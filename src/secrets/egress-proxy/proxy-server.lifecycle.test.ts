@@ -12,6 +12,7 @@ import path from "node:path";
 import tls from "node:tls";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as exec from "../../process/exec.js";
 import * as proxyCa from "../../proxy-capture/ca.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { mintSecretSentinel } from "../sentinel.js";
@@ -39,6 +40,7 @@ let auditEvents: Array<{ kind: string; reason?: string }>;
 let incoming: Map<string, IncomingMessage>;
 let responses: Map<string, ServerResponse>;
 let bodyReceived: Set<string>;
+let receivedConnects: number;
 const sockets = new Set<Socket>();
 
 function trackSocket<T extends Socket>(socket: T): T {
@@ -125,16 +127,19 @@ beforeEach(async () => {
   incoming = new Map();
   responses = new Map();
   bodyReceived = new Set();
+  receivedConnects = 0;
   const { createServer } = await vi.importActual<typeof http>("node:http");
   vi.spyOn(http, "createServer").mockImplementation((options, listener) =>
-    createServer(options, listener).on("request", (request, response) => {
-      const proof = request.headers["x-upload-proof"];
-      if (typeof proof === "string" && !incoming.has(proof)) {
-        incoming.set(proof, request);
-        responses.set(proof, response);
-        request.once("data", () => bodyReceived.add(proof));
-      }
-    }),
+    createServer(options, listener)
+      .on("connect", () => receivedConnects++)
+      .on("request", (request, response) => {
+        const proof = request.headers["x-upload-proof"];
+        if (typeof proof === "string" && !incoming.has(proof)) {
+          incoming.set(proof, request);
+          responses.set(proof, response);
+          request.once("data", () => bodyReceived.add(proof));
+        }
+      }),
   );
   caDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-egress-lifecycle-"));
   // Reuse initial material only; request-time issuance and TLS state stay per case.
@@ -636,22 +641,122 @@ describe("secret egress registration lifecycle", () => {
       return leaf;
     });
     const existing = await openTlsTunnel();
+    const siblingEnv = register(sibling);
+    const existingSibling = await openTlsTunnel(siblingEnv);
     const previous = issued[0]!;
     const trustedCa = fs.readFileSync(proxy.caCertPath);
     // OpenSSL uses the native clock. Advance the cache's clock into the leaf's
     // renewal window while real TLS verifies both certificates and the same CA.
     vi.spyOn(Date, "now").mockReturnValue(previous.validToDate.getTime() - 30 * 60_000);
-    const renewed = await Promise.all([openTlsTunnel(), openTlsTunnel()]);
+    const renewed = await Promise.all([openTlsTunnel(), openTlsTunnel(siblingEnv)]);
     for (const socket of renewed) {
       await sendCredential(socket);
     }
     expect(fs.readFileSync(proxy.caCertPath)).toEqual(trustedCa);
     await sendCredential(existing);
-    expect(observed).toHaveLength(3);
+    await sendCredential(existingSibling);
+    expect(observed).toHaveLength(4);
     expect(issued.length).toBe(2);
     expect(issued[1]!.fingerprint256).not.toBe(previous.fingerprint256);
     expect(issued[1]!.checkIssued(new X509Certificate(trustedCa))).toBe(true);
   });
+
+  it("shares hostname certificates across active runs without sharing their bindings", async () => {
+    const issueLeaf = vi.spyOn(proxyCa, "generateLocalProxyLeaf");
+    const siblingEnv = proxy.registerRun(sibling, []);
+    const [first, second] = await Promise.all([openTlsTunnel(), openTlsTunnel(siblingEnv)]);
+    const fingerprints = [first, second].map(
+      (socket) => socket.getPeerCertificate().fingerprint256,
+    );
+    await sendCredential(first);
+    await sendCredential(second);
+    expect(issueLeaf).toHaveBeenCalledTimes(1);
+    expect(fingerprints[0]).toBe(fingerprints[1]);
+    expect(observed).toEqual([{ authorization: `Bearer ${value}`, body: "" }]);
+    proxy.revokeRun(run);
+    await sendCredential(await openTlsTunnel(siblingEnv));
+    expect(issueLeaf).toHaveBeenCalledTimes(1);
+    expect(observed).toHaveLength(1);
+    proxy.revokeRun(sibling);
+    proxyEnv = register();
+    await sendCredential(await openTlsTunnel());
+    expect(issueLeaf).toHaveBeenCalledTimes(2);
+    expect(observed).toHaveLength(2);
+  });
+
+  it.each(["revoke", "stop", "replace"] as const)(
+    "%s settles shared certificate writes with independent run authority",
+    async (action) => {
+      const issueLeaf = vi.spyOn(proxyCa, "generateLocalProxyLeaf");
+      const runExec = exec.runExec;
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let paused = false;
+      vi.spyOn(exec, "runExec").mockImplementation(async (command, args, options) => {
+        if (args[0] === "x509" && !paused) {
+          paused = true;
+          entered.resolve();
+          await release.promise;
+        }
+        return runExec(command, args, options);
+      });
+      const siblingEnv = register(sibling);
+      const connecting = connectTunnel();
+      let siblingConnecting: ReturnType<typeof connectTunnel> | undefined;
+      let replacement: ReturnType<typeof connectTunnel> | undefined;
+      let stopping: Promise<void> | undefined;
+      let stopped = false;
+      try {
+        await entered.promise;
+        siblingConnecting = connectTunnel(siblingEnv);
+        await vi.waitFor(() => expect(receivedConnects).toBe(2));
+        expect(fs.readdirSync(caDir).filter((name) => name.startsWith(".leaf-"))).toHaveLength(1);
+        if (action === "stop") {
+          stopping = proxy.stop().then(() => {
+            stopped = true;
+          });
+        } else {
+          proxy.revokeRun(run);
+          if (action === "replace") {
+            proxy.revokeRun(sibling);
+            proxyEnv = register();
+            replacement = connectTunnel();
+            await vi.waitFor(() => expect(receivedConnects).toBe(3));
+          }
+        }
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(stopped).toBe(false);
+        release.resolve();
+        const [old, other, next] = await Promise.all([connecting, siblingConnecting, replacement]);
+        expect(old.status).not.toBe(200);
+        expect(other.status).toBe(action === "revoke" ? 200 : 0);
+        other.socket?.destroy();
+        next?.socket?.destroy();
+        await stopping;
+        expect(issueLeaf).toHaveBeenCalledTimes(action === "replace" ? 2 : 1);
+        expect(fs.readdirSync(caDir).filter((name) => name.startsWith(".leaf-"))).toEqual([]);
+        if (action === "stop") {
+          expect(stopped).toBe(true);
+        } else {
+          if (action === "replace") {
+            expect(next?.status).toBe(200);
+          }
+          await sendCredential(await openTlsTunnel(action === "revoke" ? siblingEnv : proxyEnv));
+          expect(observed).toEqual([{ authorization: `Bearer ${value}`, body: "" }]);
+          expect(issueLeaf).toHaveBeenCalledTimes(action === "replace" ? 2 : 1);
+        }
+      } finally {
+        release.resolve();
+        const results = await Promise.all([connecting, siblingConnecting, replacement]);
+        for (const result of results) {
+          result?.socket?.destroy();
+        }
+        await stopping;
+      }
+    },
+  );
   it.each([false, true])(
     "recovers certificate failures on the next request (renewal: %s)",
     async (renewing) => {
