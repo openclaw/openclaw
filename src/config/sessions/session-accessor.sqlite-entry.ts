@@ -583,6 +583,10 @@ async function patchSqliteSessionEntrySnapshot(
       });
     },
     params.operationLabel,
+    undefined,
+    // Source-free worker patches may reuse a foreground planner's reservation.
+    // The admission owner still prevents reentry during a worker write grant.
+    useWorker && !sourceAssertion ? "foreground-reentrant" : "foreground",
   );
   if (wrote) {
     kickSessionEntryMaintenanceAfterWrite({
