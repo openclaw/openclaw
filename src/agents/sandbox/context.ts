@@ -20,6 +20,10 @@ import {
 } from "../admitted-run-context.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import {
+  isAdmittedRunForegroundOnly,
+  requireAdmittedRunForeground,
+} from "../run-execution-policy.js";
+import {
   resolveSubagentSessionAttachmentRootDir,
   SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
 } from "../subagents/subagent-attachment-paths.js";
@@ -27,6 +31,7 @@ import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backen
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
+import { acquireForegroundSandboxCustody } from "./foreground-owner.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { hashTextSha256 } from "./hash.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
@@ -148,6 +153,7 @@ async function ensureSandboxWorkspaceLayout(
 }
 
 function resolveSandboxSession(params: {
+  admittedRunContext?: AdmittedRunContext;
   skillsSnapshot?: SkillSnapshot;
   config?: OpenClawConfig;
   agentId?: string;
@@ -165,6 +171,9 @@ function resolveSandboxSession(params: {
         cfg: params.config,
         agentId: params.agentId,
         sessionKey: rawSessionKey,
+        execution: isAdmittedRunForegroundOnly(params.admittedRunContext)
+          ? "foreground-only"
+          : undefined,
       });
   if (!runtime.sandboxed) {
     return null;
@@ -217,6 +226,7 @@ type ResolveSandboxContextParams = {
   requireCurrentConfig?: boolean;
   assertCurrent?: () => void;
   admittedRunContext?: AdmittedRunContext;
+  abortSignal?: AbortSignal;
   sessionKey?: string;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
@@ -288,6 +298,10 @@ async function resolveProvisionedSandboxContext(
 ): Promise<SandboxContext> {
   const selected = await prepareSandboxWorkspaceSelection(params, resolved);
   const { rawSessionKey, runtime, cfg, localWorkspace } = selected;
+  const custody =
+    runtime.execution === "foreground-only"
+      ? acquireForegroundSandboxCustody(params.admittedRunContext!, params.abortSignal)
+      : undefined;
   if (cfg.prune.idleHours !== 0 || cfg.prune.maxAgeDays !== 0) {
     await (await import("./prune.js")).maybePruneSandboxes();
   }
@@ -357,6 +371,7 @@ async function resolveProvisionedSandboxContext(
           : {}),
       },
       readAdmittedRunOperatorAuthority(params.admittedRunContext),
+      custody,
     );
 
   const backend = localWorkspace
@@ -451,6 +466,9 @@ export async function resolveSandboxContext(
   const resolved = resolveSandboxSession(params);
   if (!resolved) {
     return null;
+  }
+  if (resolved.runtime.execution === "foreground-only") {
+    requireAdmittedRunForeground(params.admittedRunContext);
   }
   // Once a sandbox session is selected, every remaining step is local
   // provisioning. Preserve that owner boundary across backend, browser,

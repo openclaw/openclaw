@@ -132,6 +132,11 @@ export async function updateRegistry(entry: SandboxRegistryEntry) {
   await writeRegistry({ operation: "update", entry });
 }
 
+/** Reserve before launch, record before start, and retire only after namespace extinction. */
+export async function reserveForegroundSandboxRegistryEntry(entry: SandboxRegistryEntry) {
+  await writeRegistry({ operation: "foreground-reserve", entry });
+}
+
 export async function recordForegroundSandboxReceipt(
   previous: SandboxRegistryEntry,
   entry: SandboxRegistryEntry,

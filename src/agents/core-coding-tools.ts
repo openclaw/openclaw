@@ -418,6 +418,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         cwd: options.codingRoot,
         sandbox: sandbox
           ? {
+              backend: sandbox.backend,
               containerName: sandbox.containerName,
               workspaceDir: sandbox.workspaceDir,
               containerWorkdir: sandbox.containerWorkdir,

@@ -49,6 +49,8 @@ type GatewayToolCallerIdentity = {
   /** Prepared requesting-tool posture; absent authority never bypasses approvals. */
   fullPermission?: boolean;
   operationalRunInstance?: OperationalRunInstanceRef;
+  /** Original host-issued admission; personal tool selection cannot replace its execution policy. */
+  admittedRunContext?: AdmittedRunContext;
   embeddedRunToolAuthorityBinding?: EmbeddedRunToolAuthorityBinding;
   /** Exact run authority used to fence delegated system-agent approvals. */
   approvalAuthority?: AgentRunDelegatedAuthority;
@@ -192,6 +194,7 @@ export function createAdmittedGatewayToolCallerIdentity(
     agentId,
     sessionKey,
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+    admittedRunContext: params.admittedRunContext,
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
     ...(operatorAuthority ? { operatorAuthority } : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
@@ -376,6 +379,7 @@ export async function withGatewayToolCallerIdentity<T>(
   const inheritedOwner = !suppliedRun || inheritedRun === suppliedRun ? inherited : undefined;
   const operationalRunInstance =
     inheritedOwner?.operationalRunInstance ?? identity.operationalRunInstance;
+  const admittedRunContext = inheritedOwner?.admittedRunContext ?? identity.admittedRunContext;
   const embeddedRunToolAuthorityBinding =
     identity.embeddedRunToolAuthorityBinding ?? inheritedOwner?.embeddedRunToolAuthorityBinding;
   // Same-run wrappers can narrow a prepared posture, never erase a restriction.
@@ -476,6 +480,7 @@ export async function withGatewayToolCallerIdentity<T>(
         inheritedOwner?.personalToolSelection ?? identity.personalToolSelection,
       ...(fullPermission !== undefined ? { fullPermission } : {}),
       ...(operationalRunInstance ? { operationalRunInstance } : {}),
+      ...(admittedRunContext ? { admittedRunContext } : {}),
       ...(embeddedRunToolAuthorityBinding ? { embeddedRunToolAuthorityBinding } : {}),
       ...(approvalAuthority ? { approvalAuthority } : {}),
       ...(operatorAuthority ? { operatorAuthority } : {}),

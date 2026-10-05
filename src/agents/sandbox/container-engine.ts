@@ -12,14 +12,28 @@ import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 
-// Cleanup has its own bounded process scope, independent of revoked turn authority.
-const NATIVE_SANDBOX_SETTLEMENT_MS = 30_000;
+/** Private attempt-owned custody; never part of sandbox factories or the SDK. */
+export type NativeSandboxCustody = {
+  readonly runtimeKey: string;
+  readonly runInstance: Readonly<{ runId: string; instanceId: string }>;
+  readonly signal: AbortSignal;
+  assertCurrent: () => void;
+  assertCleanupConfirmed: () => void;
+  registerCleanup: (cleanup: (reason: string) => Promise<void>) => void;
+  runProducer: <T>(run: () => Promise<T>, options?: { settleAfterAbort: true }) => Promise<T>;
+};
+
+// A dispatched control request needs its receipt even after the turn stops.
+// This bound is independent of execution permission and also bounds retirement.
+export const NATIVE_SANDBOX_SETTLEMENT_MS = 30_000;
 
 const nativeBinding = Symbol("native sandbox transport");
 type NativeBinding = {
   executable: string;
   cwd: string;
   env: Readonly<NodeJS.ProcessEnv>;
+  custody?: NativeSandboxCustody;
+  assertCurrent?: () => void;
   target?: Readonly<{ key: string; globalArgs: readonly string[] }>;
 };
 type BoundEngine = SandboxContainerEngine & { [nativeBinding]: NativeBinding };
@@ -28,9 +42,28 @@ function isBoundEngine(engine: SandboxContainerEngine): engine is BoundEngine {
   return nativeBinding in engine;
 }
 
+/** Capture selection facts once; these do not certify immutable daemon identity. */
+export function captureNativeSandboxEngine(
+  engine: SandboxContainerEngine,
+  custody: NativeSandboxCustody,
+  assertCurrent?: () => void,
+): SandboxContainerEngine {
+  custody.assertCurrent();
+  assertCurrent?.();
+  return captureNativeSandboxTransport(engine, custody, assertCurrent);
+}
+
 /** Restart recovery can only retire recorded resources, never launch new work. */
 export function captureNativeSandboxCleanupEngine(
   engine: SandboxContainerEngine,
+): SandboxContainerEngine {
+  return captureNativeSandboxTransport(engine);
+}
+
+function captureNativeSandboxTransport(
+  engine: SandboxContainerEngine,
+  custody?: NativeSandboxCustody,
+  assertCurrent?: () => void,
 ): SandboxContainerEngine {
   const cwd = process.cwd();
   const env = Object.freeze({ ...process.env });
@@ -44,7 +77,7 @@ export function captureNativeSandboxCleanupEngine(
   return Object.freeze({
     ...engine,
     globalArgs: Object.freeze([...(engine.globalArgs ?? [])]),
-    [nativeBinding]: Object.freeze({ executable, cwd, env }),
+    [nativeBinding]: Object.freeze({ executable, cwd, env, custody, assertCurrent }),
   });
 }
 
@@ -86,9 +119,45 @@ export function bindNativeSandboxEngineTarget(
   });
 }
 
+export async function resolveNativeDockerTarget(
+  engine: SandboxContainerEngine,
+): Promise<SandboxContainerEngineTarget> {
+  if (!isBoundEngine(engine) || engine.id !== "docker") {
+    throw new Error("Docker target selection requires a captured foreground transport.");
+  }
+  const env = engine[nativeBinding].env;
+  let host = !env.DOCKER_CONTEXT ? env.DOCKER_HOST : undefined;
+  if (!host) {
+    const selected = await execContainer(engine, ["context", "show"]);
+    const context = await execContainer(engine, [
+      "context",
+      "inspect",
+      selected.stdout.trim(),
+      "--format",
+      "{{.Endpoints.docker.Host}}",
+    ]);
+    host = context.stdout.trim();
+  }
+  return { key: host, globalArgs: ["--host", host] };
+}
+
 export function readNativeSandboxEngineTarget(engine: SandboxContainerEngine) {
   const target = isBoundEngine(engine) ? engine[nativeBinding].target : undefined;
   return target ? { key: target.key, globalArgs: [...target.globalArgs] } : undefined;
+}
+
+/** Each exec spec gets a copy; callers cannot mutate the private captured environment. */
+export function readNativeSandboxExecution(engine: SandboxContainerEngine) {
+  if (!isBoundEngine(engine)) {
+    return undefined;
+  }
+  const { executable, cwd, env, custody } = engine[nativeBinding];
+  if (!custody) {
+    throw new Error("Cleanup-only sandbox transport cannot execute work.");
+  }
+  custody.assertCurrent();
+  engine[nativeBinding].assertCurrent?.();
+  return { executable, cwd, env: { ...env } };
 }
 
 export type ExecContainerRawOptions = {
@@ -142,72 +211,165 @@ async function runContainerRaw(
   engine: SandboxContainerEngine,
   args: string[],
   opts?: ExecContainerRawOptions,
-  cleanup = false,
+  onCreated?: (containerId: string) => void | Promise<void>,
+  lifecycle: "work" | "settlement" | "cleanup" = "work",
+  onDispatch?: () => void | Promise<void>,
+  onNotDispatched?: () => void | Promise<void>,
 ): Promise<ExecDockerRawResult> {
   const binding = isBoundEngine(engine) ? engine[nativeBinding] : undefined;
-  if (binding && !cleanup) {
-    throw new Error("Cleanup-only sandbox transport cannot execute work.");
-  }
-  let result;
-  try {
-    result = await spawnCommand(
-      [binding?.executable ?? engine.command, ...(engine.globalArgs ?? []), ...args],
-      {
-        ...(binding ? { baseEnv: binding.env, cwd: binding.cwd } : {}),
-        cancelSignal: opts?.signal,
-        encoding: "buffer",
-        input: opts?.input ?? Buffer.alloc(0),
-        maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
-        reject: false,
-        stripFinalNewline: false,
-      },
-    );
-  } catch (error) {
-    if (opts?.signal?.aborted) {
+  const execute = async () => {
+    if (binding && !binding.custody && lifecycle !== "cleanup") {
+      throw new Error("Cleanup-only sandbox transport cannot execute work.");
+    }
+    if (lifecycle !== "cleanup") {
+      binding?.custody?.assertCurrent();
+      binding?.assertCurrent?.();
+    }
+    let result;
+    try {
+      if (onDispatch) {
+        await onDispatch();
+      }
+      // Receipt writes can yield to Stop. Preserve proven non-dispatch before
+      // rejecting; a crash during this write must still retain the attempted receipt.
+      if (lifecycle !== "cleanup") {
+        try {
+          binding?.custody?.assertCurrent();
+          // Run admission cannot certify a managed workspace's later generation.
+          binding?.assertCurrent?.();
+        } catch (error) {
+          await onNotDispatched?.();
+          throw error;
+        }
+      }
+      result = await spawnCommand(
+        [binding?.executable ?? engine.command, ...(engine.globalArgs ?? []), ...args],
+        {
+          ...(binding ? { baseEnv: binding.env, cwd: binding.cwd } : {}),
+          cancelSignal: opts?.signal,
+          encoding: "buffer",
+          input: opts?.input ?? Buffer.alloc(0),
+          maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+          reject: false,
+          stripFinalNewline: false,
+        },
+      );
+    } catch (error) {
+      if (opts?.signal?.aborted) {
+        throw createAbortError("Aborted");
+      }
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw Object.assign(new Error(missingContainerEngineMessage(engine)), {
+          code: "INVALID_CONFIG",
+          cause: error,
+        });
+      }
+      throw error;
+    }
+    // Execa reports cancellation/termination as failed even when stdout exists.
+    // Only its successful buffered result can establish the create receipt.
+    if (
+      onCreated &&
+      !result.failed &&
+      result.exitCode === 0 &&
+      !result.isCanceled &&
+      !result.timedOut &&
+      !result.isTerminated &&
+      !result.isMaxBuffer
+    ) {
+      const containerId = Buffer.from(result.stdout).toString("utf8").trim();
+      if (!/^[a-f0-9]{64}$/u.test(containerId)) {
+        throw new Error("Container create did not return an immutable container ID.");
+      }
+      await onCreated(containerId);
+    }
+    if (lifecycle !== "cleanup") {
+      binding?.custody?.assertCurrent();
+      binding?.assertCurrent?.();
+    }
+    if (opts?.signal?.aborted || result.isCanceled) {
       throw createAbortError("Aborted");
     }
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw Object.assign(new Error(missingContainerEngineMessage(engine)), {
-        code: "INVALID_CONFIG",
-        cause: error,
-      });
+    if (result.failed && !isPlainCommandExitFailure(result)) {
+      if (result.code === "ENOENT") {
+        throw Object.assign(new Error(missingContainerEngineMessage(engine)), {
+          code: "INVALID_CONFIG",
+          cause: result,
+        });
+      }
+      throw toErrorObject(result, `${engine.displayName} command execution failed`);
     }
-    throw error;
-  }
-  if (opts?.signal?.aborted || result.isCanceled) {
-    throw createAbortError("Aborted");
-  }
-  if (result.failed && !isPlainCommandExitFailure(result)) {
-    if (result.code === "ENOENT") {
-      throw Object.assign(new Error(missingContainerEngineMessage(engine)), {
-        code: "INVALID_CONFIG",
-        cause: result,
-      });
+    const stdout = Buffer.from(result.stdout);
+    const stderr = Buffer.from(result.stderr);
+    const exitCode = result.exitCode ?? (result.failed ? 1 : 0);
+    if (exitCode !== 0 && !opts?.allowFailure) {
+      let message = stderr.length > 0 ? stderr.toString("utf8").trim() : "";
+      if (
+        engine.id === "podman" &&
+        args[0] === "create" &&
+        /^(?:Error: )?(?:lookup init binary|container-init binary not found on the host):/mu.test(
+          message,
+        )
+      ) {
+        // Podman owns init resolution, including helpers outside PATH and inside Podman Machine.
+        message +=
+          "\nInstall catatonit on the Podman engine host, or repair its configured init_path/helper_binaries_dir in containers.conf, then retry. The init executable must be available to the engine, not only inside the sandbox image. Keep --init and sandboxing enabled so orphaned processes are reaped.";
+      }
+      throw Object.assign(
+        new Error(message || `${engine.displayName} command failed (exit ${exitCode})`),
+        { code: exitCode, stdout, stderr },
+      );
     }
-    throw toErrorObject(result, `${engine.displayName} command execution failed`);
-  }
-  const stdout = Buffer.from(result.stdout);
-  const stderr = Buffer.from(result.stderr);
-  const exitCode = result.exitCode ?? (result.failed ? 1 : 0);
-  if (exitCode !== 0 && !opts?.allowFailure) {
-    let message = stderr.length > 0 ? stderr.toString("utf8").trim() : "";
-    if (
-      engine.id === "podman" &&
-      args[0] === "create" &&
-      /^(?:Error: )?(?:lookup init binary|container-init binary not found on the host):/mu.test(
-        message,
+    return { stdout, stderr, code: exitCode };
+  };
+  return binding?.custody && lifecycle !== "cleanup"
+    ? await binding.custody.runProducer(
+        execute,
+        lifecycle === "settlement" ? { settleAfterAbort: true } : undefined,
       )
-    ) {
-      // Podman owns init resolution, including helpers outside PATH and inside Podman Machine.
-      message +=
-        "\nInstall catatonit on the Podman engine host, or repair its configured init_path/helper_binaries_dir in containers.conf, then retry. The init executable must be available to the engine, not only inside the sandbox image. Keep --init and sandboxing enabled so orphaned processes are reaped.";
-    }
-    throw Object.assign(
-      new Error(message || `${engine.displayName} command failed (exit ${exitCode})`),
-      { code: exitCode, stdout, stderr },
-    );
+    : await execute();
+}
+
+/** Same runner, with a receipt observed before cancellation translation and env cleanup. */
+export async function execNativeSandboxCreate(
+  engine: SandboxContainerEngine,
+  args: string[],
+  onCreated: (containerId: string) => void | Promise<void>,
+  onDispatch?: () => void | Promise<void>,
+  onNotDispatched?: () => void | Promise<void>,
+): Promise<void> {
+  if (!isBoundEngine(engine) || !engine[nativeBinding].target || args[0] !== "create") {
+    throw new Error("Native sandbox create requires its captured target and custody.");
   }
-  return { stdout, stderr, code: exitCode };
+  await runContainerRaw(
+    engine,
+    args,
+    undefined,
+    onCreated,
+    "settlement",
+    onDispatch,
+    onNotDispatched,
+  );
+}
+
+export async function execNativeSandboxStart(
+  engine: SandboxContainerEngine,
+  containerId: string,
+  onDispatch?: () => void | Promise<void>,
+  onNotDispatched?: () => void | Promise<void>,
+) {
+  if (!isBoundEngine(engine) || !engine[nativeBinding].target) {
+    throw new Error("Native sandbox start requires its captured target and custody.");
+  }
+  await runContainerRaw(
+    engine,
+    ["start", containerId],
+    undefined,
+    undefined,
+    "settlement",
+    onDispatch,
+    onNotDispatched,
+  );
 }
 
 /** Cleanup never re-enters the revoked producer set it is joining. */
@@ -224,7 +386,9 @@ export async function runNativeSandboxCleanup<T>(
   return await runOutsideCommandProcessScope(() =>
     withCommandProcessScope(
       () =>
-        run((args, allowFailure) => runContainerRaw(engine, args, { signal, allowFailure }, true)),
+        run((args, allowFailure) =>
+          runContainerRaw(engine, args, { signal, allowFailure }, undefined, "cleanup"),
+        ),
       signal,
     ),
   );

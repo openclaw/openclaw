@@ -368,6 +368,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     createdActor?: SessionCreatedActor;
     /** Creation-only sandbox requirement; existing unstamped sessions always remain unstamped. */
     sandbox?: "required";
+    /** Creation-only execution ceiling retained by the runtime owner. */
+    execution?: "foreground-only";
     /** Immutable selected-project/worktree requirement, retained across role changes and resets. */
     requiredWorkspace?: RequiredSessionWorkspace;
     /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */

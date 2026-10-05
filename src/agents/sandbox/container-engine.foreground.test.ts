@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   resolveCommandProcessSignal,
@@ -8,9 +9,14 @@ import {
 import {
   bindNativeSandboxEngineTarget,
   captureNativeSandboxCleanupEngine,
+  captureNativeSandboxEngine,
   DOCKER_SANDBOX_ENGINE,
+  PODMAN_SANDBOX_ENGINE,
   execContainerRaw,
+  execNativeSandboxCreate,
+  execNativeSandboxStart,
   runNativeSandboxCleanup,
+  type NativeSandboxCustody,
 } from "./container-engine.js";
 
 const command = vi.hoisted(() => vi.fn());
@@ -27,6 +33,27 @@ function cleanupEngine() {
     key: "unix:///var/run/docker.sock",
     globalArgs: ["--host", "unix:///var/run/docker.sock"],
   });
+}
+
+function fixture() {
+  const controller = new AbortController();
+  const runtime = new AbortController();
+  const custody: NativeSandboxCustody = {
+    runtimeKey: "foreground:dispatch",
+    runInstance: { runId: "run", instanceId: "instance" },
+    signal: controller.signal,
+    assertCurrent: () => controller.signal.throwIfAborted(),
+    assertCleanupConfirmed() {},
+    registerCleanup() {},
+    runProducer: (run) => run(),
+  };
+  const engine = bindNativeSandboxEngineTarget(
+    captureNativeSandboxEngine(DOCKER_SANDBOX_ENGINE, custody, () =>
+      runtime.signal.throwIfAborted(),
+    ),
+    { key: "unix:///var/run/docker.sock", globalArgs: ["--host", "unix:///var/run/docker.sock"] },
+  );
+  return { controller, runtime, engine };
 }
 
 beforeEach(() => command.mockReset());
@@ -68,3 +95,91 @@ describe("recorded native allocation cleanup", () => {
     ).rejects.toBeInstanceOf(CommandProcessCleanupError);
   });
 });
+
+describe("foreground native dispatch", () => {
+  it.each([
+    ["create", "Stop"],
+    ["start", "Stop"],
+    ["create", "workspace retirement"],
+    ["start", "workspace retirement"],
+  ] as const)(
+    "does not dispatch %s after %s during its intent write",
+    async (operation, revokedOwner) => {
+      const { controller, runtime, engine } = fixture();
+      const writing = createDeferred();
+      const written = createDeferred();
+      const created = vi.fn();
+      const notDispatched = vi.fn();
+      const intent = async () => {
+        writing.resolve();
+        await written.promise;
+      };
+      const pending =
+        operation === "create"
+          ? execNativeSandboxCreate(
+              engine,
+              ["create", "sandbox:test"],
+              created,
+              intent,
+              notDispatched,
+            )
+          : execNativeSandboxStart(engine, "a".repeat(64), intent, notDispatched);
+      const stopped = expect(pending).rejects.toThrow();
+      await writing.promise;
+      (revokedOwner === "Stop" ? controller : runtime).abort();
+      written.resolve();
+      await stopped;
+      expect(command).not.toHaveBeenCalled();
+      expect(created).not.toHaveBeenCalled();
+      expect(notDispatched).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("records a late successful full create ID before returning Stop", async () => {
+    const { controller, engine } = fixture();
+    const dispatched = createDeferred();
+    const returned = createDeferred();
+    command.mockImplementation(async () => {
+      dispatched.resolve();
+      await returned.promise;
+      return {
+        failed: false,
+        exitCode: 0,
+        stdout: Buffer.from("a".repeat(64)),
+        stderr: Buffer.alloc(0),
+      };
+    });
+    const created = vi.fn();
+    const notDispatched = vi.fn();
+    const pending = execNativeSandboxCreate(
+      engine,
+      ["create", "sandbox:test"],
+      created,
+      undefined,
+      notDispatched,
+    );
+    const stopped = expect(pending).rejects.toThrow();
+    await dispatched.promise;
+    controller.abort();
+    returned.resolve();
+    await stopped;
+    expect(created).toHaveBeenCalledWith("a".repeat(64));
+    expect(notDispatched).not.toHaveBeenCalled();
+  });
+});
+
+it.each([DOCKER_SANDBOX_ENGINE, PODMAN_SANDBOX_ENGINE])(
+  "dispatches ordinary $id work without yielding after its caller guard",
+  async (engine) => {
+    const calls: string[] = [];
+    command.mockImplementation(async () => {
+      calls.push("spawn");
+      return { failed: false, exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+    });
+    const assertCurrent = () => calls.push("assert");
+    assertCurrent();
+    const pending = execContainerRaw(engine, ["start", "ordinary-container"]);
+    expect(calls).toEqual(["assert", "spawn"]);
+    await pending;
+  },
+);

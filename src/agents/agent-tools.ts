@@ -57,6 +57,7 @@ import { filterRequesterYieldTools } from "./openclaw-tools.requester-yield.js";
 import { applySwarmCollectorToolContract } from "./openclaw-tools.swarm.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
+import { readForegroundSandboxCustody } from "./sandbox/foreground-owner.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
 import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
@@ -156,12 +157,15 @@ export function createOpenClawCodingToolsInternal(
   ];
   const sandboxWorkspaceMediaReadAllowed = isConversationToolAllowed(capabilityProfile, "read");
   // Borrowed tool restrictions do not transfer ownership of the policy session's processes.
-  const scopeKey = resolveProcessToolScopeKey({
-    scopeKey: options?.exec?.scopeKey,
-    sessionKey: executionSessionKey,
-    sessionId: options?.sessionId,
-    agentId: executionAgentId,
-  });
+  const foreground = readForegroundSandboxCustody(sandbox?.backend);
+  const scopeKey =
+    foreground?.runtimeKey ??
+    resolveProcessToolScopeKey({
+      scopeKey: options?.exec?.scopeKey,
+      sessionKey: executionSessionKey,
+      sessionId: options?.sessionId,
+      agentId: executionAgentId,
+    });
   if (options?.oneShotCliRun && scopeKey && options.registerRunCleanup) {
     const supervisor = getProcessSupervisor();
     // Sandbox runtimes retain their configured lifetime; host commands still

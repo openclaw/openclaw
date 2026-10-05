@@ -6,7 +6,12 @@ import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
+import { prepareForegroundTestAdmission } from "./run-execution-policy.test-support.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
+import {
+  acquireForegroundSandboxCustody,
+  bindForegroundSandboxBackend,
+} from "./sandbox/foreground-owner.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
@@ -89,49 +94,72 @@ describe("coding-tool exec working directory", () => {
     expect(output?.trim()).toBe(expectedCwd);
   });
 
-  it("forwards sandbox cleanup custody through the builtin exec tool", async () => {
-    const terminate = vi.fn(async () => {});
-    const finalizeExec = vi.fn(async () => {});
-    const backend: SandboxBackendHandle = {
-      id: "docker",
-      runtimeId: "coding-cleanup",
-      runtimeLabel: "coding-cleanup",
-      workdir: "/workspace",
-      prepareProcessCleanup(env) {
-        return {
-          env: { ...env, CODEX_SANDBOX_EXEC_ID: this.runtimeId },
-          terminate,
-          interrupt: async () => false,
-        };
-      },
-      buildExecSpec: async ({ env }) => ({
-        argv: [
-          process.execPath,
-          "-e",
-          "process.stdout.write(process.env.CODEX_SANDBOX_EXEC_ID ?? 'missing')",
-        ],
-        env,
-        cwd: codingRoot,
-        stdinMode: "pipe-closed",
-      }),
-      finalizeExec,
-      runShellCommand: async () => ({ code: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }),
-    };
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        workspaceDir: codingRoot,
-        agentWorkspaceDir: codingRoot,
-        backend,
-        fsBridge: createHostSandboxFsBridge(codingRoot),
-      },
-    });
-    const exec = createExecTool(sandbox);
-    const result = await exec.execute("coding-cleanup", { command: "fixture" });
-    expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
-    expect(result.content.find((entry) => entry.type === "text")?.text.trim()).toBe(
-      "coding-cleanup",
-    );
-    expect(finalizeExec).toHaveBeenCalledOnce();
-    expect(terminate).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "forwards sandbox custody through builtin exec (foreground: %s)",
+    async (foreground) => {
+      const terminate = vi.fn(async () => {});
+      const finalizeExec = vi.fn(async () => {});
+      const backend: SandboxBackendHandle = {
+        id: "docker",
+        runtimeId: "coding-cleanup",
+        runtimeLabel: "coding-cleanup",
+        workdir: "/workspace",
+        prepareProcessCleanup(env) {
+          return {
+            env: { ...env, CODEX_SANDBOX_EXEC_ID: this.runtimeId },
+            terminate,
+            interrupt: async () => false,
+          };
+        },
+        buildExecSpec: async ({ env }) => ({
+          argv: [
+            process.execPath,
+            "-e",
+            "process.stdout.write(process.env.CODEX_SANDBOX_EXEC_ID ?? 'missing')",
+          ],
+          env,
+          cwd: codingRoot,
+          stdinMode: "pipe-closed",
+        }),
+        finalizeExec,
+        runShellCommand: async () => ({
+          code: 0,
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+        }),
+      };
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          workspaceDir: codingRoot,
+          agentWorkspaceDir: codingRoot,
+          backend,
+          fsBridge: createHostSandboxFsBridge(codingRoot),
+        },
+      });
+      const admission = foreground ? prepareForegroundTestAdmission("coding-cleanup") : undefined;
+      try {
+        if (admission) {
+          bindForegroundSandboxBackend(
+            backend,
+            acquireForegroundSandboxCustody(await admission.admit("embedded")),
+          );
+        }
+        const exec = createExecTool(sandbox);
+        const result = await exec.execute("coding-cleanup", { command: "fixture" });
+        expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+        expect(result.content.find((entry) => entry.type === "text")?.text.trim()).toBe(
+          "coding-cleanup",
+        );
+        expect(finalizeExec).toHaveBeenCalledOnce();
+        expect(terminate).not.toHaveBeenCalled();
+        if (admission) {
+          await admission.close();
+          await expect(exec.execute("closed-custody", { command: "fixture" })).rejects.toThrow();
+          expect(finalizeExec).toHaveBeenCalledOnce();
+        }
+      } finally {
+        await admission?.close();
+      }
+    },
+  );
 });

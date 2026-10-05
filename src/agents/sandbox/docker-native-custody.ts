@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  execContainerRaw,
   captureNativeSandboxCleanupEngine,
   DOCKER_SANDBOX_ENGINE,
   PODMAN_SANDBOX_ENGINE,
@@ -9,6 +11,7 @@ import {
   readNativeSandboxEngineTarget,
   runNativeSandboxCleanup,
   type ExecDockerRawResult,
+  type NativeSandboxCustody,
   type SandboxContainerEngine,
 } from "./container-engine.js";
 import {
@@ -21,20 +24,119 @@ import {
   type SandboxRegistryEntry,
 } from "./registry.js";
 import { assertForegroundSandboxReservationCurrent } from "./registry.kernel.js";
+import type { ForegroundSandboxReceipt } from "./registry.types.js";
 
 type NativeCommand = (args: string[], allowFailure?: boolean) => Promise<ExecDockerRawResult>;
 
-type NativeSandboxContainerCustody = {
+/** Private allocation facts; neither transport completion nor a reusable name is custody. */
+export type NativeSandboxContainerCustody = {
+  custody: NativeSandboxCustody;
   engine: SandboxContainerEngine;
-  reservation: SandboxRegistryEntry;
+  reservation?: SandboxRegistryEntry;
+  reserved?: boolean;
 };
 
-/** Server facts, not the local CLI's OS. Podman identity is its selected store/principal. */
-async function readNativeSandboxEngineIdentity(
-  engine: SandboxContainerEngine,
-  exec: NativeCommand,
+/** Hold the exact allocation lock through retirement, including between tool calls. */
+export async function holdNativeSandboxAllocation(native: NativeSandboxContainerCustody) {
+  const reservation = native.reservation;
+  if (!reservation) {
+    throw new Error("Foreground allocation has no reserved identity.");
+  }
+  const ready = createDeferredCore();
+  const closing = createDeferredCore();
+  native.custody.registerCleanup(async () => {
+    closing.resolve();
+    await settled;
+  });
+  const settled = withSandboxRegistryEntryLock(reservation, async () => {
+    ready.resolve();
+    await closing.promise;
+    if (native.reserved) {
+      await retireNativeSandboxContainer(native);
+    }
+  });
+  void settled.catch(ready.reject);
+  await ready.promise;
+  native.custody.assertCurrent();
+}
+
+export async function recordNativeSandboxReceipt(
+  native: Pick<NativeSandboxContainerCustody, "reservation">,
+  receipt: Partial<ForegroundSandboxReceipt>,
+  ready = false,
 ) {
-  const result = await exec(["info", "--format", "{{json .}}"]);
+  const previous = native.reservation;
+  if (!previous?.foreground) {
+    throw new Error("Foreground allocation has no reserved owner.");
+  }
+  const entry: SandboxRegistryEntry = {
+    ...previous,
+    foreground: { ...previous.foreground, ...receipt },
+    ...(ready ? { runtimeState: "ready" } : {}),
+  };
+  await recordForegroundSandboxReceipt(previous, entry);
+  native.reservation = entry;
+}
+
+/** Re-read under the exact allocation lock before either owner can attempt retirement. */
+async function reconcileRetainedForegroundSandbox(
+  entry: SandboxRegistryEntry,
+  selectEngine: () => SandboxContainerEngine,
+  custody?: Pick<NativeSandboxCustody, "assertCleanupConfirmed">,
+) {
+  await withSandboxRegistryEntryLock(entry, async () => {
+    const current = await readRegistryEntry(entry.containerName);
+    // The prior owner may have completed retirement while this request waited.
+    if (!current) {
+      return;
+    }
+    assertForegroundSandboxReservationCurrent(current, entry);
+    if (current.foreground?.cleanupUncertain) {
+      throw new Error(
+        "Foreground cleanup remains unconfirmed. This allocation is quarantined; use a new managed workspace for further work.",
+      );
+    }
+    await retireNativeSandboxContainer({ engine: selectEngine(), reservation: current, custody });
+  });
+}
+
+/** A new request may retire a crashed turn, but never steal a live allocation lock. */
+export async function reconcileForegroundSandboxWorkspace(params: {
+  custody: NativeSandboxCustody;
+  engine: SandboxContainerEngine;
+  workspaceDir: string;
+}) {
+  const retained = (await readRegistry()).entries.filter(
+    (entry) => entry.workspaceDir === params.workspaceDir,
+  );
+  for (const entry of retained) {
+    params.custody.assertCurrent();
+    if (!entry.foreground || !entry.backendTarget || entry.backendId !== params.engine.id) {
+      throw new Error(
+        "Workspace has an allocation owned by another sandbox lifecycle. Select a new managed worktree or ask a maintainer to reconcile the retained environment.",
+      );
+    }
+    await reconcileRetainedForegroundSandbox(
+      entry,
+      () => {
+        params.custody.assertCurrent();
+        return bindNativeSandboxEngineTarget(params.engine, entry.backendTarget!);
+      },
+      params.custody,
+    );
+  }
+}
+
+/** Server facts, not the local CLI's OS. Podman identity is its selected store/principal. */
+export async function readNativeSandboxEngineIdentity(
+  engine: SandboxContainerEngine,
+  exec?: NativeCommand,
+) {
+  const result = await (exec ?? ((args) => execContainerRaw(engine, args)))([
+    "info",
+    "--format",
+    "{{json .}}",
+  ]);
   const info: unknown = JSON.parse(result.stdout.toString("utf8"));
   if (!isRecord(info) || !readNativeSandboxEngineTarget(engine)) {
     throw new Error("Native sandbox engine identity is unavailable.");
@@ -73,19 +175,24 @@ async function readNativeSandboxEngineIdentity(
 }
 
 /** The exact allocation must retain its private namespace and non-restarting policy. */
-async function assertNativeSandboxCreatedContainer(
+export async function assertNativeSandboxCreatedContainer(
   engine: SandboxContainerEngine,
   containerId: string,
   reservation: Pick<
     SandboxRegistryEntry,
     "containerName" | "sessionKey" | "createdAtMs" | "configHash"
   >,
-  exec: NativeCommand,
+  exec?: NativeCommand,
 ) {
   if (!readNativeSandboxEngineTarget(engine) || !/^[a-f0-9]{64}$/u.test(containerId)) {
     throw new Error("Native sandbox inspection requires its captured target and immutable ID.");
   }
-  const result = await exec(["inspect", "--format", "{{json .}}", containerId]);
+  const result = await (exec ?? ((args) => execContainerRaw(engine, args)))([
+    "inspect",
+    "--format",
+    "{{json .}}",
+    containerId,
+  ]);
   const value: unknown = JSON.parse(result.stdout.toString("utf8"));
   const config = isRecord(value) && isRecord(value.Config) ? value.Config : undefined;
   const labels = config && isRecord(config.Labels) ? config.Labels : undefined;
@@ -148,8 +255,15 @@ function assertExited(
   }
 }
 
-async function retireNativeSandboxContainer(native: NativeSandboxContainerCustody) {
+async function retireNativeSandboxContainer(
+  native: Pick<NativeSandboxContainerCustody, "reservation" | "engine"> & {
+    custody?: Pick<NativeSandboxCustody, "assertCleanupConfirmed">;
+  },
+) {
   const reservation = native.reservation;
+  if (!reservation) {
+    return;
+  }
   try {
     await assertForegroundSandboxRegistryEntryCurrent(reservation);
     const receipt = reservation.foreground;
@@ -157,6 +271,7 @@ async function retireNativeSandboxContainer(native: NativeSandboxContainerCustod
       throw new Error("Native sandbox allocation receipt is missing; custody is retained.");
     }
     if (!receipt.createAttempted || receipt.createNotDispatched) {
+      native.custody?.assertCleanupConfirmed();
       await retireForegroundSandboxRegistryEntry(reservation);
       return;
     }
@@ -209,15 +324,11 @@ async function retireNativeSandboxContainer(native: NativeSandboxContainerCustod
       // resource is not our removal receipt, so any command failure retains the row.
       await exec(["rm", containerId]);
     });
-    // Bounded cleanup scope settlement must succeed before the exact retirement CAS.
+    // Scope settlement and earlier generation cleanup must both succeed before CAS.
+    native.custody?.assertCleanupConfirmed();
     await retireForegroundSandboxRegistryEntry(reservation);
   } catch (cause) {
-    if (reservation.foreground) {
-      await recordForegroundSandboxReceipt(reservation, {
-        ...reservation,
-        foreground: { ...reservation.foreground, cleanupUncertain: true },
-      }).catch(() => undefined);
-    }
+    await recordNativeSandboxReceipt(native, { cleanupUncertain: true }).catch(() => undefined);
     throw new CommandProcessCleanupError({ cause });
   }
 }
@@ -227,33 +338,21 @@ export async function reconcileForegroundSandboxesAtStartup(): Promise<unknown[]
   const failures: unknown[] = [];
   for (const entry of (await readRegistry()).entries.filter((candidate) => candidate.foreground)) {
     try {
-      await withSandboxRegistryEntryLock(entry, async () => {
-        const current = await readRegistryEntry(entry.containerName);
-        // The previous owner may have retired while startup acquired its exact lock.
-        if (!current) {
-          return;
-        }
-        assertForegroundSandboxReservationCurrent(current, entry);
-        if (current.foreground?.cleanupUncertain) {
-          throw new Error(
-            "Foreground cleanup remains unconfirmed. This allocation is quarantined; use a new managed workspace for further work.",
-          );
-        }
+      await reconcileRetainedForegroundSandbox(entry, () => {
         if (
-          !current.backendTarget ||
-          (current.backendId !== "docker" && current.backendId !== "podman")
+          !entry.backendTarget ||
+          (entry.backendId !== "docker" && entry.backendId !== "podman")
         ) {
           throw new Error(
             "Foreground sandbox backend receipt is unavailable; custody is retained.",
           );
         }
-        const engine = bindNativeSandboxEngineTarget(
+        return bindNativeSandboxEngineTarget(
           captureNativeSandboxCleanupEngine(
-            current.backendId === "docker" ? DOCKER_SANDBOX_ENGINE : PODMAN_SANDBOX_ENGINE,
+            entry.backendId === "docker" ? DOCKER_SANDBOX_ENGINE : PODMAN_SANDBOX_ENGINE,
           ),
-          current.backendTarget,
+          entry.backendTarget,
         );
-        await retireNativeSandboxContainer({ engine, reservation: current });
       });
     } catch (error) {
       failures.push(error);

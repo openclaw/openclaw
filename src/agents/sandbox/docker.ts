@@ -9,6 +9,9 @@ import {
   DOCKER_SANDBOX_ENGINE,
   execContainer,
   execContainerRaw,
+  execNativeSandboxCreate,
+  execNativeSandboxStart,
+  readNativeSandboxEngineTarget,
   type ExecContainerRawOptions,
   type ExecDockerRawResult,
   type SandboxContainerEngine,
@@ -27,6 +30,14 @@ import {
   type ContainerSourceLease,
 } from "./container-lifecycle.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
+import {
+  assertNativeSandboxCreatedContainer,
+  holdNativeSandboxAllocation,
+  readNativeSandboxEngineIdentity,
+  reconcileForegroundSandboxWorkspace,
+  recordNativeSandboxReceipt,
+  type NativeSandboxContainerCustody,
+} from "./docker-native-custody.js";
 import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
 import {
   prepareSandboxMountPlan,
@@ -45,6 +56,7 @@ import {
 import {
   completeSandboxRegistryReservation,
   readRegistryEntry,
+  reserveForegroundSandboxRegistryEntry,
   removeRegistryEntry,
   updateRegistry,
 } from "./registry.js";
@@ -333,6 +345,8 @@ async function createSandboxContainer(params: {
   onAllocated?: (id: string) => void;
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  native?: NativeSandboxContainerCustody;
+  createdAtMs?: number;
 }) {
   const { engine, name, cfg, workspaceDir, scopeKey } = params;
   const podmanPolicy =
@@ -355,6 +369,7 @@ async function createSandboxContainer(params: {
     cfg: createCfg,
     scopeKey,
     configHash: params.configHash,
+    createdAtMs: params.createdAtMs,
     includeBinds: false,
     bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
   });
@@ -368,18 +383,46 @@ async function createSandboxContainer(params: {
     );
   }
   appendCustomBinds(args, params.mountPlan.binds);
-  const created = await withContainerEnvFile(env, async (envFile) => {
+  const containerId = await withContainerEnvFile(env, async (envFile) => {
     args.push("--env-file", envFile, cfg.image, "sleep", "infinity");
     params.assertCurrent?.();
-    return await execContainer(engine, args);
+    if (params.native) {
+      const native = params.native;
+      await execNativeSandboxCreate(
+        engine,
+        args,
+        (allocatedId) => recordNativeSandboxReceipt(native, { containerId: allocatedId }),
+        () => recordNativeSandboxReceipt(native, { createAttempted: true }),
+        () => recordNativeSandboxReceipt(native, { createNotDispatched: true }),
+      );
+      return native.reservation?.foreground?.containerId ?? "";
+    }
+    return (await execContainer(engine, args)).stdout.trim();
   });
-  const containerId = created.stdout.trim();
   if (!/^[a-f0-9]{64}$/u.test(containerId)) {
     throw new Error("Container creation did not return an immutable container ID.");
   }
   params.onAllocated?.(containerId);
   params.assertCurrent?.();
-  await execContainer(engine, ["start", containerId]);
+  if (params.native) {
+    const native = params.native;
+    const inspected = await assertNativeSandboxCreatedContainer(
+      engine,
+      containerId,
+      native.reservation!,
+    );
+    if (typeof inspected.Namespace === "string") {
+      await recordNativeSandboxReceipt(native, { namespace: inspected.Namespace });
+    }
+    await execNativeSandboxStart(
+      engine,
+      containerId,
+      () => recordNativeSandboxReceipt(native, { startAttempted: true }),
+      () => recordNativeSandboxReceipt(native, { startNotDispatched: true }),
+    );
+  } else {
+    await execContainer(engine, ["start", containerId]);
+  }
 
   if (cfg.setupCommand?.trim()) {
     params.assertCurrent?.();
@@ -392,6 +435,8 @@ async function createSandboxContainer(params: {
 }
 
 type EnsureSandboxContainerParams = {
+  native?: NativeSandboxContainerCustody;
+  nativePodmanRuntimeInfo?: PodmanSandboxRuntimeInfo;
   workspaceSource?: "managed-worktree";
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -408,7 +453,11 @@ type EnsureSandboxContainerParams = {
 
 export async function ensureSandboxContainer(params: EnsureSandboxContainerParams) {
   const engine = params.engine ?? DOCKER_SANDBOX_ENGINE;
-  const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
+  const slug = params.native
+    ? slugifySessionKey(params.native.custody.runtimeKey)
+    : params.cfg.scope === "shared"
+      ? "shared"
+      : slugifySessionKey(params.scopeKey);
   const prefix =
     engine.id === "podman"
       ? resolvePodmanSandboxContainerPrefix(params.cfg.docker.containerPrefix)
@@ -418,9 +467,13 @@ export async function ensureSandboxContainer(params: EnsureSandboxContainerParam
   // Independent agent runs can converge on one container resource. Serialize the
   // full lifecycle so followers re-read state after create, start, or replace.
   const assertCurrent = () => {
+    params.native?.custody.assertCurrent();
     params.operatorAuthority?.assertCurrent();
     params.assertCurrent?.();
   };
+  if (params.native) {
+    return ensureSandboxContainerLifecycle({ ...params, assertCurrent }, containerName, undefined);
+  }
   return await withSandboxContainerLifecycle(
     containerName,
     params.cfg.scope === "shared" ? undefined : params.operatorAuthority,
@@ -436,13 +489,14 @@ async function ensureSandboxContainerLifecycle(
 ) {
   const configuredEngine = params.engine ?? DOCKER_SANDBOX_ENGINE;
   const podmanRuntimeInfo =
-    configuredEngine.id === "podman" ? await resolvePodmanSandboxRuntimeInfo() : undefined;
+    params.nativePodmanRuntimeInfo ??
+    (configuredEngine.id === "podman" ? await resolvePodmanSandboxRuntimeInfo() : undefined);
   if (podmanRuntimeInfo) {
     assertPodmanSandboxTarget(params.podmanTarget, podmanRuntimeInfo.target);
   }
-  const engine = podmanRuntimeInfo
-    ? bindPodmanSandboxEngine(podmanRuntimeInfo.target)
-    : configuredEngine;
+  const engine =
+    params.native?.engine ??
+    (podmanRuntimeInfo ? bindPodmanSandboxEngine(podmanRuntimeInfo.target) : configuredEngine);
   params.assertCurrent?.();
   let existingRegistryEntry = await readRegistryEntry(containerName);
   // Built-in engines bypass generic reservation; fence their retained native
@@ -516,6 +570,62 @@ async function ensureSandboxContainerLifecycle(
         })
       : genericConfigHash;
   const now = Date.now();
+  if (params.native) {
+    const native = params.native;
+    await reconcileForegroundSandboxWorkspace({
+      custody: native.custody,
+      engine,
+      workspaceDir: params.workspaceDir,
+    });
+    const backendTarget = readNativeSandboxEngineTarget(engine);
+    if (!backendTarget) {
+      throw new Error("Foreground sandbox target was not captured.");
+    }
+    native.reservation = {
+      containerName,
+      backendId: engine.id,
+      backendTarget,
+      runtimeLabel: containerName,
+      sessionKey: params.scopeKey,
+      workspaceDir: params.workspaceDir,
+      createdAtMs: now,
+      lastUsedAtMs: now,
+      image: params.cfg.docker.image,
+      configLabelKind: "Image",
+      configHash: expectedHash,
+      runtimeState: "pending",
+      foreground: {
+        ...native.custody.runInstance,
+        engineIdentity: await readNativeSandboxEngineIdentity(engine),
+        createAttempted: false,
+        startAttempted: false,
+      },
+    };
+    await holdNativeSandboxAllocation(native);
+    await reserveForegroundSandboxRegistryEntry(native.reservation);
+    native.reserved = true;
+    native.custody.assertCurrent();
+    const containerId = await createSandboxContainer({
+      engine,
+      name: containerName,
+      cfg: params.cfg.docker,
+      dockerTmpfsSource: params.cfg.dockerTmpfsSource,
+      workspaceDir: params.workspaceDir,
+      workspaceAccess: params.cfg.workspaceAccess,
+      agentWorkspaceDir: params.agentWorkspaceDir,
+      scopeKey: params.scopeKey,
+      configHash: expectedHash,
+      createdAtMs: now,
+      mountPlan,
+      podmanRuntimeInfo,
+      native,
+      assertCurrent: params.assertCurrent,
+      operatorAuthority: params.operatorAuthority,
+    });
+    await recordNativeSandboxReceipt(native, {}, true);
+    native.custody.assertCurrent();
+    return { containerName, containerId };
+  }
   const needsSetupReservation =
     Boolean(params.cfg.docker.setupCommand?.trim()) ||
     existingRegistryEntry?.runtimeState === "pending";

@@ -9,6 +9,7 @@ import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./regist
 
 export type SandboxRegistryInsert = Insertable<DB["sandbox_registry_entries"]>;
 export type SandboxRegistryWrite =
+  | { operation: "foreground-reserve"; entry: SandboxRegistryEntry }
   | { operation: "foreground-record"; previous: SandboxRegistryEntry; entry: SandboxRegistryEntry }
   | { operation: "foreground-retire"; entry: SandboxRegistryEntry }
   | { operation: "update"; entry: SandboxRegistryEntry }
@@ -101,6 +102,24 @@ export function writeSandboxRegistryInDatabase(
   const { entry } = write;
   const row = readSandboxRegistryRowInDatabase(db, "container", entry.containerName);
   const existing = row ? rowToContainerEntry(row) : null;
+  if (write.operation === "foreground-reserve") {
+    if (!entry.foreground || !entry.workspaceDir || row) {
+      throw new Error("Foreground sandbox requires a new, fully identified allocation.");
+    }
+    // Workspace custody spans scopes and backend choices. A new name cannot
+    // bypass an unfinished allocation left by another turn or Gateway process.
+    if (
+      readSandboxRegistryInDatabase(db).some(
+        (current) => current.workspaceDir === entry.workspaceDir,
+      )
+    ) {
+      throw new Error(
+        "Workspace has an unfinished sandbox allocation; cleanup must complete before retrying.",
+      );
+    }
+    insertSandboxRegistryRowInDatabase(db, containerEntryToRow(entry));
+    return;
+  }
   if (write.operation === "foreground-record" || write.operation === "foreground-retire") {
     assertForegroundSandboxReservationCurrent(
       existing,

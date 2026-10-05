@@ -27,6 +27,7 @@ import {
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import {
   completeSandboxRegistryReservation,
+  reserveForegroundSandboxRegistryEntry,
   recordForegroundSandboxReceipt,
   retireForegroundSandboxRegistryEntry,
   reserveSandboxRegistryEntry,
@@ -186,6 +187,27 @@ describe("registry race safety", () => {
     ).rejects.toThrow();
     expect(await readRegistryEntry(entry.containerName)).toMatchObject(stopped);
     await retireForegroundSandboxRegistryEntry(stopped);
+  });
+
+  it("admits only one foreground owner per workspace even with different names", async () => {
+    const entry = containerEntry({
+      backendId: "docker",
+      workspaceDir: "/workspace/project",
+      foreground: {
+        runId: "run-1",
+        instanceId: "instance-1",
+        engineIdentity: { kind: "docker", id: "daemon-1" },
+        createAttempted: false,
+        startAttempted: false,
+      },
+    });
+    const results = await Promise.allSettled([
+      reserveForegroundSandboxRegistryEntry(entry),
+      reserveForegroundSandboxRegistryEntry({ ...entry, containerName: "container-b" }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect((await readRegistry()).entries).toHaveLength(1);
   });
 
   it("retains exact browser workspace custody and rejects a rebound owner", async () => {
