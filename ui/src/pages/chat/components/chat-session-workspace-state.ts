@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import {
   scopedAgentParamsForSession,
   type SessionScopeHostWithKey,
@@ -154,12 +155,19 @@ export function loadSessionWorkspace(
           search: browserSearch,
           agentId,
         }),
-        client.request<{
-          artifacts?: SessionWorkspaceListResult["artifacts"];
-        } | null>("artifacts.list", {
-          sessionKey,
-          ...(agentId ? { agentId } : {}),
-        }),
+        // The artifact catalog needs broad read; it must not block scoped session files.
+        canCallGatewayMethod(
+          { client, hello: state.hello, phase: "connected" },
+          "artifacts.list",
+          "operator.read",
+        )
+          ? client.request<{
+              artifacts?: SessionWorkspaceListResult["artifacts"];
+            } | null>("artifacts.list", {
+              sessionKey,
+              ...(agentId ? { agentId } : {}),
+            })
+          : null,
       ]);
       if (!isCurrentListing()) {
         return;

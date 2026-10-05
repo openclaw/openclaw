@@ -509,6 +509,33 @@ it.each(["tunnel", "result"])("rejects a replaced placement after %s work", asyn
   expect(mocks.workspace).not.toHaveBeenCalled();
 });
 
+it.each(["tunnel", "result"])(
+  "retains a scoped diff requester through remote %s work",
+  async (phase) => {
+    let current = true;
+    if (phase === "tunnel") {
+      onTunnel = () => {
+        current = false;
+      };
+    } else {
+      onResult = () => {
+        current = false;
+      };
+    }
+    await expect(
+      loadSessionDiff({ sessionKey }, context as never, {
+        ownWorkspaceOnly: true,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("requester revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("requester revoked");
+    expect(mocks.workspace).not.toHaveBeenCalled();
+  },
+);
+
 it.each(["reset", "archive", "lifecycle revision"])(
   "rejects a session %s before dispatching an editor write",
   async (change) => {

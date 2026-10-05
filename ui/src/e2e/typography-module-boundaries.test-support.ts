@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { describe, expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   type createControlUiE2eSuite,
   holdModuleResponse,
@@ -18,7 +19,9 @@ export function defineTypographyModuleBoundaryTests(
     it.each(["MacIntel", "Linux x86_64"])(
       "keeps shortcut letters aligned on the system UI stack on %s",
       async (platform) => {
-        const { page } = await openThemedChat("phosphor", "dark");
+        const { page } = await openThemedChat("phosphor", "dark", {
+          featureMethods: [...defaultControlUiFeatureMethods, "sessions.diff"],
+        });
         await page.addInitScript((value) => {
           Object.defineProperty(navigator, "platform", { get: () => value });
         }, platform);

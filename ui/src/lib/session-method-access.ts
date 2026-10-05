@@ -101,8 +101,12 @@ export function readSessionMethodScopeAccess(
   const createsNewSession =
     request.method === "sessions.create" &&
     !(isRecord(request.params) && request.params.parentSessionKey);
+  const diffNeedsOwner =
+    request.method === "sessions.diff" &&
+    !roleScopesAllow({ role, requestedScopes: ["operator.read"], allowedScopes: scopes });
   if (
     (archiveNeedsOwner ||
+      diffNeedsOwner ||
       (requiredScope === "operator.sessions.write" &&
         !roleScopesAllow({ role, requestedScopes: ["operator.write"], allowedScopes: scopes }) &&
         // Creation assigns its owner on the Gateway before a canonical row exists.

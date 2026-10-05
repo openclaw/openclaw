@@ -6,6 +6,7 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  defaultControlUiFeatureMethods,
   canRunPlaywrightChromium,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -104,6 +105,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      featureMethods: [...defaultControlUiFeatureMethods, "artifacts.list"],
       historyMessages: [
         {
           role: "assistant",

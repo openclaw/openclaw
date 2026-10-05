@@ -89,6 +89,7 @@ describeControlUiE2e("Control UI chat file links", () => {
           },
         };
         const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "artifacts.list"],
           deferredMethods: [
             "sessions.files.get",
             ...(intent === "list" ? ["sessions.files.list"] : []),

@@ -71,25 +71,29 @@ describe("readSessionMethodAccess", () => {
     },
   );
 
-  it.each(["sessions.create"])("keeps scoped %s on the creator's session", (method) => {
-    const gateway = snapshot({ methods: [method], scopes: ["operator.sessions.write"] });
-    const request = {
-      method,
-      params: { parentSessionKey: "agent:main:notes", fork: true },
-      requiredScope: "operator.write" as const,
-      sessionScope: true,
-    };
-    expect(
-      readSessionMethodAccess(gateway, { ...request, session: { sharingRole: "owner" } }),
-    ).toMatchObject({ allowed: true });
-    expect(
-      readSessionMethodAccess(gateway, { ...request, session: { sharingRole: "viewer" } }),
-    ).toMatchObject({ allowed: false, cause: "session-not-owned" });
-    expect(readSessionMethodAccess(gateway, request)).toMatchObject({
-      allowed: false,
-      cause: "session-not-owned",
-    });
-  });
+  it.each(["sessions.diff", "sessions.create"])(
+    "keeps scoped %s on the creator's session",
+    (method) => {
+      const gateway = snapshot({ methods: [method], scopes: ["operator.sessions.write"] });
+      const request = {
+        method,
+        params: { parentSessionKey: "agent:main:notes", fork: true },
+        requiredScope:
+          method === "sessions.diff" ? ("operator.read" as const) : ("operator.write" as const),
+        sessionScope: true,
+      };
+      expect(
+        readSessionMethodAccess(gateway, { ...request, session: { sharingRole: "owner" } }),
+      ).toMatchObject({ allowed: true });
+      expect(
+        readSessionMethodAccess(gateway, { ...request, session: { sharingRole: "viewer" } }),
+      ).toMatchObject({ allowed: false, cause: "session-not-owned" });
+      expect(readSessionMethodAccess(gateway, request)).toMatchObject({
+        allowed: false,
+        cause: "session-not-owned",
+      });
+    },
+  );
 
   it("allows a write-scoped operator to create ordinary sessions", () => {
     expect(

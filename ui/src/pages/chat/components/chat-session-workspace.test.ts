@@ -17,12 +17,52 @@ import {
   refreshSessionWorkspace,
   renderSessionWorkspaceRail,
   revealSessionWorkspaceFile,
-  resolveSessionDiffSidebarContent,
+  resolveSessionReviewSidebarContent,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
 
 describe("session workspace state", () => {
+  it("opens scoped Review only for the creator and discards results after access changes", async () => {
+    const pending = createDeferred<{
+      sessionKey: string;
+      files: [];
+      additions: number;
+      deletions: number;
+    }>();
+    const request = vi.fn(() => pending.promise);
+    const state = {
+      client: { request },
+      connected: true,
+      connectionEpoch: 1,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHelloForMethods(["sessions.diff"], ["operator.sessions.write"]),
+      sessionKey: "agent:main:own",
+      sidebarContent: null,
+      sessions: {},
+    } as unknown as SessionWorkspaceHost;
+    expect(
+      createSessionWorkspaceProps(state, { session: { sharingRole: "viewer" } }).onOpenDiff,
+    ).toBeUndefined();
+    expect(
+      createSessionWorkspaceProps(state, { session: { sharingRole: "owner" } }).onOpenDiff,
+    ).toBeTypeOf("function");
+    const content = resolveSessionReviewSidebarContent(state);
+    if (content?.kind !== "session-diff") {
+      throw new Error("Expected scoped Review");
+    }
+    const result = content.load({ scope: "all" });
+    const outcome = expect(result).rejects.toThrow("creator");
+    createSessionWorkspaceProps(state, { session: { sharingRole: "viewer" } });
+    pending.resolve({ sessionKey: state.sessionKey, files: [], additions: 1, deletions: 0 });
+    await outcome;
+    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.diff", {
+      sessionKey: state.sessionKey,
+      agentId: "main",
+      scope: "all",
+    });
+  });
+
   it("keeps filter changes in the current session and resets them for a new session", () => {
     const requestUpdate = vi.fn();
     const state = {
@@ -75,7 +115,7 @@ describe("session workspace state", () => {
       connected: true,
       connectionEpoch: 1,
       handleOpenSidebar: vi.fn(),
-      hello: null,
+      hello: gatewayHelloForMethods(["artifacts.list"]),
       agentsList: { agents: [] },
       requestUpdate: vi.fn(),
       sessionKey: "agent:main:cloud",
@@ -119,6 +159,60 @@ describe("session workspace state", () => {
     expect(mount.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     expect(mount.querySelector('button[aria-label="src/slow.ts"]')).not.toBeNull();
   });
+
+  it.each(["scoped", "broad", "unadvertised", "artifact-error"] as const)(
+    "keeps Files and previews usable with %s artifact access",
+    async (access) => {
+      const sessionKey = "agent:main:shared-files";
+      const file = { kind: "read", name: "notes.md", path: "notes.md", missing: false };
+      const listFiles = vi.fn().mockResolvedValue({ sessionKey, files: [file] });
+      const getFile = vi.fn().mockResolvedValue({
+        sessionKey,
+        file: { ...file, content: "Visible project notes" },
+      });
+      const request =
+        access === "artifact-error"
+          ? vi.fn().mockRejectedValue(new Error("Artifact catalog unavailable"))
+          : vi.fn().mockResolvedValue({ artifacts: [] });
+      const state = {
+        client: { request },
+        connected: true,
+        connectionEpoch: 1,
+        handleOpenSidebar: createSidebarContentRecorder(),
+        hello: gatewayHelloForMethods(access === "unadvertised" ? [] : ["artifacts.list"], [
+          access === "scoped" ? "operator.sessions.read" : "operator.read",
+        ]),
+        agentsList: { agents: [] },
+        sessionKey,
+        sidebarContent: null,
+        sessions: { listFiles, getFile },
+      } as unknown as SessionWorkspaceHost;
+      createSessionWorkspaceProps(state, { expanded: true, session: { sharingRole: "viewer" } });
+      await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
+      expect(listFiles).toHaveBeenCalledExactlyOnceWith(sessionKey, {
+        agentId: "main",
+        path: "",
+        search: "",
+      });
+      expect(request).toHaveBeenCalledTimes(
+        access === "scoped" || access === "unadvertised" ? 0 : 1,
+      );
+      if (access === "artifact-error") {
+        expect(createSessionWorkspaceProps(state).error).toBe("Artifact catalog unavailable");
+        expect(createSessionWorkspaceProps(state).list).toBeNull();
+        return;
+      }
+      expect(createSessionWorkspaceProps(state).error).toBeNull();
+      expect(createSessionWorkspaceProps(state).list?.files).toEqual([file]);
+      createSessionWorkspaceProps(state).onOpenFile("notes.md", "session");
+      expect(await loadedSidebarContent(state)).toMatchObject({
+        kind: "file",
+        path: "notes.md",
+        content: "Visible project notes",
+      });
+      expect(getFile).toHaveBeenCalledExactlyOnceWith(sessionKey, "notes.md", { agentId: "main" });
+    },
+  );
 
   it("rotates Files and Review ownership across a same-client reconnect", async () => {
     let resolveReplacementList!: (value: {
@@ -170,7 +264,7 @@ describe("session workspace state", () => {
       connected: true,
       connectionEpoch: 1,
       handleOpenSidebar: vi.fn(),
-      hello: gatewayHelloForMethods(["sessions.diff"]),
+      hello: gatewayHelloForMethods(["sessions.diff", "artifacts.list"]),
       agentsList: { agents: [] },
       requestUpdate: vi.fn(),
       sessionKey: "agent:main:current",
@@ -188,7 +282,7 @@ describe("session workspace state", () => {
     await vi.waitFor(() =>
       expect(createSessionWorkspaceProps(state).list?.root).toBe("/checkout/a"),
     );
-    const oldDiff = resolveSessionDiffSidebarContent(state);
+    const oldDiff = resolveSessionReviewSidebarContent(state);
     expect(oldDiff?.kind).toBe("session-diff");
     createSessionWorkspaceProps(state, { expanded: true }).onOpenDiff?.();
     expect(state.sidebarContent).toBe(oldDiff);
@@ -240,7 +334,7 @@ describe("session workspace state", () => {
     await Promise.resolve();
     expect(state.sessionWorkspaceState).toBe(replacementWorkspace);
     expect(state.sessionWorkspaceState?.list).toBe(replacementContents);
-    expect(resolveSessionDiffSidebarContent(state)).not.toBe(oldDiff);
+    expect(resolveSessionReviewSidebarContent(state)).not.toBe(oldDiff);
   });
 
   it("refreshes content in place while rotating an open default Review loader", async () => {
@@ -275,7 +369,7 @@ describe("session workspace state", () => {
     };
     createSessionWorkspaceProps(state, { expanded: true });
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
-    const oldDiff = resolveSessionDiffSidebarContent(state)!;
+    const oldDiff = resolveSessionReviewSidebarContent(state)!;
     createSessionWorkspaceProps(state, { expanded: true }).onOpenDiff?.();
 
     refreshSessionWorkspace(state, true);
@@ -511,7 +605,7 @@ describe("openSessionWorkspaceFile", () => {
       }
       const workspace = state.sessionWorkspaceState!;
       workspace.browserSearch = "notes";
-      const oldDiff = resolveSessionDiffSidebarContent(state);
+      const oldDiff = resolveSessionReviewSidebarContent(state);
       state.sidebarContent = oldDiff;
       const savedUpdate = createDeferred();
       state.requestUpdate = () => {
@@ -820,7 +914,7 @@ describe("openSessionWorkspaceFile", () => {
       kind: "unavailable",
       message: "Failed to load notes.txt",
     });
-    const diff = resolveSessionDiffSidebarContent(state);
+    const diff = resolveSessionReviewSidebarContent(state);
     expect(diff?.kind).toBe("session-diff");
     if (diff?.kind === "session-diff") {
       await expect(diff.loadFileText?.("notes.txt")).resolves.toBeNull();

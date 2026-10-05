@@ -67,6 +67,7 @@ import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
+import { resolveSessionReviewSidebarContent } from "./components/chat-session-workspace.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
@@ -202,6 +203,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         desktopAvailable: isDesktopPanelAvailable(this.context.gateway.snapshot),
         discussion: state.connected && state.client ? true : null,
         discussionAvailable: discussionState === "available" || discussionState === "open",
+        reviewAvailable: resolveSessionReviewSidebarContent(state) !== null,
         dashboardAvailable: () => !this.compact && this.isBoardPanelAvailable(),
       })
     ) {

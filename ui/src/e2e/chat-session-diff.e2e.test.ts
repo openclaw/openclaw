@@ -11,6 +11,7 @@ import {
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   activateChatHeaderPanelAction,
   openChatSidePanelType,
@@ -145,6 +146,70 @@ async function seedPersistedReviewLayouts(
 }
 
 suite.define(() => {
+  it.each(["owner", "viewer"] as const)(
+    "limits scoped Review to the creator while preserving %s history",
+    async (sharingRole) => {
+      const context = await newBrowserContext();
+      const page = await context.newPage();
+      const session = createControlUiSessionRow(
+        `agent:main:scoped-review-${sharingRole}`,
+        sharingRole === "owner" ? "My isolated work" : "Shared project notes",
+        Date.parse("2026-09-20T12:00:00.000Z"),
+        { sharingRole, visibility: "shared" },
+      );
+      const historyText = "The session's recorded project notes remain readable.";
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.sessions.write"],
+        sessionKey: session.key,
+        sessions: [session],
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+        historyMessages: [{ role: "assistant", content: historyText }],
+        methodResponses: {
+          "sessions.diff": { ...SESSION_DIFF_RESPONSE, sessionKey: session.key, root: "" },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
+      await page.getByText(historyText, { exact: true }).waitFor();
+      expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
+
+      if (sharingRole === "owner") {
+        await openChatSidePanelType(page, "Review");
+        await waitForSessionDiff(page);
+        await expect
+          .poll(() => page.locator(".chat-diff__row--add").first().textContent())
+          .toContain("replacement line");
+        const requests = await gateway.getRequests("sessions.diff");
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.params).toEqual({
+          sessionKey: session.key,
+          agentId: "main",
+          scope: "all",
+        });
+      } else {
+        await page.keyboard.press("ControlOrMeta+Alt+Shift+E");
+        expect(await page.locator('[data-panel-slot="detail"]').count()).toBe(0);
+        await page.locator(".chat-side-panel-toggle").click();
+        const choices = page.locator(".side-panel-empty__types");
+        await choices.waitFor();
+        expect(
+          await choices.locator(".side-panel-empty__type").filter({ hasText: "Review" }).count(),
+        ).toBe(0);
+        expect(await page.locator(".session-diff").count()).toBe(0);
+        expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
+      }
+      expect(await page.getByText(historyText, { exact: true }).isVisible()).toBe(true);
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.files.get")).toHaveLength(0);
+      if (captureProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, `scoped-review-${sharingRole}.png`),
+        });
+      }
+    },
+  );
+
   it("opens a renamed session diff when Review is added from the panel menu", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();

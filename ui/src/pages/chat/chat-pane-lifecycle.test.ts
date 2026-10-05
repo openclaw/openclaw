@@ -13,6 +13,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
@@ -82,6 +83,36 @@ it("publishes queued-edit retention changes while its pane is parked", async () 
   expect(updates).not.toHaveBeenCalled();
   pane.presented = true;
   await pane.updateComplete;
+});
+
+describe("chat pane Review shortcut", () => {
+  it.each(["viewer", "owner", "preview", "staff"] as const)(
+    "uses the same scoped Review eligibility for %s",
+    (access) => {
+      const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+      pane.active = true;
+      pane.presented = true;
+      state.hello = gatewayHelloForMethods(
+        ["sessions.diff"],
+        [access === "staff" ? "operator.read" : "operator.sessions.write"],
+      );
+      state.sessionWorkspaceSession = { sharingRole: access === "owner" ? "owner" : "viewer" };
+      if (access === "preview") {
+        state.sidebarContent = { kind: "markdown", content: "Visible transcript details" };
+      }
+      const event = new KeyboardEvent("keydown", {
+        key: "E",
+        code: "KeyE",
+        ctrlKey: true,
+        altKey: true,
+        shiftKey: true,
+        cancelable: true,
+      });
+      pane.handleDocumentKeydown(event);
+      expect(event.defaultPrevented).toBe(access !== "viewer");
+      expect(isSidebarSlotVisible(state.sidebarLayout, "detail")).toBe(access !== "viewer");
+    },
+  );
 });
 
 describe("chat pane composer prefill attention", () => {

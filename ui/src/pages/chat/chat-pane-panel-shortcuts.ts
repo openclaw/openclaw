@@ -7,6 +7,7 @@ type PanelContext = {
   desktopAvailable?: boolean;
   discussion?: unknown;
   discussionAvailable?: boolean;
+  reviewAvailable?: boolean;
   dashboardAvailable: () => boolean;
 };
 
@@ -30,7 +31,7 @@ export const SIDEBAR_PANEL_SHORTCUTS = {
     (c) => c.discussion != null && c.discussionAvailable === true,
   ),
   dashboard: panel("dashboard", combos.dashboardPanel, (c) => c.dashboardAvailable()),
-  detail: panel("detail", combos.reviewPanel),
+  detail: panel("detail", combos.reviewPanel, (c) => c.reviewAvailable === true),
   conversation: undefined,
   "link-reader": undefined,
   portal: undefined,

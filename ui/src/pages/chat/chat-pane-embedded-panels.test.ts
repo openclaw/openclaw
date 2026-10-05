@@ -71,6 +71,61 @@ afterEach(() => {
 });
 
 describe("chat pane embedded panels", () => {
+  it("offers Review only for an allowed diff or an existing detail preview", () => {
+    const { state } = createReviewFixture();
+    state.hello = gatewayHelloForMethods(["sessions.diff"], ["operator.sessions.write"]);
+    state.sessionWorkspaceSession = { sharingRole: "viewer" };
+    const slots = () =>
+      availableSidebarSlots(
+        sidebarPanelDefinitions({
+          state,
+          themeMode: "light",
+          agentId: null,
+          browserPresented: false,
+          browserTabsInHeader: false,
+          terminalTabsInHeader: false,
+          browserRefreshOnPresentation: false,
+          desktopPresented: false,
+          desktopRefreshOnPresentation: false,
+          desktopAvailable: false,
+          desktopSource: null,
+          desktopFocusHref: "",
+          onDesktopFocusTargetChange: () => {},
+          dashboard: nothing,
+          workspace: nothing,
+          renderDetail: () => html``,
+          digest: null,
+          activeRunId: null,
+          pullRequests: [],
+          companion: { turns: [], loading: false, draft: "" },
+          companionPresented: false,
+          companionFocusRequest: undefined,
+          onCompanionSubmit: () => {},
+          onCompanionDraftChange: () => {},
+          connected: state.connected,
+          onClearCompanion: () => {},
+          discussion: null,
+          discussionAvailable: false,
+          discussionOpenUrl: null,
+          discussionSourceGeneration: 0,
+          pluginPanels: [],
+          isPluginPanelPresented: () => false,
+        }),
+      );
+    expect(slots()).not.toContain("detail");
+    expect(slots()).toContain("workspace");
+    state.sessionWorkspaceSession = { sharingRole: "owner" };
+    expect(slots()).toContain("detail");
+    state.sidebarContent = state.sessionWorkspaceState!.diffContent!;
+    state.sessionWorkspaceSession = { sharingRole: "viewer" };
+    expect(slots()).not.toContain("detail");
+    state.sidebarContent = { kind: "markdown", content: "Visible transcript details" };
+    expect(slots()).toContain("detail");
+    state.sidebarContent = null;
+    state.hello = gatewayHelloForMethods(["sessions.diff"], ["operator.read"]);
+    expect(slots()).toContain("detail");
+  });
+
   it("navigates an existing file tab to an explicit line without resetting its editor or draft", async () => {
     const descriptors = ["getClientRects", "getBoundingClientRect"].map(
       (key) => [key, Object.getOwnPropertyDescriptor(Range.prototype, key)] as const,
@@ -621,7 +676,7 @@ describe("chat pane embedded panels", () => {
       client: { request: vi.fn() },
       connected: true,
       connectionEpoch: 1,
-      hello: { features: { methods: ["sessions.diff"] } },
+      hello: gatewayHelloForMethods(["sessions.diff"]),
       sessionKey: "agent:main:review",
       sidebarContent: null,
       sidebarLayout: openSlot({ columns: [] }, "workspace"),
@@ -659,7 +714,7 @@ describe("chat pane embedded panels", () => {
       client: { request },
       connected: true,
       connectionEpoch: 1,
-      hello: { features: { methods: ["sessions.diff"] } },
+      hello: gatewayHelloForMethods(["sessions.diff"]),
       sessionKey: "agent:main:review",
       sidebarContent: null,
       sidebarLayout: { columns: [] },

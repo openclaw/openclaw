@@ -98,6 +98,12 @@ Gateway's allowed model catalog. Full permission mode, sandbox changes, and
 changes to an existing session's context window still require administrator access.
 Reconnecting rechecks current permission before replaying a Stop for its original run.
 
+**Review** accepts session read access for the creator's own managed worktree or
+repository workspace. It checks the durable workspace owner and current session
+before returning changes. It does not fall back to a shared agent checkout or
+expose the host workspace path. A session without its own checkout shows an
+explanation directing the person to create a session with a worktree.
+
 Own-work methods, including message sending, ordinary session creation,
 recovery, and forks, accept `operator.sessions.write` where their parameters
 do not require administrator access. Session ownership, current authority,

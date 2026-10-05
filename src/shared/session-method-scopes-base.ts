@@ -34,6 +34,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.viewers.set",
   "sessions.preview",
   "sessions.describe",
+  "sessions.diff",
   "sessions.branches.list",
   "sessions.get",
   "sessions.github.options",

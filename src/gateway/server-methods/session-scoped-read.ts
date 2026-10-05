@@ -1,5 +1,6 @@
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
+import { isSessionCreatorProfile } from "../session-creator.js";
 import {
   hasSessionReadAccessChanged,
   hiddenSessionNotFound,
@@ -18,7 +19,11 @@ export function retainSessionScopedRead(
   options: GatewayRequestHandlerOptions,
   sessionKey: string,
   agentId: string,
-  readOptions: { requireMaterialized?: boolean; allowMetadataChanges?: boolean } = {},
+  readOptions: {
+    requireMaterialized?: boolean;
+    allowMetadataChanges?: boolean;
+    requireOwner?: boolean;
+  } = {},
 ) {
   const authority = readGatewayRequestMutationAuthority(options);
   const actor = resolveGatewayOperatorRoleActor(options.client);
@@ -56,6 +61,8 @@ export function retainSessionScopedRead(
         !operatorScopeSatisfied("operator.sessions.read", options.client?.connect.scopes ?? [])) ||
       sharingIdentity(options.client, currentActor)?.id !== profileId ||
       (readOptions.requireMaterialized && !read.entry?.sessionId) ||
+      (readOptions.requireOwner &&
+        !isSessionCreatorProfile(read.entry?.createdActor, operatorProfileId)) ||
       !read.isCurrentAtResponse() ||
       (read.entry && visible?.(read.legacyKey ?? read.canonicalKey, read.entry) === false)
     ) {
