@@ -349,7 +349,11 @@ New LaunchAgent plists request `ExitTimeOut=330`, derived from the same service
 stop budget as Linux's `TimeoutStopSec=330`. With that effective deadline, the
 nominal split is 315 seconds of drain, 10 seconds for cleanup, and 5 seconds before
 the supervisor deadline. `openclaw doctor --fix` backs up and migrates the retired
-installer value of 20 seconds to 330. Other explicit values, including 600 and
+installer value of 20 seconds to 330 only when the definition otherwise matches
+the retired generated template. A 20-second timeout in a customized definition
+is ambiguous: Doctor reports that it is below the drain budget and preserves it.
+An installer comment alone does not authorize replacing an operator's policy.
+Other explicit values, including 600 and
 unlimited (`0`), are reported and preserved; short custom values receive a warning.
 Update finalization uses the same backed-up service reconciliation. The first
 stop still obeys the previously loaded job's deadline until the replacement is

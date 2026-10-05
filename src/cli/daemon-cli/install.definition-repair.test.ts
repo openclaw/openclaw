@@ -666,6 +666,9 @@ it.skipIf(process.platform === "win32")(
 
 it.skipIf(process.platform === "win32").each([
   { seconds: 20, throttle: 10, migrated: true },
+  { seconds: 20, throttle: 45, migrated: false },
+  { seconds: 20, throttle: 45, migrated: true, portDrift: true },
+  { seconds: 20, throttle: 45, migrated: true, updater: true },
   { seconds: 600, throttle: 10, migrated: false },
   { seconds: 30, throttle: 10, migrated: false },
   { seconds: 600, throttle: 1, migrated: true },
@@ -701,6 +704,7 @@ it.skipIf(process.platform === "win32").each([
     const original = buildLaunchAgentPlist({
       ...plan,
       label: "ai.openclaw.gateway",
+      comment: "OpenClaw Gateway",
       stdoutPath,
       stderrPath: stdoutPath,
     })
@@ -726,10 +730,16 @@ it.skipIf(process.platform === "win32").each([
       expect(changed).toContain("<string>19138</string>");
     }
     expect(changed).toMatch(
-      new RegExp(`<key>ExitTimeOut</key>\\s*<integer>${seconds === 20 ? 330 : seconds}</integer>`),
+      new RegExp(
+        `<key>ExitTimeOut</key>\\s*<integer>${seconds === 20 && throttle !== 45 ? 330 : seconds}</integer>`,
+      ),
     );
     if (migrated) {
-      expect(changed).toMatch(/<key>ThrottleInterval<\/key>\s*<integer>10<\/integer>/u);
+      expect(changed).toMatch(
+        new RegExp(
+          `<key>ThrottleInterval</key>\\s*<integer>${throttle === 45 ? 45 : 10}</integer>`,
+        ),
+      );
       await expectDefinitionBackups({ source, original });
       expect(native.launchctl.mock.calls.filter(([args]) => args[0] === "bootstrap")).toHaveLength(
         1,
@@ -744,11 +754,13 @@ it.skipIf(process.platform === "win32").each([
       ? response().warnings?.join("\n")
       : native.note.mock.calls.map(([message]) => message).join("\n");
     expect(diagnostics).toContain(
-      updater
-        ? "Reconciled Gateway service definition: ExitTimeOut."
-        : seconds === 20
-          ? "ExitTimeOut=330"
-          : "Custom ExitTimeOut; not changed.",
+      throttle === 45
+        ? "not changed because the definition is customized"
+        : updater
+          ? "Reconciled Gateway service definition: ExitTimeOut."
+          : seconds === 20
+            ? "ExitTimeOut=330"
+            : "Custom ExitTimeOut; not changed.",
     );
   },
 );

@@ -9,6 +9,7 @@ import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import {
   buildLaunchAgentEnvironmentWrapper,
   resolveLaunchAgentPlistPath,
+  resolveLaunchAgentEnvFilePath,
   resolveLaunchAgentEnvWrapperPath,
 } from "./launchd-service-files.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
@@ -249,20 +250,42 @@ it.each([
   { seconds: 600, kind: "preserved", stale: true },
   { seconds: 20, kind: "outdated", throttle: 1 },
   { seconds: 20, kind: "outdated", throttle: 60 },
+  { seconds: 20, kind: "outdated", wrapped: true },
+  { seconds: 20, kind: "preserved", throttle: 45 },
+  { seconds: 20, kind: "preserved", customized: "ProcessType" },
+  { seconds: 20, kind: "preserved", customized: "ProgramArguments" },
+  { seconds: 20, kind: "preserved", customized: "Comment" },
+  { seconds: 20, kind: "preserved", customized: "WorkingDirectory" },
+  { seconds: 20, kind: "preserved", customized: "UnknownKey" },
 ])(
-  "audits launchd exit timeout $seconds and preserves custom policy (throttle=$throttle)",
-  async ({ seconds, kind, stale, throttle }) => {
+  "audits launchd exit timeout $seconds and preserves custom policy (throttle=$throttle, customized=$customized, wrapped=$wrapped)",
+  async ({ seconds, kind, stale, throttle, customized, wrapped }) => {
     const home = dirs.make("definition-facts-launchd-");
     const env = { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") };
     const sourcePath = resolveLaunchAgentPlistPath(env);
     const command = {
-      programArguments: ["/usr/bin/node", "/opt/openclaw/index.js", "gateway"],
+      programArguments: [
+        "/usr/bin/node",
+        "/opt/openclaw/index.js",
+        "gateway",
+        ...(customized === "ProgramArguments" ? ["--verbose"] : []),
+      ],
       environment: { PATH: "/usr/bin:/bin", ...(stale ? staleServiceEnvironment : {}) },
     };
     const { stdoutPath } = resolveGatewaySupervisorLogPaths(env);
     const original = buildLaunchAgentPlist({
       ...command,
+      programArguments: wrapped
+        ? [
+            "/bin/sh",
+            resolveLaunchAgentEnvWrapperPath(env, "ai.openclaw.gateway"),
+            resolveLaunchAgentEnvFilePath(env, "ai.openclaw.gateway"),
+            ...command.programArguments,
+          ]
+        : command.programArguments,
+      ...(customized === "WorkingDirectory" ? { workingDirectory: "/operator/workspace" } : {}),
       label: "ai.openclaw.gateway",
+      comment: customized === "Comment" ? "Operator service" : "OpenClaw Gateway",
       stdoutPath,
       stderrPath: stdoutPath,
     })
@@ -273,6 +296,14 @@ it.each([
       .replace(
         /<key>ThrottleInterval<\/key>\s*<integer>10<\/integer>/u,
         `<key>ThrottleInterval</key><integer>${throttle ?? 10}</integer>`,
+      )
+      .replace(
+        "<string>Interactive</string>",
+        `<string>${customized === "ProcessType" ? "Background" : "Interactive"}</string>`,
+      )
+      .replace(
+        "<key>Label</key>",
+        `${customized === "UnknownKey" ? "<key>LowPriorityIO</key><true/>" : ""}<key>Label</key>`,
       );
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, original);
@@ -287,12 +318,16 @@ it.each([
         ? [
             expect.objectContaining({
               code: "launchd-stop-timeout",
-              message: expect.stringContaining("ExitTimeOut=330"),
+              message: expect.stringContaining(
+                seconds === 20 && kind === "preserved"
+                  ? "not changed because the definition is customized"
+                  : "ExitTimeOut=330",
+              ),
             }),
           ]
         : [],
     );
-    expect(result.definitionDrift ?? []).toEqual([
+    const expectedDrift = [
       ...(kind
         ? [
             expect.objectContaining(
@@ -305,14 +340,21 @@ it.each([
       ...(throttle
         ? [
             expect.objectContaining({
-              kind: "outdated",
+              kind: throttle === 45 ? "preserved" : "outdated",
               key: "ThrottleInterval",
-              current: throttle,
-              expected: 10,
+              ...(throttle === 45 ? {} : { current: throttle, expected: 10 }),
             }),
           ]
         : []),
-    ]);
+      ...(customized === "ProcessType"
+        ? [expect.objectContaining({ kind: "preserved", key: "ProcessType" })]
+        : []),
+      ...(customized === "UnknownKey"
+        ? [expect.objectContaining({ kind: "unknown-edit", key: "LowPriorityIO" })]
+        : []),
+    ];
+    expect(result.definitionDrift ?? []).toEqual(expect.arrayContaining(expectedDrift));
+    expect(result.definitionDrift ?? []).toHaveLength(expectedDrift.length);
     expect(await fs.readFile(sourcePath, "utf8")).toBe(original);
   },
 );
