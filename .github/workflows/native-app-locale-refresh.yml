@@ -37,12 +37,30 @@ on:
         required: false
         default: false
         type: boolean
+      publish:
+        description: Publish the generated locale PR after validation.
+        required: false
+        default: true
+        type: boolean
+      preflight_only:
+        description: Verify an exact branch dispatch without translation or publishing secrets.
+        required: false
+        default: false
+        type: boolean
+      source_sha:
+        description: Exact reviewed pull request head to translate in non-publishing mode.
+        required: false
+        type: string
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
-  group: native-app-locale-refresh
+  group: >-
+    ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only &&
+      format('native-app-locale-preflight-{0}', github.ref) ||
+      'native-app-locale-refresh' }}
   # Finish the active full refresh; GitHub retains only the newest pending run for this group.
   # Publisher overlap checks defer stale generated paths to that queued reconciliation run.
   cancel-in-progress: false
@@ -51,33 +69,117 @@ jobs:
   resolve-base:
     if: >-
       github.repository == 'openclaw/openclaw' &&
-      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+      (github.event_name != 'workflow_dispatch' ||
+        (inputs.publish && !inputs.preflight_only && github.ref == 'refs/heads/main') ||
+        (!inputs.publish && !inputs.preflight_only && github.ref == 'refs/heads/main') ||
+        (inputs.preflight_only && github.ref_type == 'branch'))
     runs-on: ubuntu-latest
     outputs:
+      reviewed-pr: ${{ steps.review.outputs.pr }}
       sha: ${{ steps.base.outputs.sha }}
     steps:
-      - name: Resolve default branch head
+      - name: Resolve source commit
         id: base
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          NON_PUBLISHING: >-
+            ${{ github.event_name == 'workflow_dispatch' &&
+              (!inputs.publish || inputs.preflight_only) }}
+          PREFLIGHT_ONLY: >-
+            ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only }}
+          REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          sha="$(
-            timeout --signal=TERM --kill-after=10s 60s \
-              gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha
-          )"
+          if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
+            sha="${WORKFLOW_SHA}"
+          elif [[ "${NON_PUBLISHING}" == "true" ]]; then
+            sha="${REQUESTED_SOURCE_SHA}"
+          else
+            sha="$(
+              timeout --signal=TERM --kill-after=10s 60s \
+                gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha
+            )"
+          fi
           if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Unable to resolve ${DEFAULT_BRANCH} to an exact commit." >&2
+            echo "Unable to resolve an exact source commit." >&2
             exit 1
           fi
           echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
 
+      - name: Require reviewed source for translation
+        id: review
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish && !inputs.preflight_only
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          set -euo pipefail
+          pull_requests="$(
+            gh api --paginate \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${REPOSITORY}/commits/${SOURCE_SHA}/pulls?per_page=100" \
+              --jq '.[]' | jq -s '.'
+          )"
+          pull_request="$(
+            jq -cer \
+              --arg base "${DEFAULT_BRANCH}" \
+              --arg repository "${REPOSITORY}" \
+              --arg sha "${SOURCE_SHA}" \
+              '[.[] | select(
+                .state == "open" and
+                .draft == false and
+                .base.ref == $base and
+                .base.repo.full_name == $repository and
+                .head.sha == $sha
+              )] | if length == 1 then .[0] else error("source must be the exact head of one open pull request") end' \
+              <<< "${pull_requests}"
+          )"
+          pr="$(jq -er '.number' <<< "${pull_request}")"
+          decision="$(
+            gh api graphql \
+              -f query='query($owner: String!, $name: String!, $number: Int!) {
+                repository(owner: $owner, name: $name) {
+                  pullRequest(number: $number) { headRefOid reviewDecision }
+                }
+              }' \
+              -f owner="${REPOSITORY%%/*}" \
+              -f name="${REPOSITORY#*/}" \
+              -F number="${pr}" \
+              --jq '.data.repository.pullRequest'
+          )"
+          if ! jq -e --arg sha "${SOURCE_SHA}" \
+            'select(.headRefOid == $sha and .reviewDecision == "APPROVED")' \
+            <<< "${decision}" >/dev/null; then
+            echo "Source ${SOURCE_SHA} needs an exact-head approval from a repository reviewer before translation credentials may be used." >&2
+            exit 1
+          fi
+          current="$(gh api "repos/${REPOSITORY}/pulls/${pr}")"
+          jq -e \
+            --arg base "${DEFAULT_BRANCH}" \
+            --arg repository "${REPOSITORY}" \
+            --arg sha "${SOURCE_SHA}" \
+            'select(
+              .state == "open" and
+              .draft == false and
+              .base.ref == $base and
+              .base.repo.full_name == $repository and
+              .head.sha == $sha
+            )' \
+            <<< "${current}" >/dev/null
+          echo "pr=${pr}" >> "${GITHUB_OUTPUT}"
+
   publisher-preflight:
     name: Verify generated PR App permissions
     needs: resolve-base
-    if: needs.resolve-base.result == 'success'
+    if: >-
+      needs.resolve-base.result == 'success' &&
+      (github.event_name != 'workflow_dispatch' ||
+        (inputs.publish && !inputs.preflight_only))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -119,8 +221,12 @@ jobs:
   refresh:
     needs: [resolve-base, publisher-preflight]
     if: >-
+      always() &&
       needs.resolve-base.result == 'success' &&
-      needs.publisher-preflight.result == 'success'
+      (needs.publisher-preflight.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' && !inputs.publish &&
+          needs.publisher-preflight.result == 'skipped')) &&
+      !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -165,6 +271,48 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - name: Revalidate reviewed source
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REVIEWED_PR: ${{ needs.resolve-base.outputs.reviewed-pr }}
+          SOURCE_SHA: ${{ needs.resolve-base.outputs.sha }}
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/${REPOSITORY}/pulls/${REVIEWED_PR}")"
+          jq -e \
+            --arg base "${DEFAULT_BRANCH}" \
+            --arg repository "${REPOSITORY}" \
+            --arg sha "${SOURCE_SHA}" \
+            'select(
+              .state == "open" and
+              .draft == false and
+              .base.ref == $base and
+              .base.repo.full_name == $repository and
+              .head.sha == $sha
+            )' \
+            <<< "${current}" >/dev/null
+          decision="$(
+            gh api graphql \
+              -f query='query($owner: String!, $name: String!, $number: Int!) {
+                repository(owner: $owner, name: $name) {
+                  pullRequest(number: $number) { headRefOid reviewDecision }
+                }
+              }' \
+              -f owner="${REPOSITORY%%/*}" \
+              -f name="${REPOSITORY#*/}" \
+              -F number="${REVIEWED_PR}" \
+              --jq '.data.repository.pullRequest'
+          )"
+          if ! jq -e --arg sha "${SOURCE_SHA}" \
+            'select(.headRefOid == $sha and .reviewDecision == "APPROVED")' \
+            <<< "${decision}" >/dev/null; then
+            echo "Source ${SOURCE_SHA} no longer has a current exact-head approval; refusing translation credential use." >&2
+            exit 1
+          fi
+
       - name: Refresh locale translations
         env:
           OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
@@ -206,11 +354,14 @@ jobs:
           retention-days: 1
 
   finalize:
-    name: Commit native locale refresh
+    name: Finalize native locale refresh
     needs: [resolve-base, publisher-preflight, refresh]
     if: >-
+      always() &&
       needs.resolve-base.result == 'success' &&
-      needs.publisher-preflight.result == 'success' &&
+      (needs.publisher-preflight.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' && !inputs.publish &&
+          needs.publisher-preflight.result == 'skipped')) &&
       needs.refresh.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -252,7 +403,42 @@ jobs:
       - name: Validate native locale refresh
         run: node --import tsx scripts/native-app-i18n.ts check
 
+      - name: Prepare non-publishing locale patch
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        run: |
+          set -euo pipefail
+          patch="${RUNNER_TEMP}/native-app-locale-refresh.patch"
+          git add -A
+          while IFS= read -r path; do
+            case "${path}" in
+              apps/.i18n/native/* | \
+              apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt | \
+              apps/android/app/src/main/res/values*/assistant.xml | \
+              apps/android/app/src/main/res/values*/strings.xml | \
+              apps/android/app/src/thirdParty/res/values*/accessibility_strings.xml | \
+              apps/android/wear/src/main/res/values*/strings.xml | \
+              apps/ios/Resources/Localizable.xcstrings | \
+              apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings | \
+              apps/ios/Sources/*.lproj/InfoPlist.strings | \
+              apps/ios/WatchApp/*.lproj/InfoPlist.strings | \
+              apps/ios/ShareExtension/*.lproj/InfoPlist.strings | \
+              apps/ios/ActivityWidget/*.lproj/InfoPlist.strings) ;;
+              *) echo "Unexpected generated path: ${path}" >&2; exit 1 ;;
+            esac
+          done < <(git diff --cached --name-only)
+          git diff --cached --binary --full-index > "${patch}"
+
+      - name: Upload non-publishing locale patch
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-app-locale-refresh-${{ needs.resolve-base.outputs.sha }}
+          path: ${{ runner.temp }}/native-app-locale-refresh.patch
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Open or update generated locale PR
+        if: github.event_name != 'workflow_dispatch' || inputs.publish
         uses: ./.github/actions/publish-generated-pr
         with:
           contents-client-id: Iv23liOECG0slfuhz093
