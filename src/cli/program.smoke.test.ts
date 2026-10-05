@@ -140,11 +140,10 @@ describe("cli program (smoke)", () => {
     expect(systemAgentRunMock).toHaveBeenCalledWith(options, runtime);
   });
 
-  it("warns and ignores invalid tui timeout override", async () => {
-    await runProgram(["tui", "--timeout-ms", "nope"]);
-    expect(runtime.error).toHaveBeenCalledWith('warning: invalid --timeout-ms "nope"; ignoring');
-    const options = firstMockArg(tuiRunMock) as { timeoutMs?: number };
-    expect(options?.timeoutMs).toBeUndefined();
+  it.each(["nope", "", "   "])("rejects invalid tui timeout override %j", async (timeoutMs) => {
+    await expect(runProgram(["tui", "--timeout-ms", timeoutMs])).rejects.toThrow("exit");
+    expect(runtime.error).toHaveBeenCalledWith("--timeout-ms must be a positive integer.");
+    expect(tuiRunMock).not.toHaveBeenCalled();
   });
 
   it("rejects partial tui history limits", async () => {
