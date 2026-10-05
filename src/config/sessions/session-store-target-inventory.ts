@@ -425,9 +425,11 @@ export function readSessionStoreTargetInventory(
             physical.storePath,
             request.candidates,
           );
+          const selected =
+            request.selection === "recovery" ? { ...target, agentId: physical.agentId } : target;
           agents.push({
-            agentId: target.agentId,
-            result: { available: true, targets: [target] },
+            agentId: selected.agentId,
+            result: { available: true, targets: [selected] },
             reads: [
               {
                 target: physical,
@@ -446,12 +448,12 @@ export function readSessionStoreTargetInventory(
         },
       };
       if (request.selection === "recovery") {
+        const selected = new Set(request.agentIds);
         resolveAllAgentSessionStoreTargetsSync(config, {
           ...options,
-          // Fixed stores retain durable owners outside the configured roster.
-          agentIds: isPerAgentSessionStoreConfig(config.session?.store)
-            ? new Set(request.agentIds)
-            : undefined,
+          ...(isPerAgentSessionStoreConfig(config.session?.store)
+            ? { agentIds: selected }
+            : { fixedStoreAgentIds: selected }),
         });
       } else {
         dedupeSessionStoreTargetsBySqliteTarget(
