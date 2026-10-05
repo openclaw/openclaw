@@ -11,6 +11,7 @@ import {
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import type { OuterContextTokenMeta } from "./helpers.js";
 import type { buildEmbeddedRunPayloads } from "./payloads.js";
 import type { EmbeddedRunTerminalState } from "./terminal-outcome.js";
 
@@ -647,7 +648,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     assistantProvider?: string;
     provider?: string;
     model?: string;
-    outerContextTokenMeta?: { contextTokens?: number };
+    outerContextTokenMeta?: OuterContextTokenMeta;
     responseModel?: string;
     usage?: Parameters<typeof mergeUsageIntoAccumulator>[1];
     attempts?: NonNullable<Parameters<typeof mergeUsageIntoAccumulator>[1]>[];
@@ -753,6 +754,14 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     expect(resolved.agentMeta).toMatchObject({
       contextTokens: 272_000,
       contextTokensSource: "resolved",
+    });
+
+    const verified = await prepareStats({
+      outerContextTokenMeta: { contextTokens: 1_000_000, contextTokensSource: "resolved-v1" },
+    });
+    expect(verified.agentMeta).toMatchObject({
+      contextTokens: 1_000_000,
+      contextTokensSource: "resolved-v1",
     });
   });
 

@@ -9,6 +9,7 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accu
 import {
   buildUsageAgentMetaFields,
   buildErrorAgentMeta,
+  buildOuterContextTokenMeta,
   resolveEmbeddedAttemptBasePrompt,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
@@ -283,6 +284,37 @@ describe("buildUsageAgentMetaFields", () => {
   });
 });
 
+describe("buildOuterContextTokenMeta", () => {
+  it("trusts only uncapped model-owned windows", () => {
+    expect(buildOuterContextTokenMeta(1_000_000, { source: "model" }, {})).toEqual({
+      contextTokens: 1_000_000,
+      contextTokensSource: "resolved-v1",
+    });
+    for (const info of [
+      { source: "modelsConfig" as const },
+      { source: "default" as const },
+      { source: "model" as const, referenceTokens: 1_000_000 },
+      undefined,
+    ]) {
+      expect(buildOuterContextTokenMeta(64_000, info, {})).toEqual({ contextTokens: 64_000 });
+    }
+    expect(buildOuterContextTokenMeta(undefined, { source: "model" }, {})).toEqual({});
+  });
+
+  it("keeps windows that follow a session selection untrusted", () => {
+    const runtimeModel = {
+      contextWindows: [
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+        { id: "1m", label: "1M", contextWindow: 1_000_000 },
+      ],
+    };
+
+    expect(buildOuterContextTokenMeta(200_000, { source: "model" }, runtimeModel)).toEqual({
+      contextTokens: 200_000,
+    });
+  });
+});
+
 describe("buildErrorAgentMeta", () => {
   it("does not promote current CLI usage without context provenance", () => {
     const fields = buildErrorAgentMeta({
@@ -331,6 +363,25 @@ describe("buildErrorAgentMeta", () => {
       total: 350,
     });
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
+  });
+
+  it("keeps the run's context provenance on error exits", () => {
+    const build = (contextTokensSource?: "resolved-v1") =>
+      buildErrorAgentMeta({
+        sessionId: "session-error",
+        provider: "opencode-go",
+        model: "deepseek-v4.1-flash",
+        contextTokens: 1_000_000,
+        contextTokensSource,
+        usageAccumulator: createUsageAccumulator(),
+        lastRunPromptUsage: undefined,
+      });
+
+    expect(build("resolved-v1")).toMatchObject({
+      contextTokens: 1_000_000,
+      contextTokensSource: "resolved-v1",
+    });
+    expect(build()).toMatchObject({ contextTokens: 1_000_000, contextTokensSource: "resolved" });
   });
 
   it("preserves active session file for error exits after transcript rotation", () => {
