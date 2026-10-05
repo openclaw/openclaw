@@ -49,8 +49,10 @@ import "../../features/github-connections/github-connections.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import "./model-accounts.ts";
 import "./personal-instructions.ts";
+import "./profile-channel-identities.ts";
 import { renderIdentitySection } from "./identity-section.ts";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
+import type { ProfileChannelIdentityBusyState } from "./profile-channel-identities.ts";
 import { renderProfileHero } from "./profile-hero.ts";
 
 registerModelAccountsEnglish();
@@ -63,6 +65,20 @@ type IdentityChange =
   | { kind: "avatar"; file: File }
   | { kind: "git-coauthor"; enabled: boolean };
 
+function sameConnectionScopes(
+  left: readonly string[] | null,
+  right: readonly string[] | null,
+): boolean {
+  if (left === null || right === null) {
+    return left === right;
+  }
+  const leftScopes = new Set(left);
+  const rightScopes = new Set(right);
+  return (
+    leftScopes.size === rightScopes.size && [...leftScopes].every((scope) => rightScopes.has(scope))
+  );
+}
+
 export class ProfilePage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
@@ -74,6 +90,11 @@ export class ProfilePage extends OpenClawLightDomElement {
   @state() private identityLoading = false;
   @state() private identityBusy: IdentityChange["kind"] | null = null;
   @state() private identityError: string | null = null;
+  @state() private identityProfileReady = false;
+  @state() private channelIdentityBusy: ProfileChannelIdentityBusyState = {
+    loading: false,
+    mutation: false,
+  };
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
@@ -82,6 +103,8 @@ export class ProfilePage extends OpenClawLightDomElement {
   private connectionScopes: readonly string[] | null = null;
   private readonly heroAvatarLoader = new IdentityAvatarController(this);
   private identityRequestId = 0;
+  private channelIdentityProfileId: string | null = null;
+  private readonly channelIdentityGenerations = { request: 0, target: 0 };
   private subscriptions: Array<() => void> = [];
   constructor() {
     super();
@@ -94,10 +117,11 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.context.gateway.subscribeEvents((event) => {
         if (
           !this.identityBusy &&
+          !this.channelIdentityBusy.mutation &&
           event.event === "sessions.changed" &&
           asOptionalRecord(event.payload)?.reason === "profile-identity"
         ) {
-          this.identityRequestId += 1;
+          this.advanceIdentityRequest();
           this.identityLoading = false;
           void this.loadIdentity();
         }
@@ -113,13 +137,25 @@ export class ProfilePage extends OpenClawLightDomElement {
       unsubscribe();
     }
     this.subscriptions = [];
-    this.identityRequestId += 1;
+    this.advanceIdentityRequest(true);
     this.client = null;
     this.connected = false;
     this.connecting = false;
     this.canWrite = false;
     this.connectionScopes = null;
+    this.channelIdentityProfileId = null;
+    this.identityProfileReady = false;
+    this.channelIdentityBusy = { loading: false, mutation: false };
     super.disconnectedCallback();
+  }
+
+  private advanceIdentityRequest(targetChanged = false) {
+    const request = ++this.identityRequestId;
+    this.channelIdentityGenerations.request = request;
+    if (targetChanged) {
+      this.channelIdentityGenerations.target += 1;
+    }
+    return request;
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
@@ -128,33 +164,48 @@ export class ProfilePage extends OpenClawLightDomElement {
     const nextCanWrite = nextConnected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
     const writeAccessChanged = nextCanWrite !== this.canWrite;
     const connectionChanged = nextConnected !== this.connected;
+    const grantedScopes = snapshot.hello?.auth?.scopes ?? null;
+    const nextConnectionScopes = nextConnected ? (grantedScopes ? [...grantedScopes] : null) : null;
+    const connectionScopesChanged = !sameConnectionScopes(
+      this.connectionScopes,
+      nextConnectionScopes,
+    );
     const nextSelfUser = nextConnected
       ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
       : null;
     const selfProfileChanged =
       nextSelfUser?.id !== this.selfUser?.id ||
       nextSelfUser?.identity?.id !== this.selfUser?.identity?.id;
+    const identityTargetChanged = clientChanged || connectionChanged || selfProfileChanged;
     const identitySourceChanged =
-      clientChanged || connectionChanged || selfProfileChanged || writeAccessChanged;
+      identityTargetChanged || writeAccessChanged || connectionScopesChanged;
     this.client = snapshot.client;
     this.connected = nextConnected;
     this.connecting = snapshot.phase === "connecting" || snapshot.phase === "reconnecting";
     this.canWrite = nextCanWrite;
     // Hello records this connection's negotiated grants, not the profile's role ceiling.
-    this.connectionScopes = nextConnected ? (snapshot.hello?.auth?.scopes ?? null) : null;
+    this.connectionScopes = nextConnectionScopes;
     this.selfUser = nextSelfUser;
     // connected/client are plain fields; an unidentified connect or
     // disconnect changes no @state, so the render branch must be invalidated
     // explicitly or the page sticks on the stale offline/connected view.
     this.requestUpdate();
     if (identitySourceChanged) {
-      this.identityRequestId += 1;
+      this.advanceIdentityRequest(identityTargetChanged);
       this.ownProfile = null;
       this.displayName = "";
       this.gitCoauthorEnabled = true;
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
+      this.identityProfileReady = false;
+      this.channelIdentityBusy = {
+        loading: false,
+        mutation: identityTargetChanged ? false : this.channelIdentityBusy.mutation,
+      };
+      if (identityTargetChanged) {
+        this.channelIdentityProfileId = null;
+      }
     }
     if (!nextConnected || !snapshot.client) {
       return;
@@ -174,19 +225,22 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (!client || !this.connected || this.identityLoading) {
       return;
     }
-    const requestId = ++this.identityRequestId;
+    const requestId = this.advanceIdentityRequest();
     const currentProfile = this.ownProfile;
     const displayNameDraft = this.displayName;
     const hasUnsavedDisplayName =
       currentProfile !== null && displayNameDraft.trim() !== (currentProfile.displayName ?? "");
     this.identityLoading = true;
     this.identityError = null;
+    this.identityProfileReady = false;
     try {
       const profile = await this.context.gateway.loadSelfProfile();
       if (requestId !== this.identityRequestId) {
         return;
       }
       this.ownProfile = profile;
+      this.channelIdentityProfileId = profile?.id ?? null;
+      this.identityProfileReady = true;
       if (!profile) {
         return;
       }
@@ -403,7 +457,7 @@ export class ProfilePage extends OpenClawLightDomElement {
             control: html`<button
               type="button"
               class="btn"
-              ?disabled=${this.identityBusy !== null}
+              ?disabled=${this.identityBusy !== null || this.channelIdentityBusy.mutation}
               @click=${() => this.context.gateway.connect()}
             >
               ${t("profilePage.access.reconnect")}
@@ -445,7 +499,13 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private refreshManually() {
-    if (this.connected && !this.identityBusy && !this.identityLoading) {
+    if (
+      this.connected &&
+      !this.identityBusy &&
+      !this.identityLoading &&
+      !this.channelIdentityBusy.loading &&
+      !this.channelIdentityBusy.mutation
+    ) {
       if (this.client) {
         invalidateUserPreferences(this.client);
       }
@@ -474,7 +534,21 @@ export class ProfilePage extends OpenClawLightDomElement {
     return renderSettingsPage(html`
       ${
         connected
-          ? html`${this.renderHero()} ${this.renderConnectionAccess()} ${this.renderIdentity()}`
+          ? html`${this.renderHero()} ${this.renderConnectionAccess()} ${this.renderIdentity()}
+              <openclaw-profile-channel-identities
+                .profileId=${this.channelIdentityProfileId}
+                .visible=${this.ownProfile !== null && this.ownProfile.id === this.channelIdentityProfileId}
+                .profileReady=${this.identityProfileReady}
+                .identityBusy=${this.identityLoading || this.identityBusy !== null}
+                .identityGeneration=${this.identityRequestId}
+                .targetGeneration=${this.channelIdentityGenerations.target}
+                .generations=${this.channelIdentityGenerations}
+                @profile-channel-identities-busy-changed=${(
+                  event: CustomEvent<ProfileChannelIdentityBusyState>,
+                ) => {
+                  this.channelIdentityBusy = event.detail;
+                }}
+              ></openclaw-profile-channel-identities>`
           : renderSettingsGroup(
               this.connecting
                 ? html`<div role="status">
@@ -521,7 +595,12 @@ export class ProfilePage extends OpenClawLightDomElement {
           this.connected
             ? html`<button
                 class="btn profile-refresh"
-                ?disabled=${this.identityLoading || this.identityBusy !== null}
+                ?disabled=${
+                  this.identityLoading ||
+                  this.identityBusy !== null ||
+                  this.channelIdentityBusy.loading ||
+                  this.channelIdentityBusy.mutation
+                }
                 @click=${() => this.refreshManually()}
               >
                 ${this.identityLoading ? t("common.refreshing") : t("common.refresh")}
