@@ -185,13 +185,13 @@ export async function runXEvents(
 ): Promise<void> {
   let stream = options.mode !== "poll" && options.bearerConfigured;
   let backoffMs = 1_000;
-  const fallback = () => {
+  const fallback = (error: unknown) => {
     stream = false;
     options.onStatus?.({
       eventMode: "poll",
       streamConnected: false,
       streamBackoffMs: 0,
-      message: "activity API unavailable for this app; polling",
+      message: `${error instanceof Error ? error.message : "X Activity API request failed"}; polling`,
     });
   };
   if (stream) {
@@ -200,7 +200,7 @@ export async function runXEvents(
     } catch (error) {
       options.signal.throwIfAborted();
       if (options.mode !== "stream" || (error instanceof XApiError && error.status === 403)) {
-        fallback();
+        fallback(error);
       } else {
         throw error;
       }
@@ -223,8 +223,8 @@ export async function runXEvents(
         await receiveStream(options);
       } catch (error) {
         options.signal.throwIfAborted();
-        if (error instanceof XApiError && error.status === 403) {
-          fallback();
+        if (error instanceof XApiError && (error.status === 401 || error.status === 403)) {
+          fallback(error);
           continue;
         }
         options.onStatus?.({

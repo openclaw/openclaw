@@ -109,15 +109,30 @@ turns off inbound turns. `dmPolicy` accepts only `disabled`.
 | `stream` | Requests Activity API streaming with the app-only bearer token; falls back to polling when no bearer token is configured. |
 | `poll`   | Polls the mentions endpoint using the user-context token.                                                                 |
 
-The default is `auto`. Streaming ensures a `post.mention.create` subscription
-for the bot, ignores blank keep-alives, and reconnects with
-backoff after a stalled or disconnected stream. Each connection runs a mentions
-backfill from the saved cursor; post IDs deduplicate stream and polling events.
-An Activity API `403` switches to polling and reports:
+The default is `auto`. Streaming lists existing subscriptions with the app-only
+`bearerToken`, then creates a missing `post.mention.create` subscription for the
+bot with its OAuth2 user access token (refreshed from `refreshToken`). Mention
+subscriptions require the user to grant `tweet.read`. The persistent
+`GET /2/activity/stream` connection uses the app-only bearer token, as specified
+by [X's Activity Stream API](https://docs.x.com/x-api/activity/activity-stream).
+
+Streaming ignores blank keep-alives and reconnects with backoff after a stalled
+or disconnected stream. Each connection runs a mentions backfill with the user
+token from the saved cursor; post IDs deduplicate stream and polling events.
+
+In `auto` mode, any subscription setup failure switches to polling. In `stream`
+mode, subscription HTTP `403` switches to polling; other setup errors stop the
+event source. A stream HTTP `401` or `403` switches either mode to polling. The
+channel status `message` includes the failed endpoint, HTTP status, and first X
+error message when available, with credentials redacted. For example:
 
 ```text
-activity API unavailable for this app; polling
+X API /2/activity/subscriptions failed (HTTP 400): OauthAccessTokenRequired: OAuth user access token is required for this event type; polling
 ```
+
+This message explains why Activity could not start; polling remains active.
+Unreadable error bodies still report the HTTP status. Network and token-refresh
+failures report their client error without provider response details.
 
 Polling defaults to 60 seconds; `events.pollSeconds` cannot be less than 15.
 Inbound posts are durably queued before the cursor advances. Completed event
@@ -204,9 +219,11 @@ The dropped-mention counter and last dropped author explain intentional silence.
 There is no pairing flow. An empty allowlist blocks all authors under the
 default policy.
 
-**Streaming falls back:** the Activity API is unavailable for the app, or no
-app-only bearer token was supplied in `auto` or `stream` mode. Polling remains operational;
-check the reported event mode, stream connection/backoff, last event, and cursor.
+**Streaming falls back:** check the status message for the Activity endpoint,
+HTTP status, and X error detail. Verify the app bearer and the bot's OAuth2
+grant, including `tweet.read`. Without an app bearer, `auto` and `stream` use
+polling. Check the reported event mode, stream connection/backoff, last event,
+and cursor.
 
 **Token refresh fails:** check the client ID, client secret, refresh token, and
 granted OAuth2 scopes. Status reports refresh state without exposing secrets.

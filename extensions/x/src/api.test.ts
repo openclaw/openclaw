@@ -1,8 +1,70 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXApiClient, type XFetch } from "./api.js";
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("X API authentication", () => {
+  it("lists and streams Activity with the app bearer but creates mentions with the user token", async () => {
+    vi.useFakeTimers();
+    const requests: string[] = [];
+    let subscribed = false;
+    const api = createXApiClient({
+      clientId: "client",
+      clientSecret: "secret",
+      refreshToken: "refresh",
+      bearerToken: "app-bearer",
+      saveRefreshToken: async () => {},
+      fetch: async (url, init) => {
+        const path = new URL(url).pathname;
+        const authorization = new Headers(init?.headers).get("authorization");
+        requests.push(`${init?.method} ${path} ${authorization}`);
+        if (path === "/2/oauth2/token") {
+          return Response.json({ access_token: "user-access" });
+        }
+        if (path === "/2/activity/stream") {
+          return new Response(null);
+        }
+        if (init?.method === "POST") {
+          if (authorization !== "Bearer user-access") {
+            return Response.json(
+              {
+                errors: [
+                  {
+                    message:
+                      "OauthAccessTokenRequired: OAuth user access token is required for this event type",
+                  },
+                ],
+              },
+              { status: 400 },
+            );
+          }
+          expect(await new Response(init.body).json()).toEqual({
+            event_type: "post.mention.create",
+            filter: { user_id: "9" },
+          });
+          subscribed = true;
+          return Response.json({ data: { subscription_id: "1" } });
+        }
+        return Response.json({
+          data: subscribed ? [{ event_type: "post.mention.create", filter: { user_id: "9" } }] : [],
+        });
+      },
+    });
+    await api.ensureActivitySubscriptions("9");
+    await api.ensureActivitySubscriptions("9");
+    await api.openActivityStream(new AbortController().signal);
+    expect(requests).toEqual([
+      "GET /2/activity/subscriptions Bearer app-bearer",
+      `POST /2/oauth2/token Basic ${Buffer.from("client:secret").toString("base64")}`,
+      "POST /2/activity/subscriptions Bearer user-access",
+      "GET /2/activity/subscriptions Bearer app-bearer",
+      "GET /2/activity/stream Bearer app-bearer",
+    ]);
+  });
+
   it("persists refresh rotation before requests, shares refresh work, and reuses it on restart", async () => {
     const writes: string[] = [];
     let stored: string | undefined;
@@ -39,6 +101,47 @@ describe("X API authentication", () => {
     expect(writes).toEqual(["refresh:initial", "persist", "request", "request"]);
     await createXApiClient(options).getMentions({ userId: "9" });
     expect(writes.slice(4)).toEqual(["refresh:rotated", "persist", "request"]);
+  });
+
+  it.each([
+    {
+      label: "reflected credentials",
+      body: JSON.stringify({
+        errors: [
+          {
+            message: "Rejected test-user-access test-app-bearer test-seed test-rotated test-secret",
+          },
+        ],
+        detail: "Ignored detail",
+      }),
+      detail: ": Rejected [redacted] [redacted] [redacted] [redacted] [redacted]",
+    },
+    {
+      label: "problem detail",
+      body: JSON.stringify({ title: "Forbidden", detail: "Missing tweet.read scope" }),
+      detail: ": Missing tweet.read scope",
+    },
+    { label: "unreadable JSON", body: "not JSON", detail: "" },
+  ])("retains safe Activity diagnostics for $label", async ({ body, detail }) => {
+    vi.useFakeTimers();
+    const api = createXApiClient({
+      clientId: "client",
+      clientSecret: "test-secret",
+      refreshToken: "test-seed",
+      bearerToken: "test-app-bearer",
+      saveRefreshToken: async () => {},
+      fetch: async (url, init) => {
+        if (url.endsWith("/oauth2/token")) {
+          return Response.json({ access_token: "test-user-access", refresh_token: "test-rotated" });
+        }
+        return init?.method === "POST"
+          ? new Response(body, { status: 400 })
+          : Response.json({ data: [] });
+      },
+    });
+    await expect(api.ensureActivitySubscriptions("9")).rejects.toThrow(
+      `X API /2/activity/subscriptions failed (HTTP 400)${detail}`,
+    );
   });
 
   it("never posts after authority is revoked while token refresh is pending", async () => {
