@@ -138,6 +138,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         nodeHasSessionSubscribers: () => false,
         nodeSendToSession: context.nodeSendToSession,
         agentRunSeq: context.agentRunSeq,
+        dedupe: context.dedupe,
         chatRunState,
         toolEventRecipients: chatRunState.toolEventRecipients,
         sessionEventSubscribers: createSessionEventSubscriberRegistry(),

@@ -244,6 +244,7 @@ export async function startGatewayCoreRuntime(input: {
       nodeHasSessionSubscribers,
       nodeSendToSession: sendNodeSessionEvent,
       agentRunSeq,
+      dedupe,
       chatRunState,
       toolEventRecipients,
       sessionEventSubscribers,

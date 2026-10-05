@@ -99,7 +99,13 @@ type ChatBroadcastParams = {
 };
 
 type ChatTerminal =
-  | { state: "final" | "aborted"; message?: Record<string, unknown>; stopReason?: string }
+  | { state: "final"; message?: Record<string, unknown>; stopReason?: string }
+  | {
+      state: "aborted";
+      message?: Record<string, unknown>;
+      stopReason?: string;
+      errorMessage?: string;
+    }
   | {
       state: "error";
       errorMessage?: string;
@@ -135,6 +141,9 @@ function broadcastChatFrame(
             state: params.state,
             message: projectChatDisplayMessage(params.message),
             ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+            ...(params.state === "aborted" && params.errorMessage
+              ? { errorMessage: params.errorMessage }
+              : {}),
           }
         : {
             state: params.state,

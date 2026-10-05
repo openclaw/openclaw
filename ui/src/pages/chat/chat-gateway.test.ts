@@ -2496,47 +2496,103 @@ describe("aborted chat diagnostics", () => {
     expect(state.chatRunId).toBeNull();
   });
 
-  it("does not restore an old diagnostic while a newer send awaits its ACK", () => {
-    const state = createAbortDiagnosticState("run-old");
-    receive(state, "aborted", { runId: "run-old" });
-    state.chatQueue = [
-      {
-        id: "pending-new-send",
-        text: "New request",
-        createdAt: 200,
-        sendRunId: "run-new",
-        sendState: "sending",
-      },
-    ];
+  it.each([
+    { initialState: "aborted", diagnosticState: "aborted" },
+    { initialState: "aborted", diagnosticState: "error" },
+    { initialState: "error", diagnosticState: "error" },
+  ] as const)(
+    "refines $initialState → $diagnosticState detail without replacing terminal timing",
+    ({ initialState, diagnosticState }) => {
+      const state = createAbortDiagnosticState();
+      const initial = chatEvent(initialState, {
+        runId: "run-validation-abort",
+        seq: 4,
+        stopReason: initialState === "error" ? "timeout" : "rpc",
+        ...(initialState === "error" ? { errorKind: "timeout" } : {}),
+        errorMessage: "Earlier provider diagnostic",
+      });
+      handleChatGatewayEvent(state, initial);
+      const status = state.chatRunStatus;
+      const terminal = state.lastLocalTerminalReconcile;
+      const messages = state.chatMessages;
+      if (initialState === "error") {
+        // The provider timeout can arrive before Stop acknowledges the same run.
+        receive(state, "aborted", { runId: initial.runId, seq: 5, stopReason: "rpc" });
+        expect(state.chatRunStatus).toEqual(status);
+        expect(state.lastLocalTerminalReconcile).toEqual(terminal);
+      }
+      const diagnostic = chatEvent(diagnosticState, {
+        runId: initial.runId,
+        seq: 6,
+        ...(diagnosticState === "error" ? { errorKind: "timeout" } : {}),
+        errorMessage: "Command cleanup could not confirm that owned work stopped",
+      });
+      handleChatGatewayEvent(state, diagnostic);
+      expect(state.chatRunError?.summary).toContain("Earlier provider diagnostic");
+      expect(state.chatRunError?.summary).toContain(diagnostic.errorMessage);
+      expect(state.chatRunStatus).toEqual(status);
+      expect(state.lastLocalTerminalReconcile).toEqual(terminal);
+      expect(state.chatMessages).toBe(messages);
+      expect(state.chatRunId).toBeNull();
+      const displayed = state.chatRunError;
+      handleChatGatewayEvent(state, { ...diagnostic, seq: 3, errorMessage: "Stale diagnostic" });
+      handleChatGatewayEvent(state, { ...diagnostic, errorMessage: "Same-sequence diagnostic" });
+      handleChatGatewayEvent(state, diagnostic);
+      expect(state.chatRunError).toBe(displayed);
+    },
+  );
 
-    receive(state, "aborted", {
-      runId: "run-old",
-      errorMessage: "edit tool validation failed: invalid arguments",
-    });
+  it.each(["aborted", "error"] as const)(
+    "does not restore an old %s diagnostic while a newer send awaits its ACK",
+    (diagnosticState) => {
+      const state = createAbortDiagnosticState("run-old");
+      receive(state, "aborted", { runId: "run-old", seq: 4 });
+      state.chatQueue = [
+        {
+          id: "pending-new-send",
+          text: "New request",
+          createdAt: 200,
+          sendRunId: "run-new",
+          sendState: "sending",
+        },
+      ];
 
-    expect(state.chatRunError).toBeNull();
-    expect(state.chatRunId).toBeNull();
-    expect(state.lastLocalTerminalReconcile?.runId).toBe("run-old");
-  });
+      receive(state, diagnosticState, {
+        runId: "run-old",
+        seq: 6,
+        ...(diagnosticState === "error" ? { errorKind: "timeout" } : {}),
+        errorMessage: "edit tool validation failed: invalid arguments",
+      });
 
-  it("does not publish an old aborted diagnostic after a newer run completes", () => {
-    const state = createAbortDiagnosticState("run-old");
-    receive(state, "aborted", { runId: "run-old" });
-    state.chatRunId = "run-new";
-    state.chatStream = "New final answer";
-    receive(state, "final", {
-      runId: "run-new",
-      message: textMessage("assistant", "New final answer"),
-    });
+      expect(state.chatRunError).toBeNull();
+      expect(state.chatRunId).toBeNull();
+      expect(state.lastLocalTerminalReconcile?.runId).toBe("run-old");
+    },
+  );
 
-    receive(state, "aborted", {
-      runId: "run-old",
-      errorMessage: "edit tool validation failed: invalid arguments",
-    });
+  it.each(["aborted", "error"] as const)(
+    "does not publish an old %s diagnostic after a newer run completes",
+    (diagnosticState) => {
+      const state = createAbortDiagnosticState("run-old");
+      receive(state, "aborted", { runId: "run-old", seq: 4 });
+      state.chatRunId = "run-new";
+      state.chatStream = "New final answer";
+      receive(state, "final", {
+        runId: "run-new",
+        message: textMessage("assistant", "New final answer"),
+      });
 
-    expect(state.chatRunError).toBeNull();
-    expect(state.lastLocalTerminalReconcile?.runId).toBe("run-new");
-    expect(state.chatRunId).toBeNull();
-    expect(state.chatMessages.at(-1)).toMatchObject(textMessage("assistant", "New final answer"));
-  });
+      receive(state, diagnosticState, {
+        runId: "run-old",
+        seq: 6,
+        ...(diagnosticState === "error" ? { errorKind: "timeout" } : {}),
+        errorMessage: "edit tool validation failed: invalid arguments",
+      });
+
+      expect(state.chatRunError).toBeNull();
+      expect(state.lastLocalTerminalReconcile?.runId).toBe("run-new");
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatMessages.at(-1)).toMatchObject(textMessage("assistant", "New final answer"));
+    },
+  );
 });

@@ -7,6 +7,7 @@ import type {
   PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
+import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import {
@@ -26,6 +27,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
+  emitAgentEvent,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -38,6 +40,7 @@ import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
@@ -78,7 +81,10 @@ import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
-import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
+import {
+  resolveReplyOperationAbortReason,
+  resolveReplyOperationTerminationFields,
+} from "./reply-operation-abort.js";
 import {
   markReplyOperationExecutionStarted,
   retainReplyOperationUntilComplete,
@@ -585,16 +591,36 @@ async function executeAgentTurnOutcome(
   try {
     const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
-        return await executeAgentTurnInternal(
-          turnParams,
-          runId,
-          commitTerminalOutcome,
-          modelContextLease?.commit ?? (() => undefined),
-          compaction,
-        );
-      } finally {
-        modelContextLease?.rollback();
-        commitTerminalOutcome();
+        try {
+          return await executeAgentTurnInternal(
+            turnParams,
+            runId,
+            commitTerminalOutcome,
+            modelContextLease?.commit ?? (() => undefined),
+            compaction,
+          );
+        } finally {
+          modelContextLease?.rollback();
+          commitTerminalOutcome();
+        }
+      } catch (error) {
+        if (hasCommandProcessCleanupError(error)) {
+          const termination = resolveReplyOperationTerminationFields(
+            error,
+            executionParams.replyOperation?.abortSignal ?? executionParams.opts?.abortSignal,
+            executionParams.replyOperation,
+          );
+          const outcome = buildAgentRunTerminalOutcome({ status: "error", error, ...termination });
+          // The execution scope retains exact routing after cleanup clears live
+          // authority, including hidden runs and compaction-updated session IDs.
+          emitAgentEvent({
+            runId,
+            lifecycleGeneration,
+            stream: "lifecycle",
+            data: { phase: "error", ...outcome, ...termination, executionSettled: true },
+          });
+        }
+        throw error;
       }
     });
     if (internal.kind === "aborted") {
@@ -656,6 +682,9 @@ async function executeAgentTurnOutcome(
       },
     };
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     const abortReason = resolveReplyOperationAbortReason(executionParams.replyOperation, error);
     if (abortReason) {
       return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };

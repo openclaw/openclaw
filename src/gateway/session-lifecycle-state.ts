@@ -230,7 +230,7 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
 }
 
 /** Cleanup may refine only the current run, including resets that retain a session id. */
-function isGatewaySessionCleanupRunCurrent(params: {
+export function isGatewaySessionCleanupRunCurrent(params: {
   entry?: Pick<SessionEntry, "lifecycleRunId" | "lastRunId"> | null;
   event: Pick<LifecycleEventLike, "runId" | "clientRunId" | "lifecycleGeneration">;
 }): boolean {

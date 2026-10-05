@@ -2,6 +2,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  onAgentRuntimeEvent,
+  withAgentRunLifecycleGeneration,
+  type AgentEventRuntimePayload,
+} from "../../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import {
   agentCommand,
   agentCommandFromGatewayIngress,
   compactionTestState as state,
@@ -14,6 +25,7 @@ import {
   GATEWAY_INGRESS_ARGS,
 } from "../agent-command.compaction.test-support.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
+import * as commandCleanup from "./cleanup.js";
 
 const {
   replaceSessionEntry,
@@ -26,6 +38,90 @@ const {
 registerAgentCommandCompactionTestHooks();
 
 describe("agent command foreground completion", () => {
+  it.each([
+    { failure: "body", messages: false, replacement: false },
+    { failure: "body", messages: true, replacement: false },
+    { failure: "finalizer", messages: false, replacement: false },
+    { failure: "finalizer", messages: true, replacement: false },
+    { failure: "finalizer", messages: false, replacement: true },
+  ] as const)(
+    "retains cleanup routing after $failure retirement (messages=$messages, replacement=$replacement)",
+    async ({ failure, messages, replacement }) => {
+      const runId = "retired-command-cleanup";
+      const sessionId = "cleanup-predecessor";
+      const sessionKey = `agent:main:explicit:${sessionId}`;
+      const error = new CommandProcessCleanupError();
+      const events: AgentEventRuntimePayload[] = [];
+      const stop = onAgentRuntimeEvent((event) => {
+        if (event.runId === runId && event.data.cleanupError) {
+          expect(getAgentRunContext(runId)).toBeUndefined();
+          events.push(event);
+        }
+      });
+      const finish = commandCleanup.finishAgentCommandCleanup;
+      const cleanup = vi
+        .spyOn(commandCleanup, "finishAgentCommandCleanup")
+        .mockImplementationOnce(async (params) => {
+          await finish(params);
+          expect(getAgentRunContext(runId)).toBeUndefined();
+          if (replacement) {
+            await withAgentRunLifecycleGeneration(params.lifecycleGeneration, async () => {
+              registerAgentRunContext(runId, {
+                agentId: "replacement",
+                sessionKey: "agent:replacement:other",
+                sessionId: "replacement-session",
+              });
+            });
+          }
+          if (failure === "finalizer") {
+            throw error;
+          }
+        });
+      state.runAgentAttemptMock.mockImplementationOnce(async () => {
+        registerAgentRunContext(runId, {
+          agentId: "main",
+          sessionKey,
+          sessionId,
+          isControlUiVisible: false,
+          projectSessionLifecycle: true,
+          projectSessionMessages: messages,
+        });
+        // The retained routing record must follow the same owner's session rotation.
+        registerAgentRunContext(runId, { sessionId: "cleanup-successor" });
+        if (failure === "body") {
+          throw error;
+        }
+        return makeCompactionResult({ sessionId, text: "done", runner: "embedded" });
+      });
+      try {
+        await expect(
+          agentCommandFromGatewayIngress(
+            { message: "continue", runId, sessionId, sessionKey, allowModelOverride: false },
+            ...GATEWAY_INGRESS_ARGS,
+          ),
+        ).rejects.toBe(error);
+        expect(events).toHaveLength(replacement ? 0 : 1);
+        if (replacement) {
+          expect(getAgentRunContext(runId)?.sessionId).toBe("replacement-session");
+        } else {
+          expect(events[0]).toMatchObject({
+            agentId: "main",
+            sessionKey,
+            sessionId: "cleanup-successor",
+            controlUiVisible: false,
+            projectSessionLifecycle: true,
+            projectSessionMessages: messages,
+            data: { phase: "error", cleanupError: error.message, executionSettled: true },
+          });
+        }
+      } finally {
+        stop();
+        cleanup.mockRestore();
+        clearAgentRunContext(runId);
+      }
+    },
+  );
+
   it.each(["none", "compaction", "memory"] as const)(
     "retains the accepted preflight successor (abort=%s)",
     async (abortStage) => {

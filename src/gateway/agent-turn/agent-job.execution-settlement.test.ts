@@ -10,6 +10,7 @@ import type { DedupeEntry } from "../server-shared.js";
 import {
   getAgentJobSession,
   readAgentJobTerminalOutcome,
+  refreshChatTerminalDedupeEntry,
   setGatewayDedupeEntry,
   waitForAgentJob,
 } from "./agent-job.js";
@@ -17,6 +18,138 @@ import {
 let runSequence = 0;
 
 describe("waitForAgentJob settled execution", () => {
+  it.each(
+    (["rpc", "restart", "timeout"] as const).flatMap((stopReason) =>
+      [true, false].map((cleanupFirst) => ({ stopReason, cleanupFirst })),
+    ),
+  )(
+    "joins late cleanup before or after chat replay ($stopReason, first=$cleanupFirst)",
+    async ({ stopReason, cleanupFirst }) => {
+      const runId = "terminal-replay-" + runSequence++;
+      const key = "chat:" + runId;
+      const dedupe = new Map<string, DedupeEntry>();
+      const session = {
+        sessionKey: "agent:main:cleanup",
+        sessionId: "cleanup-session",
+        agentId: "main",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      };
+      setGatewayDedupeEntry({
+        dedupe,
+        key,
+        session,
+        entry: { ts: 50, ok: true, payload: { runId, status: "accepted" } },
+      });
+      emitAgentEvent({
+        runId,
+        ...session,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          aborted: true,
+          stopReason,
+          ...(stopReason === "timeout" ? { timeoutPhase: "provider", providerStarted: true } : {}),
+          startedAt: 100,
+          endedAt: 200,
+          error: "Earlier provider diagnostic",
+          executionSettled: true,
+        },
+      });
+      const cleanup = new CommandProcessCleanupError();
+      const observeCleanup = () =>
+        emitAgentEvent({
+          runId,
+          ...session,
+          stream: "lifecycle",
+          data: { phase: "error", error: cleanup, endedAt: 300, executionSettled: true },
+        });
+      if (cleanupFirst) {
+        observeCleanup();
+        // Acceptance must not be relabeled as a terminal replay.
+        expect(refreshChatTerminalDedupeEntry({ dedupe, runId, session })).toBe(false);
+      }
+      const entry: DedupeEntry = {
+        ts: 200,
+        ok: true,
+        incognito: true,
+        payload: { runId, status: "timeout", stopReason, endedAt: 200 },
+      };
+      setGatewayDedupeEntry({ dedupe, key, session, entry });
+      if (!cleanupFirst) {
+        observeCleanup();
+      }
+      for (let observation = 0; observation < 2; observation++) {
+        expect(refreshChatTerminalDedupeEntry({ dedupe, runId, session })).toBe(true);
+        expect(dedupe.get(key)).toMatchObject({
+          ts: 200,
+          ok: false,
+          incognito: true,
+          payload: { stopReason, startedAt: 100, endedAt: 200 },
+        });
+        const result = await waitForAgentJob({ runId, source: "chat", timeoutMs: 0 });
+        expect(result).toMatchObject({ stopReason, startedAt: 100, endedAt: 200 });
+        expect(result?.error).toContain("Earlier provider diagnostic");
+        expect(result?.error?.split(cleanup.message)).toHaveLength(2);
+      }
+    },
+  );
+
+  it.each([
+    "sessionKey",
+    "sessionId",
+    "agentId",
+    "lifecycleGeneration",
+    "timestamp",
+    "active",
+    "identity",
+  ] as const)("does not relabel a chat replay with mismatched %s ownership", (mismatch) => {
+    const runId = "terminal-owner-" + runSequence++;
+    const key = "chat:" + runId;
+    const dedupe = new Map<string, DedupeEntry>();
+    const session = {
+      sessionKey: "agent:main:cleanup",
+      sessionId: "cleanup-session",
+      agentId: "main",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    };
+    const entry: DedupeEntry = {
+      ts: 200,
+      ok: true,
+      payload: { runId, status: "timeout", stopReason: "rpc" },
+    };
+    setGatewayDedupeEntry({ dedupe, key, session, entry });
+    emitAgentEvent({
+      runId,
+      ...session,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: new CommandProcessCleanupError(),
+        endedAt: 300,
+        executionSettled: true,
+      },
+    });
+    let eventSession = session;
+    if (mismatch === "timestamp") {
+      dedupe.set(key, { ...entry, ts: 201 });
+    } else if (mismatch === "identity") {
+      dedupe.set(key, { ts: 201, ok: true });
+    } else if (mismatch === "active") {
+      setGatewayDedupeEntry({
+        dedupe,
+        key,
+        session,
+        startNewAttempt: true,
+        entry: { ts: 201, ok: true, payload: { runId, status: "accepted" } },
+      });
+    } else {
+      eventSession = { ...session, [mismatch]: session[mismatch] + "-replacement" };
+    }
+    const retained = dedupe.get(key);
+    expect(refreshChatTerminalDedupeEntry({ dedupe, runId, session: eventSession })).toBe(false);
+    expect(dedupe.get(key)).toBe(retained);
+  });
+
   it.each([
     { source: "agent", stopSource: "replay" },
     { source: "chat", stopSource: "replay" },
@@ -98,6 +231,10 @@ describe("waitForAgentJob settled execution", () => {
           },
         });
         expect(replay?.ts).toBe(stopSource === "replay" ? 200 : 300);
+        if (source === "chat") {
+          expect(refreshChatTerminalDedupeEntry({ dedupe, runId, session })).toBe(true);
+          expect(dedupe.get(key)?.ts).toBe(replay?.ts);
+        }
         const result = await waitForAgentJob({ runId, source, timeoutMs: 0 });
         expect(result).toMatchObject({
           status: "error",

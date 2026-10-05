@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -11,6 +12,35 @@ import {
   resolveReplyRunDeliveryContext,
 } from "./agent-runner-core.js";
 import { createReplyOperation } from "./reply-run-registry.js";
+
+it("keeps cleanup uncertainty visible after restart cancellation", async () => {
+  const replyOperation = createReplyOperation({
+    sessionKey: "agent:main:cleanup",
+    sessionId: "cleanup",
+    turnKind: "visible",
+    resetTriggered: false,
+  });
+  replyOperation.abortForRestart();
+  const error = new Error("Settlement failed", { cause: new CommandProcessCleanupError() });
+  const drain = vi.fn();
+  try {
+    await expect(
+      handleReplyAgentRunError(error, {
+        resolveVisibleReplyDelivery: async () => false,
+        isHeartbeat: false,
+        replyExpectation: "required",
+        isRestartRecoveryArmed: async () => true,
+        replyOperation,
+        resolvedVerboseLevel: "off",
+        returnWithQueuedFollowupDrain: drain,
+        sessionCtx: {},
+      }),
+    ).rejects.toBe(error);
+    expect(drain).toHaveBeenCalledOnce();
+  } finally {
+    replyOperation.complete();
+  }
+});
 
 it.each([false, true])(
   "awaits restart recovery before choosing the error reply (%s)",

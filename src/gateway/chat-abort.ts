@@ -29,6 +29,7 @@ import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import {
   createChatAbortMarker,
+  type ChatAbortMarker,
   type ChatRunPlanSnapshot,
   type ChatRunState,
 } from "./server-chat-state.js";
@@ -438,6 +439,7 @@ function broadcastChatAborted(
     message?: Record<string, unknown>;
     errorMessage?: string;
     liveTextGroup?: AbortSignal;
+    abortMarker: ChatAbortMarker;
   },
 ) {
   const { runId, sessionKey, stopReason } = params;
@@ -449,11 +451,12 @@ function broadcastChatAborted(
       : undefined;
   const payloadAgentId =
     sessionKey === "global" ? (explicitAgentId ?? defaultGlobalAgentId) : explicitAgentId;
+  params.abortMarker.chatSeq = (ops.agentRunSeq.get(runId) ?? 0) + 1;
   const payload = {
     runId,
     sessionKey,
     ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
-    seq: (ops.agentRunSeq.get(runId) ?? 0) + 1,
+    seq: params.abortMarker.chatSeq,
     state: "aborted" as const,
     stopReason,
     ...(errorMessage ? { errorMessage } : {}),
@@ -560,7 +563,8 @@ export function abortChatRunById(
       : undefined,
     canvasBlocks,
   );
-  ops.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
+  const abortMarker = createChatAbortMarker();
+  ops.chatRunState.getOrCreate(runId).abortMarker = abortMarker;
   if (stopReason) {
     active.abortStopReason = stopReason;
   }
@@ -599,6 +603,7 @@ export function abortChatRunById(
       message,
       errorMessage: active.toolErrorSummary,
       liveTextGroup,
+      abortMarker,
     });
   }
   emitAgentEvent({

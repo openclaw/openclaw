@@ -17,6 +17,7 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
@@ -349,6 +350,11 @@ export async function handleReplyAgentRunError(
     sessionCtx,
   } = context;
 
+  if (hasCommandProcessCleanupError(error)) {
+    // A cancellation acknowledgement does not certify that native work stopped.
+    returnWithQueuedFollowupDrain(undefined);
+    throw error;
+  }
   if (isReplyOperationSuperseded(replyOperation)) {
     return { text: SILENT_REPLY_TOKEN };
   }

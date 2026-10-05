@@ -53,6 +53,7 @@ export function createSubscriptionTestFixture() {
         nodeHasSessionSubscribers: () => false,
         nodeSendToSession: vi.fn(),
         agentRunSeq: new Map(),
+        dedupe: new Map(),
         chatRunState,
         toolEventRecipients: chatRunState.toolEventRecipients,
         sessionEventSubscribers: createSessionEventSubscriberRegistry(),

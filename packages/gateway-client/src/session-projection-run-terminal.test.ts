@@ -29,6 +29,71 @@ function createMessage(
 /** Run-scoped terminal state: final acceptance, late diagnostics, and retention. */
 describe("session run terminal bookkeeping", () => {
   it.each([
+    { initialStatus: "aborted", diagnosticStatus: "aborted" },
+    { initialStatus: "aborted", diagnosticStatus: "timeout" },
+    { initialStatus: "timeout", diagnosticStatus: "timeout" },
+  ] as const)(
+    "refines only newer same-run $initialStatus → $diagnosticStatus diagnostics",
+    ({ initialStatus, diagnosticStatus }) => {
+      const message = createMessage("assistant", "Partial answer");
+      const initial = reduceSessionProjection(createSessionProjection(primaryScope), {
+        type: "runTerminal",
+        runId: "cancelled-run",
+        status: initialStatus,
+        seq: 7,
+        stopReason: initialStatus === "timeout" ? "timeout" : "rpc",
+        errorMessage: "Earlier provider diagnostic",
+        message,
+      });
+      const diagnostic = {
+        type: "runTerminal" as const,
+        runId: "cancelled-run",
+        status: diagnosticStatus,
+        seq: 8,
+        stopReason: "restart",
+        errorMessage: "Native cleanup could not confirm termination",
+      };
+      const refined = reduceSessionProjection(initial, diagnostic);
+      const expectedError = `Earlier provider diagnostic\n\n${diagnostic.errorMessage}`;
+      expect(refined.runs[diagnostic.runId]).toMatchObject({
+        status: initialStatus,
+        stopReason: initialStatus === "timeout" ? "timeout" : "rpc",
+        message,
+        seq: 8,
+        errorMessage: expectedError,
+      });
+      expect(reduceSessionProjection(refined, diagnostic)).toBe(refined);
+      for (const seq of [6, 8]) {
+        expect(
+          reduceSessionProjection(refined, { ...diagnostic, seq, errorMessage: "Stale failure" }),
+        ).toBe(refined);
+      }
+      for (const seq of [undefined, -1, 8.5, Number.NaN]) {
+        expect(
+          reduceSessionProjection(refined, { ...diagnostic, seq, errorMessage: "Invalid order" })
+            .runs[diagnostic.runId]?.errorMessage,
+        ).toBe(expectedError);
+      }
+      const replayed = reduceSessionProjection(refined, {
+        ...diagnostic,
+        seq: 9,
+        errorMessage: expectedError,
+      });
+      expect(replayed.runs[diagnostic.runId]?.errorMessage).toBe(expectedError);
+      const withNewRun = reduceSessionProjection(replayed, {
+        type: "runDelta",
+        runId: "new-run",
+        seq: 1,
+        message: createMessage("assistant", "New answer"),
+      });
+      const late = reduceSessionProjection(withNewRun, { ...diagnostic, seq: 10 });
+      expect(late.runs["new-run"]).toBe(withNewRun.runs["new-run"]);
+      const ordinary = reduceSessionProjection(initial, { ...diagnostic, status: "error" });
+      expect(ordinary.runs[diagnostic.runId]?.errorMessage).toBe("Earlier provider diagnostic");
+    },
+  );
+
+  it.each([
     { content: [] },
     { content: [{ type: "input_text", text: "provider rate limit" }] },
     { content: [{ type: "output_text", text: "provider rate limit" }] },

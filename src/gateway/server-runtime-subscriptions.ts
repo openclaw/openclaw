@@ -41,6 +41,10 @@ import {
 } from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import {
+  readChatTerminalDedupeEntry,
+  refreshChatTerminalDedupeEntry,
+} from "./agent-turn/agent-job.js";
+import {
   bindChatAbortTerminalDispatch,
   markChatAbortTerminalPersistenceError,
   type ChatAbortTerminalDispatch,
@@ -59,6 +63,7 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import type { DedupeEntry } from "./server-shared.js";
 import { createSessionActivitySummaries } from "./session-activity-summaries.js";
 import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
@@ -102,6 +107,7 @@ export function startGatewayEventSubscriptions(params: {
   nodeHasSessionSubscribers: (sessionKey: string) => boolean;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   agentRunSeq: Map<string, number>;
+  dedupe: Map<string, DedupeEntry>;
   chatRunState: ChatRunState;
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
@@ -356,6 +362,10 @@ export function startGatewayEventSubscriptions(params: {
                 : snapshot;
             },
             persistGatewaySessionLifecycleEventForEvent: sessionLifecyclePersistence.persist,
+            hasChatTerminalReplay: (runId, session) =>
+              readChatTerminalDedupeEntry({ dedupe: params.dedupe, runId, session }) !== undefined,
+            refreshChatTerminalReplay: (runId, session) =>
+              refreshChatTerminalDedupeEntry({ dedupe: params.dedupe, runId, session }),
             updateRunToolErrorSummary: ({ runId, clientRunId, summary }) => {
               for (const candidateRunId of trackedRunIds(runId, clientRunId)) {
                 const entry = params.chatAbortControllers.get(candidateRunId);

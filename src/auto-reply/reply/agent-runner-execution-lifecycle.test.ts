@@ -17,8 +17,10 @@ import {
 } from "../../agents/run-termination.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
+import { onAgentRuntimeEvent, type AgentEventRuntimePayload } from "../../infra/agent-events.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -48,6 +50,7 @@ import {
 
 useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
 const state = await setupAgentRunnerExecutionTestState();
+const registryMock = await import("../../infra/agent-run-registry.js");
 const execution = await import("./agent-runner-execution.js");
 const { emitAgentEvent } = await import("../../infra/agent-events.js");
 const compactionTarget = {
@@ -60,6 +63,69 @@ const compactionTarget = {
 };
 
 describe("executeAgentTurn: run lifecycle and ownership", () => {
+  it.each([false, true])(
+    "retains hidden cleanup routing after cancellation (messages=%s)",
+    async (messages) => {
+      const registry = await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
+        "../../infra/agent-run-registry.js",
+      );
+      vi.mocked(registryMock.registerAgentRunContext).mockImplementation(
+        registry.registerAgentRunContext,
+      );
+      vi.mocked(registryMock.clearAgentRunContext).mockImplementation(
+        registry.clearAgentRunContext,
+      );
+      const runId = "cancelled-cleanup-run";
+      const events: AgentEventRuntimePayload[] = [];
+      const stop = onAgentRuntimeEvent((event) => {
+        if (event.runId === runId && event.data.cleanupError) {
+          expect(registry.getAgentRunContext(runId)).toBeUndefined();
+          events.push(event);
+        }
+      });
+      const controller = new AbortController();
+      const cleanup = new CommandProcessCleanupError();
+      const error = new Error("Joined runtime cleanup failed", { cause: cleanup });
+      state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+        registry.registerAgentRunContext(runId, {
+          isControlUiVisible: false,
+          projectSessionMessages: messages,
+          sessionId: "cleanup-successor",
+        });
+        controller.abort(createAgentRunRestartAbortError());
+        registry.clearAgentRunContext(runId);
+        throw error;
+      });
+      try {
+        await expect(
+          execution.executeAgentTurn(
+            createMinimalRunAgentTurnParams({
+              opts: { runId, abortSignal: controller.signal },
+            }),
+          ),
+        ).rejects.toBe(error);
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          sessionId: "cleanup-successor",
+          controlUiVisible: false,
+          projectSessionMessages: messages,
+          data: {
+            phase: "error",
+            stopReason: "restart",
+            cleanupError: cleanup.message,
+            executionSettled: true,
+            error: expect.stringContaining(cleanup.message),
+          },
+        });
+      } finally {
+        stop();
+        registry.clearAgentRunContext(runId);
+        vi.mocked(registryMock.registerAgentRunContext).mockReset();
+        vi.mocked(registryMock.clearAgentRunContext).mockReset();
+      }
+    },
+  );
+
   it("classifies cancellation raised by the real deferred lifecycle owner", async () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(
       async (params: RunEmbeddedAgentInternalParams) => {
@@ -942,8 +1008,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   });
 
   it("registers run ownership before asynchronous image preflight", async () => {
-    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
-    const registerAgentRunContext = vi.mocked(agentRunRegistry.registerAgentRunContext);
     let resolveImages: (() => void) | undefined;
     state.resolveCurrentTurnImagesMock.mockImplementationOnce(
       () =>
@@ -959,7 +1023,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const runPromise = executeAgentTurn(createMinimalRunAgentTurnParams());
 
-    expect(registerAgentRunContext).toHaveBeenCalledWith(
+    expect(registryMock.registerAgentRunContext).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
         sessionKey: "main",

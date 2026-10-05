@@ -471,6 +471,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.chat-recovered-output.test.ts",
   "src/gateway/server.cli-watchdog.test.ts",
   "src/gateway/server.codex-failure-recovery.test.ts",
+  "src/gateway/server.foreground-cleanup.test.ts",
   "src/gateway/server.incomplete-stream.test.ts",
   "src/gateway/server.plugins-install-authority.test.ts",
   "src/gateway/server.labs-hot-reload.test.ts",

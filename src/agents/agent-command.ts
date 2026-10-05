@@ -9,11 +9,13 @@ import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/se
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
+  emitAgentEvent,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -34,6 +36,7 @@ import {
   resolveCommandRecoveryOptions,
   shouldPersistRestartRecoveryContextClaim,
 } from "./agent-command-restart-recovery.js";
+import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
 import { persistAgentSession } from "./command/attempt-execution.shared.js";
@@ -66,7 +69,11 @@ import type {
 import { createInternalSessionEffectsCleanup } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-store.js";
-import { createAgentRunRestartAbortError, isAgentRunDirectAbortReason } from "./run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  isAgentRunDirectAbortReason,
+  resolveAgentRunErrorLifecycleFields,
+} from "./run-termination.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
 import { beginForegroundSessionMaintenance } from "./session-maintenance/coordinator.js";
 import {
@@ -673,13 +680,33 @@ async function agentCommandFromIngressInternal(
               deps,
               true,
             );
-          return generation
-            ? await run()
-            : await withAgentPluginRegistry({
-                config: prepared.cfg,
-                workspaceDir: prepared.workspaceDir,
-                run,
+          try {
+            return generation
+              ? await run()
+              : await withAgentPluginRegistry({
+                  config: prepared.cfg,
+                  workspaceDir: prepared.workspaceDir,
+                  run,
+                });
+          } catch (error) {
+            if (hasCommandProcessCleanupError(error)) {
+              const termination = resolveAgentRunErrorLifecycleFields(error, opts.abortSignal);
+              const outcome = buildAgentRunTerminalOutcome({
+                status: "error",
+                error,
+                ...termination,
               });
+              // Body and joined-finalizer failures still own this scope's routing
+              // after command cleanup retires the live run registration.
+              emitAgentEvent({
+                runId: prepared.runId,
+                lifecycleGeneration,
+                stream: "lifecycle",
+                data: { phase: "error", ...outcome, ...termination, executionSettled: true },
+              });
+            }
+            throw error;
+          }
         },
       });
 

@@ -29,7 +29,12 @@ export type ChatRunEntry = ChatRunRegistration & {
   registeredSequence: number;
 };
 
-export type ChatAbortMarker = { abortedAtMs: number; sequence: number };
+export type ChatAbortMarker = {
+  abortedAtMs: number;
+  sequence: number;
+  /** Last emitted terminal frame, retained after the live sequence counter retires. */
+  chatSeq?: number;
+};
 
 let chatRunOrderingSequence = 0;
 

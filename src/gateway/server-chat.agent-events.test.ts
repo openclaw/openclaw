@@ -27,6 +27,7 @@ import {
   getAgentEventLifecycleGeneration,
   onAgentRuntimeEvent,
   resetAgentEventsForTest,
+  withAgentRunLifecycleGeneration,
   type AgentEventPayload,
 } from "../infra/agent-events.js";
 import {
@@ -37,6 +38,13 @@ import {
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import { subscribePluginSessionsChanged } from "../plugins/services.test-support.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
+import {
+  readChatTerminalDedupeEntry,
+  refreshChatTerminalDedupeEntry,
+  setGatewayDedupeEntry,
+} from "./agent-turn/agent-job.js";
+import type { DedupeEntry } from "./server-shared.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
@@ -157,6 +165,8 @@ describe("agent event handler", () => {
     resolveSessionKeyForRun?: (runId: string, options?: { agentId?: string }) => string | undefined;
     lifecycleErrorRetryGraceMs?: number;
     isChatSendRunActive?: (runId: string) => boolean;
+    hasChatTerminalReplay?: AgentEventHandlerOptions["hasChatTerminalReplay"];
+    refreshChatTerminalReplay?: AgentEventHandlerOptions["refreshChatTerminalReplay"];
     settleTrackedTerminal?: AgentEventHandlerOptions["settleTrackedTerminal"];
     trackTrackedRunTerminalPersistence?: AgentEventHandlerOptions["trackTrackedRunTerminalPersistence"];
     resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
@@ -195,6 +205,8 @@ describe("agent event handler", () => {
       persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
+      hasChatTerminalReplay: params?.hasChatTerminalReplay,
+      refreshChatTerminalReplay: params?.refreshChatTerminalReplay,
       clearTrackedActiveRun,
       settleTrackedTerminal: params?.settleTrackedTerminal,
       trackTrackedRunTerminalPersistence: params?.trackTrackedRunTerminalPersistence,
@@ -234,6 +246,291 @@ describe("agent event handler", () => {
       handler,
     };
   }
+
+  it.each(
+    (["visible", "private", "subscriber"] as const).flatMap((visibility) =>
+      (visibility === "visible" ? [true, false] : [true]).flatMap((hasMarker) =>
+        [false, true].map((earlierTimeout) => ({ visibility, earlierTimeout, hasMarker })),
+      ),
+    ),
+  )(
+    "refines settled cleanup without replaying buffers ($visibility, timeout=$earlierTimeout, marker=$hasMarker)",
+    ({ visibility, earlierTimeout, hasMarker }) => {
+      const runId = "late-cleanup-" + visibility + "-" + earlierTimeout + "-" + hasMarker;
+      const session = {
+        sessionKey: "agent:main:cleanup",
+        sessionId: "cleanup-session",
+        agentId: "main",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      };
+      const dedupe = new Map<string, DedupeEntry>();
+      setGatewayDedupeEntry({
+        dedupe,
+        key: "chat:" + runId,
+        session,
+        entry: { ts: 50, ok: true, payload: { runId, status: "accepted" } },
+      });
+      if (earlierTimeout) {
+        emitRuntimeAgentEvent({
+          runId,
+          ...session,
+          stream: "lifecycle",
+          data: {
+            phase: "error",
+            status: "timeout",
+            stopReason: "timeout",
+            timeoutPhase: "provider",
+            providerStarted: true,
+            startedAt: 100,
+            endedAt: 150,
+            error: "Earlier provider diagnostic",
+            executionSettled: true,
+          },
+        });
+      }
+      emitRuntimeAgentEvent({
+        runId,
+        ...session,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          aborted: true,
+          stopReason: "rpc",
+          startedAt: 100,
+          endedAt: 200,
+          error: "Earlier provider diagnostic",
+          executionSettled: true,
+        },
+      });
+      setGatewayDedupeEntry({
+        dedupe,
+        key: "chat:" + runId,
+        session,
+        entry: {
+          ts: 200,
+          ok: true,
+          payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 200 },
+        },
+      });
+      const h = createHarness({
+        isChatSendRunActive: () => true,
+        hasChatTerminalReplay: (ownerRunId, ownerSession) =>
+          readChatTerminalDedupeEntry({ dedupe, runId: ownerRunId, session: ownerSession }) !==
+          undefined,
+        refreshChatTerminalReplay: (ownerRunId, ownerSession) =>
+          refreshChatTerminalDedupeEntry({ dedupe, runId: ownerRunId, session: ownerSession }),
+      });
+      const marker = createChatAbortMarker(200);
+      marker.chatSeq = 20;
+      const record = h.chatRunState.getOrCreate(runId);
+      if (hasMarker) {
+        record.abortMarker = marker;
+      }
+      record.buffer = "Retained text must not be replayed";
+      record.bufferIsCurrent = () => false;
+      const pendingText = {
+        sessionKey: session.sessionKey,
+        payload: {
+          runId,
+          seq: 19,
+          ts: 190,
+          stream: "assistant",
+          data: { text: "Retained agent text", delta: "Retained agent text" },
+        },
+      };
+      record.agentText = { assistant: { bufferedEvent: pendingText } };
+      h.agentRunSeq.set(runId, 20);
+      const clearRun = vi.spyOn(h.chatRunState, "clearRun");
+      h.sessionMessageSubscribers.subscribe("cleanup-reader", session.sessionKey);
+      loadGatewaySessionRow.mockReturnValue({
+        key: session.sessionKey,
+        kind: "direct",
+        sessionId: session.sessionId,
+        updatedAt: 200,
+        lastRunId: runId,
+        status: "killed",
+      });
+      const cleanup = buildAgentRunTerminalOutcome({
+        status: "error",
+        error: new CommandProcessCleanupError(),
+      });
+      const cleanupMessage = expectDefined(cleanup.cleanupError, "late native cleanup diagnostic");
+      const unsubscribe = onAgentRuntimeEvent(h.handler);
+      try {
+        withAgentRunLifecycleGeneration(session.lifecycleGeneration, () => {
+          registerAgentRunContext(runId, {
+            ...session,
+            completionSource: "reply-dispatch",
+            isControlUiVisible: visibility === "visible",
+            projectSessionMessages: visibility !== "private",
+          });
+          clearRegisteredAgentRunContext(runId);
+          emitRuntimeAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: { phase: "error", ...cleanup, endedAt: 300, executionSettled: true },
+          });
+        });
+        const chats = (visibility === "visible" ? h.chat() : h.targetedChat()).map(
+          ([, payload]) => payload,
+        );
+        if (visibility === "private" || !hasMarker) {
+          expect(chats).toEqual([]);
+        } else {
+          expect(chats).toHaveLength(1);
+          expect(chats[0]).toMatchObject({
+            runId,
+            state: earlierTimeout ? "error" : "aborted",
+            stopReason: earlierTimeout ? "timeout" : "rpc",
+            seq: 21,
+            errorMessage: expect.stringContaining("Earlier provider diagnostic"),
+          });
+          expect(chats[0]?.errorMessage).toContain(cleanupMessage);
+          expect(chats[0]?.message).toBeUndefined();
+        }
+        if (visibility !== "visible") {
+          expect(h.chat()).toEqual([]);
+        }
+        expect(clearRun).not.toHaveBeenCalled();
+        expect(record.buffer).toBe("Retained text must not be replayed");
+        expect(record.agentText?.assistant?.bufferedEvent).toBe(pendingText);
+        expect(h.agentRunSeq.get(runId)).toBe(20);
+        expect(
+          [...h.agent(), ...h.targetedAgent()].some(([, event]) => event.stream === "assistant"),
+        ).toBe(false);
+        expect(h.clearTrackedActiveRun).not.toHaveBeenCalled();
+        expect(h.clearAgentRunContext).not.toHaveBeenCalled();
+        expect(dedupe.get("chat:" + runId)).toMatchObject({
+          ok: false,
+          payload: {
+            endedAt: earlierTimeout ? 150 : 200,
+            summary: expect.stringContaining(cleanupMessage),
+          },
+        });
+      } finally {
+        unsubscribe();
+        h.handler.dispose();
+        clearRun.mockRestore();
+      }
+    },
+  );
+
+  it("flushes buffered output before a nonsticky cleanup failure", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const runId = "cleanup-after-completed-output";
+    const session = {
+      sessionKey: "agent:main:cleanup",
+      sessionId: "cleanup-session",
+      agentId: "main",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    };
+    const h = createHarness({ lifecycleErrorRetryGraceMs: 0 });
+    const clearRun = vi.spyOn(h.chatRunState, "clearRun");
+    h.register(runId, session.sessionKey, runId, { agentId: session.agentId });
+    loadGatewaySessionRow.mockReturnValue({
+      key: session.sessionKey,
+      kind: "direct",
+      sessionId: session.sessionId,
+      updatedAt: 200,
+      lastRunId: runId,
+      status: "done",
+    });
+    emitRuntimeAgentEvent({
+      runId,
+      ...session,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 100, endedAt: 200, executionSettled: true },
+    });
+    try {
+      h.emitMany(runId, [
+        ["assistant", { text: "Hel", delta: "Hel" }, session],
+        ["assistant", { text: "Hello", delta: "lo" }, session],
+      ]);
+      expect(h.chatRunState.runs.get(runId)?.agentText?.assistant?.bufferedEvent).toBeDefined();
+      const cleanup = buildAgentRunTerminalOutcome({
+        status: "error",
+        error: new CommandProcessCleanupError(),
+      });
+      h.emit(
+        runId,
+        "lifecycle",
+        { phase: "error", ...cleanup, endedAt: 300, executionSettled: true },
+        { ...session, seq: 3 },
+      );
+      const events = h.agent().map(([, event]) => event);
+      expect(events.at(-2)).toMatchObject({
+        stream: "assistant",
+        data: { text: "Hello", delta: "lo" },
+      });
+      expect(events.at(-1)).toMatchObject({ stream: "lifecycle", data: { phase: "error" } });
+      expect(h.chat().at(-1)?.[1]).toMatchObject({
+        state: "error",
+        errorMessage: expect.stringContaining(
+          expectDefined(cleanup.cleanupError, "nonsticky cleanup diagnostic"),
+        ),
+      });
+      expect(clearRun).toHaveBeenCalledWith(runId);
+      expect(h.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
+      const completedCalls = h.broadcast.mock.calls.length;
+      vi.advanceTimersByTime(1_000);
+      expect(h.broadcast).toHaveBeenCalledTimes(completedCalls);
+    } finally {
+      h.handler.dispose();
+      h.chatRunState.clear();
+      clearRun.mockRestore();
+    }
+  });
+
+  it.each(["captured-generation", "same-id-reset", "new-run", "new-session"] as const)(
+    "rejects late cleanup after %s without changing live state or replay",
+    (replacement) => {
+      const runId = "retired-cleanup-" + replacement;
+      const refresh = vi.fn();
+      const h = createHarness({ refreshChatTerminalReplay: refresh });
+      const record = h.chatRunState.getOrCreate(runId);
+      record.abortMarker = createChatAbortMarker();
+      record.abortMarker.chatSeq = 10;
+      record.buffer = "Successor buffer";
+      const clearRun = vi.spyOn(h.chatRunState, "clearRun");
+      loadGatewaySessionRow.mockReturnValue(
+        replacement === "captured-generation"
+          ? null
+          : {
+              key: "agent:main:cleanup",
+              kind: "direct",
+              sessionId: replacement === "new-session" ? "successor-session" : "cleanup-session",
+              updatedAt: 400,
+              lastRunId: replacement === "same-id-reset" ? undefined : "successor-run",
+            },
+      );
+      const cleanup = buildAgentRunTerminalOutcome({
+        status: "error",
+        error: new CommandProcessCleanupError(),
+      });
+      h.emit(
+        runId,
+        "lifecycle",
+        { phase: "error", ...cleanup, executionSettled: true },
+        {
+          sessionKey: "agent:main:cleanup",
+          sessionId: "cleanup-session",
+          agentId: "main",
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          seq: 1,
+        },
+      );
+      expect(h.chat()).toEqual([]);
+      expect(h.targetedChat()).toEqual([]);
+      expect(refresh).not.toHaveBeenCalled();
+      expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
+      expect(clearRun).not.toHaveBeenCalled();
+      expect(record.buffer).toBe("Successor buffer");
+      expect(record.abortMarker.chatSeq).toBe(10);
+      h.handler.dispose();
+      clearRun.mockRestore();
+    },
+  );
 
   function mockSessionEntry(
     entry: ReturnType<typeof loadSessionEntry>["entry"],

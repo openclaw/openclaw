@@ -1,6 +1,7 @@
 /** Browser-safe identity and replay rules shared by Gateway conversation clients. */
 
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   canRecoverSessionProjectionFinal,
   hasSessionProjectionAcceptedFinal,
@@ -565,6 +566,21 @@ function updateRun(
     const recoverMessage = acceptFinal && !currentHasDisplayableMessage;
     const recoverError =
       readNonemptyString(current.errorMessage) === null && incomingErrorMessage !== null;
+    const refineTerminalError =
+      (current.status === "aborted" || current.status === "timeout") &&
+      (incoming.status === current.status || incoming.status === "timeout") &&
+      incomingErrorMessage !== null &&
+      current.seq !== undefined &&
+      incomingSeq !== undefined &&
+      incomingSeq > current.seq;
+    const errorMessage =
+      refineTerminalError && incomingErrorMessage && current.errorMessage
+        ? current.errorMessage.includes(incomingErrorMessage)
+          ? current.errorMessage
+          : incomingErrorMessage.includes(current.errorMessage)
+            ? incomingErrorMessage
+            : `${truncateUtf16Safe(current.errorMessage, 1_024)}\n\n${truncateUtf16Safe(incomingErrorMessage, 1_280)}`
+        : incomingErrorMessage;
     const updateTerminalSequence =
       incoming.status !== "streaming" &&
       (incomingSeq === undefined
@@ -592,9 +608,9 @@ function updateRun(
                 ].slice(-MAX_ACCEPTED_FINAL_MESSAGES_PER_RUN),
               }
             : {}),
-          ...(recoverError && incomingErrorMessage
+          ...((recoverError || refineTerminalError) && errorMessage
             ? {
-                errorMessage: incomingErrorMessage,
+                errorMessage,
                 ...(incoming.errorKind ? { errorKind: incoming.errorKind } : {}),
               }
             : {}),

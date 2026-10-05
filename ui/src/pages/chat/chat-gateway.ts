@@ -253,7 +253,15 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       ) {
         // Late diagnostics belong to the active, pending, or latest locally terminal run;
         // publishing them over a newer response falsely marks the new run failed.
-        setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId, errorKind);
+        setChatRunError(
+          state,
+          resolveGatewayErrorText(
+            { ...payload, errorMessage: projectedRun.currentRun?.errorMessage },
+            null,
+          ),
+          payload.runId,
+          errorKind,
+        );
       }
       if (payload.state === "error") {
         reconcileOwnedTerminalRun();

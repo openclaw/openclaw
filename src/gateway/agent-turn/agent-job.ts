@@ -699,6 +699,44 @@ export function setGatewayDedupeEntry(params: {
   }
 }
 
+/** Read only a terminal publication still owned by the exact recorded chat attempt. */
+export function readChatTerminalDedupeEntry(params: {
+  dedupe: Map<string, DedupeEntry>;
+  runId: string;
+  session: Readonly<AgentJobSession>;
+}): Readonly<DedupeEntry> | undefined {
+  if (params.session.lifecycleGeneration !== getAgentRunLifecycleGeneration()) {
+    return undefined;
+  }
+  const key = `chat:${params.runId}`;
+  const entry = params.dedupe.get(key);
+  const chat = agentJobs.get(params.runId)?.snapshotsBySource.get("chat");
+  if (
+    !entry ||
+    !chat ||
+    chat.recordedAt !== entry.ts ||
+    !sameAgentJobSession(chat.session, params.session) ||
+    parseDedupeObservation(entry).state !== "terminal"
+  ) {
+    return undefined;
+  }
+  return entry;
+}
+
+/** Refine only the terminal publication qualified by the accepted event owner. */
+export function refreshChatTerminalDedupeEntry(
+  params: Parameters<typeof readChatTerminalDedupeEntry>[0],
+): boolean {
+  const entry = readChatTerminalDedupeEntry(params);
+  if (!entry || !readAgentJobTerminalOutcome(params.runId, params.session)?.cleanupError) {
+    return false;
+  }
+  // Never relabel a cache entry with lifecycle routing or turn acceptance into a
+  // fresh attempt: the raw chat snapshot and its publication timestamp own it.
+  setGatewayDedupeEntry({ ...params, key: `chat:${params.runId}`, entry });
+  return true;
+}
+
 function getFreshestDedupeSnapshot(
   snapshotsBySource: Map<AgentJobSource, AgentRunSnapshot>,
 ): AgentRunSnapshot | undefined {

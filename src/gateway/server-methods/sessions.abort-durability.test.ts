@@ -102,6 +102,7 @@ it.each([
         nodeHasSessionSubscribers: () => false,
         nodeSendToSession: context.nodeSendToSession,
         agentRunSeq: context.agentRunSeq,
+        dedupe: context.dedupe,
         chatRunState: context.chatRunState,
         toolEventRecipients: context.chatRunState.toolEventRecipients,
         sessionEventSubscribers: createSessionEventSubscriberRegistry(),

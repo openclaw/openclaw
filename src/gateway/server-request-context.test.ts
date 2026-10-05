@@ -108,6 +108,7 @@ describe("createGatewayRequestContext", () => {
         nodeHasSessionSubscribers: () => false,
         nodeSendToSession: vi.fn(),
         agentRunSeq: new Map(),
+        dedupe: context.dedupe,
         chatRunState,
         toolEventRecipients: chatRunState.toolEventRecipients,
         sessionEventSubscribers: subscribers,

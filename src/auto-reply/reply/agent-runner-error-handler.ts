@@ -20,6 +20,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -129,6 +130,9 @@ export async function handleAgentExecutionError(params: {
     );
     return { kind: "aborted", reason };
   };
+  if (hasCommandProcessCleanupError(err)) {
+    throw err;
+  }
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
