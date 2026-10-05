@@ -349,6 +349,17 @@ async function installManagedBinary(
   }
 }
 
+// Keep a rejected-probe report bounded; redaction happens where the reason is produced.
+function describeRejectedProbe(
+  probe: Exclude<CrabboxVersionProbe, { status: "supported" }>,
+): string {
+  if (probe.status === "outdated") {
+    return `probe status "outdated": version ${probe.version} is older than the required ${CRABBOX_MIN_VERSION}`;
+  }
+  const reason = probe.reason.length > 200 ? `${probe.reason.slice(0, 200)}…` : probe.reason;
+  return `probe status "indeterminate": ${reason}`;
+}
+
 type Acquisition = {
   promise: Promise<CrabboxBinary>;
   controller: AbortController;
@@ -363,6 +374,7 @@ export async function ensureManagedCrabboxBinary(
     runCommand?: CrabboxCommandRunner;
     env?: NodeJS.ProcessEnv;
     signal?: AbortSignal;
+    warn?: (message: string) => void;
   } = {},
 ): Promise<CrabboxBinary> {
   const { signal } = params;
@@ -379,9 +391,17 @@ export async function ensureManagedCrabboxBinary(
   if (preferred.status === "supported") {
     return { binary: candidate, version: preferred.version };
   }
+  // A configured binary that OpenClaw declines must stay visible: name the rejected probe
+  // and the managed substitute. Callers cache per candidate, so this reports at most once.
+  const reportFallback = (selected: CrabboxBinary): CrabboxBinary => {
+    params.warn?.(
+      `Crabbox configured binary "${candidate}" was not used (${describeRejectedProbe(preferred)}); using managed binary "${selected.binary}" (${selected.version}) instead.`,
+    );
+    return selected;
+  };
   const cached = await findManagedCrabboxBinary({ env: params.env, runCommand, signal });
   if (cached) {
-    return cached;
+    return reportFallback(cached);
   }
   const { toErrorObject } = await import("openclaw/plugin-sdk/error-runtime");
   signal?.throwIfAborted();
@@ -437,7 +457,7 @@ export async function ensureManagedCrabboxBinary(
   try {
     const resolved = await Promise.race([shared.promise, abandoned]);
     signal?.throwIfAborted();
-    return resolved;
+    return reportFallback(resolved);
   } catch (error) {
     signal?.throwIfAborted();
     throw error;

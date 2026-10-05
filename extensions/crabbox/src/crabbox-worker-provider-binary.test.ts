@@ -164,4 +164,20 @@ describe("Crabbox provider binary resolution", () => {
     });
     expect(runCommand).not.toHaveBeenCalled();
   });
+
+  it("reports fallbacks only for an explicitly configured binary", async () => {
+    const warn = vi.fn();
+    const runCommand = vi.fn<CrabboxCommandRunner>(async () => commandResult({ stdout: "[]" }));
+    const provider = createProvider({ runCommand, warn });
+
+    await provider.listMachineOptions!(PROFILE);
+    const implicit = vi.mocked(ensureManagedCrabboxBinary).mock.calls.at(-1)![0]!;
+    expect(implicit).toMatchObject({ binary: SIBLING_BINARY });
+    expect("warn" in implicit).toBe(false);
+
+    await provider.listMachineOptions!({ ...PROFILE, binary: "/opt/other/crabbox" });
+    expect(ensureManagedCrabboxBinary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ binary: "/opt/other/crabbox", warn }),
+    );
+  });
 });
