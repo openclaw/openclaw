@@ -134,10 +134,17 @@ path. Upgrade to Octopool 0.7.1 or later; setting an explicit
 host-qualified `GH_REPO=github.com/openclaw/openclaw` also avoids discovery while
 preserving the subsequent authoritative API checks.
 
-Immediate REST squash uses `gh api --method PUT repos/OWNER/REPO/pulls/NUMBER/merge
+Ordinary immediate REST squash uses `gh api --method PUT repos/OWNER/REPO/pulls/NUMBER/merge-async
 --input <absolute-file>` with JSON containing the full prepared 40-hex `sha`,
-`merge_method: "squash"`, and the inspected `commit_message`; an optional
-`commit_title` is accepted. The shared GitHub subprocess owner stages internal
+`merge_method: "squash"`, `merge_action: "direct_merge"`, `bypass_rules: false`, and
+the inspected `commit_message`. It refuses stacked PRs because this workflow
+reviews one PR. The outcome retains the returned UUID before polling; subsequent
+`merge-run` calls read that UUID once and reconcile the authoritative PR/tree.
+Acceptance and `enqueued` are not merge completion. Failed, expired, conflicting,
+or lost responses never authorize automatic resubmission or another transport.
+Existing auto/queue/admin and GraphQL-quota routes keep their own contracts; the
+explicit prior-CI admin route below still uses the synchronous `/merge` endpoint.
+The shared GitHub subprocess owner stages internal
 `--input -` payload bytes in a private temporary file, keeps child stdin empty,
 and removes the file after synchronous completion. Keep the explicit SHA even
 when newer Octopool can resolve a missing one. Auto-merge needs Octopool's protected auto-merge support

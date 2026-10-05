@@ -190,6 +190,10 @@ export function createMergeOutcomeFixtureHarness() {
         commit_message: string;
       },
       restMergeRefusal: "",
+      asyncMergeStatus: "",
+      asyncMergeFault: "",
+      asyncPolls: 0,
+      stack: null as null | { number: number },
       graphqlMergePayloads: [] as Array<{
         pullRequestId: string;
         expectedHeadOid: string;
@@ -356,7 +360,11 @@ if(quotaRead&&s.quotaFailuresRemaining!==0) {
   if(s.quotaFailuresRemaining!==null) s.quotaFailuresRemaining--;
   quota();
 }
-const restMerge=args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123/merge");
+const asyncMerge=args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123/merge-async");
+const restMerge=args[0]==="api"&&(args.includes("repos/fixture/repo/pulls/123/merge")||asyncMerge);
+const asyncUuid="630b9d5e-3f2a-4f7e-8b0c-2d5f9a8c1e42";
+const asyncPending=()=>({status:"pending",details:{message:"Merge request is in progress.",uuid:asyncUuid,
+  merge_method:"squash",merge_action:"direct_merge",expected_head_sha:s.pr.headRefOid,bypass_rules:false}});
 const graphqlMerge=args[0]==="api"&&args.includes("graphql")&&args.includes("--input");
 const restCheckRuns=()=>{
   if(["missing","status-only"].includes(s.restChecks)) return [];
@@ -462,7 +470,7 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
   const pendingDispatchProjection=s.restDispatchChange==="projection"&&process.env.OCTOPOOL_DIAGNOSTICS==="1";
   const record={node_id:s.pr.id,number:s.pr.number,html_url:s.pr.url,title:"Fixture repair",body:s.previewBody,
     state:s.pr.state==="OPEN"?"open":"closed",merged:s.pr.state==="MERGED",merged_at:s.pr.state==="MERGED"?"2026-09-20T00:00:00Z":null,
-    merge_commit_sha:s.pr.mergeCommit?.oid??null,draft:s.pr.isDraft,
+    merge_commit_sha:s.pr.mergeCommit?.oid??null,draft:s.pr.isDraft,stack:s.stack,
     auto_merge:s.pr.autoMergeRequest?{merge_method:s.pr.autoMergeRequest.mergeMethod.toLowerCase()}:null,
     head:{sha:s.pr.headRefOid,ref:s.pr.headRefName,repo:s.priorCi.enabled?{...s.repoAuthority,...s.priorCi.sourceRepository}:s.repoAuthority},base:{ref:s.pr.baseRefName,sha:main(),repo:s.repoAuthority},
     user:{id:1001,login:s.pr.author.login,type:s.pr.author.__typename},created_at:"2026-09-20T00:00:00Z",
@@ -565,6 +573,17 @@ else if(args[0]==="pr"&&args[1]==="view") {
   if(route==="path"&&s.stale) {pr.state="OPEN";pr.mergeCommit=null;}
   if(args.includes("--jq")) {const q=args[args.indexOf("--jq")+1];out(q===".state"?pr.state:q===".mergeCommit.oid"?pr.mergeCommit?.oid??"null":pr.url);}
   else out(pr);
+} else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123/merge-async/"+asyncUuid)) {
+  const record=JSON.parse(git(["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"]));
+  if(record.asyncMerge?.uuid!==asyncUuid||!record.accepted) fail("UUID not retained before polling");
+  if(!args.includes("Cache-Control: max-age=0")) fail("cached async result");
+  s.asyncPolls++;save();
+  if(s.asyncMergeStatus==="expired") {out('HTTP/2.0 404 Not Found\\n\\n{"message":"Not Found"}');fail("gh: Not Found (HTTP 404)");}
+  const result=s.asyncMergeStatus==="pending"?asyncPending():{status:s.asyncMergeStatus,
+    details:{message:"Fixture async result",...(s.asyncMergeStatus==="merged"?{sha:s.pr.mergeCommit?.oid}: {})}};
+  if(s.asyncMergeFault==="head") result.details.expected_head_sha="f".repeat(40);
+  if(s.asyncMergeFault==="sha") result.details.sha="f".repeat(40);
+  out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify(result));
 } else if((args[0]==="pr"&&args[1]==="merge")||restMerge||graphqlMerge) {
   if(s.mode==="octopool-refusal") {
     if(process.env.OCTOPOOL_DIAGNOSTICS!=="1"||!args.includes("--subject")) fail("missing protected merge publication inputs");
@@ -578,6 +597,16 @@ else if(args[0]==="pr"&&args[1]==="view") {
     if(s.restMergePayload.sha!==s.pr.headRefOid||s.restMergePayload.merge_method!=="squash") fail("unpinned REST merge request");
     s.mergeBody=s.restMergePayload.commit_message;
     if(s.restMergeRefusal) {save();process.stdout.write(s.restMergeRefusal);process.exit(1);}
+    if(asyncMerge) {
+      if(s.restMergePayload.merge_action!=="direct_merge"||s.restMergePayload.bypass_rules!==false) fail("invalid async merge options");
+      if(s.asyncMergeStatus) {
+        const result=asyncPending();
+        if(s.asyncMergeFault==="uuid") delete result.details.uuid;
+        save();out("HTTP/2.0 "+(s.asyncMergeFault==="conflict"?"409 Conflict":"202 Accepted")+"\\n\\n"+JSON.stringify(result));
+        if(s.asyncMergeFault==="conflict") fail("gh: Conflict (HTTP 409)");
+        process.exit(0);
+      }
+    }
   }
   if(graphqlMerge) {
     const payload=JSON.parse(inputPayload);
@@ -625,7 +654,8 @@ else if(args[0]==="pr"&&args[1]==="view") {
     if(s.crash==="dispatch") {save();process.kill(Number(process.env.FIXTURE_LEADER),"SIGKILL");process.exit(1);}
     if(s.mutations===1&&["applied-open","applied-merged","unapplied"].includes(s.mode)) fail("non-200 OK status code: 502 Bad Gateway");
   }
-  if(restMerge) out({merged:true,sha:s.pr.mergeCommit?.oid});
+  if(asyncMerge) out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify({status:"merged",details:{message:"Pull request is already merged.",sha:s.pr.mergeCommit?.oid}}));
+  else if(restMerge) out({merged:true,sha:s.pr.mergeCommit?.oid});
   if(graphqlMerge) out({data:{mergePullRequest:{clientMutationId:null}}});
 } else if(args.includes("graphql")&&args.some(arg=>arg.includes("disablePullRequestAutoMerge("))) {
   const record=JSON.parse(git(["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"]));
