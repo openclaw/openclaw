@@ -225,6 +225,13 @@ recovery starts, they follow the session's normal message queue policy. You do
 not need to resend a message just because recovery is waiting for capacity.
 Stopping or replacing the session still cancels pending work.
 
+If subagent recovery changes session-protection facts while an incoming turn is
+being prepared, reply initialization refreshes those facts and retries within its
+existing bounded retry budget. Exhaustion reports an error asking you to retry
+the message. A saved user message that has not reached the model remains user
+input when a subagent announcement continues the session; it is not demoted to
+background context.
+
 If automatic recovery is exhausted, the transcript remains available. Use
 **Resume in new session** in WebChat, or `/new` or `/reset` in other channels,
 to start a replacement session.

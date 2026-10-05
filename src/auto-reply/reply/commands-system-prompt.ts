@@ -1,6 +1,6 @@
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
-import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import {
@@ -223,9 +223,9 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     ),
     skillsSnapshot: targetSessionEntry?.skillsSnapshot,
   });
-  const tools = (() => {
+  const tools = await (async () => {
     try {
-      return createOpenClawCodingTools({
+      return await createOpenClawCodingToolsAsync({
         config: params.cfg,
         agentId: sessionAgentId,
         workspaceDir,

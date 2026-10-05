@@ -153,13 +153,7 @@ export type AuthProbeSummary = {
   finishedAt: number;
   durationMs: number;
   totalTargets: number;
-  options: {
-    provider?: string;
-    profileIds?: string[];
-    timeoutMs: number;
-    concurrency: number;
-    maxTokens: number;
-  };
+  options: Omit<AuthProbeOptions, "includeDirectKeys">;
   results: AuthProbeResult[];
 };
 

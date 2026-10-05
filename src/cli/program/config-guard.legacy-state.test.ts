@@ -76,22 +76,35 @@ it.each([
               .get(),
           ).toBeUndefined();
 
-          await prepareDoctorContext(configPath);
-          const { db: repairedDb } = openOpenClawStateDatabase();
+          await expect(prepareDoctorContext(configPath)).rejects.toMatchObject({
+            name: "RetiredStateFormatError",
+            message:
+              `Runtime JSON sidecars: retired files whose last writer predates July 1, 2026: ${sourcePath}. ` +
+              'The files were left unchanged. Upgrade through OpenClaw 2026.9.7, run "openclaw doctor --fix" on the original host, then retry this upgrade.',
+          });
+          const { db: deferredDb } = openOpenClawStateDatabase();
 
-          await expect(fs.access(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+          expect(await fs.readFile(sourcePath, "utf8")).toBe(original);
+          expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
           expect(
-            repairedDb
+            deferredDb
               .prepare(
                 "SELECT value_json FROM config_machine_state WHERE state_key = 'voicewake.triggers'",
               )
               .get(),
-          ).toEqual({ value_json: '["test wake phrase"]' });
-          const receipts = repairedDb.prepare("SELECT count(*) AS count FROM migration_runs").get();
-          expect(receipts?.count).toBeGreaterThan(0);
+          ).toBeUndefined();
+          const receipts = deferredDb.prepare("SELECT count(*) AS count FROM migration_runs").get();
+          expect(receipts).toEqual({ count: 0 });
+          expect(
+            deferredDb
+              .prepare(
+                "SELECT meta_key FROM schema_meta WHERE meta_key IN ('startup-migrations', 'state-migrations')",
+              )
+              .all(),
+          ).toEqual([]);
           testApi.resetConfigGuardStateForTests();
           await bootstrap();
-          expect(repairedDb.prepare("SELECT count(*) AS count FROM migration_runs").get()).toEqual(
+          expect(deferredDb.prepare("SELECT count(*) AS count FROM migration_runs").get()).toEqual(
             receipts,
           );
         } finally {

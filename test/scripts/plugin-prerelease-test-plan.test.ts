@@ -718,6 +718,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       run_plugin_prerelease_node: "${{ steps.manifest.outputs.run_plugin_prerelease_node }}",
       run_plugin_prerelease_static: "${{ steps.manifest.outputs.run_plugin_prerelease_static }}",
       run_plugin_prerelease_suite: "${{ steps.manifest.outputs.run_plugin_prerelease_suite }}",
+      upgrade_baseline: "${{ steps.qualification_baselines.outputs.baseline }}",
+      upgrade_baselines: "${{ steps.qualification_baselines.outputs.baselines }}",
     });
     expect(staticShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}",

@@ -1,6 +1,6 @@
 import {
   logInboundDrop,
-  resolveChannelInboundRouteEnvelope,
+  createChannelInboundEnvelopeBuilderAsync,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { channelIngressRoutes } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
@@ -13,6 +13,7 @@ import {
   deliverFormattedTextWithAttachments,
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
@@ -219,7 +220,7 @@ export async function handleIrcInbound(params: {
       ? message.target
       : `#${message.target}`;
   const peerId = message.isGroup ? channelTarget : message.senderNick;
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: config,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -345,6 +346,7 @@ export async function handleIrcInbound(params: {
   }
 
   const fromLabel = message.isGroup ? message.target : senderDisplay;
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: config, route });
   const body = buildEnvelope({
     channel: "IRC",
     from: fromLabel,

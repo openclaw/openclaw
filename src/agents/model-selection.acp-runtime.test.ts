@@ -113,6 +113,7 @@ describe("ACP native model policy", () => {
       const result = runWithModelFallback({
         cfg,
         agentId: "worker",
+        skipAuthProfileRuntime: true,
         ...primary,
         manifestPlugins: [],
         fallbacksOverride: resolveEffectiveModelFallbacks({

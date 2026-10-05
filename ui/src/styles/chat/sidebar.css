@@ -1209,6 +1209,10 @@ openclaw-session-discussion {
   background: var(--panel);
 }
 
+.session-diff__summary .btn {
+  flex-shrink: 0;
+}
+
 .session-diff__branch {
   display: inline-flex;
   align-items: center;
@@ -1226,7 +1230,7 @@ openclaw-session-discussion {
 }
 
 .session-diff__branch-label {
-  max-width: 170px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

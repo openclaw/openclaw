@@ -16,16 +16,7 @@ type NodeGatewayOptions = {
   tlsFingerprint?: string;
 };
 
-type NodePairGatewayOptions = {
-  host: string;
-  port: number;
-  contextPath?: string;
-  tls: boolean;
-  tlsFingerprint?: string;
-  bootstrapToken: string;
-  expiresAtMs?: number;
-  candidates: NodeHostGatewayConfig[];
-};
+type NodePairGatewayOptions = ReturnType<typeof resolveNodePairGatewayPayload>;
 
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 
@@ -49,9 +40,7 @@ export function resolveNodePairGatewayOptions(
 }
 
 /** Project a validated pairing payload into the canonical node-host candidate list. */
-export function resolveNodePairGatewayPayload(
-  payload: PairingSetupPayload,
-): NodePairGatewayOptions {
+export function resolveNodePairGatewayPayload(payload: PairingSetupPayload) {
   const candidates = (payload.urls ?? [payload.url]).map((url) =>
     gatewayConfigFromUrl(url, url === payload.url ? payload.tlsFingerprint : undefined),
   );

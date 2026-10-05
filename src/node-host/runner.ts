@@ -96,7 +96,6 @@ async function canReuseNodeHostDeviceToken(params: {
   savedGateway?: NodeHostGatewayConfig;
   gatewayCandidates: readonly NodeHostGatewayConfig[];
   deviceId: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<boolean> {
   const savedGatewayScope = params.savedGateway
     ? gatewayOriginScope(formatGatewayCandidateUrl(params.savedGateway))
@@ -110,7 +109,7 @@ async function canReuseNodeHostDeviceToken(params: {
       await loadDeviceAuthTokenReadOnly({
         deviceId: params.deviceId,
         role: "node",
-        env: params.env ?? process.env,
+        env: process.env,
       })
     )?.token,
   );
@@ -121,10 +120,9 @@ async function resolveNodeHostGatewayCredentials(params: {
   savedGateway?: NodeHostGatewayConfig;
   gatewayCandidates: readonly NodeHostGatewayConfig[];
   deviceId: string;
-  env?: NodeJS.ProcessEnv;
   envOnly?: boolean;
 }): Promise<{ token?: string; password?: string }> {
-  const env = params.env ?? process.env;
+  const env = process.env;
   if (params.envOnly || (await canReuseNodeHostDeviceToken(params))) {
     // A co-located Gateway's shared password must not displace the paired node
     // credential. GatewayClient rereads the current token when connecting.
@@ -288,7 +286,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
           savedGateway: savedConfig?.gateway,
           gatewayCandidates,
           deviceId: deviceIdentity.deviceId,
-          env: process.env,
         });
 
   let consecutivePermanentGatewayRejections = 0;

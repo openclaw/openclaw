@@ -38,6 +38,10 @@ export async function applyNonInteractiveAuthChoice(params: {
   target: OnboardingAgentTarget;
 }): Promise<OpenClawConfig | null> {
   const { opts, runtime, baseConfig } = params;
+  const reject = (message: string): null => {
+    rejectOnboardingOption(opts, runtime, message);
+    return null;
+  };
   let authChoice = normalizeApiKeyTokenProviderAuthChoice({
     authChoice: params.authChoice,
     tokenProvider: opts.tokenProvider,
@@ -61,15 +65,12 @@ export async function applyNonInteractiveAuthChoice(params: {
       const envHint = paramsLocal.envVarName
         ? `Set ${paramsLocal.envVarName} in env and retry`
         : "Set the provider API key env var and retry";
-      rejectOnboardingOption(
-        opts,
-        runtime,
+      return reject(
         [
           `--secret-input-mode ref requires an explicit environment variable for provider "${paramsLocal.provider}".`,
           `${envHint}, or use --secret-input-mode plaintext.`,
         ].join("\n"),
       );
-      return null;
     }
     return {
       source: "env",
@@ -134,12 +135,9 @@ export async function applyNonInteractiveAuthChoice(params: {
       });
   const replacementChoiceId = deprecatedChoice?.choiceId ?? deprecatedInstallChoice?.choiceId;
   if (replacementChoiceId) {
-    rejectOnboardingOption(
-      opts,
-      runtime,
+    return reject(
       `${JSON.stringify(authChoice)} is no longer supported. Use --auth-choice ${JSON.stringify(replacementChoiceId)} instead.`,
     );
-    return null;
   }
 
   const validAuthChoices = formatAuthChoiceChoicesForCli({
@@ -148,12 +146,9 @@ export async function applyNonInteractiveAuthChoice(params: {
     env: process.env,
   }).split("|");
   if (!validAuthChoices.includes(authChoice) && !authChoice.startsWith("provider-plugin:")) {
-    rejectOnboardingOption(
-      opts,
-      runtime,
+    return reject(
       `Unknown --auth-choice ${JSON.stringify(authChoice)}. Valid choices: ${validAuthChoices.join(", ")}.`,
     );
-    return null;
   }
 
   const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
@@ -173,15 +168,12 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "setup-token" || authChoice === "token") {
-    rejectOnboardingOption(
-      opts,
-      runtime,
+    return reject(
       [
         `Auth choice "${params.authChoice}" was not matched to a provider setup flow.`,
         'For Anthropic legacy token auth, use "--auth-choice setup-token --token-provider anthropic --token <token>" or pass "--auth-choice token --token-provider anthropic".',
       ].join("\n"),
     );
-    return null;
   }
 
   if (authChoice === "custom-api-key") {
@@ -261,12 +253,9 @@ export async function applyNonInteractiveAuthChoice(params: {
             agentDir: params.target.agentDir,
             modelRef: `${result.providerId}/${result.modelId}`,
           });
-          rejectOnboardingOption(
-            opts,
-            runtime,
+          return reject(
             `Replacement credential saved but inactive. Your connection is unchanged. Test and activate it with:\n${formatCliCommand(`openclaw models auth activate ${quoteCliArg(saved.profile.profileId)} --agent ${quoteCliArg(params.target.agentId)}`)}`,
           );
-          return null;
         }
       }
       return result.config;
@@ -276,8 +265,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         (err.code === "missing_required" || err.code === "invalid_compatibility")
           ? err.message
           : `Invalid custom provider config: ${err instanceof CustomApiError ? err.message : formatErrorMessage(err)}`;
-      rejectOnboardingOption(opts, runtime, message);
-      return null;
+      return reject(message);
     }
   }
 
@@ -286,8 +274,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice === "minimax-global-oauth" ||
     authChoice === "minimax-cn-oauth"
   ) {
-    rejectOnboardingOption(opts, runtime, "OAuth requires interactive mode.");
-    return null;
+    return reject("OAuth requires interactive mode.");
   }
 
   return nextConfig;

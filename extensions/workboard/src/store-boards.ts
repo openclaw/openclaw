@@ -2,6 +2,7 @@ import type {
   WorkboardBoardMetadata,
   WorkboardBoardSummary,
   WorkboardCard,
+  WorkboardChange,
   WorkboardListResult,
   WorkboardSessionPlacement,
   WorkboardSessionsBoard,
@@ -47,7 +48,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
   ) {
     super(stores.dataVersion, stores.close, stores.ready, stores.runWithWriteAuthority);
     this.store = this.trackCardStore(store);
-    this.boardStore = this.track(stores.boards);
+    this.boardStore = this.track(stores.boards, { sessions: true });
     this.sessionsBoardStore = stores.sessionsBoard;
     this.subscriptionStore = {
       ...this.track(stores.subscriptions, { notifyChanges: false }),
@@ -65,7 +66,12 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
     return readCards(this.store, boardId === undefined ? undefined : { kind: "board", boardId });
   }
 
-  listCards(board: unknown): Promise<WorkboardListResult & { boards: WorkboardBoardSummary[] }> {
+  listCards(board: unknown): Promise<
+    WorkboardListResult & {
+      boards: WorkboardBoardSummary[];
+      revision: WorkboardChange & { boardId?: string };
+    }
+  > {
     return this.runOperation(() => {
       const boardId = normalizeBoardId(board);
       const cached = this.cardLists.get(boardId);
@@ -83,6 +89,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
             cards: cards.map(redactClaimToken),
             boards,
             statuses: WORKBOARD_STATUSES,
+            revision: { ...this.cardsRevision, ...(boardId === undefined ? {} : { boardId }) },
           };
           freezeCardList(result);
           // Arbitrary missing-board queries must not grow the retained cache.
@@ -188,6 +195,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
         this.trackMutation(
           () => this.sessionsBoardStore.update(normalizeBoardIdRequired(boardId), patch),
           () => true,
+          true,
         ),
       assertCurrent,
     );
@@ -204,6 +212,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
       this.trackMutation(
         () => this.sessionsBoardStore.repairPlacements(),
         (result) => result.placements > 0 || result.boards > 0,
+        true,
       ),
     );
   }
@@ -215,12 +224,15 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
   ): Promise<boolean> {
     return this.enqueueMutation(
       () =>
-        this.trackMutation(() =>
-          this.sessionsBoardStore.writePlacement(
-            normalizeBoardIdRequired(boardId),
-            placement,
-            options.expectedSpec,
-          ),
+        this.trackMutation(
+          () =>
+            this.sessionsBoardStore.writePlacement(
+              normalizeBoardIdRequired(boardId),
+              placement,
+              options.expectedSpec,
+            ),
+          Boolean,
+          true,
         ),
       options.assertCurrent,
     );

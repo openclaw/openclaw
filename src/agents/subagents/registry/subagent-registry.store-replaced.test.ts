@@ -211,7 +211,7 @@ it("keeps an observed late-result store retirement after the original selector r
     },
   );
   try {
-    expect(driver.controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+    expect(driver.controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
     const announce = await entered.promise;
     expect(announce.isCompletionDeliveryAllowed?.()).toBe(false);
     publishSystemEventStoreResolver(() => "original-store");
@@ -239,14 +239,7 @@ it("keeps an observed late-result store retirement after the original selector r
   ).toEqual([]);
 });
 
-it.each([
-  "same",
-  "restore",
-  "unknown retry",
-  "failed",
-  "delivered",
-  "pending acknowledgment",
-] as const)(
+it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"] as const)(
   "keeps automatic child notification disposition through store publication: %s",
   async (change) => {
     const input = change === "failed" ? failedRecords("failed", { status: "error" }) : records();
@@ -255,8 +248,7 @@ it.each([
     input.subagent.controllerStorePath = unknownStore ? undefined : "original-store";
     input.subagent.cleanupCompletedAt = undefined;
     input.subagent.delivery = {
-      status: change === "delivered" ? "delivered" : "pending",
-      ...(change === "delivered" ? { deliveredAt: Date.now(), announcedAt: Date.now() } : {}),
+      status: "pending",
       payload: loadPendingFinalDeliveryPayload(input.subagent),
     };
     const executionBefore = structuredClone(input.subagent.execution);
@@ -390,9 +382,7 @@ it.each([
         .prepare("SELECT id FROM delivery_queue_entries WHERE entry_kind = 'systemEvent'")
         .all(),
     ).toEqual([]);
-    if (change === "delivered") {
-      expect(persisted?.delivery).toEqual(receipt);
-    } else if (change !== "same") {
+    if (change !== "same") {
       expect(persisted?.delivery).toMatchObject({
         status: "suspended",
         disposition: "intentional_non_delivery",

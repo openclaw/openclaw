@@ -13,6 +13,7 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { icons, type IconName } from "../components/icons.ts";
+import type { SidebarMenusController } from "../components/sidebar-menus-controller.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
@@ -303,6 +304,7 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) agentId?: string;
   @property({ attribute: false }) session?: ControlUiSession;
   @property({ attribute: false }) navigationKey = "";
+  @property({ attribute: false }) navigationMenus?: SidebarMenusController;
   @property({ type: Boolean }) presented = true;
   @state() private actionError = "";
   private readonly subscriptions = new SubscriptionsController(this)
@@ -414,6 +416,43 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
           class="nav-item ${child ? "nav-item--child" : ""} ${active ? "nav-item--active" : ""}"
           href=${href}
           aria-current=${active ? "page" : nothing}
+          aria-haspopup=${entry.value.actions?.length ? "menu" : nothing}
+          @contextmenu=${
+            entry.value.actions?.length
+              ? (event: MouseEvent) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  // SAFETY: this listener is attached directly to the navigation link.
+                  const trigger = event.currentTarget as HTMLElement;
+                  this.navigationMenus?.openPluginNavigationMenu(
+                    entry,
+                    event.clientX,
+                    event.clientY,
+                    trigger,
+                  );
+                }
+              : nothing
+          }
+          @keydown=${
+            entry.value.actions?.length
+              ? (event: KeyboardEvent) => {
+                  if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.stopPropagation();
+                  // SAFETY: this listener is attached directly to the navigation link.
+                  const trigger = event.currentTarget as HTMLElement;
+                  const rect = trigger.getBoundingClientRect();
+                  this.navigationMenus?.openPluginNavigationMenu(
+                    entry,
+                    rect.left,
+                    rect.bottom,
+                    trigger,
+                  );
+                }
+              : nothing
+          }
           @click=${(event: MouseEvent) => {
             if (!shouldHandleNavigationClick(event)) {
               return;

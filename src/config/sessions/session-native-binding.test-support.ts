@@ -19,9 +19,12 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { cleanupSessionLifecycleArtifactsCore } from "./session-accessor.sqlite-artifact-cleanup.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
+import { emptySessionEntryMaintenancePlan } from "./session-accessor.sqlite-maintenance-store.js";
+import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import {
   rewindSessionToMessage,
   switchSessionBranch,
@@ -146,6 +149,30 @@ async function createFixture(
     bindingStore: native.store,
     readEntry: () => readExactSessionEntryRow(database, scope.sessionKey)?.entry,
     readBinding: () => native.store.lookup(native.key),
+    cleanup: () =>
+      withPluginRuntimeRegistryScope(registry, () =>
+        cleanupSessionLifecycleArtifactsCore({
+          ...scope,
+          sessionKeySegmentPrefix: "native-binding",
+          transcriptContentMarker: "Retain this transcript",
+          orphanTranscriptMinAgeMs: 0,
+          archiveRemovedEntryTranscripts: false,
+        }),
+      ),
+    maintain: (expectedEntry: NonNullable<ReturnType<typeof readExactSessionEntryRow>>["entry"]) =>
+      withPluginRuntimeRegistryScope(registry, () =>
+        finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+          { ...scope, path: database.path },
+          [
+            {
+              ...emptySessionEntryMaintenancePlan(),
+              entryRemovals: [
+                { sessionKey: scope.sessionKey, expectedEntry, maintenanceReason: "pruned" },
+              ],
+            },
+          ],
+        ),
+      ),
     cut: (cutMode: "rewind" | "switch", entryId: string) =>
       withPluginRuntimeRegistryScope(registry, () =>
         cutMode === "rewind"

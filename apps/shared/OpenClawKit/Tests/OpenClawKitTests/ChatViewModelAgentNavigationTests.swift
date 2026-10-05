@@ -5,8 +5,23 @@ import Testing
 private actor AgentNavigationGate {
     private var continuation: CheckedContinuation<Void, Never>?
     private var released = false
+    private var arrivals = 0
+    private var arrivalWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+    func arrive() {
+        self.arrivals += 1
+        let ready = self.arrivalWaiters.filter { $0.count <= self.arrivals }
+        self.arrivalWaiters.removeAll { $0.count <= self.arrivals }
+        for waiter in ready { waiter.continuation.resume() }
+    }
+
+    func waitUntilStarted(count: Int = 1) async {
+        guard self.arrivals < count else { return }
+        await withCheckedContinuation { self.arrivalWaiters.append((count, $0)) }
+    }
 
     func wait() async {
+        self.arrive()
         guard !self.released else { return }
         await withCheckedContinuation { self.continuation = $0 }
     }
@@ -26,6 +41,9 @@ private actor AgentNavigationTransport: OpenClawChatTransport {
     let sendGate: AgentNavigationGate?
     let supportsAgentScopes: Bool
     let firstAbortGate: AgentNavigationGate?
+    let mutationRequestsGate = AgentNavigationGate()
+    let abortRequestsGate = AgentNavigationGate()
+    let catalogUpdatesGate = AgentNavigationGate()
     private(set) var catalogRequests = 0
     private(set) var sentKeys: [String] = []
     private(set) var createdKeys: [String] = []
@@ -77,6 +95,7 @@ private actor AgentNavigationTransport: OpenClawChatTransport {
 
     func recordAbort(_ target: OpenClawChatSessionTarget) async {
         self.abortTargets.append(target)
+        await self.abortRequestsGate.arrive()
         if self.abortTargets.count == 1 { await self.firstAbortGate?.wait() }
     }
 
@@ -89,7 +108,7 @@ private actor AgentNavigationTransport: OpenClawChatTransport {
         return nil
     }
 
-    func recordMutation(_ request: OpenClawChatGatewayRequest) -> Data {
+    func recordMutation(_ request: OpenClawChatGatewayRequest) async -> Data {
         self.mutationRequests.append(request)
         if let owner = request.params["agentId"]?.value as? String,
            let key = request.params["key"]?.value as? String,
@@ -98,6 +117,7 @@ private actor AgentNavigationTransport: OpenClawChatTransport {
         {
             self.sessionsByAgentID[owner]?[index].unread = unread
         }
+        await self.mutationRequestsGate.arrive()
         return Data("{}".utf8)
     }
 
@@ -114,6 +134,7 @@ private actor AgentNavigationTransport: OpenClawChatTransport {
         let result = self.catalogs[min(index, self.catalogs.count - 1)]
         if index == 0 { await self.catalogGate?.wait() }
         try await onUpdate(result.get())
+        await self.catalogUpdatesGate.arrive()
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
@@ -334,7 +355,8 @@ struct ChatViewModelAgentNavigationTests {
         await vm.bootstrapTask?.value
         #expect(await transport.mutationRequests.count == 1)
         vm.setSessionUnread(key: "global", unread: true, agentID: "research")
-        try await waitUntil("Research manual unread mark accepted") { await transport.mutationRequests.count == 2 }
+        await transport.mutationRequestsGate.waitUntilStarted(count: 2)
+        #expect(await transport.mutationRequests.count == 2)
         vm.refresh()
         await vm.bootstrapTask?.value
         #expect(await transport.mutationRequests.count == 2)
@@ -401,9 +423,9 @@ struct ChatViewModelAgentNavigationTests {
         #expect(vm.selectedAgentID == "research")
         #expect(vm.currentSessionTarget == research)
         vm.input = "Send to Research"
-        vm.send()
-        try await waitUntil("research send") { await transport.sentTargets == [research] }
-        try await waitUntil("research send settles") { await MainActor.run { !vm.isSending } }
+        await vm.send()?.value
+        #expect(await transport.sentTargets == [research])
+        #expect(!vm.isSending)
         vm.input = "research draft"
 
         vm.switchSession(to: "global", agentID: "main")
@@ -484,10 +506,12 @@ struct ChatViewModelAgentNavigationTests {
         await vm.bootstrapTask?.value
         vm.pendingRuns = ["run-one", "run-two"]
         vm.abort()
-        try await waitUntil("first abort begins") { await transport.abortTargets.count == 1 }
+        await gate.waitUntilStarted()
+        #expect(await transport.abortTargets.count == 1)
         vm.switchSession(to: "global", agentID: "main")
         await gate.release()
-        try await waitUntil("both requested runs aborted") { await transport.abortTargets.count == 2 }
+        await transport.abortRequestsGate.waitUntilStarted(count: 2)
+        #expect(await transport.abortTargets.count == 2)
         #expect(await transport.abortTargets.allSatisfy {
             $0 == OpenClawChatSessionTarget(sessionKey: "global", agentID: "research")
         })
@@ -504,8 +528,9 @@ struct ChatViewModelAgentNavigationTests {
         await vm.setSessionColor(key: "global", color: "blue", agentID: "research")
         try await vm.setSessionGroup(key: "global", group: "Work", agentID: "research")
         vm.deleteSession("global", agentID: "research")
-        try await waitUntil("all row mutations dispatched") { await transport.mutationRequests.count == 6 }
+        await transport.mutationRequestsGate.waitUntilStarted(count: 6)
         let requests = await transport.mutationRequests
+        #expect(requests.count == 6)
         #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
         #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "research" })
         #expect(vm.selectedAgentID == "main")
@@ -536,9 +561,9 @@ struct ChatViewModelAgentNavigationTests {
         vm.syncActiveAgentId("replacement-default")
         #expect(vm.selectedAgentID == "research")
         vm.input = "Hello Research"
-        vm.send()
-        try await waitUntil("send reaches selected agent") { await transport.sentKeys == [selectedKey] }
-        try await waitUntil("send settles") { await MainActor.run { !vm.isSending } }
+        await vm.send()?.value
+        #expect(await transport.sentKeys == [selectedKey])
+        #expect(!vm.isSending)
 
         #expect(await vm.startNewSession())
         #expect(await transport.createdKeys.count == 1)
@@ -578,9 +603,8 @@ struct ChatViewModelAgentNavigationTests {
 
         vm.deleteSession("agent:research:topic")
 
-        try await waitUntil("selected agent primary opens") {
-            await MainActor.run { vm.sessionKey == "agent:research:\(mainKey)" }
-        }
+        await waitForObservedState { vm.sessionKey == "agent:research:\(mainKey)" }
+        #expect(vm.sessionKey == "agent:research:\(mainKey)")
         #expect(vm.selectedAgentID == "research")
     }
 
@@ -592,12 +616,14 @@ struct ChatViewModelAgentNavigationTests {
         let vm = fixture.viewModel
         await vm.refreshAgents()
         vm.input = "Send once"
-        vm.send()
-        try await waitUntil("alias send starts") { await transport.sentKeys == ["main"] }
+        let send = try #require(vm.send())
+        await sendGate.waitUntilStarted()
+        #expect(await transport.sentKeys == ["main"])
         vm.switchAgent(to: "research")
         vm.syncActiveAgentId("replacement-default")
         await sendGate.release()
-        try await waitUntil("alias send settles") { await MainActor.run { !vm.isSending } }
+        await send.value
+        #expect(!vm.isSending)
         vm.switchAgent(to: "main")
         #expect(vm.input.isEmpty)
         #expect(vm.recallPreviousInput(caretOnFirstLine: true))
@@ -629,16 +655,16 @@ struct ChatViewModelAgentNavigationTests {
         defer { fixture.close() }
         let vm = fixture.viewModel
         let first = Task { await vm.refreshAgents() }
-        try await waitUntil("first catalog starts") { await transport.catalogRequests == 1 }
+        await gate.waitUntilStarted()
+        #expect(await transport.catalogRequests == 1)
         if replacement {
             vm.handleTransportEvent(.routeChanged)
         } else {
             vm.handleTransportEvent(.health(ok: false))
             vm.handleTransportEvent(.health(ok: true))
         }
-        try await waitUntil("replacement catalog arrives") {
-            await MainActor.run { vm.agentChoices.map(\.id) == ["new"] }
-        }
+        await transport.catalogUpdatesGate.waitUntilStarted()
+        #expect(vm.agentChoices.map(\.id) == ["new"])
         await gate.release()
         await first.value
         #expect(vm.agentChoices.map(\.id) == ["new"])

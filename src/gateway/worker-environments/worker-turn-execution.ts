@@ -6,7 +6,7 @@ import {
   copyAgentToolMetadata,
   getAgentToolExecutionLocation,
 } from "../../agents/agent-tool-metadata.js";
-import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
 import type { EmbeddedAttemptSteeringLease } from "../../agents/embedded-agent-runner/run/attempt-prompt-build.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
@@ -77,6 +77,7 @@ export async function executeWorkerTurn(
   },
 ) {
   const { placement, turn: input } = params;
+  const backend = "cloud-worker";
   await using preparedRuntime = await acquireAgentRunPreparedModelRuntime(
     {
       config: input.config ?? {},
@@ -115,13 +116,13 @@ export async function executeWorkerTurn(
   turn.abortSignal?.throwIfAborted();
 
   const startedAt = Date.now();
-  await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
+  await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration, backend });
   params.assertRunCurrent?.();
   turn.abortSignal?.throwIfAborted();
   if (!params.placements.validateTurnClaim(params.turnClaim)) {
     throw new Error("Worker turn claim is no longer current");
   }
-  turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
+  turn.onExecutionPhase?.({ phase: "runner_entered", backend });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
   const recorder = turn.userTurnTranscriptRecorder;
   let blocked = false;
@@ -261,13 +262,14 @@ export async function executeWorkerTurn(
   });
   const { browser, computer, preparedComputer } = desktop;
   const {
+    authProfileStoreSource,
     capabilityProfile,
     policy: toolPolicy,
     exec,
     execUnavailable,
     presentation,
     installedSkills,
-  } = resolveWorkerToolAuthority({
+  } = await resolveWorkerToolAuthority({
     modelRef,
     model,
     placement,
@@ -375,12 +377,14 @@ export async function executeWorkerTurn(
         const tools = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
           params.environments.createGatewayTools?.({
             identity,
+            inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
             skillWorkshop,
             portalAvailable,
-            prepareTools: (adapters) => {
-              const prepared = createOpenClawCodingToolsInternal(
+            prepareTools: async (adapters) => {
+              const prepared = await createOpenClawCodingToolsInternalAsync(
                 {
                   ...turn,
+                  authProfileStoreSource,
                   agentId: placement.agentId,
                   conversationCapabilityProfile: capabilityProfile,
                   preparedModelRuntime: preparedRuntime.snapshot,
@@ -404,6 +408,7 @@ export async function executeWorkerTurn(
                 undefined,
                 undefined,
                 { tools: [...placementTools, ...adapters], policy: toolPolicy },
+                { assertCurrent: assertToolSurfaceCurrent, signal },
               );
               if (turn.disableTools || turn.modelRun || turn.promptMode === "none") {
                 return [];
@@ -623,7 +628,7 @@ export async function executeWorkerTurn(
       throw new Error("Queued child results lost authority before worker prompt injection");
     }
     recorder?.markSentToProvider?.();
-    turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend: "cloud-worker" });
+    turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend });
     const handoffAbort = new AbortController();
     let handoffError: Error | undefined;
     let handoffPending: Promise<void> | undefined;
@@ -638,7 +643,7 @@ export async function executeWorkerTurn(
           ? { requiresTerminalReceipt: true }
           : undefined,
       );
-      turn.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
+      turn.onExecutionPhase?.({ phase: "process_spawned", backend });
       handoffPending = (async () => {
         try {
           if (!(await params.environments.acknowledgeCredentialDelivery(credential))) {

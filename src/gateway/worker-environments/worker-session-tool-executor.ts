@@ -6,8 +6,9 @@ import {
   getAgentToolExecutionLocation,
 } from "../../agents/agent-tool-metadata.js";
 import { buildBlockedToolResult } from "../../agents/agent-tools.before-tool-call.wrapper.js";
+import { resolveSenderRestrictedSpawnError } from "../../agents/spawn-requester-policy.js";
 import { buildSubagentExecutionSessionSpawnContext } from "../../agents/subagents/spawn/subagent-spawn-execution-identity.js";
-import type { AnyAgentTool } from "../../agents/tools/common.js";
+import { jsonResult, type AnyAgentTool } from "../../agents/tools/common.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
@@ -74,7 +75,8 @@ type WorkerGatewayToolsDependencies = {
   portals: WorkerPortalToolExecutorDependencies["portals"];
   skillWorkshop?: AnyAgentTool;
   portalAvailable?: boolean;
-  prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[];
+  inheritedToolPolicySource?: "sender";
+  prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
 };
 
 export function createWorkerSessionToolExecutor(
@@ -137,6 +139,13 @@ export function createWorkerSessionToolExecutor(
     },
     { assertSource, callGateway, collectExecutionIdentity }: WorkerSessionToolAuthority,
   ) => {
+    const restrictedError = resolveSenderRestrictedSpawnError({
+      inheritedToolPolicySource: params.inheritedToolPolicySource,
+      visible: true,
+    });
+    if (restrictedError) {
+      return jsonResult({ status: "forbidden", error: restrictedError });
+    }
     const sourceEnvironment = params.environments.get(operation.identity.environmentId);
     if (
       !sourceEnvironment ||
@@ -371,6 +380,7 @@ export function createWorkerSessionToolExecutor(
       requesterAgentIdOverride: operation.source.agentId,
       inheritedToolAllowlist: authorizedTools,
       inheritedToolDenylist: [],
+      inheritedToolPolicySource: params.inheritedToolPolicySource,
       callGateway: gatewayCall,
       expectedParentSessionId: operation.source.sessionId,
       ...(operation.signal ? { signal: operation.signal } : {}),
@@ -556,9 +566,9 @@ export function createWorkerWorkshopCallRetention() {
   };
 }
 
-export function createWorkerGatewayTools(
+export async function createWorkerGatewayTools(
   params: WorkerGatewayToolsDependencies & { identity: WorkerConnectionIdentity },
-): AnyAgentTool[] {
+): Promise<AnyAgentTool[]> {
   const claim = params.identity.turnClaim;
   const capability = claim && getWorkerTurnExecutionIdentityCapability(params.placements, claim);
   if (!claim || !capability) {
@@ -631,7 +641,9 @@ export function createWorkerGatewayTools(
   const runWithSource = createWorkerSessionToolSourceRunner(params);
   const retainWorkshopCall = createWorkerWorkshopCallRetention();
   const tools = [...adapters, presence, ...(params.skillWorkshop ? [params.skillWorkshop] : [])];
-  return (params.prepareTools?.(tools) ?? tools).map((tool) => {
+  const preparedTools = await (params.prepareTools?.(tools) ?? tools);
+  capability.receiptAuthority();
+  return preparedTools.map((tool) => {
     if (getAgentToolExecutionLocation(tool).kind === "placement" || adapterNames.has(tool.name)) {
       return tool;
     }

@@ -168,11 +168,16 @@ export async function prepareChatHistorySessionRead({
         // Excluded metadata can refuse a read, never authorize transcript delivery.
         if (excludedEntry) {
           if (authorizeSharing({ ...current, entry: excludedEntry }, read)) {
-            respondChatHistoryUnavailable(
-              method,
-              respond,
-              "session changed while reading history; reload the conversation",
-            );
+            // Only a row the projection now serves changed mid-read; one it still omits stays unserved.
+            if (current.entry) {
+              respondChatHistoryUnavailable(
+                method,
+                respond,
+                "session changed while reading history; reload the conversation",
+              );
+            } else {
+              respond(false, undefined, hiddenSessionNotFound(current.canonicalKey));
+            }
           }
           return undefined;
         }

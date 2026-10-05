@@ -41,7 +41,11 @@ import type {
 } from "../cron/store/run-recovery-read.types.js";
 import type { CronQuarantinedJob } from "../cron/types-shared.js";
 import type { FleetCellRecord } from "../fleet/registry.types.js";
-import type { CronStandingGrantListing } from "../gateway/operator-approval-standing-grants.types.js";
+import type {
+  CronStandingGrantListing,
+  CronStandingGrantLookupInput,
+  ConsumeCronStandingGrantResult,
+} from "../gateway/operator-approval-standing-grants.types.js";
 import type {
   ListTerminalOperatorApprovalsInput,
   ListTerminalOperatorApprovalsResult,
@@ -102,7 +106,7 @@ import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
-  AgentDatabaseDeletionSnapshot,
+  AgentDatabaseDeletionWorkerSnapshot,
   AgentDeletionJournalAuthority,
   AgentDeletionJournalPurpose,
   AgentDeletionJournalStatus,
@@ -181,6 +185,7 @@ export type OpenClawStateReadCommand =
       input: ListTerminalOperatorApprovalsInput;
     }
   | { type: "operatorApprovals.listCronGrants"; input: { limit?: number } }
+  | { type: "operatorApprovals.validateCronGrant"; input: CronStandingGrantLookupInput }
   | PluginBlobReadCommand
   | { type: "subagents.sessionList" }
   | {
@@ -340,6 +345,7 @@ export type OpenClawStateReadResult =
       history: ListTerminalOperatorApprovalsResult;
     }
   | { type: "operatorApprovals.listCronGrants"; grants: CronStandingGrantListing[] }
+  | { type: "operatorApprovals.validateCronGrant"; result: ConsumeCronStandingGrantResult }
   | ReadResult<PluginBlobReadReply>
   | {
       type: "capture.readOnlyEvents";
@@ -431,7 +437,7 @@ export type OpenClawStateReadResult =
     }
   | {
       type: "agentDatabaseDeletion.snapshot";
-      snapshot: AgentDatabaseDeletionSnapshot;
+      snapshot: AgentDatabaseDeletionWorkerSnapshot;
     }
   | {
       type: "workerEnvironments.pruneCandidates";

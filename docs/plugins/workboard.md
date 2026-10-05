@@ -76,7 +76,12 @@ Sessions boards, with the open board highlighted. Select a nested board to open 
 Sidebar labels use the board name; boards with the same name include their kind
 in parentheses, such as **Planning (cards)** and **Planning (sessions)**.
 Boards you create in the Control UI are pinned in the sidebar immediately.
-Use **Customize** to pin any other board or remove a pin; removed pins stay removed.
+Right-click a board, or focus its link and press **Shift+F10** or the context-menu
+key, to **Pin to sidebar**, **Unpin from sidebar**, or **Delete board…**.
+Deleting asks for confirmation naming the board and requires write access.
+The default board and boards that still contain cards cannot be deleted.
+Deleting the open board returns to the Workboard root page. You can also use
+**Customize** to manage pins; removed pins stay removed.
 Pinned boards remain available as top-level entries when you leave Workboard,
 and you can drag them to reorder them.
 
@@ -99,15 +104,33 @@ a replacement value for them. Other fields retain their ordinary update behavior
 array changes nothing. Clients using this argument need a Gateway version that
 supports explicit appearance clearing; older Gateways do not implement this reset.
 
+Card lists share one prepared, claim-token-redacted snapshot per board scope and
+card revision. `workboard.cards.list` returns `revision`; repeat the same query
+with `{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
+The revision includes the store epoch and, for scoped queries, the normalized
+`boardId`. Reconnects request a full snapshot. `plugin.workboard.changed` includes
+an event `revision` and a separate `cardsRevision`: session-fact notifications
+advance the event sequence without invalidating unchanged cards.
+
 ## Sessions board
 
 Use a Sessions board to see where your conversations stand without creating
 cards. By default, it includes sessions from all configured agents with activity
-in the last 72 hours and excludes archived sessions. Each session appears in
+in the last 72 hours and excludes archived sessions, automation (cron) sessions,
+system sessions, dock conversations, and each agent's home session. Subagent sessions remain included.
+Set `scope.includeAutomation: true` to include automation and system sessions, or
+`scope.includeHome: true` to include home sessions. The Board agent can set these
+options. Existing boards use the same defaults without a migration. Each session appears in
 exactly one column. Open a tile to continue its conversation; the tile also shows
 its agent, run state, observer headline when available, pull requests, and recent
-activity. The agent filter narrows the displayed sessions without changing the
+activity. Message previews are plain text: Markdown formatting and HTML are removed,
+link labels are retained, and whitespace is collapsed before the 400-character limit.
+Tiles link up to four pull requests, ordered by open, draft, merged,
+then closed state, with a count for any additional pull requests. The agent filter
+narrows the displayed sessions without changing the
 saved board scope.
+
+Dock conversations stay excluded even when automation is included.
 
 **People filter:** Choose **Everyone** (the default), **Involving me**, or a person
 beside the agent filter. Involving me shows sessions you own or previously prompted;
@@ -117,8 +140,9 @@ the Board agent. API clients can pass `view: { involvingMe?: boolean,
 involvingProfileId?: string, includePeople?: boolean }` to
 `workboard.sessionsBoard.read`; `includePeople` returns the people facet for the picker.
 
-Columns are rules over Gateway-owned session status, observer health, and
-pull-request state. Health comes from the Gateway session observer: live digests
+Columns are rules over Gateway-owned run state, observer health, and
+pull-request state. Run state comes from the live run registry and queued inputs;
+a saved `running` status without an active run is idle. Health comes from the Gateway session observer: live digests
 for sessions someone is watching in the Control UI, and a terminal digest when an
 observed run ends. Sessions nobody watches have no health, so they match only run
 and pull-request rules. Reads follow the current caller's session visibility; board specs and
@@ -150,25 +174,47 @@ column is removed, the board applies its rules again. Tile tooltips distinguish
 **by rule** and **pinned**.
 
 Facts update live from session changes, with automatic board rereads at most once
-every five seconds. Later events keep invalidating facts without delaying that
-reread. The board reuses unchanged facts across boards until a session change
-invalidates them, and concurrent reads share one facts refresh per board.
-Session visibility and people filters remain specific to each caller.
-Reads use prepared Gateway facts without waiting for Git or pull-request requests.
-Missing pull-request facts refresh in the background and announce a board change
-when ready. An inline warning names the
-reason when facts or pull-request information are unavailable, including on an
-empty board. A failed facts read keeps the last known facts and placement;
-sessions with no known facts use the fallback column with reason
+every five seconds. Category-only session updates and card-only changes do not
+reload Sessions boards. Reads share a prepared placement snapshot when their
+board, authorized roster, people view, and session revision match. Each request
+still obtains its own caller-scoped roster; sharing never expands session visibility.
+`workboard.sessionsBoard.read` returns a `revision`; repeat the same query with
+`{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
+Reconnects and view changes request a full snapshot. The Workboard change event's
+`sessionsRevision` advances for board edits, operator pins, and session fact
+invalidations independently of `cardsRevision`.
+
+Pull-request facts come from the Gateway's shared PR owner, independently of
+which sessions appear in a Control UI sidebar. Reads use prepared Gateway facts
+without waiting for Git or pull-request requests. Missing snapshots load through
+that owner's bounded background loader and announce a board change when ready.
+If PR facts become unavailable or GitHub rate limits requests, the board retains
+the last ready PR list for its cards and column rules while updating run state
+and health. Unavailable PR reads retry per session, starting after one minute
+and doubling to a 15-minute maximum; a successful read resets the delay.
+An inline warning distinguishes stale PR facts from facts not loaded yet and
+identifies GitHub rate limiting. A failed facts read keeps the last known facts
+and placement; sessions with no known facts use the fallback column with reason
 `facts-unavailable`. A session whose available facts match no rule also uses that
 reason while its pull-request facts are unknown. Opening a board starts any needed
-background refresh; unchanged sessions do not refresh merely because time passed.
+background refresh. Shared snapshots reuse prepared facts until a publication,
+board age-window expiry, or a pull-request retry becomes due; failure fallback
+retains the last known facts.
 
 When the Control UI host supports a session dock, **Board agent** opens a
 conversation beside the board. Its first use creates and saves a dedicated
-conversation named **Sessions board · &lt;board name&gt;**. The Board agent is the
-only model used by the board, invoked on demand to change columns, rules, scope,
-or pins using these tools:
+conversation named **Sessions board · &lt;board name&gt;**. This is a dock conversation:
+it stays out of session lists, Involving me views, and people counts. Open it from
+the **Board agent** button. Its human creator, sharing, and sandbox rules are the
+same as an ordinary conversation.
+
+For boards with an older Board agent conversation, the next **Board agent** use
+creates a new dock conversation and saves its reference. The old conversation
+keeps its history and remains an ordinary session that you can archive; its
+creation surface and provenance are not rewritten.
+
+The Board agent is the only model used by the board, invoked on demand to change
+columns, rules, scope, or pins using these tools:
 
 | Tool                              | Arguments and behavior                                                                                                        |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -186,7 +232,8 @@ id from that context or from `workboard_boards`.
 Specs allow 2–12 columns with unique lowercase slug ids (1–48 characters), labels
 (1–60), and descriptions (1–400). Exactly one column must have `fallback: true`.
 Optional colors use the board palette. `scope` accepts `agentIds`,
-`includeArchived`, and a positive `maxAgeHours`. Rules can match `health`, `run`
+`includeArchived`, `includeAutomation`, `includeHome`, and a positive `maxAgeHours`.
+The include options default to false. Rules can match `health`, `run`
 (`active`, `idle`, `failed`), `pullRequest` (`none`, `open`, `draft`, `merged`,
 `closed`), and `archived`. Unknown pull-request state does not count as `none`.
 

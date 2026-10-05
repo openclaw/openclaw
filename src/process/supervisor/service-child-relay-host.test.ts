@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { closeOwnedStdioProcess } from "../owned-stdio.js";
 import * as childAdapter from "./adapters/child.js";
@@ -103,6 +104,81 @@ it.each(["before", "after"] as const)(
       }
     } finally {
       stub.control.destroy();
+      stub.disconnectMock();
+      stub.emitExit(0);
+    }
+  },
+);
+
+it.each(["current", "revoked", "closed"] as const)(
+  "checks %s authority after remote preparation and retains custody until native readiness",
+  async (authority) => {
+    platformMock = mockProcessPlatform("darwin");
+    const stub = createWritableRelayChild();
+    mocks.spawn.mockReturnValue(stub.child);
+    const writes = vi.spyOn(stub.control, "write");
+    const grantReached = createDeferredCore();
+    const abort = new AbortController();
+    let current = true;
+    let released = false;
+    const starting = createServiceChildRelayAdapter({
+      command: "synthetic-command",
+      args: [],
+      stdinMode: "pipe-closed",
+      oomScoreWrapperSelected: false,
+      initiateSpawn(launch, settlement) {
+        grantReached.resolve();
+        abort.signal.throwIfAborted();
+        if (!current) {
+          throw new Error("launch revoked");
+        }
+        void settlement?.then(() => {
+          released = true;
+        });
+        return launch();
+      },
+    });
+    const start = firstMockArg(stub.sendMock, "remote preparation");
+    if (!isRecord(start) || typeof start.generation !== "string") {
+      throw new Error("Expected remote preparation identity");
+    }
+    const generation = start.generation;
+    const emit = (payload: ServiceChildAnchorPayload, sequence: number) =>
+      stub.control.push(
+        Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence })),
+      );
+    const rejected =
+      authority === "current"
+        ? undefined
+        : expect(starting).rejects.toThrow(/launch revoked|launch closed/);
+    current = authority !== "revoked";
+    if (authority === "closed") {
+      abort.abort(new Error("launch closed"));
+    }
+    emit({ type: "prepared" }, 1);
+    await grantReached.promise;
+    expect(released).toBe(false);
+    try {
+      if (rejected) {
+        await rejected;
+        expect(writes.mock.calls.some(([chunk]) => String(chunk).includes('"type":"launch"'))).toBe(
+          false,
+        );
+      } else {
+        expect(writes.mock.calls.some(([chunk]) => String(chunk).includes('"type":"launch"'))).toBe(
+          true,
+        );
+        emit({ type: "ready", commandPid: 1234, anchorPid: 1235 }, 2);
+        const adapter = await starting;
+        expect(released).toBe(true);
+        emit({ type: "root-result", code: 0, signal: null }, 3);
+        stub.stdout.emit("end");
+        stub.stderr.emit("end");
+        await adapter.wait();
+      }
+    } finally {
+      stub.control.destroy();
+      stub.lineage.destroy();
       stub.disconnectMock();
       stub.emitExit(0);
     }

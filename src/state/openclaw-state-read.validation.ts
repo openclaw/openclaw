@@ -25,6 +25,16 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     (input.snapshotRoot === undefined || typeof input.snapshotRoot === "string") &&
     (input.context.existingSchemaPath === undefined ||
       typeof input.context.existingSchemaPath === "string") &&
+    (input.context.stateIntegrity === undefined ||
+      (isRecord(input.context.stateIntegrity) &&
+        isRecord(input.context.stateIntegrity.identity) &&
+        typeof input.context.stateIntegrity.identity.key === "string" &&
+        input.context.stateIntegrity.revision instanceof SharedArrayBuffer &&
+        input.context.stateIntegrity.revision.byteLength === BigInt64Array.BYTES_PER_ELEMENT &&
+        typeof input.context.stateIntegrity.epoch === "bigint" &&
+        input.context.stateIntegrity.epoch >= 0n &&
+        input.context.stateIntegrity.proof instanceof SharedArrayBuffer &&
+        input.context.stateIntegrity.proof.byteLength === BigInt64Array.BYTES_PER_ELEMENT)) &&
     isRecord(environment) &&
     typeof environment.OPENCLAW_STATE_DIR === "string" &&
     (environment.OPENCLAW_SUPERVISOR_MODE === undefined ||
@@ -36,6 +46,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         isRecord(input.command.input) &&
         typeof input.command.input.channel === "string" &&
         typeof input.command.input.accountId === "string") ||
+      (input.command.type === "sessionState.pendingNotices" && input.command.input === undefined) ||
       (input.command.type === "sessionState.ambientTargets" &&
         isRecord(input.command.input) &&
         typeof input.command.input.watcherSessionKey === "string") ||
@@ -83,7 +94,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "backup.runs" ||
       ((input.command.type === "restartSentinel.current" ||
         input.command.type === "restartSentinel.snapshot" ||
-        input.command.type === "restartSentinel.installReceipt") &&
+        input.command.type === "restartSentinel.installReceipt" ||
+        input.command.type === "plugins.deferredMigrations.read" ||
+        input.command.type === "config.health.read") &&
         "input" in input.command &&
         input.command.input === undefined) ||
       (input.command.type === "claws.packageOwnership" &&
@@ -338,7 +351,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.input.includeRunId === "string")) ||
       input.command.type === "fleet.list" ||
       ((input.command.type === "operatorApprovals.history" ||
-        input.command.type === "operatorApprovals.listCronGrants") &&
+        input.command.type === "operatorApprovals.listCronGrants" ||
+        input.command.type === "operatorApprovals.validateCronGrant") &&
         isRecord(input.command.input)) ||
       isTuiLastSessionReadCommand(input.command) ||
       input.command.type === "nodeHost.config" ||

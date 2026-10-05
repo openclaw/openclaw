@@ -538,7 +538,7 @@ type GatewayCombinedSessionStore = {
   targetsBySessionKey: GatewayStoredSessionTargets;
 };
 
-function prepareCombinedSessionStore(cfg: OpenClawConfig, opts: GatewaySessionStoreOptions) {
+export function prepareCombinedSessionStore(cfg: OpenClawConfig, opts: GatewaySessionStoreOptions) {
   const targets = resolveGatewaySessionStoreTargets(cfg, opts);
   return {
     projection: opts.projection ?? "list",
@@ -553,7 +553,7 @@ function prepareCombinedSessionStore(cfg: OpenClawConfig, opts: GatewaySessionSt
   };
 }
 
-function mergeCombinedSessionStore(
+export function mergeCombinedSessionStore(
   cfg: OpenClawConfig,
   opts: GatewaySessionStoreOptions,
   prepared: ReturnType<typeof prepareCombinedSessionStore>,

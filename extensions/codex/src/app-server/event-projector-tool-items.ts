@@ -163,17 +163,13 @@ export function itemToolResult(item: CodexThreadItem): Record<string, unknown> |
     });
   }
   if (item.type === "webSearch") {
-    return webSearchToolResult(item);
+    return sanitizeCodexAgentEventRecord({
+      status: itemStatus(item),
+      ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
+      ...webSearchToolArgs(item),
+    });
   }
   return undefined;
-}
-
-function webSearchToolResult(item: CodexThreadItem): Record<string, unknown> {
-  return sanitizeCodexAgentEventRecord({
-    status: itemStatus(item),
-    ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
-    ...webSearchToolArgs(item),
-  });
 }
 
 type CodexFileChangeSummary = {

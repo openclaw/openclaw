@@ -5,7 +5,6 @@
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { buildCronExecOperationBinding } from "../gateway/operator-approval-standing-grants.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
@@ -774,24 +773,17 @@ export async function processGatewayAllowlist(
     !requiresInlineEvalApproval &&
     !requiresHeredocApproval;
   if (cronStandingGrantEligible) {
-    const grantLookup = {
-      agentId: cronExecutionSource.agentId,
-      cronJobId: cronExecutionSource.jobId,
-      jobConfigRevision: cronExecutionSource.jobConfigRevision,
-      operationBinding: buildCronExecOperationBinding({
-        command: params.command,
-        cwd: params.workdir,
-        env: params.requestedEnv,
-      }),
-    };
-    let consumeGrant: ReturnType<typeof prepareCronStandingGrantConsumption>;
+    let consumeGrant: Awaited<ReturnType<typeof prepareCronStandingGrantConsumption>>;
     try {
-      consumeGrant = prepareCronStandingGrantConsumption(grantLookup);
+      consumeGrant = await prepareCronStandingGrantConsumption(params, cronExecutionSource, {
+        security: hostSecurity,
+        ask: hostAsk,
+      });
     } catch {
       consumeGrant = undefined;
     }
     if (consumeGrant) {
-      const consume = consumeGrant;
+      const consume = consumeGrant.consume;
       const emitGrantEvent = (approved: boolean, reason: string) =>
         emitApprovalEvent({
           action: approved ? "exec.approval.approved" : "exec.approval.denied",
@@ -802,7 +794,9 @@ export async function processGatewayAllowlist(
         });
       return {
         execCommandOverride: enforcedCommand,
-        // Consumption settles under receipt custody; native initiation remains the exec owner's boundary.
+        assertCurrent: consumeGrant.assertCurrent,
+        initiateSpawn: consumeGrant.initiateSpawn,
+        releaseSpawn: consumeGrant.releaseSpawn,
         revalidateBeforeExecution: async () => {
           let grantUse: Awaited<ReturnType<typeof consume>> | undefined;
           try {

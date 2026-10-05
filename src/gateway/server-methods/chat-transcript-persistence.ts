@@ -10,12 +10,12 @@ import {
   patchSessionEntryCore,
   publishTranscriptUpdate,
   readSessionTranscriptWatermark,
-  rewriteAssistantTranscriptMessageForRun,
   rewriteTranscriptEventRowsExact,
   withTranscriptWriteLock,
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import { rewritePreparedAssistantTranscriptMessageForRun } from "../../config/sessions/session-message-rewrite.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -573,7 +573,7 @@ export async function enrichAssistantTranscriptMediaForRun(params: {
   expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
   scope: ResolvedAssistantTranscriptScope;
 }): Promise<{ messageId: string } | null> {
-  return await rewriteAssistantTranscriptMessageForRun({
+  return await rewritePreparedAssistantTranscriptMessageForRun({
     scope: params.scope,
     runId: params.runId,
     expectedLifecycleRevision: params.expectedLifecycleRevision,

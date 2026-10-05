@@ -11,10 +11,7 @@ import type {
 } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, reportPlacementTransition } from "./placement-record.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
-import {
-  completeMovedWorkspaceTeardown,
-  completeReclaimedWorkspaceTeardown,
-} from "./placement-teardown.js";
+import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import type {
   WorkerPlacementAuthorization,
@@ -57,7 +54,7 @@ export type WorkerPlacementReclaimOptions = Pick<
 
 export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOptions) {
   const { environments, placements } = options;
-  const reclaimOnce = async (
+  return async (
     request: WorkerPlacementReclaimRequest,
     moveIntent?: WorkerPlacementMoveIntent,
     authorize?: WorkerPlacementAuthorization,
@@ -209,7 +206,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                 }
               });
             };
-            const finishReclaim = async (): Promise<WorkerReclaimPlacement> => {
+            try {
               const pending = await journal.load();
               if (pending) {
                 reauthorize?.();
@@ -345,20 +342,13 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       complete: async () => {
                         // Destroy is the final privileged effect. Once it commits, durable placement
                         // completion must finish even if caller authority closes during the await.
-                        const completed = moveIntent
-                          ? await completeMovedWorkspaceTeardown({
-                              placements,
-                              turnClaim: reclaimClaim,
-                              environmentId: current.environmentId,
-                              ownerEpoch: current.activeOwnerEpoch,
-                              operationId: moveIntent.operationId,
-                            })
-                          : await completeReclaimedWorkspaceTeardown({
-                              placements,
-                              turnClaim: reclaimClaim,
-                              environmentId: current.environmentId,
-                              ownerEpoch: current.activeOwnerEpoch,
-                            });
+                        const completed = await completeWorkerWorkspaceTeardown({
+                          placements,
+                          turnClaim: reclaimClaim,
+                          environmentId: current.environmentId,
+                          ownerEpoch: current.activeOwnerEpoch,
+                          operationId: moveIntent?.operationId,
+                        });
                         // Publish the committed owner before cleanup refs and the tunnel can yield.
                         reportPlacementTransition(onTransition, completed);
                         return completed;
@@ -390,9 +380,6 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                 // Provider teardown is authoritative; local tunnel cleanup is best effort.
               }
               return reclaimed;
-            };
-            try {
-              return await finishReclaim();
             } catch (error) {
               if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
                 throw error;
@@ -418,6 +405,4 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
         );
       },
     });
-
-  return reclaimOnce;
 }

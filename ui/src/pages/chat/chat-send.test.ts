@@ -320,12 +320,10 @@ describe("refreshChat", () => {
     startup.resolve({ messages: [message] });
     await expect(refresh).resolves.toBeUndefined();
     const joined = refreshChatMetadata(asChatPageHost(host), { automatic: true });
+    const scope = { agentId: "main", sessionKey: host.sessionKey };
 
     expect(host.chatMessages).toEqual([message]);
-    expect(host.request).toHaveBeenCalledWith("chat.metadata", {
-      agentId: "main",
-      sessionKey: host.sessionKey,
-    });
+    expect(host.request).toHaveBeenCalledWith("chat.metadata", { ...scope, includeModels: false });
     expect(asChatPageHost(host).chatModelsLoading).toBe(true);
 
     const model = {
@@ -336,12 +334,9 @@ describe("refreshChat", () => {
     };
     metadata.resolve({ commands: [] });
     await waitForFast(() =>
-      expect(
-        peekChatMetadata(expectDefined(host.client, "chat client"), {
-          agentId: "main",
-          sessionKey: host.sessionKey,
-        }),
-      ).toEqual({ commands: [] }),
+      expect(peekChatMetadata(expectDefined(host.client, "chat client"), scope)).toEqual({
+        commands: [],
+      }),
     );
     expect(asChatPageHost(host).chatModelsLoading).toBe(true);
     expect(host.chatModelCatalog).toEqual([]);

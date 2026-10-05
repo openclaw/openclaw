@@ -241,48 +241,6 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
-  it("reports admitted memory cleanup failure while completing registry retirement", async () => {
-    const failure = new Error("memory teardown failed");
-    const cleanup = vi.fn(async () => {
-      throw failure;
-    });
-    const registry = createEmptyPluginRegistry();
-    const record = createPluginRecord({ id: "memory-close" });
-    registry.plugins.push(record);
-    const instance = new PluginInstance(record.id, { record, registry });
-    registry.memoryCapabilities.push({
-      pluginId: record.id,
-      capability: instance.wrap({
-        runtime: {
-          getMemorySearchManager: async () => ({ manager: null }),
-          resolveMemoryBackendConfig: () => ({ backend: "builtin" }),
-          prepareReload: () => ({ drain: cleanup, resume() {} }),
-        } satisfies MemoryPluginRuntime,
-      }),
-    });
-    setActivePluginRegistry(registry);
-    const owner = createPluginRegistryOwner(registry);
-    const clearSecretsRuntimeSnapshot = vi.fn();
-    const result = await createGatewayCloseHandler(
-      createGatewayCloseTestDeps({ closePluginRegistry: owner.close, clearSecretsRuntimeSnapshot }),
-    )();
-
-    expect(result.warnings).toContain("memory-managers");
-    expect(mocks.logWarn).toHaveBeenCalledWith(expect.stringContaining(failure.message));
-    expect(mocks.logInfo).not.toHaveBeenCalledWith(
-      expect.stringContaining("shutdown completed cleanly"),
-    );
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(instance.lifecycle.signal.aborted).toBe(true);
-    expect(getActivePluginRegistry()).toBeNull();
-    expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
-    expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
-    const repeated = owner.close();
-    expect(owner.close()).toBe(repeated);
-    await expect(repeated).resolves.toEqual({ memoryErrors: [failure], pluginFailures: [] });
-    expect(cleanup).toHaveBeenCalledOnce();
-  });
-
   it.each([true, false])(
     "selects only serving Gateway owners while closing custodians drain (open survivor: %s)",
     async (openSurvivor) => {

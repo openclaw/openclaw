@@ -6,16 +6,25 @@ import {
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { isActiveStoreWriter } from "../../shared/store-writer-queue.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
+
+export type SessionManagerIncognitoBinding = Readonly<{
+  actor: IncognitoSessionActor;
+  admissionSignal?: AbortSignal;
+}>;
+
+const managerBindings = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionManagerIncognitoBindings"),
+  () => new WeakMap<object, SessionManagerIncognitoBinding>(),
+);
 
 const actorScope = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionManagerIncognitoActor"),
-  () =>
-    new AsyncLocalStorage<{
-      actor: IncognitoSessionActor;
-      admissionSignal?: AbortSignal;
-    }>(),
+  () => new AsyncLocalStorage<SessionManagerIncognitoBinding>(),
 );
 
 /**
@@ -34,10 +43,15 @@ export function withSessionManagerIncognitoActor<T>(
   );
 }
 
-export function captureSessionManagerIncognitoActor(
+export function captureSessionManagerIncognitoBinding(
   target: SessionTranscriptRuntimeTarget | undefined,
-) {
-  const actor = actorScope.getStore()?.actor;
+  manager?: object,
+  retarget = false,
+): SessionManagerIncognitoBinding | undefined {
+  const retained = manager ? managerBindings.get(manager) : undefined;
+  const scoped = actorScope.getStore();
+  const binding = retarget ? (scoped ?? retained) : (retained ?? scoped);
+  const actor = binding?.actor;
   if (!actor || !isIncognitoSessionKey(target?.sessionKey)) {
     return undefined;
   }
@@ -50,9 +64,51 @@ export function captureSessionManagerIncognitoActor(
   ) {
     throw new Error("SessionManager target belongs to another incognito actor");
   }
-  return actor;
+  return binding;
 }
 
-export function assertSessionManagerIncognitoAdmission(): void {
-  actorScope.getStore()?.admissionSignal?.throwIfAborted();
+/** Publish the binding captured by preparation; failed hydration never changes its owner. */
+export function installSessionManagerIncognitoBinding(
+  manager: object,
+  binding: SessionManagerIncognitoBinding | undefined,
+): void {
+  if (binding) {
+    binding.actor.assertCurrent();
+    managerBindings.set(manager, binding);
+  } else {
+    managerBindings.delete(manager);
+  }
+}
+
+export function withRetainedSessionManagerIncognitoActor<T>(
+  manager: object,
+  operation: () => T,
+): T {
+  const binding = managerBindings.get(manager);
+  return binding ? actorScope.run(binding, operation) : operation();
+}
+
+export function captureSessionManagerIncognitoAdmissionAssertion(
+  binding: SessionManagerIncognitoBinding,
+): () => void {
+  // Accepted writes retain their hydration and settlement after new admission closes.
+  const acceptedWriter = isActiveStoreWriter(SQLITE_SESSION_WRITER_QUEUES, binding.actor.path);
+  const signals = [
+    binding.admissionSignal,
+    actorScope.getStore()?.admissionSignal,
+    getAsyncWorkSignal(),
+  ];
+  return () => {
+    if (!acceptedWriter) {
+      for (const signal of signals) {
+        signal?.throwIfAborted();
+      }
+    }
+  };
+}
+
+export function assertSessionManagerIncognitoAdmission(
+  binding: SessionManagerIncognitoBinding,
+): void {
+  captureSessionManagerIncognitoAdmissionAssertion(binding)();
 }

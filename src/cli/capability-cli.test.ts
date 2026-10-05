@@ -1606,7 +1606,7 @@ describe("capability cli", () => {
       "--resolution",
       "768p",
       "--duration",
-      "6",
+      "2.5",
       "--audio",
       "--watermark",
       "--timeout-ms",
@@ -1619,7 +1619,7 @@ describe("capability cli", () => {
     expect(videoCall?.size).toBe("1280x768");
     expect(videoCall?.aspectRatio).toBe("16:9");
     expect(videoCall?.resolution).toBe("768P");
-    expect(videoCall?.durationSeconds).toBe(6);
+    expect(videoCall?.durationSeconds).toBe(2.5);
     expect(videoCall?.audio).toBe(true);
     expect(videoCall?.watermark).toBe(true);
     expect(videoCall?.timeoutMs).toBe(300000);

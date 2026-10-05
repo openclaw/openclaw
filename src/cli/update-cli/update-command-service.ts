@@ -7,6 +7,7 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
@@ -239,6 +240,11 @@ export async function maybeRestartService(params: {
   }
   let activation = {
     ...params,
+    // A default update step must not truncate a Windows service's cold-start budget.
+    timeoutMs:
+      process.platform === "win32" && params.opts.timeout === undefined
+        ? Math.max(params.timeoutMs, resolveGatewayStartupTiming().deadlineMs)
+        : params.timeoutMs,
     invocationEnv,
     serviceEnv,
     assertCurrent,
@@ -356,7 +362,6 @@ export async function maybeRestartService(params: {
           timeoutMs: activation.timeoutMs,
           expectedVersion: expectedGatewayVersion,
           ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
-          requirePluginHealth: false,
           env: activation.serviceEnv,
         });
         assertReadinessCurrent();

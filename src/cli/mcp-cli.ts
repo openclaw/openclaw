@@ -148,17 +148,6 @@ function parseKeyValueEntries(values: readonly string[] | undefined, label: stri
   return Object.keys(entries).length > 0 ? entries : undefined;
 }
 
-function parsePositiveNumberOption(value: string | undefined, label: string): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const parsed = parseStrictFiniteNumber(value);
-  if (parsed === undefined || parsed <= 0) {
-    fail(`${label} must be a positive number.`);
-  }
-  return parsed;
-}
-
 function parseMcpApprovalModeOption(
   value: string | undefined,
 ): McpCodexToolApprovalMode | undefined {
@@ -186,8 +175,15 @@ function applyMcpTimeoutOptions(
     ["timeout", "requestTimeoutMs", "--timeout"],
     ["connectTimeout", "connectionTimeoutMs", "--connect-timeout"],
   ] as const) {
-    const seconds = parsePositiveNumberOption(opts[option], label);
-    setOptionalField(server, field, seconds === undefined ? undefined : seconds * 1_000);
+    const value = opts[option];
+    if (value === undefined) {
+      continue;
+    }
+    const seconds = parseStrictFiniteNumber(value);
+    if (seconds === undefined || seconds <= 0) {
+      fail(`${label} must be a positive number.`);
+    }
+    server[field] = seconds * 1_000;
   }
 }
 
@@ -396,18 +392,15 @@ async function collectMcpDoctorIssues(params: {
           const authStatus = await readMcpOAuthCredentialsStatus(
             operatorMcpOAuthIdentity(name, resolved.url),
           );
-          if (authStatus.state === "requires-authorization") {
+          if (authStatus.state !== "authorized") {
+            const state =
+              authStatus.state === "requires-authorization"
+                ? "require additional authorization"
+                : "are not authorized";
             issues.push(
               issue(
                 "warning",
-                `OAuth credentials require additional authorization; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
-              ),
-            );
-          } else if (authStatus.state !== "authorized") {
-            issues.push(
-              issue(
-                "warning",
-                `OAuth credentials are not authorized; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
+                `OAuth credentials ${state}; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
               ),
             );
           }
@@ -628,16 +621,6 @@ function createMcpProbeRuntime(
 
 const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
 
-function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record<string, unknown> {
-  if (asPositiveFiniteNumber(server.connectionTimeoutMs) !== undefined) {
-    return server;
-  }
-  return {
-    ...server,
-    connectionTimeoutMs: DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS,
-  };
-}
-
 function resolveMcpProbeIssue(params: {
   result: Awaited<ReturnType<typeof readMcpProbeResult>>;
   servers: Record<string, Record<string, unknown>>;
@@ -659,11 +642,13 @@ async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
-}): Promise<Awaited<ReturnType<typeof readMcpProbeResult>>> {
+}): Promise<void> {
   const probeServers = Object.fromEntries(
     Object.entries(params.servers).map(([name, server]) => [
       name,
-      applyMcpProbeInitializeTimeout(server),
+      asPositiveFiniteNumber(server.connectionTimeoutMs) !== undefined
+        ? server
+        : { ...server, connectionTimeoutMs: DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS },
     ]),
   );
   const runtime = await createMcpProbeRuntime(
@@ -677,7 +662,6 @@ async function probeMcpServersOrFail(params: {
     if (probeIssue) {
       fail(probeIssue);
     }
-    return result;
   } finally {
     await runtime.dispose();
   }

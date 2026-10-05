@@ -56,6 +56,8 @@ export type NpmSpecResolution = {
   packageOpenClaw?: Record<string, unknown>;
 };
 
+type InstallSourceResult<T> = ({ ok: true } & T) | { ok: false; error: string };
+
 /** Flattened npm resolution fields stored on install results and diagnostics. */
 type NpmResolutionFields = {
   resolvedName?: string;
@@ -269,16 +271,9 @@ export async function withInstallWorkspace<T>(
 }
 
 /** Resolves and validates a user-supplied archive path before extraction. */
-export async function resolveArchiveSourcePath(archivePath: string): Promise<
-  | {
-      ok: true;
-      path: string;
-    }
-  | {
-      ok: false;
-      error: string;
-    }
-> {
+export async function resolveArchiveSourcePath(
+  archivePath: string,
+): Promise<InstallSourceResult<{ path: string }>> {
   const resolved = resolveUserPath(archivePath);
   if (!(await pathExists(resolved))) {
     return { ok: false, error: `archive not found: ${resolved}` };
@@ -388,17 +383,7 @@ export async function packNpmSpecToArchive(params: {
   workTimeoutMs?: number | null;
   cwd: string;
   signal?: AbortSignal;
-}): Promise<
-  | {
-      ok: true;
-      archivePath: string;
-      metadata: NpmSpecResolution;
-    }
-  | {
-      ok: false;
-      error: string;
-    }
-> {
+}): Promise<InstallSourceResult<{ archivePath: string; metadata: NpmSpecResolution }>> {
   const res = await runCommandWithTimeout(
     resolveNpmCommand([
       "pack",
@@ -458,16 +443,7 @@ export async function resolveNpmPackArchiveMetadata(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<
-  | {
-      ok: true;
-      archivePath: string;
-      tarballName: string;
-      metadata: NpmSpecResolution;
-    }
-  | {
-      ok: false;
-      error: string;
-    }
+  InstallSourceResult<{ archivePath: string; tarballName: string; metadata: NpmSpecResolution }>
 > {
   const archivePathResult = await resolveArchiveSourcePath(params.archivePath);
   if (!archivePathResult.ok) {

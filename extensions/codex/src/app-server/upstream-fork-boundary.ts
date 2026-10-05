@@ -62,14 +62,10 @@ function textOnlyMessage(content: unknown): string | undefined {
   // undefined marks the message unverifiable so boundary resolution fails closed.
   const texts: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object" || Array.isArray(block)) {
+    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
       return undefined;
     }
-    const typed = block as { type?: unknown; text?: unknown };
-    if (typed.type !== "text" || typeof typed.text !== "string") {
-      return undefined;
-    }
-    texts.push(typed.text);
+    texts.push(block.text);
   }
   return texts.join("\n");
 }

@@ -407,9 +407,10 @@ gh workflow run openclaw-live-and-e2e-checks-reusable.yml --ref main \
 ```
 
 Bun jobs are labeled advisory and report failures normally in their separate
-run. They do not replace Node release evidence or add PR jobs. The existing
-`setup-test-bun` action owns the fork pin. The existing trusted admission job
-installs it once and shares its executable by artifact ID with the test jobs.
+run. They do not replace Node release evidence or add PR jobs. The trusted
+admission checkout includes `scripts/lib/openclaw-bun.json` and its staging
+helper from the workflow revision. The existing `setup-test-bun` action installs
+that pin once and shares its executable by artifact ID with the test jobs.
 Only test steps select Bun; dependency
 installation, build preparation, packaging, and workflow tooling keep their
 current toolchain.

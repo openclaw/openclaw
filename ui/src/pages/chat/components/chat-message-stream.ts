@@ -273,7 +273,7 @@ export function renderWorkGroupSummary(
               >`
             : nothing
         }
-        ${outcomes.map((outcome) => html`<span class="muted">· ${outcome.label}</span>`)}
+        ${outcomes.map((outcome) => html`<span class="chat-activity-group__outcome muted">· ${outcome.label}</span>`)}
         ${
           toolOutcomes === nothing
             ? nothing

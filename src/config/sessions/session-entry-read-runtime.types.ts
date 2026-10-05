@@ -1,4 +1,5 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
 import type {
   SessionExactEntriesWorkerResult,
   SessionExactEntriesWorkerSelection,
@@ -13,6 +14,7 @@ export type SessionStoreWorkerReadScope = {
 export type SessionEntryWorkerRead = SessionStoreWorkerReadScope &
   SessionExactEntriesWorkerSelection & {
     lifecycleSessionKey?: string;
+    snapshotFields?: readonly SessionEntrySnapshotField[];
     projection?: "full" | "sharing" | "list" | "exact";
     includeMembers?: boolean;
     includeParticipantRecords?: boolean;

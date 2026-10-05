@@ -39,11 +39,10 @@ export function isValidMemoryEmbedding(embedding: number[], dimensions?: number)
 
 export function loadMemoryEmbeddingCache(params: {
   db: DatabaseSync;
-  enabled: boolean;
   providerIdentities: MemoryIndexProviderIdentity[];
   hashes: string[];
 }): Map<string, number[]> {
-  if (!params.enabled || params.providerIdentities.length === 0 || params.hashes.length === 0) {
+  if (params.providerIdentities.length === 0 || params.hashes.length === 0) {
     return new Map();
   }
   const unresolved = new Set(params.hashes.filter(Boolean));
@@ -176,18 +175,14 @@ function prepareMemoryEmbeddingCacheUpsert(db: DatabaseSync) {
 
 export function upsertMemoryEmbeddingCache(params: {
   db: DatabaseSync;
-  enabled: boolean;
-  provider: { id: string; model: string } | null;
-  providerKey: string | null;
+  provider: { id: string; model: string };
+  providerKey: string;
   /** Stable replayable rows let staged writes retain hashes without a second vector batch. */
   entries: () => Iterable<{ hash: string; embedding: number[] }>;
   maxEntries?: number;
   now?: number;
 }): void {
   const provider = params.provider;
-  if (!params.enabled || !provider || !params.providerKey) {
-    return;
-  }
   const lastRows = new Map<string, number>();
   let row = 0;
   for (const entry of params.entries()) {
@@ -221,7 +216,7 @@ export function upsertMemoryEmbeddingCache(params: {
     if (!retained.has(row++)) {
       continue;
     }
-    const embedding = entry.embedding ?? [];
+    const embedding = entry.embedding;
     upsert({
       provider: provider.id,
       model: provider.model,

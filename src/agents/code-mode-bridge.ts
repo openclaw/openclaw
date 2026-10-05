@@ -186,7 +186,7 @@ export function requiresCodeModeCompletion(
     if (
       request.method !== "callValue" ||
       !isRecord(request.args[1]) ||
-      request.args[1].required !== true
+      request.args[1].awaitResults !== true
     ) {
       return false;
     }
@@ -345,7 +345,7 @@ export async function runBridgeRequest(params: {
           input.background !== true &&
           params.completionRequired
         ) {
-          input = { ...input, required: true };
+          input = { ...input, awaitResults: true };
         } else if (
           binding.source === "openclaw" &&
           binding.name === "exec" &&
@@ -367,7 +367,7 @@ export async function runBridgeRequest(params: {
           isRecord(input) &&
           input.timeoutSeconds === undefined
         ) {
-          input = { ...input, required: true };
+          input = { ...input, awaitResults: true };
         }
         value = await params.runtime.callExactValue(binding.id, input, {
           recoverySurface: "catalog",

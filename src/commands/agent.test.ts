@@ -100,12 +100,6 @@ vi.mock("../config/io.js", () => ({
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
 }));
 
-vi.mock("../agents/auth-profiles/store.js", async (importOriginal) => {
-  return {
-    ...(await importOriginal<typeof import("../agents/auth-profiles/store.js")>()),
-    hasAnyAuthProfileStoreSource: vi.fn(() => false),
-  };
-});
 vi.mock("../agents/auth-profiles/store-runtime.js", () => {
   const createEmptyStore = () => ({ version: 1, profiles: {} });
   return {
@@ -120,8 +114,9 @@ vi.mock("../agents/auth-profiles/store-runtime.js", () => {
   };
 });
 
+// mock-isolation: Command fixtures supply an empty auth store; source discovery must not read host credentials.
 vi.mock("../agents/auth-profiles/source-check.js", () => ({
-  hasAnyAuthProfileStoreSource: vi.fn(() => false),
+  hasAnyAuthProfileStoreSourceAsync: vi.fn(() => false),
 }));
 
 vi.mock("../auto-reply/reply/session-stable-reply-mode.js", () => ({

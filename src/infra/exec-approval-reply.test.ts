@@ -36,7 +36,6 @@ vi.mock("./exec-approval-surface.js", () => ({
 }));
 
 import {
-  buildExecApprovalCommandText,
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
   buildTypedApprovalActionDescriptors,
@@ -500,14 +499,7 @@ describe("exec approval reply helpers", () => {
     ]);
   });
 
-  it("builds and parses shared exec approval command text", () => {
-    expect(
-      buildExecApprovalCommandText({
-        approvalCommandId: "req-1",
-        decision: "allow-always",
-      }),
-    ).toBe("/approve req-1 allow-always");
-
+  it("parses exec approval command text", () => {
     expect(parseExecApprovalCommandText("/approve req-1 deny")).toEqual({
       approvalId: "req-1",
       decision: "deny",

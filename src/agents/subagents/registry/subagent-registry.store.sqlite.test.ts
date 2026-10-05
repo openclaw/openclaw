@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync, constants } from "node:sqlite";
+import { DatabaseSync, StatementSync, constants } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryChangesToSqlite,
@@ -29,7 +30,11 @@ import {
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "./subagent-registry.store.kernel.js";
+import {
+  conflictingSubagentRunVersions,
+  writeSubagentRunValuesInDatabase,
+} from "./subagent-registry.store.kernel.js";
+import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 import {
   readSubagentRun,
   loadSubagentRunsForChildSessionFromSqlite,
@@ -192,7 +197,7 @@ describe("subagent registry sqlite store", () => {
     });
     expect(() =>
       runOpenClawStateWriteTransaction((database) => {
-        upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(bound));
+        writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(bound)], []);
         throw new Error("registration rolled back");
       }),
     ).toThrow("registration rolled back");
@@ -232,6 +237,75 @@ describe("subagent registry sqlite store", () => {
     } finally {
       olderReader.close();
     }
+  });
+
+  it.each([
+    { count: 1, upserts: 1 },
+    { count: 32, upserts: 1 },
+    { count: 257, upserts: 3 },
+  ])("reads a $count-row cohort once and bounds its UPSERT parameters", ({ count, upserts }) => {
+    const runs = Array.from({ length: count }, (_, index) =>
+      createRun({ runId: `cohort-${index}`, task: "x".repeat(6_400) }),
+    );
+    saveSubagentRegistryToSqlite(new Map(runs.map((run) => [run.runId, run])));
+    const versions = runs.map((run) => ({
+      runId: run.runId,
+      version: subagentRunRowVersion(bindSubagentRunRecord(run)),
+    }));
+    const values = runs.map((run) => bindSubagentRunRecord({ ...run, model: "updated-model" }));
+    const observed = observeMainThreadSql();
+    try {
+      runOpenClawStateWriteTransaction((database) => {
+        expect(conflictingSubagentRunVersions(database, versions)).toEqual([]);
+        writeSubagentRunValuesInDatabase(database, values, []);
+      });
+      const executed = observed.calls.flatMap((call) =>
+        call.mock.calls.flatMap((bindings, index) => {
+          const statement = call.mock.contexts[index];
+          return statement instanceof StatementSync
+            ? [{ query: statement.sourceSQL, bindings: bindings.length }]
+            : [];
+        }),
+      );
+      expect(
+        executed.filter(({ query }) => /^select .*from "subagent_runs"/i.test(query)),
+      ).toHaveLength(1);
+      const writes = executed.filter(({ query }) => /^insert into "subagent_runs"/i.test(query));
+      expect(writes).toHaveLength(upserts);
+      expect(writes.every(({ bindings }) => bindings <= 1_024)).toBe(true);
+    } finally {
+      observed.restore();
+    }
+    expect([...loadSubagentRegistryFromSqlite().values()].map((run) => run.model)).toEqual(
+      Array.from({ length: count }, () => "updated-model"),
+    );
+  });
+
+  it("preserves absent-row CAS and duplicate conflict ordering across a cohort", () => {
+    const run = createRun({ runId: "run-\uFFFD\u0000" });
+    const boundAlias = "run-\uD800\u0000";
+    const row = bindSubagentRunRecord(run);
+    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+    const missing = createRun({ runId: "missing" });
+    runOpenClawStateWriteTransaction((database) => {
+      expect(
+        conflictingSubagentRunVersions(database, [
+          { runId: missing.runId, version: null },
+          { runId: boundAlias, version: subagentRunRowVersion(row) },
+          { runId: run.runId, version: subagentRunRowVersion(row) },
+        ]),
+      ).toEqual([]);
+      writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(missing)], []);
+      expect(
+        conflictingSubagentRunVersions(database, [
+          { runId: missing.runId, version: null },
+          { runId: boundAlias, version: null },
+          { runId: "still-missing", version: subagentRunRowVersion(row) },
+          { runId: missing.runId, version: null },
+        ]),
+      ).toEqual([missing.runId, boundAlias, "still-missing", missing.runId]);
+    });
+    expect(loadSubagentRegistryFromSqlite().has(missing.runId)).toBe(true);
   });
 
   it("reuses a complete compact tree with isolated full records and owner writes", async () => {

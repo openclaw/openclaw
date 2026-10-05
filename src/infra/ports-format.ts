@@ -108,10 +108,7 @@ export function isDualStackLoopbackGatewayListeners(
     return false;
   }
   const parsed = parseGatewayListeners(listeners, port);
-  if (!parsed) {
-    return false;
-  }
-  return parsedListenersAreDualStackLoopback(parsed);
+  return parsed !== null && parsedListenersAreDualStackLoopback(parsed);
 }
 
 function parsedListenersAreDualStackLoopback(parsed: ParsedGatewayListener[]): boolean {
@@ -191,14 +188,6 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   return hints;
 }
 
-function formatPortListener(listener: PortListener): string {
-  const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
-  const user = listener.user ? ` ${listener.user}` : "";
-  const command = listener.commandLine || listener.command || "unknown";
-  const address = listener.address ? ` (${listener.address})` : "";
-  return `${pid}${user}: ${command}${address}`;
-}
-
 export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
   if (diagnostics.status === "free") {
     return [`Port ${diagnostics.port} is free.`];
@@ -206,12 +195,15 @@ export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
   if (diagnostics.status === "unknown") {
     return [`Port ${diagnostics.port} availability could not be determined.`];
   }
-  const lines = [`Port ${diagnostics.port} is already in use.`];
-  for (const listener of diagnostics.listeners) {
-    lines.push(`- ${formatPortListener(listener)}`);
-  }
-  for (const hint of diagnostics.hints) {
-    lines.push(`- ${hint}`);
-  }
-  return lines;
+  return [
+    `Port ${diagnostics.port} is already in use.`,
+    ...diagnostics.listeners.map((listener) => {
+      const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
+      const user = listener.user ? ` ${listener.user}` : "";
+      const command = listener.commandLine || listener.command || "unknown";
+      const address = listener.address ? ` (${listener.address})` : "";
+      return `- ${pid}${user}: ${command}${address}`;
+    }),
+    ...diagnostics.hints.map((hint) => `- ${hint}`),
+  ];
 }

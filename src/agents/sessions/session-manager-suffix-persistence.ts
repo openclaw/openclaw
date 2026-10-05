@@ -229,13 +229,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
           )
         : undefined;
     const persistedSuffixStartSeq = candidateSeq ?? this.persistedSuffixStartSeq;
-    const current = new SessionManagerSuffixPersistence(
-      this.cwd,
-      undefined,
-      this.fileEntries,
-      undefined,
-      this.transcriptMutationAt,
-    );
+    const current = new SessionManagerSuffixPersistence(this.cwd, undefined, this.fileEntries);
     current.opaqueFileEntries = this.opaqueFileEntries.map((entry) => ({ ...entry }));
     current.buildIndex();
     current.leafId = this.leafId;
@@ -326,13 +320,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
       }
     }
     const preparedEntries = [...retainedContextPrefix, ...expectedPersistedEntries];
-    const prepared = new SessionManagerSuffixPersistence(
-      this.cwd,
-      undefined,
-      preparedEntries,
-      undefined,
-      this.transcriptMutationAt,
-    );
+    const prepared = new SessionManagerSuffixPersistence(this.cwd, undefined, preparedEntries);
     const restoreOmittedParentAncestry = (): void => {
       for (const [id, parentId] of this.opaqueParentsById) {
         if (!prepared.byId.has(id) && !prepared.opaqueParentsById.has(id)) {
@@ -454,7 +442,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     // Preserve its opaque identity so the serialized leaf control can restore it on a full reopen.
     prepared.leafId = replacementParentId;
     prepared.appendParentId = replacementParentId;
-    const events = prepared.getPersistedFileEntries(prepared.appendParentId, prepared.appendMode);
+    const events = prepared.getPersistedFileEntries(prepared.appendMode);
     const suffixEvents = preparedSuffixOffset > 0 ? events.slice(preparedSuffixOffset) : events;
     const incrementalPlanningBytes = [...expectedPersistedEntries, ...suffixEvents].reduce<number>(
       (sum, event) => sum + Buffer.byteLength(JSON.stringify(event), "utf8"),

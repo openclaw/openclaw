@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { setTimeout as delay } from "node:timers/promises";
+import path from "node:path";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { spawnWithFallback } from "../spawn-utils.js";
 import { runWithSpawnBroker } from "./context.js";
@@ -12,6 +15,7 @@ import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 import { SpawnBrokerError } from "./protocol.js";
 
 let broker: SpawnBrokerHost | undefined;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await broker?.close();
   broker = undefined;
@@ -168,6 +172,89 @@ describe.skipIf(process.platform === "win32")("spawn broker private bootstrap", 
 });
 
 describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
+  it("fences guarded launches and settles custody from native receipts", async () => {
+    const host = await start();
+    const marker = path.join(tempDirs.make("openclaw-broker-launch-"), "started");
+    let current = true;
+    const denied = host.spawn(
+      process.execPath,
+      ["-e", "require('node:fs').writeFileSync(process.argv[1], 'started')", marker],
+      { stdio: "ignore" },
+      (launch) => {
+        if (!current) {
+          throw new Error("launch authority revoked");
+        }
+        return launch();
+      },
+    );
+    current = false;
+    await expect(denied.ready()).rejects.toThrow("launch authority refused");
+    expect(denied.pid).toBeUndefined();
+    await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    const admitted = createDeferredCore();
+    const child = host.spawn(
+      process.execPath,
+      ["-e", "process.stdin.resume(); process.stdin.once('end', () => process.exit(0))"],
+      { stdio: ["pipe", "ignore", "ignore"] },
+      (launch, settlement) => {
+        if (!settlement) {
+          throw new Error("Missing native launch settlement");
+        }
+        void settlement.then(() => admitted.resolve(), admitted.reject);
+        return launch();
+      },
+    );
+    await admitted.promise;
+    expect(child.exitCode).toBeNull();
+    await child.ready();
+    const closed = once(child, "close");
+    child.stdin!.end();
+    expect(await closed).toEqual([0, null]);
+
+    const grantReached = createDeferredCore<{ settlement: Promise<unknown> }>();
+    let pausedPid: number | undefined;
+    const failed = host.spawn(
+      process.execPath,
+      ["-e", "process.exit(0)"],
+      { stdio: "ignore" },
+      (launch, settlement) => {
+        if (!settlement || !host.pid) {
+          throw new Error("Missing native launch settlement");
+        }
+        pausedPid = host.pid;
+        process.kill(pausedPid, "SIGSTOP");
+        try {
+          const dispatched = launch();
+          failed.fail(new Error("synthetic local proxy failure"));
+          grantReached.resolve({ settlement });
+          return dispatched;
+        } catch (error) {
+          process.kill(pausedPid, "SIGCONT");
+          pausedPid = undefined;
+          throw error;
+        }
+      },
+    );
+    const locallyFailed = expect(failed.ready()).rejects.toThrow("synthetic local proxy failure");
+    const { settlement } = await grantReached.promise;
+    let settled = false;
+    void settlement.then(() => {
+      settled = true;
+    });
+    try {
+      await locallyFailed;
+      // Drain host promise reactions while the exact native peer cannot publish a receipt.
+      await nextTurn();
+      expect(settled).toBe(false);
+    } finally {
+      if (pausedPid) {
+        process.kill(pausedPid, "SIGCONT");
+      }
+    }
+    await settlement;
+  });
+
   it.each(["coalesced", "later"])(
     "preserves native spawn waiters and single ordered events for %s exits",
     async (timing) => {

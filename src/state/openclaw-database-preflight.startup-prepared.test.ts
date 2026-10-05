@@ -240,6 +240,43 @@ it("carries fleet compatibility once into bootstrap while readiness always inspe
   );
 });
 
+it("preserves configured ownership when reusing an unchanged inspected database", async () => {
+  const fleet = createFleet();
+  await withAgentDatabaseStartupAdmission(async () => {
+    await fleet.ready();
+    const inspected = await preflightOpenClawDatabaseSchemas(
+      {
+        env: fleet.env,
+        agentAdmissionConfig: {
+          ...fleet.config,
+          agents: {
+            ...fleet.config.agents,
+            entries: { ...fleet.config.agents?.entries, alias: {} },
+          },
+        },
+        configuredAgentDatabaseTargets: [{ agentId: "alias", path: fleet.paths[0]! }],
+        reuseStartupSchemaPreparation: true,
+        onAgentInspection: fleet.onAgentInspection,
+      },
+      "runtime",
+    );
+    expect(inspected).toMatchObject({ incompatible: [], indeterminate: [] });
+    expect(inspected.agentRefusals).toEqual([
+      expect.objectContaining({
+        agentId: "alias",
+        embeddedOwnerId: "first",
+        code: "agent-database-ownership-mismatch",
+        paths: [fleet.paths[0]],
+      }),
+    ]);
+    expect(fleet.onAgentInspection).toHaveBeenLastCalledWith({
+      schemaInspectionCount: 0,
+      schemaProcessCount: 0,
+      schemaSnapshotCount: 0,
+    });
+  });
+});
+
 it.each(["WAL commit", "replacement", "new registration"] as const)(
   "inspects only changed fleet members after %s and still refuses their newer schema",
   async (change) => {

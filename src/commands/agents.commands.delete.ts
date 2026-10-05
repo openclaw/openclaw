@@ -95,7 +95,6 @@ function failAgentsDelete(opts: AgentsDeleteOptions, runtime: RuntimeEnv, messag
 async function maybeDeleteAgentThroughGateway(params: {
   config: OpenClawConfig;
   agentId: string;
-  deleteFiles: boolean;
 }): Promise<AgentDeleteGatewayAttempt> {
   const { url } = buildGatewayConnectionDetails({ config: params.config });
   const localTarget = await isImplicitLocalGatewayTarget({ config: params.config });
@@ -106,7 +105,7 @@ async function maybeDeleteAgentThroughGateway(params: {
       method: "agents.delete",
       params: {
         agentId: params.agentId,
-        deleteFiles: params.deleteFiles,
+        deleteFiles: true,
       },
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
@@ -293,7 +292,6 @@ export async function agentsDeleteCommand(
   const gatewayAttempt = await maybeDeleteAgentThroughGateway({
     config: cfg,
     agentId,
-    deleteFiles: true,
   });
   if (gatewayAttempt.kind === "deleted") {
     const workspaceSharedWith = opts.json

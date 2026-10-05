@@ -1,3 +1,4 @@
+import type { SessionsCompanionStateResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -11,7 +12,6 @@ import {
   ChatSessionCompanionThreads,
   type ChatSessionCompanionTurn,
   requestSessionCompanionAnswer,
-  requestSessionCompanionState,
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -259,7 +259,11 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     this.sessionCompanionHydrationKey = hydrationKey;
     void this.sessionCompanionThreads.hydrate(
       sessionKey,
-      (key) => requestSessionCompanionState(state.client!, key, agentId),
+      (key) =>
+        state.client!.request<SessionsCompanionStateResult>("sessions.companion.state", {
+          sessionKey: key,
+          ...(agentId ? { agentId } : {}),
+        }),
       agentId,
     );
   }

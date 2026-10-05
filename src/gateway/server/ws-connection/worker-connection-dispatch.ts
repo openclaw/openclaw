@@ -1,6 +1,5 @@
 import {
   type RequestFrame,
-  type WorkerConnectParams,
   type WorkerErrorShape,
   type WorkerHeartbeatResult,
   type WorkerLiveEventErrorShape,
@@ -49,24 +48,19 @@ type WorkerServiceFailure<K extends keyof WorkerTurnRpc> = Exclude<
 >;
 export type WorkerConnectionService = Pick<
   WorkerTurnRpc,
-  "commitTranscript" | "pushLiveEvent" | "validateWorkerConnection"
+  "admitWorker" | "commitTranscript" | "pushLiveEvent" | "validateWorkerConnection"
 > &
   Partial<
     Pick<
       WorkerTurnRpc,
-      "executeComputer" | "getToolSurface" | "invokeGatewayTool" | "cancelGatewayTool"
+      | "executeComputer"
+      | "getToolSurface"
+      | "invokeGatewayTool"
+      | "cancelGatewayTool"
+      | "startInference"
+      | "cancelInference"
     >
-  > & {
-    admitWorker: (
-      admission: WorkerConnectParams["admission"],
-    ) => Promise<
-      | { ok: true; identity: WorkerConnectionIdentity }
-      | { ok: false; reason: WorkerProtocolCloseReason }
-    >;
-  };
-
-type WorkerInferenceConnectionService = WorkerConnectionService &
-  Partial<Pick<WorkerTurnRpc, "startInference" | "cancelInference">>;
+  >;
 
 type WorkerRespond = (
   ok: boolean,
@@ -78,32 +72,26 @@ type WorkerRespond = (
     | WorkerTranscriptCommitErrorShape,
 ) => void;
 
-function rejectWorkerRequest(params: {
-  reason: WorkerProtocolCloseReason;
-  respond: WorkerRespond;
-  close(code: number, reason: WorkerProtocolCloseReason): void;
-  warn(message: string): void;
-}): void {
-  params.warn(`worker protocol request rejected reason=${params.reason}`);
-  params.respond(false, undefined, workerProtocolError(params.reason));
-  queueMicrotask(() => params.close(1008, params.reason));
-}
-
 /** Closed worker dispatcher. It never calls the generic gateway method registry. */
 export async function dispatchWorkerRequest(params: {
   request: RequestFrame;
   identity: WorkerConnectionIdentity;
   connectionId: string;
-  service: WorkerInferenceConnectionService | undefined;
+  service: WorkerConnectionService | undefined;
   send(frame: unknown): void;
   respond: WorkerRespond;
   close(code: number, reason: WorkerProtocolCloseReason): void;
   warn(message: string): void;
   signal?: AbortSignal;
 }): Promise<void> {
+  const reject = (reason: WorkerProtocolCloseReason) => {
+    params.warn(`worker protocol request rejected reason=${reason}`);
+    params.respond(false, undefined, workerProtocolError(reason));
+    queueMicrotask(() => params.close(1008, reason));
+  };
   const service = params.service;
   if (!service) {
-    rejectWorkerRequest({ ...params, reason: "environment-unavailable" });
+    reject("environment-unavailable");
     return;
   }
   const toolSurfaceRequest = Object.values(WORKER_GATEWAY_TOOL_METHODS).some(
@@ -113,23 +101,9 @@ export async function dispatchWorkerRequest(params: {
     ? service.validateWorkerConnection(params.identity, { toolSurface: true })
     : service.validateWorkerConnection(params.identity);
   if (ownershipFailure) {
-    rejectWorkerRequest({ ...params, reason: ownershipFailure });
+    reject(ownershipFailure);
     return;
   }
-  const respondOutcome = <TFailure extends { ok: false }>(
-    outcome: WorkerServiceResult<TFailure>,
-    errorFor: (failure: TFailure) => Parameters<WorkerRespond>[2],
-  ): void => {
-    if (outcome.ok) {
-      params.respond(true, outcome.result);
-      // Reply before a synchronous provider can emit.
-      outcome.launch?.();
-    } else if ("closeReason" in outcome) {
-      rejectWorkerRequest({ ...params, reason: outcome.closeReason });
-    } else {
-      params.respond(false, undefined, errorFor(outcome));
-    }
-  };
   const execute = async <TRequest, TFailure extends { ok: false }>(
     feature: string,
     validate: (value: unknown) => value is TRequest,
@@ -138,15 +112,24 @@ export async function dispatchWorkerRequest(params: {
     errorFor: (failure: TFailure) => Parameters<WorkerRespond>[2],
   ): Promise<void> => {
     if (!params.identity.protocolFeatures.includes(feature) || !operation) {
-      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+      reject("method-not-allowed");
     } else if (!validate(params.request.params)) {
       if (typeof invalid === "string") {
-        rejectWorkerRequest({ ...params, reason: invalid });
+        reject(invalid);
       } else {
         params.respond(false, undefined, invalid);
       }
     } else {
-      respondOutcome(await operation(params.request.params), errorFor);
+      const outcome = await operation(params.request.params);
+      if (outcome.ok) {
+        params.respond(true, outcome.result);
+        // Reply before a synchronous provider can emit.
+        outcome.launch?.();
+      } else if ("closeReason" in outcome) {
+        reject(outcome.closeReason);
+      } else {
+        params.respond(false, undefined, errorFor(outcome));
+      }
     }
   };
   // Inference validates its context before rejecting an unavailable handler.
@@ -230,11 +213,11 @@ export async function dispatchWorkerRequest(params: {
     );
   }
   if (params.request.method !== WORKER_PROTOCOL_METHODS[0]) {
-    rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+    reject("method-not-allowed");
     return;
   }
   if (!validateWorkerHeartbeatParams(params.request.params)) {
-    rejectWorkerRequest({ ...params, reason: "invalid-heartbeat" });
+    reject("invalid-heartbeat");
     return;
   }
   const result: WorkerHeartbeatResult = {

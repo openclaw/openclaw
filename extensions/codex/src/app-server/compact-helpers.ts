@@ -170,7 +170,11 @@ const warnedIgnoredCompactionOverrides = createDedupeCache({ ttlMs: 0, maxSize: 
 export function warnIfIgnoringOpenClawCompactionOverrides(
   params: CompactEmbeddedAgentSessionParams,
 ): void {
-  const ignoredConfig = readIgnoredCompactionOverridePaths(params);
+  const compaction = asOptionalRecord(params.config?.agents?.defaults?.compaction);
+  const ignoredConfig = ["model", "thinkingLevel", "provider"].flatMap((field) => {
+    const value = compaction?.[field];
+    return typeof value === "string" && value.trim() ? [`agents.defaults.compaction.${field}`] : [];
+  });
   if (ignoredConfig.length === 0) {
     return;
   }
@@ -186,14 +190,6 @@ export function warnIfIgnoringOpenClawCompactionOverrides(
       ignoredConfig,
     },
   );
-}
-
-function readIgnoredCompactionOverridePaths(params: CompactEmbeddedAgentSessionParams): string[] {
-  const compaction = asOptionalRecord(params.config?.agents?.defaults?.compaction);
-  return ["model", "thinkingLevel", "provider"].flatMap((field) => {
-    const value = compaction?.[field];
-    return typeof value === "string" && value.trim() ? [`agents.defaults.compaction.${field}`] : [];
-  });
 }
 
 export function resolveCodexCompactionExecutionBlock(

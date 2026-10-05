@@ -217,7 +217,7 @@ struct DashboardGatewaysBridgeTests {
             storeKey: "profile:studio")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             tlsParams: params,
             windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
@@ -334,7 +334,7 @@ struct DashboardManagerGatewayTargetTests {
         let url = server.url("/#token=current")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "current",
                 password: nil),
@@ -379,7 +379,7 @@ struct DashboardManagerGatewayTargetTests {
             let url = server.url("/#token=current")
             let controller = DashboardWindowController(
                 url: url,
-                auth: DashboardWindowAuth(
+                auth: DashboardWindowAuth.nativeDevice(
                     gatewayUrl: server.websocketURL("/").absoluteString,
                     token: "current",
                     password: nil),
@@ -488,7 +488,7 @@ struct DashboardManagerGatewayTargetTests {
         let sourceURL = server.url("/#token=current")
         let controller = DashboardWindowController(
             url: sourceURL,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "current",
                 password: nil),
@@ -1027,7 +1027,7 @@ struct DashboardManagerGatewayTargetTests {
         let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: store.dataStore,
             browserSessionLease: store.lease(for: session),
             windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",

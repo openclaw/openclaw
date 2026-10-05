@@ -2,6 +2,7 @@ import {
   asMeetingBrowserTabs,
   readMeetingBrowserTab,
   type MeetingBrowserCandidateTab,
+  type MeetingBrowserRequestParams,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
@@ -180,24 +181,25 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     params.config.chrome.joinTimeoutMs,
   );
   const stepTimeoutMs = Math.min(timeoutMs, GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS);
-  let openedByPlugin = false;
-  let tab = asMeetingBrowserTabs(
-    await callBrowserProxyOnNode({
+  const callBrowser = (request: Omit<MeetingBrowserRequestParams, "timeoutMs">) =>
+    callBrowserProxyOnNode({
+      ...request,
       runtime: params.runtime,
       nodeId,
+      timeoutMs: stepTimeoutMs,
+    });
+  let openedByPlugin = false;
+  let tab = asMeetingBrowserTabs(
+    await callBrowser({
       method: "GET",
       path: "/tabs",
-      timeoutMs: stepTimeoutMs,
     }),
   ).find(isGoogleMeetCreateTab);
   if (tab?.targetId) {
-    await callBrowserProxyOnNode({
-      runtime: params.runtime,
-      nodeId,
+    await callBrowser({
       method: "POST",
       path: "/tabs/focus",
       body: { targetId: tab.targetId },
-      timeoutMs: stepTimeoutMs,
     });
     // Meet automation scripts match English UI labels; a reused tab may have
     // been opened by the browser/profile in a non-English locale. Only force
@@ -212,25 +214,19 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     if (englishUrl && englishUrl !== reusedUrl) {
       tab =
         readMeetingBrowserTab(
-          await callBrowserProxyOnNode({
-            runtime: params.runtime,
-            nodeId,
+          await callBrowser({
             method: "POST",
             path: "/navigate",
             body: { targetId: tab.targetId, url: englishUrl },
-            timeoutMs: stepTimeoutMs,
           }),
         ) ?? tab;
     }
   } else {
     tab = readMeetingBrowserTab(
-      await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId,
+      await callBrowser({
         method: "POST",
         path: "/tabs/open",
         body: { url: forceMeetEnglishUi(GOOGLE_MEET_NEW_URL) },
-        timeoutMs: stepTimeoutMs,
       }),
     );
     openedByPlugin = Boolean(tab?.targetId);
@@ -245,9 +241,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     try {
-      const evaluated = await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId,
+      const evaluated = await callBrowser({
         method: "POST",
         path: "/act",
         body: {
@@ -255,7 +249,6 @@ export async function createMeetWithBrowserProxyOnNode(params: {
           targetId,
           fn: CREATE_MEET_FROM_BROWSER_SCRIPT,
         },
-        timeoutMs: stepTimeoutMs,
       });
       const result = readBrowserCreateResult(evaluated);
       lastResult = result;

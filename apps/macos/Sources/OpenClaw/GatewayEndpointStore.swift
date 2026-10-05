@@ -144,7 +144,7 @@ actor GatewayEndpointStore {
         launchdSnapshot: LaunchAgentPlistSnapshot? = nil) -> String?
     {
         let envVar = "OPENCLAW_GATEWAY_\(kind.rawValue.uppercased())"
-        let override = env[envVar]?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        let override = env[envVar]?.nonEmpty
         let configured: String?
         if isRemote {
             configured = switch kind {
@@ -173,7 +173,7 @@ actor GatewayEndpointStore {
         }
         guard !isRemote else { return nil }
         let serviceValue = kind == .token ? launchdSnapshot?.token : launchdSnapshot?.password
-        return serviceValue?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        return serviceValue?.nonEmpty
     }
 
     private static func resolveLocalConfigAuthString(
@@ -181,16 +181,14 @@ actor GatewayEndpointStore {
         env: [String: String],
         serviceEnv: [String: String]) -> String?
     {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard let trimmed = raw.nonEmpty else { return nil }
         guard let envName = envSecretRefName(trimmed) else {
             return trimmed
         }
         // Finder-launched apps cannot see gateway-service-only env values. Resolve
         // local refs from app env first, then the gateway LaunchAgent snapshot.
         for source in [env, serviceEnv] {
-            let value = source[envName]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let value, !value.isEmpty {
+            if let value = source[envName]?.nonEmpty {
                 return value
             }
         }
@@ -200,21 +198,14 @@ actor GatewayEndpointStore {
     private static func envSecretRefName(_ value: String) -> String? {
         let name: Substring
         if value.hasPrefix("${"), value.hasSuffix("}") {
-            let nameStart = value.index(value.startIndex, offsetBy: 2)
-            let nameEnd = value.index(before: value.endIndex)
-            name = value[nameStart..<nameEnd]
+            name = value.dropFirst(2).dropLast()
         } else if value.hasPrefix("$") {
-            let nameStart = value.index(after: value.startIndex)
-            name = value[nameStart..<value.endIndex]
+            name = value.dropFirst()
         } else {
             return nil
         }
         let candidate = String(name)
-        return self.isValidEnvSecretRefID(candidate) ? candidate : nil
-    }
-
-    private static func isValidEnvSecretRefID(_ value: String) -> Bool {
-        value.range(of: #"^[A-Z][A-Z0-9_]{0,127}$"#, options: .regularExpression) != nil
+        return candidate.range(of: #"^[A-Z][A-Z0-9_]{0,127}$"#, options: .regularExpression) != nil ? candidate : nil
     }
 
     private static func warnEnvOverrideOnce(
@@ -753,12 +744,7 @@ extension GatewayEndpointStore {
         let currentHost = currentURL.host?.lowercased() ?? ""
         guard currentHost == "127.0.0.1" || currentHost == "localhost" else { return nil }
 
-        let source: SourceSnapshot
-        do {
-            source = try await self.currentSourceSnapshot()
-        } catch {
-            return nil
-        }
+        guard let source = try? await self.currentSourceSnapshot() else { return nil }
         let fallbackHost = source.localHost.lowercased()
         guard !Task.isCancelled,
               source.mode == .local,
@@ -946,7 +932,7 @@ extension GatewayEndpointStore {
 
     private static func resolveGatewayCustomBindHost(root: [String: Any]) -> String? {
         let gateway = root["gateway"] as? [String: Any]
-        return (gateway?["customBindHost"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        return (gateway?["customBindHost"] as? String)?.nonEmpty
     }
 
     private static func resolveGatewayScheme(
@@ -1064,18 +1050,14 @@ extension GatewayEndpointStore {
         let trimmed = (rawPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "/" }
         let withLeadingSlash = trimmed.hasPrefix("/") ? trimmed : "/" + trimmed
-        guard withLeadingSlash != "/" else { return "/" }
         return withLeadingSlash.hasSuffix("/") ? withLeadingSlash : withLeadingSlash + "/"
     }
 
     private static func localControlUiBasePath() -> String {
         let root = OpenClawConfigFile.loadDict()
-        guard let gateway = root["gateway"] as? [String: Any],
-              let controlUi = gateway["controlUi"] as? [String: Any]
-        else {
-            return "/"
-        }
-        return self.normalizeDashboardPath(controlUi["basePath"] as? String)
+        let gateway = root["gateway"] as? [String: Any]
+        let controlUi = gateway?["controlUi"] as? [String: Any]
+        return self.normalizeDashboardPath(controlUi?["basePath"] as? String)
     }
 
     /// Dashboard fragments and Gateway URL userinfo can contain credentials.
@@ -1120,20 +1102,14 @@ extension GatewayEndpointStore {
             components.path = "/"
         }
 
-        var fragmentItems: [URLQueryItem] = []
         let tokenCandidate = authToken ?? config.token
-        if let token = tokenCandidate?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !token.isEmpty
-        {
-            fragmentItems.append(URLQueryItem(name: "token", value: token))
-        }
         components.queryItems = nil
-        if fragmentItems.isEmpty {
-            components.fragment = nil
-        } else {
+        if let token = tokenCandidate?.nonEmpty {
             var fragment = URLComponents()
-            fragment.queryItems = fragmentItems
+            fragment.queryItems = [URLQueryItem(name: "token", value: token)]
             components.fragment = fragment.percentEncodedQuery
+        } else {
+            components.fragment = nil
         }
         guard let url = components.url else {
             throw NSError(domain: "Dashboard", code: 2, userInfo: [

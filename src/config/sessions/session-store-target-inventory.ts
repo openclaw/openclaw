@@ -446,7 +446,13 @@ export function readSessionStoreTargetInventory(
         },
       };
       if (request.selection === "recovery") {
-        resolveAllAgentSessionStoreTargetsSync(config, options);
+        resolveAllAgentSessionStoreTargetsSync(config, {
+          ...options,
+          // Fixed stores retain durable owners outside the configured roster.
+          agentIds: isPerAgentSessionStoreConfig(config.session?.store)
+            ? new Set(request.agentIds)
+            : undefined,
+        });
       } else {
         dedupeSessionStoreTargetsBySqliteTarget(
           resolveConfiguredSessionStoreTargets(config, env, request.paths),

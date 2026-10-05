@@ -406,14 +406,13 @@ export async function captureBrowserScreenshot(
 
 export async function clickBrowserCoords(
   client: BrowserRequestClient,
-  params: { targetId: string; x: number; y: number; doubleClick?: boolean },
+  params: { targetId: string; x: number; y: number },
 ) {
   await browserAction(client, {
     kind: "clickCoords",
     targetId: params.targetId,
     x: Math.max(0, Math.round(params.x)),
     y: Math.max(0, Math.round(params.y)),
-    ...(params.doubleClick ? { doubleClick: true } : {}),
   });
 }
 

@@ -18,8 +18,10 @@ import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/se
 import {
   SessionEntryLifecycleUpsertConflictError,
   SqliteSessionMutationConflictError,
+  SqliteTranscriptMutationConflictError,
 } from "../config/sessions/session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
+import { SessionTranscriptWriterClaimReboundError } from "../config/sessions/session-transcript-writer-claim-error.js";
 import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
@@ -91,6 +93,8 @@ export type ErrorIdentity =
   | MessageOnlyErrorIdentity
   | { type: "session-goal-operation"; goalCode: SessionGoalOperationErrorCode }
   | { type: "session-mutation-conflict"; operationLabel: string }
+  | { type: "session-transcript-mutation-conflict"; sessionId: string }
+  | { type: "session-transcript-writer-claim-rebound" }
   | { type: "session-lifecycle-upsert-conflict"; sessionKey: string }
   | { type: "worker-session-already-attached"; sessionId: string; environmentId: string }
   | {
@@ -196,8 +200,14 @@ export function identifyError(error: Error): ErrorIdentity {
   if (error instanceof SessionEntryLifecycleUpsertConflictError) {
     return { type: "session-lifecycle-upsert-conflict", sessionKey: error.sessionKey };
   }
+  if (error instanceof SessionTranscriptWriterClaimReboundError) {
+    return { type: "session-transcript-writer-claim-rebound" };
+  }
   if (error instanceof SqliteSessionMutationConflictError) {
     return { type: "session-mutation-conflict", operationLabel: error.operationLabel };
+  }
+  if (error instanceof SqliteTranscriptMutationConflictError) {
+    return { type: "session-transcript-mutation-conflict", sessionId: error.sessionId };
   }
   if (error instanceof SessionMetadataUnavailableError) {
     return {
@@ -398,6 +408,7 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
     case "error":
     case "aggregate":
     case "mcp-oauth-corruption":
+    case "session-transcript-writer-claim-rebound":
       return { type: node.type };
     case "session-goal-operation": {
       const goalCode = SESSION_GOAL_OPERATION_ERROR_CODES.find((code) => code === node.goalCode);
@@ -410,6 +421,10 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
     case "session-mutation-conflict":
       return typeof node.operationLabel === "string"
         ? { type: node.type, operationLabel: node.operationLabel }
+        : undefined;
+    case "session-transcript-mutation-conflict":
+      return typeof node.sessionId === "string"
+        ? { type: node.type, sessionId: node.sessionId }
         : undefined;
     case "session-metadata":
       return (node.reason === "schema-missing" || node.reason === "table-missing") &&
@@ -501,6 +516,10 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
       return new SessionEntryLifecycleUpsertConflictError(node.sessionKey);
     case "session-mutation-conflict":
       return new SqliteSessionMutationConflictError(node.operationLabel);
+    case "session-transcript-mutation-conflict":
+      return new SqliteTranscriptMutationConflictError(node.sessionId);
+    case "session-transcript-writer-claim-rebound":
+      return new SessionTranscriptWriterClaimReboundError();
     case "session-metadata":
       return new SessionMetadataUnavailableError(node.reason, undefined, node.missingTables);
     case "error":

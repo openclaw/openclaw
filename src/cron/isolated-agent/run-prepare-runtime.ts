@@ -1,7 +1,7 @@
 /** Lazy preparation runtimes and session lifecycle helpers for cron runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
-import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
 import { AUTOMATION_FAILED_TOKEN, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -92,7 +92,7 @@ export async function resolveCronAuthSelection(params: {
   if (
     !hasSessionOverride &&
     !hasConfiguredAuthProfiles(params.cfg) &&
-    !hasAnyAuthProfileStoreSource(params.agentDir)
+    !(await hasAnyAuthProfileStoreSourceAsync(params.agentDir))
   ) {
     return undefined;
   }

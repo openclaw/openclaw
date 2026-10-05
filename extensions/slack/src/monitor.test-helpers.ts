@@ -491,7 +491,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   );
   return {
     ...actual,
-    readSessionUpdatedAt: vi.fn(() => undefined),
+    readSessionUpdatedAtAsync: vi.fn(async () => undefined),
     getSessionEntry: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),

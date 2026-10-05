@@ -1,3 +1,4 @@
+import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -18,7 +19,7 @@ import { logWarn } from "../../logger.js";
 import type { WorkerToolAuthority } from "../../worker/launch-descriptor.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 
-export function resolveWorkerToolAuthority(params: {
+export async function resolveWorkerToolAuthority(params: {
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
   model?: AgentToolSurfacePlanParams["model"];
@@ -27,6 +28,12 @@ export function resolveWorkerToolAuthority(params: {
   computerAvailable?: boolean;
 }) {
   const turn = params.turn;
+  const authSourceAgentDir = turn.agentDir?.trim();
+  const authProfileStoreSource = authSourceAgentDir
+    ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
+    : false;
+  params.assertCurrent();
+  turn.abortSignal?.throwIfAborted();
   const sandboxSessionKey =
     turn.sandboxSessionKey?.trim() || turn.sessionKey?.trim() || turn.sessionId;
   const sandbox = resolveSandboxRuntimeStatus({
@@ -117,6 +124,7 @@ export function resolveWorkerToolAuthority(params: {
     location,
   }));
   return {
+    authProfileStoreSource,
     capabilityProfile,
     policy: corePolicy,
     exec,

@@ -56,15 +56,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const rows = new Map<string, records.Row>();
   const creators = createSessionRowCreatorIndex();
   const membership = createSessionMembershipProjection();
-  const {
-    invalidateRowMembership,
-    readSessionRowEntry: readStoredSessionRowEntry,
-    createStoreRead,
-  } = rowMembership.createSessionRowEntryReadAccess(membership);
-  const readSessionRowEntry = (row: records.Row) =>
-    row.publishedSource && row.storedEntry && row.sharingEntry === row.storedEntry
-      ? row.storedEntry
-      : readStoredSessionRowEntry(row);
+  const { invalidateRowMembership, readSessionRowEntry, createStoreRead } =
+    rowMembership.createSessionRowEntryReadAccess(membership);
   let stores = new Map<string, records.SessionRowStore>();
   const byStore = new Map<string, Set<string>>(),
     byAgent = new Map<string, Set<string>>();
@@ -263,34 +256,36 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       const discovery = { env, snapshot: prepared.snapshot };
       const revision = epoch;
       const storeRead = createStoreRead({ stores, rows, byStore, env });
-      const loaded = storeRead.loadCombinedStore(nextConfig, discovery);
-      prepared.assertCurrent();
-      if (!topologyCurrent()) {
-        return;
-      }
-      cfg = nextConfig;
-      const acquisitions = records.seedSessionRowEntries({
-        targets: loaded.targetsBySessionKey,
-        rows,
-        replaced: storeRead.replaced,
-        remove,
-        put,
+      await storeRead.loadCombinedStore(nextConfig, discovery, (load) => {
+        prepared.assertCurrent();
+        if (!topologyCurrent() || epoch !== revision) {
+          return;
+        }
+        const loaded = load();
+        cfg = nextConfig;
+        const acquisitions = records.seedSessionRowEntries({
+          targets: loaded.targetsBySessionKey,
+          rows,
+          replaced: storeRead.replaced,
+          remove,
+          put,
+        });
+        stores = storeRead.sources;
+        // Every stored identity must be visible before an earlier store selects a later parent.
+        for (const { row, entry } of acquisitions) {
+          enqueue(acquireEntry(row, entry));
+          markRelated(row);
+        }
+        storeRead.updateMembership();
+        scope = rowScope.prepareSessionRowScopes(
+          cfg,
+          byAgent.keys(),
+          new Map([...stores].map(([locator, source]) => [source.filename, locator])),
+          discovery,
+        );
+        revisions.publishSelection();
+        topologyDirty = epoch !== revision;
       });
-      stores = storeRead.sources;
-      // Every stored identity must be visible before an earlier store selects a later parent.
-      for (const { row, entry } of acquisitions) {
-        enqueue(acquireEntry(row, entry));
-        markRelated(row);
-      }
-      storeRead.updateMembership();
-      scope = rowScope.prepareSessionRowScopes(
-        cfg,
-        byAgent.keys(),
-        new Map([...stores].map(([locator, source]) => [source.filename, locator])),
-        discovery,
-      );
-      revisions.publishSelection();
-      topologyDirty = epoch !== revision;
     }).finally(() => {
       preparingTopology = undefined;
     }));

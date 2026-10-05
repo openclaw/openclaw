@@ -5,7 +5,7 @@ import type {
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionEntryReadWorkerInput = {
   kind: "session-entry-read";

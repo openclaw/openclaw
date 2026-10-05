@@ -159,7 +159,7 @@ describe("Cloudflare OIDC and Visitor Access admission", () => {
           roles: { default: "guest", definitions: { guest: guestRole } },
         },
       };
-      const visitor = visitorFixture({ gatewayConfig: invitedCfg, githubEmail: null });
+      const visitor = visitorFixture({ gatewayConfig: invitedCfg });
       await visitor.service.initialize();
       const { config, registry } = createPluginRegistryFixture();
       registerVirtualTestPlugin({

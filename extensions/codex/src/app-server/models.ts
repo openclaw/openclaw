@@ -45,7 +45,6 @@ type CodexAppServerListModelsOptions = {
   authRequirement?: CodexAppServerAuthRequirement;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-  sharedClient?: boolean;
 };
 
 export async function listCodexAppServerModels(
@@ -88,19 +87,12 @@ async function withCodexAppServerModelRequest<T>(
     return await run(options.request);
   }
   const timeoutMs = options.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
-  const useSharedClient = options.sharedClient !== false;
-  const {
-    createIsolatedCodexAppServerClient,
-    getLeasedSharedCodexAppServerClient,
-    releaseLeasedSharedCodexAppServerClient,
-  } = await import("./shared-client.js");
+  const { getLeasedSharedCodexAppServerClient, releaseLeasedSharedCodexAppServerClient } =
+    await import("./shared-client.js");
   const { requestCodexAppServerClientJson } = await import("./request.js");
-  const acquireClient = useSharedClient
-    ? getLeasedSharedCodexAppServerClient
-    : createIsolatedCodexAppServerClient;
   // Standalone listing retains the initialize diagnostic and per-page budget;
   // catalog/account callers supply their shared operation scope above.
-  const client = await acquireClient({
+  const client = await getLeasedSharedCodexAppServerClient({
     startOptions: options.startOptions,
     timeoutMs,
     authProfileId: options.authProfileId,
@@ -113,11 +105,7 @@ async function withCodexAppServerModelRequest<T>(
       requestCodexAppServerClientJson({ ...request, client, timeoutMs, config: options.config }),
     );
   } finally {
-    if (useSharedClient) {
-      releaseLeasedSharedCodexAppServerClient(client);
-    } else {
-      await client.closeAndWait();
-    }
+    releaseLeasedSharedCodexAppServerClient(client);
   }
 }
 

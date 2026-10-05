@@ -54,5 +54,5 @@ export type ExecEventPayload = {
 };
 
 export type SkillBinsProvider = {
-  current(force?: boolean): Promise<SkillBinTrustEntry[]>;
+  current(): Promise<SkillBinTrustEntry[]>;
 };

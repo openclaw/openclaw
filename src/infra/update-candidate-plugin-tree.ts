@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { createFileCopyWithCloneFallback } from "./fs-safe-file-copy.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
@@ -24,7 +25,8 @@ import type {
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import {
   readRuntimeModulesManifest,
-  relocateRuntimeEntry,
+  relocateRuntimeSymlink,
+  resolveRuntimeFileRelocator,
   type RuntimeRelocation,
 } from "./update-runtime-relocation.js";
 import { isGitRuntimeStagingName } from "./update-runtime-staging.js";
@@ -630,6 +632,7 @@ export async function copyUpdateCandidatePluginTrees(
   await assertEntries();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
   const destinationRoot = await openRoot(privateRoot);
+  const copyFile = createFileCopyWithCloneFallback();
   const preparedDirectories = new Set([privateRoot]);
   for (const entry of plan.entries) {
     if (entry.kind === "directory") {
@@ -659,13 +662,12 @@ export async function copyUpdateCandidatePluginTrees(
         const destination = destinationFor(entry.path);
         // copyIn owns portable create-only publication; no-replace move needs a
         // native binding. Recheck the inventory before its private stage is published.
-        await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
+        await copyFile(destinationRoot, path.relative(privateRoot, destination), entry.path, {
           overwrite: false,
           // Every destination parent is prepared before copies are admitted.
           mkdir: false,
           // Rehearsal payloads are disposable and never serve as recovery backups.
           durable: false,
-          clone: "auto",
           maxBytes: entry.size,
           mode: entry.mode | 0o600,
           sourceHardlinks: "allow",
@@ -695,7 +697,11 @@ export async function copyUpdateCandidatePluginTrees(
   for (const entry of plan.entries) {
     if (entry.kind !== "directory") {
       const target = destinationFor(entry.path);
-      await relocateRuntimeEntry(target, entry.path, target, entry.kind, relocations);
+      const relocate =
+        entry.kind === "symlink" ? relocateRuntimeSymlink : resolveRuntimeFileRelocator(target);
+      if (relocate) {
+        await relocate(target, entry.path, target, relocations);
+      }
     }
   }
   const privateAliases = await publishUpdateCandidatePluginTreeLinks({

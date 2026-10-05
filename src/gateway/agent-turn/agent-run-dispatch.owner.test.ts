@@ -97,40 +97,51 @@ describe("Gateway dispatch run ownership", () => {
     return { f, owner, dispatch };
   }
 
-  it("joins a captured terminal save when command startup fails before its delivery hook", async () => {
-    const { entry, params } = createDispatch(true);
-    const finishCommand = createDeferred();
-    const saving = createDeferred();
-    const finishSave = createDeferred();
-    mocks.agentCommand.mockImplementationOnce(async () => {
-      await finishCommand.promise;
-      throw new Error("Synthetic startup failure");
-    });
-    const { emitFinal } = params.io;
-    const completion = dispatchAgentRunFromGateway(params);
-    try {
-      const producer = entry.resolveTerminalProducer?.();
-      expect(
-        producer?.handoff(async (producerCompleted) => {
-          await producerCompleted;
-          saving.resolve();
-          await finishSave.promise;
-        }),
-      ).toBe(true);
-      entry.controller.abort();
-      finishCommand.resolve();
-      await saving.promise;
-      expect(emitFinal).not.toHaveBeenCalled();
-      finishSave.resolve();
-      await completion;
-      expect(emitFinal).toHaveBeenCalledOnce();
-      expect(entry.resolveTerminalProducer?.()).toBeUndefined();
-    } finally {
-      finishCommand.resolve();
-      finishSave.resolve();
-      await completion;
-    }
-  });
+  it.each(["command", "commentary-media"] as const)(
+    "joins a captured terminal save when %s startup fails before its delivery hook",
+    async (startup) => {
+      const { entry, params } = createDispatch(true);
+      const finishCommand = createDeferred();
+      const saving = createDeferred();
+      const finishSave = createDeferred();
+      const failStartup = async () => {
+        await finishCommand.promise;
+        throw new Error("Synthetic startup failure");
+      };
+      if (startup === "command") {
+        mocks.agentCommand.mockImplementationOnce(failStartup);
+      }
+      const { emitFinal } = params.io;
+      const completion = dispatchAgentRunFromGateway({
+        ...params,
+        loadCommentaryMedia: startup === "commentary-media" ? failStartup : undefined,
+      });
+      try {
+        const producer = entry.resolveTerminalProducer?.();
+        expect(
+          producer?.handoff(async (producerCompleted) => {
+            await producerCompleted;
+            saving.resolve();
+            await finishSave.promise;
+          }),
+        ).toBe(true);
+        entry.controller.abort();
+        finishCommand.resolve();
+        await saving.promise;
+        expect(emitFinal).not.toHaveBeenCalled();
+        finishSave.resolve();
+        await completion;
+        expect(emitFinal).toHaveBeenCalledOnce();
+        expect(params.cleanupAbortController).toHaveBeenCalledOnce();
+        expect(mocks.agentCommand).toHaveBeenCalledTimes(startup === "command" ? 1 : 0);
+        expect(entry.resolveTerminalProducer?.()).toBeUndefined();
+      } finally {
+        finishCommand.resolve();
+        finishSave.resolve();
+        await completion;
+      }
+    },
+  );
 
   it.each(["registration", "controller", "session", "instance"] as const)(
     "rejects captured transcript custody after %s replacement",

@@ -419,7 +419,6 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
   commit: ConfigCommit<T>;
 }): Promise<{
   committed: T;
-  nextInstallRecords: Record<string, PluginInstallRecord>;
   indexWrite: InstalledPluginIndexWriteReceipt;
 }> {
   return await withPluginLifecycleLease({}, async (lease) => {
@@ -490,7 +489,6 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
       const committed = await params.commit(params.nextConfig, writeOptions);
       return {
         committed,
-        nextInstallRecords: prepared.nextInstallRecords,
         indexWrite: tentativeWrite,
       };
     } catch (error) {
@@ -613,7 +611,6 @@ export async function commitPluginInstallRecordsOnly(params: {
 }
 
 type PluginConfigCommit = ConfigReplaceResult & {
-  installRecords: Record<string, PluginInstallRecord>;
   movedInstallRecords: boolean;
 };
 
@@ -647,7 +644,6 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
     });
     return {
       ...committed,
-      installRecords: {},
       movedInstallRecords: false,
     };
   }
@@ -675,7 +671,6 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
   });
   return {
     ...result.committed,
-    installRecords: result.nextInstallRecords,
     movedInstallRecords: true,
   };
 }

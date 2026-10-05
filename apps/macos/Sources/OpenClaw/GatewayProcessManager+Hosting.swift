@@ -146,7 +146,14 @@ extension GatewayProcessManager {
             }
             return .installedService
         } catch {
-            if self.isCurrentGatewayStart(generation) { self.recordNodeMigrationFailure(error.localizedDescription) }
+            if self.isCurrentGatewayStart(generation) {
+                self.recordNodeMigrationFailure(error.localizedDescription)
+                if error.localizedDescription.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) {
+                    self.desiredActive = false
+                    self.status = .failed(error.localizedDescription)
+                    self.lastFailureReason = error.localizedDescription
+                }
+            }
             return .failed(error.localizedDescription)
         }
     }
@@ -198,6 +205,9 @@ extension GatewayProcessManager {
             self.status = .starting
             let result = await self.enableLaunchAgentIfNeeded(
                 port: candidate.port, generation: generation, nodeMigration: candidate)
+            if let failure = result.error, failure.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) {
+                throw GatewayHostingError(message: failure)
+            }
             guard self.isCurrentGatewayStart(generation) else { throw CancellationError() }
             if let failure = result.error {
                 self.recordNodeMigrationFailure(failure)

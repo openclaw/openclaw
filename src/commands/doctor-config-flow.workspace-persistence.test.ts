@@ -54,8 +54,20 @@ describe("Doctor workspace persistence", () => {
               },
             },
           },
+          models: {
+            providers: {
+              custom: {
+                api: "openai-codex-responses",
+                models: [{ id: "legacy-model", api: "openai-codex-responses" }],
+              },
+            },
+          },
           session: { typingMode: "thinking", parentForkMaxTokens: 200_000 },
-          browser: { relayBindHost: "127.0.0.1", ssrfPolicy: { allowPrivateNetwork: true } },
+          browser: {
+            relayBindHost: "127.0.0.1",
+            ssrfPolicy: { allowPrivateNetwork: true },
+            profiles: { relay: { driver: "extension", cdpUrl: "http://127.0.0.1:18792" } },
+          },
           messages: {
             queue: {
               mode: "queue",
@@ -87,6 +99,9 @@ describe("Doctor workspace persistence", () => {
           "agents.entries.ops.subagents.model.timeoutMs",
           "parentForkMaxTokens",
           "relayBindHost",
+          "browser.profiles.relay.cdpUrl",
+          "models.providers.custom.api",
+          "models.providers.custom.models.0.api",
           "allowPrivateNetwork",
           "messages.queue.mode",
           "messages.queue.byChannel.discord",

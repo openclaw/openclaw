@@ -37,15 +37,20 @@ it.each(["default", "shared", "embedded"])(
     const result = read(layout === "embedded" ? "embedded" : "successor");
     const before = read("before-startup");
     expect(result.pid).not.toBe(predecessor.pid);
-    const { running: mainOrphan, "ops-running": opsOrphan, ...controls } = result.rows;
-    const { running: mainOriginal, "ops-running": opsOriginal, ...originalControls } = before.rows;
-    expect(controls).toEqual(originalControls);
     expect(result.owners).toEqual(before.owners);
-    for (const [orphan, original] of [
-      [mainOrphan, mainOriginal],
-      [opsOrphan, opsOriginal],
-    ]) {
-      if (layout === "embedded") {
+    const repaired = new Set([
+      "running",
+      "ops-running",
+      "recovering",
+      "dashboard-spawned",
+      "dashboard-aborted",
+      "dashboard-completed-history",
+      "role-spawned",
+    ]);
+    for (const kind of Object.keys(before.rows)) {
+      const orphan = result.rows[kind];
+      const original = before.rows[kind];
+      if (layout === "embedded" || !repaired.has(kind)) {
         expect(orphan).toEqual(original);
       } else {
         expect(orphan.status).toBe("interrupted");

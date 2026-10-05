@@ -84,34 +84,11 @@ func (t *CodexTranslator) translate(ctx context.Context, text string, run func(c
 	if translated, ok := t.exactGlossaryMappings[core]; ok {
 		return prefix + translated + suffix, nil
 	}
-	translated, err := t.translateWithRetry(ctx, func(ctx context.Context) (string, error) {
-		return run(ctx, core)
-	})
-	if err != nil {
-		return "", err
-	}
-	return prefix + translated + suffix, nil
-}
-
-func exactGlossaryMappings(glossary []GlossaryEntry) map[string]string {
-	mappings := map[string]string{}
-	for _, entry := range glossary {
-		source := strings.TrimSpace(entry.Source)
-		target := strings.TrimSpace(entry.Target)
-		if source == "" || target == "" {
-			continue
-		}
-		mappings[source] = target
-	}
-	return mappings
-}
-
-func (t *CodexTranslator) translateWithRetry(ctx context.Context, run func(context.Context) (string, error)) (string, error) {
 	var lastErr error
 	for attempt := 0; attempt < translateMaxAttempts; attempt++ {
-		translated, err := run(ctx)
+		translated, err := run(ctx, core)
 		if err == nil {
-			return translated, nil
+			return prefix + translated + suffix, nil
 		}
 		if !isRetryableTranslateError(err) {
 			return "", err
@@ -125,6 +102,19 @@ func (t *CodexTranslator) translateWithRetry(ctx context.Context, run func(conte
 		}
 	}
 	return "", lastErr
+}
+
+func exactGlossaryMappings(glossary []GlossaryEntry) map[string]string {
+	mappings := map[string]string{}
+	for _, entry := range glossary {
+		source := strings.TrimSpace(entry.Source)
+		target := strings.TrimSpace(entry.Target)
+		if source == "" || target == "" {
+			continue
+		}
+		mappings[source] = target
+	}
+	return mappings
 }
 
 func (t *CodexTranslator) translateMasked(ctx context.Context, core string) (string, error) {

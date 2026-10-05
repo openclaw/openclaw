@@ -91,7 +91,7 @@ import { shortenHomePath } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import {
   listAuthProfileRepairCandidates,
-  listLegacyOAuthSidecarPaths,
+  listReferencedLegacyOAuthSidecarPaths,
   resolveLegacyAuthStatePath as resolveAuthStatePath,
   resolveLegacyFlatAuthPath as resolveLegacyAuthStorePath,
   type AuthProfileRepairCandidate,
@@ -689,7 +689,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   const env = params.env ?? process.env;
   assertNoRetiredStateFiles(
     "OAuth credential sidecars",
-    listLegacyOAuthSidecarPaths(env, params.cfg),
+    listReferencedLegacyOAuthSidecarPaths(env, params.cfg),
   );
   const loadMigratedStore =
     params.deps?.loadPersistedAuthProfileStore ?? loadPersistedAuthProfileStore;
@@ -957,9 +957,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       ) {
         if (sourceReceipts.length > 0) {
           const archived = sourceReceipts.map((receipt) => {
-            finalizeAuthProfileMigrationSource(receipt, "archived-unparsed", {
-              sourceLocked: true,
-            });
+            finalizeAuthProfileMigrationSource(receipt, "archived-unparsed");
             return receipt.archivePath;
           });
           result.warnings.push(
@@ -1154,7 +1152,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       }
       assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
       const archives = sourceReceipts.map((receipt) => {
-        finalizeAuthProfileMigrationSource(receipt, "completed", { sourceLocked: true });
+        finalizeAuthProfileMigrationSource(receipt, "completed");
         return receipt.archivePath;
       });
       for (const id of [

@@ -352,31 +352,6 @@ export function createTopLevelChannelGroupPolicySetter(params: {
     });
 }
 
-async function resolveGroupAllowlistWithLookupNotes<TResolved>(params: {
-  label: string;
-  prompter: Pick<WizardPrompter, "note">;
-  entries: string[];
-  fallback: TResolved;
-  resolve: () => Promise<TResolved>;
-}): Promise<TResolved> {
-  try {
-    return await params.resolve();
-  } catch (error) {
-    await noteChannelLookupFailure({
-      prompter: params.prompter,
-      label: params.label,
-      error,
-    });
-    await noteChannelLookupSummary({
-      prompter: params.prompter,
-      label: params.label,
-      resolvedSections: [],
-      unresolved: params.entries,
-    });
-    return params.fallback;
-  }
-}
-
 export function createAccountScopedAllowFromSection(
   params: Omit<WizardAllowFrom, "apply" | "parseInputs"> & { channel: string },
 ): WizardAllowFrom {
@@ -421,21 +396,25 @@ export function createAccountScopedGroupAccessSection<TResolved>(
       }),
     ...(params.resolveAllowlist
       ? {
-          resolveAllowlist: ({ cfg, accountId, credentialValues, entries, prompter }) =>
-            resolveGroupAllowlistWithLookupNotes({
-              label: params.label,
-              prompter,
-              entries,
-              fallback: params.fallbackResolved(entries),
-              resolve: async () =>
-                await params.resolveAllowlist!({
-                  cfg,
-                  accountId,
-                  credentialValues,
-                  entries,
-                  prompter,
-                }),
-            }),
+          resolveAllowlist: async (input) => {
+            const fallback = params.fallbackResolved(input.entries);
+            try {
+              return await params.resolveAllowlist!(input);
+            } catch (error) {
+              await noteChannelLookupFailure({
+                prompter: input.prompter,
+                label: params.label,
+                error,
+              });
+              await noteChannelLookupSummary({
+                prompter: input.prompter,
+                label: params.label,
+                resolvedSections: [],
+                unresolved: input.entries,
+              });
+              return fallback;
+            }
+          },
         }
       : {}),
     applyAllowlist: ({ cfg, accountId, resolved }) =>

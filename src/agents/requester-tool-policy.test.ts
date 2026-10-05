@@ -75,6 +75,30 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.delegated).toBe(false);
     expect(result.requesterPolicySource).toBe("current-request");
     expect(result.senderPolicy).toBeUndefined();
+    expect(result.inheritedToolPolicySource).toBeUndefined();
+  });
+
+  it.each([
+    { policy: {}, restricted: false },
+    { policy: { allow: [] }, restricted: false },
+    { policy: { allow: ["*", "read"] }, restricted: false },
+    { policy: { allow: ["read", "sessions_spawn"] }, restricted: true },
+    { policy: { deny: ["exec"] }, restricted: true },
+  ])("classifies sender/channel restriction provenance for $policy", ({ policy, restricted }) => {
+    for (const source of ["sender", "conversation"] as const) {
+      const result = resolveRequesterToolPolicies({
+        config: config({
+          tools: {
+            allow: ["read", "sessions_spawn"],
+            toolsBySender: { "id:alice": source === "sender" ? policy : {} },
+          },
+        }),
+        sessionKey: "agent:main:discord:direct:alice",
+        senderId: "alice",
+        ...(source === "conversation" ? { conversationPolicy: policy } : {}),
+      });
+      expect(result.inheritedToolPolicySource).toBe(restricted ? "sender" : undefined);
+    }
   });
 
   it.each([
@@ -84,6 +108,7 @@ describe("resolveRequesterToolPolicies", () => {
     "external sender",
     "different allow",
     "different deny",
+    "different source",
     "missing lineage",
   ])("resolves a settled batch with %s authority", async (authority) => {
     const targetSessionKey = "agent:main:main";
@@ -101,6 +126,8 @@ describe("resolveRequesterToolPolicies", () => {
               : ["exec", "read"],
         inheritedToolDeny:
           index === 1 && authority === "different deny" ? ["exec", "write"] : ["write"],
+        inheritedToolPolicySource:
+          index === 1 && authority === "different source" ? undefined : "sender",
       });
     }
     let current = true;
@@ -148,6 +175,7 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.senderPolicy).toBeUndefined();
     expect(result.groupPolicy).toBeUndefined();
     expect(result.inheritedToolPolicy).toEqual({ allow: ["read", "exec"], deny: ["write"] });
+    expect(result.inheritedToolPolicySource).toBe("sender");
 
     const snapshot = prepareReplyToolAuthority({
       run: {
@@ -180,6 +208,7 @@ describe("resolveRequesterToolPolicies", () => {
       subagentControlScope: "children",
       inheritedToolPolicyVersion: 1,
       inheritedToolDeny: ["message"],
+      inheritedToolPolicySource: "sender",
     });
 
     const result = resolveRequesterToolPolicies({
@@ -194,6 +223,7 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.senderPolicy).toBeUndefined();
     expect(result.groupPolicy).toBeUndefined();
     expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
+    expect(result.inheritedToolPolicySource).toBe("sender");
     expect(result.subagentPolicy).toBeDefined();
   });
 
@@ -400,6 +430,7 @@ describe("resolveRequesterToolPolicies", () => {
 
   it.each([
     ["sender identity", { senderId: "bob" }],
+    ["allowlisted sender identity", { senderId: "alice" }],
     ["external provenance", { inputProvenance: { kind: "external_user" as const } }],
   ])("applies current policy to an existing child with %s", async (_label, externalFacts) => {
     const childSessionKey = "agent:main:subagent:external-turn";
@@ -410,6 +441,7 @@ describe("resolveRequesterToolPolicies", () => {
       subagentControlScope: "children",
       inheritedToolPolicyVersion: 1,
       inheritedToolDeny: ["message"],
+      inheritedToolPolicySource: "sender",
     });
 
     const result = resolveRequesterToolPolicies({
@@ -422,8 +454,13 @@ describe("resolveRequesterToolPolicies", () => {
 
     expect(result.delegated).toBe(false);
     expect(result.requesterPolicySource).toBe("current-request");
-    expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+    expect(result.senderPolicy).toEqual(
+      _label === "allowlisted sender identity"
+        ? undefined
+        : { deny: ["group:runtime", "group:fs"] },
+    );
     expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
+    expect(result.inheritedToolPolicySource).toBe("sender");
   });
 
   it("treats an empty projection as valid only for verified lineage", async () => {

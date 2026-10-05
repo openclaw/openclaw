@@ -2,6 +2,46 @@ import { describe, expect, it } from "vitest";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 
 describe("docs Markdown rendering", () => {
+  it.each(["```", "~~~"].flatMap((fence) => ["\n", "\r\n"].map((newline) => ({ fence, newline }))))(
+    "preserves nested fence indentation for $fence with newline %j",
+    ({ fence, newline }) => {
+      const body = '{\n  "features": {\n    "example": "<Tab title=\\"literal\\">"\n  }\n}';
+      const yaml = "app:\n  scopes:\n    - chat:write\n  description: |\n    Nested content";
+      const source = [
+        "<Tabs>",
+        '  <Tab title="Manifest">',
+        "    <Steps>",
+        '      <Step title="Create app">',
+        "        <CodeGroup>",
+        `${fence}json Recommended`,
+        ...body.split("\n"),
+        fence,
+        `          ${fence}json Minimal`,
+        ...body.split("\n").map((line) => `          ${line}`),
+        `          ${fence}`,
+        `  ${fence}yaml`,
+        ...yaml.split("\n").map((line) => `  ${line}`),
+        `  ${fence}`,
+        "        </CodeGroup>",
+        "      </Step>",
+        "    </Steps>",
+        "  </Tab>",
+        "</Tabs>",
+        '<ParamField path="live">[Visible](/visible)</ParamField>',
+        `${fence}json`,
+        ...body.split("\n"),
+        fence,
+      ].join(newline);
+      const document = parseDocsDocument(source);
+
+      expect(
+        document.tokens.filter((token) => token.type === "fence").map((token) => token.content),
+      ).toEqual([`${body}\n`, `${body}\n`, `${yaml}\n`, `${body}\n`]);
+      expect(document.ids).toContain("param-live");
+      expect(document.links).toEqual(["/visible"]);
+    },
+  );
+
   it.each([
     {
       name: "APIUsage",

@@ -74,13 +74,19 @@ export async function prepareCurrentGitHubPublicationIdentity(
   });
 }
 
-export async function prepareCurrentGitHubPublicationOptionsIdentity(agentId: string) {
+export async function prepareCurrentGitHubPublicationOptionsIdentity(
+  agentId: string,
+  assertCurrent?: () => void,
+) {
+  assertCurrent?.();
   await requestCurrentGitHubOAuthRefresh(agentId);
+  assertCurrent?.();
   const snapshot = publicationConfigSnapshot();
   return await prepareGitHubPublicationOptionsIdentity({
     config: snapshot.config,
     sourceConfig: snapshot.sourceConfig,
     agentId,
+    assertCurrent,
   });
 }
 
@@ -241,6 +247,7 @@ export async function prepareGitHubPublicationWorkspaceOwner(params: Publication
       cfg: getRuntimeConfig(),
       key: params.sessionKey,
       agentId: params.agentId,
+      projection: [],
     }),
   );
   context.admission.assertCurrent();
@@ -398,6 +405,7 @@ export async function hasSupportedGitHubPublicationTarget(
       key: session.sessionKey,
       agentId: session.agentId,
       assertActive: assertCurrent,
+      projection: [],
     }),
     true,
   );

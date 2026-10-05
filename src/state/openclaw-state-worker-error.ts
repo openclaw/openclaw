@@ -89,14 +89,15 @@ export function encodeOpenClawStateWorkerError(
       const identity = identifyError(current);
       const nativeOpen = isSqliteNativeOpenFailure(current);
       const stateDatabasePath = readOpenClawStateDatabaseFailurePath(current);
+      const errcode = "errcode" in current ? current.errcode : undefined;
       canonical ||=
         stateDatabasePath !== undefined ||
         nativeOpen ||
+        isNativeErrorCode(errcode) ||
         isSqliteLockError(current) ||
         current instanceof OpenClawQuarantineReadCleanupError ||
         (identity.type !== "error" && identity.type !== "aggregate");
       const code = "code" in current ? current.code : undefined;
-      const errcode = "errcode" in current ? current.errcode : undefined;
       const errno = "errno" in current ? current.errno : undefined;
       nodes.push({
         ...identity,
@@ -236,6 +237,7 @@ function decodeErrorGraph(
       canonical ||=
         node.stateDatabasePath !== undefined ||
         node.nativeOpen === true ||
+        isNativeErrorCode(node.errcode) ||
         isSqliteLockError(node) ||
         (node.type === "aggregate" && node.name === DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME) ||
         (node.type !== "error" && node.type !== "aggregate");

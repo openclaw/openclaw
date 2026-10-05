@@ -59,7 +59,6 @@ extensions/browser/src/browser/extension-relay/relay-protocol.ts	1
 extensions/browser/src/browser/output-files.ts	1
 extensions/browser/src/browser/paths.ts	1
 extensions/browser/src/browser/playwright-core.runtime.ts	2
-extensions/browser/src/browser/pw-download-capture.ts	1
 extensions/browser/src/browser/pw-session-actions.ts	2
 extensions/browser/src/browser/pw-session-navigation.ts	1
 extensions/browser/src/browser/pw-tools-core.interactions.actions.ts	2
@@ -157,7 +156,6 @@ extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
 extensions/codex/src/app-server/tool-progress-normalization.ts	1
 extensions/codex/src/app-server/transcript-mirror.ts	1
 extensions/codex/src/app-server/transport-stdio.ts	1
-extensions/codex/src/app-server/upstream-fork-boundary.ts	1
 extensions/codex/src/command-handlers.ts	3
 extensions/codex/src/command-rpc.ts	1
 extensions/codex/src/conversation-control.ts	1
@@ -187,7 +185,6 @@ extensions/copilot/src/byok-proxy.ts	1
 extensions/copilot/src/event-bridge-transcript.ts	4
 extensions/copilot/src/event-bridge.ts	1
 extensions/copilot/src/hooks-bridge.ts	7
-extensions/copilot/src/isolated-completion.ts	1
 extensions/copilot/src/provider-bridge.ts	1
 extensions/copilot/src/sdk-loader.ts	2
 extensions/copilot/src/tool-bridge.ts	3
@@ -259,7 +256,7 @@ extensions/discord/src/internal/interaction-options.ts	2
 extensions/discord/src/internal/interaction-response.ts	2
 extensions/discord/src/internal/interactions.ts	2
 extensions/discord/src/internal/modal-fields.ts	4
-extensions/discord/src/internal/rest-body.ts	6
+extensions/discord/src/internal/rest-body.ts	5
 extensions/discord/src/internal/rest-errors.ts	1
 extensions/discord/src/internal/rest-scheduler.ts	1
 extensions/discord/src/internal/rest.ts	1
@@ -267,7 +264,6 @@ extensions/discord/src/internal/structures.ts	8
 extensions/discord/src/internal/undefined-fields.ts	1
 extensions/discord/src/internal/voice.ts	1
 extensions/discord/src/markdown.ts	4
-extensions/discord/src/monitor/agent-components-context.ts	1
 extensions/discord/src/monitor/agent-components.plugin-interactive.ts	1
 extensions/discord/src/monitor/channel-access.ts	1
 extensions/discord/src/monitor/exec-approvals.ts	1
@@ -386,7 +382,7 @@ extensions/github-copilot/usage.ts	1
 extensions/google-meet/index.ts	1
 extensions/google-meet/src/calendar.ts	1
 extensions/google-meet/src/cli-runtime-commands.ts	1
-extensions/google-meet/src/cli-space-commands.ts	3
+extensions/google-meet/src/cli-space-commands.ts	2
 extensions/google-meet/src/meet-api.ts	1
 extensions/google-meet/src/transports/chrome-create.ts	1
 extensions/google/cli-backend-auth.runtime.ts	1
@@ -445,7 +441,7 @@ extensions/line/src/flex-templates/schedule-cards.ts	27
 extensions/line/src/gateway.ts	1
 extensions/line/src/monitor-durable.ts	1
 extensions/line/src/monitor.ts	1
-extensions/line/src/outbound.ts	5
+extensions/line/src/outbound.ts	4
 extensions/line/src/send.ts	1
 extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	2
@@ -505,21 +501,20 @@ extensions/matrix/src/matrix/poll-types.ts	7
 extensions/matrix/src/matrix/probe.ts	1
 extensions/matrix/src/matrix/reaction-common.ts	1
 extensions/matrix/src/matrix/sdk.ts	8
-extensions/matrix/src/matrix/sdk/client-base.ts	4
+extensions/matrix/src/matrix/sdk/client-base.ts	1
 extensions/matrix/src/matrix/sdk/client-core.ts	14
 extensions/matrix/src/matrix/sdk/client-event-bridge.ts	2
 extensions/matrix/src/matrix/sdk/client-support.ts	1
 extensions/matrix/src/matrix/sdk/client-sync-quiesce.ts	2
 extensions/matrix/src/matrix/sdk/client-verification.ts	4
 extensions/matrix/src/matrix/sdk/crypto-bootstrap.ts	1
-extensions/matrix/src/matrix/sdk/crypto-facade.ts	4
+extensions/matrix/src/matrix/sdk/crypto-facade.ts	1
 extensions/matrix/src/matrix/sdk/crypto-node.runtime.ts	1
 extensions/matrix/src/matrix/sdk/decrypt-bridge.ts	1
 extensions/matrix/src/matrix/sdk/event-helpers.ts	1
 extensions/matrix/src/matrix/sdk/fake-indexeddb-prune.ts	4
 extensions/matrix/src/matrix/sdk/idb-persistence.ts	3
 extensions/matrix/src/matrix/sdk/transport.ts	2
-extensions/matrix/src/matrix/sdk/verification-manager.ts	3
 extensions/matrix/src/matrix/send.ts	8
 extensions/matrix/src/matrix/send/chunking.ts	2
 extensions/matrix/src/matrix/send/client.ts	1
@@ -588,7 +583,6 @@ extensions/memory-wiki/src/bounded-walk.ts	1
 extensions/memory-wiki/src/cli.ts	3
 extensions/memory-wiki/src/compiled-cache.ts	1
 extensions/memory-wiki/src/gateway.ts	3
-extensions/memory-wiki/src/ingest.ts	2
 extensions/memory-wiki/src/log.ts	1
 extensions/memory-wiki/src/mutation-coordinator.ts	1
 extensions/memory-wiki/src/tool.ts	2
@@ -676,7 +670,7 @@ extensions/openai/native-web-search.ts	1
 extensions/openai/openai-chatgpt-oauth-token.runtime.ts	1
 extensions/openai/provider-policy-api.ts	2
 extensions/openai/realtime-voice-bridge.ts	1
-extensions/opencode-go/stream-termination.ts	4
+extensions/opencode-go/stream-termination.ts	3
 extensions/opencode/provider-catalog.ts	2
 extensions/opencode/session-catalog-plugin.ts	1
 extensions/opencode/stream.ts	3
@@ -916,10 +910,9 @@ extensions/telegram/src/bot-info-cache.ts	1
 extensions/telegram/src/bot-info.ts	1
 extensions/telegram/src/bot-message-context.body.ts	1
 extensions/telegram/src/bot-message-context.session.ts	2
-extensions/telegram/src/bot-message-context.ts	3
+extensions/telegram/src/bot-message-context.ts	2
 extensions/telegram/src/bot-message-dispatch-reply.ts	1
 extensions/telegram/src/bot-message-dispatch-session.ts	1
-extensions/telegram/src/bot-native-command-dispatch.ts	1
 extensions/telegram/src/bot-native-command-plugins.ts	1
 extensions/telegram/src/bot/body-helpers.ts	1
 extensions/telegram/src/bot/delivery.replies.ts	1
@@ -987,14 +980,13 @@ extensions/twitch/src/twitch-ingress.ts	4
 extensions/venice/models.ts	1
 extensions/vllm/stream.ts	1
 extensions/voice-call/index.ts	2
-extensions/voice-call/setup-api.ts	1
-extensions/voice-call/src/config.ts	2
+extensions/voice-call/src/config.ts	1
 extensions/voice-call/src/manager/outbound.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/response-generator.ts	2
 extensions/voice-call/src/runtime.ts	1
-extensions/voice-call/src/webhook.ts	7
+extensions/voice-call/src/webhook.ts	5
 extensions/voyage/embedding-batch.ts	1
 extensions/web-readability/web-content-extractor.ts	2
 extensions/whatsapp/src/account-config.ts	1
@@ -1118,10 +1110,9 @@ packages/ai/src/transports/anthropic-payload-policy.ts	7
 packages/ai/src/transports/anthropic-transport-stream.ts	4
 packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
-packages/ai/src/transports/openai-completions-params.ts	7
-packages/ai/src/transports/openai-completions-replay.ts	6
+packages/ai/src/transports/openai-completions-params.ts	6
+packages/ai/src/transports/openai-completions-replay.ts	1
 packages/ai/src/transports/openai-completions-stream.ts	8
-packages/ai/src/transports/openai-completions-string-content.ts	5
 packages/ai/src/transports/openai-completions-transport.ts	9
 packages/ai/src/transports/openai-responses-client.ts	10
 packages/ai/src/transports/openai-responses-compact-request.ts	2
@@ -1336,7 +1327,7 @@ src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
 src/agents/embedded-agent-runner/replay-history.ts	17
 src/agents/embedded-agent-runner/run-entry.ts	2
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	4
-src/agents/embedded-agent-runner/run/attempt-client-tools.ts	2
+src/agents/embedded-agent-runner/run/attempt-client-tools.ts	1
 src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
 src/agents/embedded-agent-runner/run/attempt-history.ts	11
@@ -1478,7 +1469,7 @@ src/agents/sessions/agent-session-models.ts	1
 src/agents/sessions/agent-session-tree.ts	1
 src/agents/sessions/agent-session-utils.ts	1
 src/agents/sessions/auth-storage.ts	3
-src/agents/sessions/extensions/loader.ts	7
+src/agents/sessions/extensions/loader.ts	2
 src/agents/sessions/extensions/runner.ts	14
 src/agents/sessions/extensions/types.ts	1
 src/agents/sessions/keybindings.ts	2
@@ -1491,9 +1482,7 @@ src/agents/sessions/session-manager-entries.ts	2
 src/agents/sessions/session-manager.ts	2
 src/agents/sessions/settings-manager.ts	8
 src/agents/sessions/steering-message-identity.ts	2
-src/agents/sessions/tools/bash.ts	2
-src/agents/sessions/tools/edit.ts	10
-src/agents/sessions/tools/grep.ts	2
+src/agents/sessions/tools/edit.ts	3
 src/agents/sessions/tools/tool-definition-wrapper.ts	1
 src/agents/sessions/tools/write.ts	3
 src/agents/shell-snapshot.ts	1
@@ -1730,7 +1719,7 @@ src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
 src/cli/capability-cli/audio.ts	3
-src/cli/capability-cli/embedding.ts	3
+src/cli/capability-cli/embedding.ts	2
 src/cli/capability-cli/image.ts	10
 src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/tts.ts	6
@@ -1749,7 +1738,6 @@ src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	4
 src/cli/connect-cli.ts	1
 src/cli/cron-cli/list-jobs.ts	4
-src/cli/cron-cli/register.cron-add.ts	1
 src/cli/cron-cli/register.cron-edit.ts	1
 src/cli/cron-cli/register.cron-scratch.ts	2
 src/cli/cron-cli/register.cron-simple.ts	2
@@ -1765,10 +1753,9 @@ src/cli/gateway-cli/run.ts	5
 src/cli/gateway-cli/suspend-cli.ts	2
 src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
-src/cli/models-cli.ts	17
+src/cli/models-cli.ts	1
 src/cli/native-hook-relay-cli.ts	2
-src/cli/nodes-cli/format.ts	1
-src/cli/nodes-cli/register.pairing.ts	4
+src/cli/nodes-cli/register.pairing.ts	2
 src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	2
 src/cli/one-shot-exit.ts	2
@@ -1785,12 +1772,11 @@ src/cli/program/message/register.permissions-search.ts	2
 src/cli/program/preaction.ts	1
 src/cli/program/program-context.ts	2
 src/cli/program/register.agent-turn.ts	1
-src/cli/program/register.audit.ts	12
 src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	7
 src/cli/program/register.onboard.ts	27
 src/cli/program/register.setup.ts	2
-src/cli/program/register.status-health-sessions.ts	29
+src/cli/program/register.status-health-sessions.ts	18
 src/cli/run-main.ts	1
 src/cli/secrets-cli.ts	2
 src/cli/secrets-store-cli.ts	1
@@ -1872,8 +1858,7 @@ src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
 src/commands/doctor/shared/empty-allowlist-policy.ts	12
 src/commands/doctor/shared/empty-allowlist-scan.ts	4
-src/commands/doctor/shared/legacy-config-core-migrate.ts	1
-src/commands/doctor/shared/legacy-config-core-normalizers.ts	11
+src/commands/doctor/shared/legacy-config-core-normalizers.ts	1
 src/commands/doctor/shared/legacy-config-issues.ts	1
 src/commands/doctor/shared/legacy-config-migrate.ts	2
 src/commands/doctor/shared/legacy-config-migrations.audio.ts	1
@@ -1893,7 +1878,7 @@ src/commands/doctor/shared/stale-plugin-repair-preservation.ts	1
 src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
-src/commands/message-format.ts	17
+src/commands/message-format.ts	15
 src/commands/models/list.probe.ts	1
 src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3
@@ -2072,7 +2057,7 @@ src/gateway/hooks-mapping.ts	2
 src/gateway/hooks.ts	1
 src/gateway/live-agent-probes.ts	1
 src/gateway/local-request-context.ts	2
-src/gateway/managed-image-attachments.ts	2
+src/gateway/managed-image-attachments.ts	1
 src/gateway/mcp-app-operations.ts	1
 src/gateway/mcp-http.handlers.ts	4
 src/gateway/mcp-http.schema.ts	2
@@ -2111,7 +2096,6 @@ src/gateway/server-methods/chat-abort-authorization.ts	3
 src/gateway/server-methods/chat-assistant-content.ts	1
 src/gateway/server-methods/chat-broadcast.ts	1
 src/gateway/server-methods/chat-send-attachments.ts	1
-src/gateway/server-methods/chat-send-reply-dispatch.ts	2
 src/gateway/server-methods/chat-send-request.ts	1
 src/gateway/server-methods/chat-server-timing.ts	1
 src/gateway/server-methods/chat-transcript-inject.ts	1
@@ -2119,7 +2103,7 @@ src/gateway/server-methods/chat-transcript-persistence.ts	4
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	1
-src/gateway/server-methods/cron.ts	3
+src/gateway/server-methods/cron.ts	2
 src/gateway/server-methods/doctor.ts	2
 src/gateway/server-methods/exec-approvals.ts	1
 src/gateway/server-methods/memory-search.ts	3
@@ -2156,7 +2140,6 @@ src/gateway/server-runtime-state-prepare.ts	1
 src/gateway/server-startup-bootstrap.ts	1
 src/gateway/server-startup-config-helpers.ts	1
 src/gateway/server-startup-post-attach.ts	1
-src/gateway/server-worker-placement-startup.ts	2
 src/gateway/server.auth.control-ui.bootstrap-lifecycle.suite.ts	7
 src/gateway/server.auth.control-ui.device-token.suite.ts	2
 src/gateway/server.auth.control-ui.mobile-bootstrap.suite.ts	6
@@ -2211,7 +2194,7 @@ src/hooks/gmail-setup-utils.ts	4
 src/hooks/internal-hook-types.ts	2
 src/hooks/loader.ts	1
 src/hooks/message-hook-mappers.ts	2
-src/hooks/module-loader.ts	2
+src/hooks/module-loader.ts	1
 src/hooks/policy.ts	1
 src/infra/advertised-lan-host.ts	1
 src/infra/agent-event-lifecycle.ts	1
@@ -2269,7 +2252,7 @@ src/infra/net/form-data.ts	2
 src/infra/net/node-proxy-agent.ts	1
 src/infra/net/proxy-fetch.ts	2
 src/infra/net/proxy/proxy-validation.ts	1
-src/infra/net/runtime-fetch.ts	5
+src/infra/net/runtime-fetch.ts	4
 src/infra/net/ssrf.ts	7
 src/infra/net/undici-dispatcher-options.ts	3
 src/infra/net/undici-global-dispatcher.ts	2
@@ -2327,7 +2310,6 @@ src/infra/sqlite-schema-contract.ts	7
 src/infra/sqlite-snapshot.ts	2
 src/infra/sqlite-strict.ts	6
 src/infra/sqlite-wal.ts	3
-src/infra/state-migrations.acp-replay.ts	1
 src/infra/state-migrations.audit-backup.ts	1
 src/infra/state-migrations.audit-records.ts	4
 src/infra/state-migrations.audit-recovery-protocol.ts	3
@@ -2345,12 +2327,10 @@ src/infra/state-migrations.meeting-transcripts-detection.ts	4
 src/infra/state-migrations.meeting-transcripts-files.ts	5
 src/infra/state-migrations.meeting-transcripts.ts	2
 src/infra/state-migrations.node-host.ts	2
-src/infra/state-migrations.runtime-state.ts	1
 src/infra/state-migrations.session-store.ts	5
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
 src/infra/state-migrations.tui-last-session.ts	2
-src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	1
 src/infra/state-migrations.workspace-setup.ts	1
 src/infra/system-presence.ts	1
@@ -2395,7 +2375,6 @@ src/mcp/codex-supervision-tools-serve.ts	6
 src/mcp/openclaw-tools-serve-config.ts	1
 src/mcp/plugin-tools-handlers.ts	2
 src/media-generation/provider-registry.ts	1
-src/media-understanding/attachments.select.ts	1
 src/media-understanding/entry-capabilities.ts	1
 src/media-understanding/image-model-runtime.ts	3
 src/media-understanding/runner.entries.ts	4
@@ -2519,7 +2498,6 @@ src/plugins/dashboard-capabilities.ts	1
 src/plugins/dev-source-root.ts	1
 src/plugins/discovery.ts	1
 src/plugins/doctor-contract-module.ts	3
-src/plugins/doctor-contract-registry-loader-state.ts	1
 src/plugins/doctor-contract-registry.ts	1
 src/plugins/gateway-events.ts	1
 src/plugins/gateway-startup-plugin-activation.ts	1
@@ -2629,7 +2607,6 @@ src/routing/binding-scope.ts	1
 src/runtime.ts	4
 src/secrets/audit.ts	1
 src/secrets/channel-contract-api.ts	1
-src/secrets/configure.ts	2
 src/secrets/egress-proxy/stream-substitution.ts	2
 src/secrets/plan.ts	2
 src/secrets/private-plan-file.ts	1
@@ -2644,8 +2621,7 @@ src/secrets/runtime-openai-file-fixture.test-helper.ts	1
 src/secrets/runtime-owner-assignments.ts	1
 src/secrets/runtime-secret-scan.ts	1
 src/secrets/runtime-state.ts	4
-src/secrets/runtime-web-tools.shared.ts	1
-src/secrets/runtime-web-tools.ts	3
+src/secrets/runtime-web-tools.ts	2
 src/secrets/runtime.ts	4
 src/secrets/store/secret-store.ts	2
 src/secrets/target-registry-query.ts	1
@@ -2902,9 +2878,8 @@ ui/src/pages/agents/model-config.ts	2
 ui/src/pages/agents/panels-overview.ts	2
 ui/src/pages/agents/panels-status-files.ts	1
 ui/src/pages/channels/view.detail.ts	1
-ui/src/pages/channels/view.nostr-profile-form.ts	4
+ui/src/pages/channels/view.nostr-profile-form.ts	3
 ui/src/pages/channels/view.nostr.ts	5
-ui/src/pages/channels/view.ts	9
 ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1
 ui/src/pages/chat/chat-page-retained-sessions.ts	1

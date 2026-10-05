@@ -13,6 +13,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import {
+  isSettledSubagentRequesterHistory,
   projectSubagentRunForMaintenance,
   projectSubagentRunForSessionList,
 } from "./subagent-delivery-state.js";
@@ -498,20 +499,21 @@ export function hasSubagentSessionOwnerInDatabase(
   database: Pick<OpenClawStateDatabase, "db">,
   sessionKey: string,
 ): boolean {
-  return (
-    executeSqliteQuerySync(
+  return runSqliteDeferredTransactionSync(database.db, () => {
+    const child = executeSqliteQuerySync(
       database.db,
       getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
         .selectFrom("subagent_runs")
         .select("run_id")
-        .where((eb) =>
-          eb.or([
-            eb("child_session_key", "=", sessionKey),
-            eb("requester_session_key", "=", sessionKey),
-            eb("controller_session_key", "=", sessionKey),
-          ]),
-        )
+        .where("child_session_key", "=", sessionKey)
         .limit(1),
-    ).rows.length > 0
-  );
+    );
+    if (child.rows.length > 0) {
+      return true;
+    }
+    return readSubagentRegistryRows({ kind: "session", sessionKey }, database).some((row) => {
+      const entry = rowToSubagentRunRecord(row);
+      return !entry || !isSettledSubagentRequesterHistory(entry);
+    });
+  });
 }

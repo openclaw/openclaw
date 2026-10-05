@@ -7,7 +7,6 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
-  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import {
   stageSqliteTransactionState,
@@ -467,23 +466,6 @@ export function scanCanonicalSqliteSessionEntries(
     count += 1;
   }
   return count;
-}
-
-/** Exact reads validate their snapshot without admitting unrelated persisted rows. */
-export function assertCanonicalSqliteSessionRowsCurrent(
-  database: { agentId: string; db: DatabaseSync },
-  sessionKeys: readonly string[],
-): void {
-  for (const row of iterateSqliteQuerySync(
-    database.db,
-    canonicalSessionValidationQuery(database).where(
-      "session_nodes.session_key",
-      "in",
-      sqliteStringSet(sessionKeys),
-    ),
-  )) {
-    validateCanonicalSessionRow(row, "read");
-  }
 }
 
 /** Validate the root's database and key together within its synchronous writer transaction. */

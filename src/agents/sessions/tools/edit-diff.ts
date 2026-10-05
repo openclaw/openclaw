@@ -404,15 +404,6 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string) {
   };
 }
 
-export interface EditDiffResult {
-  diff: string;
-  firstChangedLine: number | undefined;
-}
-
-export interface EditDiffError {
-  error: string;
-}
-
 function validateNoOpEditTargets(
   normalizedContent: string,
   noOpEdits: Edit[],

@@ -274,11 +274,18 @@ two-party event loops that do not go through the shared inbound reply runner.
 ### Bounded waits
 
 `openclaw/plugin-sdk/time-runtime` exports
-`raceWithTimeout(operation, timeoutMs, onTimeout, { ref? })`. Pass an existing
+`raceWithTimeout(operation, timeoutMs, onTimeout, { ref?, signal?, onAbort? })`. Pass an existing
 promise, or a function returning a promise when the timer must start before the
 work. The timeout callback returns a fallback or throws the caller's error.
 Delays use native `setTimeout` semantics; the timer keeps the process alive
 unless `ref` is `false`, and is cleared when the race settles.
+
+When `signal` is supplied, the same wait owns cancellation and clears both the
+timer and listener on any outcome. `onAbort(signal)` returns a fallback or throws
+the caller's error; the default throws an `AbortError` with the signal reason as
+its cause. The operation comes first in the promise race, including when both
+inputs have already settled. Check an existing abort before calling if it must
+prevent an operation factory from starting.
 
 `racePromiseWithAbortSignal(operation, signal?, createError?)` from the same
 subpath bounds observation by caller cancellation. An already-aborted signal

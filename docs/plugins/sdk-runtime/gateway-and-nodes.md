@@ -252,9 +252,22 @@ applicable policy also requires fresh publication admission.
     previews can be absent while enrichment is pending. Missing PR snapshots
     refresh in the background. Use `api.runtime.gateway.subscribeSessionChanges`
     to reread the affected `sessionKey` when facts change, and call the returned
-    unsubscribe function when finished. Unchanged facts need no age-based retry.
+    unsubscribe function when finished. Category-only changes carry
+    `factsInvalidated: "category"`; projections that do not use session categories
+    can ignore them. Unchanged facts need no age-based retry.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
+
+    `await api.runtime.gateway.resolveGitHubAccount({ login, signal? })` resolves a
+    public GitHub login to `{ accountId, login }` using the Gateway's configured
+    GitHub API credential, with no anonymous retry. Bundled and trusted official
+    plugins use the existing `users.list` / `operator.read` permission; the caller,
+    plugin, and Gateway must stay active. Lookup failures return `{ error }` with
+    the existing GitHub `statusCode` (404 not found, 429 rate limited, 502 upstream
+    or network failure), a safe `message`, optional absolute `retryAtMs`, and
+    `credentialConfigured`. Cancellation and authority failures reject. The
+    optional capability is absent on older hosts; require an update rather than
+    implementing a private lookup. The transport owns timeout and identity validation.
 
     `await api.runtime.gateway.withUserProfileIdentity({ profileId, emails, githubAccountIds }, run)`
     prepares the canonical profile's original binding lifetimes for up to 500

@@ -116,7 +116,6 @@ async function runEmbeddedAttemptOwned(
     emitCorePluginToolStageSummary,
     prepStages,
     sandbox,
-    sandboxSessionKey,
     sessionAgentId,
   } = setup;
 
@@ -424,8 +423,8 @@ async function runEmbeddedAttemptOwned(
         state: executionState,
         lifecycle: {
           applyPermissionMode: (mode, revokeApprovals) =>
-            withRuntimeToolSchemaQuarantine((recordQuarantine) => {
-              preparedToolBase.refreshPermissionMode(mode, revokeApprovals);
+            withRuntimeToolSchemaQuarantine(async (recordQuarantine) => {
+              await preparedToolBase.refreshPermissionMode(mode, revokeApprovals);
               preparedBundleTools.refreshTools(recordQuarantine);
               preparedToolCatalog.refreshTools(recordQuarantine);
               preparedSessionRuntime.agentSession.refreshTools();
@@ -491,8 +490,6 @@ async function runEmbeddedAttemptOwned(
           bundleMcpRuntime: sessionMcpRuntime,
           bundleLspRuntime: sessionLspRuntime,
           toolSearchCatalogRef,
-          sandboxSessionKey,
-          sessionAgentId,
           trajectoryEndRecorded: executionState.trajectoryEndRecorded,
           deferredLifecycleOwner: executionState.deferredLifecycleOwner,
           emitDiagnosticRunCompleted,

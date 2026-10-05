@@ -42,6 +42,7 @@ import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { expectRecordFields } from "../../subagent-test-fixtures.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import { registerAcpSpawnPolicyTests } from "./acp-spawn-policy.test-support.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import {
   expectRegisteredSubagentRun,
@@ -501,6 +502,14 @@ function trackActiveAcpTurn(sessionKey: string, ownerSessionKey: string) {
 }
 
 describe("spawnAcpDirect", () => {
+  registerAcpSpawnPolicyTests({
+    spawn: spawnAcpDirect,
+    state: hoisted.state,
+    initializeSessionMock: hoisted.initializeSessionMock,
+    upsertSessionEntryMock: hoisted.upsertSessionEntryMock,
+    callGatewayMock: hoisted.callGatewayMock,
+  });
+
   beforeEach(() => {
     setActivePluginRegistry(createTestRegistry());
     acpRuntimeRegistryTesting.resetAcpRuntimeBackendsForTests();
@@ -1348,16 +1357,6 @@ describe("spawnAcpDirect", () => {
     expectRecordFields(result, {
       status: "forbidden",
     });
-  });
-
-  it('forbids sandbox="require" for runtime=acp', async () => {
-    const result = await spawn({
-      sandbox: "require",
-    });
-
-    expect(expectFailedSpawn(result, "forbidden").error).toContain('sandbox="require"');
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
-    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
   it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {

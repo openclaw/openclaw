@@ -20,7 +20,7 @@ import {
 } from "./session-transcript-projection-rebuild.js";
 
 export type TranscriptProjectionPublicationOperations = {
-  preflight: { input: undefined; output: boolean };
+  preflight: { input: undefined; output: number };
   claim: {
     input: { plan: PreparedSessionTranscriptProjectionMetadata; claimId: number };
     output: boolean;
@@ -51,7 +51,7 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
           switch (command.type) {
             case "preflight":
               deleteOrphanedTranscriptIndexRowsInTransaction(db);
-              return listSessionsNeedingTranscriptIndexReconcile(db).length > 0;
+              return listSessionsNeedingTranscriptIndexReconcile(db).length;
             case "claim":
               return claimPreparedSessionTranscriptProjectionInTransaction(
                 db,

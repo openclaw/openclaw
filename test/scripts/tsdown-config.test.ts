@@ -562,7 +562,7 @@ describe("tsdown config", () => {
           const listener = historicalListeners[name];
           assert.deepEqual(Object.keys(mod).sort(), name === "clickclack"
             ? ["normalizeCompatibilityConfig"]
-            : [...(listener ? ["historicalWebhookListener"] : []), "legacyConfigRules", "normalizeCompatibilityConfig"]);
+            : [...(listener ? ["historicalWebhookListener"] : []), "legacyConfigRules", "normalizeCompatibilityConfig", ...(listener ? ["normalizeHistoricalWebhookConfig"] : [])]);
           if (listener) {
             assert.deepEqual(mod.historicalWebhookListener, {
               channelId: name, preserveAuthoredActivation: undefined, ...listener,

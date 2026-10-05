@@ -208,8 +208,6 @@ export function createPageState(
       context.placementStartup.hasPendingTurn(sessionKey),
     chatSubmissions: context.chatSubmissions,
     settings,
-    password: "",
-    onboarding: false,
     assistantName: appConfig.assistantIdentity.name,
     assistantAvatar: null,
     assistantAvatarStatus: null,
@@ -350,7 +348,6 @@ export function createPageState(
 
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
-  state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {
     resetChatScroll(state);
     scheduleChatScroll(state, true, Boolean(options?.smooth), { source: "manual" });

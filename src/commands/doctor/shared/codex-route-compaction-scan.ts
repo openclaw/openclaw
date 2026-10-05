@@ -110,8 +110,6 @@ function collectLegacyLosslessCompactionForAgent(
     : (params.inheritedCompactionPath ?? compactionPath);
   return [
     {
-      path: params.path,
-      compactionPath,
       providerPath: `${compactionPath}.provider`,
       providerValue: String(providerValue).trim(),
       ...(typeof modelValue === "string" && modelValue.trim()
@@ -162,7 +160,7 @@ export function collectLegacyLosslessCompactionConfigs(
   return dedupeByKey(
     collectCompactionConfigs(params, collectLegacyLosslessCompactionForAgent),
     (hit) =>
-      `${hit.compactionPath}\0${hit.providerValue}\0${hit.modelPath ?? ""}\0${hit.modelValue ?? ""}`,
+      `${hit.providerPath}\0${hit.providerValue}\0${hit.modelPath ?? ""}\0${hit.modelValue ?? ""}`,
   );
 }
 

@@ -46,7 +46,9 @@ import type {
   SessionEntryCreateWithTranscriptOptions,
   SessionEntryReplacement,
 } from "./session-accessor.types.js";
+import { maintenanceLane, projectionLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js";
 import {
   captureSessionMaintenancePreservation,
   prepareSessionMaintenancePreservation,
@@ -135,35 +137,44 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
           databaseIdentity: readOpenClawAgentDatabaseIdentity(database).identity,
         }));
       const snapshot = useWorker
-        ? await withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
-            const read = () =>
-              owner.readExactEntries({
-                sessionKeys: params.sessionKeys ?? [],
-                projection: "replacement",
-                replacementSelection: {
-                  sessionKeys: params.sessionKeys,
-                  statuses: params.statuses,
-                  includeLabelOwners: params.includeLabelOwners,
-                },
-                env: { ...resolved.env },
-              });
-            let result = await read();
-            if (!result.replacement) {
-              await prepareSessionEntryReplacementDatabase(
-                databaseOptions,
-                () => {
-                  owner.assertCurrent();
-                  params.assertCommitAllowed?.();
-                },
-                params.retainedExecution,
-              );
-              result = await read();
-            }
-            if (!result.replacement) {
-              throw new Error("Session replacement snapshot lost its initialized database");
-            }
-            return result.replacement;
-          })
+        ? await withSessionHistoryWorkerDatabase(
+            databaseOptions,
+            async (owner) => {
+              const read = () =>
+                owner.readExactEntries({
+                  sessionKeys: params.sessionKeys ?? [],
+                  projection: "replacement",
+                  replacementSelection: {
+                    sessionKeys: params.sessionKeys,
+                    statuses: params.statuses,
+                    includeLabelOwners: params.includeLabelOwners,
+                  },
+                  env: { ...resolved.env },
+                });
+              let result = await read();
+              if (!result.replacement) {
+                await prepareSessionEntryReplacementDatabase(
+                  databaseOptions,
+                  () => {
+                    owner.assertCurrent();
+                    params.assertCommitAllowed?.();
+                  },
+                  params.retainedExecution,
+                );
+                result = await read();
+              }
+              if (!result.replacement) {
+                throw new Error("Session replacement snapshot lost its initialized database");
+              }
+              return result.replacement;
+            },
+            // Label owners can expand a keyed selection beyond the foreground read budget.
+            params.sessionKeys &&
+              params.sessionKeys.length <= MAX_SESSION_ROW_FACTS_KEYS &&
+              params.includeLabelOwners === undefined
+              ? projectionLane
+              : maintenanceLane,
+          )
         : await readNative();
       const { entries, expectedRows, labelOwnerKeys } = snapshot;
       const selectedKeys = params.sessionKeys ? new Set(params.sessionKeys) : undefined;

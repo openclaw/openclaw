@@ -90,12 +90,23 @@ without passing a new option. The watchdog includes migration, listener, and hea
 phases; phase changes cannot extend its cap. Explicit readiness budgets supplied
 by newer update callers take precedence. Ordinary standalone restarts wait beyond the standard readiness budget only while the same running Gateway advances startup phases or acquires, renews, or completes an observed same-process migration, up to five minutes, then report `still-starting` (exit 2) with the last phase and `openclaw gateway status --deep` as the next step; startup without progress still fails at the standard budget (exit 1), while a newly observed migration lease gets one heartbeat interval plus polling grace before it is considered stalled, and its observed completion earns one fresh readiness window within the same cap. See [Restart recovery](/gateway/restart-recovery).
 
+On Windows, managed `gateway start` and `gateway restart` allow up to 90 minutes
+for cold startup, using three default update-step budgets for activation, loading,
+and readiness. Managed update restoration uses the same allowance unless an
+explicit `update --timeout` supplies its per-step budget. Implicit Windows update
+readiness checks use ten times the observed startup duration, bounded between
+90 and 120 minutes; the ceiling cannot truncate the cold-start floor. This accommodates large
+agent databases on slow storage; a service that exits or fails a health check can
+still report failure earlier. A live Gateway that remains in startup at the
+deadline is left running and reported as `still-starting`; updates retain the
+readiness warning and recovery backups.
+
 On Windows, a plain restart launched from a Gateway service process, including an agent's shell command, automatically uses the safe restart path. The running Gateway owns the deferred Scheduled Task handoff, so stopping its process tree cannot kill the caller before relaunch. This requires a reachable Gateway; the command acknowledges the restart request, not successor health. Use `openclaw gateway status` afterward to verify recovery.
 
-The Windows handoff waits for the outgoing Gateway to exit, then requests a task
+The Windows handoff waits up to three minutes for the outgoing Gateway to exit, then requests a task
 launch. It records `restart finished` in `logs/gateway-restart.log` only after a
 different process with the expected executable and Gateway entrypoint listens on
-the configured port. This listener check allows up to three minutes; it does not
+the configured port. This listener check uses the same 90-minute cold-start allowance; it does not
 prove channel readiness. A task marked **Running** or a successful launch request
 alone does not count as recovery.
 

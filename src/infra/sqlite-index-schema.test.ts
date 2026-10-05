@@ -481,6 +481,7 @@ describe("repairCanonicalSqliteIndexes", () => {
           tenant_id TEXT NOT NULL,
           external_id TEXT
         );
+        CREATE INDEX idx_records_active_lookup ON records(tenant_id);
       `);
 
       expect(() => repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA)).toThrow(
@@ -491,6 +492,9 @@ describe("repairCanonicalSqliteIndexes", () => {
           allowMissingColumns: true,
         }),
       ).toEqual([]);
+      expect(
+        db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_records_active_lookup'").get(),
+      ).toEqual({ sql: "CREATE INDEX idx_records_active_lookup ON records(tenant_id)" });
 
       db.exec("ALTER TABLE records ADD COLUMN active INTEGER NOT NULL DEFAULT 0;");
       expect(

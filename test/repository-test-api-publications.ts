@@ -26,7 +26,6 @@ const publications: Record<string, string | symbol> = {
   ),
   "src/agents/prepared-model-runtime.ts": Symbol.for("openclaw.preparedModelRuntimeTestApi"),
   "src/agents/session-suspension.ts": Symbol.for("openclaw.sessionSuspensionTestApi"),
-  "src/agents/sessions/tools/bash.ts": Symbol.for("openclaw.bashToolTestApi"),
   "src/agents/subagents/announce/subagent-announce-delivery.ts": Symbol.for(
     "openclaw.subagentAnnounceDeliveryTestApi",
   ),

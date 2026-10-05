@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   claimAgentRunApprovalAuthority,
@@ -11,6 +12,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -26,13 +28,63 @@ import {
 } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 import {
+  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  withGatewayPersonalToolUser,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
   wrapToolWithGatewayCallerIdentity,
 } from "./gateway-caller-context.js";
 
 describe("gateway caller context wrapper", () => {
+  it("keeps prepared caller authority live through personal selection without synchronous source reads", async () => {
+    const refusal = new Error("requesting session authority was revoked");
+    let active = true;
+    const assertSourceCurrent = () => {
+      if (!active) {
+        throw refusal;
+      }
+    };
+    const synchronousSource = vi.fn(assertSourceCurrent);
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "source-profile",
+      scopes: ["operator.write"],
+      assertCurrent: Object.assign(synchronousSource, {
+        prepareSessionSource: async () => ({ assertCurrent: assertSourceCurrent, checks: [] }),
+      }),
+    });
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:source",
+        operationalRunInstance: { instanceId: "source-instance", runId: "source-run" },
+        operatorAuthority,
+        receiptAuthority: () => true,
+        cronAuthorityCheck: () => false,
+      },
+      () =>
+        withGatewayPersonalToolUser(undefined, async () => {
+          const assertion = expectDefined(captureGatewayToolCallerAssertion(), "captured caller");
+          expect(() => assertion("sessions.abort")).not.toThrow();
+          expect(() => assertion("cron.update")).toThrow(
+            "Automation caller authority is no longer active.",
+          );
+          synchronousSource.mockClear();
+          const prepared = await prepareSessionSourceAuthority(assertion);
+          try {
+            prepared.assertCurrent();
+            expect(synchronousSource).not.toHaveBeenCalled();
+            active = false;
+            expect(() => prepared.assertCurrent()).toThrow(refusal);
+            expect(() => assertion("sessions.abort")).toThrow(refusal);
+            expect(synchronousSource).not.toHaveBeenCalled();
+          } finally {
+            await prepared.release?.();
+          }
+        }),
+    );
+  });
+
   it.each(["outer", "inner", "unrelated"] as const)(
     "narrows nested approval scopes: %s",
     async (narrower) => {

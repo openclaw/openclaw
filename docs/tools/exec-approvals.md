@@ -379,9 +379,16 @@ openclaw exec-policy preset yolo
 
 Updates both local `tools.exec.host/security/ask` and the local approvals
 file defaults (including `askFallback: "full"`). It is intentionally
-local-only. To change gateway-host or node-host approvals remotely, use
+local-only and requires exclusive offline ownership of the selected state. Stop a
+running Gateway through its service owner before using `exec-policy set` or
+`preset`; these commands refuse before changing policy while another live Gateway
+owns the state. To change gateway-host or node-host approvals remotely, use
 `openclaw approvals set --gateway` or
 `openclaw approvals set --node <id|name|ip>`.
+
+A Gateway policy change that withdraws permission may be refused while a cron
+command is starting. Retry after command startup settles; the refusal leaves the
+previous policy in place.
 
 Other built-in presets: `cautious` (`host=gateway`, `security=allowlist`,
 `ask=on-miss`, `askFallback=deny`) and `deny-all` (`host=gateway`,

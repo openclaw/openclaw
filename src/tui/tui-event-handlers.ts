@@ -38,37 +38,26 @@ import type {
   SessionChangedEvent,
   SessionMessageEvent,
   TuiHistoryLoadResult,
-  TuiStateAccess,
 } from "./tui-types.js";
-
-type EventHandlerTui = { requestRender: (force?: boolean) => void };
 
 function isFailedTuiRunStatus(status: SessionProjectionRunStatus | undefined): boolean {
   return status === "aborted" || status === "error" || status === "timeout";
 }
 
-type EventHandlerContext = {
+type EventHandlerContext = Omit<
+  Parameters<typeof createTuiRunLifecycle>[0],
+  "runCoordinator" | "chatLog" | "btw"
+> & {
   chatLog: ChatLogOperations;
   btw: {
     showResult: (params: { question: string; text: string; isError?: boolean }) => void;
     clear: () => void;
   };
-  tui: EventHandlerTui;
-  state: TuiStateAccess;
-  setActivityStatus: (text: string) => void;
   updateFooter: () => void;
-  refreshSessionInfo?: () => Promise<void>;
   loadHistory: () => Promise<TuiHistoryLoadResult>;
   noteLocalRunId?: (runId: string) => void;
-  isLocalRunId?: (runId: string) => boolean;
-  forgetLocalRunId?: (runId: string) => void;
-  clearLocalRunIds?: () => void;
   isLocalBtwRunId?: (runId: string) => boolean;
   forgetLocalBtwRunId?: (runId: string) => void;
-  clearLocalBtwRunIds?: () => void;
-  /** Reset `streaming` after this much delta silence. Set to 0 to disable. */
-  streamingWatchdogMs?: number;
-  localMode?: boolean;
 };
 
 export function createEventHandlers(context: EventHandlerContext) {

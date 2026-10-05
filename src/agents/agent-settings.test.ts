@@ -1,5 +1,6 @@
 /** Tests agent compaction settings and small-context auto-compaction guards. */
 import { describe, expect, it, vi } from "vitest";
+import { shouldCompact } from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
   applyAgentAutoCompactionGuard,
   applyAgentCompactionSettingsFromConfig,
@@ -7,7 +8,6 @@ import {
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
 } from "./agent-settings.js";
-import { shouldCompact } from "./sessions/compaction/compaction.js";
 import { SettingsManager } from "./sessions/settings-manager.js";
 
 describe("applyAgentCompactionSettingsFromConfig", () => {

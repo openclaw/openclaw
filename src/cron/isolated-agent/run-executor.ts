@@ -212,11 +212,7 @@ function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
-    const {
-      preparedRunAdmission,
-      messageActionTurnCapability,
-      close: closePromptAdmission,
-    } = prepareCronRunAdmission({
+    const cronAdmission = prepareCronRunAdmission({
       admissionSource: params.admissionSource,
       deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
@@ -246,12 +242,13 @@ function createCronPromptExecutor(
         jobId: params.job.id,
         jobConfigRevision: resolveCronJobConfigRevision(params.job),
         jobName: params.job.name,
+        standingGrantAuthority: cronAdmission.standingGrantAuthority,
       });
     } catch {
       // Non-canonicalizable job config: no grant registration for this run.
     }
     const fallbackResult = await runEmbeddedAgentEntry({
-      preparedRunAdmission,
+      preparedRunAdmission: cronAdmission.preparedRunAdmission,
       selection: {
         cfg: params.cfgWithAgentDefaults,
         provider: params.liveSelection.provider,
@@ -413,7 +410,7 @@ function createCronPromptExecutor(
         // Snapshot mutable session and transcript facts only when the runtime is invoked.
         const buildCommonRunParams = () =>
           ({
-            preparedRunAdmission,
+            preparedRunAdmission: cronAdmission.preparedRunAdmission,
             ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
             cwd: params.executionRoot ?? params.cwd,
             sessionId: params.cronSession.sessionEntry.sessionId,
@@ -422,7 +419,7 @@ function createCronPromptExecutor(
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
-            messageActionTurnCapability,
+            messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
             finalizePromptForResolvedTools,
@@ -561,7 +558,7 @@ function createCronPromptExecutor(
                 return candidateResult;
               },
               {
-                preparedRunAdmission,
+                preparedRunAdmission: cronAdmission.preparedRunAdmission,
                 abortSignal: cliAbortSignal,
                 trigger: "cron",
                 isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
@@ -647,7 +644,7 @@ function createCronPromptExecutor(
       })
       .finally(() => {
         unregisterCronRunExecSource();
-        closePromptAdmission();
+        cronAdmission.close();
       });
     const executionError =
       params.lifecycle.getDeferredError() ??

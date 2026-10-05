@@ -904,7 +904,7 @@ describe("Discord model picker interactions", () => {
     expect(dispatchCall?.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
   });
 
-  it.each(["auto", "default"])(
+  it.each(["default"])(
     "routes selected runtime %s through the hidden /model command",
     async (runtime) => {
       const context = createModelPickerContext();

@@ -250,11 +250,15 @@ describe("worker placement session maintenance ownership", () => {
       });
       expect(loadSessionEntryReadOnly(placement)).toBeUndefined();
       const createRetention = vi.spyOn(workspaceRetention, "createNodeWorkspaceRetainCoordinator");
+      let prepared:
+        | Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>
+        | undefined;
       try {
         createMaintenanceRuntime({ placements: [placement] });
         const options = createRetention.mock.calls.at(-1)?.[0];
         const additionalManifestRefs = options?.additionalManifestRefs;
-        const currentPlacement = options?.placements.list()[0];
+        prepared = await options?.placements.prepareRuntimeRefresh(placement.sessionId);
+        const currentPlacement = prepared?.placement;
         if (!additionalManifestRefs || !currentPlacement) {
           throw new Error("startup did not bind repository manifest retention");
         }
@@ -263,6 +267,7 @@ describe("worker placement session maintenance ownership", () => {
         const currentManifestRefs = await additionalManifestRefs(currentPlacement);
         expect(currentManifestRefs()).toEqual([originalManifest]);
       } finally {
+        prepared?.release();
         createRetention.mockRestore();
       }
     });

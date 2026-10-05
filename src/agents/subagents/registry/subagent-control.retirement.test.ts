@@ -46,7 +46,7 @@ import {
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "./subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { releaseSubagentRun, testing } from "./subagent-registry.test-helpers.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -735,7 +735,11 @@ describe("restored historical cancellation ownership", () => {
     await restore();
     const updated = structuredClone(input.subagent);
     updated.killReconciliation = { killedAt: Date.now() };
-    upsertSubagentRunRowInDatabase(openOpenClawStateDatabase(), bindSubagentRunRecord(updated));
+    writeSubagentRunValuesInDatabase(
+      openOpenClawStateDatabase(),
+      [bindSubagentRunRecord(updated)],
+      [],
+    );
 
     resumeSubagentRun(input.subagent.runId, "restore");
     await settle();
@@ -795,9 +799,10 @@ describe("restored historical cancellation ownership", () => {
         delivery: { status: "not_required" },
       });
       if (stage === "before restore") {
-        upsertSubagentRunRowInDatabase(
+        writeSubagentRunValuesInDatabase(
           openOpenClawStateDatabase(),
-          bindSubagentRunRecord(successor),
+          [bindSubagentRunRecord(successor)],
+          [],
         );
       }
       await restore();

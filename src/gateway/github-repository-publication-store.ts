@@ -375,7 +375,14 @@ export function claimRepositoryGitHubPublication(
           query(db)
             .updateTable(table)
             .set({
-              ...values,
+              ...(values.last_effect === "push" && values.head_commit
+                ? {
+                    last_effect: "push",
+                    effect_state: "observed",
+                    head_commit: values.head_commit,
+                    pushed_head_commit: values.head_commit,
+                  }
+                : values),
               ...(retainPullRequest
                 ? { last_effect: current.last_effect, effect_state: current.effect_state }
                 : {}),
@@ -400,51 +407,14 @@ export function claimRepositoryGitHubPublication(
       undefined,
       { operationLabel: "github-repository-publication.record" },
     );
-  const effects = createGitHubPublicationExecutionEffects({
-    write,
-    interruptedStatus: row.owner_profile_id === null ? "requested" : "needs_confirmation",
-  });
   return {
     row: claimed,
     ownsExecution,
-    ...effects,
-    recordEffect(...[effect, observed]: Parameters<typeof effects.recordEffect>): void {
-      if (effect === "push" && observed?.headCommit) {
-        write(
-          {
-            last_effect: "push",
-            effect_state: "observed",
-            head_commit: observed.headCommit,
-            pushed_head_commit: observed.headCommit,
-          },
-          false,
-        );
-      } else {
-        effects.recordEffect(effect, observed);
-      }
-    },
+    ...createGitHubPublicationExecutionEffects({
+      write,
+      interruptedStatus: row.owner_profile_id === null ? "requested" : "needs_confirmation",
+    }),
   };
-}
-
-export function markRepositoryGitHubPublicationReported(requestId: string): void {
-  const database = openOpenClawStateDatabase().db;
-  if (!tableExists(database, table)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        query(db)
-          .updateTable(table)
-          .set({ reported_at_ms: Date.now() })
-          .where("request_id", "=", requestId)
-          .where("status", "in", ["published", "failed"]),
-      );
-    },
-    undefined,
-    { operationLabel: "github-repository-publication.report" },
-  );
 }
 
 export function failStaleRepositoryGitHubPublication(

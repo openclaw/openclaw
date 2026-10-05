@@ -622,6 +622,15 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(complete.lanes.filter((lane) => packageNames.has(lane.name))).toEqual(lanes);
   });
 
+  it("keeps restart auth exactly once in the legacy package/update aggregate", () => {
+    const aggregate = planFor({
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "package-update",
+    });
+
+    expect(aggregate.lanes.filter((lane) => lane.name === "update-restart-auth")).toHaveLength(1);
+  });
+
   it("includes OpenWebUI exactly once in each legacy plugin aggregate", () => {
     for (const releaseChunk of [
       "plugins-runtime-core",
@@ -724,6 +733,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       upgradeSurvivorScenarios: "legacy-operator-state",
     });
     expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.6.34-legacy-operator-state",
       "published-upgrade-survivor-2026.9.1-legacy-operator-state",
       "published-upgrade-survivor-2026.9.4-legacy-operator-state",
       "published-upgrade-survivor-2026.9.6-legacy-operator-state",
