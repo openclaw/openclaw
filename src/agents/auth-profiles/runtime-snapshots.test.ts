@@ -481,12 +481,13 @@ describe("runtime auth profile snapshots", () => {
   });
 
   it("retains the JSON clone contract for nested values without encoding credential bodies", () => {
+    const baseStore = createStore("synthetic-access");
     const nested = { value: "original" };
     const array: unknown[] = [undefined];
     array.length = 2;
     array.push(Number.NaN, Infinity, -0, nested);
     const store = {
-      ...createStore("synthetic-access"),
+      ...baseStore,
       metadata: {
         absent: undefined,
         date: new Date("2026-01-01T00:00:00.000Z"),
@@ -499,7 +500,7 @@ describe("runtime auth profile snapshots", () => {
       },
     };
     const expected = {
-      ...createStore("synthetic-access"),
+      ...baseStore,
       metadata: {
         date: "2026-01-01T00:00:00.000Z",
         array: [null, null, null, null, 0, { value: "original" }],
