@@ -1,5 +1,5 @@
 import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { XApiError, parseXPost, type XApiClient, type XPostEnvelope } from "./api.js";
+import { XApiError, parseXPostEnvelope, type XApiClient, type XPostEnvelope } from "./api.js";
 import { resolveXRecipient } from "./recipient.js";
 
 export type XEventStatus = {
@@ -80,13 +80,11 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function eventEnvelope(value: unknown): XPostEnvelope | undefined {
-  const event = asRecord(value);
-  if (typeof event.event_type === "string" && event.event_type !== "post.mention.create") {
+  const event = asRecord(asRecord(value).data);
+  if (event.event_type !== "post.mention.create") {
     return undefined;
   }
-  const data = asRecord(event.data);
-  const post = parseXPost(event.post ?? data.post ?? event.data);
-  return post ? { post, users: [] } : undefined;
+  return parseXPostEnvelope({ post: event.payload, users: asRecord(event.includes).users });
 }
 
 async function receiveStream(options: XReceiveOptions): Promise<void> {

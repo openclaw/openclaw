@@ -116,9 +116,11 @@ subscriptions require the user to grant `tweet.read`. The persistent
 `GET /2/activity/stream` connection uses the app-only bearer token, as specified
 by [X's Activity Stream API](https://docs.x.com/x-api/activity/activity-stream).
 
-Streaming ignores blank keep-alives and reconnects with backoff after a stalled
-or disconnected stream. Each connection runs a mentions backfill with the user
-token from the saved cursor; post IDs deduplicate stream and polling events.
+Streaming reads `post.mention.create` events from X's `data.payload` envelope,
+checks that the post addresses the bot, and ignores other event types and blank
+keep-alives. It reconnects with backoff after a stalled or disconnected stream.
+Each connection runs a mentions backfill with the user token from the saved
+cursor; post IDs deduplicate stream and polling events.
 
 In `auto` mode, any subscription setup failure switches to polling. In `stream`
 mode, subscription HTTP `403` switches to polling; other setup errors stop the
