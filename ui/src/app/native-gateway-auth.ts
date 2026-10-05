@@ -3,13 +3,14 @@ import {
   gatewayCredentialScope,
   type ConnectParams,
 } from "@openclaw/gateway-client/browser";
-import {
-  normalizeGatewayClientId,
-  normalizeGatewayClientMode,
-} from "@openclaw/gateway-protocol/client-info";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatUiError } from "../lib/format-error.ts";
 import { generateUUID } from "../lib/uuid.ts";
+
+export type NativeGatewayHelloExpectation = {
+  method: "tailscale";
+  recoveryScope: string;
+};
 
 export type NativeGatewayAuthorization = {
   client: ConnectParams["client"];
@@ -17,7 +18,9 @@ export type NativeGatewayAuthorization = {
   auth:
     | { deviceToken: string; token?: never; password?: never }
     | { token: string; deviceToken?: never; password?: never }
-    | { password: string; token?: never; deviceToken?: never };
+    | { password: string; token?: never; deviceToken?: never }
+    | Record<string, never>;
+  expectedHelloAuth?: NativeGatewayHelloExpectation;
   device: NonNullable<ConnectParams["device"]>;
 };
 
@@ -45,71 +48,6 @@ type NativeAuthHost = Window & {
     };
   };
 };
-
-function readNativeCredential(value: Record<string, unknown>): NativeGatewayAuthorization["auth"] {
-  // Preserve the accepted native method. In particular, role-configured Gateways
-  // distinguish shared-owner token/password auth from device-token authentication.
-  if (Object.keys(value).length === 1) {
-    if (typeof value.deviceToken === "string" && value.deviceToken) {
-      return { deviceToken: value.deviceToken };
-    }
-    if (typeof value.token === "string" && value.token) {
-      return { token: value.token };
-    }
-    if (typeof value.password === "string" && value.password) {
-      return { password: value.password };
-    }
-  }
-  throw new Error("The app returned an invalid Gateway credential. Reconnect in the app.");
-}
-
-function readAuthorization(
-  value: unknown,
-  challenge: ChallengeMessage,
-): NativeGatewayAuthorization {
-  const result = isRecord(value) ? value : {};
-  const client = isRecord(result.client) ? result.client : {};
-  const device = isRecord(result.device) ? result.device : {};
-  const auth = isRecord(result.auth) ? result.auth : {};
-  const id = normalizeGatewayClientId(typeof client.id === "string" ? client.id : undefined);
-  const mode = normalizeGatewayClientMode(
-    typeof client.mode === "string" ? client.mode : undefined,
-  );
-  if (
-    !id ||
-    !mode ||
-    typeof client.version !== "string" ||
-    typeof client.platform !== "string" ||
-    !Array.isArray(result.scopes) ||
-    !result.scopes.every((scope): scope is string => typeof scope === "string") ||
-    typeof device.id !== "string" ||
-    typeof device.publicKey !== "string" ||
-    typeof device.signature !== "string" ||
-    device.nonce !== challenge.nonce ||
-    device.signedAt !== challenge.signedAt
-  ) {
-    throw new Error("The app returned an invalid Gateway authorization. Reconnect in the app.");
-  }
-  return {
-    client: {
-      id,
-      mode,
-      version: client.version,
-      platform: client.platform,
-      ...(typeof client.deviceFamily === "string" ? { deviceFamily: client.deviceFamily } : {}),
-      ...(typeof client.instanceId === "string" ? { instanceId: client.instanceId } : {}),
-    },
-    scopes: result.scopes,
-    auth: readNativeCredential(auth),
-    device: {
-      id: device.id,
-      publicKey: device.publicKey,
-      signature: device.signature,
-      nonce: challenge.nonce,
-      signedAt: challenge.signedAt,
-    },
-  };
-}
 
 /** Adapts native challenge signing; the app remains the sole credential and grant owner. */
 export function createNativeGatewayConnectAuth(
@@ -254,14 +192,23 @@ export function createNativeGatewayConnectAuth(
         DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS / 2,
       );
       pending.set(request.id, (reply) => {
-        try {
-          if (typeof reply.error === "string") {
-            throw new NativeGatewayAuthUnavailableError(reply.error);
-          }
-          finish(undefined, readAuthorization(reply.result, request));
-        } catch (error) {
-          finish(error instanceof Error ? error : new Error(formatUiError(error)));
+        if (typeof reply.error === "string") {
+          finish(new NativeGatewayAuthUnavailableError(reply.error));
+          return;
         }
+        void import("./native-gateway-authorization.ts")
+          .then(({ readAuthorization }) => {
+            if (!pending.has(request.id)) {
+              return;
+            }
+            finish(undefined, readAuthorization(reply.result, request));
+          })
+          .catch((error: unknown) => {
+            if (!pending.has(request.id)) {
+              return;
+            }
+            finish(error instanceof Error ? error : new Error(formatUiError(error)));
+          });
       });
       signal.addEventListener("abort", abort, { once: true });
       try {

@@ -16,6 +16,7 @@ import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
 const gatewayUrl = "wss://gateway.example/work/";
 const scopes = ["operator.read", "operator.write"];
+const personalRecoveryScope = "tailscale-account-a";
 const nativeClient = {
   id: "openclaw-android",
   version: "test",
@@ -49,7 +50,7 @@ class RecordingSocket extends MockWebSocket {
 function signedAuthorization(
   challenge: Challenge,
   token = "synthetic-native-grant",
-  kind: "token" | "password" | "deviceToken" = "deviceToken",
+  kind: "token" | "password" | "deviceToken" | "credentialless" = "deviceToken",
 ) {
   const payload = buildDeviceAuthPayloadV3({
     deviceId,
@@ -59,7 +60,7 @@ function signedAuthorization(
     deviceFamily: nativeClient.deviceFamily,
     role: "operator",
     scopes,
-    token: kind === "password" ? null : token,
+    token: kind === "password" || kind === "credentialless" ? null : token,
     nonce: challenge.nonce,
     signedAtMs: challenge.signedAt,
   });
@@ -68,7 +69,13 @@ function signedAuthorization(
     result: {
       client: nativeClient,
       scopes,
-      auth: { [kind]: token },
+      auth: kind === "credentialless" ? {} : { [kind]: token },
+      ...(kind === "credentialless"
+        ? {
+            requiredAuthMethod: "tailscale",
+            expectedRecoveryScope: personalRecoveryScope,
+          }
+        : {}),
       device: {
         id: deviceId,
         publicKey: publicKeyBytes.toString("base64url"),
@@ -82,6 +89,7 @@ function signedAuthorization(
 
 describe("native authenticated Control UI", () => {
   let gateway: ReturnType<typeof createApplicationGateway> | undefined;
+  let releaseAuthorizationParser: (() => void) | undefined;
   const ports: MessagePort[] = [];
   let bridge: {
     onmessage: ((event: { data: string }) => void) | null;
@@ -127,10 +135,15 @@ describe("native authenticated Control UI", () => {
     vi.stubGlobal("window", host);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     gateway?.stop();
     gateway = undefined;
     window.dispatchEvent(new Event("pagehide"));
+    releaseAuthorizationParser?.();
+    releaseAuthorizationParser = undefined;
+    await vi.dynamicImportSettled();
+    vi.doUnmock("./native-gateway-authorization.ts");
+    vi.resetModules();
     for (const port of ports.splice(0)) {
       port.close();
     }
@@ -140,6 +153,29 @@ describe("native authenticated Control UI", () => {
     vi.unstubAllGlobals();
     wsInstances.length = 0;
   });
+
+  function deferAuthorizationParserImport() {
+    const started = createDeferred();
+    const release = createDeferred();
+    const parserCalls: unknown[][] = [];
+    releaseAuthorizationParser = release.resolve;
+    vi.resetModules();
+    vi.doMock("./native-gateway-authorization.ts", async () => {
+      const actual = await vi.importActual<typeof import("./native-gateway-authorization.ts")>(
+        "./native-gateway-authorization.ts",
+      );
+      started.resolve();
+      await release.promise;
+      return {
+        ...actual,
+        readAuthorization: (...args: Parameters<typeof actual.readAuthorization>) => {
+          parserCalls.push(args);
+          return actual.readAuthorization(...args);
+        },
+      };
+    });
+    return { started, release, parserCalls };
+  }
 
   function connect(
     target = gatewayUrl,
@@ -363,6 +399,12 @@ describe("native authenticated Control UI", () => {
 
   type Rejection =
     | { kind: "credential"; auth: Record<string, string> }
+    | {
+        kind: "personalRequirement";
+        auth?: unknown;
+        requiredAuthMethod?: unknown;
+        expectedRecoveryScope?: unknown;
+      }
     | { kind: "target"; target: string }
     | { kind: "unavailable"; failure: "missing bridge" | "wrong challenge" | "subframe" }
     | { kind: "challenge"; challenge: { nonce: string; ts: number } };
@@ -370,6 +412,23 @@ describe("native authenticated Control UI", () => {
     { kind: "credential", auth: { bootstrapToken: "not-a-reusable-native-grant" } },
     { kind: "credential", auth: { token: "shared", deviceToken: "ambiguous-second-method" } },
     { kind: "credential", auth: { token: "" } },
+    {
+      kind: "personalRequirement",
+      auth: {},
+      requiredAuthMethod: "token",
+      expectedRecoveryScope: personalRecoveryScope,
+    },
+    {
+      kind: "personalRequirement",
+      auth: {},
+      requiredAuthMethod: "tailscale",
+      expectedRecoveryScope: "   ",
+    },
+    {
+      kind: "personalRequirement",
+      requiredAuthMethod: "tailscale",
+      expectedRecoveryScope: personalRecoveryScope,
+    },
     { kind: "target", target: "wss://other.example/work/" },
     { kind: "target", target: "wss://gateway.example/other/" },
     { kind: "target", target: "wss://gateway.example/work/?tenant=other" },
@@ -387,6 +446,25 @@ describe("native authenticated Control UI", () => {
         const reply = signedAuthorization(JSON.parse(message));
         bridge.onmessage?.({
           data: JSON.stringify({ ...reply, result: { ...reply.result, auth: scenario.auth } }),
+        });
+      });
+    } else if (scenario.kind === "personalRequirement") {
+      bridge.postMessage.mockImplementation((message) => {
+        const reply = signedAuthorization(JSON.parse(message));
+        bridge.onmessage?.({
+          data: JSON.stringify({
+            ...reply,
+            result: {
+              ...reply.result,
+              auth: scenario.auth,
+              ...(scenario.requiredAuthMethod !== undefined
+                ? { requiredAuthMethod: scenario.requiredAuthMethod }
+                : {}),
+              ...(scenario.expectedRecoveryScope !== undefined
+                ? { expectedRecoveryScope: scenario.expectedRecoveryScope }
+                : {}),
+            },
+          }),
         });
       });
     } else if (scenario.kind === "unavailable") {
@@ -416,7 +494,7 @@ describe("native authenticated Control UI", () => {
     );
     await socket.closed.promise;
     socket.emitClose(4008, "native authorization unavailable");
-    if (scenario.kind === "credential") {
+    if (scenario.kind === "credential" || scenario.kind === "personalRequirement") {
       expect(gateway!.snapshot.lastError).toContain("invalid Gateway credential");
     } else if (scenario.kind === "target") {
       expect(bridge.postMessage).not.toHaveBeenCalled();
@@ -434,6 +512,98 @@ describe("native authenticated Control UI", () => {
     expect(socket.sent).toEqual([]);
     expect(localStorage.getItem("openclaw-device-identity-v1")).toBeNull();
   });
+
+  it.each(["Android", "WebKit", "Tauri"] as const)(
+    "uses credentialless Tailscale auth over %s only with the app-approved personal recovery scope",
+    async (transport) => {
+      if (transport === "WebKit") {
+        Object.assign(window, {
+          OpenClawNativeGatewayAuth: undefined,
+          webkit: {
+            messageHandlers: {
+              OpenClawNativeGatewayAuth: {
+                postMessage: async (challenge: Challenge) =>
+                  signedAuthorization(challenge, undefined, "credentialless"),
+              },
+            },
+          },
+        });
+      } else if (transport === "Tauri") {
+        bridge.postMessage.mockImplementation((message) =>
+          Promise.resolve(signedAuthorization(JSON.parse(message), undefined, "credentialless")),
+        );
+      } else {
+        bridge.postMessage.mockImplementation((message) => {
+          bridge.onmessage?.({
+            data: JSON.stringify(
+              signedAuthorization(JSON.parse(message), undefined, "credentialless"),
+            ),
+          });
+        });
+      }
+      const socket = connect();
+      const frame = await Promise.race([
+        socket.connect.promise,
+        socket.closed.promise.then(() => {
+          throw new Error("native Tailscale authorization was rejected before connect");
+        }),
+      ]);
+      expect(frame.params.auth).toEqual({});
+      expect(frame.params.device?.id).toBe(deviceId);
+      expect(frame.params.scopes).toEqual(scopes);
+      if (transport === "WebKit") {
+        expect(bridge.postMessage).not.toHaveBeenCalled();
+      } else {
+        expect(bridge.postMessage).toHaveBeenCalledOnce();
+      }
+      expect(localStorage.getItem("openclaw-device-identity-v1")).toBeNull();
+      expect(localStorage.getItem("openclaw.device.auth.v1:wss://gateway.example/work")).toBeNull();
+
+      const device = frame.params.device!;
+      const payload = buildDeviceAuthPayloadV3({
+        deviceId: device.id,
+        clientId: frame.params.client.id,
+        clientMode: frame.params.client.mode,
+        platform: frame.params.client.platform,
+        deviceFamily: frame.params.client.deviceFamily,
+        role: frame.params.role!,
+        scopes: frame.params.scopes!,
+        token: null,
+        nonce: device.nonce!,
+        signedAtMs: device.signedAt,
+      });
+      expect(
+        verify(
+          null,
+          Buffer.from(payload),
+          keys.publicKey,
+          Buffer.from(device.signature, "base64url"),
+        ),
+      ).toBe(true);
+
+      socket.emitMessage({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 3,
+          auth: {
+            role: "operator",
+            scopes,
+            method: "tailscale",
+            recoveryScope: personalRecoveryScope,
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(gateway!.snapshot.phase).toBe("connected");
+      expect(gateway!.snapshot.hello?.auth).toMatchObject({
+        method: "tailscale",
+        recoveryScope: personalRecoveryScope,
+      });
+    },
+  );
 
   it("obtains the current native grant again when the dashboard reconnects", async () => {
     const first = connect();
@@ -535,6 +705,107 @@ describe("native authenticated Control UI", () => {
       expect(wsInstances).toHaveLength(2);
     },
   );
+
+  it("does not parse a successful reply after stop while the authorization parser is loading", async () => {
+    const parserImport = deferAuthorizationParserImport();
+    let request: Challenge | undefined;
+    bridge.postMessage.mockImplementation((message) => {
+      request = JSON.parse(message);
+    });
+    const socket = connect();
+    expect(request).toBeDefined();
+    bridge.onmessage?.({ data: JSON.stringify(signedAuthorization(request!)) });
+    await parserImport.started.promise;
+
+    gateway!.stop();
+    await socket.closed.promise;
+    parserImport.release.resolve();
+    await vi.dynamicImportSettled();
+
+    expect(parserImport.parserCalls).toEqual([]);
+    expect(socket.sent).toEqual([]);
+  });
+
+  it("keeps the native authorization deadline active while the parser is loading", async () => {
+    const parserImport = deferAuthorizationParserImport();
+    let request: Challenge | undefined;
+    bridge.postMessage.mockImplementation((message) => {
+      request = JSON.parse(message);
+    });
+    const socket = connect();
+    expect(request).toBeDefined();
+    bridge.onmessage?.({ data: JSON.stringify(signedAuthorization(request!)) });
+    await parserImport.started.promise;
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS / 2);
+    await socket.closed.promise;
+    socket.emitClose(4008, "native authorization unavailable");
+    expect(gateway!.snapshot.lastError).toContain("did not authorize this dashboard in time");
+    parserImport.release.resolve();
+    await vi.dynamicImportSettled();
+
+    expect(parserImport.parserCalls).toEqual([]);
+    expect(socket.sent).toEqual([]);
+  });
+
+  it("does not let a late parser import outlive native document retirement", async () => {
+    const parserImport = deferAuthorizationParserImport();
+    Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__");
+    Object.assign(window, { OpenClawNativeGatewayAuth: undefined });
+    window.location.hash = `nativeControlAuth=${encodeURIComponent(gatewayUrl)}`;
+    const channel = new MessageChannel();
+    ports.push(channel.port1, channel.port2);
+    channel.port1.on("message", (message: string) => {
+      channel.port1.postMessage(JSON.stringify(signedAuthorization(JSON.parse(message))));
+    });
+    const socket = connect();
+    window.dispatchEvent(
+      Object.assign(new Event("message"), {
+        data: JSON.stringify({ type: "openclaw.native-control-auth", gatewayUrl }),
+        source: null,
+        origin: "",
+        ports: [channel.port2],
+      }),
+    );
+    await parserImport.started.promise;
+
+    window.dispatchEvent(new Event("pagehide"));
+    await socket.closed.promise;
+    socket.emitClose(4008, "native authorization unavailable");
+    expect(gateway!.snapshot.lastError).toContain("Native dashboard document closed");
+    parserImport.release.resolve();
+    await vi.dynamicImportSettled();
+
+    expect(parserImport.parserCalls).toEqual([]);
+    expect(socket.sent).toEqual([]);
+  });
+
+  it("treats an authorization parser import failure as terminal", async () => {
+    const importStarted = createDeferred();
+    vi.resetModules();
+    // mock-isolation: emulate the parser chunk failing during import.
+    vi.doMock("./native-gateway-authorization.ts", () => {
+      importStarted.resolve();
+      throw new Error("Synthetic native authorization parser chunk failed");
+    });
+    let request: Challenge | undefined;
+    bridge.postMessage.mockImplementation((message) => {
+      request = JSON.parse(message);
+    });
+    const socket = connect();
+    expect(request).toBeDefined();
+    bridge.onmessage?.({ data: JSON.stringify(signedAuthorization(request!)) });
+    await importStarted.promise;
+    await socket.closed.promise;
+    socket.emitClose(4008, "native authorization unavailable");
+
+    expect(gateway!.snapshot.lastError).toContain(
+      "Synthetic native authorization parser chunk failed",
+    );
+    expect(socket.sent).toEqual([]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+  });
 
   it.each(["iPhone", "iPad"])(
     "preserves the shipped %s nonpersistent identity handoff",

@@ -65,6 +65,7 @@ enum GatewaySettingsStore {
         var useTLS: Bool
         var contextPath: String?
         var lastConnectedAtMs: Int?
+        var personalTailscaleAuthentication: Bool?
 
         var id: GatewayStableIdentifier.Key {
             GatewayStableIdentifier.Key(self.stableID)
@@ -78,6 +79,7 @@ enum GatewaySettingsStore {
                 lhs.port == rhs.port &&
                 lhs.useTLS == rhs.useTLS &&
                 lhs.contextPath == rhs.contextPath &&
+                lhs.personalTailscaleAuthentication == rhs.personalTailscaleAuthentication &&
                 lhs.lastConnectedAtMs == rhs.lastConnectedAtMs
         }
     }
@@ -430,13 +432,18 @@ enum GatewaySettingsStore {
     }
 
     @discardableResult
-    static func upsertGatewayRegistryEntry(_ entry: GatewayRegistryEntry, activate: Bool = false) -> Bool {
+    static func upsertGatewayRegistryEntry(
+        _ entry: GatewayRegistryEntry,
+        activate: Bool = false,
+        personalTailscaleAuthentication: Bool? = nil) -> Bool
+    {
         guard let normalized = self.normalizedGatewayRegistryEntry(entry) else { return false }
         var registry = self.loadGatewayRegistry()
         if let index = registry.entries.firstIndex(where: {
             GatewayStableIdentifier.matches($0.stableID, normalized.stableID)
         }) {
             var replacement = normalized
+            replacement.personalTailscaleAuthentication = registry.entries[index].personalTailscaleAuthentication
             if replacement.lastConnectedAtMs == nil {
                 replacement.lastConnectedAtMs = registry.entries[index].lastConnectedAtMs
             }
@@ -444,6 +451,18 @@ enum GatewaySettingsStore {
         } else {
             registry.entries.append(normalized)
         }
+        if let personalTailscaleAuthentication,
+           let index = registry.entries.firstIndex(where: {
+               GatewayStableIdentifier.matches($0.stableID, normalized.stableID)
+           })
+        {
+            registry.entries[index].personalTailscaleAuthentication = personalTailscaleAuthentication ? true : nil
+        }
+        guard registry.entries.first(where: {
+            GatewayStableIdentifier.matches($0.stableID, normalized.stableID)
+        })?.personalTailscaleAuthentication != true ||
+            normalized.useTLS && normalized.host?.lowercased().hasSuffix(".ts.net") == true
+        else { return false }
         if activate {
             registry.activeStableID = normalized.stableID
             if !registry.connectedStableIDs.contains(where: {

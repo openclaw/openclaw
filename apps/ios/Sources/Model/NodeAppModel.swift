@@ -662,8 +662,16 @@ final class NodeAppModel {
             ?? self.connectedGatewayID
             ?? GatewaySettingsStore.activeGatewayEntry()?.stableID
         guard let stableID, !stableID.isEmpty else { return nil }
+        if self.activeGatewayConnectConfig?.personalTailscaleAuthentication == true ||
+            GatewaySettingsStore.usesPersonalTailscaleAuthentication(stableID: stableID)
+        {
+            return nil
+        }
         return stableID
     }
+
+    private var personalChatRecoveryScope: String?
+    private var personalChatOwnerGatewayID: String?
 
     /// Session-list refresh identity. Gateway and agent changes must restart
     /// requests so no roster or cached projection crosses either owner.
@@ -687,7 +695,12 @@ final class NodeAppModel {
     }
 
     private var chatTranscriptCacheGatewayIdentityComponent: String {
-        self.chatTranscriptCacheGatewayID.flatMap(GatewayStableIdentifier.storageComponent) ?? ""
+        if let config = self.activeGatewayConnectConfig, config.personalTailscaleAuthentication {
+            let scope = GatewayStableIdentifier.matches(self.personalChatOwnerGatewayID, config.effectiveStableID)
+                ? self.personalChatRecoveryScope ?? "pending" : "pending"
+            return "\(config.effectiveStableID)|personal|\(scope)"
+        }
+        return self.chatTranscriptCacheGatewayID.flatMap(GatewayStableIdentifier.storageComponent) ?? ""
     }
 
     private var chatTranscriptCacheGeneration = 0
@@ -950,6 +963,14 @@ final class NodeAppModel {
         didSet {
             if oldValue?.controlUIInputs != self.activeGatewayConnectConfig?.controlUIInputs {
                 self.operatorAuthorityGeneration &+= 1
+                if oldValue?.personalTailscaleAuthentication == true ||
+                    self.activeGatewayConnectConfig?.personalTailscaleAuthentication == true
+                {
+                    self.personalChatRecoveryScope = nil
+                    self.personalChatOwnerGatewayID = nil
+                    self.chatPresentation.viewModel?.detachTransport()
+                    self.retireWatchMessageJournal()
+                }
             }
         }
     }
@@ -3363,6 +3384,8 @@ extension NodeAppModel {
         forceReconnect: Bool = false)
     {
         let effectiveStableID = nextConfig.effectiveStableID
+        let authenticationChanged = self.activeGatewayConnectConfig?.personalTailscaleAuthentication !=
+            nextConfig.personalTailscaleAuthentication
         let sessionBox = nextConfig.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
         let previousGatewayStableID = self.activeGatewayConnectConfig?.effectiveStableID
             ?? self.connectedGatewayID
@@ -3390,17 +3413,18 @@ extension NodeAppModel {
         let hasForeignCachedApproval = self.watchExecApprovalPromptsByID.values.contains {
             !GatewayStableIdentifier.matches($0.gatewayStableID, effectiveStableID)
         }
-        if hasForeignCachedApproval || targetChanged {
+        if hasForeignCachedApproval || targetChanged || authenticationChanged {
             // Approval IDs are gateway-local authorization handles. A target switch must remove
             // every cached surface so stale prompts cannot authorize work on the replacement.
             invalidateExecApprovalSurfacesForGatewayChange()
         }
-        let operatorLoopRequired = shouldStartOperatorGatewayLoop(
-            token: nextConfig.token,
-            bootstrapToken: nextConfig.bootstrapToken,
-            password: nextConfig.password,
-            deviceAuthGatewayID: nextConfig.nodeOptions.deviceAuthGatewayID ?? effectiveStableID,
-            allowStoredDeviceAuth: nextConfig.nodeOptions.allowStoredDeviceAuth)
+        let operatorLoopRequired = nextConfig.personalTailscaleAuthentication ? self.gatewayConnected :
+            shouldStartOperatorGatewayLoop(
+                token: nextConfig.token,
+                bootstrapToken: nextConfig.bootstrapToken,
+                password: nextConfig.password,
+                deviceAuthGatewayID: nextConfig.nodeOptions.deviceAuthGatewayID ?? effectiveStableID,
+                allowStoredDeviceAuth: nextConfig.nodeOptions.allowStoredDeviceAuth)
         if let activeConfig = activeGatewayConnectConfig,
            activeConfig.hasSameConnectionInputs(as: nextConfig),
            nodeGatewayTask != nil,
@@ -3418,8 +3442,8 @@ extension NodeAppModel {
         prepareForGatewayConnect(
             stableID: effectiveStableID,
             preservingGatewayProblem: isSameGatewayTarget || preservesPreconnectProblem,
-            preservingFocusedChatSession: isSameGatewayTarget)
-        if operatorLoopRequired {
+            preservingFocusedChatSession: isSameGatewayTarget && !authenticationChanged)
+        if operatorLoopRequired, !nextConfig.personalTailscaleAuthentication {
             startOperatorGatewayLoop(
                 config: nextConfig,
                 sessionBox: sessionBox)
@@ -3986,7 +4010,8 @@ extension NodeAppModel {
                 token: config.token,
                 bootstrapToken: nil,
                 password: config.password,
-                nodeOptions: reconnectOptions)
+                nodeOptions: reconnectOptions,
+                personalTailscaleAuthentication: config.personalTailscaleAuthentication)
             self.activeGatewayConnectConfig = reconnectConfig
 
             if self.operatorGatewayTask == nil,
@@ -4141,6 +4166,40 @@ extension NodeAppModel {
         }
     }
 
+    private func admitPersonalOperator(stableID: String, routeGeneration: UInt64) async -> Bool {
+        guard let config = self.activeGatewayConnectConfig, config.personalTailscaleAuthentication else { return true }
+        guard let admittedRoute = await self.operatorGateway.currentRoute(ifGatewayID: stableID) else { return false }
+        do {
+            let scope = try await config.verifiedPersonalRecoveryScope(session: self.operatorGateway)
+            guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
+                  await self.operatorGateway.currentRoute(ifGatewayID: stableID) == admittedRoute
+            else { throw CancellationError() }
+            self.adoptPersonalChatOwner(scope: scope, stableID: stableID)
+            return true
+        } catch {
+            guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
+                  await self.operatorGateway.currentRoute(ifGatewayID: stableID) == admittedRoute
+            else { return false }
+            self.setOperatorConnected(false)
+            self.operatorStatusText = "Personal sign-in unavailable"
+            await self.operatorGateway.disconnect()
+            return false
+        }
+    }
+
+    func adoptPersonalChatOwner(scope: String, stableID: String) {
+        guard self.personalChatRecoveryScope != scope ||
+            !GatewayStableIdentifier.matches(self.personalChatOwnerGatewayID, stableID)
+        else { return }
+        self.operatorAuthorityGeneration &+= 1
+        self.chatPresentation.viewModel?.detachTransport()
+        self.chatTranscriptCacheGeneration &+= 1
+        self.focusedChatSessionKey = nil
+        self.invalidateNodePushToTalkRoute()
+        self.personalChatRecoveryScope = scope
+        self.personalChatOwnerGatewayID = stableID
+    }
+
     private func handleOperatorGatewayConnected(
         url: URL,
         stableID: String,
@@ -4149,6 +4208,7 @@ extension NodeAppModel {
         guard !self.isLocalGatewayFixtureEnabled,
               self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
         else { return }
+        guard await self.admitPersonalOperator(stableID: stableID, routeGeneration: routeGeneration) else { return }
         self.operatorTalkConnectionGeneration &+= 1
         let talkConnectionGeneration = self.operatorTalkConnectionGeneration
         self.operatorTalkHydrationGeneration = talkConnectionGeneration
@@ -4158,6 +4218,12 @@ extension NodeAppModel {
             }
         }
         self.setOperatorConnected(true)
+        if self.activeGatewayConnectConfig?.personalTailscaleAuthentication == true,
+           let route = await self.operatorGateway.currentRoute(ifGatewayID: stableID)
+        {
+            self.hasOperatorAdminScope = await self.operatorGateway.currentOperatorScopes(ifCurrentRoute: route)?
+                .contains("operator.admin") == true
+        }
         await self.refreshDesktopObserveAvailability(
             stableID: stableID,
             routeGeneration: routeGeneration)
@@ -4235,6 +4301,18 @@ extension NodeAppModel {
                 authRoles: authRoles,
                 nodeOptions: nodeOptions) != nil
             else { return }
+        }
+
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        if let config = self.activeGatewayConnectConfig,
+           config.personalTailscaleAuthentication,
+           self.operatorGatewayTask == nil
+        {
+            // Concurrent unpaired roles supersede each other's approval request.
+            // Admit the node first, then request the personal operator's authority.
+            self.startOperatorGatewayLoop(
+                config: config,
+                sessionBox: config.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) })
         }
 
         self.clearGatewayConnectionProblem()
@@ -4316,30 +4394,31 @@ extension NodeAppModel {
                     fallback: config.nodeOptions)
                 let talkPermissionUpgradeRequest = self.forceOperatorTalkPermissionUpgradeRequest
                 let deviceAuthGatewayID = reconnectOptions.deviceAuthGatewayID ?? stableID
-                let operatorOptions = self.makeOperatorConnectOptions(
+                let operatorOptions = config.operatorOptions(from: self.makeOperatorConnectOptions(
                     clientId: reconnectOptions.clientId,
                     displayName: reconnectOptions.clientDisplayName,
                     deviceAuthGatewayID: deviceAuthGatewayID,
-                    includeAdminScope: self.shouldRequestOperatorAdminScope(
+                    includeAdminScope: config.personalTailscaleAuthentication || self.shouldRequestOperatorAdminScope(
                         gatewayID: deviceAuthGatewayID,
                         token: reconnectAuth.token,
                         password: reconnectAuth.password,
                         forceTalkPermissionUpgradeRequest: talkPermissionUpgradeRequest),
-                    includeApprovalScope: self.shouldRequestOperatorApprovalScope(
-                        gatewayID: deviceAuthGatewayID,
-                        token: reconnectAuth.token,
-                        password: reconnectAuth.password,
-                        forceTalkPermissionUpgradeRequest: talkPermissionUpgradeRequest),
+                    includeApprovalScope: config.personalTailscaleAuthentication || self
+                        .shouldRequestOperatorApprovalScope(
+                            gatewayID: deviceAuthGatewayID,
+                            token: reconnectAuth.token,
+                            password: reconnectAuth.password,
+                            forceTalkPermissionUpgradeRequest: talkPermissionUpgradeRequest),
                     forceExplicitScopes: talkPermissionUpgradeRequest,
-                    allowStoredDeviceAuth: reconnectOptions.allowStoredDeviceAuth)
+                    allowStoredDeviceAuth: reconnectOptions.allowStoredDeviceAuth))
 
                 do {
                     try await self.operatorGateway.connect(
                         url: config.url,
-                        credentials: GatewayNodeSessionCredentials(
+                        credentials: config.operatorCredentials(fallback: GatewayNodeSessionCredentials(
                             token: reconnectAuth.token,
                             bootstrapToken: reconnectAuth.bootstrapToken,
-                            password: reconnectAuth.password),
+                            password: reconnectAuth.password)),
                         connectOptions: operatorOptions,
                         sessionBox: sessionBox,
                         extraHeadersProvider: {
@@ -4795,6 +4874,11 @@ extension NodeAppModel {
         }
         Task { [weak self] in
             guard let self else { return }
+            guard self.activeGatewayConnectConfig?.personalTailscaleAuthentication != true else {
+                // Watch queues predate personal attribution; retain them without replaying as another person.
+                await self.syncWatchAppSnapshot(reason: "operator_online")
+                return
+            }
             await self.flushPendingExecApprovalResolvedPushes()
             var approvalStateIsAuthoritative = true
             if changed {
@@ -4834,6 +4918,10 @@ extension NodeAppModel {
             return
         }
         let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
+        if config.personalTailscaleAuthentication {
+            if !self.operatorConnected { self.hasOperatorAdminScope = false }
+            return
+        }
         self.hasOperatorAdminScope = self.storedGatewayRoleToken("operator", gatewayID: gatewayID)?
             .scopes.contains("operator.admin") == true
     }
@@ -6232,7 +6320,14 @@ extension NodeAppModel {
     }
 
     private func watchChatCoordinator() async throws -> WatchReplyCoordinator {
+        guard self.activeGatewayConnectConfig?.personalTailscaleAuthentication != true else {
+            throw WatchMessagingError.admissionUnavailable
+        }
+        let generation = self.operatorAuthorityGeneration
         let journal = try await self.watchMessageJournal()
+        guard self.activeGatewayConnectConfig?.personalTailscaleAuthentication != true,
+              self.operatorAuthorityGeneration == generation
+        else { throw CancellationError() }
         if let coordinator = self.watchReplyCoordinator { return coordinator }
         let coordinator = WatchReplyCoordinator(
             journal: journal,
@@ -6281,7 +6376,9 @@ extension NodeAppModel {
                 reason: "watch_message",
                 routeGeneration: generation,
                 gatewayStableID: command.context.gatewayStableID)
-            if connected { await coordinator.resume(gatewayStableID: command.context.gatewayStableID) }
+            if connected, self.activeGatewayConnectConfig?.personalTailscaleAuthentication != true {
+                await coordinator.resume(gatewayStableID: command.context.gatewayStableID)
+            }
         }
     }
 
@@ -6297,6 +6394,7 @@ extension NodeAppModel {
     }
 
     private func flushQueuedWatchMessagesIfAvailable(resetRetryBudget: Bool = false) async {
+        guard self.activeGatewayConnectConfig?.personalTailscaleAuthentication != true else { return }
         do {
             let coordinator = try await self.watchChatCoordinator()
             await coordinator.resume(
@@ -6308,7 +6406,8 @@ extension NodeAppModel {
     }
 
     private func currentWatchChatGatewayStableID() -> String? {
-        GatewayStableIdentifier.exact(self.connectedGatewayID)
+        guard self.activeGatewayConnectConfig?.personalTailscaleAuthentication != true else { return nil }
+        return GatewayStableIdentifier.exact(self.connectedGatewayID)
     }
 
     private func watchAppCommandTargetsCurrentGatewayIfTagged(_ event: WatchAppCommandEvent) -> Bool {
@@ -6769,6 +6868,7 @@ extension NodeAppModel {
 
     @discardableResult
     func handleWatchExecApprovalResolve(_ event: WatchExecApprovalResolveEvent) async -> Bool {
+        guard self.activeGatewayConnectConfig?.personalTailscaleAuthentication != true else { return false }
         guard let approvalID = ExecApprovalIdentifier.exact(event.approvalId) else { return true }
         guard let routedEvent = ownerScopedWatchExecApprovalEvent(
             event,
@@ -6838,6 +6938,9 @@ extension NodeAppModel {
                 return false
             }
         }
+        guard self.activeGatewayConnectConfig?.personalTailscaleAuthentication != true,
+              self.gatewayRouteGeneration == routeGeneration
+        else { return false }
         guard prompt.allowedDecisions.contains(routedEvent.decision.rawValue) else {
             self.markWatchResolutionAttemptResettable(routedEvent)
             let resetResolutionAttemptId = self.resettableWatchResolutionAttemptID(
@@ -6886,7 +6989,7 @@ extension NodeAppModel {
         }
         guard self.isActiveExecApprovalResolutionAttempt(resolutionAttempt) else { return true }
         switch outcome {
-        case .resolved, .stale:
+        case .resolved, .stale, .uncertain:
             return true
         case let .pendingRetry(message), let .failed(message):
             self.markWatchResolutionAttemptResettable(routedEvent)
@@ -6900,9 +7003,6 @@ extension NodeAppModel {
             await self.republishCachedWatchExecApprovalPromptForRetry(
                 approvalID: approvalID,
                 heldAttemptID: routedEvent.replyId)
-            return true
-        case .uncertain:
-            // Recorded above, before the attempt gate.
             return true
         }
     }
@@ -6984,7 +7084,8 @@ extension NodeAppModel {
     private func flushPendingWatchExecApprovalResolutions(
         shouldContinue: @MainActor @Sendable () -> Bool = { true }) async
     {
-        guard shouldContinue(),
+        guard self.activeGatewayConnectConfig?.personalTailscaleAuthentication != true,
+              shouldContinue(),
               !self.pendingWatchExecApprovalResolutions.isEmpty,
               !self.pendingWatchExecApprovalResolutionFlushInFlight
         else { return }
@@ -9016,12 +9117,13 @@ extension NodeAppModel {
                 + "reason=\(reconnectReason) seconds=\(leaseSeconds)")
 
         let hadReconnectLoop = self.operatorGatewayTask != nil
-        let canStartReconnectLoop = hadReconnectLoop || self.shouldStartOperatorGatewayLoop(
-            token: cfg.token,
-            bootstrapToken: cfg.bootstrapToken,
-            password: cfg.password,
-            deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID ?? cfg.effectiveStableID,
-            allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
+        let canStartReconnectLoop = hadReconnectLoop || cfg.personalTailscaleAuthentication ||
+            self.shouldStartOperatorGatewayLoop(
+                token: cfg.token,
+                bootstrapToken: cfg.bootstrapToken,
+                password: cfg.password,
+                deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID ?? cfg.effectiveStableID,
+                allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
         guard canStartReconnectLoop else {
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_timeout "

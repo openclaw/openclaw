@@ -8,6 +8,10 @@ public enum OpenClawGatewayClientCapability {
     public static let usageRefreshing = "usage-refreshing"
 }
 
+public enum GatewayPersonalAuthMethod: String, Sendable {
+    case tailscale
+}
+
 public struct GatewayConnectOptions: Sendable {
     public var role: String
     public var scopes: [String]
@@ -31,6 +35,8 @@ public struct GatewayConnectOptions: Sendable {
     /// Stable Gateway owner for device tokens. Nil preserves legacy unscoped storage only when
     /// `allowStoredDeviceAuth` is true; false plus nil disables both lookup and persistence.
     public var deviceAuthGatewayID: String?
+    /// An explicit personal route must not be admitted as shared-owner authentication.
+    public var requiredAuthMethod: GatewayPersonalAuthMethod?
 
     public init(
         role: String,
@@ -47,7 +53,8 @@ public struct GatewayConnectOptions: Sendable {
         deviceIdentityProfile: GatewayDeviceIdentityProfile = .primary,
         includeDeviceIdentity: Bool = true,
         allowStoredDeviceAuth: Bool = true,
-        deviceAuthGatewayID: String? = nil)
+        deviceAuthGatewayID: String? = nil,
+        requiredAuthMethod: GatewayPersonalAuthMethod? = nil)
     {
         self.role = role
         self.scopes = scopes
@@ -64,6 +71,7 @@ public struct GatewayConnectOptions: Sendable {
         self.includeDeviceIdentity = includeDeviceIdentity
         self.allowStoredDeviceAuth = allowStoredDeviceAuth
         self.deviceAuthGatewayID = deviceAuthGatewayID
+        self.requiredAuthMethod = requiredAuthMethod
     }
 }
 
@@ -104,7 +112,7 @@ extension GatewayConnectOptions {
     var allowsDeviceAuthPersistence: Bool {
         // Legacy callers must rotate credentials in the same unscoped namespace they read.
         // Fresh pairing instead supplies an owner; explicit ownerless handoffs set false/nil.
-        self.allowStoredDeviceAuth || self.deviceAuthGatewayID != nil
+        self.requiredAuthMethod == nil && (self.allowStoredDeviceAuth || self.deviceAuthGatewayID != nil)
     }
 
     /// Additive connect-frame fields, sent only when this node declares them.

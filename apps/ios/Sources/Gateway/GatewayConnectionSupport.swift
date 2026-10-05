@@ -10,6 +10,7 @@ struct GatewayPendingTrustConnect {
     let stableID: String
     let isManual: Bool
     let authOverride: GatewayConnectionController.ManualAuthOverride?
+    var personalTailscaleAuthentication: Bool?
     let allowStoredDeviceAuth: Bool
     let suppressionLease: GatewayConnectionController.AutoConnectSuppressionLease
     let gatewayGeneration: UInt64?

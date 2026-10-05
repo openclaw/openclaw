@@ -17,6 +17,32 @@ struct GatewayConnectConfig: Sendable {
     let bootstrapToken: String?
     let password: String?
     var nodeOptions: GatewayConnectOptions
+    var personalTailscaleAuthentication: Bool = false
+
+    func operatorCredentials(fallback: GatewayNodeSessionCredentials) -> GatewayNodeSessionCredentials {
+        self.personalTailscaleAuthentication ? .init() : fallback
+    }
+
+    func operatorOptions(from options: GatewayConnectOptions) -> GatewayConnectOptions {
+        guard self.personalTailscaleAuthentication else { return options }
+        var result = options
+        result.allowStoredDeviceAuth = false
+        result.requiredAuthMethod = .tailscale
+        return result
+    }
+
+    func verifiedPersonalRecoveryScope(session: GatewayNodeSession) async throws -> String {
+        guard let route = await session.currentRoute(ifGatewayID: self.effectiveStableID),
+              let scope = await session.currentAuthRecoveryScope(ifCurrentRoute: route)
+        else { throw CancellationError() }
+        let data = try await session.request(method: "users.self", paramsJSON: "{}", ifCurrentRoute: route)
+        let result = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let profile = result?["profile"] as? [String: Any],
+              let profileID = profile["id"] as? String, !profileID.isEmpty,
+              await session.currentRoute(ifGatewayID: self.effectiveStableID) == route
+        else { throw CancellationError() }
+        return scope
+    }
 
     /// Stable, non-empty route identifier used for UI/event ownership.
     /// If the caller doesn't provide a stableID, fall back to URL identity.
@@ -38,6 +64,7 @@ struct GatewayConnectConfig: Sendable {
         let allowStoredDeviceAuth: Bool
         let deviceIdentityProfile: String
         let deviceAuthGatewayID: ExactOpaqueIdentifierKey
+        let personalTailscaleAuthentication: Bool
     }
 
     /// Control UI authentication does not consume node registration metadata.
@@ -57,7 +84,8 @@ struct GatewayConnectConfig: Sendable {
             allowStoredDeviceAuth: self.nodeOptions.allowStoredDeviceAuth,
             deviceIdentityProfile: self.nodeOptions.deviceIdentityProfile.rawValue,
             deviceAuthGatewayID: ExactOpaqueIdentifierKey(
-                self.nodeOptions.deviceAuthGatewayID ?? self.effectiveStableID))
+                self.nodeOptions.deviceAuthGatewayID ?? self.effectiveStableID),
+            personalTailscaleAuthentication: self.personalTailscaleAuthentication)
     }
 
     func hasSameControlUIInputs(as other: GatewayConnectConfig) -> Bool {
@@ -71,6 +99,7 @@ struct GatewayConnectConfig: Sendable {
             self.token == other.token &&
             self.bootstrapToken == other.bootstrapToken &&
             self.password == other.password &&
+            self.personalTailscaleAuthentication == other.personalTailscaleAuthentication &&
             Self.sameOptions(self.nodeOptions, other.nodeOptions)
     }
 
@@ -83,6 +112,7 @@ struct GatewayConnectConfig: Sendable {
             lhs.deviceIdentityProfile == rhs.deviceIdentityProfile &&
             lhs.includeDeviceIdentity == rhs.includeDeviceIdentity &&
             lhs.allowStoredDeviceAuth == rhs.allowStoredDeviceAuth &&
+            lhs.requiredAuthMethod == rhs.requiredAuthMethod &&
             lhs.deviceAuthGatewayID.map(ExactOpaqueIdentifierKey.init) ==
             rhs.deviceAuthGatewayID.map(ExactOpaqueIdentifierKey.init) &&
             self.normalizedValues(lhs.scopes) == self.normalizedValues(rhs.scopes) &&

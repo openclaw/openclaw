@@ -34,7 +34,13 @@ final class GatewayConnectionController {
     }
 
     private enum PreconnectRetryTarget {
-        case manual(host: String, port: Int, useTLS: Bool, contextPath: String?, authOverride: ManualAuthOverride?)
+        case manual(
+            host: String,
+            port: Int,
+            useTLS: Bool,
+            contextPath: String?,
+            authOverride: ManualAuthOverride?,
+            personalTailscaleAuthentication: Bool?)
         case discovered(GatewayDiscoveryModel.DiscoveredGateway)
     }
 
@@ -325,6 +331,7 @@ final class GatewayConnectionController {
         useTLS: Bool,
         contextPath: String? = nil,
         authOverride: ManualAuthOverride? = nil,
+        personalTailscaleAuthentication: Bool? = nil,
         forceReconnect: Bool = false) async -> ConnectionAttemptResult
     {
         let authOverride = authOverride?.unconsumed
@@ -338,13 +345,17 @@ final class GatewayConnectionController {
         self.requestLocalNetworkAccess(reason: "connect_manual", allowAutoReconnect: false)
         guard let resolvedPort, let stableID
         else { return .failed(String(localized: "This paired gateway has an invalid saved endpoint.")) }
+        guard personalTailscaleAuthentication != true || resolvedUseTLS &&
+            host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasSuffix(".ts.net")
+        else { return .failed(String(localized: "Use a secure Tailscale Serve host for personal sign-in.")) }
         self.preconnectRetryContext = PreconnectRetryContext(
             target: .manual(
                 host: host,
                 port: resolvedPort,
                 useTLS: resolvedUseTLS,
                 contextPath: contextPath,
-                authOverride: authOverride),
+                authOverride: authOverride,
+                personalTailscaleAuthentication: personalTailscaleAuthentication),
             stableID: stableID,
             attemptGeneration: connectAttempt.suppressionLease.generation,
             gatewayGeneration: connectAttempt.gatewayGeneration)
@@ -365,14 +376,8 @@ final class GatewayConnectionController {
         let password = authOverride.map(\.password) ?? storedCredentials.password
         let suppressStoredDeviceAuth =
             authOverride?.suppressStoredDeviceAuth ?? storedCredentials.suppressStoredDeviceAuth
-        let pendingAuthOverride = authOverride ?? (storedCredentials.hasCredentials
-            ? ManualAuthOverride.explicit(
-                token: token,
-                bootstrapToken: bootstrapToken,
-                password: password,
-                targetStableID: stableID,
-                suppressStoredDeviceAuth: suppressStoredDeviceAuth)
-            : nil)
+        let pendingAuthOverride = self.trustHandoffAuth(
+            override: authOverride, stored: storedCredentials, stableID: stableID)
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         let setupFingerprint = GatewayStableIdentifier.matches(authOverride?.targetStableID, stableID)
             ? authOverride?.tlsFingerprintSha256
@@ -417,6 +422,7 @@ final class GatewayConnectionController {
                 stableID: stableID,
                 isManual: true,
                 authOverride: pendingAuthOverride,
+                personalTailscaleAuthentication: personalTailscaleAuthentication,
                 allowStoredDeviceAuth: !suppressStoredDeviceAuth,
                 suppressionLease: connectAttempt.suppressionLease,
                 gatewayGeneration: connectAttempt.gatewayGeneration)
@@ -452,7 +458,10 @@ final class GatewayConnectionController {
             useTLS: resolvedUseTLS,
             contextPath: contextPath,
             lastConnectedAtMs: nil)
-        guard self.persistActiveGateway(registryEntry) else {
+        guard self.persistActiveGateway(
+            registryEntry,
+            personalTailscaleAuthentication: personalTailscaleAuthentication)
+        else {
             self.restoreStoredFingerprint(stored, afterAttempting: setupFingerprint, stableID: stableID)
             return .failed(String(localized: "Could not save the paired gateway."))
         }
@@ -482,13 +491,14 @@ final class GatewayConnectionController {
             // The saved gateway can still be the old route. Retry the producer-owned attempt
             // with its unconsumed setup pin and credentials, not that persisted selection.
             switch retry.target {
-            case let .manual(host, port, useTLS, contextPath, authOverride):
+            case let .manual(host, port, useTLS, contextPath, authOverride, personalTailscaleAuthentication):
                 return await self.connectManual(
                     host: host,
                     port: port,
                     useTLS: useTLS,
                     contextPath: contextPath,
                     authOverride: authOverride,
+                    personalTailscaleAuthentication: personalTailscaleAuthentication,
                     forceReconnect: true)
             case let .discovered(gateway):
                 return await self.connectDiscoveredGateway(gateway, forceReconnect: true)
@@ -504,6 +514,36 @@ final class GatewayConnectionController {
         case .discovered: .discovered
         case nil: nil
         }
+    }
+
+    func pendingPersonalTailscaleAuthentication(stableID: String) -> Bool? {
+        if let pending = self.pendingTrustConnect,
+           pending.suppressionLease.generation == self.connectAttemptGeneration,
+           pending.gatewayGeneration == self.appModel?.gatewayConnectGeneration,
+           GatewayStableIdentifier.matches(pending.stableID, stableID)
+        {
+            return pending.personalTailscaleAuthentication
+        }
+        guard let retry = self.currentPreconnectRetry,
+              GatewayStableIdentifier.matches(retry.stableID, stableID),
+              case let .manual(_, _, _, _, _, personal) = retry.target
+        else { return nil }
+        return personal
+    }
+
+    private func trustHandoffAuth(
+        override: ManualAuthOverride?,
+        stored: GatewaySettingsStore.GatewayCredentials,
+        stableID: String) -> ManualAuthOverride?
+    {
+        if let override { return override }
+        guard stored.hasCredentials else { return nil }
+        return ManualAuthOverride.explicit(
+            token: stored.token,
+            bootstrapToken: stored.bootstrapToken,
+            password: stored.password,
+            targetStableID: stableID,
+            suppressStoredDeviceAuth: stored.suppressStoredDeviceAuth)
     }
 
     private var currentPreconnectRetry: PreconnectRetryContext? {
@@ -580,6 +620,14 @@ final class GatewayConnectionController {
     @discardableResult
     func setGatewayConnectionEnabled(stableID: String, enabled: Bool) -> Bool {
         guard GatewaySettingsStore.setGatewayConnectionEnabled(stableID: stableID, enabled: enabled) else {
+            return false
+        }
+        self.scheduleOperatorFleetReconcile()
+        return true
+    }
+
+    func setPersonalTailscaleAuthentication(stableID: String, enabled: Bool) -> Bool {
+        guard GatewaySettingsStore.setPersonalTailscaleAuthentication(stableID: stableID, enabled: enabled) else {
             return false
         }
         self.scheduleOperatorFleetReconcile()
@@ -678,8 +726,15 @@ final class GatewayConnectionController {
         }
     }
 
-    private func persistActiveGateway(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> Bool {
-        guard GatewaySettingsStore.upsertGatewayRegistryEntry(entry, activate: true) else {
+    private func persistActiveGateway(
+        _ entry: GatewaySettingsStore.GatewayRegistryEntry,
+        personalTailscaleAuthentication: Bool? = nil) -> Bool
+    {
+        guard GatewaySettingsStore.upsertGatewayRegistryEntry(
+            entry,
+            activate: true,
+            personalTailscaleAuthentication: personalTailscaleAuthentication)
+        else {
             self.appModel?.gatewayStatusText = "Could not save paired gateway"
             return false
         }
@@ -836,7 +891,10 @@ final class GatewayConnectionController {
                 ? URLComponents(url: pending.url, resolvingAgainstBaseURL: false)?.percentEncodedPath
                 : nil,
             lastConnectedAtMs: nil)
-        guard self.persistActiveGateway(registryEntry) else {
+        guard self.persistActiveGateway(
+            registryEntry,
+            personalTailscaleAuthentication: pending.personalTailscaleAuthentication)
+        else {
             _ = GatewayTLSStore.clearFingerprint(stableID: pending.stableID)
             return
         }
@@ -1189,7 +1247,9 @@ extension GatewayConnectionController {
                 token: token,
                 bootstrapToken: bootstrapToken,
                 password: password,
-                nodeOptions: nodeOptions)
+                nodeOptions: nodeOptions,
+                personalTailscaleAuthentication: GatewaySettingsStore.usesPersonalTailscaleAuthentication(
+                    stableID: gatewayStableID))
             self.pendingGatewayRestoration = nil
             appModel.applyGatewayConnectConfig(
                 cfg,
@@ -1301,7 +1361,9 @@ extension GatewayConnectionController {
             token: credentials.token,
             bootstrapToken: credentials.bootstrapToken,
             password: credentials.password,
-            nodeOptions: nodeOptions)
+            nodeOptions: nodeOptions,
+            personalTailscaleAuthentication: GatewaySettingsStore.usesPersonalTailscaleAuthentication(
+                stableID: stableID))
     }
 
     private func probeTLSFingerprint(
