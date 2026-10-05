@@ -12,6 +12,7 @@ import {
   type OutboundMediaAccess,
   resolveOutboundAttachmentFromUrl,
 } from "openclaw/plugin-sdk/media-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   asPositiveSafeInteger,
@@ -245,16 +246,14 @@ export async function sendMessageSignal(
   let textStyles: SignalTextStyleRange[] = [];
   const textMode = opts.textMode ?? "markdown";
   const maxBytes = (() => {
-    if (typeof opts.maxBytes === "number") {
-      return opts.maxBytes;
+    const explicit = asPositiveFiniteNumber(opts.maxBytes);
+    if (explicit !== undefined) {
+      return explicit;
     }
-    if (typeof accountInfo.config.mediaMaxMb === "number") {
-      return accountInfo.config.mediaMaxMb * 1024 * 1024;
-    }
-    if (typeof cfg.agents?.defaults?.mediaMaxMb === "number") {
-      return cfg.agents.defaults.mediaMaxMb * 1024 * 1024;
-    }
-    return 8 * 1024 * 1024;
+    const limitMb =
+      asPositiveFiniteNumber(accountInfo.config.mediaMaxMb) ??
+      asPositiveFiniteNumber(cfg.agents?.defaults?.mediaMaxMb);
+    return limitMb === undefined ? 8 * 1024 * 1024 : limitMb * 1024 * 1024;
   })();
 
   let attachments: string[] | undefined;
