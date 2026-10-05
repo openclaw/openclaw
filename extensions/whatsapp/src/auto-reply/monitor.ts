@@ -16,7 +16,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
+import { resolveWhatsAppMediaMaxBytes } from "../accounts.js";
 import { WHATSAPP_AUTH_UNSTABLE_CODE, WhatsAppAuthUnstableError } from "../auth-store.js";
 import {
   WhatsAppConnectionController,
@@ -42,6 +42,7 @@ import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
+import { resolveWebMonitorConfigSnapshot } from "./monitor-config-snapshot.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
 import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
@@ -58,41 +59,6 @@ function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
 }
 
 type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
-type WhatsAppRuntimeConfig = ReturnType<typeof getRuntimeConfig>;
-
-function resolveWebMonitorConfigSnapshot(params: {
-  cfg: WhatsAppRuntimeConfig;
-  accountId?: string | null;
-}): {
-  cfg: WhatsAppRuntimeConfig;
-  account: ReturnType<typeof resolveWhatsAppAccount>;
-} {
-  const account = resolveWhatsAppAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  const cfg = {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      whatsapp: {
-        ...params.cfg.channels?.whatsapp,
-        responsePrefix: account.messagePrefix,
-        allowFrom: account.allowFrom,
-        groupAllowFrom: account.groupAllowFrom,
-        groupPolicy: account.groupPolicy,
-        textChunkLimit: account.textChunkLimit,
-        // Account merge replaces `streaming` wholesale, so pinning the
-        // account-resolved object here keeps downstream root-level resolver
-        // reads (chunk mode, block enable/coalesce) on this account's config.
-        streaming: account.streaming,
-        mediaMaxMb: account.mediaMaxMb,
-        groups: account.groups,
-      },
-    },
-  } satisfies WhatsAppRuntimeConfig;
-  return { cfg, account };
-}
 
 function isNoListenerReconnectError(lastError?: string): boolean {
   return typeof lastError === "string" && /No active WhatsApp Web listener/i.test(lastError);
