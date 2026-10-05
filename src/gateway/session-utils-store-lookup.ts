@@ -449,6 +449,13 @@ export async function withGatewaySessionStoreTarget<T>(
             },
             {
               ordered: params.includeMembership,
+              onReadAdmitted: params.includeMembership
+                ? () => {
+                    assertDiscoveryCurrent();
+                    // The ordered snapshot includes writes that settled before FIFO admission.
+                    changed = false;
+                  }
+                : undefined,
               prepareSource(input, database, source) {
                 for (const { read, scope } of publications) {
                   if (
