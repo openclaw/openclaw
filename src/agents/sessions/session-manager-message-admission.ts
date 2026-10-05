@@ -31,8 +31,8 @@ export function captureSessionMessageAdmission(
         if (!pendingInput) {
           throw new Error("Session message has no captured pending input owner");
         }
-        // This bound worker alone produces the session-message grant.
         pendingInput.assertCurrent(
+          // SAFETY: This bound worker alone produces the session-message grant.
           facts.authority as SessionPendingInputAuthorityFacts,
           assertCurrent,
         );

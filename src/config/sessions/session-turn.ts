@@ -138,7 +138,7 @@ export async function appendSessionTurnInWorker(
         if (!custody) {
           throw new Error("Session turn has no pending-input owner");
         }
-        // The paired worker captures the row and members in its current transaction.
+        // SAFETY: The paired worker captures the row and members in its current transaction.
         custody.assertCurrent(facts.authority as SessionPendingInputAuthorityFacts, assertCurrent);
         custodyRequired = true;
         return true;
