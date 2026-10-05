@@ -377,7 +377,6 @@ src/commands/doctor-state-integrity.ts
 src/commands/doctor-state-migrations.test.ts
 src/commands/doctor/repair-sequencing.test.ts
 src/commands/doctor/shared/codex-route-warnings.test.ts
-src/commands/doctor/shared/legacy-config-core-normalizers.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
