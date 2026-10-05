@@ -30,7 +30,10 @@ import {
   selectLlamaServerAsset,
   type LlamaServerAsset,
 } from "./llama-server-assets.js";
-import { UnsupportedLlamaServerHostError } from "./llama-server-install.js";
+import {
+  ensureLlamaServerInstalled,
+  UnsupportedLlamaServerHostError,
+} from "./llama-server-install.js";
 import type { ManagedLlamaChatModel } from "./llama-server-preset.js";
 import {
   ensureLlamaCppModel,
@@ -402,6 +405,16 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
 
   const progress = ctx.prompter.progress("Preparing managed llama.cpp server…");
   try {
+    // Run the server install/reuse decision before any model download so a dead-end
+    // host short-circuits before fetching GGUFs. The installer reuses a validating
+    // already-installed server on any macOS (preserving the self-built escape hatch)
+    // and only refuses when neither reuse nor fresh download can succeed; the later
+    // nested call from prepareManagedLlamaServer hits installationPromises as a no-op.
+    await ensureLlamaServerInstalled({
+      asset,
+      signal: ctx.signal,
+      onProgress: (status) => progress.update(formatDownloadProgress("llama.cpp runtime", status)),
+    });
     let chatModel: ManagedLlamaChatModel;
     if (plan.kind === "chat") {
       const chatModelPath =
