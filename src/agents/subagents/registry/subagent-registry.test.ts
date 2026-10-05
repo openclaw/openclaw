@@ -3331,6 +3331,10 @@ describe("subagent registry seam flow", () => {
     const now = Date.parse("2026-03-24T12:00:00Z");
     const runId = "run-suspended-delete-persist-failure";
     const childSessionKey = "agent:main:subagent:suspended-delete-persist-failure";
+    const originalTarget = {
+      sessionId: "session-suspended-delete-persist-failure",
+      lifecycleRevision: "revision-suspended-delete-persist-failure",
+    };
     mocks.getGlobalHookRunner.mockReturnValue({
       hasHooks: (hookName: string) => hookName === "subagent_ended",
       runSubagentEnded: mocks.runSubagentEnded,
@@ -3344,6 +3348,7 @@ describe("subagent registry seam flow", () => {
         requesterDisplayKey: "main",
         task: "discard suspended delete delivery",
         cleanup: "delete",
+        childSessionIdentity: originalTarget,
         spawnMode: "run",
         createdAt: now - 8 * 24 * 60 * 60_000,
         endedAt: now - 8 * 24 * 60 * 60_000,
@@ -3362,6 +3367,9 @@ describe("subagent registry seam flow", () => {
 
     expect(mod.getSubagentRunByChildSessionKey(childSessionKey)).toEqual(original);
     expect(mocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
+    ).toHaveLength(0);
     expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
     expect(mocks.removeInternalSessionEffectsSession).not.toHaveBeenCalled();
 
@@ -3372,6 +3380,16 @@ describe("subagent registry seam flow", () => {
       delivery: { status: "discarded" },
     });
     expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          key: childSessionKey,
+          expectedSessionId: originalTarget.sessionId,
+          expectedLifecycleRevision: originalTarget.lifecycleRevision,
+        }),
+      }),
+    );
     await waitForFast(() => {
       expect(mocks.removeInternalSessionEffectsSession).toHaveBeenCalledTimes(1);
     });

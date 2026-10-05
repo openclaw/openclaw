@@ -226,10 +226,14 @@ export function createSuspendedDeleteNativeFixture(
         const originalNode = readNativeChildNode(run.childSessionKey);
         expect(originalNode).toBeDefined();
         const archiveAtMs = subagentRuns.get(run.runId)!.archiveAtMs;
-        if (archiveAtMs === undefined) throw new Error("Expected original archive deadline");
+        if (archiveAtMs === undefined) {
+          throw new Error("Expected original archive deadline");
+        }
         expect(archiveAtMs).toBeGreaterThan(Date.now());
         await updateRun(run.runId, (draft) => {
-          if (mode === "legacy-stamp-only") draft.deleteCleanupDispatchedAt = legacyStamp;
+          if (mode === "legacy-stamp-only") {
+            draft.deleteCleanupDispatchedAt = legacyStamp;
+          }
           draft.delivery = {
             ...draft.delivery,
             status: "suspended",
@@ -388,10 +392,13 @@ export function createSuspendedDeleteNativeFixture(
             await fixture.settle();
             expect(subagentRuns.has(run.runId)).toBe(false);
             expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
-            if (mode === "same-key-successor")
+            if (mode === "same-key-successor") {
               expect(readNativeChildNode(run.childSessionKey)).toEqual(successorNode);
-            else if (legacy) expect(readNativeChildNode(run.childSessionKey)).toEqual(originalNode);
-            else expect(readNativeChildNode(run.childSessionKey)).toBeUndefined();
+            } else if (legacy) {
+              expect(readNativeChildNode(run.childSessionKey)).toEqual(originalNode);
+            } else {
+              expect(readNativeChildNode(run.childSessionKey)).toBeUndefined();
+            }
             expect(gateway.requests).toHaveLength(
               legacy ? 0 : mode === "failed-then-retry" ? 2 : 1,
             );

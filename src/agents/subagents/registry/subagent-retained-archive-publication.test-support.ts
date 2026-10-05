@@ -88,8 +88,8 @@ export function defineRetainedArchivePublicationCases(params: {
     ).toHaveLength(1);
 
     // The next archive pass owns its real SQLite DELETE through host acknowledgement.
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
+    const entered = createDeferred();
+    const release = createDeferred();
     const execute = stateWorker.runOpenClawStateWorkerOperation;
     const writer = vi
       .spyOn(stateWorker, "runOpenClawStateWorkerOperation")

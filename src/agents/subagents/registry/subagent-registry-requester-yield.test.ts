@@ -539,6 +539,19 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       expect(runs.has(entry.runId)).toBe(true);
       expect(runs.get(entry.runId)?.requesterSettleWake).toBeUndefined();
       expect(runs.get(entry.runId)?.retireAfterRequesterTurn).toBeUndefined();
+      expect(runs.get(entry.runId)?.requesterTurnRunId).toBeUndefined();
+      const retained = loadSubagentRegistryFromSqlite().get(entry.runId);
+      expect(retained).toMatchObject({
+        runId: entry.runId,
+        cleanup: "delete",
+        cleanupCompletedAt: 2_100,
+        delivery: { status: "delivered" },
+      });
+      expect(retained?.requesterTurnRunId).toBeUndefined();
+      expect(schedule).not.toHaveBeenCalled();
+      expect(await settleRuns([entry], { runs, schedule })).toBe(false);
+      expect(schedule).not.toHaveBeenCalled();
+      expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toEqual(retained);
     } else if (kind === "valid receipt") {
       expect(runs.get(entry.runId)!.requesterSettleWake).toBeUndefined();
       expect(runs.get(entry.runId)!.requesterTurnRunId).toBeUndefined();
