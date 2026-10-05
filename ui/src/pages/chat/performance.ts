@@ -64,7 +64,7 @@ export function recordControlUiPerformanceEvent(
   payload: Record<string, unknown>,
   opts: { warn?: boolean; maxBufferedEventsForType: number },
 ): void {
-  const entry: EventLogEntry = { ts: Date.now(), event, payload };
+  const newEntry: EventLogEntry = { ts: Date.now(), event, payload };
   if (host.eventLogBuffer) {
     let keptForType = 0;
     const existingBuffer = host.eventLogBuffer.filter((entry) => {
@@ -74,7 +74,7 @@ export function recordControlUiPerformanceEvent(
       keptForType += 1;
       return keptForType < opts.maxBufferedEventsForType;
     });
-    host.eventLogBuffer = [entry, ...existingBuffer].slice(0, EVENT_LOG_LIMIT);
+    host.eventLogBuffer = [newEntry, ...existingBuffer].slice(0, EVENT_LOG_LIMIT);
   }
   if (opts.warn) {
     console.warn(`[openclaw] ${event}`, payload);

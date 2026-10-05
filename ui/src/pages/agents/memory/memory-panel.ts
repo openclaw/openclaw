@@ -231,7 +231,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     if (!scope || !(await showConfirmDialog(confirmation)) || !this.isTaskScopeCurrent(scope)) {
       return;
     }
-    await this.runDreamingTask((state) => runDreamDiaryAction(state, method), scope);
+    await this.runDreamingTask((current) => runDreamDiaryAction(current, method), scope);
   }
 
   private async loadAll(refreshConfig = false) {
@@ -251,7 +251,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     this.syncConfigSnapshot();
     await Promise.all(
       (["dreamingStatus", "dreamDiary", "wikiImportInsights", "wikiOverview"] as const).map((key) =>
-        this.runDreamingTask((state) => loadDreamingResource(state, key), scope),
+        this.runDreamingTask((current) => loadDreamingResource(current, key), scope),
       ),
     );
   }
@@ -319,7 +319,10 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         return;
       }
       this.syncConfigSnapshot();
-      await this.runDreamingTask((state) => loadDreamingResource(state, "dreamingStatus"), scope);
+      await this.runDreamingTask(
+        (current) => loadDreamingResource(current, "dreamingStatus"),
+        scope,
+      );
       if (!this.isTaskScopeCurrent(scope)) {
         return;
       }
@@ -362,7 +365,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       return;
     }
     this.syncConfigSnapshot();
-    await this.runDreamingTask((state) => loadDreamingResource(state, key), scope);
+    await this.runDreamingTask((current) => loadDreamingResource(current, key), scope);
   }
 
   override render() {
@@ -476,14 +479,14 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         wikiOverviewError: dreaming.wikiOverviewError,
         wikiOverview: dreaming.wikiOverview,
         onRefreshDiary: () =>
-          void this.runDreamingTask((state) => loadDreamingResource(state, "dreamDiary")),
+          void this.runDreamingTask((current) => loadDreamingResource(current, "dreamDiary")),
         onRefreshImports: () => void this.refreshWikiData("wikiImportInsights"),
         onRefreshWikiOverview: () => void this.refreshWikiData("wikiOverview"),
         onOpenConfig: () => void this.context.runtimeConfig.openFile(),
         onOpenWikiPage: (lookup) => this.openWikiPage(lookup),
         onBackfillDiary: () =>
-          void this.runDreamingTask((state) =>
-            runDreamDiaryAction(state, "doctor.memory.backfillDreamDiary"),
+          void this.runDreamingTask((current) =>
+            runDreamDiaryAction(current, "doctor.memory.backfillDreamDiary"),
           ),
         onCopyDreamingArchivePath: () => void this.runDreamingTask(copyDreamingArchivePath),
         onDedupeDreamDiary: () =>
@@ -494,12 +497,12 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
             danger: true,
           }),
         onResetDiary: () =>
-          void this.runDreamingTask((state) =>
-            runDreamDiaryAction(state, "doctor.memory.resetDreamDiary"),
+          void this.runDreamingTask((current) =>
+            runDreamDiaryAction(current, "doctor.memory.resetDreamDiary"),
           ),
         onResetGroundedShortTerm: () =>
-          void this.runDreamingTask((state) =>
-            runDreamDiaryAction(state, "doctor.memory.resetGroundedShortTerm"),
+          void this.runDreamingTask((current) =>
+            runDreamDiaryAction(current, "doctor.memory.resetGroundedShortTerm"),
           ),
         onRepairDreamingArtifacts: () =>
           void this.confirmDreamingTask("doctor.memory.repairDreamingArtifacts", {

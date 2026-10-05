@@ -379,6 +379,7 @@ const DREAMING_RESOURCE_SPECS: {
   },
 };
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Key pairs the RPC payload with its resource writer.
 export async function loadDreamingResource<Key extends DreamingResourceKey>(
   state: DreamingState,
   key: Key,
