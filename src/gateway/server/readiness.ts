@@ -6,6 +6,7 @@ import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
+  isChannelHealthRestartHandoff,
   type ChannelHealthPolicy,
   type ChannelHealthEvaluation,
 } from "../channel-health-policy.js";
@@ -87,11 +88,7 @@ function shouldIgnoreReadinessFailure(
   // A failed ingress start lands in the same backoff window, so it gets the same
   // grace: the next start re-proves ingress, and once the ladder stops setting
   // restartPending the account stays red instead of hiding dead inbound.
-  const restartableReason =
-    health.reason === "not-running" || health.reason === "ingress-unavailable";
-  const inRestartHandoff =
-    accountSnapshot.restartPending === true && accountSnapshot.running !== true;
-  return restartableReason && inRestartHandoff;
+  return isChannelHealthRestartHandoff(accountSnapshot, health.reason);
 }
 
 /** Create a cached readiness checker over channel runtime health. */

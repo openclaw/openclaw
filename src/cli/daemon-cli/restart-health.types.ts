@@ -28,6 +28,13 @@ export type UnavailablePluginHealthSummary = {
   detail: string;
 };
 
+export type GatewayChannelHealthError = {
+  id: string;
+  error: string;
+  /** Keep polling inside the existing restart deadline while the channel owner recovers. */
+  retryable?: boolean;
+};
+
 export type GatewayRestartSnapshot = {
   runtime: GatewayServiceRuntime;
   portUsage: PortUsage;
@@ -40,7 +47,7 @@ export type GatewayRestartSnapshot = {
   staleConnection?: GatewayStaleConnectionReason;
   activatedPluginErrors?: PluginHealthErrorSummary[];
   unavailablePlugins?: UnavailablePluginHealthSummary[];
-  channelProbeErrors?: Array<{ id: string; error: string }>;
+  channelProbeErrors?: GatewayChannelHealthError[];
   expectedVersion?: string;
   versionMismatch?: {
     expected: string;

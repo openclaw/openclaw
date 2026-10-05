@@ -8,6 +8,12 @@ import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveReadOnlyLocalGatewayAuth } from "../../gateway/call-device-auth.js";
 import { callGateway } from "../../gateway/call.js";
+import {
+  DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+  evaluateChannelHealth,
+  isChannelHealthRestartHandoff,
+} from "../../gateway/channel-health-policy.js";
 import { isGatewayProtocolResponseError } from "../../gateway/client.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
 import {
@@ -26,6 +32,7 @@ import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 import { sleep } from "../../utils.js";
 import type {
+  GatewayChannelHealthError,
   GatewayPortHealthSnapshot,
   UnavailablePluginHealthSummary,
 } from "./restart-health.types.js";
@@ -76,7 +83,7 @@ export type GatewayReachability = {
   gatewayBuildId: string | null | undefined;
   activatedPluginErrors: PluginHealthErrorSummary[];
   unavailablePlugins: UnavailablePluginHealthSummary[];
-  channelProbeErrors: Array<{ id: string; error: string }>;
+  channelProbeErrors: GatewayChannelHealthError[];
   probeError?: string;
   staleConnection?: GatewayStaleConnectionReason;
 };
@@ -204,15 +211,91 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
   });
 }
 
-function readChannelProbeErrors(health: unknown): Array<{ id: string; error: string }> {
+function readChannelProbeErrors(health: unknown): GatewayChannelHealthError[] {
   const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  return Object.entries(channels ?? {}).flatMap(([id, summary]) => {
-    const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
-    if (probe?.ok !== false) {
-      return [];
-    }
-    const error = probe.error;
-    return [{ id, error: typeof error === "string" && error.trim() ? error : "probe failed" }];
+  return Object.entries(channels ?? {}).flatMap(([channelId, value]) => {
+    const summary = asOptionalRecord(value);
+    const accounts = asOptionalRecord(summary?.accounts);
+    // Account projections are authoritative when present; the channel summary mirrors only
+    // its preferred account and can hide a failed secondary account or duplicate its error.
+    const entries =
+      accounts && Object.keys(accounts).length > 0
+        ? Object.entries(accounts).map(
+            ([accountId, account]) => [`${channelId}/${accountId}`, account] as const,
+          )
+        : [[channelId, summary] as const];
+    return entries.flatMap(([id, accountValue]) => {
+      const account = asOptionalRecord(accountValue);
+      if (
+        account?.enabled === false ||
+        account?.configured === false ||
+        account?.linked === false
+      ) {
+        return [];
+      }
+      const lastError = typeof account?.lastError === "string" ? account.lastError.trim() : "";
+      const healthState = typeof account?.healthState === "string" ? account.healthState : "";
+      // A successful credential probe does not prove that the channel process is running.
+      // Keep an intentionally stopped account without a recorded failure non-blocking.
+      if (
+        healthState &&
+        healthState !== "healthy" &&
+        (healthState !== "not-running" || lastError || account?.restartPending === true)
+      ) {
+        const lifecycle =
+          account?.lifecycle === "starting" ||
+          account?.lifecycle === "ready" ||
+          account?.lifecycle === "recovering" ||
+          account?.lifecycle === "blocked" ||
+          account?.lifecycle === "stopped"
+            ? account.lifecycle
+            : undefined;
+        const lastDisconnect = asOptionalRecord(account?.lastDisconnect);
+        const recoveryReason = evaluateChannelHealth(
+          {
+            lifecycle,
+            running: account?.running === true,
+            connected:
+              account?.connected === true ? true : account?.connected === false ? false : undefined,
+            lastDisconnect:
+              typeof lastDisconnect?.at === "number" ? { at: lastDisconnect.at } : undefined,
+            terminalDisconnect: account?.terminalDisconnect === true,
+            ingressUnavailable: account?.ingressUnavailable === true ? true : undefined,
+            lastStartAt: typeof account?.lastStartAt === "number" ? account.lastStartAt : undefined,
+          },
+          {
+            channelId,
+            now: Date.now(),
+            channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+            staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+          },
+        ).reason;
+        const recoveryGrace =
+          recoveryReason === "startup-connect-grace" || recoveryReason === "reconnect-grace";
+        const restartHandoff =
+          (healthState === "not-running" || healthState === "ingress-unavailable") &&
+          isChannelHealthRestartHandoff(
+            {
+              running: account?.running === true,
+              restartPending: account?.restartPending === true,
+            },
+            healthState,
+          );
+        return [
+          {
+            id,
+            error: lastError || healthState,
+            ...(recoveryGrace || restartHandoff ? { retryable: true } : {}),
+          },
+        ];
+      }
+      const probe = asOptionalRecord(account?.probe);
+      if (probe?.ok !== false) {
+        return [];
+      }
+      const error = probe.error;
+      return [{ id, error: typeof error === "string" && error.trim() ? error : "probe failed" }];
+    });
   });
 }
 
