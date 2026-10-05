@@ -26,6 +26,7 @@ export type WorkerTaskChannel = {
 };
 
 export type WorkerTaskServerHost<TaskContext> = {
+  selectStartupPort?: (message: unknown) => MessagePort | undefined;
   initialize: (port: MessagePort) => void;
   onMessage: (sampleMemory: boolean) => void;
   installTaskContext: (context: TaskContext) => void;
@@ -46,10 +47,11 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
   },
   host: WorkerTaskServerHost<TaskContext>,
 ): void {
-  const port = parentPort;
-  if (!port) {
+  if (!parentPort) {
     return;
   }
+  let port = parentPort;
+  let receivedStartup = false;
   host.initialize(port);
   let active: WorkerConversation | undefined;
   let execution = Promise.resolve();
@@ -57,7 +59,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
   let cancelledResponse: { taskId: number; responseId: number } | undefined;
   port.on(
     "message",
-    (message: {
+    function receive(message: {
       input: unknown;
       taskId: number;
       interactive?: boolean;
@@ -68,7 +70,18 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
       key?: string;
       resourcePort?: MessagePort;
       sampleMemory?: boolean;
-    }) => {
+    }) {
+      if (!receivedStartup) {
+        receivedStartup = true;
+        const taskPort = host.selectStartupPort?.(message);
+        if (taskPort) {
+          port.off("message", receive);
+          port = taskPort;
+          host.initialize(port);
+          port.on("message", receive);
+          return;
+        }
+      }
       host.onMessage(message.sampleMemory === true);
       if (message.closeResource && message.resourcePort) {
         const receipt = message.resourcePort;

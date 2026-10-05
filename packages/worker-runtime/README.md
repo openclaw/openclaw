@@ -40,6 +40,16 @@ custody. Worker-side `WorkerTaskServerHost` installs the captured context and
 provides memory sampling, logging initialization, and idle hooks without importing
 those application concerns into the protocol implementation.
 
+Retained task hosts provide a dedicated message port through a private startup
+message, leaving `workerData` unchanged. Task
+inputs, results, host exchanges, and resource-close requests use that channel;
+the supervisor continues to own startup, native exit, and resource settlement.
+The native handle buffers task messages until startup is recorded and drains
+admitted messages before terminal lifecycle events. A failed startup discards
+unadmitted data. Losing the task channel is a transport
+failure, never an execution or cleanup receipt. Ordinary SDK workers keep their
+parent-port transport.
+
 ## Results and settlement
 
 A task result, an execution receipt, and resource release are distinct facts.

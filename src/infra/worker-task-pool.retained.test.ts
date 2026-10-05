@@ -23,6 +23,26 @@ afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
 });
 
+it.each([
+  { label: "string", workerData: "startup seed" },
+  { label: "null", workerData: null },
+  { label: "array", workerData: [1, "seed"] },
+  { label: "object", workerData: { type: "user data", port: "user port" } },
+])("preserves $label workerData through retained task startup", async ({ workerData }) => {
+  const pool = createOwnedWorkerTaskPool<PoolFixtureInput, PoolFixtureResult>(
+    {
+      workerUrl: new URL("./worker-task-pool.test-support.ts", import.meta.url),
+      workerOptions: { workerData },
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+    },
+    { retainedTransport: true },
+  );
+  pools.push(pool);
+  const reply = await pool.run({ label: "startup", readStartupOptions: true }, {});
+  expect(reply.startupOptions?.data).toEqual(workerData);
+});
+
 it("retains an admitted task when abort reentry targets another worker of a failed source", async () => {
   await withRuntimeWorkerGeneration(
     async (bind) => {
