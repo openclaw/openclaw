@@ -25,7 +25,11 @@ export function classifyWorkerRequest(commandType: PropertyKey): string {
   if (commandType.startsWith("session.history.")) {
     return "transcript_read";
   }
-  if (commandType.startsWith("session.transcript.") || commandType.startsWith("transcripts.")) {
+  if (
+    commandType.startsWith("trajectory.") ||
+    commandType.startsWith("session.transcript.") ||
+    commandType.startsWith("transcripts.")
+  ) {
     return "transcripts";
   }
   if (commandType.startsWith("session.")) {

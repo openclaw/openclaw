@@ -65,7 +65,10 @@ function fallbackResult(agentMeta: Record<string, unknown>, text = "test output"
 }
 async function runWithEvents(
   params: Parameters<typeof runCronIsolatedAgentTurn>[0] = makeParams(),
-  subscribe: typeof onInternalDiagnosticEvent = onInternalDiagnosticEvent,
+  subscribe: (
+    listener: (event: DiagnosticEventPayload) => void,
+    filter?: Parameters<typeof onInternalDiagnosticEvent>[1],
+  ) => () => void = onInternalDiagnosticEvent,
   events: DiagnosticEventPayload[] = [],
 ) {
   const unsubscribe = subscribe((event) => events.push(event), {

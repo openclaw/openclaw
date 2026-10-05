@@ -337,6 +337,8 @@ labels. This bounds the three metric families to 250 retained label sets, even
 if every kind/class combination occurs; the exporter's shared series cap still
 applies.
 
+The `transcripts` request family includes canonical event appends and retention.
+
 Dispatch is the host scheduler's allocation of a slot, not a worker-side CPU
 timestamp. Request duration includes preparation, cold worker startup, transport,
 host exchanges, and I/O. General task pools report `task`; SQLite commands retain
