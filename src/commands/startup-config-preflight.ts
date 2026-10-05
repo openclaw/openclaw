@@ -56,17 +56,18 @@ export async function runStartupConfigPreflight(
 }
 
 function readStartupStateWarnings(env: NodeJS.ProcessEnv): string[] {
-  const warnings = listAgentDatabaseAdmissionRefusals({ env }).map(
-    (refusal) => `${refusal.reason}\n${refusal.repairHint}`,
-  );
+  let warnings: string[] = [];
   try {
+    warnings = listAgentDatabaseAdmissionRefusals({ env }).map(
+      (refusal) => `${refusal.reason}\n${refusal.repairHint}`,
+    );
     assertNoRetiredRuntimeStateFiles(resolveStateDir(env), env);
   } catch (error) {
-    if (!(error instanceof RetiredStateFormatError)) {
-      throw error;
-    }
+    const message = error instanceof Error ? error.message : String(error);
     warnings.push(
-      `Retired runtime state was left unchanged for Doctor; no import was attempted. ${error.message}`,
+      error instanceof RetiredStateFormatError && error.cause === undefined
+        ? `Retired runtime state was left unchanged for Doctor; no import was attempted. ${message}`
+        : `Could not inspect retired runtime state: ${message}; run openclaw doctor`,
     );
   }
   return warnings;

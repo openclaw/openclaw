@@ -202,6 +202,8 @@ importing the files, logs a warning, and retains that deferred outcome in the
 startup diagnostics. Their presence alone does not prevent bootstrap or a
 recovery restart. Gateway-routed message clients leave state preparation to the
 running Gateway.
+If this advisory inspection fails, startup records the error with guidance to
+run `openclaw doctor` and continues without changing the files.
 
 Doctor also refuses these retired config inputs:
 
