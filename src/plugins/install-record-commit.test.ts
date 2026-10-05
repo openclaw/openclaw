@@ -223,10 +223,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
           },
         },
       },
-      installRecords: {
-        ...existingRecords,
-        ...pendingRecords,
-      },
       movedInstallRecords: true,
       persistedHash: "test-config-hash",
     });
@@ -910,7 +906,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     expect(result).toMatchObject({
       path: "/tmp/openclaw.json",
       nextConfig,
-      installRecords: {},
       movedInstallRecords: false,
       persistedHash: "test-config-hash",
     });
