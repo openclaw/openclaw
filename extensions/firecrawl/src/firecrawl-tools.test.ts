@@ -229,7 +229,7 @@ describe("firecrawl tools", () => {
     const recovered = await runActualFirecrawlScrape(params);
 
     expect(recovered.status).toBe(200);
-    expect(recovered.cached).toBeUndefined();
+    expect(recovered).not.toHaveProperty("cached");
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -328,7 +328,7 @@ describe("firecrawl tools", () => {
           : await runActualFirecrawlScrape(scrapeParams);
       if (operation === "search") {
         expect(retry).toMatchObject({ results: [{ url: "https://fresh.example/result" }] });
-        expect(retry.cached).toBeUndefined();
+        expect(retry).not.toHaveProperty("cached");
       } else {
         expect(retry).toMatchObject({ status: 200 });
         expect(retry.text).toContain("fresh scrape result");

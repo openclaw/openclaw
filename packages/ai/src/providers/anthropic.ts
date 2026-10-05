@@ -27,7 +27,6 @@ import {
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
   AssistantMessageEvent,
-  Context,
   Model,
   SimpleStreamOptions,
   StreamFunction,

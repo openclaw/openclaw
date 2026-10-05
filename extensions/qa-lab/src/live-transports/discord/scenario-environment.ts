@@ -108,7 +108,7 @@ export function createDiscordQaScenarioEnvironment(params: {
             run,
             ...(run.kind === "transcripts-voice-authorization"
               ? {
-                  configureTranscriptVoiceAccess: async (authorized: boolean) =>
+                  configureTranscriptVoiceAccess: async (authorized: boolean): Promise<void> =>
                     void (await applyConfig(authorized)),
                 }
               : {}),

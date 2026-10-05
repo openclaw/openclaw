@@ -27,6 +27,17 @@ const GOOGLE_MEET_BROWSER_POLL_MS = 500;
 
 type GoogleMeetBrowserManualActionState = NonNullable<GoogleMeetChromeHealth["manualAction"]>;
 
+type GoogleMeetBrowserCreateResult = {
+  meetingUri: string;
+  nodeId: string;
+  targetId?: string;
+  openedByPlugin: boolean;
+  browserUrl?: string;
+  browserTitle?: string;
+  notes?: string[];
+  source: "browser";
+};
+
 function formatBrowserAutomationError(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -151,7 +162,7 @@ const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
 export async function createMeetWithBrowserProxyOnNode(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
-}) {
+}): Promise<GoogleMeetBrowserCreateResult> {
   const nodeId = await resolveChromeNode({
     runtime: params.runtime,
     requestedNode: params.config.chromeNode.node,
@@ -237,7 +248,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
       }
       if (result.meetingUri) {
         return {
-          source: "browser" as const,
+          source: "browser",
           nodeId,
           targetId,
           openedByPlugin,
