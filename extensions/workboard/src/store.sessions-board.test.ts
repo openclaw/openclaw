@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
-import { registerWorkboardWorkspaceBoardMethod } from "./gateway-workspace-methods.js";
+import { registerWorkboardGatewayMethods } from "./gateway.js";
 import type { WorkboardSessionPlacementWrite } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
@@ -287,7 +287,7 @@ describe("Sessions board schema reopening", () => {
 
       const registerGatewayMethod = vi.fn<OpenClawPluginApi["registerGatewayMethod"]>();
       const api = createTestPluginApi({ registerGatewayMethod });
-      registerWorkboardWorkspaceBoardMethod({ api, store: reopened });
+      registerWorkboardGatewayMethods({ api, store: reopened });
       const upsert = registerGatewayMethod.mock.calls.find(
         ([method]) => method === "workboard.boards.upsert",
       )![1];
