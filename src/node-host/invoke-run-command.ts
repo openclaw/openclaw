@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RunResult } from "./invoke-types.js";
 
@@ -38,6 +39,36 @@ function clarifyNodeExecCwdSpawnError(
   return `node exec working directory ${reason} on the node host: ${cwd} (os reported: ${message})`;
 }
 
+type CommandLaunch = {
+  argv: string[];
+  windowsVerbatimArguments?: true;
+};
+
+// Node quotes Windows arguments with the MSVCRT convention and escapes inner quotes
+// as \", which cmd.exe does not understand. `cmd.exe /s /c` strips only the first and
+// last quote character of the remainder, so the node shell envelope is launched
+// verbatim with one outer pair, as Node's own `shell` option does.
+function resolveCommandLaunch(argv: string[]): CommandLaunch {
+  if (process.platform !== "win32" || argv.length !== 5) {
+    return { argv };
+  }
+  const [shell, noAutoRun, stripQuotes, runAndExit, command] = argv;
+  if (
+    shell === undefined ||
+    command === undefined ||
+    path.win32.basename(shell).toLowerCase() !== "cmd.exe" ||
+    noAutoRun !== "/d" ||
+    stripQuotes !== "/s" ||
+    runAndExit !== "/c"
+  ) {
+    return { argv };
+  }
+  return {
+    argv: [shell, noAutoRun, stripQuotes, runAndExit, `"${command}"`],
+    windowsVerbatimArguments: true,
+  };
+}
+
 export async function runCommand(
   argv: string[],
   cwd: string | undefined,
@@ -48,7 +79,9 @@ export async function runCommand(
 ): Promise<RunResult> {
   assertCurrent?.();
   try {
-    const result = await runCommandWithTimeout(argv, {
+    const launch = resolveCommandLaunch(argv);
+    const result = await runCommandWithTimeout(launch.argv, {
+      ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
       baseEnv: env,
       cwd,
       killProcessTree: true,
