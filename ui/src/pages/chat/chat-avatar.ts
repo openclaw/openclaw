@@ -188,7 +188,6 @@ type ChatAvatarHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; agents?: AgentsListResult["agents"] } | null;
   chatAvatarReason?: string | null;
-  chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarUrl: string | null;
   senderAgentAvatars?: ReadonlyMap<string, string | null>;
@@ -207,7 +206,6 @@ const senderAvatarInputs = new WeakMap<object, unknown[]>();
 
 type ChatAvatarSnapshot = {
   reason: string | null;
-  source: string | null;
   status: "none" | "local" | "remote" | "data" | null;
   url: string | null;
   release: () => void;
@@ -244,7 +242,6 @@ function clearChatAvatarState(host: ChatAvatarHost) {
   references?.get(currentAvatarReference)?.();
   references?.delete(currentAvatarReference);
   host.chatAvatarUrl = null;
-  host.chatAvatarSource = null;
   host.chatAvatarStatus = null;
   host.chatAvatarReason = null;
 }
@@ -313,7 +310,6 @@ async function loadChatAvatarSnapshot(
     }
     return {
       release,
-      source: identity.avatarSource ?? null,
       status: identity.avatarStatus ?? null,
       reason: identity.avatarReason ?? null,
       url,
@@ -443,7 +439,6 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
   }
   if (snapshot) {
     rememberChatAvatarReference(host, currentAvatarReference, snapshot.release);
-    host.chatAvatarSource = snapshot.source;
     host.chatAvatarStatus = snapshot.status;
     host.chatAvatarReason = snapshot.reason;
     host.chatAvatarUrl = snapshot.url;

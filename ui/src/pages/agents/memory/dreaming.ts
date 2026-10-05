@@ -118,7 +118,11 @@ export type WikiPagePreview = {
   updatedAt?: string;
 };
 
-type DreamingResourceKey = "dreamingStatus" | "dreamDiary" | "wikiImportInsights" | "wikiOverview";
+export type DreamingResourceKey =
+  | "dreamingStatus"
+  | "dreamDiary"
+  | "wikiImportInsights"
+  | "wikiOverview";
 type DreamingResourceRequest = { agentId: string };
 
 export type DreamingState = {
@@ -217,7 +221,7 @@ export function canCallDreamingMethod(
   );
 }
 
-type DreamDiaryActionMethod =
+export type DreamDiaryActionMethod =
   | "doctor.memory.backfillDreamDiary"
   | "doctor.memory.resetDreamDiary"
   | "doctor.memory.resetGroundedShortTerm"
@@ -375,11 +379,12 @@ const DREAMING_RESOURCE_SPECS: {
   },
 };
 
-async function loadDreamingResource<Key extends DreamingResourceKey>(
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Key pairs the RPC payload with its resource writer.
+export async function loadDreamingResource<Key extends DreamingResourceKey>(
   state: DreamingState,
   key: Key,
-  spec: DreamingResourceSpec<Key> = DREAMING_RESOURCE_SPECS[key],
 ): Promise<void> {
+  const spec: DreamingResourceSpec<Key> = DREAMING_RESOURCE_SPECS[key];
   const agentId = resolveSelectedAgentId(state);
   const loadingKey = `${key}Loading` as const;
   const errorKey = `${key}Error` as const;
@@ -434,28 +439,9 @@ async function loadDreamingResource<Key extends DreamingResourceKey>(
   }
 }
 
-export async function loadDreamingStatus(state: DreamingState): Promise<void> {
-  await loadDreamingResource(state, "dreamingStatus");
-}
-
-export async function loadDreamDiary(state: DreamingState): Promise<void> {
-  await loadDreamingResource(state, "dreamDiary");
-}
-
-export async function loadWikiImportInsights(state: DreamingState): Promise<void> {
-  await loadDreamingResource(state, "wikiImportInsights");
-}
-
-export async function loadWikiOverview(state: DreamingState): Promise<void> {
-  await loadDreamingResource(state, "wikiOverview");
-}
-
-async function runDreamDiaryAction(
+export async function runDreamDiaryAction(
   state: DreamingState,
   method: DreamDiaryActionMethod,
-  options?: {
-    reloadDiary?: boolean;
-  },
 ): Promise<boolean> {
   const client = state.client;
   const agentId = resolveSelectedAgentId(state);
@@ -474,10 +460,13 @@ async function runDreamDiaryAction(
   state.dreamDiaryActionArchivePath = null;
   try {
     const payload = await client.request<DoctorMemoryDreamActionPayload>(method, { agentId });
-    if (options?.reloadDiary !== false) {
-      await loadDreamDiary(state);
+    if (
+      method !== "doctor.memory.resetGroundedShortTerm" &&
+      method !== "doctor.memory.repairDreamingArtifacts"
+    ) {
+      await loadDreamingResource(state, "dreamDiary");
     }
-    await loadDreamingStatus(state);
+    await loadDreamingResource(state, "dreamingStatus");
     state.dreamDiaryActionArchivePath =
       method === "doctor.memory.repairDreamingArtifacts"
         ? (normalizeTrimmedString(payload?.archiveDir) ?? null)
@@ -499,26 +488,6 @@ async function runDreamDiaryAction(
   }
 }
 
-export async function backfillDreamDiary(state: DreamingState): Promise<boolean> {
-  return runDreamDiaryAction(state, "doctor.memory.backfillDreamDiary");
-}
-
-export async function resetDreamDiary(state: DreamingState): Promise<boolean> {
-  return runDreamDiaryAction(state, "doctor.memory.resetDreamDiary");
-}
-
-export async function resetGroundedShortTerm(state: DreamingState): Promise<boolean> {
-  return runDreamDiaryAction(state, "doctor.memory.resetGroundedShortTerm", {
-    reloadDiary: false,
-  });
-}
-
-export async function repairDreamingArtifacts(state: DreamingState): Promise<boolean> {
-  return runDreamDiaryAction(state, "doctor.memory.repairDreamingArtifacts", {
-    reloadDiary: false,
-  });
-}
-
 export async function copyDreamingArchivePath(state: DreamingState): Promise<boolean> {
   const path = state.dreamDiaryActionArchivePath;
   if (!path) {
@@ -532,10 +501,6 @@ export async function copyDreamingArchivePath(state: DreamingState): Promise<boo
     ),
   };
   return copied;
-}
-
-export async function dedupeDreamDiary(state: DreamingState): Promise<boolean> {
-  return runDreamDiaryAction(state, "doctor.memory.dedupeDreamDiary");
 }
 
 export type DreamingConfigPathSupport = "supported" | "unsupported" | "unknown";

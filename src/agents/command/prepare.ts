@@ -54,7 +54,7 @@ import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
-import { acquireWorktreeRunLease, resolveWorktreeIdForPath } from "../worktrees/run-lease.js";
+import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../worktrees/run-lease.js";
 import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
@@ -353,11 +353,13 @@ export async function prepareAgentCommandExecution(
     throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
   }
   const resolvedCwd = cwd ? resolveUserPath(cwd) : undefined;
-  const worktreeId = await resolveWorktreeIdForPath({
+  const worktreeSource = await resolveWorktreeForPath({
     sessionEntry: sessionEntryRaw,
     candidatePaths: [resolvedCwd ?? workspaceDir, workspaceDir],
   });
-  const runLease = worktreeId ? await acquireWorktreeRunLease(worktreeId) : undefined;
+  const runLease = worktreeSource
+    ? await acquireWorktreeRunLease(worktreeSource.record.id, { source: worktreeSource })
+    : undefined;
   try {
     const { resolveAcpAgentWorkspaceProvisioningForTurn } =
       await import("../acp-workspace-provisioning.js");

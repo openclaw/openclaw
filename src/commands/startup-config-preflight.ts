@@ -146,30 +146,40 @@ async function prepareStartupConfig(
         }
       }, 60_000);
       heartbeat.unref();
-      // Admission and recovery must name the generation observed after acquiring the writer lease.
-      read = await readAdmitted();
+      const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+      const startupLease = lease;
+      await withPluginLifecycleLease(
+        { env, assertCurrent: assertLeaseCurrent, processBound: true },
+        async (pluginLease) => {
+          // Admit once after both writers settle; persistence consumes these prepared facts.
+          read = await readAdmitted();
+          if (!read.snapshot.valid) {
+            return;
+          }
+          assertLeaseCurrent();
+          if (read.recovery) {
+            const recovered = read.snapshot;
+            await read.recovery.apply(() => pluginLease.assertOwned());
+            read = await readSnapshot();
+            assertPreflightConfigUnchanged(recovered, read.snapshot);
+          }
+          if (needsRefreshedPluginIndexPersistence(read)) {
+            const persisted = await measureDoctorConfigPreflightStep("plugin-index.refresh", () =>
+              persistRefreshedPluginIndex({
+                env,
+                lease: startupLease,
+                pluginLease,
+                measure,
+                readPersistedSnapshot: readSnapshot,
+                snapshotRead: read,
+              }),
+            );
+            read = persisted.snapshotRead;
+          }
+        },
+      );
       if (!read.snapshot.valid) {
         return result(read);
-      }
-      assertLeaseCurrent();
-      if (read.recovery) {
-        const recovered = read.snapshot;
-        await read.recovery.apply(assertLeaseCurrent);
-        read = await readSnapshot();
-        assertPreflightConfigUnchanged(recovered, read.snapshot);
-      }
-      if (needsRefreshedPluginIndexPersistence(read)) {
-        const persisted = await measureDoctorConfigPreflightStep("plugin-index.refresh", () =>
-          persistRefreshedPluginIndex({
-            env,
-            lease,
-            measure,
-            readPersistedSnapshot: readSnapshot,
-            snapshotRead: read,
-            assertCurrent: assertHeartbeatCurrent,
-          }),
-        );
-        read = persisted.snapshotRead;
       }
     }
     const { HISTORICAL_WEBHOOK_CHANNELS, recordUnwrittenWebhookCompletion } =

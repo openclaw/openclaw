@@ -19,7 +19,10 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
@@ -129,6 +132,7 @@ describe("memory manager shared agent connection", () => {
     const originalDb = managerDatabase(first);
     closeOpenClawAgentDatabasesForTest();
     expect(originalDb.isOpen).toBe(false);
+    await closeOpenClawAgentDatabasesAsync();
     const replacement = await fixture.getFreshManager(createConfig());
     expect(replacement === first).toBe(false);
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });

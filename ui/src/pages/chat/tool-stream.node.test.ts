@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { readPreparedActivity, summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
+import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
@@ -43,6 +44,43 @@ afterAll(() => {
 });
 
 afterEach(() => vi.useRealTimers());
+
+describe("status text truncation", () => {
+  it.each([
+    ["short", "Ready 😀", "Ready 😀"],
+    ["ASCII limit", "x".repeat(257), "x".repeat(256)],
+    ["surrogate boundary", `${"x".repeat(255)}😀 trailing`, "x".repeat(255)],
+  ])("preserves complete characters in %s retry and fallback labels", (_name, input, expected) => {
+    const host = createHost({
+      chatRunId: "run-1",
+      chatRunStartup: { state: "status", runId: "run-1", phase: "starting_model" },
+      toolStreamSyncTimer: 1,
+    });
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "run_status", {
+        phase: "retrying",
+        message: input,
+      }),
+    );
+    expect(chatStartupStatusLabel(activeChatRunStartupStatus(host.chatRunStartup), null)).toBe(
+      expected,
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "notice", {
+        phase: "provider_policy",
+        category: "cyber",
+        provider: "openai",
+        state: "fallback",
+        model: input,
+        fallbackModel: input,
+      }),
+    );
+    expect(host.providerPolicyNotice?.model).toBe(expected);
+    expect(host.providerPolicyNotice?.fallbackModel).toBe(expected);
+  });
+});
 
 describe("app-tool-stream approval lifecycle", () => {
   it.each([

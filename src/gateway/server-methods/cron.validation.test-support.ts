@@ -3,10 +3,12 @@ import { vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCronListSnapshotRevision } from "../../cron/list-snapshot-revision.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronService } from "../../cron/service.js";
 import type { CronJob } from "../../cron/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -185,8 +187,8 @@ export function createCronTestContext(
           const pageJobs = filteredJobs.slice(offset, offset + limit);
           const nextOffset = offset + pageJobs.length;
           return {
-            jobs: pageJobs,
-            snapshotRevision: `fixture:${filteredJobs.map((job) => job.id).join(",")}`,
+            jobs: freezeJsonSnapshot(structuredClone(pageJobs)),
+            snapshotRevision: resolveCronListSnapshotRevision(filteredJobs),
             total,
             offset,
             limit,

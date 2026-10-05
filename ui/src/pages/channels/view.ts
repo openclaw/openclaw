@@ -14,16 +14,12 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
-import {
-  channelEnabled,
-  renderChannelRefreshAction,
-  resolveChannelDisplayState,
-} from "./view.shared.ts";
+import { renderChannelRefreshAction, resolveChannelDisplayState } from "./view.shared.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
@@ -41,10 +37,11 @@ const RECOMMENDED_CHANNEL_ORDER: ChannelKey[] = [
 ];
 
 export function renderChannels(props: ChannelsProps) {
-  const channelOrder = resolveChannelOrder(props.channels.channelsSnapshot);
+  const snapshot = props.channels.channelsSnapshot;
+  const channelOrder = resolveChannelOrder(snapshot);
   // Key both lists so status updates cannot retarget an in-flight channel click.
-  const connected = channelOrder.filter((key) => channelEnabled(key, props));
-  const available = channelOrder.filter((key) => !channelEnabled(key, props));
+  const connected = channelOrder.filter((key) => channelSnapshotEntryIsActive(snapshot, key));
+  const available = channelOrder.filter((key) => !channelSnapshotEntryIsActive(snapshot, key));
   const showingStaleSnapshot = Boolean(
     props.channels.channelsLoading &&
     props.channels.channelsSnapshot &&

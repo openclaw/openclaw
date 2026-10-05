@@ -4454,12 +4454,9 @@ td.data-table-key-col {
 
 .agent-tools-list {
   display: grid;
+  grid-template-columns: 1fr;
   gap: 10px;
   padding: 0 12px 12px;
-}
-
-.agent-tools-list--stacked {
-  grid-template-columns: 1fr;
 }
 
 .agent-tool-card {
@@ -4752,12 +4749,6 @@ td.data-table-key-col {
 @container (min-width: 900px) {
   .skills-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 1100px) {
-  .agent-tools-list {
-    grid-template-columns: 1fr;
   }
 }
 

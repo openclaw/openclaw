@@ -238,7 +238,6 @@ type ChatHeaderTestState = {
   chatMessage: string;
   chatMessages: unknown[];
   chatModelCatalog: ModelCatalogEntry[];
-  chatModelsLoading?: boolean;
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
@@ -455,7 +454,6 @@ function createChatHeaderState(
     connected: true,
     sessionsResult: initialSessionsResult,
     chatModelCatalog: catalog,
-    chatModelsLoading: false,
     client,
     settings: {
       gatewayUrl: "",
@@ -541,11 +539,11 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     gatewayAvailable: Boolean(state.client),
     loading: state.chatLoading,
     modelCatalog: state.chatModelCatalog,
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
     modelOverrides: state.sessions.state.modelOverrides,
     modelSelectionLocked: selectedSession?.modelSelectionLocked,
     modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
     modelSwitching: false,
-    modelsLoading: state.chatModelsLoading,
     sending: state.chatSending,
     sessionKey: state.sessionKey,
     selectedSession,
@@ -3944,7 +3942,6 @@ describe("chat model controls", () => {
     const container = renderModelControls(state, {
       modelCatalogState: { hasSnapshot: false, status: "loading" },
       ...(known ? { modelOverrides: { main: null } } : {}),
-      modelsLoading: true,
     });
     const trigger = getChatModelSelect(container);
     expect(trigger.getAttribute("aria-busy")).toBe(String(!known));

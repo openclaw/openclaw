@@ -5,7 +5,7 @@ import type { ChannelAccountSnapshot, ChannelStatus } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsRow, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
@@ -76,14 +76,6 @@ export function resolveChannelDisplayState(
     defaultAccount,
     status,
   };
-}
-
-export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
-  return channelSnapshotEntryIsActive(props.channels.channelsSnapshot, key);
-}
-
-export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps): boolean | null {
-  return resolveChannelDisplayState(key, props).configured;
 }
 
 export function formatNullableBoolean(value: boolean | null): string {

@@ -117,7 +117,11 @@ function prepareSessionManagerIncognitoContext(
     check(await pending);
   return {
     binding: { actor, authority, target: input },
-    retain: <T>(operation: () => Promise<T>) => actor.sessions.withSharedState(operation),
+    retain: async <T>(operation: () => Promise<T>) => {
+      const value = await actor.sessions.withSharedState(operation);
+      assertCurrent();
+      return value;
+    },
     readMessages: () =>
       checked(
         actor.sessions.history(

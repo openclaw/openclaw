@@ -149,15 +149,20 @@ export async function claimHeartbeatOutcomeForRun(params: {
   assertCurrent?: () => void;
   incognito?: SessionCollaborationScope["incognito"];
 }): Promise<PersistedHeartbeatOutcome | undefined> {
+  const { incognito, assertCurrent } = params;
   const row = await runHeartbeatOutcomeOperation(
     params,
     {
       type: "claim",
       input: { sessionKey: params.sessionKey, runId: params.runId },
     },
-    params.assertCurrent,
+    assertCurrent,
   );
-  params.incognito?.actor.assertReadable();
+  if (incognito) {
+    assertCurrent?.();
+    incognito.authority.assertCurrent();
+    incognito.actor.assertReadable();
+  }
   return row ? rowToOutcome(row) : undefined;
 }
 
@@ -310,12 +315,14 @@ export async function claimHeartbeatContextForUserRun(
   if (params.trigger !== "user" || params.detached || !params.sessionKey) {
     return undefined;
   }
-  if (!params.assertCurrent) {
+  const { incognito, assertCurrent } = params;
+  if (!assertCurrent) {
     throw new Error("Heartbeat outcome context requires an active admitted run");
   }
-  params.assertCurrent();
+  assertCurrent();
   const outcome = await claimHeartbeatOutcomeForRun({ ...params, sessionKey: params.sessionKey });
-  params.assertCurrent();
-  params.incognito?.actor.assertReadable();
+  assertCurrent();
+  incognito?.authority.assertCurrent();
+  incognito?.actor.assertReadable();
   return buildHeartbeatOutcomeContext(outcome);
 }

@@ -91,11 +91,13 @@ export async function setSessionReactionAsync(
     };
     current.assertCurrent();
     return actor.sessions
-      .withSharedState(async () => {
-        const result = await actor.sessions.sideData(current, {
+      .withSharedState(() =>
+        actor.sessions.sideData(current, {
           type: "session.reaction.set",
           input: { sessionKey: logical.sessionKey, params: input },
-        });
+        }),
+      )
+      .then((result) => {
         current.assertCurrent();
         claim.assertCurrent();
         actor.assertReadable();

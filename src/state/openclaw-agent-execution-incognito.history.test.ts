@@ -792,6 +792,55 @@ it("composes matching RPC and HTTP pages while rechecking disclosure after displ
   await expect(reader.http({ target, limit: 1 })).rejects.toThrow("display caller revoked");
 });
 
+it.each(["consume", "pending-list", "pending-read"] as const)(
+  "rechecks history caller after %s composition settles",
+  async (operation) => {
+    const session = await create(`settled-${operation}`);
+    await append(session, "Private history");
+    let current = true;
+    const target = { ...targetInput(session), agentId: actor.agentId, storePath: actor.path };
+    const reader = createIncognitoSessionHistoryReader({
+      actor,
+      target,
+      authority: {
+        assertCurrent() {
+          if (!current) {
+            throw new Error("History caller retired after settlement");
+          }
+        },
+      },
+      subagentCoordination: { isSubagentSession: () => false, isSubagentRunMessage: () => false },
+      resolveCurrentUserProfileDisplay: () => ({ kind: "unresolved" as const }),
+    });
+    const retain = actor.sessions.withSharedState.bind(actor.sessions);
+    let first = true;
+    const completed = vi
+      .spyOn(actor.sessions, "withSharedState")
+      .mockImplementation(<T>(work: () => Promise<T>) => {
+        const revoke = first;
+        first = false;
+        return retain(work).then((result) => {
+          if (revoke) {
+            current = false;
+          }
+          return result;
+        });
+      });
+    try {
+      await expect(
+        operation === "consume"
+          ? reader.consume(target, (reads) => reads.readSessionMessageCountAsync(target))
+          : operation === "pending-list"
+            ? reader.listPendingInputs()
+            : reader.readPendingInput("absent"),
+      ).rejects.toThrow("History caller retired after settlement");
+      actor.assertReadable();
+    } finally {
+      completed.mockRestore();
+    }
+  },
+);
+
 registerIncognitoHistoryWiringTests({
   authority,
   get actor() {

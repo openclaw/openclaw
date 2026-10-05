@@ -1653,6 +1653,7 @@ describe("subagent registry seam flow", () => {
 
   registerYieldFollowupAdoptionTests({
     getRegistry: () => mod,
+    bindWakeMutation: (entries) => bindWakeMutation(entries),
     mocks,
     findRequesterRun,
     getLifecycleHandler,
@@ -1660,89 +1661,6 @@ describe("subagent registry seam flow", () => {
     settleLifecycle,
     wakeRequester,
   });
-
-  it.each([true, false])(
-    "accepts late yield only without a kill owner (killed=%s)",
-    async (killed) => {
-      mockPendingAgentWait();
-      const runId = "run-late-yield";
-      const childSessionKey = "agent:main:subagent:late-yield";
-      await mod.registerSubagentRun({
-        runId,
-        childSessionKey,
-        task: "handle authoritative late yield",
-      });
-      const lifecycleHandler = getLifecycleHandler();
-      let killedCleanupAt: number | undefined;
-      if (killed) {
-        lifecycleHandler({
-          runId,
-          stream: "lifecycle",
-          data: { phase: "end", startedAt: 111, endedAt: 222, yielded: true },
-        });
-        expect(
-          await mod.markSubagentRunTerminated({ runId, childSessionKey, reason: "killed" }),
-        ).toBe(1);
-        const run = findRequesterRun(runId);
-        expect(run).toMatchObject({
-          execution: { status: "terminal", endedAt: 222 },
-          endedReason: SUBAGENT_ENDED_REASON_KILLED,
-          cleanupHandled: true,
-          suppressAnnounceReason: "killed",
-        });
-        expect(run?.pauseReason).toBeUndefined();
-        killedCleanupAt = run?.cleanupCompletedAt;
-      } else {
-        const run = findRequesterRun(runId);
-        expect(run).toBeDefined();
-        await updateFixtureRun(runId, (next) =>
-          Object.assign(next, {
-            endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-            execution: {
-              ...run!.execution,
-              status: "terminal",
-              endedAt: 222,
-              outcome: { status: "ok" as const },
-            },
-            cleanupHandled: true,
-            cleanupCompletedAt: 223,
-            delivery: { status: "delivered" as const, deliveredAt: 223 },
-          }),
-        );
-      }
-      const event = {
-        runId,
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 111, endedAt: 333, yielded: true },
-      };
-      if (killed) {
-        lifecycleHandler(event);
-      } else {
-        await settleLifecycle(event);
-      }
-      const run = findRequesterRun(runId);
-      if (killed) {
-        expect(run).toMatchObject({
-          execution: { status: "terminal", endedAt: 222 },
-          endedReason: SUBAGENT_ENDED_REASON_KILLED,
-          cleanupHandled: true,
-          cleanupCompletedAt: killedCleanupAt,
-          suppressAnnounceReason: "killed",
-        });
-        expect(run?.pauseReason).toBeUndefined();
-      } else {
-        expect(run).toMatchObject({
-          execution: { status: "terminal", endedAt: 333 },
-          pauseReason: "sessions_yield",
-          cleanupHandled: false,
-          delivery: { status: "pending" },
-        });
-        expect(run?.endedReason).toBeUndefined();
-        expect(run?.execution.outcome).toBeUndefined();
-        expect(run?.cleanupCompletedAt).toBeUndefined();
-      }
-    },
-  );
 
   it.each(["lifecycle yield", "wait yield", "explicit kill"] as const)(
     "cancels pending abort grace when superseded by %s (#92448)",

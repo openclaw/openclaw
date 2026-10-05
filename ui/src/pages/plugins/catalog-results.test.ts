@@ -109,6 +109,28 @@ describe("renderPluginCatalogResults", () => {
     expect(chips.querySelectorAll("button")).toHaveLength(3);
   });
 
+  it("uses the package fallback for unknown and inherited category icon names", () => {
+    const container = mount(
+      baseProps({
+        categories: ["constructor", "unknown-icon", "package", "brain"].map((icon, order) => ({
+          slug: icon,
+          label: icon,
+          description: icon,
+          icon,
+          order,
+        })),
+      }),
+    );
+    const categoryIcons = [...container.querySelectorAll(".plugin-catalog-chip")]
+      .slice(3)
+      .map((chip) => chip.querySelector("svg")?.outerHTML);
+    expect(categoryIcons[2]).toBeDefined();
+    expect(categoryIcons[0]).toBe(categoryIcons[2]);
+    expect(categoryIcons[1]).toBe(categoryIcons[2]);
+    expect(categoryIcons[3]).toBeDefined();
+    expect(categoryIcons[3]).not.toBe(categoryIcons[2]);
+  });
+
   it.each(["official", "community", "empty", "mixed"] as const)(
     "preserves search ranking and groups only mixed publishers (%s)",
     (kind) => {

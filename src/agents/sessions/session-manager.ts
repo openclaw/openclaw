@@ -390,6 +390,11 @@ export class SessionManager extends SessionManagerBranching {
             throw new Error("Transcript rewrite source is not in the loaded view");
           }
           sources.set(destination, source);
+          for (const prefix of publication.cacheTtlProjectionPrefixes ?? []) {
+            if (prefix.anchorIds.includes(sourceId)) {
+              prefix.anchorIds.push(destination);
+            }
+          }
         }
         const first = entries[0];
         const source = first && sources.get(first.id);
@@ -571,16 +576,21 @@ export class SessionManager extends SessionManagerBranching {
     });
   }
 
+  private static detachBounded(source: SessionManager) {
+    const detached = SessionManager.fromSelectedEntries(
+      [source.getHeader(), ...source.getBranch()],
+      source.getCwd(),
+    );
+    detached.cacheTtlProjectionPrefixes = source.cacheTtlProjectionPrefixes;
+    return detached;
+  }
+
   /** Detach the prepared bounded branch without retaining database custody. */
   static async openDetachedBoundedAsync(
     target: SessionTranscriptRuntimeTarget,
     options: Parameters<typeof SessionManager.openBoundedAsync>[1],
   ): Promise<SessionManager> {
-    const source = await SessionManager.openBoundedAsync(target, options);
-    return SessionManager.fromSelectedEntries(
-      [source.getHeader(), ...source.getBranch()],
-      source.getCwd(),
-    );
+    return SessionManager.detachBounded(await SessionManager.openBoundedAsync(target, options));
   }
 
   /** @deprecated Runtime callers should await openDetachedBoundedAsync. */
@@ -589,12 +599,7 @@ export class SessionManager extends SessionManagerBranching {
     options: Parameters<typeof SessionManager.openBounded>[1],
   ): SessionManager {
     prepareSessionManagerSync("openDetachedBounded", target);
-    const source = SessionManager.openBounded(target, options);
-    // Normalize opaque parents and retained cuts before discarding persistence and bounded state.
-    return SessionManager.fromSelectedEntries(
-      [source.getHeader(), ...source.getBranch()],
-      source.getCwd(),
-    );
+    return SessionManager.detachBounded(SessionManager.openBounded(target, options));
   }
 
   /** @deprecated Await openModelContextAsync. Removal: next Plugin SDK major. */

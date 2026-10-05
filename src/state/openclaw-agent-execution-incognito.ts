@@ -441,24 +441,30 @@ function createIncognitoAgentExecutionOwner(
             });
           },
           readEntry(params) {
-            return execution.sessions.withSharedState(async () => {
-              const { readIncognitoAcpSessionEntry } =
-                await import("../acp/runtime/session-meta-worker-mutation.js");
-              const entry = await readIncognitoAcpSessionEntry({ ...params, actor: execution });
-              params.authority.assertCurrent();
-              execution.assertReadable();
-              return entry;
-            });
+            return execution.sessions
+              .withSharedState(async () => {
+                const { readIncognitoAcpSessionEntry } =
+                  await import("../acp/runtime/session-meta-worker-mutation.js");
+                return readIncognitoAcpSessionEntry({ ...params, actor: execution });
+              })
+              .then((entry) => {
+                params.authority.assertCurrent();
+                execution.assertReadable();
+                return entry;
+              });
           },
           upsertMeta(params) {
-            return execution.sessions.withSharedState(async () => {
-              const { upsertIncognitoAcpSessionMeta } =
-                await import("../acp/runtime/session-meta-worker-mutation.js");
-              const entry = await upsertIncognitoAcpSessionMeta({ ...params, actor: execution });
-              params.authority.assertCurrent();
-              execution.assertReadable();
-              return entry;
-            });
+            return execution.sessions
+              .withSharedState(async () => {
+                const { upsertIncognitoAcpSessionMeta } =
+                  await import("../acp/runtime/session-meta-worker-mutation.js");
+                return upsertIncognitoAcpSessionMeta({ ...params, actor: execution });
+              })
+              .then((entry) => {
+                params.authority.assertCurrent();
+                execution.assertReadable();
+                return entry;
+              });
           },
         },
         assertCurrent: assertBorrowed,

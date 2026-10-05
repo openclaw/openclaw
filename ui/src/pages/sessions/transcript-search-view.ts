@@ -28,7 +28,7 @@ export type TranscriptSearchProps = {
   onTranscriptSearchChange: (query: string) => void;
   onTranscriptSearch: () => void;
   onClearTranscriptSearch: () => void;
-  onNavigateToChat?: (sessionKey: string) => void;
+  onNavigateToChat: (sessionKey: string) => void;
 };
 
 function transcriptSearchSessionLabel(hit: SessionsSearchHit, rows: GatewaySessionRow[]): string {
@@ -194,7 +194,7 @@ export function renderTranscriptSearch(props: TranscriptSearchProps) {
                         <button
                           class="sessions-transcript-search__result"
                           type="button"
-                          @click=${() => props.onNavigateToChat?.(hit.sessionKey)}
+                          @click=${() => props.onNavigateToChat(hit.sessionKey)}
                         >
                           <span class="sessions-transcript-search__result-header">
                             <strong>${transcriptSearchSessionLabel(hit, rows)}</strong>

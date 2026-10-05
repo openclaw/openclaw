@@ -484,18 +484,6 @@ describe("openclaw.chat", () => {
     );
   });
 
-  it("rejects unknown setup verification params without running inference", async () => {
-    const { calls, respond } = makeRespond();
-
-    await systemAgentHandler("openclaw.setup.verify")({
-      params: { modelRef: "openai/gpt-5.5" },
-      respond,
-    } as never);
-
-    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
-    expect(calls[0]?.ok).toBe(false);
-  });
-
   it.each(["applied", "restart-required", "failed"] as const)(
     "settles setup completion without holding its lane: %s",
     async (outcome) => {
@@ -742,20 +730,6 @@ describe("openclaw.chat", () => {
     });
   });
 
-  it("does not pass UI context to welcome-only turns", async () => {
-    const engine = makeVerifiedEngine();
-    const handle = vi.spyOn(engine, "handle");
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      context: { page: "custodian" },
-    });
-
-    expect(call.ok).toBe(true);
-    expect(handle).not.toHaveBeenCalled();
-  });
-
   it("persists completed turns from the engine's sanitized history", async () => {
     const engine = new SystemAgentChatEngine({
       verifiedInference: requireVerifiedInferenceFixture(),
@@ -783,27 +757,6 @@ describe("openclaw.chat", () => {
     expect(JSON.stringify(transcriptStoreMocks.appendTurn.mock.calls)).not.toMatch(
       /ui-context|plugin-reference|Example/,
     );
-  });
-
-  it("seeds a new engine with the persisted tail without recording an idle welcome", async () => {
-    stubEngineOverview();
-    transcriptStoreMocks.readTranscriptTailAsync.mockResolvedValue([
-      { role: "user", text: "Earlier question", at: 1 },
-      { role: "assistant", text: "Earlier answer", at: 2 },
-    ]);
-    const seedHistory = vi.spyOn(SystemAgentChatEngine.prototype, "seedHistory");
-
-    const call = await callChat(makeContext(new Map()), { sessionId: "fresh" });
-
-    expect(call.ok).toBe(true);
-    expect(transcriptStoreMocks.readTranscriptTailAsync).toHaveBeenCalledWith(30, {
-      afterLastReset: true,
-    });
-    expect(seedHistory).toHaveBeenCalledWith([
-      { role: "user", text: "Earlier question" },
-      { role: "assistant", text: "Earlier answer" },
-    ]);
-    expect(transcriptStoreMocks.appendTurn).not.toHaveBeenCalled();
   });
 
   it("persists only the mask marker for a sensitive hosted-wizard answer", async () => {

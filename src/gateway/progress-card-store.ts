@@ -83,16 +83,16 @@ export function createIncognitoProgressCardStore(
   return {
     async get(sessionKey, agentId) {
       const target = capture(sessionKey, agentId);
-      return target.actor.sessions.withSharedState(async () => {
-        const card = await target.actor.sessions.sideData(target.current, {
+      const card = await target.actor.sessions.withSharedState(() =>
+        target.actor.sessions.sideData(target.current, {
           type: "session.progressCard.get",
           input: { sessionKey: target.sessionKey },
-        });
-        target.current.assertCurrent();
-        target.claim.assertCurrent();
-        target.actor.assertReadable();
-        return card;
-      });
+        }),
+      );
+      target.current.assertCurrent();
+      target.claim.assertCurrent();
+      target.actor.assertReadable();
+      return card;
     },
     async put(sessionKey, input, agentId) {
       const target = capture(sessionKey, agentId, input.assertCurrent);
@@ -101,16 +101,16 @@ export function createIncognitoProgressCardStore(
         steps: input.steps,
         expectedRevision: input.expectedRevision,
       });
-      return target.actor.sessions.withSharedState(async () => {
-        const result = await target.actor.sessions.sideData(target.current, {
+      const result = await target.actor.sessions.withSharedState(() =>
+        target.actor.sessions.sideData(target.current, {
           type: "session.progressCard.put",
           input: { ...captured, sessionKey: target.sessionKey },
-        });
-        target.current.assertCurrent();
-        target.claim.assertCurrent();
-        target.actor.assertReadable();
-        return "card" in result ? result : { card: null };
-      });
+        }),
+      );
+      target.current.assertCurrent();
+      target.claim.assertCurrent();
+      target.actor.assertReadable();
+      return "card" in result ? result : { card: null };
     },
   };
 }

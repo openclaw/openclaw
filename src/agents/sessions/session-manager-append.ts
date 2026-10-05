@@ -425,6 +425,15 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       } else {
         this.leafId = canonicalEntry.id;
         this.appendMode = undefined;
+        // Bind opaque-only inherited state only after the visible append succeeds.
+        this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.flatMap((prefix) => {
+          if (prefix.anchorIds.length) {
+            return [prefix];
+          }
+          return canonicalEntry.type === "reset" || canonicalEntry.type === "branch_summary"
+            ? []
+            : [{ ...prefix, anchorIds: [canonicalEntry.id] }];
+        });
       }
       if (canonicalEntry.type === "label") {
         if (canonicalEntry.label) {

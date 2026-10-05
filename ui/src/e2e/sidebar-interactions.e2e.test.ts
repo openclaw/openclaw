@@ -415,7 +415,7 @@ suite.define(() => {
     }
   });
 
-  it("shows one tile per agent plus Show all and reaches them with menu keys", async () => {
+  it("shows one row per agent plus Show all and reaches them with menu keys", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -478,7 +478,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           researchSwitch.evaluate(
-            (element) => element.parentElement?.matches(".sidebar-agent-menu__agent-grid") ?? false,
+            (element) => element.parentElement?.matches(".sidebar-agent-menu__agent-list") ?? false,
           ),
         )
         .toBe(true);
@@ -486,40 +486,25 @@ suite.define(() => {
         .poll(() => researchSwitch.locator(".agent-select__avatar img").getAttribute("src"))
         .toContain("data:image/png;base64,");
       await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
-      const gridLayout = await menu.evaluate((dropdown) => {
-        const center = (element: Element | null | undefined) => {
-          const rect = element?.getBoundingClientRect();
-          return rect ? Math.round(rect.x + rect.width / 2) : Number.NaN;
-        };
-        const grid = dropdown.querySelector(".sidebar-agent-menu__agent-grid");
-        const agentRows = [
-          ...dropdown.querySelectorAll("wa-dropdown-item.sidebar-agent-menu__agent-switch"),
-        ];
-        return {
-          columns: grid ? getComputedStyle(grid).gridTemplateColumns.split(" ").length : 0,
-          bottomGap:
-            grid && agentRows.length > 0
-              ? Math.round(
-                  Math.abs(
-                    grid.getBoundingClientRect().bottom -
-                      Math.max(...agentRows.map((row) => row.getBoundingClientRect().bottom)),
-                  ),
-                )
-              : Number.NaN,
-          widths: agentRows.map((row) => Math.round(row.getBoundingClientRect().width)),
-          avatarOffsets: agentRows.map(
-            (row) => center(row.querySelector(".sidebar-agent-menu__agent-avatar")) - center(row),
-          ),
-          labelOffsets: agentRows.map(
-            (row) => center(row.querySelector(".agent-select__option-copy")) - center(row),
-          ),
-        };
+      await menu.evaluate(async (dropdown) => {
+        await document.fonts.ready;
+        const surface = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+        await Promise.all(surface.getAnimations().map((animation) => animation.finished));
       });
-      expect(gridLayout.columns).toBe(3);
-      expect(gridLayout.bottomGap).toBe(0);
-      expect(new Set(gridLayout.widths).size).toBe(1);
-      expect(gridLayout.avatarOffsets).toEqual([0, 0, 0, 0]);
-      expect(gridLayout.labelOffsets).toEqual([0, 0, 0, 0]);
+      const rowLayout = await menu.evaluate((dropdown) => {
+        const rows = [...dropdown.querySelectorAll(".sidebar-agent-menu__agent-switch")];
+        return rows.map((row) => {
+          const avatar = row
+            .querySelector(".sidebar-agent-menu__agent-avatar")!
+            .getBoundingClientRect();
+          const label = row.querySelector(".agent-select__option-copy")!.getBoundingClientRect();
+          const bounds = row.getBoundingClientRect();
+          return { height: bounds.height, width: bounds.width, gap: label.left - avatar.right };
+        });
+      });
+      expect(rowLayout.map((row) => row.height)).toEqual([56, 56, 56, 56]);
+      expect(new Set(rowLayout.map((row) => row.width)).size).toBe(1);
+      expect(rowLayout.map((row) => row.gap)).toEqual([12, 12, 12, 12]);
       const capabilities = menu.getByRole("menuitem", {
         name: "What can Scheduled Automations do?",
         exact: true,
@@ -544,7 +529,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           menu.evaluate((dropdown) => {
-            const grid = dropdown.querySelector(".sidebar-agent-menu__agent-grid");
+            const grid = dropdown.querySelector(".sidebar-agent-menu__agent-list");
             const rows = [
               ...dropdown.querySelectorAll("wa-dropdown-item.sidebar-agent-menu__agent-switch"),
             ];
@@ -593,6 +578,136 @@ suite.define(() => {
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(controlUiSessionPath("agent:research:main"));
+      await sidebar.locator(".sidebar-agent-card__main").click();
+      await menu.getByRole("menuitem", { name: "Show all", exact: true }).click();
+      await sidebar.locator(".sidebar-workspace-header__main").click();
+      await captureSidebarUiProof(suite, page, "agent-menu-selected-stack.png");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("searches a crowded agent menu without losing keyboard navigation or actions", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 480 },
+    });
+    const page = await context.newPage();
+    const agents = Array.from({ length: 40 }, (_, index) => ({
+      id: index === 0 ? "main" : `agent-${index}`,
+      name: index === 1 || index === 2 ? "Support" : `Research and documentation agent ${index}`,
+    }));
+    const agentsList = { agents, defaultId: "main", mainKey: "main", scope: "agent" };
+    await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": agentsList,
+        "agent.identity.get": {
+          cases: agents.map((agent) => ({
+            match: { agentId: agent.id },
+            response: { agentId: agent.id, name: agent.name },
+          })),
+        },
+        "chat.startup": {
+          agentsList,
+          messages: [],
+          metadata: { models: [] },
+          sessionId: "session:agent:main:main",
+          thinkingLevel: null,
+        },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const trigger = sidebar.locator(".sidebar-agent-card__main");
+      await trigger.click();
+      const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
+      const search = menu.getByRole("searchbox", { name: "Find an agent…" });
+      const rows = menu.locator(".sidebar-agent-menu__agent-list > wa-dropdown-item");
+      await expect.poll(() => rows.count()).toBe(41);
+      await menu.evaluate(async (dropdown) => {
+        await document.fonts.ready;
+        const surface = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+        await Promise.all(surface.getAnimations().map((animation) => animation.finished));
+      });
+      const geometry = await menu.evaluate((dropdown) => {
+        const list = dropdown.querySelector<HTMLElement>(".sidebar-agent-menu__agent-list")!;
+        const actions = [...dropdown.querySelectorAll<HTMLElement>(":scope > wa-dropdown-item")];
+        return {
+          scrolls: list.scrollHeight > list.clientHeight,
+          actionsFit: actions.every((action) => {
+            const box = action.getBoundingClientRect();
+            return box.top >= 0 && box.bottom <= innerHeight;
+          }),
+          heights: [...list.children].map((row) => row.getBoundingClientRect().height),
+        };
+      });
+      expect(geometry.scrolls).toBe(true);
+      expect(geometry.actionsFit).toBe(true);
+      expect(geometry.heights.every((height) => height === 56)).toBe(true);
+      await captureSidebarUiProof(suite, page, "agent-menu-40-short-window.png");
+      await page.keyboard.press("Home");
+      await page.keyboard.press("ArrowUp");
+      await expect
+        .poll(() => search.evaluate((input) => input === document.activeElement))
+        .toBe(true);
+      await page.keyboard.type("support");
+      await expect.poll(() => rows.count()).toBe(2);
+      expect(await rows.locator(".agent-select__option-description").allTextContents()).toEqual([
+        "agent-1",
+        "agent-2",
+      ]);
+      await search.press("Home");
+      await expect
+        .poll(() => search.evaluate((input) => input === document.activeElement))
+        .toBe(true);
+      await search.fill("no-such-agent");
+      await expect.poll(() => menu.getByRole("status").textContent()).toBe("No matching agents");
+      expect(await menu.locator(":scope > wa-dropdown-item").count()).toBe(4);
+      await search.fill("agent-39");
+      await expect.poll(() => rows.count()).toBe(1);
+      await search.press("ArrowDown");
+      await expect
+        .poll(() => rows.first().evaluate((row) => row === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Enter");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:agent-39:main"));
+      await trigger.click();
+      await expect.poll(() => search.inputValue()).toBe("");
+      const active = menu.locator('[aria-current="true"]');
+      await expect
+        .poll(() =>
+          active.evaluate((row) => {
+            const box = row.getBoundingClientRect();
+            const list = row.parentElement!.getBoundingClientRect();
+            return box.top >= list.top - 1 && box.bottom <= list.bottom + 1;
+          }),
+        )
+        .toBe(true);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => menu.count()).toBe(0);
+      await expect
+        .poll(() => trigger.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+      await composer.click();
+      await trigger.hover();
+      await expect.poll(() => menu.count()).toBe(1);
+      await expect
+        .poll(() =>
+          active.evaluate((row) => {
+            const bounds = row.getBoundingClientRect();
+            const viewport = row.parentElement!.getBoundingClientRect();
+            return bounds.top >= viewport.top - 1 && bounds.bottom <= viewport.bottom + 1;
+          }),
+        )
+        .toBe(true);
+      await expect
+        .poll(() => composer.evaluate((element) => element === document.activeElement))
+        .toBe(true);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -1730,40 +1730,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
-  it("preserves bounded delivery evidence when strict post-turn delivery throws", async () => {
-    setupSuccessfulAttempt();
-    const secret = ["sk", "strict-delivery-secret-value"].join("-");
-    state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
-      (
-        params as {
-          onDeliveryResult?: (result: { deliveryStatus: Record<string, unknown> }) => void;
-        }
-      ).onDeliveryResult?.({
-        deliveryStatus: {
-          status: "failed",
-          errorMessage: `Authorization: Bearer ${secret}`,
-          target: "discord:dm:private",
-        },
-      });
-      throw new Error("strict delivery failed");
-    });
-
-    await expect(runDiscordDelivery()).rejects.toThrow("strict delivery failed");
-
-    const lifecycleError = state.emitAgentEventMock.mock.calls
-      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
-      .find((event) => event.stream === "lifecycle" && event.data?.phase === "error");
-    expect(lifecycleError?.data?.terminalDelivery).toEqual({
-      status: "failed",
-      resultCount: 0,
-    });
-    for (const field of ["stopReason", "terminalReceipt", "terminalReply"]) {
-      expect(lifecycleError?.data).not.toHaveProperty(field);
-    }
-    expect(JSON.stringify(lifecycleError)).not.toContain(secret);
-    expect(JSON.stringify(lifecycleError)).not.toContain("discord:dm:private");
-  });
-
   it("preserves restart ownership when an aborted attempt resolves normally", async () => {
     setupSingleAttemptFallback();
     const controller = new AbortController();

@@ -46,7 +46,7 @@ import {
   isSubagentRunQueued,
   isSubagentSessionRunActive,
 } from "./subagent-registry-read.js";
-import { preserveSubagentRunForRestart } from "./subagent-registry-run-wait.js";
+import { preserveSubagentRunForRestart } from "./subagent-registry-run-pause.js";
 import {
   countActiveRunsForSession,
   markSubagentRunTerminated,

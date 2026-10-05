@@ -279,7 +279,12 @@ enum ShellExecutor {
                                 await self.waitForExitOrTimeout(execution: execution, timeout: timeout)
                             }
                         }
-                        return try await group.reduce(false) { $0 || $1 }
+                        // Drain every task so stream errors still propagate after the deadline fires.
+                        var timedOut = false
+                        for try await didTimeOut in group {
+                            timedOut = timedOut || didTimeOut
+                        }
+                        return timedOut
                     }
                 } onCancel: {
                     _ = Darwin.kill(-processIdentifier, SIGKILL)

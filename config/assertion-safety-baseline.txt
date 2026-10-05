@@ -1777,7 +1777,6 @@ src/cli/run-main.ts	1
 src/cli/secrets-cli.ts	2
 src/cli/secrets-store-cli.ts	1
 src/cli/session-ref.ts	1
-src/cli/setup-onboard-configure-help-fast-path.ts	2
 src/cli/skills-cli.ts	2
 src/cli/startup-metadata.ts	1
 src/cli/subprocess-exit-code.ts	1

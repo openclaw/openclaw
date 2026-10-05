@@ -149,6 +149,120 @@ it("retains independent admission claims and revokes only the released claim", a
   }
 });
 
+it.each(["card-read", "card-write", "reaction-write"] as const)(
+  "rechecks %s caller authority after retained settlement",
+  async (operation) => {
+    const { scope, reaction, store } = await fixture(`settled-${operation}`);
+    await store.put(scope.sessionKey, { markdown: "Private stored card" });
+    await setSessionReactionAsync(scope, reaction);
+    let allowed = true;
+    const current: IncognitoSessionAuthority = {
+      assertCurrent() {
+        if (!allowed) {
+          throw new Error("Domain caller authority ended");
+        }
+      },
+    };
+    const bound = { ...scope, incognito: { actor, authority: current } };
+    const cards = createIncognitoProgressCardStore(() => bound);
+    const retain = actor.sessions.withSharedState.bind(actor.sessions);
+    const settle = async <T>(work: () => Promise<T>): Promise<T> => {
+      const value = await retain(work);
+      allowed = false;
+      return value;
+    };
+    const settled = vi.spyOn(actor.sessions, "withSharedState").mockImplementationOnce(settle);
+    try {
+      const work =
+        operation === "card-read"
+          ? cards.get(scope.sessionKey)
+          : operation === "card-write"
+            ? cards.put(scope.sessionKey, { expectedRevision: 999 })
+            : setSessionReactionAsync(bound, { ...reaction, identityId: "writer" });
+      await expect(work).rejects.toThrow("Domain caller authority ended");
+      actor.assertReadable();
+      expect(await store.get(scope.sessionKey)).toMatchObject({
+        markdown: "Private stored card",
+        revision: 1,
+      });
+      if (operation === "reaction-write") {
+        expect(
+          await actor.sessions.sideData(authority, {
+            type: "session.reactions.read",
+            input: { sessionKey: scope.sessionKey, sessionId: scope.sessionId },
+          }),
+        ).toMatchObject({ [reaction.messageId]: [{ count: 2 }] });
+      }
+    } finally {
+      settled.mockRestore();
+    }
+  },
+);
+
+it("rechecks native context authority after retained settlement", async () => {
+  const { scope } = await fixture("settled-native-context");
+  const controller = new AbortController();
+  await withIncognitoSessionActor(actor, async () => {
+    const retain = actor.sessions.withSharedState.bind(actor.sessions);
+    const settle = async <T>(work: () => Promise<T>): Promise<T> => {
+      const value = await retain(work);
+      controller.abort(new Error("Context caller authority ended"));
+      return value;
+    };
+    const settled = vi.spyOn(actor.sessions, "withSharedState").mockImplementationOnce(settle);
+    try {
+      await expect(
+        readSessionManagerContextAsync(scope, (messages) => [...messages], {
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow("Context caller authority ended");
+      actor.assertReadable();
+    } finally {
+      settled.mockRestore();
+    }
+  });
+});
+
+it.each(["run", "actor"] as const)(
+  "rechecks heartbeat %s authority after claim settlement without discarding the claim",
+  async (owner) => {
+    const { scope, heartbeat } = await fixture(`settled-authority-${owner}`);
+    await persistHeartbeatOutcome(heartbeat);
+    let allowed = true;
+    const assertCurrent = () => {
+      if (!allowed) {
+        throw new Error("Heartbeat caller authority ended");
+      }
+    };
+    const retain = actor.sessions.withSharedState.bind(actor.sessions);
+    const settle = async <T>(operation: () => Promise<T>): Promise<T> => {
+      const value = await retain(operation);
+      allowed = false;
+      return value;
+    };
+    const settled = vi.spyOn(actor.sessions, "withSharedState").mockImplementationOnce(settle);
+    try {
+      await expect(
+        claimHeartbeatOutcomeForRun({
+          ...scope,
+          runId: "accepted-claim",
+          assertCurrent: owner === "run" ? assertCurrent : undefined,
+          incognito: { actor, authority: owner === "actor" ? { assertCurrent } : authority },
+        }),
+      ).rejects.toThrow("Heartbeat caller authority ended");
+      actor.assertReadable();
+      expect(
+        await claimHeartbeatOutcomeForRun({ ...scope, runId: "accepted-claim" }),
+      ).toMatchObject({
+        summary: "Private progress",
+      });
+      expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "another-run" })).toBeUndefined();
+    } finally {
+      settled.mockRestore();
+    }
+  },
+);
+
 it.each(["transaction", "commit"] as const)(
   "rolls domain mutations back when current authority refuses at %s",
   async (stage) => {

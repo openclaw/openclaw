@@ -355,14 +355,17 @@ export function createIncognitoSessionHistoryReader(params: {
       current.snapshot?.assertCurrent();
       disclose(undefined);
     };
-    return actor.sessions.withSharedState(() =>
-      consumption.run(current, async () => {
-        assertReadCurrent();
-        const result = await operation(readers, assertReadCurrent);
+    return actor.sessions
+      .withSharedState(() =>
+        consumption.run(current, async () => {
+          assertReadCurrent();
+          return operation(readers, assertReadCurrent);
+        }),
+      )
+      .then((result) => {
         assertReadCurrent();
         return result;
-      }),
-    );
+      });
   };
   return {
     readers,
@@ -414,15 +417,15 @@ export function createIncognitoSessionHistoryReader(params: {
     listPendingInputs(query: Pick<PendingInputHistoryQuery, "limit" | "before"> = {}) {
       const captured = { ...query };
       assertCurrent();
-      return actor.sessions.withSharedState(async () =>
-        disclose(await (await pendingInputs()).list(captured)),
-      );
+      return actor.sessions
+        .withSharedState(async () => (await pendingInputs()).list(captured))
+        .then(disclose);
     },
     readPendingInput(id: string) {
       assertCurrent();
-      return actor.sessions.withSharedState(async () =>
-        disclose(await (await pendingInputs()).read(id)),
-      );
+      return actor.sessions
+        .withSharedState(async () => (await pendingInputs()).read(id))
+        .then(disclose);
     },
     async rpc(request: ChatHistoryPageParams) {
       const captured = structuredClone(request);

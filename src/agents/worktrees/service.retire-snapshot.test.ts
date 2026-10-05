@@ -93,7 +93,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     await git(repo, "update-ref", record.snapshotRef!, snapshot);
     const retainedSourceRef = "refs/heads/retained-source";
     await git(repo, "update-ref", retainedSourceRef, source);
-    insertRegistryWorktree(env, record, { provisionedPaths: [] });
+    await insertRegistryWorktree(env, record, { provisionedPaths: [] });
     const database = openOpenClawStateDatabase({ env });
     expect(await fs.realpath(database.path)).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
     request = {
@@ -178,7 +178,7 @@ describe("Exact removed worktree snapshot retirement", () => {
         branch: "openclaw/foreign",
         snapshotRef: "refs/openclaw/snapshots/a0000000-0000-4000-8000-000000000002",
       };
-      insertRegistryWorktree(env, foreign, { provisionedPaths: [] });
+      await insertRegistryWorktree(env, foreign, { provisionedPaths: [] });
       await git(repo, "update-ref", foreign.snapshotRef!, source);
       const outcome = "refs/openclaw/pr-merge-outcomes/123";
       await git(repo, "update-ref", outcome, source);
@@ -206,9 +206,9 @@ describe("Exact removed worktree snapshot retirement", () => {
     ["repository identity", {}],
   ] as const)("preserves custody when the expected %s does not match", async (label, patch) => {
     if (label === "live registry lifecycle") {
-      updateRegistryWorktree(env, record.id, { removedAt: undefined });
+      await updateRegistryWorktree(env, record.id, { removedAt: undefined });
     } else if (label === "repository identity") {
-      updateRegistryWorktree(env, record.id, {
+      await updateRegistryWorktree(env, record.id, {
         repositoryIdentity: { repoRoot: repo, repoFingerprint: "foreign-fingerprint" },
       });
     }
@@ -229,7 +229,7 @@ describe("Exact removed worktree snapshot retirement", () => {
   it("preserves exact-state recovery instead of treating it as a redundant ordinary snapshot", async () => {
     const exactRef = `refs/openclaw/snapshots/exact-v1/${record.id}`;
     await git(repo, "update-ref", exactRef, request.expectedSnapshotOid);
-    updateRegistryWorktree(env, record.id, { snapshotRef: exactRef });
+    await updateRegistryWorktree(env, record.id, { snapshotRef: exactRef });
     const exactRecord = getRegistryWorktree(env, record.id);
     const recovery = path.join(root, "exact-recovery");
     await git(repo, "worktree", "add", "--detach", recovery, source);
@@ -327,7 +327,7 @@ describe("Exact removed worktree snapshot retirement", () => {
           { env },
         );
       } else if (kind === "provisioned ledger") {
-        updateRegistryWorktree(env, record.id, {
+        await updateRegistryWorktree(env, record.id, {
           provisionedState: [{ path: chunk.path, mode: 0o600, chunks: 1 }],
         });
         await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
@@ -518,9 +518,9 @@ describe("Exact removed worktree snapshot retirement", () => {
     "rechecks %s at the deletion boundary",
     async (kind) => {
       let revoked = false;
-      const mutation = beforeSnapshotDeletion(() => {
+      const mutation = beforeSnapshotDeletion(async () => {
         if (kind === "registry lifecycle") {
-          updateRegistryWorktree(env, record.id, { removedAt: removedAt + 1 });
+          await updateRegistryWorktree(env, record.id, { removedAt: removedAt + 1 });
         } else {
           revoked = true;
         }

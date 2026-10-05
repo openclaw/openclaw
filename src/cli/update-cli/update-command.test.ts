@@ -29,11 +29,7 @@ import {
   formatPostUpdateGatewayRecoveryInstructions,
   recoverLaunchAgentAndRecheckGatewayHealth,
 } from "./update-command-service-recovery.js";
-import {
-  resolvePostUpdateServiceStateReadEnv,
-  resolveUpdatedGatewayRestartPort,
-  shouldPrepareUpdatedInstallRestart,
-} from "./update-command-service.js";
+import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
 import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
 const tempDirs = createTempDirTracker();
@@ -109,65 +105,6 @@ describe("applyPostPluginConfigValidation", () => {
   });
 });
 
-describe("shouldPrepareUpdatedInstallRestart", () => {
-  it("prepares package update restarts when the service is installed but stopped", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "npm",
-        serviceInstalled: true,
-        serviceLoaded: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not install a new service for package updates when no service exists", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "npm",
-        serviceInstalled: false,
-        serviceLoaded: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps non-package updates tied to the matching loaded service state", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: false,
-      }),
-    ).toBe(false);
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: true,
-        serviceMatchesUpdateRoot: false,
-      }),
-    ).toBe(false);
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: true,
-        serviceMatchesUpdateRoot: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("prepares git restart when this update stopped the managed service", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: false,
-        serviceStoppedForUpdate: true,
-      }),
-    ).toBe(true);
-  });
-});
-
 describe("resolveUpdatedGatewayRestartPort", () => {
   it("uses the managed service port ahead of the caller environment", async () => {
     expect(
@@ -187,26 +124,6 @@ describe("resolveUpdatedGatewayRestartPort", () => {
         serviceEnv: {},
       }),
     ).toBe(19000);
-  });
-});
-
-describe("resolvePostUpdateServiceStateReadEnv", () => {
-  it.each(["git", "npm"] as const)(
-    "keeps %s restart preparation anchored to the pre-update service env",
-    (updateMode) => {
-      const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
-      const preManagedServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" };
-      expect(
-        resolvePostUpdateServiceStateReadEnv({ updateMode, processEnv, preManagedServiceEnv }),
-      ).toEqual(preManagedServiceEnv);
-    },
-  );
-
-  it("uses the caller environment when no managed service context was captured", () => {
-    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
-    expect(resolvePostUpdateServiceStateReadEnv({ updateMode: "git", processEnv })).toEqual(
-      processEnv,
-    );
   });
 });
 

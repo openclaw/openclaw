@@ -614,10 +614,10 @@ describe("update-cli", () => {
         "gateway",
       ]);
       serviceDefinitionMutationCapability.mockResolvedValue({ kind: beforeKind, detail: "owner" });
-      const {
-        maybeStopManagedServiceBeforeMutableUpdate,
-        revalidateManagedGatewayServiceAfterUpdate,
-      } = await import("./update-cli/update-command-service.js");
+      const { maybeStopManagedServiceBeforeMutableUpdate } =
+        await import("./update-cli/update-command-service.js");
+      const { revalidateManagedGatewayServiceAfterUpdate } =
+        await import("./update-cli/update-command-service-revalidation.js");
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
         root: process.cwd(),
         updateInstallKind: "git",

@@ -93,16 +93,24 @@ describe("memory manager reads", () => {
     );
     expect(archive?.artifactKind).toBe("archive-artifact");
     const database = Reflect.get(manager, "db") as DatabaseSync;
-    const insert = database.prepare(
-      "INSERT INTO memory_index_sources(path, source, hash, mtime, size) VALUES(?, ?, 'retained', 1, 2)",
-    );
-    for (let index = 0; index < 2_000; index += 1) {
-      insert.run(`sessions/main/unrelated-${index}.jsonl`, "sessions");
+    const databasePath = database.location();
+    if (!databasePath) {
+      throw new Error("Expected the fixture's file-backed memory index");
     }
-    for (const sessionId of [activeId, archivedId]) {
-      insert.run(`sessions/main/${sessionId}`, "sessions");
+    {
+      // Observe the worker-published schema before seeding through a fixture writer.
+      using writer = new DatabaseSync(databasePath);
+      const insert = writer.prepare(
+        "INSERT INTO memory_index_sources(path, source, hash, mtime, size) VALUES(?, ?, 'retained', 1, 2)",
+      );
+      for (let index = 0; index < 2_000; index += 1) {
+        insert.run(`sessions/main/unrelated-${index}.jsonl`, "sessions");
+      }
+      for (const sessionId of [activeId, archivedId]) {
+        insert.run(`sessions/main/${sessionId}`, "sessions");
+      }
+      insert.run(`sessions/main/${archivedId}`, "memory");
     }
-    insert.run(`sessions/main/${archivedId}`, "memory");
     const readSources = database.prepare(
       "SELECT * FROM memory_index_sources ORDER BY path, source",
     );
