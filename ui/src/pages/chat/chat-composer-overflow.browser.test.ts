@@ -481,7 +481,8 @@ describe("composer overflow presentation", () => {
       await expectStableSize("A short editable draft.");
       const draft =
         "A typed line that wraps within the available composer width. ".repeat(8) +
-        "\nA second editable line.";
+        // Taller than half the viewport, so the editor reaches its cap and scrolls.
+        Array.from({ length: 24 }, (_value, index) => `\nEditable line ${index + 2}.`).join("");
       await control.fill(draft);
       await afterLayout();
       expect(textarea.value).toBe(draft);
