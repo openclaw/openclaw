@@ -351,7 +351,6 @@ describe("candidate update admission", () => {
     "plugins/installs.json",
     "settings/voicewake.json",
     "settings/voicewake-routing.json",
-    "update-check.json",
     "bindings/current-conversations.json",
     "acp/event-ledger.json",
     "acp/event-ledger.json.doctor-import",
@@ -490,6 +489,19 @@ describe("candidate update admission", () => {
       expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
     },
   );
+
+  it("admits despite a leftover update-check cache", async () => {
+    const filename = path.join(path.dirname(configPath), "update-check.json");
+    fs.writeFileSync(filename, '{"lastAvailableVersion":"2026.9.7"}\n');
+    const before = snapshotFiles();
+
+    await updateAdmitCommand(contextPath);
+
+    expect(process.exitCode).toBe(0);
+    expect(readVerdict()).toMatchObject({ verdict: "admit", reasons: [] });
+    expect(stderr).toBe("");
+    expect(snapshotFiles()).toEqual(before);
+  });
 
   it("uses the explicit installed root and emits one JSON verdict without creating live state", async () => {
     const before = snapshotFiles();

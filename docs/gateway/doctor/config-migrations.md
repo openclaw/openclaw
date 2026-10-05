@@ -184,9 +184,11 @@ original files before stopping the running Gateway. The same early check reports
 the existing recovery guidance for a retired `plugins/installs.json` index. See
 [state migration recovery](/gateway/doctor/state-and-sessions).
 
-Voice Wake trigger/routing JSON, `update-check.json`, plugin-binding approvals,
+Voice Wake trigger/routing JSON, plugin-binding approvals,
 current-conversation bindings, ACP replay `acp/event-ledger.json`, and
 `restart-sentinel.json` are retired. Their last writers shipped before July 1.
+A leftover `update-check.json` is only a notification cache, so Doctor and
+updates ignore it.
 Doctor and update admission preserve the files and refuse with the intermediate
 upgrade path: install `2026.9.7`, run `openclaw doctor --fix` on the original
 host, then retry. Interrupted ACP and restart-sentinel import claims are also
