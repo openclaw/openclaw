@@ -67,7 +67,6 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   GitHub-hosted labels. Configure eligible runners and repo
   access first; unset preserves ordinary routing. Shared workers inherit the
   caller group; PR/main CI and unrelated scheduled work remain outside it.
-- Validate provider secrets before dispatching expensive full release matrices.
 - Check the nightly parent for the Code SHA before dispatching a fresh main validation; it seals per-child receipts that exact-target dispatches adopt when inputs match. The nightly runs this explicit trusted-main helper route (`--sha <main-sha> --workflow-sha <main-sha> --trusted-workflow-ref main`), so its parent runs on a `release-ci/<sha12>-<id>` branch, not `main`.
 - Every selected validation lane must pass; see
   [Publication requirements](#publication-requirements). Stable tags require stable/full
@@ -85,10 +84,11 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   Avoid broad `gh run view` polling loops; REST quota is easy to burn.
 - Fetch logs only for failed or currently-blocking jobs. If quota is low, stop polling and wait for reset.
 - Treat live-provider flakes separately from code failures: prove key validity, provider HTTP status, retry evidence, and exact failing lane before editing code.
-- A model-list response proves authentication, not billing or inference
-  entitlement. Mandatory live providers must pass a real completion probe
-  before release dispatch. Fix the credential first; do not add an alternate
-  auth path merely to bypass a failed release credential.
+- When diagnosing a live-provider failure, a model-list response proves
+  authentication, not billing or inference entitlement. Confirm the credential
+  with a real completion probe before treating it as valid. Fix the credential
+  first; do not add an alternate auth path merely to bypass a failed release
+  credential.
 - Full Release Validation separates exact-child dispatch, Release Decision,
   and Diagnostic Drain. With `fail_fast=false`, it makes zero child
   cancellation calls; Diagnostic Drain follows every selected child to
@@ -380,18 +380,10 @@ image bytes remain owned by the release workflows and their sealed artifacts.
 Before full release validation:
 
 ```bash
-node .agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs --required openai,anthropic,fireworks
 gh api rate_limit --jq '.resources.core'
 git status --short --branch
 git rev-parse HEAD
 ```
-
-1Password service-account values are the first source for release provider
-preflight. Inject those exact targeted keys first, then run the verifier; use
-ambient env only when it was already intentionally injected for this release.
-The script prints only provider status and HTTP class, never tokens.
-The Anthropic check performs a tiny message completion so exhausted or
-non-billable credentials fail before the expensive release matrix.
 
 ### Before publication
 
@@ -917,7 +909,6 @@ Record:
 - all selected lane conclusions, including Linux/Windows/macOS cross-OS
 - performance comparison result versus earlier releases when available
 - targeted local proof commands
-- provider-secret preflight result
 - frozen-target compatibility repairs or omitted inapplicable scenarios, with
   their source PRs and invariant
 - hosted proof and its deployment prerequisites separately from local contract

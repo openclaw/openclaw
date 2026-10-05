@@ -423,7 +423,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const agentsList = {
-      agents: [{ id: "main" }, { id: "research" }, { id: "forge" }],
+      agents: [{ id: "main" }, { id: "research" }, { id: "forge" }, { id: "support" }],
       defaultId: "main",
       mainKey: "main",
       scope: "agent",
@@ -453,6 +453,10 @@ suite.define(() => {
             {
               match: { agentId: "forge" },
               response: { agentId: "forge", avatar: "", emoji: "🔧", name: "Forge" },
+            },
+            {
+              match: { agentId: "support" },
+              response: { agentId: "support", avatar: "", emoji: "🧭", name: "Support" },
             },
           ],
         },
@@ -502,9 +506,9 @@ suite.define(() => {
           return { height: bounds.height, width: bounds.width, gap: label.left - avatar.right };
         });
       });
-      expect(rowLayout.map((row) => row.height)).toEqual([56, 56, 56, 56]);
+      expect(rowLayout.map((row) => row.height)).toEqual([56, 56, 56, 56, 56]);
       expect(new Set(rowLayout.map((row) => row.width)).size).toBe(1);
-      expect(rowLayout.map((row) => row.gap)).toEqual([12, 12, 12, 12]);
+      expect(rowLayout.map((row) => row.gap)).toEqual([12, 12, 12, 12, 12]);
       const capabilities = menu.getByRole("menuitem", {
         name: "What can Scheduled Automations do?",
         exact: true,
@@ -573,6 +577,41 @@ suite.define(() => {
       await expect
         .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);
+      const researchPin = researchSwitch.getByRole("button");
+      await page.keyboard.press("Tab");
+      await expect
+        .poll(() => researchPin.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Space");
+      await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("true");
+      await expect
+        .poll(() => researchPin.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath("agent:main:main"));
+      expect(await menu.isVisible()).toBe(true);
+      await page.keyboard.press("ArrowDown");
+      await expect
+        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await researchSwitch.focus();
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Enter");
+      await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("false");
+      await page.keyboard.press("Shift+Tab");
+      await expect
+        .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await researchSwitch.hover();
+      await researchPin.click();
+      await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("true");
+      await page.keyboard.press("Escape");
+      await page.reload();
+      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+      await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("true");
+      await researchSwitch.hover();
+      await researchPin.click();
+      await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("false");
+      await researchSwitch.focus();
       await captureSidebarUiProof(suite, page, "agent-menu-without-new-session-rows.png");
       await page.keyboard.press("Enter");
       await expect
@@ -667,6 +706,12 @@ suite.define(() => {
       expect(await menu.locator(":scope > wa-dropdown-item").count()).toBe(4);
       await search.fill("agent-39");
       await expect.poll(() => rows.count()).toBe(1);
+      expect(
+        await rows
+          .first()
+          .getByRole("button", { name: /Pin to switcher/ })
+          .count(),
+      ).toBe(1);
       await search.press("ArrowDown");
       await expect
         .poll(() => rows.first().evaluate((row) => row === document.activeElement))
