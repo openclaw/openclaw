@@ -265,33 +265,28 @@ export async function appendExpectedSessionTranscriptTurn(
           const transactionVersion = identity
             ? readTranscriptContextVersionInTransaction(transactionDb, resolved.sessionId)
             : undefined;
-          const committed = commit(
-            transactionDb,
-            messages.map((append) =>
-              asyncMessages.has(append)
-                ? {
-                    ...append,
-                    workerPreparation: {
-                      ...append.workerPreparation,
-                      beforeFreshMessageCommit: () => {
-                        if (
-                          !preparedMessages.has(append) ||
-                          identity?.identity !== currentIdentity?.identity ||
-                          identity?.birthtime !== currentIdentity?.birthtime ||
-                          !isDeepStrictEqual(version, transactionVersion)
-                        ) {
-                          throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
-                        }
-                        (
-                          append.workerPreparation?.beforeFreshMessageCommit ??
-                          append.beforeFreshMessageCommit
-                        )?.();
-                      },
-                    },
-                  }
-                : append,
-            ),
-          );
+          for (const append of messages) {
+            if (!asyncMessages.has(append)) {
+              continue;
+            }
+            const beforeFreshMessageCommit =
+              append.workerPreparation?.beforeFreshMessageCommit ?? append.beforeFreshMessageCommit;
+            append.workerPreparation = {
+              ...append.workerPreparation,
+              beforeFreshMessageCommit: () => {
+                if (
+                  !preparedMessages.has(append) ||
+                  identity?.identity !== currentIdentity?.identity ||
+                  identity?.birthtime !== currentIdentity?.birthtime ||
+                  !isDeepStrictEqual(version, transactionVersion)
+                ) {
+                  throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
+                }
+                beforeFreshMessageCommit?.();
+              },
+            };
+          }
+          const committed = commit(transactionDb, messages);
           result = committed.result;
           return committed.identity
             ? prepareSessionIdentityPublication(
