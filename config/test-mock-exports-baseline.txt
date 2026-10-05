@@ -4376,8 +4376,6 @@
 ["src/channels/plugins/registry.test.ts","./bundled.js","73d61cbbdbf4e70e5e4ba63708d821a68b20b3f18cd4c33f2aa3ec1b4abe9fa3",1]
 ["src/channels/plugins/setup-helpers.import-safety.test.ts","../../plugins/discovery.js","e1fda8a9e748c59c9ee40e723e6a3e1781c4b052a5653e16db0cfece4d1a5480",1]
 ["src/channels/plugins/setup-promotion-helpers.test.ts","./registry-loaded.js","a184645e5e1aa8b4c974307dd1adf41b51a66a317d834d146f34ba9fba3a482f",1]
-["src/channels/plugins/stateful-target-builtins.test.ts","./acp-stateful-target-driver.js","9598b732567e77bf79cdbbbeea37ea4b6e2eb8e7368f8741297adac5dfbd5cc2",1]
-["src/channels/plugins/stateful-target-builtins.test.ts","./stateful-target-drivers.js","3bc413cb915b1806878bc63da6ce3728b5232ba22cbe97b3ddb1b6399fa181fd",1]
 ["src/channels/plugins/thread-binding-api.test.ts","../../plugins/public-surface-loader.js","5a0ded54b73cdbe5d8497298b7dfe5840dbe2b5b8baa70cfb4c8bacc80b85213",1]
 ["src/channels/session.test.ts","../config/sessions/inbound.runtime.js","a5c22a0308c0926b2547c147c019fc9d1041e59320d6de802b2e734f762f0f61",1]
 ["src/channels/turn/group-thread-delivery.test.ts","../../config/sessions/transcript.js","9d82f9708fa5512d8fa00fe9ea23aa83c0afe93c18790f8ce71b81d402c76249",1]

@@ -16,6 +16,7 @@ import {
   type RuntimeConversationBindingRouteResult,
 } from "./binding-routing.js";
 const acpReadiness = vi.hoisted(() => vi.fn());
+// mock-isolation: Readiness timeout tests must not initialize ACP backend registries or Gateway reset state.
 vi.mock("./acp-stateful-target-driver.js", () => ({
   ensureConfiguredAcpBindingTargetReady: acpReadiness,
 }));

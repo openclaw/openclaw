@@ -10,6 +10,7 @@ const acp = vi.hoisted(() => ({
   resolveAcpBindingTargetBySessionKey: vi.fn(),
   resetConfiguredAcpBindingTargetInPlace: vi.fn(),
 }));
+// mock-isolation: Keep the real ACP backend and Gateway reset singletons outside this dispatch-only fixture.
 vi.mock("./acp-stateful-target-driver.js", () => acp);
 
 function createBindingResolution(driverId: string): ConfiguredBindingResolution {
