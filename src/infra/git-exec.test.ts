@@ -23,6 +23,8 @@ import {
   createGitCommandError,
   enqueueGitRefMutation,
   executeGitCommand,
+  executeGitCommandBytes,
+  executeGitCommandBuffered,
   gitNullConfigPath,
   normalizeGitPathForFilesystem,
   requireGitCommand,
@@ -329,6 +331,21 @@ const failure = {
   killed: false,
   termination: "exit",
 } satisfies SpawnResult;
+
+it.skipIf(process.platform === "win32").each([
+  ["text", executeGitCommand],
+  ["bytes", executeGitCommandBytes],
+  ["buffered", executeGitCommandBuffered],
+] as const)("lowers Git %s child priority without changing the parent", async (_kind, run) => {
+  const parentPriority = os.getPriority();
+  const result = await run(process.cwd(), ["-c", "alias.priority=!ps -o ni= -p $$", "priority"], {
+    lowerPriority: true,
+    killProcessTree: true,
+  });
+  expect(result.code).toBe(0);
+  expect(Number(result.stdout.toString().trim())).toBe(Math.min(19, parentPriority + 10));
+  expect(os.getPriority()).toBe(parentPriority);
+});
 
 it.each(["maintenance.autoDetach", "gc.autoDetach"])(
   "overrides %s only for an explicitly owned Git command",
