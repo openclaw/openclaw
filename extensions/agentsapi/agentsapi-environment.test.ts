@@ -883,7 +883,7 @@ async function attempt(
     params,
     binding,
     bind,
-    vi.fn(),
+    vi.fn<() => void>(),
     vi.fn(),
     {
       agentId: "main",
