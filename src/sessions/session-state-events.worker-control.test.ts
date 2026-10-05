@@ -99,7 +99,8 @@ vi.mock("./session-state-events.kernel.js", () => ({
   rowToSessionStateEvent: vi.fn(),
 }));
 vi.mock("./session-state-notices.js", () => ({ enqueueSessionStateNotice: edge.notice }));
-vi.mock("./session-upstream-links.js", () => ({ deleteSessionUpstreamLink: vi.fn() }));
+// mock-isolation: Keep upstream persistence outside the signal-worker control fixture.
+vi.mock("./session-upstream-links.js", () => ({ deleteSessionUpstreamLinkAsync: vi.fn() }));
 
 const notice: SessionStateNotice = {
   watcherSessionKey: "agent:main:main",

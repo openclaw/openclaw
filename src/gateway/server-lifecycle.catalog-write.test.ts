@@ -12,6 +12,10 @@ import {
   handleSessionStateSessionDeleted,
   handleSessionStateSessionReset,
 } from "../sessions/session-state-events.js";
+import {
+  readSessionUpstreamLink,
+  upsertSessionUpstreamLink,
+} from "../sessions/session-upstream-links.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -115,7 +119,7 @@ it("settles an accepted catalog refresh before Gateway close retires its state w
   }
 });
 
-it("joins accepted notice persistence and signal cleanup after the Gateway close prelude aborts", async ({
+it("joins accepted notices, signal cleanup, and upstream deletion after the Gateway close prelude aborts", async ({
   signal,
 }) => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-notice-sweep-close");
@@ -199,6 +203,21 @@ it("joins accepted notice persistence and signal cleanup after the Gateway close
     );
     const resetWatcher = `${watcher}-reset`;
     const deletedTarget = `${target}-deleted`;
+    expect(
+      upsertSessionUpstreamLink(
+        {
+          sessionKey: deletedTarget,
+          agentId: "main",
+          catalogId: "codex",
+          hostId: "gateway:local",
+          threadId: "close",
+          upstreamKind: "codex-app-server",
+          upstreamRef: null,
+          marker: null,
+        },
+        options,
+      ),
+    ).toBe(true);
     shared
       .prepare(
         "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, ?)",
@@ -234,6 +253,7 @@ it("joins accepted notice persistence and signal cleanup after the Gateway close
         )
         .get(watcher, target),
     ).toEqual({ notified_sequence: 3 });
+    expect(readSessionUpstreamLink(deletedTarget, "main", options)).toBeUndefined();
     const reopened = openOpenClawStateDatabase(options).db;
     expect(
       reopened
