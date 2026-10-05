@@ -455,56 +455,31 @@ const COMMAND_CASES: readonly CommandCase[] = [
   },
 ] as const;
 
-function parseFlagValue(flag: string): string | undefined {
-  const idx = process.argv.indexOf(flag);
-  if (idx === -1) {
-    return undefined;
-  }
-  const value = process.argv[idx + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
-}
-
-function hasFlag(flag: string): boolean {
-  return process.argv.includes(flag);
-}
-
-function parseRepeatableFlag(flag: string): string[] {
-  const values: string[] = [];
-  for (let i = 0; i < process.argv.length; i += 1) {
-    const value = process.argv[i + 1];
-    if (process.argv[i] === flag && value && !value.startsWith("-")) {
-      values.push(value);
-    }
-  }
-  return values;
-}
-
-function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): void {
-  const seenSingleValueFlags = new Set<string>();
+function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): Map<string, string[]> {
+  const flags = new Map<string, string[]>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = expectDefined(argv[index], `CLI benchmark argument at index ${index}`);
     if (VALUE_FLAGS.has(arg)) {
-      if (arg !== "--case") {
-        if (seenSingleValueFlags.has(arg)) {
-          throw new Error(`${arg} was provided more than once`);
-        }
-        seenSingleValueFlags.add(arg);
+      if (arg !== "--case" && flags.has(arg)) {
+        throw new Error(`${arg} was provided more than once`);
       }
       const value = argv[index + 1];
       if (!value || value.startsWith("-")) {
         throw new Error(`${arg} requires a value`);
       }
+      const values = flags.get(arg) ?? [];
+      values.push(value);
+      flags.set(arg, values);
       index += 1;
       continue;
     }
     if (BOOLEAN_FLAGS.has(arg)) {
+      flags.set(arg, []);
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);
   }
+  return flags;
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
@@ -844,10 +819,6 @@ function memoryInvocationEntries(entry: string): string[] {
   return entries;
 }
 
-function nodeImportSpecifierForPath(filePath: string): string {
-  return pathToFileURL(filePath).href;
-}
-
 function buildCpuOrHeapFlags(options: { cpuProfDir?: string; heapProfDir?: string }): string[] {
   const flags: string[] = [];
   if (options.cpuProfDir) {
@@ -902,7 +873,7 @@ async function runSample(params: {
         ]
       : []),
     "--import",
-    nodeImportSpecifierForPath(rssHookPath),
+    pathToFileURL(rssHookPath).href,
     ...buildCpuOrHeapFlags({
       cpuProfDir: params.cpuProfDir,
       heapProfDir: params.heapProfDir,
@@ -1326,26 +1297,27 @@ async function buildSuiteResult(params: {
   };
 }
 
-function parseOptions(): CliOptions {
-  const presets = parsePresets(parseFlagValue("--preset"));
+function parseOptions(flags: Map<string, string[]>): CliOptions {
+  const value = (flag: string) => flags.get(flag)?.[0];
+  const presets = parsePresets(value("--preset"));
   const cases = resolveCases({
     presets,
-    caseIds: parseRepeatableFlag("--case"),
+    caseIds: flags.get("--case") ?? [],
   });
   return {
     cases,
-    compareBaseline: parseFlagValue("--compare-baseline"),
-    compareCandidate: parseFlagValue("--compare-candidate"),
-    entryPrimary: parseFlagValue("--entry-primary") ?? parseFlagValue("--entry") ?? DEFAULT_ENTRY,
-    entrySecondary: parseFlagValue("--entry-secondary"),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
-    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
-    runtimeRss: hasFlag("--runtime-rss"),
-    json: hasFlag("--json"),
-    output: parseFlagValue("--output"),
-    cpuProfDir: parseFlagValue("--cpu-prof-dir"),
-    heapProfDir: parseFlagValue("--heap-prof-dir"),
+    compareBaseline: value("--compare-baseline"),
+    compareCandidate: value("--compare-candidate"),
+    entryPrimary: value("--entry-primary") ?? value("--entry") ?? DEFAULT_ENTRY,
+    entrySecondary: value("--entry-secondary"),
+    runs: parsePositiveInt(value("--runs"), DEFAULT_RUNS, "--runs"),
+    warmup: parseNonNegativeInt(value("--warmup"), DEFAULT_WARMUP, "--warmup"),
+    timeoutMs: parsePositiveInt(value("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
+    runtimeRss: flags.has("--runtime-rss"),
+    json: flags.has("--json"),
+    output: value("--output"),
+    cpuProfDir: value("--cpu-prof-dir"),
+    heapProfDir: value("--heap-prof-dir"),
   };
 }
 
@@ -1405,13 +1377,13 @@ function readBenchmarkComparison(
 }
 
 async function main(): Promise<void> {
-  validateCliArgs();
-  if (hasFlag("--help")) {
+  const flags = validateCliArgs();
+  if (flags.has("--help")) {
     printUsage();
     return;
   }
 
-  const options = parseOptions();
+  const options = parseOptions(flags);
   const transport = sampleTransport();
   if (transport && options.runtimeRss) {
     throw new Error("Cross-user runtime RSS sampling is not supported");
@@ -1522,7 +1494,6 @@ async function main(): Promise<void> {
 export const testing = {
   buildConfigFixture,
   collectFailedSamples,
-  nodeImportSpecifierForPath,
   parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,

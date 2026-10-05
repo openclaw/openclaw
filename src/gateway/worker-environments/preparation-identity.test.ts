@@ -67,6 +67,7 @@ describe("worker preparation identity", () => {
       { profileSnapshot: { ...input.profileSnapshot, settings: { region: "elsewhere" } } },
     ],
     ["target", { target: { ...input.target, arch: "arm64" } }],
+    ["OS", { target: { ...input.target, platform: "darwin" } }],
     ["mode", { profileSnapshot: { ...input.profileSnapshot, executionMode: "remote-exec" } }],
     ["runtime", { artifacts: { ...input.artifacts, nodeBootstrapSha256: "3".repeat(64) } }],
     [

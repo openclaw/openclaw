@@ -8,6 +8,25 @@ import {
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
 
+// Script contract exports at module binding while keeping setup instance ownership.
+vi.mock("./plugin-instance-module-loader.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-instance-module-loader.js")>();
+  const { getCachedPluginModuleLoader } = await import("./plugin-module-loader-cache.js");
+  return {
+    ...actual,
+    bindPluginInstanceModuleLoader: (
+      params: Parameters<typeof actual.bindPluginInstanceModuleLoader>[0],
+    ) =>
+      params.instance.bindModuleLoader(
+        getCachedPluginModuleLoader({
+          modulePath: params.source,
+          importerUrl: import.meta.url,
+          createLoader: getRegistryJitiMocks().createJiti,
+        }),
+      ),
+  };
+});
+
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 const doctorContractWarnMock = vi.hoisted(() => vi.fn());
@@ -31,9 +50,6 @@ let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-reg
 let collectRelevantDoctorPluginIds: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIds;
 let collectDoctorConfigRepairPluginIds: typeof import("./doctor-contract-registry.js").collectDoctorConfigRepairPluginIds;
 let listPluginDoctorSessionStoreAgentIds: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionStoreAgentIds;
-let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
-  | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
-  | undefined;
 
 function mockDoctorPlugins(...plugins: Record<string, unknown>[]): void {
   mocks.loadPluginManifestRegistry.mockReturnValue({ plugins, diagnostics: [] });
@@ -44,7 +60,7 @@ function makeTempDir(): string {
 }
 
 afterEach(() => {
-  setPluginDoctorContractRegistryModuleLoaderFactoryForTest?.(undefined);
+  clearPluginDoctorContractRegistryCache?.();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -57,10 +73,8 @@ describe("doctor-contract-registry module loader", () => {
       collectDoctorConfigRepairPluginIds,
       listPluginDoctorSessionStoreAgentIds,
     } = await import("./doctor-contract-registry.js"));
-    ({
-      clearPluginDoctorContractRegistryCache,
-      setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
-    } = await import("./doctor-contract-registry.test-fixtures.js"));
+    ({ clearPluginDoctorContractRegistryCache } =
+      await import("./doctor-contract-registry.test-fixtures.js"));
   });
 
   beforeEach(() => {
@@ -68,13 +82,6 @@ describe("doctor-contract-registry module loader", () => {
     mockDoctorPlugins();
     doctorContractWarnMock.mockReset();
     retainedConfigDoctorMock.mockReset().mockReturnValue(null);
-    // Loaded once in beforeAll; afterEach guards the same binding optionally because it
-    // can fire when that import never completed. Fail loudly here instead of silently
-    // running a case against the real module loader.
-    if (!setPluginDoctorContractRegistryModuleLoaderFactoryForTest) {
-      throw new Error("doctor contract registry test fixtures were not loaded");
-    }
-    setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginDoctorContractRegistryCache();
   });
 

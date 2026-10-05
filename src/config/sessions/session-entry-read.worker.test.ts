@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  isSessionNodePayloadSelect,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -13,6 +17,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
@@ -32,8 +37,116 @@ import {
   readExactSessionEntriesWithLifecycle,
   readSessionRowDatabaseFacts,
 } from "./session-entry-read.worker.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
 import * as sharingKernel from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+
+it("hydrates only requested snapshots while retaining exact-read lifecycle and authorization facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:scoped-snapshots";
+    const entry = {
+      sessionId: "snapshot-session",
+      updatedAt: 1,
+      createdAt: 1,
+      sessionStartedAt: 1,
+      status: "running" as const,
+      skillsSnapshot: { prompt: "saved prompt".repeat(8192), skills: [] },
+      sessionDiffBaseline: {
+        version: 1 as const,
+        sessionId: "snapshot-session",
+        root: "/synthetic",
+        files: [],
+      },
+      systemPromptReport: {
+        source: "run" as const,
+        generatedAt: 1,
+        systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 0, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      },
+    };
+    replaceSessionEntrySync({ agentId: "main", env, sessionKey }, entry);
+    const target = { agentId: database.agentId, path: database.path };
+    await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+    const retained = new OpenClawAgentDatabaseReadOnlyScope();
+    try {
+      retained.run(target, () => {
+        const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, { ...target, env });
+        if (!opened.found) {
+          throw new Error("Expected seeded snapshot database");
+        }
+        const read = (snapshotFields?: readonly SessionEntrySnapshotField[], exact = false) =>
+          readExactSessionEntriesWithLifecycle({
+            kind: "session-exact-entries",
+            database: target,
+            env,
+            sessionKeys: [sessionKey, "agent:main:absent"],
+            projection: exact ? "exact" : "full",
+            snapshotFields,
+            lifecycleSessionKey: sessionKey,
+            includeAuthorization: true,
+            includeMembers: true,
+            includeParticipantRecords: true,
+          });
+        // Admit the physical file before measuring the requested row payload.
+        expect(read().entries[0]?.entry).toMatchObject(entry);
+        const payloads = trackSqliteStatementExecutions(opened.value.db, ["entry"], (sql) =>
+          isSessionNodePayloadSelect(sql) ||
+          (sql.includes('from "session_nodes"') && sql.includes('"entry_json"'))
+            ? "entry"
+            : null,
+        );
+        try {
+          for (const fields of [[], ["systemPromptReport"], ["sessionDiffBaseline"]] as const) {
+            payloads.textBytes.entry = 0;
+            const selected = read(fields);
+            expect(selected.entries).toHaveLength(1);
+            expect(selected.databaseIdentity?.identity).toBeTypeOf("string");
+            expect(selected.lifecycleTimestamps.sessionStartedAt).toBe(1);
+            expect(selected.members).toEqual({ [sessionKey]: [] });
+            expect(selected.participantRecords).toEqual({});
+            for (const field of [
+              "skillsSnapshot",
+              "systemPromptReport",
+              "sessionDiffBaseline",
+            ] as const) {
+              expect(selected.entries[0]?.entry[field]).toEqual(
+                fields.some((selectedField) => selectedField === field) ? entry[field] : undefined,
+              );
+            }
+            expect(payloads.textBytes.entry).toBeLessThan(2048);
+            expect(read(fields, true).entries).toEqual(selected.entries);
+          }
+          const recovery = readExactSessionEntriesWithLifecycle({
+            kind: "session-exact-entries",
+            database: target,
+            env,
+            sessionKeys: [],
+            statusSelection: { statuses: ["running"], presenceOnly: false },
+          });
+          expect(recovery.entries).toEqual(read([]).entries);
+          expect(read().entries[0]?.entry).toMatchObject(entry);
+        } finally {
+          payloads.restore();
+        }
+      });
+    } finally {
+      retained.close();
+    }
+    const transported = await readSessionEntriesFromStoreInWorker({
+      agentId: target.agentId,
+      storePath: target.path,
+      env,
+      sessionKeys: [sessionKey],
+      snapshotFields: ["sessionDiffBaseline"],
+    });
+    expect(transported.entries[0]?.entry.sessionDiffBaseline).toEqual(entry.sessionDiffBaseline);
+    expect(transported.entries[0]?.entry.skillsSnapshot).toBeUndefined();
+    expect(transported.entries[0]?.entry.systemPromptReport).toBeUndefined();
+  });
+});
 
 it("publishes exact-read admission only after commit and reuses it on the retained reader", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -202,7 +315,7 @@ it("reads row metadata, board presence, and cold summary position from one snaps
     const concurrentCommit = vi
       .spyOn(boardStore, "readBoardSessionKeys")
       .mockImplementationOnce((reader, key) => {
-        // Commit after entry decoding; the remaining facts must retain its original snapshot.
+        // Commit after entry acquisition; the remaining facts must retain its original snapshot.
         peer.exec("BEGIN IMMEDIATE");
         try {
           peer
@@ -234,9 +347,27 @@ it("reads row metadata, board presence, and cold summary position from one snaps
         if (!opened.found) {
           throw new Error("Expected the seeded read-only database");
         }
-        const queries = trackSqliteStatementExecutions(opened.value.db, ["boards"], (sql) =>
-          /\bfrom "board_tabs"/iu.test(sql) ? "boards" : null,
+        const queries = trackSqliteStatementExecutions(
+          opened.value.db,
+          ["boards", "entries"],
+          (sql) => {
+            if (/\bfrom "board_tabs"/iu.test(sql)) {
+              return "boards";
+            }
+            return /\bfrom "session_nodes"/iu.test(sql) && sql.includes('"entry_json"')
+              ? "entries"
+              : null;
+          },
         );
+        const parse = vi.spyOn(JSON, "parse");
+        const entryParseCount = () =>
+          parse.mock.calls.filter(
+            ([value]) =>
+              typeof value === "string" &&
+              value.includes('"sessionId":') &&
+              (value.includes(sessionId) ||
+                sessionKeys.slice(1).some((key) => value.includes(key))),
+          ).length;
         try {
           const read = () =>
             readSessionRowDatabaseFacts({
@@ -248,6 +379,9 @@ it("reads row metadata, board presence, and cold summary position from one snaps
           const first = read();
           expect(first.rows).toHaveLength(64);
           expect(queries.counts.boards).toBe(1);
+          expect(queries.counts.entries).toBe(1);
+          expect(queries.rowCounts.entries).toBe(64);
+          expect(entryParseCount()).toBe(64);
           expect(first.rows.filter((row) => row.hasBoard).map((row) => row.sessionKey)).toEqual(
             boardKeys,
           );
@@ -268,7 +402,10 @@ it("reads row metadata, board presence, and cold summary position from one snaps
             activitySummaryWatermark: { generation: "next-generation", maxSeq: 42 },
           });
           expect(queries.counts.boards).toBe(2);
+          expect(queries.counts.entries).toBe(2);
+          expect(entryParseCount()).toBe(128);
         } finally {
+          parse.mockRestore();
           queries.restore();
         }
       });
@@ -355,7 +492,7 @@ it("consumes admitted board absence for a cohort and observes first use and fore
   });
 });
 
-it.each(["worker", "row-facts"] as const)(
+it.each(["worker", "exact", "row-facts"] as const)(
   "refuses unavailable session metadata in the %s reader instead of reporting missing sessions",
   async (reader) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -374,7 +511,7 @@ it.each(["worker", "row-facts"] as const)(
               database: { agentId: "main", path: storePath },
               env,
               sessionKeys,
-              projection: "list",
+              projection: reader === "exact" ? "exact" : "list",
             }).entries;
       expect(read()).toEqual([]);
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
@@ -606,7 +743,7 @@ it.each(["durable", "incognito"] as const)(
       }
       const authority = await prepareSessionDeliveryGeneration(descriptor);
       try {
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("patch", {
           scope: database.path,
           identities: [sessionKey, entry.sessionId],
           prepare: async () => {
@@ -721,6 +858,74 @@ it.each(["durable", "incognito"] as const)(
       } finally {
         authority.release();
       }
+    });
+  },
+);
+
+it("orders native reads with writers and ignores unrelated metadata notifications", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:ordered-consumer";
+    writeSessionEntry(database, sessionKey, { sessionId: "ordered-session", updatedAt: 1 });
+    const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
+    let escaped: (() => void) | undefined;
+    await withSessionEntriesFromStoresInWorker(
+      [input],
+      ([read]) => {
+        escaped = read!.assertCurrent;
+        sessionChanges.emit({ sessionKey, scope: "runtime" });
+        sessionChanges.emit({ all: true, scope: "agent-runs" });
+        sessionChanges.emit({ all: true, scope: "worker-placements" });
+        sessionChanges.emit({ all: true, scope: "profiles" });
+        sessionChanges.emit({ sessionKey, agentId: "main" });
+        sessionChanges.emit({ sessionKey, storePath: database.path, facts: { kind: "unchanged" } });
+        sessionChanges.emit({
+          all: true,
+          scope: { storePath: path.join(path.dirname(database.path), "unrelated.sqlite") },
+          factsInvalidated: true,
+        });
+        read!.assertCurrent();
+        expect(read!.result.entries[0]?.entry.sessionId).toBe("ordered-session");
+        sessionChanges.emit({ sessionKey, storePath: database.path, factsInvalidated: true });
+        expect(read!.assertCurrent).toThrow("Session entry changed during read");
+      },
+      { ordered: true },
+    );
+    expect(escaped).toThrow("consumer is no longer active");
+    await expect(
+      runOpenClawAgentWriteAdmission({ agentId: "main", path: database.path, env }, () =>
+        withSessionEntriesFromStoresInWorker([input], () => {}, { ordered: true }),
+      ),
+    ).rejects.toThrow("cannot reenter an active SQLite writer admission");
+  });
+});
+
+it.each(["entry", "store", "topology"] as const)(
+  "revokes an ordered reader after authoritative %s changes",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      const sessionKey = "agent:main:changed-consumer";
+      writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+      await withSessionEntriesFromStoresInWorker(
+        [{ agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env }],
+        ([read]) => {
+          read!.assertCurrent();
+          if (change === "entry") {
+            writeSessionEntry(database, sessionKey, { sessionId: "successor", updatedAt: 2 });
+          } else if (change === "store") {
+            sessionChanges.emit({
+              all: true,
+              scope: { storePath: database.path },
+              factsInvalidated: true,
+            });
+          } else {
+            sessionChanges.emit({ all: true, scope: "stores" });
+          }
+          expect(read!.assertCurrent).toThrow("Session entry changed during read");
+        },
+        { ordered: true },
+      );
     });
   },
 );

@@ -19,7 +19,6 @@ import {
   resolveDefaultAgentId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatMemoryCoreSidecarNotice, resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
@@ -139,14 +138,6 @@ export function resolveMemoryAgent(cfg: OpenClawConfig, agent?: string) {
   }
   return trimmed ? resolveConfiguredAgentId(cfg, trimmed) : resolveDefaultAgentId(cfg);
 }
-export function buildCliMemorySearchSessionKey(agentId: string): string {
-  return buildAgentSessionKey({
-    agentId,
-    channel: "cli",
-    peer: { kind: "direct", id: "memory-search" },
-    dmScope: "per-channel-peer",
-  });
-}
 export function resolveMemoryAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   const trimmed = agent?.trim();
   if (agent !== undefined && !trimmed) {
@@ -197,21 +188,15 @@ export async function withMemoryCommand(params: {
     ? resolveMemoryAgentIds(cfg, params.agent)
     : [resolveMemoryAgent(cfg, params.agent)];
   for (const agentId of agentIds) {
-    const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
-      cfg,
-      agentId,
-    };
-    if (params.purpose) {
-      managerParams.purpose = params.purpose;
-    }
-    if (params.inspectSources) {
-      managerParams.inspectSources = true;
-    }
-    if (params.acquireLocalService) {
-      managerParams.acquireLocalService = params.acquireLocalService;
-    }
     await withManager<MemoryManager>({
-      getManager: () => getMemorySearchManager(managerParams),
+      getManager: () =>
+        getMemorySearchManager({
+          cfg,
+          agentId,
+          purpose: params.purpose,
+          inspectSources: params.inspectSources,
+          acquireLocalService: params.acquireLocalService,
+        }),
       onMissing: (error) => {
         if (!error?.trim()) {
           defaultRuntime.log("Memory search disabled.");

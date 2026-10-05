@@ -21,6 +21,7 @@ import {
   readPublicationArtifactArchive,
   sha256Digest,
 } from "./actions-artifact-archive.mjs";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./arg-utils.mts";
 import { readBoundedResponseText } from "./bounded-response.mjs";
 import { collectPublishableCorePackages } from "./npm-core-release-packages.mjs";
 import { resolveNpmJsonEntries } from "./npm-json-output.mts";
@@ -727,94 +728,79 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     workflowRuns: {},
   };
 
-  for (let index = 0; index < values.length; index += 1) {
-    const arg = values[index];
-    const next = () => {
-      const value = values[index + 1];
-      if (value === undefined || value.startsWith("-")) {
-        throw new Error(`${arg} requires a value.`);
-      }
-      index += 1;
-      return value;
-    };
-
-    switch (arg) {
-      case "--tag":
-        parsed.tag = next();
-        break;
-      case "--dist-tag":
-        parsed.distTag = next();
-        break;
-      case "--repo":
-        parsed.repo = next();
-        break;
-      case "--registry":
-        parsed.registry = next();
-        break;
-      case "--release-sha":
-        parsed.releaseSha = next();
-        if (!COMMIT_SHA_PATTERN.test(parsed.releaseSha)) {
+  const valueFlag = (flag: string, key: string, transform?: (value: string) => unknown) =>
+    stringFlag<ReleaseVerifyBetaArgs>(flag, key, {
+      allowEmpty: true,
+      allowInline: false,
+      missingValueMessage: `${flag} requires a value.`,
+      rejectShortOptions: true,
+      repeatable: true,
+      transform,
+    });
+  parseFlagArgs(
+    values,
+    parsed,
+    [
+      ...(
+        [
+          ["--tag", "tag"],
+          ["--dist-tag", "distTag"],
+          ["--repo", "repo"],
+          ["--registry", "registry"],
+          ["--workflow-ref", "workflowRef"],
+          ["--clawhub-workflow-ref", "clawHubWorkflowRef"],
+          ["--evidence-out", "evidenceOut"],
+          ["--postpublish-verifier", "postpublishVerifier"],
+        ] as const
+      ).map(([flag, key]) => valueFlag(flag, key)),
+      ...(
+        [
+          ["--full-release-validation-run", "fullReleaseValidation"],
+          ["--openclaw-npm-run", "openclawNpm"],
+          ["--plugin-npm-run", "pluginNpm"],
+          ["--plugin-clawhub-run", "pluginClawHub"],
+          ["--plugin-clawhub-bootstrap-run", "pluginClawHubBootstrap"],
+          ["--npm-telegram-run", "npmTelegram"],
+        ] as const
+      ).map(([flag, key]) =>
+        valueFlag(flag, "workflowRuns", (value) => ({ ...parsed.workflowRuns, [key]: value })),
+      ),
+      ...(
+        [
+          ["--skip-postpublish", "skipPostpublish"],
+          ["--skip-github-release", "skipGitHubRelease"],
+          ["--skip-clawhub", "skipClawHub"],
+          ["--rerun-failed-clawhub", "rerunFailedClawHub"],
+        ] as const
+      ).map(([flag, key]) => booleanFlag(flag, key, true, { repeatable: true })),
+      valueFlag("--release-sha", "releaseSha", (value) => {
+        if (!COMMIT_SHA_PATTERN.test(value)) {
           throw new Error("--release-sha must be a full 40-character lowercase commit SHA.");
         }
-        break;
-      case "--workflow-ref":
-        parsed.workflowRef = next();
-        break;
-      case "--clawhub-workflow-ref":
-        parsed.clawHubWorkflowRef = next();
-        break;
-      case "--plugins":
-        parsed.pluginSelection = parsePluginReleaseSelection(next());
-        if (parsed.pluginSelection.length === 0) {
-          throw new Error("--plugins requires at least one plugin package name.");
-        }
-        break;
-      case "--clawhub-bootstrap-plugins":
-        parsed.clawHubBootstrapPlugins = parsePluginReleaseSelection(next());
-        if (parsed.clawHubBootstrapPlugins.length === 0) {
-          throw new Error("--clawhub-bootstrap-plugins requires at least one package name.");
-        }
-        break;
-      case "--evidence-out":
-        parsed.evidenceOut = next();
-        break;
-      case "--postpublish-verifier":
-        parsed.postpublishVerifier = next();
-        break;
-      case "--full-release-validation-run":
-        parsed.workflowRuns.fullReleaseValidation = next();
-        break;
-      case "--openclaw-npm-run":
-        parsed.workflowRuns.openclawNpm = next();
-        break;
-      case "--plugin-npm-run":
-        parsed.workflowRuns.pluginNpm = next();
-        break;
-      case "--plugin-clawhub-run":
-        parsed.workflowRuns.pluginClawHub = next();
-        break;
-      case "--plugin-clawhub-bootstrap-run":
-        parsed.workflowRuns.pluginClawHubBootstrap = next();
-        break;
-      case "--npm-telegram-run":
-        parsed.workflowRuns.npmTelegram = next();
-        break;
-      case "--skip-postpublish":
-        parsed.skipPostpublish = true;
-        break;
-      case "--skip-github-release":
-        parsed.skipGitHubRelease = true;
-        break;
-      case "--skip-clawhub":
-        parsed.skipClawHub = true;
-        break;
-      case "--rerun-failed-clawhub":
-        parsed.rerunFailedClawHub = true;
-        break;
-      default:
+        return value;
+      }),
+      ...(
+        [
+          ["--plugins", "pluginSelection", "at least one plugin package name"],
+          ["--clawhub-bootstrap-plugins", "clawHubBootstrapPlugins", "at least one package name"],
+        ] as const
+      ).map(([flag, key, required]) =>
+        valueFlag(flag, key, (value) => {
+          const packages = parsePluginReleaseSelection(value);
+          if (packages.length === 0) {
+            throw new Error(`${flag} requires ${required}.`);
+          }
+          return packages;
+        }),
+      ),
+    ],
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
         throw new Error(`Unknown argument: ${arg}`);
-    }
-  }
+      },
+    },
+  );
 
   if (parsed.skipPostpublish && parsed.postpublishVerifier !== undefined) {
     throw new Error("--postpublish-verifier cannot be combined with --skip-postpublish.");

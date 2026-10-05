@@ -165,7 +165,7 @@ describe("worker store session change publications", () => {
       },
       { to: "active", patch: { activeOwnerEpoch: 7 } },
     ] as const) {
-      active = store.transition({
+      active = await store.transition({
         sessionId: SESSION.sessionId,
         from: active.state,
         expectedGeneration: active.generation,

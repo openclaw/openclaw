@@ -42,11 +42,10 @@ function readSharedGitHubPublicationWorkspace(
             .where("workspace_id", "=", entry.repositoryWorkspaceId),
         )
       : undefined;
-    if (
-      !workspace ||
-      workspace.agent_id !== session.agentId ||
-      workspace.session_key !== session.sessionKey
-    ) {
+    if (!workspace) {
+      return undefined;
+    }
+    if (workspace.agent_id !== session.agentId || workspace.session_key !== session.sessionKey) {
       throw new Error("GitHub publication session repository owner is unavailable.");
     }
     return {
@@ -71,13 +70,15 @@ function readSharedGitHubPublicationWorkspace(
           .limit(1),
       )
     : undefined;
+  // Worktree GC retires idle checkouts while the session keeps its record. A retired or
+  // replaced checkout has no current publication; execution still re-proves ownership.
   if (
     !worktree ||
     worktree.id !== entry.worktree.id ||
     worktree.branch !== entry.worktree.branch ||
     worktree.repo_root !== entry.worktree.repoRoot
   ) {
-    throw new Error("GitHub publication session worktree owner is unavailable.");
+    return undefined;
   }
   return {
     kind: "worktree" as const,

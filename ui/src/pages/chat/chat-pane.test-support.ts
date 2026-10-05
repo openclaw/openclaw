@@ -187,7 +187,6 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<void>;
   resetOlderMessagesViewport: () => void;
-  requestReplyMessage: (messageId: string) => void;
   readReplyMessage: (messageId: string) => unknown;
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;

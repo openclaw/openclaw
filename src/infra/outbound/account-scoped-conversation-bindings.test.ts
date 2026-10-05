@@ -362,7 +362,7 @@ describe("account-scoped conversation binding expiry", () => {
   it("derives the binding owner from an agent-scoped target before consulting defaults", () => {
     const manager = createManager({
       cfg: {
-        agents: { list: [{ id: "main" }, { id: "molty" }] },
+        agents: { entries: { main: {}, molty: {} } },
         session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } },
       },
     });

@@ -298,7 +298,7 @@ it.for(cases)(
           abandonSource: true,
         });
         if (failed) {
-          placements.failWorkspaceResultAndReleaseTurn(
+          await placements.failWorkspaceResultAndReleaseTurn(
             (await placements.listPendingWorkspaceResultsAsync())[0]!,
             "Earlier workspace recovery failed",
           );

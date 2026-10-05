@@ -5,6 +5,7 @@ import type {
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
@@ -16,7 +17,6 @@ import {
 } from "../agents/agent-run-terminal-outcome.js";
 import {
   resolveAgentDir,
-  resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../agents/agent-scope.js";
@@ -35,7 +35,6 @@ import {
   withPreparedModelCatalogOwner,
 } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import {
   getSubagentSessionListReadSnapshotIdentity,
   prepareOptionalSubagentSessionListReadCache,
@@ -56,7 +55,6 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig, registerConfigWriteListener } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   mergeAssistantText,
   resolveAssistantTextInput,
@@ -85,7 +83,7 @@ import {
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
 import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
 import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
-import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lookup.js";
+import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lineage.js";
 import {
   getSessionDefaults,
   listAgentsForGateway,
@@ -127,6 +125,7 @@ import {
   resolveDeltaPayload,
   resolveTerminalChatState,
 } from "./embedded-chat-projection.js";
+import { ensureEmbeddedHistoryRuntimePluginsLoaded } from "./embedded-history-runtime.js";
 import {
   buildLocalQueuedPrompt,
   timeoutSecondsFromMs,
@@ -172,22 +171,6 @@ const embeddedSessionStartupMigrationLog = {
   info: (message: string) => logInfo(message, silentRuntime),
   warn: (message: string) => logWarn(message, silentRuntime),
 };
-
-function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
-  cfg: OpenClawConfig;
-  sessionAgentId: string;
-}): { status: "warmed" } | { status: "failed"; error: string } {
-  try {
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId);
-    loadAgentRuntimePluginRegistryHandle({
-      config: params.cfg,
-      workspaceDir,
-    });
-    return { status: "warmed" };
-  } catch (err) {
-    return { status: "failed", error: formatTuiErrorMessage(err) };
-  }
-}
 
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
@@ -261,6 +244,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return createSessionRowProjection({ cfg: getRuntimeConfig(), getConfig: getRuntimeConfig });
     })();
     this.ready = this.sessionProjection.then(() => {});
+    void this.ready.catch(() => {});
     this.unbindSessionProjection = bindEmbeddedSessionRowProjection(this.sessionProjection);
     queueMicrotask(() => {
       this.onConnected?.();
@@ -454,7 +438,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
         continue;
       }
       if (opts.sessionKey === "global") {
-        const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
+        const defaultAgentId =
+          opts.agentId && run.agentId ? undefined : resolveDefaultAgentId(getRuntimeConfig());
         const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
         const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
         if (runAgentId !== requestedAgentId) {
@@ -571,25 +556,32 @@ export class EmbeddedTuiBackend implements TuiBackend {
       agentId: sessionAgentId,
       storePath: readSource?.path ?? storePath,
     };
-    const sessionInfo =
-      entry && (entry.incognito || isIncognitoSessionKey(canonicalKey))
-        ? buildGatewaySessionRow({
-            cfg,
-            storePath,
-            store,
-            key: canonicalKey,
-            entry,
-            agentId: sessionAgentId,
-            modelSource: { entry, readSourceEntry: createGatewaySessionEntryReader(selected) },
-            lightweightListRow: true,
-            skipTranscriptUsageFallback: true,
+    const privateEntry = entry && (entry.incognito || isIncognitoSessionKey(canonicalKey));
+    const [privateAcpMeta] = privateEntry
+      ? await readAcpSessionMetaForEntries({
+          cfg,
+          entries: [{ agentId: sessionAgentId, sessionKey: canonicalKey, entry }],
+        })
+      : [];
+    const sessionInfo = privateEntry
+      ? buildGatewaySessionRow({
+          cfg,
+          storePath,
+          store,
+          key: canonicalKey,
+          entry,
+          preparedAcpMeta: privateAcpMeta ?? null,
+          agentId: sessionAgentId,
+          modelSource: { entry, readSourceEntry: createGatewaySessionEntryReader(selected) },
+          lightweightListRow: true,
+          skipTranscriptUsageFallback: true,
+        })
+      : entry && projection
+        ? await readEmbeddedHistorySessionInfo(projection, target, {
+            sessionId,
+            lifecycleRevision: entry.lifecycleRevision,
           })
-        : entry && projection
-          ? await readEmbeddedHistorySessionInfo(projection, target, {
-              sessionId,
-              lifecycleRevision: entry.lifecycleRevision,
-            })
-          : undefined;
+        : undefined;
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     if (sessionInfo) {
       sessionInfo.thinkingLevel = thinkingLevel;
@@ -662,10 +654,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
       throw new Error(applied.error.message);
     }
 
+    const canonicalKey = target.canonicalKey ?? opts.key;
+    const [acpMeta] = await readAcpSessionMetaForEntries({
+      cfg,
+      entries: [{ agentId: target.agentId, sessionKey: canonicalKey, entry: applied.entry }],
+    });
     const projected = projectSessionPatchResult({
-      canonicalKey: target.canonicalKey ?? opts.key,
+      canonicalKey,
       cfg,
       entry: applied.entry,
+      preparedAcpMeta: acpMeta ?? null,
       storePath: target.storePath,
       targetAgentId: target.agentId,
     });

@@ -619,7 +619,7 @@ describe("host-owned current admission annotation", () => {
         ],
         ["starting", "active", { activeOwnerEpoch: 7 }],
       ] as const) {
-        placement = placements.transition({
+        placement = await placements.transition({
           sessionId: f.target.sessionId,
           from,
           to,

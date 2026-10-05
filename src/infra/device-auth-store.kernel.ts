@@ -21,12 +21,10 @@ type DeviceAuthDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "device_auth_tokens" | "gateway_origin_device_tokens"
 >;
-type DeviceAuthRow = {
-  token: string;
-  role: string;
-  scopes_json: string;
-  updated_at_ms: number;
-};
+type DeviceAuthRow = Pick<
+  DeviceAuthDatabase["device_auth_tokens"],
+  "token" | "role" | "scopes_json" | "updated_at_ms"
+>;
 type DeviceAuthLookup = { deviceId: string; role: string };
 type DeviceAuthWrite = DeviceAuthLookup &
   Parameters<typeof createDeviceAuthEntry>[0] & { expectedToken?: string | null };

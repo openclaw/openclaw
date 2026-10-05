@@ -91,17 +91,34 @@ describe("transcript turn physical identity", () => {
     },
   );
 
-  it("writes the qualified unknown identity into its existing raw physical row", async () => {
-    const raw = "unknown";
-    replaceSessionEntrySync(scope(raw), { sessionId, updatedAt: 1 });
-    await expect(persist(`agent:main:${raw}`)).resolves.toMatchObject({ appendedCount: 1 });
-    expect(keys()).toEqual([{ session_key: raw }]);
-    expect(loadTranscriptEventsSync(scope(raw))).toContainEqual(
-      expect.objectContaining({ type: "message", message }),
-    );
-    expect(loadSessionEntryReadOnly(scope(raw))?.sessionId).toBe(sessionId);
-    expect(loadSessionEntryReadOnly(scope(`agent:main:${raw}`))).toBeUndefined();
-  });
+  it.each([
+    { stored: "unknown", requested: "agent:main:unknown", mainKey: undefined },
+    { stored: "agent:main:main", requested: "agent:main:main", mainKey: "custom" },
+  ])(
+    "preserves the physical row $stored when writing $requested",
+    async ({ stored, requested, mainKey }) => {
+      replaceSessionEntrySync(scope(stored), { sessionId, updatedAt: 1 });
+      if (mainKey) {
+        setCanonicalSqliteSessionMainKey(database(), mainKey);
+      }
+      await expect(
+        persistSessionTranscriptTurn(scope(requested), {
+          ...(mainKey ? { config: { session: { mainKey } } } : {}),
+          expectedSessionId: sessionId,
+          messages: [{ message }],
+          updateMode: "none",
+        }),
+      ).resolves.toMatchObject({ appendedCount: 1 });
+      expect(keys()).toEqual([{ session_key: stored }]);
+      expect(loadTranscriptEventsSync(scope(stored))).toContainEqual(
+        expect.objectContaining({ type: "message", message }),
+      );
+      if (!mainKey) {
+        expect(loadSessionEntryReadOnly(scope(stored))?.sessionId).toBe(sessionId);
+        expect(loadSessionEntryReadOnly(scope(requested))).toBeUndefined();
+      }
+    },
+  );
 
   it.each(["entry", "retained window"])(
     "refuses a competing qualified %s before appending through the selected SID",
@@ -128,112 +145,49 @@ describe("transcript turn physical identity", () => {
     },
   );
 
-  it("keeps a fully qualified literal main key when the configured main alias changes", async () => {
-    const literal = scope("agent:main:main");
-    replaceSessionEntrySync(literal, { sessionId, updatedAt: 1 });
-    setCanonicalSqliteSessionMainKey(database(), "custom");
-    await expect(
-      persistSessionTranscriptTurn(literal, {
-        config: { session: { mainKey: "custom" } },
-        expectedSessionId: sessionId,
-        messages: [{ message }],
-        updateMode: "none",
-      }),
-    ).resolves.toMatchObject({ appendedCount: 1 });
-    expect(keys()).toEqual([{ session_key: literal.sessionKey }]);
-    expect(loadTranscriptEventsSync(literal)).toContainEqual(
-      expect.objectContaining({ type: "message", message }),
-    );
-  });
-
-  it.each([
-    { revision: "original", expected: undefined },
-    { revision: undefined, expected: undefined },
-    { revision: "original", expected: "successor" },
+  it.each<{
+    change: "revision" | "delete" | "appears" | "disappears";
+    revision?: string;
+    expected?: string;
+  }>([
+    { change: "revision", revision: "original" },
+    { change: "revision" },
+    { change: "revision", revision: "original", expected: "successor" },
+    { change: "delete" },
+    { change: "appears" },
+    { change: "disappears" },
   ])(
-    "retains the initially selected revision $revision with caller fence $expected",
-    async (row) => {
-      replaceSessionEntrySync(scope(), {
-        sessionId,
-        updatedAt: 1,
-        lifecycleRevision: row.revision,
-      });
-      const selection = pauseTargetSelection();
-      const pending = persistSessionTranscriptTurn(scope("agent:main:global"), {
-        expectedSessionId: sessionId,
-        expectedLifecycleRevision: row.expected,
-        messages: [{ message }],
-        updateMode: "none",
-      });
-      try {
-        await awaitGateBeforeSettlement(
-          selection.selected,
-          pending,
-          "Transcript turn settled before selecting its target",
-        );
-        replaceSessionEntrySync(scope(), {
-          sessionId,
-          updatedAt: 2,
-          lifecycleRevision: "successor",
-        });
-      } finally {
-        selection.resume();
-      }
-      await expect(pending).resolves.toMatchObject({
-        rejectedReason: "session-rebound",
-        appendedCount: 0,
-      });
-      expect(loadSessionEntryReadOnly(scope())?.lifecycleRevision).toBe("successor");
-      expect(loadTranscriptEventsSync(scope())).toEqual([]);
-    },
-  );
-
-  it("does not downgrade a deleted persisted selection into a transcript-only append", async () => {
-    replaceSessionEntrySync(scope(), { sessionId, updatedAt: 1 });
-    const selection = pauseTargetSelection();
-    const pending = persistSessionTranscriptTurn(scope("agent:main:global"), {
-      messages: [{ message }],
-      updateMode: "none",
-    });
-    try {
-      await awaitGateBeforeSettlement(
-        selection.selected,
-        pending,
-        "Transcript turn settled before selecting its target",
-      );
-      retainWindowOnly();
-    } finally {
-      selection.resume();
-    }
-    await expect(pending).resolves.toMatchObject({
-      rejectedReason: "session-rebound",
-      appendedCount: 0,
-    });
-    expect(loadSessionEntryReadOnly(scope())).toBeUndefined();
-    expect(loadTranscriptEventsSync(scope())).toEqual([]);
-  });
-
-  it.each(["appears", "disappears"])(
-    "does not adopt a changed creation precondition when the original entry %s",
-    async (change) => {
-      const entry = { sessionId, updatedAt: 1 };
-      if (change === "disappears") {
+    "rejects a changed $change precondition (revision=$revision, fence=$expected)",
+    async ({ change, revision, expected }) => {
+      const entry = { sessionId, updatedAt: 1, lifecycleRevision: revision };
+      if (change !== "appears") {
         replaceSessionEntrySync(scope(), entry);
       }
+      const creation = change === "appears" || change === "disappears";
       const selection = pauseTargetSelection();
-      const pending = persistSessionTranscriptTurn(scope(), {
-        expectedSessionId: sessionId,
-        initialSessionEntry: entry,
-        messages: [{ message }],
-        updateMode: "none",
-      });
+      const pending = persistSessionTranscriptTurn(
+        scope(creation ? "global" : "agent:main:global"),
+        {
+          ...(change === "delete" ? {} : { expectedSessionId: sessionId }),
+          ...(creation ? { initialSessionEntry: entry } : {}),
+          expectedLifecycleRevision: expected,
+          messages: [{ message }],
+          updateMode: "none",
+        },
+      );
       try {
         await awaitGateBeforeSettlement(
           selection.selected,
           pending,
           "Transcript turn settled before selecting its target",
         );
-        if (change === "appears") {
+        if (change === "revision") {
+          replaceSessionEntrySync(scope(), {
+            sessionId,
+            updatedAt: 2,
+            lifecycleRevision: "successor",
+          });
+        } else if (change === "appears") {
           replaceSessionEntrySync(scope(), entry);
         } else {
           retainWindowOnly();
@@ -245,6 +199,11 @@ describe("transcript turn physical identity", () => {
         rejectedReason: "session-rebound",
         appendedCount: 0,
       });
+      if (change === "revision") {
+        expect(loadSessionEntryReadOnly(scope())?.lifecycleRevision).toBe("successor");
+      } else if (change === "delete") {
+        expect(loadSessionEntryReadOnly(scope())).toBeUndefined();
+      }
       expect(loadTranscriptEventsSync(scope())).toEqual([]);
     },
   );

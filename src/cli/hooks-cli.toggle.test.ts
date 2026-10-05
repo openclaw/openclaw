@@ -170,10 +170,10 @@ function configureExplicitFleet() {
     ...sourceConfig,
     agents: {
       ownership: "explicit" as const,
-      list: [
-        { id: "main", workspace: "/tmp/openclaw-main-workspace" },
-        { id: "research", workspace: "/tmp/openclaw-research-workspace" },
-      ],
+      entries: {
+        main: { workspace: "/tmp/openclaw-main-workspace" },
+        research: { workspace: "/tmp/openclaw-research-workspace" },
+      },
     },
   };
   mocks.getRuntimeConfig.mockReturnValue(config);

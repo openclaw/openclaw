@@ -6,7 +6,7 @@ import {
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
 import * as healthState from "../config/io.health-state.js";
-import * as configMutation from "../config/mutate.js";
+import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { ExitError } from "../runtime.js";
 import {
@@ -27,19 +27,32 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it.each(["current", "backup", "concurrent-edit"] as const)(
-  "admits only the owned startup config write from %s",
+it.each(["current", "backup", "webhook-repair"] as const)(
+  "preserves authored config during startup from %s",
   async (source) => {
     await withDoctorConfigPreflightHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const configPath = path.join(stateDir, "openclaw.json");
       const original = JSON.stringify({
         gateway: { mode: "local" },
-        plugins: { enabled: false },
+        ...(source === "webhook-repair"
+          ? {
+              channels: {
+                "nextcloud-talk": {
+                  enabled: true,
+                  baseUrl: "https://cloud.example.com",
+                  botSecret: "test-bot-secret",
+                },
+              },
+            }
+          : { plugins: { enabled: false } }),
       });
       await fs.mkdir(stateDir, { recursive: true });
       openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
       closeOpenClawStateDatabaseForTest();
+      if (source === "webhook-repair") {
+        recordGatewayBootStart(process.env, 1_800_000_000_000);
+      }
       await fs.writeFile(configPath, original);
       if (source === "backup") {
         await fs.writeFile(`${configPath}.bak`, original);
@@ -57,30 +70,29 @@ it.each(["current", "backup", "concurrent-edit"] as const)(
         gateway: { mode: "local", port: 19002 },
         plugins: { enabled: false },
       });
-      if (source === "concurrent-edit") {
-        const transform = configMutation.transformConfigFile;
-        vi.spyOn(configMutation, "transformConfigFile").mockImplementationOnce(async (params) => {
-          const committed = await transform(params);
-          await fs.writeFile(configPath, replacement);
-          return committed;
-        });
-      }
       const options: StartupConfigPreflightOptions = {
         gateway: true,
-        beforeStatePreparation: (snapshot, committedWrite) =>
-          recheckGatewayRunBootstrap({ opts: {}, runtime, snapshot, committedWrite }),
+        beforeStatePreparation: (snapshot) =>
+          recheckGatewayRunBootstrap({ opts: {}, runtime, snapshot }),
       };
-      if (source === "concurrent-edit") {
-        await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({ code: 1 });
-        expect(await fs.readFile(configPath, "utf8")).toBe(replacement);
+      if (source === "webhook-repair") {
+        await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({
+          code: 78,
+          message: expect.stringContaining("openclaw doctor --fix"),
+        });
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
         const ready = await runStartupConfigPreflight(options);
         expect(ready.snapshot.valid).toBe(true);
-        expect(ready.snapshot.sourceConfig.meta?.migrations?.webhookListeners).toBe(true);
-        expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
-        const committed = await fs.readFile(configPath, "utf8");
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        if (source === "backup") {
+          expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
+        } else {
+          await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
+        }
         expect((await runStartupConfigPreflight(options)).snapshot.valid).toBe(true);
-        expect(await fs.readFile(configPath, "utf8")).toBe(committed);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await fs.writeFile(configPath, replacement);
         await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({ code: 1 });
         expect(await fs.readFile(configPath, "utf8")).toBe(replacement);

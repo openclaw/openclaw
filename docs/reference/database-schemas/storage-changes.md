@@ -38,6 +38,13 @@ Canonical shutdown joins accepted publication and planner lease cleanup; a newer
 scheduled owner cannot be consumed by an older retired pass. Schemas, retention,
 permissions, and update behavior are unchanged.
 
+The transcript reconcile pool admits the smallest pending session backlog first,
+with original operation order breaking ties. At a completed session boundary, a
+planner yields only to a strictly smaller waiting backlog and reserves its place
+before releasing the worker. Each resumed pass refreshes its backlog in preflight;
+startup still awaits the complete rebuild. The pool retains one worker, and lease
+release tasks bypass backlog admission.
+
 Deferred agent recovery reads deletion status through the shared-state worker.
 Native preparation checks the current journal before transaction and commit
 admission without reentering SQLite on the host. These checks belong to each
@@ -64,9 +71,11 @@ terminal replay keys, JSON payloads, retention limits, schema, and restart
 recovery policy remain unchanged.
 
 Ordinary operator approval lookups, pending replay, verdicts, expiry, and allow-once
-consumption execute in the shared-state worker. Lookups and pending scans retain
-their expiry and corrupt-row repair transactions; history pages use the read-only
-worker. The approval manager retains live authority and decision handoffs, checks
+consumption execute in the shared-state worker. Replay expires and publishes due
+approvals before listing the pending set; the pending query excludes expired rows
+without repeating that sweep. Lookups retain expiry, and both reads retain
+corrupt-row repair transactions; history pages use the read-only worker. The
+approval manager retains live authority and decision handoffs, checks
 authority at transaction and commit admission, and joins accepted mutations before
 retiring their local bindings. Startup orphan closure and pruning remain boot
 admission operations. Stored bytes, schemas, retention, and update behavior are
@@ -1992,6 +2001,34 @@ snapshot scopes, selected revision bytes, hidden-pin omission, and the first
 resource failure. Synchronous discovery and borrowed-database readers keep their
 existing contracts. This changes no schema, migration, or persistent data.
 
+### Memory chunk path index retirement
+
+The maintainer accepted this index-only design on 2026-10-04. The per-agent
+memory store retires `idx_memory_index_chunks_path(path)` and retains
+`idx_memory_index_chunks_path_source(path, source)`, whose leftmost prefix also
+serves path-only lookups. Chunk rows remain authoritative for this derived index;
+logical identities, FTS and revision triggers, recall metadata, provenance, and
+vector publication keep their existing owners and atomicity.
+
+Fresh canonical agent schemas and SDK memory bootstrap omit the path-only index.
+On update, the SDK's existing writable memory initialization drops it after
+validating and converting any legacy storage. Frozen predecessor validation still
+accepts the historical index. Current-version canonical index repair does not
+recreate it; read-only admission accepts its presence or absence. An existing
+agent database that never initializes memory can retain it. There is no per-query
+cleanup, new admission owner, schema-version bump, or installed-updater change.
+
+Each replaced chunk avoids one redundant index deletion and insertion; SQL
+statement counts in source replacement stay unchanged. Synthetic component
+measurements with 15,183 chunks saved 183 4-KiB pages (749,568 bytes) and 753,960
+WAL bytes (0.32%) during full delete/reinsert with chunk FTS and revision triggers.
+Vector, provenance, and recall writes were excluded, so this is not an end-to-end
+estimate or a wall-time speedup claim. Dropping the index makes its pages reusable;
+it does not promise immediate physical file shrinkage or run `VACUUM`.
+Downgrade or binary rollback can safely recreate the older runtime's index without
+row conversion; re-upgrade retires it again when memory initializes. A rolled-back
+enclosing schema transaction restores the index with the rest of that transaction.
+
 ### Preserve the data and concurrency contracts
 
 Transcript turn predicates acquire the latest assistant only when they need it.
@@ -2224,6 +2261,46 @@ before advancing its marker or removing a missing source. Durable event insertio
 or deduplication still precedes marker settlement. Failed event recording leaves
 the marker available for the next probe. Schemas, stored bytes, retention, provider
 contracts, and update behavior are unchanged; no migration is required.
+
+## Trajectory retention covering index
+
+The accepted trajectory retention design keeps canonical runtime events in the
+per-agent store and replaces its derived `idx_agent_trajectory_runtime_run`
+index with `(session_id, run_id, created_at, octet_length(event_json))`. The
+retention read worker aggregates directly from that covering index, outside the
+append transaction. No materialized event-size staging, summary table, trigger,
+counter, second index, or new persistence owner is introduced.
+
+Writable database admission atomically repairs the same-name index through the
+canonical index owner, with its existing integrity checks. This is an index-only
+change at agent schema 24; no schema-version bump or event conversion is required.
+The one-time rebuild reads retained trajectory rows and temporarily holds a probe
+index and replacement. Later event writes maintain the byte-length expression,
+including null run IDs. Older same-version writable owners can rebuild their
+prior partial index on downgrade or binary rollback without changing event rows.
+Strict read-only validation may require that writable repair before reopening.
+
+Retention keeps the 14-day age rule, whole-run eviction, current-session exemption,
+512 MiB default global budget, JSONL separator accounting, and existing database
+encoding semantics. Per-session trimming still measures UTF-8 bytes. Appends
+serialize events before writer admission and commit independently of global
+cleanup. First-use and hourly cleanup uses one lifecycle-owned reader and deletion
+transactions bounded to 100 runs and 10 MiB, allowing one oversized complete run.
+Each deletion rechecks the captured native revision; concurrent changes defer
+remaining cleanup until a later append. Cadence advances only after the sweep
+completes. Nested synchronous appends defer cleanup until a later independent
+append. Permissions and durability are unchanged.
+
+A synthetic 241,697-event fixture measured the aggregate at 31–40 ms versus
+407–453 ms with the staged query, with all 3,836 groups equal. The replacement
+index occupied 7,712,768 bytes versus 6,598,656 bytes for the old partial index,
+about 1.06 MiB more. A warm 320-row insert/rollback probe was roughly 0.7 ms for
+both shapes, excluding commit, cache eviction, and checkpoint amplification.
+These are component measurements, not production throughput or end-to-end hold
+guarantees. Regression proof captures the retention read's aggregate plan, requires
+covering access without temporary grouping or table-body reads, asserts retained
+events for null and named runs, and opens a populated old-index fixture through
+canonical admission without changing its version or rows.
 
 ## Review checkpoint for material changes
 

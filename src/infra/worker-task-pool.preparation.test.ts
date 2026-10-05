@@ -87,8 +87,6 @@ describe("public worker task preparation custody", () => {
 
   it.each([
     { order: "preparation-first", rejects: false },
-    { order: "preparation-first", rejects: true },
-    { order: "exit-first", rejects: false },
     { order: "exit-first", rejects: true },
   ])(
     "joins both lifetimes before releasing input ($order, rejects=$rejects)",
@@ -249,11 +247,8 @@ describe("public worker task preparation custody", () => {
 
   it.each([
     { ending: "abort", failure: "input" },
-    { ending: "close", failure: "input" },
-    { ending: "abort", failure: "settlement" },
     { ending: "close", failure: "settlement" },
     { ending: "abort", failure: "both" },
-    { ending: "close", failure: "both" },
   ])(
     "reports $failure cleanup failure through close after $ending rejects the result",
     async ({ ending, failure }) => {

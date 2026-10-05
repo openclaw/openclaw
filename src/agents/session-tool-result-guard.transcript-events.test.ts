@@ -128,7 +128,7 @@ afterEach(async () => {
 
 describe("guardSessionManager transcript updates", () => {
   it("preserves prepared source and redaction when a concurrent append forces a retry", async () => {
-    const { sessionManager: manager, target } = await openPersistedSessionManager();
+    const { root, sessionManager: manager, target } = await openPersistedSessionManager();
     const baseId = manager.appendMessage(makeUserMessage("Compute a value", 1));
     installSessionToolResultGuard(manager, {
       config: { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } },
@@ -165,7 +165,8 @@ describe("guardSessionManager transcript updates", () => {
     } finally {
       execSpy.mockRestore();
     }
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(root);
+    closeOpenClawAgentDatabasesForTest(root);
     const entries = SessionManager.open(target).getBranch();
     expect(entries.map(({ id, parentId }) => ({ id, parentId }))).toEqual([
       { id: baseId, parentId: null },

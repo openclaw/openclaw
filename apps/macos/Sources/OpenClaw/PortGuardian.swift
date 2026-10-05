@@ -96,14 +96,13 @@ actor PortGuardian {
     }
 
     func removeRecord(_ receipt: Record) {
+        // Callers remove only after the child exited. Even when SQLite needs a retry,
+        // this process must stop protecting the receipt from later sweeps.
+        defer { self.relinquishRecord(receipt) }
         do {
             let recordStore = try self.requireRecordStore()
             _ = try recordStore.deleteIfMatches(receipt)
-            self.relinquishRecord(receipt)
         } catch {
-            // Callers remove only after the child exited. Keep the SQLite row for
-            // retry, but stop protecting its in-memory receipt from later sweeps.
-            self.relinquishRecord(receipt)
             self.logger.error(
                 "failed to remove PortGuardian receipt pid \(receipt.pid, privacy: .public): " +
                     "\(error.localizedDescription, privacy: .public)")
@@ -306,8 +305,8 @@ actor PortGuardian {
         return false
     }
 
-    private static func waitForProcessExit(_ orphan: OrphanedTunnel, timeout: TimeInterval = 1.0) async -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
+    private static func waitForProcessExit(_ orphan: OrphanedTunnel) async -> Bool {
+        let deadline = Date().addingTimeInterval(1)
         while true {
             switch self.classifyTunnelRecord(
                 orphan.record,
@@ -739,11 +738,7 @@ actor PortGuardian {
 #if DEBUG
 extension PortGuardian {
     func setTestingDescriptor(_ descriptor: Descriptor?, forPort port: Int) {
-        if let descriptor {
-            self.testingDescriptors[port] = descriptor
-        } else {
-            self.testingDescriptors.removeValue(forKey: port)
-        }
+        self.testingDescriptors[port] = descriptor
     }
 
     static func _testTunnelProcessInfo(pid: Int32) -> TunnelProcessInfo? {

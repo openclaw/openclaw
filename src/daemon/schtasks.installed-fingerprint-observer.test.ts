@@ -45,89 +45,66 @@ function createRepository() {
 }
 
 describe("installed fingerprint source qualification", () => {
-  it("accepts the identical clean candidate checkout", () => {
-    const { cwd, sourceSha } = createRepository();
-    expect(verifyInstalledFingerprintSource({ cwd, sourceSha, toolingSha: sourceSha })).toEqual([]);
-  });
+  it.each([false, true])(
+    "accepts clean candidate owners with reviewed tooling changes=%s",
+    (changed) => {
+      const repo = createRepository();
+      const paths = changed
+        ? [fixturePath, "src/daemon/schtasks.installed-package.test-support.ts"]
+        : [];
+      for (const filename of paths) {
+        repo.write(filename);
+      }
+      const toolingSha = changed ? repo.commit() : repo.sourceSha;
+      if (changed) {
+        expect(toolingSha).not.toBe(repo.sourceSha);
+      }
+      expect(verifyInstalledFingerprintSource({ ...repo, toolingSha })).toEqual(paths.toSorted());
+    },
+  );
 
-  it("reuses candidate owners across the exact reviewed fixture-only tooling changes", () => {
-    const repo = createRepository();
-    const changed = [
-      "src/daemon/schtasks.integration-observation.test-support.ts",
-      "src/daemon/schtasks.integration.e2e.test.ts",
-      fixturePath,
-      "src/daemon/schtasks.installed-diagnostics.test-support.ts",
-      "src/daemon/schtasks.installed-authority.test-support.ts",
-      "src/daemon/schtasks.installed.integration.test-support.ts",
-      "src/daemon/schtasks.installed-startup.test-support.ts",
-      "src/daemon/schtasks.installed-fingerprint-observer.test-support.mts",
-      "src/daemon/schtasks.installed-fingerprint-observer.test.ts",
-      "src/config/sessions/session-sharing-store.test.ts",
-      ".github/workflows/windows-testbox-probe.yml",
-      "test/helpers/gateway/config-rpc-gateway.ts",
-      "src/daemon/schtasks.installed-powershell-context.test-support.mts",
-      "src/daemon/schtasks.installed-package.test-support.ts",
-      "src/daemon/schtasks.installed-package.test.ts",
-    ];
-    for (const filename of changed) {
-      repo.write(filename);
-    }
-    const toolingSha = repo.commit();
-    expect(toolingSha).not.toBe(repo.sourceSha);
-    expect(verifyInstalledFingerprintSource({ ...repo, toolingSha })).toEqual(changed.toSorted());
-  });
+  it.each(["production", "unreviewed test", "rename"])(
+    "rejects %s changes outside reviewed fixtures",
+    (kind) => {
+      const repo = createRepository();
+      const filename =
+        kind === "unreviewed test" ? "src/daemon/schtasks.unreviewed.test.ts" : productionPath;
+      if (kind === "rename") {
+        repo.git("mv", "--force", productionPath, fixturePath);
+      } else {
+        repo.write(filename);
+      }
+      const toolingSha = repo.commit();
+      expect(() => verifyInstalledFingerprintSource({ ...repo, toolingSha })).toThrow(
+        `Candidate source differs outside reviewed proof fixtures: ${filename}`,
+      );
+    },
+  );
 
-  it.each([
-    productionPath,
-    "package.json",
-    "pnpm-lock.yaml",
-    "src/daemon/schtasks.unreviewed.test.ts",
-  ])("rejects a committed change to %s", (filename) => {
-    const repo = createRepository();
-    repo.write(filename);
-    const toolingSha = repo.commit();
-    expect(() => verifyInstalledFingerprintSource({ ...repo, toolingSha })).toThrow(
-      `Candidate source differs outside reviewed proof fixtures: ${filename}`,
-    );
-  });
-
-  it("rejects moving production bytes into an admitted fixture path", () => {
-    const repo = createRepository();
-    repo.git("mv", "--force", productionPath, fixturePath);
-    const toolingSha = repo.commit();
-    expect(() => verifyInstalledFingerprintSource({ ...repo, toolingSha })).toThrow(
-      `Candidate source differs outside reviewed proof fixtures: ${productionPath}`,
-    );
-  });
-
-  it("rejects a tooling pin that is not the checked-out HEAD", () => {
-    const repo = createRepository();
-    repo.write(fixturePath);
-    repo.commit();
-    expect(() =>
-      verifyInstalledFingerprintSource({ ...repo, toolingSha: repo.sourceSha }),
-    ).toThrow();
-  });
-
-  it.each([false, true])("rejects dirty tracked fixture bytes (staged=%s)", (staged) => {
-    const repo = createRepository();
-    repo.write(fixturePath);
-    if (staged) {
-      repo.git("add", "--", fixturePath);
-    }
-    expect(() =>
-      verifyInstalledFingerprintSource({ ...repo, toolingSha: repo.sourceSha }),
-    ).toThrow();
-  });
-
-  it("requires full commit pins and an available candidate commit", () => {
-    const { cwd, sourceSha } = createRepository();
-    for (const pins of [
-      { sourceSha: sourceSha.slice(0, 12), toolingSha: sourceSha },
-      { sourceSha, toolingSha: "HEAD" },
-      { sourceSha: "0".repeat(40), toolingSha: sourceSha },
-    ]) {
-      expect(() => verifyInstalledFingerprintSource({ cwd, ...pins })).toThrow();
-    }
-  });
+  it.each(["wrong HEAD", "staged", "unstaged", "invalid pins"])(
+    "rejects an unqualified source checkout: %s",
+    (kind) => {
+      const repo = createRepository();
+      if (kind !== "invalid pins") {
+        repo.write(fixturePath);
+        if (kind === "wrong HEAD") {
+          repo.commit();
+        } else if (kind === "staged") {
+          repo.git("add", "--", fixturePath);
+        }
+      }
+      const { cwd, sourceSha } = repo;
+      const pins =
+        kind === "invalid pins"
+          ? [
+              { sourceSha: sourceSha.slice(0, 12), toolingSha: sourceSha },
+              { sourceSha, toolingSha: "HEAD" },
+              { sourceSha: "0".repeat(40), toolingSha: sourceSha },
+            ]
+          : [{ sourceSha, toolingSha: sourceSha }];
+      for (const pin of pins) {
+        expect(() => verifyInstalledFingerprintSource({ cwd, ...pin })).toThrow();
+      }
+    },
+  );
 });

@@ -26,9 +26,11 @@ import {
 } from "../../routing/session-key.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
+import { registerSerializedJsonArray } from "../serialized-json.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
+import { serializeSessionRow } from "../session-row-presentation.js";
 import {
   getSessionRowProjection,
   requireSessionRowProjection,
@@ -51,7 +53,8 @@ import {
 } from "../session-utils.js";
 import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { withSessionListDiagnostics } from "./sessions-list-diagnostics.js";
+import { createPreparedReadHandler } from "./prepared-read.js";
+import { startSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import { searchProjectedSessionTranscripts } from "./sessions-search-projected.js";
@@ -272,27 +275,59 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "sessions.list": withSessionListDiagnostics(async (args, diagnostics) => {
-    const { params, respond, client, context } = args;
-    if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
-      return;
+  "sessions.list": createPreparedReadHandler((args) => {
+    const { params, client, context } = args;
+    const diagnostics = startSessionListDiagnostics(
+      args.respond,
+      args.req.method === "sessions.subscribe" ? "sessions.subscribe" : "sessions.list",
+      params,
+    );
+    const respondToCaller = diagnostics?.respond ?? args.respond;
+    try {
+      if (
+        !assertValidParams(params, validateSessionsListParams, "sessions.list", respondToCaller)
+      ) {
+        diagnostics?.finish("returned");
+        return undefined;
+      }
+      const projection = requireSessionRowProjection(context);
+      const assertCurrent = () => args.sessionMutationAuthorization?.assertCurrent();
+      return {
+        respond: respondToCaller,
+        assertCurrent,
+        beforeRespond: () => {
+          // An event delivered before roster admission may not have established its ancestor rows.
+          if (client?.connId) {
+            context.forgetConnectionAncestors(client.connId);
+          }
+        },
+        release: (outcome) => diagnostics?.finish(outcome),
+        run: async (respond) => {
+          await listProjectedSessions({
+            projection,
+            opts: params,
+            context,
+            client,
+            diagnostics,
+            onResult: (result, sharedRows) => {
+              assertCurrent();
+              // The RPC snapshot is immutable; embedded list results retain private mutable wrappers.
+              for (const row of result.sessions) {
+                Object.freeze(row);
+              }
+              registerSerializedJsonArray(
+                Object.freeze(result.sessions),
+                sharedRows.map(serializeSessionRow),
+              );
+              respond(true, result);
+            },
+          });
+        },
+      };
+    } catch (error) {
+      diagnostics?.finish("threw");
+      throw error;
     }
-    const projection = requireSessionRowProjection(context);
-    await listProjectedSessions({
-      projection,
-      opts: params,
-      context,
-      client,
-      diagnostics,
-      onResult: (result) => {
-        args.sessionMutationAuthorization?.assertCurrent();
-        // An event delivered before roster admission may not have established its ancestor rows.
-        if (client?.connId) {
-          context.forgetConnectionAncestors(client.connId);
-        }
-        respond(true, result);
-      },
-    });
   }),
   "sessions.preview": async ({
     params,

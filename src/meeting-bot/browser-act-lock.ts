@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
@@ -17,33 +18,20 @@ export async function runMeetingBrowserAct<T>(params: {
   if (waitMs <= 0) {
     throw new Error(BROWSER_ACT_TIMEOUT_MESSAGE);
   }
-  let acquired = false;
   const { promise: acquisition, resolve: markAcquired } = createDeferredCore();
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   const queued = browserActLock.enqueue(params.targetId, async () => {
     const remainingMs = Math.floor(params.deadline - performance.now());
     if (remainingMs <= 0) {
       throw new Error(BROWSER_ACT_TIMEOUT_MESSAGE);
     }
-    acquired = true;
-    clearTimeout(timeout);
     markAcquired();
     return await params.operation(remainingMs);
   });
   // The acquisition race may return before this queued no-op reaches the lock.
   // Keep its eventual deadline rejection observed without masking caller errors.
   void queued.catch(() => undefined);
-  const expired = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => {
-      if (!acquired) {
-        reject(new Error(BROWSER_ACT_TIMEOUT_MESSAGE));
-      }
-    }, waitMs);
+  await raceWithTimeout(acquisition, waitMs, () => {
+    throw new Error(BROWSER_ACT_TIMEOUT_MESSAGE);
   });
-  try {
-    await Promise.race([acquisition, expired]);
-  } finally {
-    clearTimeout(timeout);
-  }
   return await queued;
 }

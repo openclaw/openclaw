@@ -334,7 +334,7 @@ describe("subagent registry lifecycle error grace", () => {
         requesterTurnRunId,
         requesterAgentIdOverride: "main",
         config: {
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           session: { mainKey: "main", scope: "per-sender" },
         },
         callGateway: vi.fn(async () => ({

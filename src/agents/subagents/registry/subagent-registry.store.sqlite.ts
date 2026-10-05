@@ -13,6 +13,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import {
+  isSettledSubagentRequesterHistory,
   projectSubagentRunForMaintenance,
   projectSubagentRunForSessionList,
 } from "./subagent-delivery-state.js";
@@ -421,14 +422,14 @@ export function loadSubagentSessionListRunsFromSqlite(
 }
 
 /** Select identities and physical records in one snapshot, before codec filtering. */
-function loadSubagentRunsForSessions(
+export function loadSubagentRunsForSessionsInDatabase(
   database: Pick<OpenClawStateDatabase, "db">,
   sessionKeys: readonly string[],
   inMemoryRuns: Iterable<Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">>,
-  observe?: (kind: "topology" | "row", row: unknown) => void,
 ) {
+  const hash = createHash("sha256");
   const { db } = database;
-  return runSqliteDeferredTransactionSync(db, () => {
+  const result = runSqliteDeferredTransactionSync(db, () => {
     const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
     const identities = executeSqliteQuerySync(
       db,
@@ -457,11 +458,9 @@ function loadSubagentRunsForSessions(
     const runs = new Map<string, SubagentRunRecord>();
     const complete = runIds.length === identities.length;
     // Topology includes malformed payloads and newly attached descendant branches.
-    if (observe) {
-      for (const row of identities) {
-        if (selected.has(row.child_session_key.trim()) || selectedRunIds.has(row.run_id.trim())) {
-          observe("topology", row);
-        }
+    for (const row of identities) {
+      if (selected.has(row.child_session_key.trim()) || selectedRunIds.has(row.run_id.trim())) {
+        hash.update(JSON.stringify(["topology", row]));
       }
     }
     if (runIds.length) {
@@ -473,7 +472,7 @@ function loadSubagentRunsForSessions(
           .orderBy("run_id", "asc"),
       ).rows;
       for (const row of rows) {
-        observe?.("row", row);
+        hash.update(JSON.stringify(["row", row]));
         const entry = rowToSubagentRunRecord(row);
         if (entry) {
           runs.set(entry.runId, entry);
@@ -482,18 +481,7 @@ function loadSubagentRunsForSessions(
     }
     return { sessionKeys: selected, runIds, runs, complete };
   });
-}
-
-export function loadSubagentRunsForSessionsInDatabase(
-  database: Pick<OpenClawStateDatabase, "db">,
-  sessionKeys: readonly string[],
-  inMemoryRuns: Iterable<Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">>,
-) {
-  const hash = createHash("sha256");
-  const selected = loadSubagentRunsForSessions(database, sessionKeys, inMemoryRuns, (kind, row) => {
-    hash.update(JSON.stringify([kind, row]));
-  });
-  return { ...selected, digest: hash.digest("hex") };
+  return { ...result, digest: hash.digest("hex") };
 }
 
 export function subagentRunsDurableBasisMatches(
@@ -511,20 +499,21 @@ export function hasSubagentSessionOwnerInDatabase(
   database: Pick<OpenClawStateDatabase, "db">,
   sessionKey: string,
 ): boolean {
-  return (
-    executeSqliteQuerySync(
+  return runSqliteDeferredTransactionSync(database.db, () => {
+    const child = executeSqliteQuerySync(
       database.db,
       getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
         .selectFrom("subagent_runs")
         .select("run_id")
-        .where((eb) =>
-          eb.or([
-            eb("child_session_key", "=", sessionKey),
-            eb("requester_session_key", "=", sessionKey),
-            eb("controller_session_key", "=", sessionKey),
-          ]),
-        )
+        .where("child_session_key", "=", sessionKey)
         .limit(1),
-    ).rows.length > 0
-  );
+    );
+    if (child.rows.length > 0) {
+      return true;
+    }
+    return readSubagentRegistryRows({ kind: "session", sessionKey }, database).some((row) => {
+      const entry = rowToSubagentRunRecord(row);
+      return !entry || !isSettledSubagentRequesterHistory(entry);
+    });
+  });
 }

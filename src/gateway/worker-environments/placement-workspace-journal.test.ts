@@ -74,56 +74,37 @@ describe("worker placement workspace journal", () => {
     return { active, owner };
   };
 
-  it("prunes a workspace journal only after its exact owner is gone", async () => {
-    const { active, owner } = await seedJournal();
-
-    expect(await prune()).toEqual([]);
-    const draining = store.startDrain({
-      sessionId: REQUEST.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      expectedGeneration: active.generation,
-    });
-    if (draining.state !== "draining") {
-      throw new Error("expected draining placement");
-    }
-    store.startReconcile({
-      sessionId: draining.sessionId,
-      environmentId: draining.environmentId,
-      ownerEpoch: draining.activeOwnerEpoch,
-      expectedGeneration: draining.generation,
-    });
-
-    expect(await prune()).toEqual([owner]);
-    expect(await store.listWorkspaceReconciliationOwners()).toEqual([]);
-  });
-
-  it("retains a failed owner whose forced rollback is retryable", async () => {
-    const { active, owner } = await seedJournal();
-    const draining = store.startDrain({
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      expectedGeneration: active.generation,
-    });
-    if (draining.state !== "draining") {
-      throw new Error("expected draining placement");
-    }
-    const reconciling = store.startReconcile({
-      sessionId: draining.sessionId,
-      environmentId: draining.environmentId,
-      ownerEpoch: draining.activeOwnerEpoch,
-      expectedGeneration: draining.generation,
-    });
-    store.fail({
-      sessionId: reconciling.sessionId,
-      expectedGeneration: reconciling.generation,
-      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
-    });
-
-    expect(await prune()).toEqual([]);
-    expect(await store.listWorkspaceReconciliationOwners()).toEqual([owner]);
-  });
+  it.each([false, true])(
+    "prunes only retired journal owners (retryable rollback: %s)",
+    async (retryable) => {
+      const { active, owner } = await seedJournal();
+      expect(await prune()).toEqual([]);
+      const draining = await store.startDrain({
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: active.generation,
+      });
+      if (draining.state !== "draining") {
+        throw new Error("expected draining placement");
+      }
+      const reconciling = await store.startReconcile({
+        sessionId: draining.sessionId,
+        environmentId: draining.environmentId,
+        ownerEpoch: draining.activeOwnerEpoch,
+        expectedGeneration: draining.generation,
+      });
+      if (retryable) {
+        await store.fail({
+          sessionId: reconciling.sessionId,
+          expectedGeneration: reconciling.generation,
+          recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+        });
+      }
+      expect(await prune()).toEqual(retryable ? [] : [owner]);
+      expect(await store.listWorkspaceReconciliationOwners()).toEqual(retryable ? [owner] : []);
+    },
+  );
 
   it("reads, writes and accepts the durable journal without host data SQL", async () => {
     const { active, owner } = await seedJournal();

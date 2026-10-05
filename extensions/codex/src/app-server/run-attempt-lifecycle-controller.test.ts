@@ -20,10 +20,12 @@ function createTerminalReleaseHarness() {
     completed: false,
     activeAppServerTurnRequests: 0,
     currentTurnHadNonTerminalDynamicToolResult: false,
+    currentTurnHadToolAuthoredFinalReply: false,
     pendingTerminalDynamicToolRelease: undefined,
     terminalDynamicToolReleaseCheckScheduled: false,
     resolveCompletion,
   };
+  const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   const client = {
     request,
     addNotificationHandler: (handler: (notification: unknown) => void) => {
@@ -52,7 +54,7 @@ function createTerminalReleaseHarness() {
     {
       state,
       activeTurnItemIds: new Set(),
-      pendingOpenClawDynamicToolCompletionIds: new Set(),
+      pendingOpenClawDynamicToolCompletionIds,
       steeringQueueRef: { current: { cancel } },
       interruptTurn: (turnId: string) =>
         interruptCodexTurnAndWaitBestEffort(client as never, {
@@ -76,7 +78,16 @@ function createTerminalReleaseHarness() {
       });
     }
   };
-  return { cancel, completeTurn, controller, order, request, resolveCompletion, state };
+  return {
+    cancel,
+    completeTurn,
+    controller,
+    order,
+    pendingOpenClawDynamicToolCompletionIds,
+    request,
+    resolveCompletion,
+    state,
+  };
 }
 
 function terminalYieldResult(success: boolean) {
@@ -261,4 +272,73 @@ describe("Codex terminal dynamic-tool release", () => {
     expect(harness.state.completed).toBe(false);
     expect(harness.resolveCompletion).not.toHaveBeenCalled();
   });
+});
+
+function dynamicToolResult(
+  callId: string,
+  response: { success: boolean; terminate?: boolean; toolAuthoredFinalReply?: true },
+) {
+  return {
+    call: { threadId: "thread-1", turnId: "turn-1", callId, tool: callId, arguments: {} },
+    response: { contentItems: [], ...response },
+    durationMs: 1,
+  };
+}
+
+// One Codex model step ran a capable tool and an ordinary tool together. Each result
+// settles the way the server-request handler settles it: the call leaves the pending
+// set, the result is classified, and a release check runs once the request ends.
+async function settleBatch(order: Array<"reply" | "note">, reply: { toolAuthored: boolean }) {
+  const harness = createTerminalReleaseHarness();
+  const results = {
+    reply: dynamicToolResult("call-reply", {
+      success: true,
+      terminate: true,
+      ...(reply.toolAuthored ? { toolAuthoredFinalReply: true as const } : {}),
+    }),
+    note: dynamicToolResult("call-note", { success: true }),
+  };
+  harness.pendingOpenClawDynamicToolCompletionIds.add("call-reply");
+  harness.pendingOpenClawDynamicToolCompletionIds.add("call-note");
+  const releasedAfter: string[] = [];
+  for (const name of order) {
+    harness.pendingOpenClawDynamicToolCompletionIds.delete(results[name].call.callId);
+    harness.controller.recordDynamicToolResult(results[name] as never);
+    harness.controller.scheduleTerminalDynamicToolReleaseCheck();
+    await yieldImmediate();
+    releasedAfter.push(`${name}:${harness.state.completed ? "released" : "open"}`);
+  }
+  return { harness, releasedAfter };
+}
+
+describe("Codex batch release after a tool-authored final reply", () => {
+  it.each([
+    { order: ["reply", "note"] as const, expected: ["reply:open", "note:released"] },
+    { order: ["note", "reply"] as const, expected: ["note:open", "reply:released"] },
+  ])("releases the turn once the batch settles, completing $order", async ({ order, expected }) => {
+    const { harness, releasedAfter } = await settleBatch([...order], { toolAuthored: true });
+    try {
+      expect(releasedAfter).toEqual(expected);
+      expect(harness.request).toHaveBeenCalledWith(
+        "turn/interrupt",
+        { threadId: "thread-1", turnId: "turn-1" },
+        expect.anything(),
+      );
+      expect(harness.resolveCompletion).toHaveBeenCalledOnce();
+    } finally {
+      harness.completeTurn();
+      await yieldImmediate();
+    }
+  });
+
+  it.each([{ order: ["reply", "note"] as const }, { order: ["note", "reply"] as const }])(
+    "keeps an ordinary terminal tool's batch open after a non-terminal sibling, completing $order",
+    async ({ order }) => {
+      const { harness, releasedAfter } = await settleBatch([...order], { toolAuthored: false });
+
+      expect(releasedAfter.every((entry) => entry.endsWith(":open"))).toBe(true);
+      expect(harness.request).not.toHaveBeenCalled();
+      expect(harness.state.currentTurnHadToolAuthoredFinalReply).toBe(false);
+    },
+  );
 });

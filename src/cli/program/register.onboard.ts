@@ -61,7 +61,7 @@ async function validateRecommendationParentOptions(
   );
 }
 
-const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
+const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli();
 const RECOMMENDATION_READ_PARENT_OPTIONS = new Set(["json"]);
 const RECOMMENDATION_MUTATION_PARENT_OPTIONS = new Set(["agent"]);
 
@@ -102,14 +102,6 @@ function resolveOnboardAuthFlags() {
 }
 
 const ONBOARD_AUTH_FLAGS = resolveOnboardAuthFlags();
-
-function pickOnboardProviderAuthOptionValues(
-  opts: Record<string, unknown>,
-): Partial<Record<string, string | undefined>> {
-  return Object.fromEntries(
-    ONBOARD_AUTH_FLAGS.map((flag) => [flag.optionKey, opts[flag.optionKey] as string | undefined]),
-  );
-}
 
 export function registerOnboardAuthOptions(command: Command): Command {
   command
@@ -202,31 +194,6 @@ export function registerOnboardRuntimeOptions(
     .option("--import-secrets", "Import supported secrets during onboarding migration", false);
 }
 
-function pickOnboardAuthOptionValues(opts: Record<string, unknown>): Partial<OnboardOptions> {
-  const customTextInput = opts.customTextInput === true;
-  return {
-    authChoice: opts.authChoice as AuthChoice | undefined,
-    tokenProvider: opts.tokenProvider as string | undefined,
-    token: opts.token as string | undefined,
-    tokenProfileId: opts.tokenProfileId as string | undefined,
-    tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
-    secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
-    ...pickOnboardProviderAuthOptionValues(opts),
-    cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
-    cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
-    customBaseUrl: opts.customBaseUrl as string | undefined,
-    customApiKey: opts.customApiKey as string | undefined,
-    customModelId: opts.customModelId as string | undefined,
-    customProviderId: opts.customProviderId as string | undefined,
-    customCompatibility: opts.customCompatibility as
-      | "openai"
-      | "openai-responses"
-      | "anthropic"
-      | undefined,
-    customImageInput: customTextInput ? false : opts.customImageInput === true ? true : undefined,
-  };
-}
-
 export async function resolveOnboardCommandOptions(
   opts: Record<string, unknown>,
   command: Command,
@@ -247,7 +214,31 @@ export async function resolveOnboardCommandOptions(
     tui: Boolean(opts.tui),
     flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
     mode: opts.mode as "local" | "remote" | undefined,
-    ...pickOnboardAuthOptionValues(opts),
+    authChoice: opts.authChoice as AuthChoice | undefined,
+    tokenProvider: opts.tokenProvider as string | undefined,
+    token: opts.token as string | undefined,
+    tokenProfileId: opts.tokenProfileId as string | undefined,
+    tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
+    secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
+    ...Object.fromEntries(
+      ONBOARD_AUTH_FLAGS.map((flag) => [
+        flag.optionKey,
+        opts[flag.optionKey] as string | undefined,
+      ]),
+    ),
+    cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
+    cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
+    customBaseUrl: opts.customBaseUrl as string | undefined,
+    customApiKey: opts.customApiKey as string | undefined,
+    customModelId: opts.customModelId as string | undefined,
+    customProviderId: opts.customProviderId as string | undefined,
+    customCompatibility: opts.customCompatibility as
+      | "openai"
+      | "openai-responses"
+      | "anthropic"
+      | undefined,
+    customImageInput:
+      opts.customTextInput === true ? false : opts.customImageInput === true ? true : undefined,
     gatewayPort: parseGatewayPortOption(opts.gatewayPort, "--gateway-port"),
     gatewayBind: opts.gatewayBind as GatewayBind | undefined,
     gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,

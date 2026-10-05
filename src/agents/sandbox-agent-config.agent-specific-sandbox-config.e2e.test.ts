@@ -215,9 +215,8 @@ function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig
           },
         },
       },
-      list: [
-        {
-          id: "work",
+      entries: {
+        work: {
           workspace: "~/openclaw-work",
           sandbox: {
             mode: "all",
@@ -227,7 +226,7 @@ function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig
             },
           },
         },
-      ],
+      },
     },
   };
 }
@@ -256,9 +255,8 @@ describe("Agent-specific sandbox config", () => {
             workspaceRoot: "~/.openclaw/sandboxes",
           },
         },
-        list: [
-          {
-            id: "isolated",
+        entries: {
+          isolated: {
             workspace: "~/openclaw-isolated",
             sandbox: {
               mode: "all",
@@ -266,7 +264,7 @@ describe("Agent-specific sandbox config", () => {
               workspaceRoot: "/tmp/isolated-sandboxes",
             },
           },
-        ],
+        },
       },
     };
 
@@ -287,23 +285,21 @@ describe("Agent-specific sandbox config", () => {
             scope: "session",
           },
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             workspace: "~/openclaw",
             sandbox: {
               mode: "off",
             },
           },
-          {
-            id: "family",
+          family: {
             workspace: "~/openclaw-family",
             sandbox: {
               mode: "all",
               scope: "agent",
             },
           },
-        ],
+        },
       },
     };
 
@@ -354,12 +350,11 @@ describe("Agent-specific sandbox config", () => {
             scope: "agent",
           },
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             workspace: "~/openclaw",
           },
-        ],
+        },
       },
     };
 
@@ -400,9 +395,8 @@ describe("Agent-specific sandbox config", () => {
             },
           },
         },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             sandbox: {
               mode: "all",
@@ -413,7 +407,7 @@ describe("Agent-specific sandbox config", () => {
               },
             },
           },
-        ],
+        },
       },
     };
 
@@ -423,7 +417,11 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should honor agent-specific sandbox mode overrides", () => {
-    for (const scenario of [
+    const scenarios: Array<{
+      cfg: OpenClawConfig;
+      sessionKey: string;
+      assert: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => void;
+    }> = [
       {
         cfg: {
           agents: {
@@ -433,15 +431,14 @@ describe("Agent-specific sandbox config", () => {
                 scope: "agent",
               },
             },
-            list: [
-              {
-                id: "main",
+            entries: {
+              main: {
                 workspace: "~/openclaw",
                 sandbox: {
                   mode: "off",
                 },
               },
-            ],
+            },
           },
         } satisfies OpenClawConfig,
         sessionKey: "agent:main:main",
@@ -458,16 +455,15 @@ describe("Agent-specific sandbox config", () => {
                 mode: "off",
               },
             },
-            list: [
-              {
-                id: "family",
+            entries: {
+              family: {
                 workspace: "~/openclaw-family",
                 sandbox: {
                   mode: "all",
                   scope: "agent",
                 },
               },
-            ],
+            },
           },
         } satisfies OpenClawConfig,
         sessionKey: "agent:family:whatsapp:group:123",
@@ -476,7 +472,8 @@ describe("Agent-specific sandbox config", () => {
           expect(runtime.sandboxed).toBe(true);
         },
       },
-    ]) {
+    ];
+    for (const scenario of scenarios) {
       const runtime = resolveSandboxRuntimeStatus({
         cfg: scenario.cfg,
         sessionKey: scenario.sessionKey,
@@ -494,16 +491,15 @@ describe("Agent-specific sandbox config", () => {
             scope: "session",
           },
         },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             sandbox: {
               mode: "all",
               scope: "agent",
             },
           },
-        ],
+        },
       },
     };
 

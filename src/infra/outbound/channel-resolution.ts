@@ -112,7 +112,6 @@ function resolveRuntimeOutboundPluginCandidate(params: {
   runtime?: ChannelPlugin;
   setupFallback?: ChannelPlugin;
   bundled?: ChannelPlugin;
-  allowSetupShell?: boolean;
   requireActivatedRuntime?: boolean;
 }): ChannelPlugin | undefined {
   const hasRuntimeSurface = params.requireActivatedRuntime
@@ -120,7 +119,9 @@ function resolveRuntimeOutboundPluginCandidate(params: {
     : channelPluginHasRuntimeOutboundSurface;
   return (
     [params.loaded, params.runtime, params.bundled].find(hasRuntimeSurface) ??
-    (params.allowSetupShell ? (params.loaded ?? params.setupFallback ?? params.bundled) : undefined)
+    (params.requireActivatedRuntime
+      ? undefined
+      : (params.loaded ?? params.setupFallback ?? params.bundled))
   );
 }
 
@@ -185,7 +186,6 @@ function* resolveOutboundChannelPluginSteps(
     runtime: runtimeCurrent,
     setupFallback,
     bundled: bundledCurrent,
-    allowSetupShell: params.allowBootstrap !== true,
     requireActivatedRuntime,
   });
   if (candidate) {

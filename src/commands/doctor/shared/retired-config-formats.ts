@@ -89,6 +89,9 @@ export function findRetiredConfigUpgradeRequirement(
   checkKeys(config.gateway, "gateway", ["webchat"]);
   checkKeys(channels, "channels", ["webchat"]);
   checkKeys(channels.telegram, "channels.telegram", ["requireMention", "groupMentionsOnly"]);
+  visitChannelEntries(config, "whatsapp", (scope, configPath) => {
+    checkKeys(scope, configPath, ["exposeErrorText"]);
+  });
   const beforeDiscord = retired.length;
   visitChannelEntries(config, "discord", (scope, configPath) => {
     const voice = isRecord(scope.voice) ? scope.voice : {};

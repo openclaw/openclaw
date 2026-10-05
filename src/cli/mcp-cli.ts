@@ -172,21 +172,6 @@ function parseMcpApprovalModeOption(
   return mode;
 }
 
-function parseOAuthConfig(opts: {
-  scope?: string;
-  redirectUrl?: string;
-  clientMetadataUrl?: string;
-}): Record<string, string> | undefined {
-  const oauth: Record<string, string> = {};
-  for (const key of ["scope", "redirectUrl", "clientMetadataUrl"] as const) {
-    const value = opts[key]?.trim();
-    if (value) {
-      oauth[key] = value;
-    }
-  }
-  return Object.keys(oauth).length > 0 ? oauth : undefined;
-}
-
 function setOptionalField(target: Record<string, unknown>, key: string, value: unknown): void {
   if (value !== undefined) {
     target[key] = value;
@@ -209,7 +194,6 @@ function applyMcpTimeoutOptions(
 function applyMcpOAuthOptions(
   server: Record<string, unknown>,
   opts: McpServerControlOptions,
-  merge: boolean,
 ): void {
   const auth = normalizeLowercaseStringOrEmpty(normalizeStringifiedOptionalString(opts.auth) ?? "");
   if (auth && auth !== "oauth") {
@@ -218,13 +202,19 @@ function applyMcpOAuthOptions(
   if (auth) {
     server.auth = auth;
   }
-  const oauth = parseOAuthConfig({
-    scope: opts.oauthScope,
-    redirectUrl: opts.oauthRedirectUrl,
-    clientMetadataUrl: opts.oauthClientMetadataUrl,
-  });
-  if (oauth) {
-    server.oauth = merge ? { ...asRecord(server.oauth), ...oauth } : oauth;
+  const oauth: Record<string, string> = {};
+  for (const [field, input] of [
+    ["scope", opts.oauthScope],
+    ["redirectUrl", opts.oauthRedirectUrl],
+    ["clientMetadataUrl", opts.oauthClientMetadataUrl],
+  ] as const) {
+    const value = input?.trim();
+    if (value) {
+      oauth[field] = value;
+    }
+  }
+  if (Object.keys(oauth).length > 0) {
+    server.oauth = { ...asRecord(server.oauth), ...oauth };
   }
 }
 
@@ -669,7 +659,7 @@ async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
-}): Promise<Awaited<ReturnType<typeof readMcpProbeResult>>> {
+}): Promise<void> {
   const probeServers = Object.fromEntries(
     Object.entries(params.servers).map(([name, server]) => [
       name,
@@ -687,7 +677,6 @@ async function probeMcpServersOrFail(params: {
     if (probeIssue) {
       fail(probeIssue);
     }
-    return result;
   } finally {
     await runtime.dispose();
   }
@@ -1025,7 +1014,7 @@ export function registerMcpCli(program: Command) {
           server.url = url;
           setOptionalField(server, "transport", normalizeStringifiedOptionalString(opts.transport));
           setOptionalField(server, "headers", parseKeyValueEntries(opts.header, "--header"));
-          applyMcpOAuthOptions(server, opts, false);
+          applyMcpOAuthOptions(server, opts);
           applyMcpTlsOptions(server, opts);
         }
         if (opts.disabled) {
@@ -1205,7 +1194,7 @@ export function registerMcpCli(program: Command) {
           delete next.auth;
           delete next.oauth;
         }
-        applyMcpOAuthOptions(next, opts, true);
+        applyMcpOAuthOptions(next, opts);
         if (opts.clearTls) {
           delete next.sslVerify;
           delete next.ssl_verify;

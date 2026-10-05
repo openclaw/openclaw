@@ -335,6 +335,8 @@ export type CronServiceState = {
     sortBy: CronJobsSortBy;
     sortDir: CronSortDir;
     jobs: CronJob[];
+    /** Requested rows are detached and frozen once for this list generation. */
+    readJobs: WeakMap<CronJob, CronJob>;
     snapshotRevision: string;
   };
   /** Last known durable wake for each persisted job. Map presence distinguishes

@@ -679,8 +679,10 @@ downloads that cohort's logs or drops only the late jobs into an apparently
 complete inventory. Explicit `--tooling-run` requests instead fail with the run
 ID and cutoff; neither path moves the window.
 
-The refit seeks up to five completed `ci.yml` push runs on `main` with a success
-or failure conclusion and parsed compact measurements from successful jobs.
+The refit seeks up to five completed scheduled `ci.yml` runs on `main` with a
+success or failure conclusion and parsed compact measurements from successful
+jobs. Scheduled CI owns main validation even when per-push test work is
+disabled, so skipped push runs cannot hide its measurements.
 Cancelled, timed-out, neutral, and other workflow outcomes are excluded.
 Docs-only runs and unparseable logs do not fill that quota. Failed workflows
 supply positive timing samples only: their missing jobs never count as evidence

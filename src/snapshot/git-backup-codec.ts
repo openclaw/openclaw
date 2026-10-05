@@ -476,10 +476,6 @@ function validateRestoredOwner(
   identity: GitBackupIdentity,
 ): void {
   assertSqliteIntegrity(database, databasePath);
-  const foreignKeys = database.prepare("PRAGMA foreign_key_check").all();
-  if (foreignKeys.length > 0) {
-    throw new Error(`SQLite foreign_key_check failed for restored Git backup: ${databasePath}`);
-  }
   buildSnapshotValidator(identity)(database, databasePath);
 }
 

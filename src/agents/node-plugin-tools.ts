@@ -1,4 +1,3 @@
-/** Materializes connected node-hosted plugin tools for agent runs. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listConnectedNodePluginTools } from "../gateway/node-plugin-tool-snapshot.js";
 import {
@@ -8,10 +7,7 @@ import {
   NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS,
   NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
 } from "../infra/node-commands.js";
-import {
-  createPluginToolAllowlist,
-  type PluginToolAllowlist,
-} from "../plugins/tool-grant-allowlist.js";
+import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { sanitizeNodeIdFragment, sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
@@ -36,74 +32,6 @@ type MaterializedNodeToolEntry = ReturnType<typeof listConnectedNodePluginTools>
 
 function isAgentToolResult(value: unknown): value is AgentToolResult<unknown> {
   return isRecord(value) && Array.isArray(value.content);
-}
-
-function toolPolicyAllows(params: {
-  pluginId: string;
-  toolName: string;
-  exposedToolName?: string;
-  allowlist: PluginToolAllowlist;
-  denylist: ReturnType<typeof compileGlobPatterns>;
-  registered: boolean;
-}): boolean {
-  const pluginId = normalizeToolPolicyName(params.pluginId);
-  const toolName = normalizeToolPolicyName(params.toolName);
-  const exposedToolName = normalizeToolPolicyName(params.exposedToolName ?? params.toolName);
-  if (
-    matchesAnyGlobPattern(pluginId, params.denylist) ||
-    matchesAnyGlobPattern(toolName, params.denylist) ||
-    matchesAnyGlobPattern(exposedToolName, params.denylist) ||
-    matchesAnyGlobPattern("group:plugins", params.denylist)
-  ) {
-    return false;
-  }
-  if (params.allowlist.includesDefaults) {
-    return true;
-  }
-  // pluginId is node-supplied for unregistered descriptors, so it must not
-  // satisfy pluginId-scoped allowlist entries (a node could claim "github").
-  // The reserved node-mcp id is safe: real plugins can never register it.
-  const pluginIdTrusted = params.registered || pluginId === "node-mcp";
-  return (
-    (pluginIdTrusted && params.allowlist.allowsPlugin(pluginId)) ||
-    params.allowlist.allowsToolName(toolName) ||
-    params.allowlist.allowsToolName(exposedToolName)
-  );
-}
-
-function prependToolNameFragment(baseName: string, fragment: string, suffix: string): string {
-  const prefix = `${fragment}_`;
-  const maxBaseLength = Math.max(
-    1,
-    NODE_PLUGIN_TOOL_NAME_MAX_LENGTH - prefix.length - suffix.length,
-  );
-  return `${prefix}${baseName.slice(0, maxBaseLength)}${suffix}`;
-}
-
-function resolveUniqueToolName(params: {
-  baseName: string;
-  normalizedName: string;
-  duplicateCount: number;
-  nodeId: string;
-  existingNormalized: Set<string>;
-}): string | null {
-  if (params.duplicateCount === 1 && !params.existingNormalized.has(params.normalizedName)) {
-    return params.baseName;
-  }
-  const nodeFragment = sanitizeNodeIdFragment(params.nodeId);
-  for (let index = 0; index < 100; index += 1) {
-    const suffix = index === 0 ? "" : `_${index + 1}`;
-    const candidate = prependToolNameFragment(params.baseName, nodeFragment, suffix);
-    const normalized = normalizeToolPolicyName(candidate);
-    if (
-      NODE_PLUGIN_TOOL_NAME_RE.test(candidate) &&
-      normalized &&
-      !params.existingNormalized.has(normalized)
-    ) {
-      return candidate;
-    }
-  }
-  return null;
 }
 
 export function createNodePluginTools(params: {
@@ -136,25 +64,55 @@ export function createNodePluginTools(params: {
   const tools: AnyAgentTool[] = [];
   for (const entry of entries) {
     const descriptor = entry.descriptor;
-    const toolName = resolveUniqueToolName({
-      baseName: descriptor.name,
-      normalizedName: entry.normalizedName,
-      duplicateCount: nameCounts.get(entry.normalizedName) ?? 1,
-      nodeId: entry.nodeId,
-      existingNormalized,
-    });
+    let toolName: string | undefined = descriptor.name;
+    if (
+      (nameCounts.get(entry.normalizedName) ?? 1) !== 1 ||
+      existingNormalized.has(entry.normalizedName)
+    ) {
+      toolName = undefined;
+      const prefix = `${sanitizeNodeIdFragment(entry.nodeId)}_`;
+      for (let index = 0; index < 100; index += 1) {
+        const suffix = index === 0 ? "" : `_${index + 1}`;
+        const maxBaseLength = Math.max(
+          1,
+          NODE_PLUGIN_TOOL_NAME_MAX_LENGTH - prefix.length - suffix.length,
+        );
+        const candidate = `${prefix}${descriptor.name.slice(0, maxBaseLength)}${suffix}`;
+        const normalized = normalizeToolPolicyName(candidate);
+        if (
+          NODE_PLUGIN_TOOL_NAME_RE.test(candidate) &&
+          normalized &&
+          !existingNormalized.has(normalized)
+        ) {
+          toolName = candidate;
+          break;
+        }
+      }
+    }
     if (!toolName) {
       continue;
     }
+    const pluginId = normalizeToolPolicyName(descriptor.pluginId);
+    const originalToolName = normalizeToolPolicyName(descriptor.name);
+    const exposedToolName = normalizeToolPolicyName(toolName);
     if (
-      !toolPolicyAllows({
-        pluginId: descriptor.pluginId,
-        toolName: descriptor.name,
-        exposedToolName: toolName,
-        allowlist,
-        denylist,
-        registered: entry.registered,
-      })
+      matchesAnyGlobPattern(pluginId, denylist) ||
+      matchesAnyGlobPattern(originalToolName, denylist) ||
+      matchesAnyGlobPattern(exposedToolName, denylist) ||
+      matchesAnyGlobPattern("group:plugins", denylist)
+    ) {
+      continue;
+    }
+    // Unregistered nodes cannot grant themselves plugin-scoped access by
+    // claiming another plugin's ID. Only the reserved node-mcp ID is trusted.
+    const pluginIdTrusted = entry.registered || pluginId === NODE_MCP_PLUGIN_ID;
+    if (
+      !allowlist.includesDefaults &&
+      !(
+        (pluginIdTrusted && allowlist.allowsPlugin(pluginId)) ||
+        allowlist.allowsToolName(originalToolName) ||
+        allowlist.allowsToolName(exposedToolName)
+      )
     ) {
       continue;
     }

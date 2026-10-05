@@ -40,6 +40,21 @@ export type WorkerPlacementSessionRuntime = {
   resolveGatewaySessionStoreTargetWithStore: typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore;
 };
 
+export function resolveWorkerPlacementSessionStoreTarget(
+  runtime: WorkerPlacementSessionRuntime,
+  cfg: OpenClawConfig,
+  identity: Pick<WorkerSessionPlacementIdentity, "sessionKey" | "agentId">,
+) {
+  return runtime.resolveGatewaySessionStoreTargetWithStore({
+    cfg,
+    key: identity.sessionKey,
+    agentId: identity.agentId,
+    preserveQualifiedAddress: true,
+    clone: false,
+    exactRead: true,
+  });
+}
+
 export function createWorkerWorkspaceRecoveryPreparer(options: {
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>;
   getConfig: () => OpenClawConfig;
@@ -78,14 +93,6 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
     const completion = createDeferredCore();
     const controller = new AbortController();
     let unregister = () => {};
-    const release = () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      unregister();
-      retained.claim.release();
-    };
     const assertSourceCurrent = () => {
       controller.signal.throwIfAborted();
       assertOwnerCurrent();
@@ -110,6 +117,7 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
         storePath: target.readSource.path,
         env: binding.env,
         sessionKeys: [identity.sessionKey],
+        snapshotFields: [],
       });
       assertSourceCurrent();
       const preparedEntry = prepared.entries.find(
@@ -147,7 +155,9 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
         }),
       );
     } finally {
-      release();
+      released = true;
+      unregister();
+      retained.claim.release();
       completion.resolve();
     }
   };
@@ -166,23 +176,20 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
   executionMode: WorkerPlacementExecutionMode;
   action: "activation" | "recovery";
   signal?: AbortSignal;
-  run: (workspace: WorkerSessionWorkspace) => T | Promise<T>;
+  run: (workspace: WorkerSessionWorkspace, assertCurrent: () => void) => T | Promise<T>;
 }): Promise<T> {
-  const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-    cfg: params.getConfig(),
-    key: params.sessionKey,
-    agentId: params.agentId,
-    preserveQualifiedAddress: true,
-    clone: false,
-    exactRead: true,
-  });
-  return await runExclusiveSessionLifecycleMutation({
+  const target = resolveWorkerPlacementSessionStoreTarget(
+    params.sessionRuntime,
+    params.getConfig(),
+    params,
+  );
+  const operation = params.action === "activation" ? "placement-activate" : "placement-recover";
+  return await runExclusiveSessionLifecycleMutation(operation, {
     scope: target.storePath,
     identities: [params.sessionKey, target.canonicalKey, ...target.storeKeys, params.sessionId],
     signal: params.signal,
     run: async () => {
       const {
-        config,
         target: currentTarget,
         entry,
         workspace,
@@ -203,21 +210,27 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
           `Session ${params.sessionKey} was archived before cloud worker ${params.action}. Retry.`,
         );
       }
-      const currentRuntime = params.sessionRuntime.resolveWorkerPlacementSessionRuntime({
-        cfg: config,
-        entry,
-        agentId: currentTarget.agentId,
-        sessionKey: currentTarget.canonicalKey,
-      });
-      if (
-        params.sessionRuntime.resolveWorkerPlacementExecutionMode(currentRuntime) !==
-        params.executionMode
-      ) {
-        throw new WorkerDispatchTargetChangedError(
-          `Session ${params.sessionKey} runtime changed to ${currentRuntime} before cloud worker ${params.action}. Retry.`,
-        );
-      }
-      return await params.run(workspace);
+      const assertPlacementCurrent = () => {
+        params.signal?.throwIfAborted();
+        const config = params.getConfig();
+        assertCurrent(config);
+        const currentRuntime = params.sessionRuntime.resolveWorkerPlacementSessionRuntime({
+          cfg: config,
+          entry,
+          agentId: currentTarget.agentId,
+          sessionKey: currentTarget.canonicalKey,
+        });
+        if (
+          params.sessionRuntime.resolveWorkerPlacementExecutionMode(currentRuntime) !==
+          params.executionMode
+        ) {
+          throw new WorkerDispatchTargetChangedError(
+            `Session ${params.sessionKey} runtime changed to ${currentRuntime} before cloud worker ${params.action}. Retry.`,
+          );
+        }
+      };
+      assertPlacementCurrent();
+      return await params.run(workspace, assertPlacementCurrent);
     },
   });
 }
@@ -232,14 +245,9 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   expectedTarget?: ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore>;
   errorMessage: string;
 }) {
-  const initialTarget = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-    cfg: params.config,
-    key: params.sessionKey,
-    agentId: params.agentId,
-    preserveQualifiedAddress: true,
-    clone: false,
-    exactRead: true,
-  });
+  const resolveTarget = (cfg: OpenClawConfig) =>
+    resolveWorkerPlacementSessionStoreTarget(params.sessionRuntime, cfg, params);
+  const initialTarget = resolveTarget(params.config);
   const initialEntry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
     initialTarget.store,
     initialTarget.storeKeys,
@@ -268,14 +276,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
     ? await getSessionRepositoryWorkspaceStore().prepare(initialIdentity.repositoryWorkspaceId)
     : undefined;
   const resolveBinding = (config = params.config) => {
-    const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-      cfg: config,
-      key: params.sessionKey,
-      agentId: params.agentId,
-      preserveQualifiedAddress: true,
-      clone: false,
-      exactRead: true,
-    });
+    const target = resolveTarget(config);
     const entry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
       target.store,
       target.storeKeys,

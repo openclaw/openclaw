@@ -5,7 +5,7 @@ import {
   type JsonSchemaValue,
 } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Compile } from "typebox/schema";
+import { Check } from "typebox/schema";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 type LocalRefResolution =
@@ -467,16 +467,12 @@ function findJsonSchemaNodeError(
     typeof schema.$id === "string" ? resolveSchemaId(schema.$id, resourceBaseId) : resourceBaseId;
   const findChildError = (child: unknown, childPath: string) =>
     findJsonSchemaNodeError(child, childPath, root, currentResourceRoot, currentResourceBaseId);
-  if (typeof schema.$ref === "string") {
-    if (!resolveSchemaRef(root, currentResourceRoot, schema.$ref, currentResourceBaseId).found) {
-      return `${path}.$ref: unresolved ref`;
-    }
-  }
-  if (typeof schema.$dynamicRef === "string") {
+  for (const key of ["$ref", "$dynamicRef"] as const) {
     if (
-      !resolveSchemaRef(root, currentResourceRoot, schema.$dynamicRef, currentResourceBaseId).found
+      typeof schema[key] === "string" &&
+      !resolveSchemaRef(root, currentResourceRoot, schema[key], currentResourceBaseId).found
     ) {
-      return `${path}.$dynamicRef: unresolved ref`;
+      return `${path}.${key}: unresolved ref`;
     }
   }
   for (const key of schemaMapKeywords) {
@@ -657,9 +653,8 @@ function schemaMatches(
 ): boolean {
   try {
     const matchSchema = inlineLocalRefsForMatch(schema, root, resourceRoot, resourceBaseId);
-    return Compile(
-      normalizeJsonSchemaForTypeBox(schemaWithResourceContext(matchSchema, resourceRoot)) as never,
-    ).Check(value);
+    const contextualSchema = schemaWithResourceContext(matchSchema, resourceRoot);
+    return Check(normalizeJsonSchemaForTypeBox(contextualSchema), value);
   } catch {
     return false;
   }
@@ -797,6 +792,15 @@ function applySchemaDefaults(
   const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
   const currentResourceBaseId =
     typeof schema.$id === "string" ? resolveSchemaId(schema.$id, resourceBaseId) : resourceBaseId;
+  const applyChild = (child: unknown, current: unknown) =>
+    applySchemaDefaults(
+      child as JsonSchemaValue,
+      current,
+      root,
+      resolvingRefs,
+      currentResourceRoot,
+      currentResourceBaseId,
+    );
   const refKey =
     typeof schema.$ref === "string"
       ? schemaResourceRefKey(currentResourceRoot, schema.$ref, currentResourceBaseId)
@@ -819,14 +823,7 @@ function applySchemaDefaults(
 
   const composedSchemas = [...(Array.isArray(schema.allOf) ? schema.allOf : [])];
   for (const branch of composedSchemas) {
-    nextValue = applySchemaDefaults(
-      branch as JsonSchemaValue,
-      nextValue,
-      root,
-      resolvingRefs,
-      currentResourceRoot,
-      currentResourceBaseId,
-    );
+    nextValue = applyChild(branch, nextValue);
   }
 
   const hasObjectApplicators =
@@ -863,14 +860,7 @@ function applySchemaDefaults(
     if (tupleSchemas) {
       const result = nextValue.slice();
       for (const [index, itemSchema] of tupleSchemas.entries()) {
-        const defaultedValue = applySchemaDefaults(
-          itemSchema as JsonSchemaValue,
-          result[index],
-          root,
-          resolvingRefs,
-          currentResourceRoot,
-          currentResourceBaseId,
-        );
+        const defaultedValue = applyChild(itemSchema, result[index]);
         if (defaultedValue !== undefined) {
           result[index] = defaultedValue;
         }
@@ -882,14 +872,7 @@ function applySchemaDefaults(
           : null;
       if (restSchema) {
         for (let index = tupleSchemas.length; index < result.length; index++) {
-          result[index] = applySchemaDefaults(
-            restSchema as JsonSchemaValue,
-            result[index],
-            root,
-            resolvingRefs,
-            currentResourceRoot,
-            currentResourceBaseId,
-          );
+          result[index] = applyChild(restSchema, result[index]);
         }
       }
       return result;
@@ -897,16 +880,7 @@ function applySchemaDefaults(
     if (!isRecord(schema.items)) {
       return nextValue;
     }
-    return nextValue.map((item) =>
-      applySchemaDefaults(
-        schema.items as JsonSchemaValue,
-        item,
-        root,
-        resolvingRefs,
-        currentResourceRoot,
-        currentResourceBaseId,
-      ),
-    );
+    return nextValue.map((item) => applyChild(schema.items, item));
   }
 
   return nextValue;

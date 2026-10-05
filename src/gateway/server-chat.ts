@@ -78,8 +78,8 @@ import type {
   ChatRunState,
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
-  ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+import type { ToolEventRecipientRegistry } from "./server-chat-tool-recipients.js";
 import { roundedChatSendTimingMs } from "./server-methods/chat-server-timing.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";

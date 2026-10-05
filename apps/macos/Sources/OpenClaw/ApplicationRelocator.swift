@@ -74,14 +74,11 @@ enum ApplicationRelocator {
         }
     }
 
-    struct ReplacementHandoffPolicy: Equatable, Sendable {
-        let maximumAttempts: Int
-        let initialBackoffSeconds: Int
-        let maximumBackoffSeconds: Int
-        let baseTimeoutMilliseconds: Int32
-        let maximumTimeoutMilliseconds: Int32
+    enum ReplacementHandoffPolicy {
+        static let maximumAttempts = 3
+        private static let baseTimeoutMilliseconds: Int32 = 15000
 
-        func failureAction(
+        static func failureAction(
             failedAttempt: Int,
             hasKeepAliveSupervisor: Bool) -> ReplacementHandoffFailureAction
         {
@@ -89,13 +86,11 @@ enum ApplicationRelocator {
                 return hasKeepAliveSupervisor ? .terminateForSupervisor : .stopMonitoring
             }
             let exponent = max(0, failedAttempt - 1)
-            let backoff = min(
-                self.maximumBackoffSeconds,
-                self.initialBackoffSeconds * (1 << exponent))
+            let backoff = min(8, 2 * (1 << exponent))
             return .retry(after: .seconds(backoff))
         }
 
-        func timeoutMilliseconds(
+        static func timeoutMilliseconds(
             loadAverage: Double?,
             activeProcessorCount: Int) -> Int32
         {
@@ -108,7 +103,7 @@ enum ApplicationRelocator {
             let multiplier = min(4, max(1, loadPerProcessor))
             let scaled = Double(self.baseTimeoutMilliseconds) * multiplier
             let rounded = ceil(scaled / 5000) * 5000
-            return min(self.maximumTimeoutMilliseconds, Int32(rounded))
+            return min(60000, Int32(rounded))
         }
     }
 
@@ -136,7 +131,6 @@ enum ApplicationRelocator {
     private struct BundleReplacementSnapshot: Sendable {
         let bundleURL: URL
         let bundleIdentifier: String
-        let executableURL: URL
         let codeDirectoryHash: Data
         let requirementData: Data
     }
@@ -163,12 +157,6 @@ enum ApplicationRelocator {
     private static var inheritedReplacementSupervisor: KeepAliveSupervisor?
     private static var supervisorRestorationWatcher: Process?
     private static var authenticatedReplacementSourceBundleURL: URL?
-    nonisolated static let replacementHandoffPolicy = ReplacementHandoffPolicy(
-        maximumAttempts: 3,
-        initialBackoffSeconds: 2,
-        maximumBackoffSeconds: 8,
-        baseTimeoutMilliseconds: 15000,
-        maximumTimeoutMilliseconds: 60000)
     private nonisolated static let replacementSourceBundleEnvironmentKey = "OPENCLAW_REPLACEMENT_SOURCE_BUNDLE"
     private nonisolated static let replacementParentPIDEnvironmentKey = "OPENCLAW_REPLACEMENT_PARENT_PID"
     private nonisolated static let replacementCodeHashEnvironmentKey = "OPENCLAW_REPLACEMENT_CODE_HASH"
@@ -605,13 +593,7 @@ extension ApplicationRelocator {
     private static func startBundleReplacementMonitoring(bundle: Bundle, at monitoredBundleURL: URL) {
         self.bundleReplacementRecoveryTask?.cancel()
         self.bundleReplacementRecoveryTask = nil
-        self.bundleReplacementSource?.cancel()
-        self.bundleReplacementSource = nil
-        self.bundleReplacementSnapshot = nil
-        self.bundleReplacementCheckPending = false
-        self.bundleReplacementHandoffInProgress = false
-        self.bundleReplacementHandoffAttempt = 0
-        self.bundleReplacementHandoffTargetHash = nil
+        self.disableBundleReplacementMonitoring()
 
         let bundleURL = monitoredBundleURL.standardizedFileURL
         guard bundleURL.pathExtension == "app",
@@ -627,7 +609,6 @@ extension ApplicationRelocator {
         self.bundleReplacementSnapshot = BundleReplacementSnapshot(
             bundleURL: bundleURL,
             bundleIdentifier: bundleIdentifier,
-            executableURL: installedApp.executableURL,
             codeDirectoryHash: runningIdentity.codeDirectoryHash,
             requirementData: runningIdentity.requirementData)
 
@@ -711,7 +692,7 @@ extension ApplicationRelocator {
                     }
                     self.bundleReplacementHandoffAttempt += 1
                     let handoffAttempt = self.bundleReplacementHandoffAttempt
-                    let maximumAttempts = self.replacementHandoffPolicy.maximumAttempts
+                    let maximumAttempts = ReplacementHandoffPolicy.maximumAttempts
                     self.bundleReplacementCheckPending = false
                     self.logger.notice(
                         "Relaunching trusted replacement (attempt \(handoffAttempt)/\(maximumAttempts))")
@@ -1081,7 +1062,7 @@ extension ApplicationRelocator {
             return .failed(supervisor: supervisor)
         }
 
-        let timeoutMilliseconds = self.replacementHandoffPolicy.timeoutMilliseconds(
+        let timeoutMilliseconds = ReplacementHandoffPolicy.timeoutMilliseconds(
             loadAverage: self.currentSystemLoadAverage(),
             activeProcessorCount: processInfo.activeProcessorCount)
         Task { @MainActor in
@@ -1116,7 +1097,7 @@ extension ApplicationRelocator {
         supervisor: KeepAliveSupervisor?,
         reason: String) async
     {
-        let action = self.replacementHandoffPolicy.failureAction(
+        let action = ReplacementHandoffPolicy.failureAction(
             failedAttempt: attempt,
             hasKeepAliveSupervisor: supervisor != nil)
         if action.isTerminal,
@@ -1130,7 +1111,7 @@ extension ApplicationRelocator {
         switch action {
         case let .retry(delay):
             self.bundleReplacementCheckPending = true
-            let maximumAttempts = self.replacementHandoffPolicy.maximumAttempts
+            let maximumAttempts = ReplacementHandoffPolicy.maximumAttempts
             self.logger.error(
                 "Replacement handoff failed: \(reason, privacy: .public); attempt \(attempt)/\(maximumAttempts)")
             do {

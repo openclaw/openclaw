@@ -10,9 +10,13 @@ import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 
 export type TerminalInput = Parameters<typeof resolveEmbeddedRunTerminal>[0];
-type TerminalInputOverrides = Omit<Partial<TerminalInput>, "runParams" | "retryState"> & {
+type TerminalInputOverrides = Omit<
+  Partial<TerminalInput>,
+  "runParams" | "retryState" | "sessionPromptState"
+> & {
   runParams?: Partial<TerminalInput["runParams"]>;
   retryState?: Partial<TerminalInput["retryState"]>;
+  sessionPromptState?: Partial<TerminalInput["sessionPromptState"]>;
 };
 
 export function emptyAssistant(overrides: Parameters<typeof buildEmbeddedRunnerAssistant>[0] = {}) {
@@ -67,12 +71,14 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     failureSignal: undefined,
     attemptCompactionCount: 0,
     replayState: { ...attempt.replayMetadata, replayInvalid: false },
-    activePromptPersisted: true,
-    activateInternalPrompt: vi.fn(),
-    markOwnedTranscriptRetry: vi.fn(),
-    activateCompactionContinuation: vi.fn(),
-    clearCompactionContinuation: vi.fn(),
-    setSuppressNextUserMessagePersistence: vi.fn(),
+    sessionPromptState: {
+      activePrompt: { persisted: true, internal: false },
+      suppressNextUserMessagePersistence: false,
+      activateInternalPrompt: vi.fn(),
+      markOwnedTranscriptRetry: vi.fn(),
+      activateCompactionContinuation: vi.fn(),
+      clearCompactionContinuation: vi.fn(),
+    },
     armPostCompactionGuard: vi.fn(),
     readTerminalToolPresentation: () => undefined,
     resolveReplayInvalid: () => false,
@@ -102,6 +108,7 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     ...base,
     ...overrides,
     runParams,
+    sessionPromptState: { ...base.sessionPromptState, ...overrides.sessionPromptState },
     retryState: { ...createEmbeddedRunTerminalRetryState(), ...overrides.retryState },
   };
 }

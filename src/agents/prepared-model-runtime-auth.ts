@@ -6,6 +6,7 @@ import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { hasOAuthIdentity } from "./auth-profiles/oauth-shared.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { SelectedModelCredential } from "./model-auth-selected-credential.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
@@ -96,15 +97,15 @@ export type PreparedAccountCatalogAccess = {
     profileIds?: readonly string[],
   ) => void;
   readServiceTiers: (params: {
-    profileId: string;
+    identityKey: string;
     modelId: string;
     runtimeId: string;
     api: string;
     baseUrl: string;
   }) => readonly string[] | undefined;
   prepareServiceTierObserver: (params: {
-    profileId: string;
-    credential: AuthProfileCredential;
+    selectedCredential: SelectedModelCredential;
+    credential?: AuthProfileCredential;
   }) => (observation: NonNullable<ProviderCatalogOutcome["modelServiceTiers"]>[number]) => boolean;
   acquire: (params: {
     profileId: string;

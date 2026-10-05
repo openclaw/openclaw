@@ -267,7 +267,6 @@ export type ResolvedActionContext = {
   channel: ChannelId;
   channelPlugin: ChannelPlugin;
   mediaAccess: OutboundMediaAccess;
-  extraActionMediaSourceParamKeys?: readonly string[];
   accountId?: string | null;
   dryRun: boolean;
   gateway?: MessageActionGateway;

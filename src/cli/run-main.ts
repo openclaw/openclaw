@@ -141,11 +141,10 @@ async function tryRunGatewayRunFastPath(
         await import("./gateway-cli/pre-bootstrap.js");
       const prepared = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
       if (prepared) {
-        beforeStatePreparation = (snapshot, committedWrite) =>
+        beforeStatePreparation = (snapshot) =>
           recheckGatewayRunBootstrap({
             opts,
             runtime: defaultRuntime,
-            committedWrite,
             ...(snapshot ? { snapshot } : {}),
           });
       }
@@ -186,15 +185,6 @@ async function tryRunGatewayRunFastPath(
     process.exitCode = error.exitCode;
   }
   return true;
-}
-
-export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
-  if (!shouldHandleBareRoot(argv)) {
-    return false;
-  }
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  return shouldStartLocalOnboarding(snapshot);
 }
 
 async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaunchTarget | null> {

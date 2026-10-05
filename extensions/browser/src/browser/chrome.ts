@@ -96,42 +96,28 @@ const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
 ]);
 const TCP_LISTEN_STATE_HEX = "0A";
 
-function diagnosticShowsChromeHttpDiscovery(diagnostic: ChromeCdpDiagnostic | null): boolean {
-  if (!diagnostic) {
-    return false;
-  }
-  if (diagnostic.ok) {
-    return true;
-  }
-  return !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(diagnostic.code);
-}
-
 type ChromeLaunchStderrSignals = {
   singletonInUse: boolean;
   missingDisplay: boolean;
 };
 
-function createChromeLaunchStderrDiagnostics(maxBytes: number) {
-  const tail = createBoundedUtf8Tail(maxBytes);
+function createChromeLaunchStderrDiagnostics() {
+  const tail = createBoundedUtf8Tail(CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES);
   const signals: ChromeLaunchStderrSignals = {
     singletonInUse: false,
     missingDisplay: false,
   };
   let markerScanTail = "";
 
-  const updateSignals = (chunkText: string) => {
-    const scanText = `${markerScanTail}${chunkText}`;
-    signals.singletonInUse ||= CHROME_SINGLETON_IN_USE_PATTERN.test(scanText);
-    signals.missingDisplay ||= CHROME_MISSING_DISPLAY_PATTERN.test(scanText);
-    markerScanTail = scanText.slice(-CHROME_STDERR_MARKER_SCAN_TAIL_CHARS);
-  };
-
   return {
     append(chunk: Buffer | string) {
       tail.append(chunk);
       const chunkText = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
       if (chunkText.length > 0) {
-        updateSignals(chunkText);
+        const scanText = `${markerScanTail}${chunkText}`;
+        signals.singletonInUse ||= CHROME_SINGLETON_IN_USE_PATTERN.test(scanText);
+        signals.missingDisplay ||= CHROME_MISSING_DISPLAY_PATTERN.test(scanText);
+        markerScanTail = scanText.slice(-CHROME_STDERR_MARKER_SCAN_TAIL_CHARS);
       }
     },
     toString() {
@@ -422,9 +408,9 @@ function isPortInUseError(err: unknown): boolean {
   );
 }
 
-function readCurrentHostSingletonPid(userDataDir: string, hostname = os.hostname()): number | null {
+function readCurrentHostSingletonPid(userDataDir: string): number | null {
   const lock = readSingletonLockTarget(userDataDir);
-  if (lock.status !== "owner" || lock.hostname !== hostname || !isPidAlive(lock.pid)) {
+  if (lock.status !== "owner" || lock.hostname !== os.hostname() || !isPidAlive(lock.pid)) {
     return null;
   }
   return lock.pid;
@@ -440,9 +426,9 @@ function clearChromeSingletonArtifacts(userDataDir: string) {
   }
 }
 
-function clearStaleChromeSingletonLocks(userDataDir: string, hostname = os.hostname()): boolean {
+function clearStaleChromeSingletonLocks(userDataDir: string): boolean {
   const lock = readSingletonLockTarget(userDataDir);
-  if (lock.status !== "owner" || lock.hostname !== hostname || isPidAlive(lock.pid)) {
+  if (lock.status !== "owner" || lock.hostname !== os.hostname() || isPidAlive(lock.pid)) {
     return false;
   }
 
@@ -1175,9 +1161,7 @@ export async function launchOpenClawChrome(
   const launchOnceAndWait = async (allowSingletonRecovery: boolean): Promise<RunningChrome> => {
     // Keep a bounded stderr tail for diagnostics in case Chrome fails to start.
     // Attach before awaiting spawn so immediate diagnostics cannot be lost.
-    const stderrDiagnostics = createChromeLaunchStderrDiagnostics(
-      CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES,
-    );
+    const stderrDiagnostics = createChromeLaunchStderrDiagnostics();
     const onStderr = (chunk: Buffer | string) => {
       stderrDiagnostics.append(chunk);
     };
@@ -1225,7 +1209,10 @@ export async function launchOpenClawChrome(
           diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
         }
         signal?.throwIfAborted();
-        if (diagnosticShowsChromeHttpDiscovery(finalDiagnostic)) {
+        if (
+          finalDiagnostic &&
+          (finalDiagnostic.ok || !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(finalDiagnostic.code))
+        ) {
           launchHttpReachable = true;
         }
         const diagnosticText = finalDiagnostic

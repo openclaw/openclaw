@@ -205,10 +205,8 @@ export async function searchClawHubSkills(
   const registry = resolveClawHubBaseUrl(params.baseUrl);
   const query = params.query.trim();
   const request = {
+    ...params,
     baseUrl: registry,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   };
   let entries: ClawHubSkillSearchWireEntry[];
   if (query) {
@@ -474,11 +472,8 @@ export async function fetchClawHubSkillInstallResolution(
 ): Promise<ClawHubSkillInstallResolutionResponse> {
   return await withClawHubResponse(
     {
-      baseUrl: params.baseUrl,
+      ...params,
       path: `/api/v1/skills/${encodeURIComponent(params.slug)}/install`,
-      token: params.token,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
       search: {
         ownerHandle: params.ownerHandle,
         reference: params.requestedReference,
@@ -510,13 +505,9 @@ export async function fetchClawHubSkillVerification(
   },
 ): Promise<ClawHubSkillVerificationResponse> {
   return await fetchClawHubJson<ClawHubSkillVerificationResponse>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}/verify`,
     maxResponseBytes: SKILL_VERIFICATION_MAX_BYTES,
-    token: params.token,
-    skipAuth: params.skipAuth,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
     search: {
       ...buildVersionOrTagSearch(params),
       reference: params.requestedReference,
@@ -531,14 +522,10 @@ export async function fetchClawHubSkillSecurityVerdicts(
   },
 ): Promise<ClawHubSkillSecurityVerdictsResponse> {
   return await fetchClawHubJson<ClawHubSkillSecurityVerdictsResponse>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: "/api/v1/skills/-/security-verdicts",
     method: "POST",
     json: { items: params.items },
-    token: params.token,
-    skipAuth: params.skipAuth,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
@@ -564,12 +551,10 @@ export async function fetchClawHubSkillCard(
       new URL(`${resolveClawHubBaseUrl(params.baseUrl)}/`).origin;
   return await withClawHubResponse(
     {
-      baseUrl: params.baseUrl,
+      ...params,
       url: cardUrl,
       path: slug ? `/api/v1/skills/${encodeURIComponent(slug)}/card` : undefined,
       token: providedToken,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
       search: cardUrl ? undefined : buildVersionOrTagSearch(params),
       skipAuth,
     },

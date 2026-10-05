@@ -49,12 +49,11 @@ type ClawHubTrustFailure = {
 type ClawHubInstallLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
-  terminalLinks?: boolean;
 };
 
 type ClawHubTrustSubject =
   | { kind: "plugin"; packageName: string }
-  | { kind: "skill"; packageName: string; workspaceDir: string; ownerHandle?: string };
+  | { kind: "skill"; packageName: string; ownerHandle?: string };
 
 type ClawHubFetchedSubjectSecurity = {
   security: ClawHubPackageSecurityResponse;
@@ -100,19 +99,15 @@ function hasClawHubRiskReasons(trust: ClawHubPackageSecurityTrust): boolean {
 }
 
 function isBlockingClawHubTrust(trust: ClawHubPackageSecurityTrust): boolean {
-  if (trust.blockedFromDownload) {
-    return true;
-  }
-  if (normalizeClawHubTrustToken(trust.scanStatus) === "malicious") {
-    return true;
-  }
-  if (CLAWHUB_BLOCKING_MODERATION_STATES.has(normalizeClawHubTrustToken(trust.moderationState))) {
-    return true;
-  }
-  return trust.reasons.some((reason) => {
-    const normalized = normalizeClawHubTrustToken(reason);
-    return normalized === "scan:malicious" || normalized === "static:malicious";
-  });
+  return (
+    trust.blockedFromDownload ||
+    normalizeClawHubTrustToken(trust.scanStatus) === "malicious" ||
+    CLAWHUB_BLOCKING_MODERATION_STATES.has(normalizeClawHubTrustToken(trust.moderationState)) ||
+    trust.reasons.some((reason) => {
+      const normalized = normalizeClawHubTrustToken(reason);
+      return normalized === "scan:malicious" || normalized === "static:malicious";
+    })
+  );
 }
 
 export function assessClawHubTrust(trust: ClawHubPackageSecurityTrust): ClawHubTrustDisposition {
@@ -302,12 +297,6 @@ function readSkillVerdictSecurityPassed(
   return typeof passed === "boolean" ? passed : undefined;
 }
 
-function hasUsablePassingSkillVerdictSecurity(item: ClawHubSkillSecurityVerdictItem): boolean {
-  return (
-    Boolean(readSkillVerdictSecurityStatus(item)) && readSkillVerdictSecurityPassed(item) === true
-  );
-}
-
 function hasSkillVerdictSecurityError(item: ClawHubSkillSecurityVerdictItem): boolean {
   return Boolean(item.error?.code || item.error?.message || item.version === null);
 }
@@ -369,14 +358,15 @@ function mapSkillSecurityVerdictToPackageSecurity(params: {
     );
   }
   const decision = normalizeClawHubTrustToken(params.item.decision);
-  if (params.item.ok && decision === "pass" && !hasUsablePassingSkillVerdictSecurity(params.item)) {
+  const rawSecurityStatus = readSkillVerdictSecurityStatus(params.item);
+  const securityPassed = readSkillVerdictSecurityPassed(params.item);
+  if (params.item.ok && decision === "pass" && !(rawSecurityStatus && securityPassed === true)) {
     throw new Error(
       `ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" did not return a usable security verdict.`,
     );
   }
 
-  const securityStatus = normalizeClawHubTrustToken(readSkillVerdictSecurityStatus(params.item));
-  const securityPassed = readSkillVerdictSecurityPassed(params.item);
+  const securityStatus = normalizeClawHubTrustToken(rawSecurityStatus);
   const reasons = params.item.reasons
     .map((reason) => normalizeOptionalString(reason))
     .filter((reason): reason is string => Boolean(reason));

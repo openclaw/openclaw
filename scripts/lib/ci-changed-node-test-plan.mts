@@ -465,6 +465,7 @@ export function resolveChangedNodeTestTargets(
     cwd,
     broad: false,
     boundedOwners: true,
+    baseRef: options.baseRef,
     aggressive: aggressive ? { maxDirectImporters: 20, maxDirectoryTests: 30 } : undefined,
     combineSiblingWithImportGraph: true,
     resolveAliases: true,

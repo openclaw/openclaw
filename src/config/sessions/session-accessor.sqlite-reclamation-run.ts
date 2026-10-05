@@ -19,7 +19,7 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { prepareSessionDeletionInDatabase } from "./session-accessor.sqlite-deletion-plan.js";
-import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
+import { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
 import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { publishSessionEntryWorkerInvalidations } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type {
@@ -33,6 +33,7 @@ import type {
 import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 import {
   collectReclamationChangedSessionKeys,
+  collectReclamationDeletionEntries,
   prepareReclamationPublication,
 } from "./session-accessor.sqlite-reclamation-publication.js";
 import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
@@ -53,6 +54,7 @@ import {
   withSqliteMutationWorkerLifetime,
   type SqliteMutationWorkerValidationOwner,
 } from "./session-accessor.sqlite-worker-request.js";
+import { publishSessionLifecycleWorkerEffects } from "./session-lifecycle-worker-publication.js";
 
 export async function runSessionDeletionPlanning(
   resolved: ReturnType<typeof resolveSqliteStoreScope>,
@@ -88,7 +90,7 @@ export async function runSessionDeletionPlanning(
   const result = await runSqliteSessionReclamation({
     diagnostics,
     assertCommitAllowed: assertCurrent,
-    forceInProcess: hasPreparedNativeSessionDeletion(),
+    forceInProcess: false,
     plan: {
       kind: "deletion-plan",
       databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
@@ -116,6 +118,27 @@ export async function runSqliteSessionReclamation(params: {
 }): Promise<SqliteSessionReclamationResult> {
   if (params.diagnostics) {
     params.diagnostics.kind = params.plan.kind;
+  }
+  if (
+    (params.plan.kind === "entry" ||
+      params.plan.kind === "lifecycle-artifacts" ||
+      params.plan.kind === "maintenance-finalize" ||
+      params.plan.kind === "lifecycle-projection-commit") &&
+    supportsOpenClawAgentDatabaseExecution(params.plan.databaseOptions)
+  ) {
+    const participants = captureNativeSessionWorkerDeletion(
+      collectReclamationDeletionEntries(params.plan),
+    );
+    if (participants) {
+      const { deleteSessionWithNativeBindingsInWorker } =
+        await import("./session-native-binding.js");
+      return deleteSessionWithNativeBindingsInWorker(
+        params.plan,
+        participants,
+        () => params.assertCommitAllowed?.(),
+        params.onWorkerResult,
+      );
+    }
   }
   if (
     params.forceInProcess ||
@@ -224,6 +247,14 @@ export async function runSqliteSessionReclamation(params: {
         params.plan.databaseOptions,
         async () => {
           assertRequestCurrent();
+          if (
+            params.plan.kind === "maintenance-plan" ||
+            params.plan.kind === "maintenance-statistics" ||
+            params.plan.kind === "maintenance-age"
+          ) {
+            // Metadata uses its worker's generation claim, not a host read admission.
+            return undefined;
+          }
           const database = getOpenClawAgentDatabaseIfOpen(params.plan.databaseOptions);
           // Reuse an already-owned handle, but never open a host connection for reclamation.
           return database && !database.db.isTransaction
@@ -455,6 +486,7 @@ async function runPreparedSqliteSessionReclamation(
                   collectReclamationChangedSessionKeys(plan, completed),
                   () => {
                     params.onWorkerResult?.(completed, identity);
+                    publishSessionLifecycleWorkerEffects(plan, completed);
                     publishRemoval?.();
                   },
                 );

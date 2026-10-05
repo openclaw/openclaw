@@ -45,15 +45,10 @@ export function isNativeAppUiClient(client: ConnectParams["client"]): boolean {
 }
 
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
-  const trimmedOrigin = requestOrigin?.trim();
-  if (!trimmedOrigin) {
-    return BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
-  }
-  try {
-    return `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}${normalizeLowercaseStringOrEmpty(new URL(trimmedOrigin).origin)}`;
-  } catch {
-    return BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
-  }
+  const origin = URL.parse(requestOrigin?.trim() ?? "")?.origin;
+  return origin
+    ? `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}${normalizeLowercaseStringOrEmpty(origin)}`
+    : BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
 }
 
 export function resolveHandshakeBrowserSecurityContext(params: {
@@ -156,15 +151,7 @@ function isSharedSecretLoopbackLocalEquivalent(params: {
 }
 
 function resolveOriginHost(origin?: string): string {
-  const trimmed = origin?.trim();
-  if (!trimmed) {
-    return "";
-  }
-  try {
-    return new URL(trimmed).hostname;
-  } catch {
-    return "";
-  }
+  return URL.parse(origin?.trim() ?? "")?.hostname ?? "";
 }
 
 function isControlUiBrowserContainerLocalEquivalent(params: {

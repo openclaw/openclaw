@@ -47,7 +47,6 @@ import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
-const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => process.execPath));
 const qaTempPathState = vi.hoisted(() => ({
   preferredTmpDir: process.env.TMPDIR || "/tmp",
 }));
@@ -59,10 +58,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
   resolvePreferredOpenClawTmpDir: () => qaTempPathState.preferredTmpDir,
-}));
-
-vi.mock("./node-exec.js", () => ({
-  resolveQaNodeExecPath: resolveQaNodeExecPathMock,
 }));
 
 const tempDirs = createTempDirHarness();
@@ -79,7 +74,6 @@ function ownGateway() {
 
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
-  resolveQaNodeExecPathMock.mockReset();
   qaTempPathState.preferredTmpDir = process.env.TMPDIR || "/tmp";
   for (const owner of owners.splice(0)) {
     await owner.stop();

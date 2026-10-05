@@ -330,7 +330,6 @@ describe("context advancement through embedded attempt guards", () => {
           persistToolResultProjections: async () => {},
           promptActiveSession: (text, options) => session.prompt(text, options),
           runtimeOnly: false,
-          sessionPromptState,
           systemPrompt: "",
           toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
           toolResultMaxChars: promptContext.promptToolResultMaxChars,

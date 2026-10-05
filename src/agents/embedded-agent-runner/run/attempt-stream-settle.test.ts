@@ -35,6 +35,7 @@ import {
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
@@ -90,7 +91,7 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
     isProbeSession: true,
     abortable: async <T>(promise: Promise<T>) => await promise,
     prePromptMessageCount: 0,
-    nestedToolActivities: [],
+    nestedToolActivityState: createAttemptNestedToolActivityState(),
     cache: {
       retention: undefined,
     },
@@ -478,7 +479,6 @@ describe("attempt projection persistence through settlement", () => {
           },
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
           runtimeOnly: false,
-          sessionPromptState,
           systemPrompt: "test prompt",
           toolResultAggregateMaxChars: 8_000,
           toolResultMaxChars: 4_000,

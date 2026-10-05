@@ -96,7 +96,7 @@ describe("secrets store CLI", () => {
           ? "__OPENCLAW_REDACTED__"
           : "OPENCLAW_GATEWAY_TOKEN=__OPENCLAW_REDACTED__\n",
       );
-      mocks.read.mockReturnValue({ ok: true, value: "synthetic-existing-token" });
+      mocks.read.mockResolvedValue({ ok: true, value: "synthetic-existing-token" });
       await createProgram().parseAsync(
         command === "set"
           ? ["secrets", "store", "set", "OPENCLAW_GATEWAY_TOKEN", "--value-file", file]
@@ -115,7 +115,7 @@ describe("secrets store CLI", () => {
   it("refuses a redacted import without a usable existing credential before writing other entries", async () => {
     const file = path.join(tempDirs.make("store-cli-redacted-"), "input.env");
     await fs.writeFile(file, "SERVICE_MODE=test\nOPENCLAW_GATEWAY_TOKEN=__OPENCLAW_REDACTED__\n");
-    mocks.read.mockReturnValue({ ok: false, error: { code: "SECRET_STORE_NOT_FOUND" } });
+    mocks.read.mockResolvedValue({ ok: false, error: { code: "SECRET_STORE_NOT_FOUND" } });
     await expect(
       createProgram().parseAsync(["secrets", "store", "import", "--from", file, "--yes"], {
         from: "user",
@@ -132,7 +132,7 @@ describe("secrets store CLI", () => {
     await createProgram().parseAsync(["secrets", "store", "list", "--json"], { from: "user" });
 
     mocks.list.mockReturnValueOnce([{ name: "SERVICE_MODE", kind: "env" }]);
-    mocks.read.mockReturnValueOnce({ ok: true, value: "production" });
+    mocks.read.mockResolvedValueOnce({ ok: true, value: "production" });
     await createProgram().parseAsync(["secrets", "store", "get", "SERVICE_MODE", "--json"], {
       from: "user",
     });

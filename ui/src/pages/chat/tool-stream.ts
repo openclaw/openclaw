@@ -103,6 +103,12 @@ function refreshSessionStatusModel(host: ToolStreamHost, data: Record<string, un
 }
 
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
+  const itemEnded = entry.activity?.some(
+    (item) =>
+      (item.toolCallId ?? item.itemId) === entry.toolCallId &&
+      item.phase === "end" &&
+      !item.suppressChannelProgress,
+  );
   const content: Array<Record<string, unknown>> = [];
   content.push({
     type: "toolcall",
@@ -132,12 +138,13 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     content,
     timestamp: entry.startedAt,
     // Running-state markers: only live tool-stream cards may show a spinner,
-    // and completion comes from the result event — partial `update` output
-    // must not end the running state. Transcript messages never carry these,
+    // and completion comes from a result or live item end, never partial output
+    // or a status-less history placeholder. Transcript messages never carry these,
     // so historical output-less calls (aborted runs) stay inert.
     __openclawToolStreamLive: true,
     __openclawToolStreamResultReceived: entry.resultReceived === true,
-    ...(entry.resultReceived !== true && entry.liveDiffStat
+    __openclawToolStreamItemEnded: itemEnded === true,
+    ...(entry.resultReceived !== true && !itemEnded && entry.liveDiffStat
       ? { __openclawToolStreamDiffStat: entry.liveDiffStat }
       : {}),
     __openclawToolStreamReceivedAt: entry.receivedAt,

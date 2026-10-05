@@ -35,20 +35,20 @@ export function renderQuestionOptions(props: QuestionOptionsProps) {
   if (question.options.length === 0) {
     return nothing;
   }
-  const hasThumbnails = question.options.some((option) => option.thumbnail);
+  const implicit = question.resource?.selection === "implicit";
+  const options = question.options.filter(
+    (option) => !implicit || props.selected.has(option.value ?? option.label),
+  );
+  const hasThumbnails = options.some((option) => option.thumbnail);
   return html`
     <div
       class="chat-question-panel__options"
       role=${question.multiSelect ? "group" : "radiogroup"}
       aria-label=${question.header}
     >
-      ${question.options.map((option, index) => {
+      ${options.map((option, index) => {
         const value = option.value ?? option.label;
         const selected = props.selected.has(value);
-        const implicit = question.resource?.selection === "implicit";
-        if (implicit && !selected) {
-          return nothing;
-        }
         const radioTabIndex = selected || (props.selected.size === 0 && index === 0) ? 0 : -1;
         return html`
           <button
@@ -149,7 +149,7 @@ export function renderQuestionFreeText(props: QuestionFreeTextProps) {
               t("chat.questions.other"),
               t("chat.questions.ownAnswerFor", { header: question.header }),
             )}
-            ${renderKbd(question.options.length + 1)}
+            ${question.options.length < 9 ? renderKbd(question.options.length + 1) : nothing}
           </label>`
     }
     ${

@@ -25,6 +25,8 @@ import type {
   ChannelIngressReadCommand,
   ChannelIngressReadReply,
 } from "../channels/message/ingress-queue-read-contract.js";
+import type { PersistedClawPackageRef } from "../claws/package-extension-provenance.js";
+import type { ClawOrphanWorkspace, PersistedClawInstall } from "../claws/provenance-types.js";
 import type { ConfigSnapshotAuditRecord } from "../config/config-journal-snapshot.kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronScratchReadCommand, CronScratchSnapshot } from "../cron/scratch-contract.js";
@@ -39,7 +41,11 @@ import type {
 } from "../cron/store/run-recovery-read.types.js";
 import type { CronQuarantinedJob } from "../cron/types-shared.js";
 import type { FleetCellRecord } from "../fleet/registry.types.js";
-import type { CronStandingGrantListing } from "../gateway/operator-approval-standing-grants.types.js";
+import type {
+  CronStandingGrantListing,
+  CronStandingGrantLookupInput,
+  ConsumeCronStandingGrantResult,
+} from "../gateway/operator-approval-standing-grants.types.js";
 import type {
   ListTerminalOperatorApprovalsInput,
   ListTerminalOperatorApprovalsResult,
@@ -53,11 +59,15 @@ import type {
   WorkerPlacementRecoveryCandidate,
   WorkerSessionPlacementReadResult,
 } from "../gateway/worker-environments/placement-read-projection.types.js";
-import type { WorkerSessionPlacementChangeSnapshot } from "../gateway/worker-environments/placement-record.js";
+import type {
+  WorkerSessionPlacementChangeSnapshot,
+  WorkerSessionPlacementRecord,
+} from "../gateway/worker-environments/placement-record.js";
 import type {
   WorkspaceJournalReadCommand,
   WorkspaceJournalReadResult,
 } from "../gateway/worker-environments/placement-workspace-journal.types.js";
+import type { PreparedPoolPresenceDemand } from "../gateway/worker-environments/prepared-pool-presence.types.js";
 import type {
   WorkerEnvironmentFacts,
   WorkerEnvironmentPrunePage,
@@ -163,6 +173,7 @@ export type OpenClawStateReadCommand =
   | { type: "capture.readOnlyBlob"; blobId: string }
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
+  | { type: "claws.packageOwnership"; agentId?: string; includeInstalls: boolean }
   | { type: "doctor.gatewayOwnerLease.read" }
   | { type: "acpSessions.list" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
@@ -174,6 +185,7 @@ export type OpenClawStateReadCommand =
       input: ListTerminalOperatorApprovalsInput;
     }
   | { type: "operatorApprovals.listCronGrants"; input: { limit?: number } }
+  | { type: "operatorApprovals.validateCronGrant"; input: CronStandingGrantLookupInput }
   | PluginBlobReadCommand
   | { type: "subagents.sessionList" }
   | {
@@ -244,7 +256,9 @@ export type OpenClawStateReadCommand =
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "fleet.get"; tenantId: string }
   | { type: "nodeHost.config" }
+  | { type: "tts.prefsPath" }
   | { type: "operator.channelPolicy" }
+  | { type: "preparedPoolPresence.read" }
   | {
       type: "sessionRepositoryWorkspaces.find";
       owners: readonly RepositoryWorkspaceOwner[];
@@ -256,6 +270,7 @@ export type OpenClawStateReadCommand =
   | { type: "sandboxRegistry.browsers" }
   | WorkspaceJournalReadCommand
   | { type: "workers.placementRecoveryCandidates" }
+  | { type: "workers.placementPreservation" }
   | { type: "workers.placementPendingResults"; sessionId?: string }
   | {
       type: "workers.placementProjection";
@@ -276,7 +291,15 @@ type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "source
 export type OpenClawStateReadResult =
   | RegisteredStateReadResult
   | { type: "backup.runs"; runs: BackupRunRecord[] }
+  | {
+      type: "claws.packageOwnership";
+      install: PersistedClawInstall | undefined;
+      installs: PersistedClawInstall[];
+      packageRefs: PersistedClawPackageRef[];
+      orphanWorkspace: ClawOrphanWorkspace | undefined;
+    }
   | { type: "doctor.gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
+  | { type: "preparedPoolPresence.read"; demand: PreparedPoolPresenceDemand | undefined }
   | {
       type: "tui.lastSession.read";
       row: ConfigMachineStateRow | undefined;
@@ -322,6 +345,7 @@ export type OpenClawStateReadResult =
       history: ListTerminalOperatorApprovalsResult;
     }
   | { type: "operatorApprovals.listCronGrants"; grants: CronStandingGrantListing[] }
+  | { type: "operatorApprovals.validateCronGrant"; result: ConsumeCronStandingGrantResult }
   | ReadResult<PluginBlobReadReply>
   | {
       type: "capture.readOnlyEvents";
@@ -505,7 +529,7 @@ export type OpenClawStateReadResult =
     }
   | { type: "fleet.get"; cell: FleetCellRecord | undefined }
   | {
-      type: "nodeHost.config" | "operator.channelPolicy";
+      type: "nodeHost.config" | "operator.channelPolicy" | "tts.prefsPath";
       row: ConfigMachineStateRow | undefined;
     }
   | {
@@ -528,6 +552,7 @@ export type OpenClawStateReadResult =
     }
   | WorkspaceJournalReadResult
   | { type: "workers.placementRecoveryCandidates"; candidates: WorkerPlacementRecoveryCandidate[] }
+  | { type: "workers.placementPreservation"; placements: WorkerSessionPlacementRecord[] }
   | {
       type: "workers.placementPendingResults";
       pendingResults: import("../gateway/worker-environments/placement-workspace-result.types.js").WorkerWorkspacePendingResult[];

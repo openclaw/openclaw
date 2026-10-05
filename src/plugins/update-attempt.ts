@@ -64,19 +64,6 @@ export function formatNpmInstallFailure(params: {
   return `Failed to ${params.phase} ${params.pluginId}: ${params.result.error}`;
 }
 
-export function formatMarketplaceInstallFailure(params: {
-  pluginId: string;
-  marketplaceSource: string;
-  marketplacePlugin: string;
-  phase: "check" | "update";
-  error: string;
-}): string {
-  return (
-    `Failed to ${params.phase} ${params.pluginId}: ` +
-    `${params.error} (marketplace plugin ${params.marketplacePlugin} from ${params.marketplaceSource}).`
-  );
-}
-
 export function formatClawHubInstallFailure(params: {
   pluginId: string;
   spec: string;
@@ -139,15 +126,6 @@ export function isClawHubTrustSkippedOutcome(outcome: { status: string; code?: s
     (outcome.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED ||
       outcome.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE)
   );
-}
-
-export function formatGitInstallFailure(params: {
-  pluginId: string;
-  spec: string;
-  phase: "check" | "update";
-  error: string;
-}): string {
-  return `Failed to ${params.phase} ${params.pluginId}: ${params.error} (git ${params.spec}).`;
 }
 
 function createPluginUpdateIntegrityDriftHandler(params: {

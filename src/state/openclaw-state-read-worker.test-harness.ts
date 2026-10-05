@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { OwnedWorkerTask } from "@openclaw/worker-runtime";
+import {
+  createRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
 import { createOwnedWorkerTaskPoolMock } from "../infra/worker-task-pool.mock.test-support.js";
-import type {
-  OwnedWorkerTask,
-  WorkerTaskInput,
-  WorkerTaskOptions,
-} from "../infra/worker-task-pool.types.js";
+import type { WorkerTaskInput, WorkerTaskOptions } from "../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
   OpenClawStateReadReply,

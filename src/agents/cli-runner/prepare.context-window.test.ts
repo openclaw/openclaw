@@ -5,9 +5,9 @@ import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../cli-runner.test-helpers.js";
-import { applyDiscoveredContextWindows } from "../context-cache-projection.js";
-import { getContextWindowCaches } from "../context-cache.js";
-import { resetContextWindowCacheForTest } from "../context.js";
+import { prepareDiscoveredContextTokenCache } from "../context-cache-projection.js";
+import { replaceDiscoveredContextTokenCache } from "../context-cache.js";
+import { resetContextWindowCacheForTest } from "../context.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -60,18 +60,18 @@ describe("CLI context-window ownership", () => {
 
     // Discovery publishes both provider-qualified and bare keys. The latter cannot
     // supply a different runtime's native budget on the next turn.
-    applyDiscoveredContextWindows({
-      cache: getContextWindowCaches().discoveredTokenCache,
-      models: [{ provider: catalogProvider, id: model, contextWindow: 1_000_000 }],
-    });
+    const catalogModels = [{ provider: catalogProvider, id: model, contextWindow: 1_000_000 }];
+    replaceDiscoveredContextTokenCache(
+      await prepareDiscoveredContextTokenCache({ modelCatalog: { entries: catalogModels } }),
+    );
     const resumed = await prepare();
     expect(resumed.contextWindowInfo?.tokens).toBe(200_000);
 
     // A provider-owned large window remains usable even without a manifest row.
-    applyDiscoveredContextWindows({
-      cache: getContextWindowCaches().discoveredTokenCache,
-      models: [{ provider, id: model, contextWindow: 1_000_000 }],
-    });
+    catalogModels.push({ provider, id: model, contextWindow: 1_000_000 });
+    replaceDiscoveredContextTokenCache(
+      await prepareDiscoveredContextTokenCache({ modelCatalog: { entries: catalogModels } }),
+    );
     const owned = await prepare();
     expect(owned.contextWindowInfo?.tokens).toBe(1_000_000);
     expect(prepareExecution.mock.calls.map(([context]) => context.contextTokenBudget)).toEqual([

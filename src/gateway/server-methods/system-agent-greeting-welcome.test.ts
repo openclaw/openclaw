@@ -1,6 +1,3 @@
-// Focused welcome-delivery tests for openclaw.chat: caretaker greeting wiring,
-// audit-cursor acknowledgement, and the onboarding template path.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -298,49 +295,6 @@ describe("openclaw.chat caretaker welcome", () => {
     },
   );
 
-  it("returns caretaker quick actions and persists the resolved greeting", async () => {
-    greetingMocks.loadSystemAgentGreetingFacts.mockReturnValueOnce({
-      updateAvailable: "2026.7.20",
-      channelHealth: { available: true, degraded: [] },
-      recentExternalEdit: true,
-      auditSequence: 42,
-    });
-    greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce({
-      text: "I'm healthy. An update is ready, and I noticed a manual config edit.",
-      source: "model",
-    });
-
-    const call = await callChat(makeContext(new Map()), { sessionId: "caretaker-welcome" });
-
-    expect(call.payload).toMatchObject({
-      reply: "I'm healthy. An update is ready, and I noticed a manual config edit.",
-      optionalWelcome: false,
-      question: {
-        header: "Quick actions",
-        options: [
-          { label: "Show update", reply: "status" },
-          { label: "Talk to my agent", reply: "talk to agent" },
-          { label: "Review recent changes", reply: "audit" },
-        ],
-      },
-    });
-    expect(greetingMocks.resolveSystemAgentGreeting).toHaveBeenCalledWith(
-      expect.objectContaining({ allowInference: true }),
-    );
-    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        role: "assistant",
-        text: "I'm healthy. An update is ready, and I noticed a manual config edit.",
-      }),
-    );
-    expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).toHaveBeenCalledWith({
-      auditSequence: 42,
-    });
-    expect(transcriptStoreMocks.appendTranscriptTurn.mock.invocationCallOrder[0]).toBeLessThan(
-      greetingMocks.acknowledgeSystemAgentGreetingDelivery.mock.invocationCallOrder[0] ?? 0,
-    );
-  });
-
   it("does not plan a greeting when a fresh session is created with a message", async () => {
     const sessions = new Map<string, SystemAgentChatSession>();
     greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce({
@@ -372,64 +326,67 @@ describe("openclaw.chat caretaker welcome", () => {
     expect(sessions.get("fresh-with-message")?.welcomeAuditSequence).toBeUndefined();
   });
 
-  it("does not acknowledge audit entries when greeting delivery fails", async () => {
-    const sessions = new Map<string, SystemAgentChatSession>();
-    const context = makeContext(sessions);
-    greetingMocks.loadSystemAgentGreetingFacts.mockReturnValueOnce({
-      updateAvailable: null,
-      channelHealth: { available: true, degraded: [] },
-      recentExternalEdit: true,
-      auditSequence: 42,
-    });
-
-    await expect(
-      expectDefined(
-        systemAgentHandlers["openclaw.chat"],
-        'systemAgentHandlers["openclaw.chat"] test invariant',
-      )({
-        params: { sessionId: "failed-delivery" },
-        respond: () => {
-          throw new Error("socket closed");
-        },
-        context,
-        client: defaultClient,
-      } as never),
-    ).rejects.toThrow("socket closed");
-
-    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalled();
-    expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
-    expect(sessions.get("failed-delivery")?.welcomeAuditSequence).toBe(42);
-
-    const creation = await callChat(context, {
-      sessionId: "failed-delivery",
-      welcomeVariant: "new-agent",
-    });
-    expect(creation.payload).toMatchObject({
-      reply: expect.stringContaining("Let's create an agent."),
-    });
-    expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
-    expect(sessions.get("failed-delivery")?.welcomeAuditSequence).toBe(42);
-
-    const retry = await callChat(context, { sessionId: "failed-delivery" });
-    expect(retry.payload).toMatchObject({ reply: "I'm OpenClaw. All systems nominal." });
-    expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).toHaveBeenCalledWith({
-      auditSequence: 42,
-    });
-    expect(sessions.get("failed-delivery")?.welcomeAuditSequence).toBeUndefined();
-  });
-
-  it("keeps onboarding on its dedicated template path", async () => {
-    const call = await callChat(makeContext(new Map()), {
-      sessionId: "onboarding-welcome",
-      welcomeVariant: "onboarding",
-    });
-
-    expect(call.payload).toMatchObject({ reply: "Inference is ready. Let's finish setup." });
-    expect(onboardingWelcomeMocks.buildOnboardingWelcome).toHaveBeenCalledOnce();
-    expect(greetingMocks.loadSystemAgentGreetingFacts).not.toHaveBeenCalled();
-    expect(greetingMocks.resolveSystemAgentGreeting).not.toHaveBeenCalled();
-    expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "persists audit greetings before acknowledgement (delivery fails=%s)",
+    async (fails) => {
+      const sessions = new Map<string, SystemAgentChatSession>();
+      const context = makeContext(sessions);
+      const text = "I'm healthy. An update is ready, and I noticed a manual config edit.";
+      greetingMocks.loadSystemAgentGreetingFacts.mockReturnValueOnce({
+        updateAvailable: "2026.7.20",
+        channelHealth: { available: true, degraded: [] },
+        recentExternalEdit: true,
+        auditSequence: 42,
+      });
+      greetingMocks.resolveSystemAgentGreeting.mockResolvedValueOnce({ text, source: "model" });
+      if (fails) {
+        await expect(
+          expectDefined(
+            systemAgentHandlers["openclaw.chat"],
+            "openclaw.chat",
+          )({
+            params: { sessionId: "audit-welcome" },
+            respond: () => {
+              throw new Error("socket closed");
+            },
+            context,
+            client: defaultClient,
+          } as never),
+        ).rejects.toThrow("socket closed");
+        expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalled();
+        expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
+        expect(sessions.get("audit-welcome")?.welcomeAuditSequence).toBe(42);
+        const creation = await callChat(context, {
+          sessionId: "audit-welcome",
+          welcomeVariant: "new-agent",
+        });
+        expect(creation.payload).toMatchObject({
+          reply: expect.stringContaining("Let's create an agent."),
+        });
+        expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
+        expect(sessions.get("audit-welcome")?.welcomeAuditSequence).toBe(42);
+      }
+      const call = await callChat(context, { sessionId: "audit-welcome" });
+      expect(call.payload).toMatchObject({
+        reply: text,
+        optionalWelcome: false,
+        question: { header: quickActions.header, options: quickActions.options },
+      });
+      expect(greetingMocks.resolveSystemAgentGreeting).toHaveBeenCalledWith(
+        expect.objectContaining({ allowInference: true }),
+      );
+      expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ role: "assistant", text }),
+      );
+      expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).toHaveBeenCalledWith({
+        auditSequence: 42,
+      });
+      expect(transcriptStoreMocks.appendTranscriptTurn.mock.invocationCallOrder[0]).toBeLessThan(
+        greetingMocks.acknowledgeSystemAgentGreetingDelivery.mock.invocationCallOrder[0] ?? 0,
+      );
+      expect(sessions.get("audit-welcome")?.welcomeAuditSequence).toBeUndefined();
+    },
+  );
 
   it("renders the onboarding welcome in the connected client's locale", async () => {
     const { buildOnboardingWelcome } = await vi.importActual<
@@ -455,6 +412,10 @@ describe("openclaw.chat caretaker welcome", () => {
       { ...defaultClient, connect: { ...defaultClient.connect, locale: "zh-TW" } },
     );
 
+    expect(onboardingWelcomeMocks.buildOnboardingWelcome).toHaveBeenCalledOnce();
+    expect(greetingMocks.loadSystemAgentGreetingFacts).not.toHaveBeenCalled();
+    expect(greetingMocks.resolveSystemAgentGreeting).not.toHaveBeenCalled();
+    expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
     expect(call.payload).toMatchObject({
       reply: expect.stringContaining("你好，我是 OpenClaw — 我們來孵化你的智慧代理吧。"),
       question: {

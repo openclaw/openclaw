@@ -17,6 +17,10 @@ import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
+import {
+  buildUpdateCanaryCommands,
+  type UpdateCanaryCommand,
+} from "./update-candidate-canary-commands.js";
 import { launchCanary, stopCanary, waitBounded } from "./update-candidate-canary-process.js";
 import { UPDATE_CANARY_PROGRESS_ARGS } from "./update-candidate-canary-progress.js";
 import {
@@ -55,15 +59,7 @@ import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-type CanaryPhase =
-  | "snapshot"
-  | "doctor"
-  | "lint"
-  | "config"
-  | "plugins"
-  | "runtime"
-  | "startup"
-  | "readiness";
+type CanaryPhase = UpdateCanaryCommand["phase"] | "snapshot" | "startup" | "readiness";
 
 type CanaryResult = {
   phase: CanaryPhase;
@@ -97,6 +93,8 @@ export async function validateUpdateCandidateCanary(
     env?: NodeJS.ProcessEnv;
     nodeRunner?: string;
     assertCurrent?: () => void;
+    /** Startup-only callers must prove the preserved input boots without Doctor repair. */
+    migrationPolicy?: "rehearse" | "startup-only";
   } & CanaryReceiptCallbacks,
 ): Promise<CanaryResult> {
   const started = Date.now();
@@ -111,6 +109,18 @@ export async function validateUpdateCandidateCanary(
   let activeLintStep: UpdateStepResult | undefined;
   const steps: UpdateStepResult[] = [];
   const receipts = createCanaryReceiptObserver(params);
+  // Each check is announced before it runs; the awaited receipt admits the progress writer first.
+  const beginStep = async (step: typeof activeStep) => {
+    activeStep = step;
+    stepStartedAt = Date.now();
+    stepLogTail.length = 0;
+    await receipts.onProgress?.({
+      step: step.name,
+      status: "in_progress",
+      startedAtMs: stepStartedAt,
+      detail: step.command,
+    });
+  };
   const recordStep = async (step: UpdateStepResult) => {
     steps.push(step);
     await receipts.onStep?.(step);
@@ -137,7 +147,7 @@ export async function validateUpdateCandidateCanary(
   let doctorConfigWrites = false;
   let doctorConfigChanges: UpdateDoctorConfigChange[] = [];
   let listenerIsolation: CanaryResult["listenerIsolation"];
-  let phase: CanaryPhase = "runtime";
+  const progress: { phase: CanaryPhase } = { phase: "runtime" };
   let env: NodeJS.ProcessEnv = { ...sourceEnv };
   const capture = (chunk: Buffer | string) => {
     const safe = redactSupportString(
@@ -189,8 +199,14 @@ export async function validateUpdateCandidateCanary(
       if (!hasErrnoCode(error, "ENOENT")) {
         throw error;
       }
+      if (params.migrationPolicy === "startup-only") {
+        throw new Error(
+          "The candidate lacks the runtime required to prove preserved-input startup",
+          { cause: error },
+        );
+      }
       const message = "This version uses the current updater to finish installation";
-      const step: UpdateStepResult = {
+      await recordStep({
         name: "candidate-recovery",
         command: "--check",
         cwd: params.root,
@@ -198,29 +214,23 @@ export async function validateUpdateCandidateCanary(
         exitCode: null,
         stdoutTail: message,
         advisory: { kind: "candidate-runtime-unavailable", message },
-      };
-      await recordStep(step);
+      });
       // Older targets also lack the isolated canary CLI; retain their shipped finalization path.
-      return { status: "ok", phase, durationMs: Date.now() - started, logTail, steps };
+      return { status: "ok", phase: "runtime", durationMs: Date.now() - started, logTail, steps };
     }
-    const policy = resolveUpdateDoctorExecutionPolicy({
-      targetVersion: await readPackageVersion(params.root),
-      allowGatewayServiceRepair: false,
-    });
-    if (!policy.fix) {
-      throw new Error("Cannot check migrations without changing the running service");
+    if (params.migrationPolicy !== "startup-only") {
+      const policy = resolveUpdateDoctorExecutionPolicy({
+        targetVersion: await readPackageVersion(params.root),
+        allowGatewayServiceRepair: false,
+      });
+      if (!policy.fix) {
+        throw new Error("Cannot check migrations without changing the running service");
+      }
     }
-    phase = "snapshot";
-    activeStep = { name: "candidate-state-snapshot", command: "Preparing update checks" };
-    stepStartedAt = Date.now();
+    progress.phase = "snapshot";
     // Admit the progress writer before the child chooses its snapshot source.
     // This receipt precedes work; streamed progress below keeps its stage owner.
-    await receipts.onInitialProgress?.({
-      step: "candidate-state-snapshot",
-      status: "in_progress",
-      startedAtMs: stepStartedAt,
-      detail: "Preparing update checks",
-    });
+    await beginStep({ name: "candidate-state-snapshot", command: "Preparing update checks" });
     rehearsal = await prepareUpdateCandidateRehearsal({
       candidateRoot: params.root,
       config: params.config,
@@ -231,6 +241,7 @@ export async function validateUpdateCandidateCanary(
       signal: params.signal,
       assertCurrent: params.assertCurrent,
       onProgress: params.onProgress,
+      migrationPolicy: params.migrationPolicy,
     });
     // Copying private state has its own size/progress budget; preserve the
     // runtime validation budget after large snapshots finish.
@@ -252,36 +263,10 @@ export async function validateUpdateCandidateCanary(
       gateway: { host: "127.0.0.1", port },
       mcpAppSandbox: "disabled",
     };
-    const commands: Array<{ phase: CanaryPhase; name: string; args: string[]; entry?: string }> = [
-      {
-        phase: "doctor",
-        name: "candidate-doctor",
-        args: ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-      },
-      {
-        phase: "lint",
-        name: "candidate-doctor-lint",
-        args: ["doctor", "--lint", "--json", "--severity-min", "error"],
-      },
-      {
-        phase: "config",
-        name: "candidate-config",
-        args: ["config", "validate", "--json"],
-      },
-      {
-        phase: "plugins",
-        name: "candidate-plugins",
-        args: ["plugins", "list", "--json"],
-      },
-      {
-        phase: "runtime",
-        name: "candidate-recovery",
-        // After a schema bump only a fresh candidate may finalize the run;
-        // prove its full recovery import graph before live state changes.
-        entry: continuationEntry,
-        args: ["--check"],
-      },
-    ];
+    const commands = buildUpdateCanaryCommands({
+      continuationEntry,
+      migrationPolicy: params.migrationPolicy,
+    });
     // Each fresh process may inspect the private state again, including the Gateway.
     const processBudget = resolveSqliteInspectionBudget(
       "update validation",
@@ -305,12 +290,11 @@ export async function validateUpdateCandidateCanary(
       return milliseconds;
     };
     for (const command of commands) {
-      phase = command.phase;
+      const { phase } = command;
+      progress.phase = phase;
       activeLintStep = undefined;
       env.OPENCLAW_UPDATE_IN_PROGRESS = phase === "doctor" ? "1" : "0";
-      activeStep = { name: command.name, command: command.args.join(" ") };
-      stepStartedAt = Date.now();
-      stepLogTail.length = 0;
+      await beginStep({ name: command.name, command: command.args.join(" ") });
       startBudget();
       remaining();
       const doctorResultPath =
@@ -505,6 +489,10 @@ export async function validateUpdateCandidateCanary(
         cwd: params.root,
         durationMs: Date.now() - stepStartedAt,
         exitCode: timedOut ? null : code,
+        // Keep the check verdict when a later native crash evicts the rolling log tail.
+        ...(phase === "doctor" && checksCompletedAt !== undefined
+          ? { stdoutTail: "Doctor complete." }
+          : {}),
         ...(timedOut
           ? { termination: "timeout" as const }
           : signal
@@ -557,10 +545,8 @@ export async function validateUpdateCandidateCanary(
     if (!candidateSchemaVersions) {
       throw new Error("The update did not report its supported database versions");
     }
-    phase = "startup";
-    activeStep = { name: "candidate-gateway-startup", command: "gateway run" };
-    stepStartedAt = Date.now();
-    stepLogTail.length = 0;
+    progress.phase = "startup";
+    await beginStep({ name: "candidate-gateway-startup", command: "gateway run" });
     startBudget();
     remaining();
     const args = ["gateway", "run", ...UPDATE_CANARY_PROGRESS_ARGS, "--bind", "loopback"];
@@ -596,7 +582,7 @@ export async function validateUpdateCandidateCanary(
         env,
         stateDir: params.stateDir,
         onEndpoint: (endpoint) => {
-          phase = endpoint === "startupz" ? "startup" : "readiness";
+          progress.phase = endpoint === "startupz" ? "startup" : "readiness";
         },
         capture,
       });
@@ -632,7 +618,7 @@ export async function validateUpdateCandidateCanary(
     }
     return {
       status: "ok",
-      phase,
+      phase: progress.phase,
       durationMs: Date.now() - started,
       logTail,
       candidateSchemaVersions,
@@ -651,6 +637,7 @@ export async function validateUpdateCandidateCanary(
       // A receipt refusal must not become a failed candidate check or be reported again.
       throw error;
     }
+    const { phase } = progress;
     const durationMs = Date.now() - stepStartedAt;
     const displayPhase = phase === "lint" ? "health" : phase;
     const failureLine = capture(`${displayPhase}: ${coerceErrorMessage(error)} (${durationMs}ms)`);

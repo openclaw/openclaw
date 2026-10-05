@@ -214,7 +214,7 @@ export async function recoverPendingWorkspaceResults(
           }
         }
         if (placement?.state === "active" || placement?.state === "draining") {
-          const failed = placements.failWorkspaceResultAndReleaseTurn(
+          const failed = await placements.failWorkspaceResultAndReleaseTurn(
             pending,
             new Error(`Pending cloud workspace result has no active claim: ${pending.sessionId}`),
           );
@@ -567,10 +567,11 @@ export async function recoverPendingWorkspaceResults(
                 return;
               }
               recovery.assertCurrent();
-              const failed = placements.failWorkspaceResultAndReleaseTurn(
+              const failed = await placements.failWorkspaceResultAndReleaseTurn(
                 pending,
                 workerDisappearanceError(environment) ??
                   new Error(`Pending cloud workspace result lost its worker: ${pending.sessionId}`),
+                recovery.assertCurrent,
               );
               if (failed.state === "failed") {
                 await failure.retryFailedTeardown(failed);

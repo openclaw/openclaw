@@ -106,6 +106,18 @@ const modifiableNamedKeys = new Set([
   "delete",
   "del",
   "dc",
+  "f1",
+  "f2",
+  "f3",
+  "f4",
+  "f5",
+  "f6",
+  "f7",
+  "f8",
+  "f9",
+  "f10",
+  "f11",
+  "f12",
 ]);
 
 type KeyEncodingRequest = {
@@ -212,12 +224,11 @@ function encodeKeyToken(
   const baseSeq = namedKeyMap.get(baseLower);
   if (baseSeq) {
     if (modifiableNamedKeys.has(baseLower) && hasAnyModifier(parsed.mods)) {
-      // Every modifiable named key is a CSI sequence from namedKeyMap.
       // Bare cursor sequences omit the first parameter; xterm modifiers require it.
       const parameter = baseSeq.slice(2, -1) || "1";
       return `${ESC}[${parameter};${xtermModifier(parsed.mods)}${baseSeq.at(-1)}`;
     }
-    return parsed.mods.alt ? `${ESC}${baseSeq}` : baseSeq;
+    return applyCharModifiers(baseSeq, parsed.mods);
   }
 
   if (base.length === 1) {
@@ -271,6 +282,9 @@ function applyCharModifiers(char: string, mods: Modifiers): string {
 function toCtrlChar(char: string): string | null {
   if (char === "?") {
     return "\x7f";
+  }
+  if (char === " ") {
+    return "\x00";
   }
   const code = char.toUpperCase().charCodeAt(0);
   if (code >= 64 && code <= 95) {

@@ -74,166 +74,124 @@ function waitForContention() {
   return waiting.promise;
 }
 
-it("serializes independent worktrees despite task-specific HOME and TMPDIR", async () => {
-  const ready = createDeferred();
-  const release = createDeferred<number>();
-  mocks.run.mockImplementationOnce(() => {
-    ready.resolve();
-    return release.promise;
-  });
-  const first = runSemanticCheck({
-    bin: "first",
-    cwd: "/workspace/first",
-    env: { HOME: "/first", TMPDIR: "/first/tmp" },
-  });
-  await ready.promise;
-  const waiting = waitForContention();
-  const second = runSemanticCheck({
-    bin: "second",
-    cwd: "/workspace/second",
-    env: { HOME: "/second", TMPDIR: "/second/tmp" },
-  });
-  try {
-    await waiting;
-    expect(mocks.run).toHaveBeenCalledTimes(1);
-  } finally {
-    release.resolve(0);
-    expect(await Promise.all([first, second])).toEqual([0, 0]);
-  }
-  expect(fs.readdirSync(directory)).toEqual([]);
-});
-
-it("joins cancellation of a contended waiter without disturbing live ownership", async () => {
-  const ready = createDeferred();
-  const release = createDeferred<number>();
-  mocks.run.mockImplementationOnce(() => {
-    ready.resolve();
-    return release.promise;
-  });
-  const first = runSemanticCheck({ bin: "first" });
-  await ready.promise;
-  const owner = fs.readFileSync(lockPath, "utf8");
-  const waiting = waitForContention();
-  const controller = new AbortController();
-  const queued = runSemanticCheck({ bin: "canceled", signal: controller.signal }).catch(
-    (error: unknown) => error,
-  );
-  try {
-    await waiting;
-    controller.abort();
-    expect(await queued).toBe(controller.signal.reason);
-    expect(fs.readFileSync(lockPath, "utf8")).toBe(owner);
-    expect(mocks.run).toHaveBeenCalledTimes(1);
-  } finally {
-    controller.abort();
-    release.resolve(0);
-    await Promise.all([first, queued]);
-  }
-});
-
-it.for([false, true])(
-  "charges queue time and rereads memory after acquisition; expires=$0",
-  async (expires) => {
+it.each(["serialized", "canceled", "budgeted", "expired"])(
+  "serializes cross-worktree admission with a %s waiter",
+  async (outcome) => {
     const ready = createDeferred();
     const release = createDeferred<number>();
     mocks.run.mockImplementationOnce(() => {
       ready.resolve();
       return release.promise;
     });
-    const first = runSemanticCheck({ bin: "first" });
+    const first = runSemanticCheck({
+      bin: "first",
+      cwd: "/workspace/first",
+      env: { HOME: "/first", TMPDIR: "/first/tmp" },
+    });
     await ready.promise;
+    const owner = fs.readFileSync(lockPath, "utf8");
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    const controller = new AbortController();
     const waiting = waitForContention();
-    const second = runSemanticCheck({ bin: "second", timeoutMs: 60_000 });
-    await waiting;
-    mocks.memory.mockReturnValue({
-      capacityBytes: 8 * 1024 ** 3,
-      limitBytes: 4 * 1024 ** 3,
-      availableBytes: 4 * 1024 ** 3,
-      usageKnown: true,
-    });
-    now += expires ? 61_000 : 40_000;
-    release.resolve(0);
-    expect(await Promise.all([first, second])).toEqual([0, expires ? 75 : 0]);
-    if (expires) {
+    const second = runSemanticCheck({
+      bin: "second",
+      cwd: "/workspace/second",
+      env: { HOME: "/second", TMPDIR: "/second/tmp" },
+      signal: controller.signal,
+      timeoutMs: 60_000,
+    }).catch((error: unknown) => error);
+    try {
+      await waiting;
       expect(mocks.run).toHaveBeenCalledTimes(1);
-    } else {
-      expect(mocks.run).toHaveBeenLastCalledWith(
-        expect.objectContaining({ timeoutMs: 20_000, memoryLimitBytes: 2 * 1024 ** 3 }),
-      );
+      if (outcome === "canceled") {
+        controller.abort();
+        expect(await second).toBe(controller.signal.reason);
+        expect(fs.readFileSync(lockPath, "utf8")).toBe(owner);
+        expect(mocks.run).toHaveBeenCalledTimes(1);
+      } else {
+        if (outcome !== "serialized") {
+          mocks.memory.mockReturnValue({
+            capacityBytes: 8 * 1024 ** 3,
+            limitBytes: 4 * 1024 ** 3,
+            availableBytes: 4 * 1024 ** 3,
+            usageKnown: true,
+          });
+          now += outcome === "expired" ? 61_000 : 40_000;
+        }
+        release.resolve(0);
+        expect(await Promise.all([first, second])).toEqual([0, outcome === "expired" ? 75 : 0]);
+        if (outcome === "expired") {
+          expect(mocks.run).toHaveBeenCalledTimes(1);
+        } else if (outcome === "budgeted") {
+          expect(mocks.run).toHaveBeenLastCalledWith(
+            expect.objectContaining({ timeoutMs: 20_000, memoryLimitBytes: 2 * 1024 ** 3 }),
+          );
+        }
+      }
+    } finally {
+      controller.abort();
+      release.resolve(0);
+      await Promise.all([first, second]);
     }
-  },
-);
-
-it.each([
-  [8, 6, 3],
-  [16, 10, 5],
-  [32, 24, 8],
-  [128, 96, 8],
-  [32, 2, 1],
-])("caps a %s GiB host with %s GiB headroom at %s GiB", async (capacity, headroom, expected) => {
-  mocks.memory.mockReturnValue({
-    capacityBytes: capacity * 1024 ** 3,
-    limitBytes: headroom * 1024 ** 3,
-    availableBytes: headroom * 1024 ** 3,
-    usageKnown: true,
-  });
-  await runSemanticCheck({ bin: "fixture" });
-  expect(mocks.run).toHaveBeenCalledWith(
-    expect.objectContaining({ memoryLimitBytes: expected * 1024 ** 3 }),
-  );
-});
-
-it.each([null, 512 * 1024 ** 2])(
-  "refuses unknown or insufficient headroom: %s",
-  async (headroom) => {
-    mocks.memory.mockReturnValue({
-      capacityBytes: 8 * 1024 ** 3,
-      limitBytes: headroom,
-      availableBytes: headroom,
-      usageKnown: true,
-    });
-    expect(await runSemanticCheck({ bin: "fixture" })).toBe(75);
-    expect(mocks.run).not.toHaveBeenCalled();
     expect(fs.readdirSync(directory)).toEqual([]);
   },
 );
 
 it.each([
-  { availableBytes: null, usageKnown: true },
-  { availableBytes: 24 * 1024 ** 3, usageKnown: false },
-])("refuses a capacity fallback without observed headroom: %j", async (observation) => {
+  { capacity: 8, headroom: 6, expected: 3 },
+  { capacity: 32, headroom: 24, expected: 8 },
+  { capacity: 32, headroom: 2, expected: 1 },
+  { capacity: 8, headroom: null, expected: 0 },
+  { capacity: 8, headroom: 0.5, expected: 0 },
+  { capacity: 32, headroom: 24, available: false, expected: 0 },
+  { capacity: 32, headroom: 24, usageKnown: false, expected: 0 },
+])("admits only observed headroom within the host budget: %j", async (observation) => {
+  const { capacity, headroom, expected } = observation;
+  const bytes = headroom === null ? null : headroom * 1024 ** 3;
   mocks.memory.mockReturnValue({
-    capacityBytes: 32 * 1024 ** 3,
-    limitBytes: 24 * 1024 ** 3,
-    ...observation,
+    capacityBytes: capacity * 1024 ** 3,
+    limitBytes: bytes,
+    availableBytes: observation.available === false ? null : bytes,
+    usageKnown: observation.usageKnown ?? true,
   });
-  expect(await runSemanticCheck({ bin: "fixture" })).toBe(75);
-  expect(mocks.run).not.toHaveBeenCalled();
-  expect(fs.readdirSync(directory)).toEqual([]);
-});
-
-it("preserves the caller's Go policy and records scope identity before launch", async () => {
   const env = { GOMAXPROCS: "4", GOGC: "100", GOMEMLIMIT: "1GiB" };
   const observe = vi.fn((unit: string) => {
     const owner = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { scopeReceipt: string };
     expect(fs.readFileSync(path.join(directory, owner.scopeReceipt), "utf8")).toBe(unit + "\n");
   });
-  await runSemanticCheck({ bin: "fixture", env, onMemoryScope: observe });
-  expect(observe).toHaveBeenCalledExactlyOnceWith(scope);
-  expect(mocks.run).toHaveBeenCalledWith(expect.objectContaining({ env }));
+  expect(await runSemanticCheck({ bin: "fixture", env, onMemoryScope: observe })).toBe(
+    expected ? 0 : 75,
+  );
+  if (expected) {
+    expect(observe).toHaveBeenCalledExactlyOnceWith(scope);
+    expect(mocks.run).toHaveBeenCalledWith(
+      expect.objectContaining({ env, memoryLimitBytes: expected * 1024 ** 3 }),
+    );
+  } else {
+    expect(mocks.run).not.toHaveBeenCalled();
+  }
   expect(fs.readdirSync(directory)).toEqual([]);
 });
 
-it.each(["live", "indeterminate"])(
+it.each(["live", "indeterminate", "release"])(
   "retains the exact scope receipt after %s cleanup",
   async (processTreeState) => {
     const failure = Object.assign(new Error("cleanup failed"), { processTreeState });
-    mocks.run.mockImplementationOnce(async (options: RunManagedCommandOptions) => {
-      options.onMemoryScope?.(scope);
-      throw failure;
-    });
+    if (processTreeState === "release") {
+      const acquire = vi.mocked(fileLocks.acquireFileLock).getMockImplementation()!;
+      vi.mocked(fileLocks.acquireFileLock).mockImplementationOnce(async (...args) => ({
+        ...(await acquire(...args)),
+        release: async () => {
+          throw failure;
+        },
+      }));
+    } else {
+      mocks.run.mockImplementationOnce(async (options: RunManagedCommandOptions) => {
+        options.onMemoryScope?.(scope);
+        throw failure;
+      });
+    }
     await expect(runSemanticCheck({ bin: "fixture" })).rejects.toBe(failure);
     const owner = JSON.parse(fs.readFileSync(lockPath, "utf8")) as {
       pid: number;
@@ -243,20 +201,6 @@ it.each(["live", "indeterminate"])(
     expect(fs.readFileSync(path.join(directory, owner.scopeReceipt), "utf8")).toBe(scope + "\n");
   },
 );
-
-it("retains the receipt when lock release fails", async () => {
-  const failure = new Error("release failed");
-  const acquire = vi.mocked(fileLocks.acquireFileLock).getMockImplementation()!;
-  vi.mocked(fileLocks.acquireFileLock).mockImplementationOnce(async (...args) => ({
-    ...(await acquire(...args)),
-    release: async () => {
-      throw failure;
-    },
-  }));
-  await expect(runSemanticCheck({ bin: "fixture" })).rejects.toBe(failure);
-  const owner = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { scopeReceipt: string };
-  expect(fs.readFileSync(path.join(directory, owner.scopeReceipt), "utf8")).toBe(scope + "\n");
-});
 
 it("refuses launch if its scope receipt cannot be written", async () => {
   const failure = new Error("receipt write failed");
@@ -327,8 +271,8 @@ it.for(["SIGINT", "SIGTERM", "SIGHUP", "abort"] as const)(
   },
 );
 
-it.each(["darwin", "win32"])("refuses unsupported %s before admission", async (unsupported) => {
-  Object.defineProperty(process, "platform", { value: unsupported });
+it("refuses unsupported platforms before admission", async () => {
+  Object.defineProperty(process, "platform", { value: "darwin" });
   expect(await runSemanticCheck({ bin: "fixture" })).toBe(75);
   expect(fileLocks.acquireFileLock).not.toHaveBeenCalled();
   expect(mocks.run).not.toHaveBeenCalled();

@@ -3,8 +3,8 @@ import {
   captureSessionPendingInputWorkerCustody,
   type SessionPendingInputWorkerReceipt,
 } from "../../config/sessions/session-accessor.sqlite-pending-inputs.js";
+import type { SessionMetadataMessageControl } from "../../config/sessions/session-manager-write-contract.js";
 import type { SqliteWorkerAdmissionRequest } from "../../infra/sqlite-worker-operation-admission.js";
-import type { SessionMetadataMessageControl } from "./session-manager-metadata.worker.js";
 
 /** Host closures retain authority; worker commands carry only their matching custody facts. */
 export function captureSessionMessageAdmission(

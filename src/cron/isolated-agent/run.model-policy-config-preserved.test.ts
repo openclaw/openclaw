@@ -143,7 +143,7 @@ describe("resolveCronAgentConfig model policy preservation", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { modelPolicy: { allow: ["openai/gpt-5.5"] } },
-        list: [{ id: "worker", modelPolicy: {} }],
+        entries: { worker: { modelPolicy: {} } },
       },
     };
 
@@ -159,7 +159,7 @@ describe("resolveCronAgentConfig model policy preservation", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { modelPolicy: { allow: ["openai/gpt-5.5"] } },
-        list: [{ id: "worker", modelPolicy: { allow: ["openai/gpt-5.6-sol"] } }],
+        entries: { worker: { modelPolicy: { allow: ["openai/gpt-5.6-sol"] } } },
       },
     };
 
@@ -282,7 +282,7 @@ function buildRunCfg(
     ...cfgWithAgentDefaults,
     agents: {
       ...cfgWithAgentDefaults.agents,
-      list: [{ id: agentId, ...agentConfigOverride }],
+      entries: { [agentId]: { ...agentConfigOverride } },
     },
   };
 }

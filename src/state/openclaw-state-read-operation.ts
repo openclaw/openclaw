@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import type { RetainedOperation, RetainedOutcome } from "../infra/retained-operation.js";
+import type { RetainedOperation, RetainedOutcome } from "@openclaw/worker-runtime/lifecycle";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationFromOwnedDatabase } from "../infra/sqlite-readonly-location.js";

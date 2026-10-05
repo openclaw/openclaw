@@ -33,10 +33,8 @@ async function validateConsentUploadUrl(
     resolveFn?: (hostname: string) => Promise<{ address: string } | { address: string }[]>;
   },
 ): Promise<void> {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     throw new Error("Consent upload URL is not a valid URL");
   }
 

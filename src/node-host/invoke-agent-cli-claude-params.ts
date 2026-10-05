@@ -243,7 +243,7 @@ export async function decodeClaudeCliNodeRunParams(
   const systemPrompt = optionalBoundedString(value.systemPrompt, "systemPrompt", MAX_REQUEST_BYTES);
   const agentId = optionalBoundedString(value.agentId, "agentId", MAX_ARG_BYTES);
   const sessionKey = optionalBoundedString(value.sessionKey, "sessionKey", MAX_ARG_BYTES);
-  const approvalDecision =
+  const approvalDecision: "allow-once" | "allow-always" | undefined =
     value.approvalDecision === "allow-once" || value.approvalDecision === "allow-always"
       ? value.approvalDecision
       : undefined;

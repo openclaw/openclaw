@@ -315,7 +315,7 @@ final class DashboardManager {
         let configuration: WindowConfiguration
         do {
             configuration = try await dashboardConfiguration(
-                endpoint: endpoint, mode: mode, target: .primary, token: authToken)
+                endpoint: endpoint, mode: mode, target: .primary, token: authToken).configuration
         } catch {
             guard self.endpointGeneration == generation else { return }
             for controller in currentControllers() {

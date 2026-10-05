@@ -61,7 +61,6 @@ actor VoiceWakeRuntime {
     private var lastTranscript: String?
     private var lastTranscriptAt: Date?
     private var pauseCheckTask: Task<Void, Never>?
-    private var isStarting: Bool = false
     private var pauseLeases: Set<UUID> = []
     private var refreshGeneration: UInt64 = 0
 
@@ -138,8 +137,6 @@ actor VoiceWakeRuntime {
 
         let config = snapshot.1
 
-        if self.isStarting { return }
-
         if self.scheduledRestartTask != nil, config == self.currentConfig, self.recognitionTask == nil {
             return
         }
@@ -156,9 +153,7 @@ actor VoiceWakeRuntime {
 
     private func start(with config: RuntimeConfig) {
         // Scheduled restarts also enter here, without passing through refresh.
-        guard self.pauseLeases.isEmpty, !self.isStarting else { return }
-        self.isStarting = true
-        defer { self.isStarting = false }
+        guard self.pauseLeases.isEmpty else { return }
         do {
             self.recognitionGeneration &+= 1
             let generation = self.recognitionGeneration
@@ -246,10 +241,8 @@ actor VoiceWakeRuntime {
         }
     }
 
-    private func stop(dismissOverlay: Bool = true, cancelScheduledRestart: Bool = true) {
-        if cancelScheduledRestart {
-            SimpleTaskSupport.stop(task: &self.scheduledRestartTask)
-        }
+    private func stop(dismissOverlay: Bool = true) {
+        SimpleTaskSupport.stop(task: &self.scheduledRestartTask)
         SimpleTaskSupport.stop(task: &self.captureTask)
         self.isCapturing = false
         self.capturedTranscript = ""
@@ -662,7 +655,7 @@ actor VoiceWakeRuntime {
     private func restartRecognizer() {
         // Restart the recognizer so we listen for the next trigger with a clean buffer.
         let current = self.currentConfig
-        self.stop(dismissOverlay: false, cancelScheduledRestart: false)
+        self.stop(dismissOverlay: false)
         if let current {
             self.start(with: current)
         }
@@ -674,10 +667,10 @@ actor VoiceWakeRuntime {
         self.restartRecognizer()
     }
 
-    private func scheduleRestartRecognizer(delay: TimeInterval = 0.7) {
+    private func scheduleRestartRecognizer() {
         self.scheduledRestartTask?.cancel()
         self.scheduledRestartTask = Task { [weak self] in
-            guard await SimpleTaskSupport.waitForNextOperation(interval: max(0, delay)) else { return }
+            guard await SimpleTaskSupport.waitForNextOperation(interval: 0.7) else { return }
             guard let self else { return }
             await self.restartRecognizerIfIdleAndOverlayHidden()
         }

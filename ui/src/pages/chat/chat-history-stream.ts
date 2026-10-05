@@ -172,6 +172,22 @@ export function applyHistoryRun(params: {
       return;
     }
     const localRunId = state.chatRunId?.trim();
+    if (
+      localRunId &&
+      sessionInfo.lastRunId !== localRunId &&
+      historyRun &&
+      !state.chatQueue.some(
+        (item) => item.sendState === "sending" && item.sendRunId && item.sendRunId !== localRunId,
+      ) &&
+      runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply) &&
+      reconcileChatRunFromSessionRow(state, sessionInfo, {
+        publishRunStatus: false,
+        historyRun,
+      })
+    ) {
+      // Idle history retires the observed run without borrowing a later run's outcome.
+      return;
+    }
     const terminalRunId =
       sessionInfo.lastRunId ??
       (localRunId && hasExactHistoryTerminal(state, localRunId) ? localRunId : undefined);

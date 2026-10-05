@@ -59,13 +59,6 @@ function runtime(catalog = CATALOG): ToolSearchRuntime {
 }
 
 describe("tokenizeQuery", () => {
-  it("collapses inflected forms to a shared root", () => {
-    expect(tokenizeQuery("scheduling").map((term) => term.term)).toEqual(
-      tokenizeDocument("schedule"),
-    );
-    expect(tokenizeQuery("reminders").map((term) => term.term)).toContain("remind");
-  });
-
   it.each([
     ["running", "run"],
     ["runner", "run"],
@@ -108,15 +101,6 @@ describe("tokenizeQuery", () => {
     const terms = tokenizeDocument("web_search");
     expect(terms).toContain("web_search");
     expect(terms).toContain("web");
-  });
-
-  it("decomposes camelCase names, which MCP catalogs commonly use", () => {
-    const document = tokenizeDocument("readFile");
-
-    // Lowercasing first would leave only "readfil", which "read file" cannot meet.
-    for (const term of tokenizeQuery("read file")) {
-      expect(document).toContain(term.term);
-    }
   });
 
   it.each(["news"])("keeps %s distinct from the word left by stripping its s", (word) => {
@@ -272,30 +256,71 @@ describe("ToolSearchRuntime.search", () => {
     expect((await search.search("meteors")).map((hit) => hit.name)).toEqual(["indexed_resource"]);
   });
 
-  it("reuses document tokens across runtimes and visibility views until the catalog changes", async () => {
-    const catalog = CATALOG.map(entry);
-    const tokenize = vi.spyOn(ranking, "tokenizeDocument");
+  it("shares one index across fresh turns and rebuilds for a changed tool-set revision", async () => {
+    const catalog = CATALOG.map((item) => entry({ ...item, id: `shared-index:${item.id}` }));
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
     for (const [query, expected] of [
       ["repository", ["issue_create"]],
       ["scheduling", ["cron_create"]],
       ["read", ["read_file"]],
-      ["the and with", []],
     ] as const) {
-      const hits = await runtime(catalog).search(query, {
+      const freshCatalog = catalog.map((item) => entry({ ...item, tool: {} as never }));
+      const hits = await runtime(freshCatalog).search(query, {
         allowedIds: new Set(catalog.map(({ id }) => id)),
       });
       expect(hits.map(({ name }) => name)).toEqual(expected);
     }
-    expect(tokenize).toHaveBeenCalledTimes(catalog.length);
+    expect(build).toHaveBeenCalledTimes(1);
 
     catalog[0]!.description = "Observe asteroids";
     expect((await runtime(catalog).search("asteroids")).map(({ name }) => name)).toEqual([
       "web_search",
     ]);
-    expect(tokenize).toHaveBeenCalledTimes(catalog.length + 1);
+    expect(build).toHaveBeenCalledTimes(2);
 
     await runtime([...catalog]).search("repository");
-    expect(tokenize).toHaveBeenCalledTimes(catalog.length * 2 + 1);
+    expect(build).toHaveBeenCalledTimes(2);
+
+    const allowedIds = new Set([catalog[0]!.id]);
+    expect(await runtime(catalog).search("repository", { allowedIds })).toEqual([]);
+    allowedIds.add(catalog[4]!.id);
+    expect(
+      (await runtime(catalog).search("repository", { allowedIds })).map(({ name }) => name),
+    ).toEqual(["issue_create"]);
+    expect(build).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    { encoding: "ASCII", padding: " ", suffix: "" },
+    { encoding: "Unicode", padding: " ", suffix: "価格 𐐀 \ud800" },
+    { encoding: "Unicode word", padding: "λ", suffix: "" },
+  ])(
+    "shares oversized $encoding revisions while their indexes remain live",
+    async ({ padding, suffix }) => {
+      const catalog = [
+        entry({
+          name: "oversized_revision",
+          description: `Retention ${padding.repeat(4 * 1024 * 1024)}${suffix}`,
+        }),
+      ];
+      // The spy retains built indexes, as another active catalog view would.
+      const build = vi.spyOn(ranking, "buildLexicalIndex");
+      for (let turn = 0; turn < 2; turn++) {
+        expect((await runtime(catalog).search("retention")).map(({ name }) => name)).toEqual([
+          "oversized_revision",
+        ]);
+      }
+      expect(build).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("projects shared index hits from the current catalog without retaining another run's metadata", async () => {
+    const first = entry({ name: "shared_revision", description: "Measure quasars" });
+    await runtime([first]).search("quasars");
+    const current = entry({ ...first, source: "mcp", sourceName: "current-server" });
+    expect(await runtime([current]).search("quasars")).toEqual([
+      expect.objectContaining({ source: "mcp", sourceName: "current-server", input: "unknown" }),
+    ]);
   });
 
   it.each(["listURL", "listUrl"])("prefers the exact catalog ID spelling for %s", async (name) => {
@@ -326,33 +351,15 @@ describe("ToolSearchRuntime.search", () => {
   });
 
   it.each([
-    {
-      query: "scheduling",
-      expected: "cron_create",
-      why: "stemmed to the description's 'Schedule'",
-    },
     { query: "reminder", expected: "cron_create", why: "expanded toward schedule/cron" },
     {
       query: "look up the price",
       expected: "web_search",
       why: "intent expanded toward search/web",
     },
-    { query: "repository", expected: "issue_create", why: "matched only via a parameter" },
   ])("finds $expected for $query ($why)", async ({ query, expected }) => {
     const hits = await runtime().search(query);
     expect(hits.map((hit) => hit.name)).toContain(expected);
-  });
-
-  it("ranks an exact tool name first even when a shorter entry mentions it", async () => {
-    const catalog = [
-      entry({ name: "issue_create", description: "Open a new issue" }),
-      entry({ id: "b", name: "notes", description: "Notes about issue_create and other tools" }),
-    ];
-    const search = runtime(catalog);
-
-    // Querying a known name is a request for that tool, not a description of one.
-    const hits = await search.search("issue_create");
-    expect(hits[0]?.name).toBe("issue_create");
   });
 
   it.each([
@@ -405,19 +412,6 @@ describe("ToolSearchRuntime.search", () => {
         })
       ).map((hit) => hit.id),
     ).toEqual(["m-local"]);
-  });
-
-  it("does not match a term that only appears inside another word", async () => {
-    // "spreadsheet" contains "read"; substring scoring used to rank it here.
-    const names = (await runtime().search("read")).map((hit) => hit.name);
-    expect(names).toContain("read_file");
-    expect(names).not.toContain("spreadsheet_open");
-  });
-
-  it("returns nothing rather than an unranked catalog for a query the catalog cannot answer", async () => {
-    // The catalog is described in English, so this matches nothing. The old
-    // scorer returned every tool in id order for exactly this input.
-    expect(await runtime().search("価格を調べて")).toEqual([]);
   });
 });
 

@@ -164,17 +164,24 @@ export function createUpdateFailureFact(
       : fact.message
         ? line(fact.message, Number.MAX_SAFE_INTEGER)
         : undefined;
-  const message = fact.errorName
-    ? diagnostic
-        ?.replace(
-          /\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z][a-zA-Z0-9-]*(?::\d+)?\b|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b|(?<!\w)(?:[A-Fa-f0-9]{0,4}:){2,}[A-Fa-f0-9:.%]*/gu,
-          "[redacted-host]",
-        )
-        .replace(
-          /\b(host(?:name)?|server|endpoint)\s*[=:]\s*["']?[A-Za-z0-9-]+["']?/giu,
-          "$1=[redacted-host]",
-        )
-    : diagnostic;
+  // Closed recovery facts contain generated basenames, not hostnames.
+  const recoveryDiagnostic = diagnostic?.startsWith("Package recovery ")
+    ? redactPublicSupportDiagnosticLine(diagnostic, context)
+    : undefined;
+  const message =
+    recoveryDiagnostic && recoveryDiagnostic !== "[redacted-diagnostic]"
+      ? recoveryDiagnostic
+      : fact.errorName
+        ? diagnostic
+            ?.replace(
+              /\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z][a-zA-Z0-9-]*(?::\d+)?\b|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b|(?<!\w)(?:[A-Fa-f0-9]{0,4}:){2,}[A-Fa-f0-9:.%]*/gu,
+              "[redacted-host]",
+            )
+            .replace(
+              /\b(host(?:name)?|server|endpoint)\s*[=:]\s*["']?[A-Za-z0-9-]+["']?/giu,
+              "$1=[redacted-host]",
+            )
+        : diagnostic;
   const location =
     fact.location &&
     /^(?:src|dist|packages|extensions)\/[A-Za-z0-9_./-]+:\d+:\d+$/u.test(fact.location)

@@ -319,20 +319,6 @@ function recommendSystemAgentNextStep(overview: SystemAgentOverview): string {
   return 'run "talk to agent" to enter your default agent';
 }
 
-function formatStartupConfigStatus(overview: SystemAgentOverview): string {
-  if (!overview.config.exists) {
-    return "missing";
-  }
-  return overview.config.valid ? "valid" : "invalid";
-}
-
-function formatStartupGatewayStatus(overview: SystemAgentOverview): string {
-  if (overview.gateway.reachable) {
-    return `Gateway: reachable at ${overview.gateway.url}.`;
-  }
-  return `Gateway: not reachable at ${overview.gateway.url}; I already did the first probe.`;
-}
-
 function formatStartupAction(overview: SystemAgentOverview): string | undefined {
   if (!overview.config.valid) {
     return "Config needs attention. Run `doctor` to inspect it.";
@@ -373,6 +359,11 @@ export function formatSystemAgentStartupMessage(overview: SystemAgentOverview): 
   const agentLabel = agent?.name
     ? `${overview.defaultAgentId} (${agent.name})`
     : overview.defaultAgentId;
+  const configStatus = !overview.config.exists
+    ? "missing"
+    : overview.config.valid
+      ? "valid"
+      : "invalid";
   return [
     "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
     // Inference status stays independent of the recovery action line: with an
@@ -382,8 +373,10 @@ export function formatSystemAgentStartupMessage(overview: SystemAgentOverview): 
       : overview.setupModel
         ? `Setup model: ${overview.setupModel}.`
         : "Inference is unavailable.",
-    `Config: ${formatStartupConfigStatus(overview)}. Default agent: ${agentLabel}.`,
-    formatStartupGatewayStatus(overview),
+    `Config: ${configStatus}. Default agent: ${agentLabel}.`,
+    overview.gateway.reachable
+      ? `Gateway: reachable at ${overview.gateway.url}.`
+      : `Gateway: not reachable at ${overview.gateway.url}; I already did the first probe.`,
     formatStartupAction(overview),
   ]
     .filter((line): line is string => line !== undefined)

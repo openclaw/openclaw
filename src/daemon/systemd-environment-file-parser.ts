@@ -106,9 +106,6 @@ export function parseSystemdEnvironmentFileLine(
     return null;
   }
   const key = trimmedStart.slice(0, eq).trim();
-  if (!key) {
-    return null;
-  }
   const decoded = decodeSystemdEnvironmentFileValue(trimmedStart.slice(eq + 1));
   return {
     key,

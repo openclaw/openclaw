@@ -25,7 +25,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 
 export type CommittedAgentMessage = Extract<
   AgentMessage,
-  { role: "assistant" | "toolResult" | "user" }
+  { role: "assistant" | "toolResult" | "user" | "custom" }
 > & { idempotencyKey: string };
 type AppliedTranscriptMessage = {
   appended: boolean;
@@ -68,7 +68,12 @@ export function isCommittedAgentMessage(message: unknown): message is CommittedA
   }
   const role = message.role;
   return (
-    (role === "user" || role === "assistant" || role === "toolResult") &&
+    (role === "user" ||
+      role === "assistant" ||
+      role === "toolResult" ||
+      (role === "custom" &&
+        (message.customType === "openclaw.runtime-context" ||
+          message.customType === "openclaw.system-update"))) &&
     readMessageIdempotencyKey(message) !== undefined
   );
 }

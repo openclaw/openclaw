@@ -19,11 +19,13 @@ import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.j
 import type {
   WorkerPlacementAuthorization,
   WorkerPlacementReclaimRequest,
+  WorkerPlacementReclaimSourceCheck,
 } from "./service-contract.js";
 import {
   createWorkerWorkspaceReconcileRequest,
   sessionWorkspaceRoot,
 } from "./session-workspace.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   verifyReconciledWorkspaceFinal,
   WorkerWorkspaceFinalFenceError,
@@ -59,14 +61,14 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
     request: WorkerPlacementReclaimRequest,
     moveIntent?: WorkerPlacementMoveIntent,
     authorize?: WorkerPlacementAuthorization,
-    beforeDrain?: WorkerPlacementAuthorization,
+    beforeDrain?: WorkerPlacementReclaimSourceCheck,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> =>
     await options.runReclaimBarrier({
       ...request,
       authorize,
       beforeDrain,
-      begin: () => {
+      begin: async (assertCurrent) => {
         const current = placements.get(request.sessionId);
         // A queued stop can observe the previous stop's completion only after
         // entering the lifecycle fence; joining an outside promise can deadlock it.
@@ -89,12 +91,32 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
         if (current.state === "draining") {
           return current;
         }
-        const draining = placements.startDrain({
-          sessionId: current.sessionId,
-          environmentId: current.environmentId,
-          ownerEpoch: current.activeOwnerEpoch,
-          expectedGeneration: current.generation,
-        });
+        let draining: WorkerDispatchPlacement;
+        try {
+          draining = await placements.startDrain(
+            {
+              sessionId: current.sessionId,
+              environmentId: current.environmentId,
+              ownerEpoch: current.activeOwnerEpoch,
+              expectedGeneration: current.generation,
+              expectedUpdatedAtMs: current.updatedAtMs,
+              requireUnclaimed: true,
+            },
+            () => {
+              assertCurrent?.();
+              beforeDrain?.assertCurrent?.();
+              if (!isExactAttachedEnvironment(environments.get(current.environmentId), current)) {
+                throw new Error("Active cloud worker does not match its session placement");
+              }
+            },
+          );
+        } catch (error) {
+          if (!(error instanceof AcceptedWorkspacePublicationIndeterminateError)) {
+            // Classify a settled refusal without replaying a write or inspecting an unknown one.
+            beforeDrain?.();
+          }
+          throw error;
+        }
         if (draining.state !== "draining") {
           throw new Error(`Session ${request.sessionKey} did not enter draining placement`);
         }
@@ -372,6 +394,9 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
             try {
               return await finishReclaim();
             } catch (error) {
+              if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
+                throw error;
+              }
               // An unstaged final-fence failure is retryable even after an unchanged
               // manifest commit; the journal remains authoritative for the next attempt.
               await cancelUnstagedFailedReclaim(

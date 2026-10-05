@@ -22,6 +22,7 @@ import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js"
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { needsOpenClawStateDatabaseSchemaRepair } from "../state/openclaw-state-db-fast-path.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
@@ -37,11 +38,9 @@ export async function backupDoctorMigrationDatabases(params: {
   databasePaths: readonly string[];
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
 }): Promise<MigrationMessages> {
-  const { detectOpenClawStateDatabaseSchemaMigrations } =
-    await import("../state/openclaw-state-db-schema-discovery.js");
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
   const pending = new Set(params.pendingDatabasePaths);
-  if (detectOpenClawStateDatabaseSchemaMigrations({ env: params.env }).length > 0) {
+  if (existsSync(sharedPath) && needsOpenClawStateDatabaseSchemaRepair(sharedPath)) {
     pending.add(sharedPath);
   }
   if (pending.size === 0) {

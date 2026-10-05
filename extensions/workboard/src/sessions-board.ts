@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   WorkboardSessionFacts,
   WorkboardSessionsBoard,
@@ -14,6 +15,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
 import { sessionMatchesColumn, sessionsBoardFallback } from "./sessions-board-rules.js";
 import type { WorkboardBoardStore } from "./store-boards.js";
+import { freezeCardList } from "./store-read.js";
 
 type Gateway = Pick<
   OpenClawPluginApi["runtime"]["gateway"],
@@ -26,7 +28,11 @@ type SessionsBoardServiceParams = {
 };
 type CallerAuthority = { assertCurrent: () => void };
 type Operations = {
-  read: (boardId: string, view?: WorkboardSessionsBoardView) => Promise<WorkboardSessionsBoardRead>;
+  read: (
+    boardId: string,
+    view?: WorkboardSessionsBoardView,
+    caller?: CallerAuthority,
+  ) => Promise<WorkboardSessionsBoardRead>;
   update: (
     boardId: string,
     patch: unknown,
@@ -42,10 +48,19 @@ type Operations = {
 export type WorkboardSessionsBoardService = OpenClawPluginService &
   Operations & { stop: () => Promise<void> };
 type Owner = Operations & { cancel: () => void; stop: () => Promise<void> };
-type CachedFacts = { sessionId: string; facts: WorkboardSessionFacts; readAt: number };
-const FACTS_MAX_AGE_MS = 10 * 60_000;
-const FACTS_PR_RETRY_MS = 60_000;
+type CachedFacts = {
+  facts: WorkboardSessionFacts;
+  prRetry?: { at: number; delayMs: number; stale: boolean };
+};
+type PreparedProjection = {
+  read: Promise<{ snapshot: WorkboardSessionsBoardRead; complete: boolean }>;
+  expires: number;
+  retryAt: number;
+  facts?: Map<string, CachedFacts>;
+};
 const FACTS_BATCH_SIZE = 40;
+const FACTS_PR_RETRY_MS = 60_000;
+const FACTS_PR_RETRY_MAX_MS = 15 * 60_000;
 
 function activeState() {
   return resolveGlobalSingleton<{ owner?: Owner }>(
@@ -77,10 +92,14 @@ async function listSessions(
       "sessions.list",
       {
         limit: 1000,
+        rowMode: "compact",
         offset,
         configuredAgentsOnly: true,
         includeGlobal: false,
         includeUnknown: false,
+        ...(board.sessions.scope?.includeAutomation
+          ? {}
+          : { excludeCron: true, excludeSystem: true }),
         archived: board.sessions.scope?.includeArchived ? "all" : false,
         sortBy: "activity",
         activeMinutes: Math.max(1, Math.ceil((board.sessions.scope?.maxAgeHours ?? 72) * 60)),
@@ -104,6 +123,7 @@ async function listSessions(
         typeof session.sessionId === "string" &&
         session.visibility !== "draft" &&
         session.incognito !== true &&
+        (board.sessions.scope?.includeHome === true || session.isMain !== true) &&
         !isIncognitoSessionKey(session.key)
       ) {
         sessions.set(session.key, {
@@ -152,7 +172,10 @@ function createOwner(
   context: ParametersOfStart,
   isCurrent: () => boolean,
 ): Owner {
-  const cache = new Map<string, CachedFacts>();
+  const lastKnown = new Map<string, CachedFacts>();
+  const boards = new Map<string, Promise<WorkboardSessionsBoard>>();
+  const projections = new Map<string, PreparedProjection>();
+  let revision = params.store.sessionsRevision;
   const now = params.now ?? Date.now;
   let stopped = false;
   let hasRead = false;
@@ -167,15 +190,11 @@ function createOwner(
     assertCurrent();
     caller?.assertCurrent();
   };
-  const unsubscribe = params.gateway.subscribeSessionChanges(({ sessionKey }) => {
-    const previous = cache.get(sessionKey);
-    if (stopped || !hasRead) {
+  const unsubscribe = params.gateway.subscribeSessionChanges(({ factsInvalidated }) => {
+    if (stopped || !hasRead || factsInvalidated === "category") {
       return;
     }
-    // Retain last-known facts for failed reads, but invalidate both freshness and in-flight reads.
-    if (previous) {
-      cache.set(sessionKey, { ...previous, readAt: -Infinity });
-    }
+    params.store.invalidateSessionBoards();
     if (timer) {
       return;
     }
@@ -187,53 +206,95 @@ function createOwner(
     }, 5_000);
     timer.unref?.();
   });
-  const read = async (
-    id: string,
-    view?: WorkboardSessionsBoardView,
-  ): Promise<WorkboardSessionsBoardRead> => {
-    assertCurrent();
-    const board = await params.store.getSessionsBoard(id);
-    hasRead = true;
-    const { sessions: roster, people } = await listSessions(params.gateway, board, view);
-    assertCurrent();
-    const missing = [...roster.values()].filter((row) => {
-      const cached = cache.get(row.key);
-      return (
-        row.key !== board.sessions.agentSessionKey &&
-        (!cached ||
-          cached.sessionId !== row.sessionId ||
-          now() - cached.readAt >=
-            (cached.facts.pullRequestsUnavailable ? FACTS_PR_RETRY_MS : FACTS_MAX_AGE_MS))
-      );
-    });
+  const project = async (
+    board: WorkboardSessionsBoard,
+    roster: Map<string, WorkboardSessionFacts>,
+    people: WorkboardSessionsBoardRead["people"],
+    admittedRevision: typeof revision,
+    caller?: CallerAuthority,
+    preparedFacts?: Map<string, CachedFacts>,
+  ) => {
+    const id = board.id;
+    const assertReadCurrent = interactiveAuthority(caller);
+    assertReadCurrent();
     const unavailable = new Set<string>();
     const reasons = new Set<string>();
-    // Results belong to this caller's roster; omitted facts are not permission to reuse old data.
-    const omitted = new Set<string>();
-    for (let offset = 0; offset < missing.length; offset += FACTS_BATCH_SIZE) {
-      const batch = missing.slice(offset, offset + FACTS_BATCH_SIZE);
-      const before = new Map(batch.map((row) => [row.key, cache.get(row.key)]));
+    const resolved = new Map<string, CachedFacts>();
+    const rows = [...roster.values()].filter((row) => {
+      if (row.key === board.sessions.agentSessionKey) {
+        return false;
+      }
+      const previous = preparedFacts?.get(row.key);
+      if (previous && (!previous.prRetry || previous.prRetry.at > now())) {
+        resolved.set(row.key, previous);
+        return false;
+      }
+      return true;
+    });
+    let complete = true;
+    for (let offset = 0; offset < rows.length; offset += FACTS_BATCH_SIZE) {
+      const batch = rows.slice(offset, offset + FACTS_BATCH_SIZE);
       try {
         const result = await params.gateway.readSessionFacts({
           sessionKeys: batch.map((row) => row.key),
         });
-        assertCurrent();
+        assertReadCurrent();
         const returned = new Map(result.sessions.map((facts) => [facts.key, facts]));
         for (const row of batch) {
           const facts = returned.get(row.key);
-          if (!facts || facts.sessionId !== row.sessionId) {
-            omitted.add(row.key);
-            if (cache.get(row.key) === before.get(row.key)) {
-              cache.delete(row.key);
+          if (facts?.sessionId === row.sessionId) {
+            const cached = lastKnown.get(row.key);
+            const previous =
+              cached?.facts.sessionId === facts.sessionId &&
+              cached.facts.lifecycleRevision === facts.lifecycleRevision
+                ? cached
+                : undefined;
+            let prRetry: CachedFacts["prRetry"];
+            if (facts.pullRequestsUnavailable || facts.pullRequestsRateLimited) {
+              const retry = previous?.prRetry;
+              const delayMs = retry
+                ? Math.min(retry.delayMs * 2, FACTS_PR_RETRY_MAX_MS)
+                : FACTS_PR_RETRY_MS;
+              prRetry = {
+                // Fresh run/health reads do not advance an unexpired PR backoff.
+                ...(retry && retry.at > now() ? retry : { at: now() + delayMs, delayMs }),
+                stale: Boolean(
+                  previous &&
+                  (previous.prRetry?.stale ||
+                    (!previous.facts.pullRequestsUnavailable &&
+                      !previous.facts.pullRequestsRateLimited)),
+                ),
+              };
             }
-          } else if (cache.get(row.key) === before.get(row.key)) {
-            cache.set(row.key, { sessionId: facts.sessionId, facts, readAt: now() });
+            resolved.set(row.key, {
+              facts:
+                prRetry?.stale && previous
+                  ? { ...facts, pullRequests: previous.facts.pullRequests }
+                  : facts,
+              prRetry,
+            });
+          } else {
+            complete = false;
+          }
+          // Late snapshots may finish, but cannot replace a newer generation's fallback facts.
+          if (params.store.sessionsRevision === admittedRevision) {
+            const current = resolved.get(row.key);
+            if (current) {
+              lastKnown.set(row.key, current);
+            } else {
+              lastKnown.delete(row.key);
+            }
           }
         }
       } catch (error) {
-        assertCurrent();
+        assertReadCurrent();
+        complete = false;
         for (const row of batch) {
           unavailable.add(row.key);
+          const previous = lastKnown.get(row.key);
+          if (previous?.facts.sessionId === row.sessionId) {
+            resolved.set(row.key, previous);
+          }
         }
         reasons.add(redactToolPayloadText(String(error)).replace(/\s+/g, " ").slice(0, 300));
       }
@@ -241,25 +302,36 @@ function createOwner(
     const placements = new Map(
       (await params.store.listSessionPlacements(id)).map((entry) => [entry.sessionKey, entry]),
     );
-    assertCurrent();
+    assertReadCurrent();
     const fallback = sessionsBoardFallback(board);
     const sessions: WorkboardSessionsBoardRead["sessions"] = [];
+    const prWarnings = new Map<string, number>();
     for (const row of roster.values()) {
-      if (omitted.has(row.key)) {
+      if (!resolved.has(row.key) && !unavailable.has(row.key)) {
         continue;
       }
-      const cached = cache.get(row.key);
-      const known = cached?.sessionId === row.sessionId ? cached.facts : undefined;
+      const cached = resolved.get(row.key);
+      const known = cached?.facts;
       const facts = known ?? row;
       if (!inScope(facts, board, now())) {
         continue;
+      }
+      if (facts.pullRequestsUnavailable || facts.pullRequestsRateLimited) {
+        const availability = cached?.prRetry?.stale ? "stale" : "not loaded yet";
+        const reason = `${availability}${facts.pullRequestsRateLimited ? " (GitHub rate limited)" : ""}`;
+        prWarnings.set(reason, (prWarnings.get(reason) ?? 0) + 1);
       }
       const pin = placements.get(row.key);
       const pinned =
         pin?.source === "operator" &&
         board.sessions.columns.some((column) => column.id === pin.columnId);
+      // Keep availability visible to callers while rules use the last confirmed PR list.
+      const ruleFacts =
+        facts.pullRequestsUnavailable || facts.pullRequestsRateLimited
+          ? { ...facts, pullRequestsUnavailable: !cached?.prRetry?.stale }
+          : facts;
       const match = known
-        ? board.sessions.columns.find((column) => sessionMatchesColumn(facts, column))
+        ? board.sessions.columns.find((column) => sessionMatchesColumn(ruleFacts, column))
         : undefined;
       sessions.push({
         ...facts,
@@ -267,7 +339,7 @@ function createOwner(
         source: pinned ? "operator" : "state",
         reason: pinned
           ? pin.reason
-          : !known
+          : !known || (!match && ruleFacts.pullRequestsUnavailable)
             ? "facts-unavailable"
             : match
               ? "Matched column rules"
@@ -285,18 +357,124 @@ function createOwner(
     } else {
       factsFailureLogged = false;
     }
-    if (sessions.some((session) => session.pullRequestsUnavailable)) {
+    for (const [reason, count] of prWarnings) {
       warnings.push(
-        "Some pull-request information is unavailable. Reread after one minute to retry.",
+        `Pull-request facts for ${count} ${count === 1 ? "session" : "sessions"} are ${reason}.`,
       );
     }
     return {
-      board,
-      columns: board.sessions.columns,
-      sessions,
-      ...(people !== undefined ? { people } : {}),
-      ...(warnings.length ? { warning: warnings.join(" ") } : {}),
+      complete,
+      facts: resolved,
+      snapshot: {
+        board,
+        columns: board.sessions.columns,
+        sessions,
+        ...(people !== undefined ? { people } : {}),
+        ...(warnings.length ? { warning: warnings.join(" ") } : {}),
+      },
     };
+  };
+  const read = async (
+    id: string,
+    view?: WorkboardSessionsBoardView,
+    caller?: CallerAuthority,
+  ): Promise<WorkboardSessionsBoardRead> => {
+    const assertReadCurrent = interactiveAuthority(caller);
+    assertReadCurrent();
+    hasRead = true;
+    if (revision !== params.store.sessionsRevision) {
+      boards.clear();
+      projections.clear();
+      revision = params.store.sessionsRevision;
+    }
+    const admittedRevision = revision;
+    let boardRead = boards.get(id);
+    if (!boardRead) {
+      const pending = params.store.getSessionsBoard(id).catch((error: unknown) => {
+        if (boards.get(id) === pending) {
+          boards.delete(id);
+        }
+        throw error;
+      });
+      if (boards.size >= 64) {
+        boards.delete(boards.keys().next().value!);
+      }
+      boards.set(id, pending);
+      boardRead = pending;
+    }
+    const board = await boardRead;
+    const { sessions, people } = await listSessions(params.gateway, board, view);
+    assertReadCurrent();
+    // Roster membership and facets remain invocation-bound; only equal authorized inputs share work.
+    const key = JSON.stringify([id, view, [...sessions.values()], people]);
+    const cacheable = params.store.sessionsRevision === admittedRevision;
+    let projection = cacheable ? projections.get(key) : undefined;
+    let preparedFacts: Map<string, CachedFacts> | undefined;
+    if (projection && (projection.expires < now() || projection.retryAt <= now())) {
+      // Reuse facts only from this exact authorized roster and revision.
+      if (projection.expires >= now()) {
+        preparedFacts = projection.facts;
+      }
+      projections.delete(key);
+      projection = undefined;
+    }
+    const joined = Boolean(projection);
+    if (!projection) {
+      const prepared: PreparedProjection = {
+        expires: Infinity,
+        retryAt: Infinity,
+        read: project(board, sessions, people, admittedRevision, caller, preparedFacts).then(
+          ({ snapshot: result, complete, facts }) => {
+            const maxAge = (board.sessions.scope?.maxAgeHours ?? 72) * 3_600_000;
+            prepared.expires = result.sessions.reduce(
+              (expires, row) => Math.min(expires, row.lastActivityAt + maxAge),
+              Infinity,
+            );
+            prepared.facts = complete ? facts : undefined;
+            prepared.retryAt = result.sessions.reduce(
+              (retryAt, row) => Math.min(retryAt, facts.get(row.key)?.prRetry?.at ?? Infinity),
+              Infinity,
+            );
+            const snapshot = {
+              ...result,
+              revision: { ...admittedRevision, boardId: id, scope: randomUUID() },
+            };
+            freezeCardList(snapshot);
+            return { snapshot, complete };
+          },
+        ),
+      };
+      // Bound arbitrary filters and aging roster windows; eviction only causes a cold read.
+      if (cacheable) {
+        if (projections.size >= 64) {
+          projections.delete(projections.keys().next().value!);
+        }
+        projections.set(key, prepared);
+      }
+      projection = prepared;
+    }
+    try {
+      const { snapshot, complete } = await projection.read;
+      assertReadCurrent();
+      // Complete an admitted read under its captured revision even during continuous churn.
+      // Retire incomplete and superseded work rather than retrying until writers become idle.
+      if (
+        (!complete || params.store.sessionsRevision !== admittedRevision) &&
+        projections.get(key) === projection
+      ) {
+        projections.delete(key);
+      }
+      return snapshot;
+    } catch (error) {
+      if (projections.get(key) === projection) {
+        projections.delete(key);
+      }
+      assertReadCurrent();
+      if (joined) {
+        return await read(id, view, caller);
+      }
+      throw error;
+    }
   };
   const cancel = () => {
     stopped = true;
@@ -305,7 +483,9 @@ function createOwner(
       clearTimeout(timer);
     }
     timer = undefined;
-    cache.clear();
+    lastKnown.clear();
+    boards.clear();
+    projections.clear();
   };
   return {
     read,
@@ -359,7 +539,7 @@ function createOwner(
       ) {
         throw new Error("Sessions board changed. Refresh and retry the move.");
       }
-      return await read(id);
+      return await read(id, undefined, caller);
     },
   };
 }
@@ -407,7 +587,7 @@ export function createWorkboardSessionsBoardService(
       }
       await owner.stop();
     },
-    read: (id, view) => current().read(id, view),
+    read: (id, view, caller) => current().read(id, view, caller),
     update: (id, patch, caller) => current().update(id, patch, caller),
     move: (id, key, column, caller) => current().move(id, key, column, caller),
   };

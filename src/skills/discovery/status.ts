@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../../shared/entry-status.js";
 import { CONFIG_DIR } from "../../utils.js";
-import { loadSkillLibrarySelection } from "../library/selection.js";
+import { prepareSkillLibrarySelection } from "../library/selection.js";
 import { resolveBundledSkillsDir } from "../loading/bundled-dir.js";
 import {
   hasBinary,
@@ -348,7 +348,7 @@ export async function prepareWorkspaceSkillStatus(
   }
   const localEntries = sources.status
     ? [
-        ...loadSkillLibrarySelection(opts?.librarySelections ?? []),
+        ...(await prepareSkillLibrarySelection(opts?.librarySelections ?? [], {}, () => {})),
         ...sources.entries.filter((entry) => resolveSkillFileHost(entry.skill) === "gateway"),
       ]
     : sources.entries;

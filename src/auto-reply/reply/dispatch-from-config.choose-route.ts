@@ -183,6 +183,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   };
   const captionedFinalTtsContext = {
     cfg,
+    preparedTtsPreferences: state.preparedTtsPreferences,
     ttsAuto: sessionTtsAuto,
     agentId: sessionAgentId,
     channelId: deliveryChannel,

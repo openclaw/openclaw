@@ -287,6 +287,12 @@
       - any-glob-to-any-file:
           - "extensions/whatsapp/**"
           - "docs/channels/whatsapp.md"
+"channel: x":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/x/**"
+          - "docs/channels/x.md"
+          - "docs/plugins/reference/x.md"
 "channel: zalo":
   - changed-files:
       - any-glob-to-any-file:

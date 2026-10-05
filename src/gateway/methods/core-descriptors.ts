@@ -1,4 +1,10 @@
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
+import {
+  chatMetadataShareKey,
+  cronListShareKey,
+  modelsListShareKey,
+  sessionsListShareKey,
+} from "./read-share-keys.js";
 
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
 const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
@@ -98,7 +104,18 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["talk.speak", "talk", "operator.talk", "<=2026.7"],
   ["talk.mode", "talk-mode", "operator.talk", "<=2026.7"],
   ["commands.list", "commands", "operator.read", "<=2026.7"],
-  ["models.list", "models", "operator.read", "<=2026.7", { startup: true }],
+  [
+    "models.list",
+    "models",
+    "operator.read",
+    "<=2026.7",
+    {
+      startup: true,
+      shareKey: modelsListShareKey,
+      shareMaxAgeMs: 1_000,
+      shareInvalidationEvents: ["chat.metadata.changed", "sessions.changed"],
+    },
+  ],
   ["models.authStatus", "models-auth-status", "operator.read", "<=2026.7"],
   ["models.authLogout", "models-auth-status", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["tools.catalog", "tools-catalog", "operator.read", "<=2026.7"],
@@ -207,7 +224,18 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["secrets.reload", null, "operator.admin", "<=2026.7"],
   ["secrets.resolve", null, "operator.admin", "<=2026.7"],
   ["voicewake.routing.get", "voicewake-routing", "operator.read", "<=2026.7"],
-  ["sessions.list", "sessions-read", "operator.read", "<=2026.7", { startup: true }],
+  [
+    "sessions.list",
+    "sessions-read",
+    "operator.read",
+    "<=2026.7",
+    {
+      startup: true,
+      shareKey: sessionsListShareKey,
+      shareMaxAgeMs: 1_000,
+      shareInvalidationEvents: ["sessions.changed", "chat.metadata.changed"],
+    },
+  ],
   ["sessions.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7", { startup: true }],
   ["sessions.messages.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.messages.unsubscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
@@ -289,7 +317,17 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["node.invoke.result", "nodes", "node", "<=2026.7"],
   ["node.event", "nodes", "node", "<=2026.7"],
   ["cron.get", "cron", "operator.read", "<=2026.7"],
-  ["cron.list", "cron", "operator.read", "<=2026.7"],
+  [
+    "cron.list",
+    "cron",
+    "operator.read",
+    "<=2026.7",
+    {
+      shareKey: cronListShareKey,
+      shareMaxAgeMs: 1_000,
+      shareInvalidationEvents: ["cron", "sessions.changed"],
+    },
+  ],
   ["cron.status", "cron", "operator.read", "<=2026.7"],
   ["cron.scratch.get", "cron", "operator.admin", "2026.7"],
   ["cron.scratch.set", "cron", "operator.admin", "2026.7"],
@@ -322,7 +360,18 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["agent.wait", "agent", "operator.write", "<=2026.7", { startup: true, lifetime: "observation" }],
   ["chat.history", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.startup", "chat", "operator.read", "<=2026.7", { startup: true }],
-  ["chat.metadata", "chat", "operator.read", "<=2026.7", { startup: true }],
+  [
+    "chat.metadata",
+    "chat",
+    "operator.read",
+    "<=2026.7",
+    {
+      startup: true,
+      shareKey: chatMetadataShareKey,
+      shareMaxAgeMs: 1_000,
+      shareInvalidationEvents: ["chat.metadata.changed", "sessions.changed"],
+    },
+  ],
   ["chat.message.get", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.abort", "chat-abort", "operator.write", "<=2026.7"],
   ["chat.send", "chat-send", "operator.write", "<=2026.7", { startup: true }],
@@ -653,4 +702,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.files.assets", "sessions-files", "operator.read", "2026.9"],
   ["worktrees.recoverRemoval", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["worktrees.retireSnapshot", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["sessions.processes.list", "session-processes", "operator.read", "2026.9", OBSERVATION],
+  ["sessions.processes.stop", "session-processes", "operator.write", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

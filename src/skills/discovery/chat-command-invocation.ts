@@ -115,7 +115,7 @@ export function hasSkillReferenceCandidate(text: string): boolean {
 export function resolveSkillCommandInvocation(params: {
   commandBodyNormalized: string;
   skillCommands: SkillCommandSpec[];
-}): { command: SkillCommandSpec; args?: string; inline?: boolean } | null {
+}): { command: SkillCommandSpec; args?: string } | null {
   const match = params.commandBodyNormalized.trim().match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
   if (!match) {
     return null;

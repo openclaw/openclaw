@@ -172,21 +172,14 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         )
       );
     };
-    const canCleanupRefusedIntent = () => {
-      if (
-        initialOutcome !== "refused" ||
-        this.options.runs.has(runId) ||
-        [...this.options.getRunsForChildSession(childSessionKey, childAgentId)].length > 0 ||
-        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
-      ) {
-        return false;
-      }
-      try {
-        assertSubagentRegistryWriteSourceCurrent(context);
-        return true;
-      } catch {
-        return false;
-      }
+    const canCleanupRefusedIntent = () =>
+      initialOutcome === "refused" &&
+      !this.options.runs.has(runId) &&
+      [...this.options.getRunsForChildSession(childSessionKey, childAgentId)].length === 0 &&
+      registryCurrent();
+    const activate = () => {
+      this.options.ensureListener();
+      this.options.startSweeper();
     };
     try {
       options.retainOwnership?.(
@@ -392,10 +385,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           "Subagent registration lost its acknowledged run owner",
         );
       }
-      const activate = () => {
-        this.options.ensureListener();
-        this.options.startSweeper();
-      };
       if (registerParams.queued) {
         await registerRequiredQueuedSubagent({
           context,
@@ -452,8 +441,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         subagentRuns.retireCompletionAuthority(registered);
         if (registryCurrent() && currentEntry()) {
           // A committed child still needs terminal observation after its caller retires.
-          this.options.ensureListener();
-          this.options.startSweeper();
+          activate();
         }
       }
       if (

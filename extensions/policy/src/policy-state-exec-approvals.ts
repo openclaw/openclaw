@@ -40,18 +40,28 @@ export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprova
     evidence.push(
       execApprovalPostureEvidence(`agent:${agentId}`, "agent", value, agentSource, agentId),
     );
-    for (const [index, entry] of execApprovalAllowlistEntries(value.allowlist).entries()) {
-      const allowlistSource = execApprovalsPolicyUri(
-        `agents/${ocPathSegment(agentId)}/allowlist/#${entry.index}`,
-      );
+    if (!Array.isArray(value.allowlist)) {
+      continue;
+    }
+    let allowlistIndex = 0;
+    for (const [index, entry] of value.allowlist.entries()) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      const pattern = readString(entry.pattern);
+      if (pattern === undefined) {
+        continue;
+      }
+      const argPattern = readString(entry.argPattern);
+      const entrySource = readString(entry.source) === "allow-always" ? "allow-always" : undefined;
       evidence.push({
-        id: `agent:${agentId}:allowlist:${index}`,
+        id: `agent:${agentId}:allowlist:${allowlistIndex++}`,
         kind: "allowlist",
-        source: allowlistSource,
+        source: `${agentSource}/allowlist/#${index}`,
         agentId,
-        pattern: entry.pattern,
-        ...(entry.argPattern === undefined ? {} : { argPattern: entry.argPattern }),
-        ...(entry.entrySource === undefined ? {} : { entrySource: entry.entrySource }),
+        pattern,
+        ...(argPattern === undefined ? {} : { argPattern }),
+        ...(entrySource === undefined ? {} : { entrySource }),
       });
     }
   }
@@ -94,39 +104,4 @@ function readExecApprovalAsk(value: unknown): string | undefined {
   return normalized === "off" || normalized === "on-miss" || normalized === "always"
     ? normalized
     : undefined;
-}
-
-function execApprovalAllowlistEntries(value: unknown): readonly {
-  readonly index: number;
-  readonly pattern: string;
-  readonly argPattern?: string;
-  readonly entrySource?: string;
-}[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const entries: {
-    readonly index: number;
-    readonly pattern: string;
-    readonly argPattern?: string;
-    readonly entrySource?: string;
-  }[] = [];
-  for (const [index, entry] of value.entries()) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const pattern = readString(entry.pattern);
-    if (pattern === undefined) {
-      continue;
-    }
-    const argPattern = readString(entry.argPattern);
-    const entrySource = readString(entry.source) === "allow-always" ? "allow-always" : undefined;
-    entries.push({
-      index,
-      pattern,
-      ...(argPattern === undefined ? {} : { argPattern }),
-      ...(entrySource === undefined ? {} : { entrySource }),
-    });
-  }
-  return entries;
 }

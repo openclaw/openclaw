@@ -1710,7 +1710,7 @@ struct ChatViewModelOutboxTests {
             }
         }
         try await waitUntil("terminal failure flush settled") {
-            await MainActor.run { !vm.isFlushingOutbox }
+            await MainActor.run { vm.outboxFlushTask == nil }
         }
 
         // Tap-to-retry resets attempts; with the gateway accepting again the
@@ -2223,7 +2223,7 @@ struct ChatViewModelOutboxTests {
 
         try await waitUntil("failed send is visible and settled") {
             await MainActor.run {
-                !vm.isFlushingOutbox && vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
+                vm.outboxFlushTask == nil && vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
             }
         }
         // Retry must work from the displayed failure, even before reconnect
@@ -2234,7 +2234,7 @@ struct ChatViewModelOutboxTests {
             await transport.goOnline()
             try await waitUntil("reconnect reconciles without replay") {
                 let historyRefreshed = await transport.state.historyRequestCount > historyRequests
-                return await MainActor.run { historyRefreshed && vm.healthOK && !vm.isFlushingOutbox }
+                return await MainActor.run { historyRefreshed && vm.healthOK && vm.outboxFlushTask == nil }
             }
         }
         #expect(await store.loadCommands().map(\.status) == [.failed])

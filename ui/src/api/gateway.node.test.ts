@@ -186,16 +186,6 @@ const REQUEST_FRAME_ID = "2:00000000-0000-4000-8000-000000000000";
 type RequestTimingPayload = Parameters<
   NonNullable<GatewayBrowserClientOptions["onRequestTiming"]>
 >[0];
-type ConnectTimingPayload = Parameters<
-  NonNullable<GatewayBrowserClientOptions["onConnectTiming"]>
->[0];
-
-function connectTimingPayloads(
-  mock: ReturnType<typeof vi.fn<(timing: ConnectTimingPayload) => void>>,
-) {
-  return mock.mock.calls.map(([payload]) => payload);
-}
-
 function stubInsecureCrypto() {
   // Real insecure contexts keep randomUUID/getRandomValues; only crypto.subtle
   // is gated to secure contexts.
@@ -342,11 +332,9 @@ describe("GatewayBrowserClient", () => {
     useNodeFakeTimers();
     const onHello = vi.fn();
     const onClose = vi.fn();
-    const onConnectTiming = vi.fn<(timing: ConnectTimingPayload) => void>();
     const client = createClient({
       onHello,
       onClose,
-      onConnectTiming,
       onRequestTiming: ({ method }) => {
         if (method === "connect") {
           client.forceReconnect("response observer closed");
@@ -368,9 +356,6 @@ describe("GatewayBrowserClient", () => {
     expect(onHello).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(loadDeviceAuthToken()?.token).toBe(STORED_CRED);
-    expect(connectTimingPayloads(onConnectTiming).some(({ phase }) => phase === "hello")).toBe(
-      false,
-    );
     ws.emitClose(4000, "response observer closed");
     expect(onClose).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -379,7 +364,6 @@ describe("GatewayBrowserClient", () => {
         willRetry: true,
       }),
     );
-    expect(connectTimingPayloads(onConnectTiming).at(-1)?.phase).toBe("failed");
     await vi.advanceTimersByTimeAsync(800);
     expect(getLatestWebSocket()).not.toBe(ws);
   });
@@ -616,34 +600,9 @@ describe("GatewayBrowserClient", () => {
     );
   });
 
-  it("keeps credentials and nonce values out of connect timing", async () => {
-    const onConnectTiming = vi.fn<(timing: ConnectTimingPayload) => void>();
-    vi.stubGlobal("performance", {
-      now: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(35).mockReturnValue(40),
-    });
-    const client = createClient({ token: "shared-auth-token", onConnectTiming });
-
-    const { ws, connectFrame } = await startConnect(client, "nonce-secret");
-    const sentPayloads = connectTimingPayloads(onConnectTiming);
-    for (const payload of sentPayloads) {
-      expect(payload).not.toHaveProperty("token");
-      expect(payload).not.toHaveProperty("passwordValue");
-      expect(payload).not.toHaveProperty("nonce");
-      expect(JSON.stringify(payload)).not.toContain("shared-auth-token");
-      expect(JSON.stringify(payload)).not.toContain("nonce-secret");
-    }
-
-    emitHello(ws, connectFrame.id);
-
-    await vi.waitFor(() => {
-      expect(connectTimingPayloads(onConnectTiming).at(-1)?.phase).toBe("hello");
-    });
-  });
-
-  it("marks fallback connect timing when no challenge arrives", async () => {
+  it("signs a fallback connect with browser time when no challenge arrives", async () => {
     useNodeFakeTimers();
-    const onConnectTiming = vi.fn<(timing: ConnectTimingPayload) => void>();
-    const client = createClient({ token: "shared-auth-token", onConnectTiming });
+    const client = createClient({ token: "shared-auth-token" });
 
     client.start();
     const ws = getLatestWebSocket();
@@ -651,14 +610,6 @@ describe("GatewayBrowserClient", () => {
     await vi.advanceTimersByTimeAsync(750);
 
     expect(parseLatestConnectFrame(ws).params?.device?.signedAt).toBe(Date.now());
-    expect(connectTimingPayloads(onConnectTiming).map((payload) => payload.phase)).toContain(
-      "fallback",
-    );
-    expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
-      phase: "request-sent",
-      hasChallenge: false,
-      usedFallback: true,
-    });
   });
 
   it.each([0, -1])("enforces the UTF-8 payload limit with %d bytes remaining", async (delta) => {

@@ -7,6 +7,7 @@ import {
   validateChannelsLogoutParams,
   validateChannelsStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import { buildChannelAccountSnapshotFromRuntime } from "../../channels/account-summary.js";
@@ -153,14 +154,16 @@ async function runChannelStatusHook(params: {
   const timeoutMs = Math.max(1, params.timeoutMs);
   const warningPrefix = `${params.channelId}${params.accountId === undefined ? "" : `:${params.accountId}`} ${params.step}`;
   const timedOut = Symbol("channel-status-timeout");
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<typeof timedOut>((resolve) => {
-    timer = setTimeout(() => resolve(timedOut), timeoutMs);
-    timer.unref();
-  });
   try {
     // Plugin hooks can be slow or fail independently; keep the remaining status usable.
-    const value = await Promise.race([Promise.resolve().then(params.run), timeout]);
+    const value = await raceWithTimeout(
+      Promise.resolve().then(params.run),
+      timeoutMs,
+      () => timedOut,
+      {
+        ref: false,
+      },
+    );
     if (value === timedOut) {
       params.warnings.push(`${warningPrefix} timed out after ${timeoutMs}ms`);
       return { ok: false, timedOut: true, error: `${params.step} timed out after ${timeoutMs}ms` };
@@ -170,8 +173,6 @@ async function runChannelStatusHook(params: {
     const message = formatForLog(error);
     params.warnings.push(`${warningPrefix} failed: ${message}`);
     return { ok: false, error: message };
-  } finally {
-    clearTimeout(timer);
   }
 }
 

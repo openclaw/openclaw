@@ -10,7 +10,7 @@ import {
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
-import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-bridge.js";
+import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
@@ -34,6 +34,7 @@ import type {
   JsonValue,
 } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import {
   isCodexAppServerStartSelectionChangedError,
   type createIsolatedCodexAppServerClient,
@@ -414,7 +415,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       !isCodexAppServerStartSelectionChangedError(error) ||
       selectionAttempt !== 0
     ) {
-      throw error;
+      throw codexPrewriteRejectionCause(error);
     }
   } finally {
     clearTimeout(timeout);

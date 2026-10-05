@@ -49,6 +49,8 @@ export type OpenClawPluginToolOptions = {
   senderIsOwner?: boolean;
   /** Host-prepared memory audience shared by every plugin tool in this turn. */
   memoryAudience?: MemoryAudience;
+  /** Stable identity for the active provider-owned memory flush. */
+  memoryFlush?: { flushId: string };
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAgentIdOverride?: string;
   sessionId?: string;
@@ -134,6 +136,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       requesterSenderId: options?.requesterSenderId ?? undefined,
       senderIsOwner: options?.senderIsOwner,
       memoryAudience: options?.memoryAudience,
+      memoryFlush: options?.memoryFlush,
       assertMemoryAudienceCurrent: options?.memoryAudience
         ? () => assertMemoryAudienceCurrent(options.memoryAudience!)
         : undefined,

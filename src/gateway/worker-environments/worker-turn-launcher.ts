@@ -35,6 +35,7 @@ import {
   releaseClaimIfOwned,
   requireActivePlacement,
   resolvePlacementIdentity,
+  resolveWorkerPlacementRuntimeOverride,
   waitForPendingWorkerResult,
   waitForInitialWorkerPlacement,
   waitForWorkerRuntimeRefresh,
@@ -47,6 +48,7 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-failure.js";
 import { createWorkerTurnRunOwner, type ActiveWorkerTurn } from "./worker-turn-run-owner.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 const loadWorkerTurnExecution = createLazyRuntimeModule(() => import("./worker-turn-execution.js"));
@@ -97,16 +99,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       workspaceDir: string;
     }): Promise<SandboxContext | null>;
   } = {
-    resolveRuntimeOverride(identity) {
-      const placement = options.placements.get(identity.sessionId);
-      return placement &&
-        placement.state !== "local" &&
-        placement.executionMode === "worker-turn" &&
-        (identity.agentId === undefined || placement.agentId === identity.agentId) &&
-        (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
-        ? "openclaw"
-        : undefined;
-    },
+    resolveRuntimeOverride: (identity) =>
+      resolveWorkerPlacementRuntimeOverride(options.placements, identity),
     assertCompactionSuccessorAllowed({ currentTarget }) {
       const placement = options.placements.get(currentTarget.sessionId);
       // Remote-exec has a local turn claim but still owns remote workspace state.
@@ -118,10 +112,15 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         );
       }
     },
-    recoverTerminalTurn(session) {
+    async recoverTerminalTurn(session, assertCurrent) {
       const active = activeWorkerTurns.get(session.sessionId);
       return active && (!session.sessionKey || active.sessionKey === session.sessionKey)
-        ? active.recoverTerminal?.()
+        ? await active.recoverTerminal?.(() => {
+            assertCurrent?.();
+            if (activeWorkerTurns.get(session.sessionId) !== active) {
+              throw new Error("Terminal worker recovery lost its active run owner");
+            }
+          })
         : undefined;
     },
     async resolveSandbox(params) {
@@ -198,7 +197,16 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             assertRunCurrent?.();
           },
         });
-      const current = options.placements.get(claim.sessionId);
+      const prepared = await options.placements.prepareRuntimeRefresh(claim.sessionId);
+      let current: WorkerSessionPlacementRecord | undefined;
+      try {
+        inputTurn.abortSignal?.throwIfAborted();
+        assertRunCurrent?.();
+        prepared.assertCurrent();
+        current = prepared.placement;
+      } finally {
+        prepared.release();
+      }
       if (!current && inputTurn.modelRun === true && !claim.sessionKey?.trim()) {
         return await runLocal();
       }
@@ -497,7 +505,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             assertRunCurrent: remoteExec ? assertRunCurrent : assertPreparationCurrent,
           });
         } catch (error) {
-          if (workspaceResolutionFailed) {
+          if (
+            workspaceResolutionFailed ||
+            error instanceof AcceptedWorkspacePublicationIndeterminateError
+          ) {
             throw error;
           }
           const abortReason = turn.abortSignal?.reason;
@@ -637,7 +648,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             if (turnClaim.owner.kind === "local") {
               // The Gateway-owned run is already terminal. Atomically record the
               // reconciliation failure before teardown so reclaim cannot see live work.
-              options.placements.failWorkspaceResultAndReleaseTurn(pendingWorkspaceResult, error);
+              await options.placements.failWorkspaceResultAndReleaseTurn(
+                pendingWorkspaceResult,
+                error,
+              );
             } else {
               // A recovery sweep owns the still-live worker claim. Teardown here
               // could discard the terminal event's durably fenced file results.
@@ -687,7 +701,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 ? {
                     terminal: {
                       observedAtMs: terminalAtMs,
-                      registerRecovery: (recover: () => string | undefined) => {
+                      registerRecovery: (recover) => {
                         terminalOwner.recoverTerminal = recover;
                       },
                     },

@@ -1,10 +1,15 @@
 import type {
   WorkboardBoardMetadata,
   WorkboardBoardSummary,
+  WorkboardCard,
+  WorkboardChange,
+  WorkboardListResult,
   WorkboardSessionPlacement,
   WorkboardSessionsBoard,
   WorkboardSessionsBoardSpec,
 } from "@openclaw/workboard-contract";
+import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
+import { redactClaimToken } from "./card-redaction.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -16,8 +21,9 @@ import type {
   WorkboardWriteAuthority,
 } from "./persistence-types.js";
 import { normalizeBoardMetadata } from "./store-board-normalizers.js";
-import type { WorkboardBoardInput } from "./store-inputs.js";
-import { normalizeBoardIdRequired } from "./store-normalizers.js";
+import type { WorkboardBoardInput, WorkboardListOptions } from "./store-inputs.js";
+import { normalizeBoardId, normalizeBoardIdRequired } from "./store-normalizers.js";
+import { freezeCardList, readCards } from "./store-read.js";
 import { WorkboardStoreRuntime } from "./store-runtime.js";
 
 export class WorkboardBoardStore extends WorkboardStoreRuntime {
@@ -42,13 +48,65 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
   ) {
     super(stores.dataVersion, stores.close, stores.ready, stores.runWithWriteAuthority);
     this.store = this.trackCardStore(store);
-    this.boardStore = this.track(stores.boards);
+    this.boardStore = this.track(stores.boards, { sessions: true });
     this.sessionsBoardStore = stores.sessionsBoard;
     this.subscriptionStore = {
       ...this.track(stores.subscriptions, { notifyChanges: false }),
       entries: (options) => this.runOperation(() => stores.subscriptions.entries(options)),
     };
-    this.attachmentStore = this.track(stores.attachments, { notifyChanges: false });
+    this.attachmentStore = {
+      ...this.track(stores.attachments, { notifyChanges: false }),
+      // Deletion also removes the card's metadata row, unlike blob-only registration.
+      delete: (key) => this.trackMutation(() => stores.attachments.delete(key)),
+    };
+  }
+
+  async list(options: WorkboardListOptions = {}): Promise<WorkboardCard[]> {
+    const boardId = normalizeBoardId(options.boardId);
+    return readCards(this.store, boardId === undefined ? undefined : { kind: "board", boardId });
+  }
+
+  listCards(board: unknown): Promise<
+    WorkboardListResult & {
+      boards: WorkboardBoardSummary[];
+      revision: WorkboardChange & { boardId?: string };
+    }
+  > {
+    return this.runOperation(() => {
+      const boardId = normalizeBoardId(board);
+      const cached = this.cardLists.get(boardId);
+      if (cached) {
+        return cached;
+      }
+      const pending = Promise.all([this.list({ boardId }), this.listBoards()])
+        .then(([cards, { boards }]) => {
+          // A write or external-change publication during the read retires this
+          // snapshot; readers join the replacement instead of publishing stale data.
+          if (this.cardLists.get(boardId) !== pending) {
+            return this.listCards(boardId);
+          }
+          const result = {
+            cards: cards.map(redactClaimToken),
+            boards,
+            statuses: WORKBOARD_STATUSES,
+            revision: { ...this.cardsRevision, ...(boardId === undefined ? {} : { boardId }) },
+          };
+          freezeCardList(result);
+          // Arbitrary missing-board queries must not grow the retained cache.
+          if (boardId !== undefined && !boards.some((entry) => entry.id === boardId)) {
+            this.cardLists.delete(boardId);
+          }
+          return result;
+        })
+        .catch((error: unknown) => {
+          if (this.cardLists.get(boardId) === pending) {
+            this.cardLists.delete(boardId);
+          }
+          throw error;
+        });
+      this.cardLists.set(boardId, pending);
+      return pending;
+    });
   }
 
   async listBoards(): Promise<{ boards: WorkboardBoardSummary[] }> {
@@ -137,6 +195,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
         this.trackMutation(
           () => this.sessionsBoardStore.update(normalizeBoardIdRequired(boardId), patch),
           () => true,
+          true,
         ),
       assertCurrent,
     );
@@ -153,6 +212,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
       this.trackMutation(
         () => this.sessionsBoardStore.repairPlacements(),
         (result) => result.placements > 0 || result.boards > 0,
+        true,
       ),
     );
   }
@@ -164,12 +224,15 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
   ): Promise<boolean> {
     return this.enqueueMutation(
       () =>
-        this.trackMutation(() =>
-          this.sessionsBoardStore.writePlacement(
-            normalizeBoardIdRequired(boardId),
-            placement,
-            options.expectedSpec,
-          ),
+        this.trackMutation(
+          () =>
+            this.sessionsBoardStore.writePlacement(
+              normalizeBoardIdRequired(boardId),
+              placement,
+              options.expectedSpec,
+            ),
+          Boolean,
+          true,
         ),
       options.assertCurrent,
     );

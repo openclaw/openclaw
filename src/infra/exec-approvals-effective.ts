@@ -68,28 +68,20 @@ export type ExecPolicyScopeSnapshot = {
   allowedDecisions: readonly ExecApprovalDecision[];
 };
 
-function resolveRequestedField<TValue>(params: {
+function resolveRequestedField<TValue extends string>(params: {
   scopeValue?: TValue;
   globalValue?: TValue;
   fallback: TValue;
-}): { value: TValue; sourcePath: string } {
+  scopeSource: string;
+  globalSource: string;
+}): { value: TValue; source: string } {
   if (params.scopeValue !== undefined) {
-    return { value: params.scopeValue, sourcePath: "scope" };
+    return { value: params.scopeValue, source: params.scopeSource };
   }
   if (params.globalValue !== undefined) {
-    return { value: params.globalValue, sourcePath: "tools.exec" };
+    return { value: params.globalValue, source: params.globalSource };
   }
-  return { value: params.fallback, sourcePath: "__default__" };
-}
-
-function formatRequestedSource(params: {
-  sourcePath: string;
-  field: "security" | "ask";
-  defaultValue: ExecSecurity | ExecAsk;
-}): string {
-  return params.sourcePath === "__default__"
-    ? `OpenClaw default (${params.defaultValue})`
-    : `${params.sourcePath}.${params.field}`;
+  return { value: params.fallback, source: `OpenClaw default (${params.fallback})` };
 }
 
 type ExecPolicyField = "security" | "ask" | "askFallback";
@@ -146,38 +138,26 @@ function resolveRequestedPolicy(params: {
     scopeValue: params.scopeExecConfig?.security,
     globalValue: inherited?.security ?? params.globalExecConfig?.security,
     fallback: DEFAULT_REQUESTED_SECURITY,
+    scopeSource: `${params.configPath}.security`,
+    globalSource: inherited ? "tools.exec.mode" : "tools.exec.security",
   });
   const ask = resolveRequestedField<ExecAsk>({
     scopeValue: params.scopeExecConfig?.ask,
     globalValue: inherited?.ask ?? params.globalExecConfig?.ask,
     fallback: DEFAULT_REQUESTED_ASK,
+    scopeSource: `${params.configPath}.ask`,
+    globalSource: inherited ? "tools.exec.mode" : "tools.exec.ask",
   });
-  const securitySource =
-    inherited && security.sourcePath === "tools.exec"
-      ? "tools.exec.mode"
-      : formatRequestedSource({
-          sourcePath: security.sourcePath === "scope" ? params.configPath : security.sourcePath,
-          field: "security",
-          defaultValue: DEFAULT_REQUESTED_SECURITY,
-        });
-  const askSource =
-    inherited && ask.sourcePath === "tools.exec"
-      ? "tools.exec.mode"
-      : formatRequestedSource({
-          sourcePath: ask.sourcePath === "scope" ? params.configPath : ask.sourcePath,
-          field: "ask",
-          defaultValue: DEFAULT_REQUESTED_ASK,
-        });
   return {
     mode: resolveExecModeFromPolicy({ security: security.value, ask: ask.value }),
     modeSource:
-      securitySource === askSource
-        ? `derived from ${securitySource}`
-        : `derived from ${securitySource} and ${askSource}`,
+      security.source === ask.source
+        ? `derived from ${security.source}`
+        : `derived from ${security.source} and ${ask.source}`,
     security: security.value,
-    securitySource,
+    securitySource: security.source,
     ask: ask.value,
-    askSource,
+    askSource: ask.source,
   };
 }
 
@@ -264,6 +244,8 @@ export function resolveExecPolicyScopeSnapshot(params: {
     scopeValue: params.scopeExecConfig?.host,
     globalValue: params.globalExecConfig?.host,
     fallback: "auto",
+    scopeSource: `${params.configPath}.host`,
+    globalSource: "tools.exec.host",
   });
   const requestedPolicy = resolveRequestedPolicy({
     scopeExecConfig: params.scopeExecConfig,
@@ -296,10 +278,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     host: {
       requested: requestedHost.value,
-      requestedSource:
-        requestedHost.sourcePath === "__default__"
-          ? "OpenClaw default (auto)"
-          : `${requestedHost.sourcePath === "scope" ? params.configPath : requestedHost.sourcePath}.host`,
+      requestedSource: requestedHost.source,
     },
     mode: {
       requested: requestedPolicy.mode,

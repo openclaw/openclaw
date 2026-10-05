@@ -210,13 +210,14 @@ async function readSnapshot(source: string, signal?: AbortSignal): Promise<void>
   }
 }
 
-it("keeps caller cancellation independent of idle reclamation", async ({ signal }) => {
+it("keeps cancelled and surviving callers independent of idle reclamation", async ({ signal }) => {
   for (const mode of ["snapshot", "update"] as const) {
     const f = mode === "snapshot" ? fixture(64, 4 * 1024 * 1024) : fixture();
     const controller = new AbortController();
     const reason = new DOMException(`${mode} caller stopped`, "AbortError");
     const reclamation = reclaimAbandonedSqliteSnapshotsAsync(f.cache);
     let operation: Promise<unknown> | undefined;
+    let survivor: Promise<void> | undefined;
     try {
       const entered = await withinTest(f.entered(reclamation), signal);
       operation = withSqliteReadOnlyWorkerScope(async () => {
@@ -233,6 +234,9 @@ it("keeps caller cancellation independent of idle reclamation", async ({ signal 
         () => undefined,
         (error: unknown) => error,
       );
+      if (mode === "snapshot") {
+        survivor = readSnapshot(f.source);
+      }
       controller.abort(reason);
       const error = await withinTest(operation, signal);
       // Cancellation must settle while reclamation is still held at the native gate.
@@ -240,53 +244,23 @@ it("keeps caller cancellation independent of idle reclamation", async ({ signal 
       expect(error).toMatchObject({ name: "AbortError" });
       expect(f.worker().settled, mode).toBe(false);
       expect(fs.existsSync(entered.file), mode).toBe(true);
+      await survivor;
+      expect(f.worker().settled, mode).toBe(false);
       f.release();
       await reclamation;
       await f.worker().closed;
       expect(fs.existsSync(entered.claimedRoot)).toBe(false);
+      expect(f.worker().child.exitCode).toBe(0);
+      expect(f.worker().child.signalCode).toBeNull();
+      expect(fs.readdirSync(f.cache)).toEqual([]);
     } finally {
       controller.abort(reason);
       f.release();
-      await operation;
+      await Promise.allSettled([operation, survivor]);
       await reclamation;
       await workers.get(path.resolve(f.cache))?.closed;
       f.close();
     }
-  }
-});
-
-it("serves another snapshot without waiting for shared idle reclamation", async ({ signal }) => {
-  const f = fixture();
-  const controller = new AbortController();
-  const reason = new Error("first snapshot caller stopped");
-  const reclamation = reclaimAbandonedSqliteSnapshotsAsync(f.cache);
-  let first: Promise<unknown> | undefined;
-  let second: Promise<void> | undefined;
-  try {
-    await withinTest(f.entered(reclamation), signal);
-    first = withSqliteReadOnlyWorkerScope(() => readSnapshot(f.source, controller.signal)).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    second = readSnapshot(f.source);
-    controller.abort(reason);
-    const error = await first;
-    expect(error).toBe(reason);
-    expect(f.worker().settled).toBe(false);
-    await second;
-    expect(f.worker().settled).toBe(false);
-    f.release();
-    await reclamation;
-    await f.worker().closed;
-    expect(f.worker().child.exitCode).toBe(0);
-    expect(f.worker().child.signalCode).toBeNull();
-    expect(fs.readdirSync(f.cache)).toEqual([]);
-  } finally {
-    controller.abort(reason);
-    f.release();
-    await Promise.allSettled([first, second, reclamation]);
-    await workers.get(path.resolve(f.cache))?.closed;
-    f.close();
   }
 });
 

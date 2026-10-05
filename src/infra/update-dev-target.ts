@@ -12,6 +12,10 @@ export type DevUpdateTarget =
 
 export type TrackedDevUpdateTarget = Extract<DevUpdateTarget, { mode: "tracked" }>;
 
+export function isFullGitObjectId(value: string): boolean {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(value);
+}
+
 type DevUpdateTargetEnvParseResult =
   | { status: "absent" }
   | { status: "valid"; target: DevUpdateTarget }

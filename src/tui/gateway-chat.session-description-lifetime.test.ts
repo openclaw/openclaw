@@ -48,11 +48,6 @@ function hello(connId: string): HelloOk {
   };
 }
 
-const heldMethods: Array<"sessions.describe" | "sessions.list"> = [
-  "sessions.describe",
-  "sessions.list",
-];
-
 describe("GatewayChatClient session description lifetime", () => {
   it("stops a disconnected metadata retry without dispatching on a later connection", async () => {
     const entered = createDeferred();
@@ -86,55 +81,24 @@ describe("GatewayChatClient session description lifetime", () => {
     });
   });
 
-  describe.each(heldMethods)("pending %s", (heldMethod) => {
-    it.each(["success", "failure"])(
-      "discards old-connection %s and reloads both metadata sources",
-      async (oldOutcome) => {
-        const entered = createDeferred();
-        const held = createDeferred<unknown>();
-        let current = false;
-        const request = vi.fn(async (method: string, params?: unknown) => {
-          let response: unknown;
-          if (method === "sessions.describe" && validateSessionsDescribeParams(params)) {
-            expect(params).toEqual({ key: selectedKey, agentId: "work" });
-            response = { session: (current ? currentDescription : oldDescription).session };
-          } else if (method === "sessions.list" && validateSessionsListParams(params)) {
-            expect(params).toEqual({ agentId: "work", limit: 1 });
-            response = current ? currentListing : oldListing;
-          } else {
-            throw new Error(`Unexpected metadata request: ${method}`);
-          }
-          if (!current && method === heldMethod) {
-            entered.resolve();
-            return held.promise;
-          }
-          return response;
-        });
-        await withGatewayChatConnection(request, async (client, callbacks) => {
-          callbacks.onHelloOk?.(hello("old"));
-          const description = client.describeSession({
-            sessionKey: selectedKey,
-            agentId: "work",
-          });
-          await entered.promise;
-          callbacks.onClose?.(1001, "reconnecting");
-          current = true;
-          callbacks.onHelloOk?.(hello("current"));
-          if (oldOutcome === "failure") {
-            held.reject(new Error("Old metadata request lost its connection"));
-          } else {
-            held.resolve(
-              heldMethod === "sessions.describe" ? { session: oldDescription.session } : oldListing,
-            );
-          }
-
-          await expect(description).resolves.toEqual(currentDescription);
-        });
-      },
-    );
-
-    it("propagates a current-connection error without retrying or returning partial metadata", async () => {
-      const failure = new Error("Current metadata request failed");
+  it.each([
+    { heldMethod: "sessions.describe", reconnect: true, failure: true },
+    { heldMethod: "sessions.list", reconnect: true, failure: false },
+    { heldMethod: "sessions.describe", reconnect: false, failure: true },
+    { heldMethod: "sessions.list", reconnect: false, failure: true },
+  ])(
+    "settles $heldMethod metadata (reconnect=$reconnect, failure=$failure)",
+    async ({ heldMethod, reconnect, failure }) => {
+      const entered = createDeferred();
+      const held = createDeferred<unknown>();
+      const error = new Error("Metadata request failed");
+      let current = !reconnect;
+      const response = (method: string) =>
+        method === "sessions.describe"
+          ? { session: (current ? currentDescription : oldDescription).session }
+          : current
+            ? currentListing
+            : oldListing;
       const request = vi.fn(async (method: string, params?: unknown) => {
         if (method === "sessions.describe" && validateSessionsDescribeParams(params)) {
           expect(params).toEqual({ key: selectedKey, agentId: "work" });
@@ -143,21 +107,35 @@ describe("GatewayChatClient session description lifetime", () => {
         } else {
           throw new Error(`Unexpected metadata request: ${method}`);
         }
-        if (method === heldMethod) {
-          throw failure;
+        if (method === heldMethod && (!reconnect || !current)) {
+          entered.resolve();
+          return held.promise;
         }
-        return method === "sessions.describe"
-          ? { session: currentDescription.session }
-          : currentListing;
+        return response(method);
       });
       await withGatewayChatConnection(request, async (client, callbacks) => {
-        callbacks.onHelloOk?.(hello("current"));
-
-        await expect(
-          client.describeSession({ sessionKey: selectedKey, agentId: "work" }),
-        ).rejects.toBe(failure);
-        expect(request.mock.calls.filter(([method]) => method === heldMethod)).toHaveLength(1);
+        callbacks.onHelloOk?.(hello(current ? "current" : "old"));
+        const description = client.describeSession({ sessionKey: selectedKey, agentId: "work" });
+        const settled = reconnect
+          ? expect(description).resolves.toEqual(currentDescription)
+          : expect(description).rejects.toBe(error);
+        await entered.promise;
+        const oldResponse = response(heldMethod);
+        if (reconnect) {
+          callbacks.onClose?.(1001, "reconnecting");
+          current = true;
+          callbacks.onHelloOk?.(hello("current"));
+        }
+        if (failure) {
+          held.reject(error);
+        } else {
+          held.resolve(oldResponse);
+        }
+        await settled;
+        if (!reconnect) {
+          expect(request.mock.calls.filter(([method]) => method === heldMethod)).toHaveLength(1);
+        }
       });
-    });
-  });
+    },
+  );
 });

@@ -82,7 +82,7 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     const config = {
       agents: {
         entries: {
-          arthur: { default: true, workspace: workspaceDir },
+          arthur: { workspace: workspaceDir },
           merlin: { workspace: siblingWorkspaceDir },
         },
       },

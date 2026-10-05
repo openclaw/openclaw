@@ -223,39 +223,6 @@ async function tryHandleWithPluginAction(params: {
   };
 }
 
-type PluginSendPayloadPreparation =
-  | { kind: "unavailable" }
-  | { kind: "declined" }
-  | { kind: "prepared"; payload: ReplyPayload };
-
-async function preparePluginSendPayload(params: {
-  ctx: OutboundSendContext;
-  to: string;
-  payload: ReplyPayload;
-  reply?: OutboundReplyFacts;
-  threadId?: string | number;
-}): Promise<PluginSendPayloadPreparation> {
-  const plugin = params.ctx.channelPlugin;
-  if (!plugin?.outbound) {
-    return { kind: "unavailable" };
-  }
-  const prepareSendPayload = plugin?.actions?.prepareSendPayload;
-  if (!prepareSendPayload) {
-    return { kind: "unavailable" };
-  }
-  const payload = await prepareSendPayload({
-    ctx: createChannelActionContext({ ctx: params.ctx, action: "send", reply: params.reply }),
-    to: params.to,
-    payload: params.payload,
-    replyToId: params.reply?.replyToId,
-    replyToIdSource: params.reply?.source,
-    threadId: params.threadId,
-  });
-  // A null result is an ownership decision: the provider-native payload cannot
-  // use durable core delivery, so even a presentation must stay on the action path.
-  return payload ? { kind: "prepared", payload } : { kind: "declined" };
-}
-
 /** Executes a message-tool send through plugin handlers or the core outbound path. */
 export async function executeSendAction(params: SendActionParams): Promise<{
   handledBy: "plugin" | "core";
@@ -281,26 +248,30 @@ export async function executeSendAction(params: SendActionParams): Promise<{
   const requiresCoreDelivery =
     params.ctx.input.forceCoreDelivery === true ||
     params.ctx.input.requireQueuePersistence === true;
-  const pluginPreparation = requiresCoreDelivery
-    ? ({ kind: "unavailable" } as const)
-    : await preparePluginSendPayload({
-        ctx: params.ctx,
+  const preparationPlugin = params.ctx.channelPlugin;
+  const prepareSendPayload =
+    !requiresCoreDelivery && preparationPlugin?.outbound
+      ? preparationPlugin.actions?.prepareSendPayload
+      : undefined;
+  const preparedPayload = prepareSendPayload
+    ? await prepareSendPayload({
+        ctx: createChannelActionContext({ ctx: params.ctx, action: "send", reply: params.reply }),
         to: params.to,
         payload: defaultPayload,
-        reply: params.reply,
+        replyToId: params.reply?.replyToId,
+        replyToIdSource: params.reply?.source,
         threadId: params.threadId,
-      });
+      })
+    : undefined;
   const channelPlugin = params.ctx.channelPlugin;
   const presentation = normalizeMessagePresentation(defaultPayload.presentation);
+  // A hook that declines owns the plugin action path, including presentations.
   const corePayload = requiresCoreDelivery
     ? defaultPayload
-    : pluginPreparation.kind === "prepared"
-      ? pluginPreparation.payload
-      : pluginPreparation.kind === "unavailable" &&
-          presentation &&
-          hasCorePresentationDelivery(channelPlugin?.outbound)
+    : preparedPayload ||
+      (!prepareSendPayload && presentation && hasCorePresentationDelivery(channelPlugin?.outbound)
         ? defaultPayload
-        : null;
+        : null);
   if (!corePayload) {
     const pluginMessage = presentation
       ? materializeMessagePresentationFallback({ payload: defaultPayload, text: params.message })

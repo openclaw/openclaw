@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { validateSystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
 import {
   analyzeArgvCommand,
@@ -75,6 +76,7 @@ import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-comm
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
+import { preferMacAppExecHost } from "./runtime-manifest.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
@@ -89,12 +91,6 @@ type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
   workerWorkspace?: NodeWorkerWorkspaceRuntime;
   workerComputer?: NodeWorkerComputer;
 };
-
-const execHostEnforced =
-  normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_HOST ?? "") === "app";
-const execHostFallbackAllowed =
-  normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_FALLBACK ?? "") !== "0";
-const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
 
 type SystemWhichParams = {
   bins: string[];
@@ -118,6 +114,7 @@ type SystemRunPrepareParams = {
   rawCommand?: unknown;
   cwd?: unknown;
   env?: Record<string, string> | null;
+  executionContext?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
   strictInlineEval?: unknown;
@@ -570,6 +567,12 @@ async function dispatchInvoke(
         decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
         frame.nodeId,
       );
+      if (
+        params.executionContext !== undefined &&
+        (preferMacAppExecHost || !validateSystemRunExecutionContext(params.executionContext))
+      ) {
+        throw new Error("executionContext invalid or unsupported");
+      }
       const { getRuntimeConfig } = await import("../config/config.js");
       const execPolicy = await resolveEffectiveSystemRunExecPolicy({
         cfg: getRuntimeConfig(),
@@ -658,8 +661,6 @@ async function dispatchInvoke(
     params,
     skillBins,
     signal: runtime.signal,
-    execHostEnforced,
-    execHostFallbackAllowed,
     runCommand,
     sendNodeEvent: (event, payload) => sendNodeEvent(client, event, payload),
     sendInvokeResult: response.send,

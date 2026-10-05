@@ -10,7 +10,9 @@ import {
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { prepareModelVisibleToolTextBlock } from "../../logging/redact.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
@@ -45,6 +47,289 @@ const user = (key: string) => ({
   content: `Synthetic input ${key}`,
   timestamp: 1,
   idempotencyKey: `${key}:user`,
+});
+
+it("shares one frozen tool-result graph across append receipts, transcript views, and prompt history", async () => {
+  const { target, manager } = await fixture(state, "shared-tool-results");
+  const seed = await manager.appendMessageWithTranscriptAnchorAsync(user("shared-results"));
+  const text = "Synthetic result line with Unicode: 🦞\n".repeat(1024);
+  const messages = Array.from({ length: 3 }, (_, index) => ({
+    role: "toolResult" as const,
+    toolCallId: `large-${index}`,
+    toolName: "read",
+    content: [{ type: "text" as const, text }],
+    details: { rows: [{ index, values: [index, index + 1] }] },
+    isError: false,
+    timestamp: index + 2,
+  }));
+  const originalGraphs = messages.map((message) => ({
+    content: message.content,
+    block: message.content[0],
+    details: message.details,
+    rows: message.details.rows,
+    row: message.details.rows[0],
+    values: message.details.rows[0]!.values,
+  }));
+  const receipts: Array<
+    Awaited<ReturnType<SessionManager["appendMessageWithTranscriptAnchorAsync"]>>
+  > = [];
+  for (const message of messages) {
+    receipts.push(await manager.appendMessageWithTranscriptAnchorAsync(message));
+  }
+  const entries = receipts.map(({ entryId }) => {
+    const entry = manager.getEntry(entryId);
+    if (entry?.type !== "message") {
+      throw new Error("Expected committed tool-result entry");
+    }
+    return entry;
+  });
+  const database = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
+  expect(readTranscriptEventRows(database, target.sessionId).slice(-messages.length)).toEqual(
+    entries.map((entry, index) => ({
+      seq: index + 2,
+      eventJson: JSON.stringify({
+        type: "message",
+        id: receipts[index]!.entryId,
+        parentId: index === 0 ? seed.entryId : receipts[index - 1]!.entryId,
+        timestamp: entry.timestamp,
+        message: {
+          role: "toolResult",
+          toolCallId: `large-${index}`,
+          toolName: "read",
+          content: [{ type: "text", text }],
+          details: { rows: [{ index, values: [index, index + 1] }] },
+          isError: false,
+          timestamp: index + 2,
+        },
+      }),
+    })),
+  );
+  const context = manager.buildSessionContext().messages.slice(-messages.length);
+  const retained = new Set([
+    ...messages,
+    ...receipts.map(({ message }) => message),
+    ...entries.map(({ message }) => message),
+    ...context,
+  ]);
+  expect(retained.size).toBe(messages.length);
+  for (const [index, message] of messages.entries()) {
+    const original = originalGraphs[index]!;
+    expect(receipts[index]!.message).toBe(message);
+    expect(entries[index]!.message).toBe(message);
+    expect(context[index]).toBe(message);
+    expect(message.content).toBe(original.content);
+    expect(message.content[0]).toBe(original.block);
+    expect(message.details).toBe(original.details);
+    expect(message.details.rows).toBe(original.rows);
+    expect(message.details.rows[0]).toBe(original.row);
+    expect(message.details.rows[0]!.values).toBe(original.values);
+    for (const value of [entries[index], message, ...Object.values(original)]) {
+      expect(Object.isFrozen(value)).toBe(true);
+    }
+  }
+  expect(() => {
+    messages[0]!.content[0]!.text = "mutated after append";
+  }).toThrow(TypeError);
+  expect(() => messages[0]!.details.rows[0]!.values.push(99)).toThrow(TypeError);
+});
+
+it.each(["message", "custom"] as const)(
+  "captures %s data before queued admission and keeps worker receipts consistent",
+  async (family) => {
+    const { target, manager } = await fixture(state, `captured-${family}`);
+    await manager.appendMessageAsync(user(`captured-${family}`));
+    const nested = { value: "captured" };
+    const data = { nested };
+    const message = {
+      role: "toolResult" as const,
+      toolCallId: "captured-result",
+      toolName: "lookup",
+      content: [{ type: "text" as const, text: "Captured result" }],
+      details: data,
+      isError: false,
+      timestamp: 2,
+    };
+    const withWorker = metadataRuntime.withSessionMetadataWorker;
+    let appends = 0;
+    let workerMutation: boolean | undefined;
+    const spy = vi
+      .spyOn(metadataRuntime, "withSessionMetadataWorker")
+      .mockImplementation((options, database, assertCurrent, operation, controls) =>
+        withWorker(
+          options,
+          database,
+          assertCurrent,
+          (worker) =>
+            operation({
+              execute: (command, commandOptions) => {
+                const pending = worker.execute(command, commandOptions);
+                if (command.type === "session.metadata.append" && ++appends === 2) {
+                  workerMutation = Reflect.set(nested, "value", "worker mutation");
+                }
+                return pending;
+              },
+            }),
+          controls,
+        ),
+      );
+    const blocker = manager.appendCustomEntryAsync("queued-before-capture");
+    const pending =
+      family === "message"
+        ? manager.appendMessageWithTranscriptAnchorAsync(message)
+        : manager.appendCustomEntryAsync("captured", data);
+    const queuedMutation = Reflect.set(nested, "value", "queued mutation");
+    try {
+      await blocker;
+      const receipt = await pending;
+      const entryId = typeof receipt === "string" ? receipt : receipt.entryId;
+      const expectedData = { nested: { value: "captured" } };
+      const expected =
+        family === "message" ? { message: { details: expectedData } } : { data: expectedData };
+      expect(manager.getEntry(entryId)).toMatchObject(expected);
+      expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject(expected);
+      if (typeof receipt !== "string") {
+        expect(receipt.message).toHaveProperty("details", expectedData);
+      }
+      expect([queuedMutation, workerMutation]).toEqual([false, false]);
+    } finally {
+      await Promise.allSettled([blocker, pending]);
+      spy.mockRestore();
+    }
+  },
+);
+
+it("captures raw persist envelope fields before asynchronous admission", async () => {
+  const { target, manager } = await fixture(state, "captured-raw-envelope");
+  const seed = await manager.appendMessageWithTranscriptAnchorAsync(user("raw-envelope"));
+  const raw = {
+    type: "custom" as const,
+    customType: "captured-envelope",
+    id: "original-raw-id",
+    parentId: seed.entryId,
+    timestamp: new Date(0).toISOString(),
+    data: { value: "captured" },
+  };
+  const expected = { ...raw };
+  const pending = manager.persistAsync(raw);
+  Reflect.set(raw, "id", "mutated-raw-id");
+  Reflect.set(raw, "parentId", null);
+  await pending;
+  await manager.reloadPersistedTranscriptAsync();
+  expect(manager.getEntry("original-raw-id")).toEqual(expected);
+  expect(manager.getEntry("mutated-raw-id")).toBeUndefined();
+  expect((await loadTranscriptEvents(target)).at(-1)).toEqual(expected);
+});
+
+it("persists the native first content getter result before provenance reads", async () => {
+  const { target, manager } = await fixture(state, "content-getter-order");
+  await manager.appendMessageAsync(user("content-getter-order"));
+  let reads = 0;
+  const receipt = await manager.appendMessageWithTranscriptAnchorAsync({
+    role: "toolResult",
+    toolCallId: "getter-result",
+    toolName: "lookup",
+    get content() {
+      return [{ type: "text" as const, text: `Read ${++reads}` }];
+    },
+    isError: false,
+    timestamp: 2,
+  });
+  const expected = [{ type: "text", text: "Read 1" }];
+  expect(receipt.message).toHaveProperty("content", expected);
+  expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({
+    message: { content: expected },
+  });
+});
+
+it("expands message toJSON with its envelope key before applying transcript redaction", async () => {
+  const { target, manager } = await fixture(state, "message-json-redaction");
+  await manager.appendMessageAsync(user("json-redaction"));
+  const message = {
+    role: "toolResult" as const,
+    toolCallId: "json-result",
+    toolName: "lookup",
+    content: [],
+    isError: false,
+    timestamp: 2,
+    toJSON(key: string) {
+      return {
+        role: "toolResult",
+        toolCallId: "json-result",
+        toolName: "lookup",
+        content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }],
+        details: { serializationKey: key },
+        isError: false,
+        timestamp: 2,
+      };
+    },
+  };
+  const committed = await manager.appendMessageWithTranscriptAnchorAsync(message, {
+    config: { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } },
+  });
+  const expected = {
+    role: "toolResult",
+    toolCallId: "json-result",
+    toolName: "lookup",
+    content: [{ type: "text", text: "opaque(abcdef…qrst)" }],
+    details: { serializationKey: "message" },
+    isError: false,
+    timestamp: 2,
+  };
+  expect(committed.message).toEqual(expected);
+  expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({ message: expected });
+});
+
+it("persists prepared tool text once when JSON normalization copies a frozen content block", async () => {
+  const { target, manager } = await fixture(state, "frozen-prepared-tool-text");
+  await manager.appendMessageAsync(user("frozen-prepared-text"));
+  const config = { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } };
+  const block = Object.freeze(
+    prepareModelVisibleToolTextBlock(
+      { type: "text", text: "opaque(abcdefghijklmnopqrst)", optional: undefined },
+      config.logging,
+    ),
+  );
+  expect(block.text).toBe("opaque(abcdef…qrst)");
+  const committed = await manager.appendMessageWithTranscriptAnchorAsync(
+    {
+      role: "toolResult",
+      toolCallId: "frozen-result",
+      toolName: "lookup",
+      content: [block],
+      isError: false,
+      timestamp: 2,
+    },
+    { config },
+  );
+  const expected = [{ type: "text", text: "opaque(abcdef…qrst)" }];
+  expect(committed.message).toHaveProperty("content", expected);
+  expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({
+    message: { content: expected },
+  });
+});
+
+it("preserves custom data toJSON keys and JSON value conversions in the committed view", async () => {
+  const { target, manager } = await fixture(state, "custom-json-values");
+  const id = await manager.appendCustomEntryAsync("json-values", {
+    toJSON(key: string) {
+      return {
+        serializationKey: key,
+        omitted: undefined,
+        values: [undefined, Number.NaN, Number.POSITIVE_INFINITY],
+        createdAt: new Date(0),
+      };
+    },
+  });
+  const expected = {
+    serializationKey: "data",
+    values: [null, null, null],
+    createdAt: "1970-01-01T00:00:00.000Z",
+  };
+  expect(manager.getEntry(id)).toMatchObject({ type: "custom", data: expected });
+  expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({
+    type: "custom",
+    data: expected,
+  });
 });
 
 it("commits user and custom messages in FIFO order without host writes, and checks only fresh messages", async () => {

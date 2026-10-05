@@ -1,6 +1,9 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { mergeAttemptToolMediaPayloads } from "openclaw/plugin-sdk/qa-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -43,6 +46,8 @@ type ImageFault =
   | "duplicate generation"
   | "missing persisted reply"
   | "persisted progress only"
+  | "wrong caption"
+  | "unrelated markdown"
   | "failed turn";
 
 async function runImageScenario(
@@ -53,6 +58,7 @@ async function runImageScenario(
     liveCodexDiscovery?: "present" | "missing";
     runtimeId?: "openclaw" | "codex";
     runtimeSelection?: QaRuntimeSelection;
+    replyFormat?: "media-directive" | "markdown";
   } = {},
 ) {
   const scenario = readQaScenarioById("native-image-generation");
@@ -62,6 +68,19 @@ async function runImageScenario(
   const state = createQaBusState();
   const generatedPath = path.join(tempDirs.make("qa-generated-image-"), "generated.png");
   await fs.writeFile(generatedPath, options.fault === "empty file" ? Buffer.alloc(0) : png);
+  const caption = "A QA lighthouse on the coast.";
+  const finalText =
+    options.replyFormat === "markdown"
+      ? `${caption}\n\n![QA lighthouse](${generatedPath})`
+      : `${caption}\n\nMEDIA:${generatedPath}`;
+  const [delivery] = createOutboundPayloadPlan(
+    mergeAttemptToolMediaPayloads({
+      payloads: [{ text: finalText }],
+      toolMediaUrls: [generatedPath],
+    }) ?? [],
+  );
+  assert.ok(delivery);
+  expect(delivery.parts).toMatchObject({ text: caption, mediaUrls: [generatedPath] });
   const attachment = {
     id: "generated-image",
     kind: "image" as const,
@@ -149,7 +168,7 @@ async function runImageScenario(
         for (let i = 0; i < (options.fault === "duplicate message" ? 2 : 1); i++) {
           state.addOutboundMessage({
             to: "dm:qa-operator",
-            text: "A QA lighthouse on the coast.",
+            text: options.fault === "wrong caption" ? "A different caption." : delivery.parts.text,
             attachments:
               options.fault === "duplicate attachment"
                 ? [attachment, { ...attachment, id: "duplicate" }]
@@ -229,7 +248,9 @@ async function runImageScenario(
               ? ""
               : !settled || options.fault === "persisted progress only"
                 ? "Rendering the lighthouse."
-                : `A QA lighthouse on the coast.\n\nMEDIA:${generatedPath}`,
+                : options.fault === "unrelated markdown"
+                  ? `${finalText}\n\n![Unrelated image](/unrelated.png)`
+                  : finalText,
         };
       },
       runScenario: runQaSuiteScenarioSteps,
@@ -270,6 +291,14 @@ describe("native image scenario delivery evidence", () => {
     ).resolves.toMatchObject({ status: "pass" });
   });
 
+  it("compares persisted generated-attachment Markdown using the delivered caption", async () => {
+    const result = await runImageScenario({
+      replyFormat: "markdown",
+      liveCodexDiscovery: "present",
+    });
+    expect(result, result.details).toMatchObject({ status: "pass" });
+  });
+
   it("accepts forced Codex image generation without discovery receipts", async () => {
     await expect(
       runImageScenario({
@@ -306,6 +335,8 @@ describe("native image scenario delivery evidence", () => {
     ["duplicate generation", "generated image completion was not persisted"],
     ["missing persisted reply", "generated image completion was not persisted"],
     ["persisted progress only", "generated image completion was not persisted"],
+    ["wrong caption", "generated image completion was not persisted"],
+    ["unrelated markdown", "generated image completion was not persisted"],
     ["failed turn", "agent.wait returned error: image generation failed"],
   ] as const)("rejects %s", async (fault, error) => {
     expect(await runImageScenario({ fault })).toMatchObject({

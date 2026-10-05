@@ -1102,3 +1102,13 @@ textarea.settings-input {
     white-space: normal;
   }
 }
+
+/* Quiet-hours details stay connected to their toggle without changing row controls. */
+.settings-row + .quiet-hours-window,
+.quiet-hours-window .settings-row + .settings-row {
+  border-top: 0;
+}
+
+.quiet-hours-window .settings-row {
+  padding-top: 0;
+}

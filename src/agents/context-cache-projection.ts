@@ -64,15 +64,6 @@ function applyDiscoveredContextWindow(
   }
 }
 
-export function applyDiscoveredContextWindows(params: {
-  cache: Map<string, number>;
-  models: ContextWindowModelEntry[];
-}): void {
-  for (const model of params.models) {
-    applyDiscoveredContextWindow(params.cache, model);
-  }
-}
-
 export function applyConfiguredContextWindows(params: {
   cache: Map<string, number>;
   windowCache: Map<string, number>;

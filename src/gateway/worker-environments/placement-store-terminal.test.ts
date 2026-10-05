@@ -100,13 +100,13 @@ describe("worker placement terminal persistence", () => {
 
   it("records a clean terminal timestamp for an idle destroyed-worker reclaim", async () => {
     const active = await advanceToActive();
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: active.generation,
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -114,7 +114,7 @@ describe("worker placement terminal persistence", () => {
     });
 
     expect(
-      store.transition({
+      await store.transition({
         sessionId: active.sessionId,
         from: "reconciling",
         to: "reclaimed",
@@ -139,7 +139,7 @@ describe("worker placement terminal persistence", () => {
     nowMs = 2_000;
     const disappearance = `cloud worker disappeared: ${"provider-detail ".repeat(100)}`;
 
-    const failed = store.failWorkspaceResultAndReleaseTurn(pending, new Error(disappearance));
+    const failed = await store.failWorkspaceResultAndReleaseTurn(pending, new Error(disappearance));
     expect(failed).toMatchObject({
       state: "failed",
       generation: claim.placementGeneration + 3,
@@ -279,9 +279,9 @@ describe("worker placement terminal persistence", () => {
       }),
     ).toMatchObject({ kind: "execute" });
 
-    expect(() =>
+    await expect(
       store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
-    ).toThrow("running worker session operation");
+    ).rejects.toThrow("running worker session operation");
     expect(store.get(claim.sessionId)).toMatchObject({
       state: "active",
       turnClaim: { claimId: claim.claimId },
@@ -300,7 +300,7 @@ describe("worker placement terminal persistence", () => {
       }),
     ).toBe(true);
     expect(
-      store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
+      await store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
     ).toMatchObject({ state: "failed", turnClaim: null });
     expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
@@ -316,7 +316,7 @@ describe("worker placement terminal persistence", () => {
     const second = await advanceToActive(otherIdentity, sharedEnvironmentId);
     const { pending } = await pendingResult();
 
-    const failed = store.failWorkspaceResultAndReleaseTurn(
+    const failed = await store.failWorkspaceResultAndReleaseTurn(
       pending,
       new Error("cloud worker disappeared: shared lease destroyed"),
     );
@@ -344,9 +344,9 @@ describe("worker placement terminal persistence", () => {
       END;
     `);
 
-    expect(() =>
+    await expect(
       store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
-    ).toThrow("injected pending delete failure");
+    ).rejects.toThrow("injected pending delete failure");
     expect(store.get(active.sessionId)).toMatchObject({
       state: "active",
       generation: active.generation,

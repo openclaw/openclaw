@@ -29,7 +29,6 @@ import { createQaGatewayCliError, redactQaGatewayDebugText } from "./gateway-log
 import { reserveQaGatewayPort } from "./gateway-port-reservation.js";
 import { createQaGatewayProcessBoundaryController } from "./gateway-process-boundary.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
-import { resolveQaNodeExecPath } from "./node-exec.js";
 import type { QaCliBackendAuthMode } from "./providers/env.js";
 import { DEFAULT_QA_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import { readQaLiveProviderConfigOverrides } from "./providers/live-config.js";
@@ -319,7 +318,7 @@ export async function prepareQaGatewayChild(
   let env: NodeJS.ProcessEnv | null = null;
   let packagedMockAuthStaged = false;
 
-  const nodeExecPath = gatewayExecutablePath ?? (await resolveQaNodeExecPath());
+  const nodeExecPath = gatewayExecutablePath ?? process.execPath;
   const cliArgsPrefix = gatewayCommand?.processBoundary
     ? gatewayArgsPrefix
     : gatewayExecutablePath

@@ -31,13 +31,11 @@ type PluginMutationSuccess<Result> = (
   result: Result,
   refreshError: string | null,
   client: GatewayBrowserClient,
-  isCurrent: () => boolean,
   isLatest: () => boolean,
 ) => Promise<void>;
 
 type PluginMutationOptions = {
   action: PluginMutationAction;
-  canDispatch?: () => boolean;
   confirm?: () => Promise<boolean>;
   preserveMessageWhilePending?: boolean;
 };
@@ -148,8 +146,7 @@ export class PluginsConsentController {
     },
   ): Promise<void> {
     const scope = this.host.gateway.capture();
-    const canDispatch = () =>
-      (options.canDispatch ?? this.host.canMutate)() && !this.getActiveInstall(rowKey);
+    const canDispatch = () => this.host.canMutate() && !this.getActiveInstall(rowKey);
     if (!scope || !canDispatch() || this.host.isBusy(rowKey)) {
       return;
     }
@@ -181,7 +178,7 @@ export class PluginsConsentController {
         { canDispatch: () => isCurrent() && canDispatch() },
       );
       if (isCurrent()) {
-        await onSuccess(mutation.value, mutation.refreshError, scope.client, isCurrent, isLatest);
+        await onSuccess(mutation.value, mutation.refreshError, scope.client, isLatest);
       }
     } catch (error) {
       if (isCurrent()) {

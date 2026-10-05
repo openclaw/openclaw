@@ -91,6 +91,7 @@ const FIXTURES = [
   "plugins-dense",
   "reactions",
   "sidebar-roster",
+  "startup-pending",
   "swarm",
   "update-available",
   "update-blocked",
@@ -2123,7 +2124,7 @@ async function createChatPickerScenario(
       ? "agent:main:production-export"
       : fixture === "dashboards"
         ? "agent:main:dashboard:release-health"
-        : fixture === "update-available"
+        : fixture === "update-available" || fixture === "startup-pending"
           ? "agent:main:home-server"
           : fixture === "update-blocked"
             ? "agent:main:model-budget"
@@ -3289,6 +3290,7 @@ async function createChatPickerScenario(
       taxChildRow,
     ],
     sessionKey: fixtureSessionKey,
+    startupPendingResponses: fixture === "startup-pending" ? 4 : 0,
     workspace: "/Users/demo/Projects/openclaw",
     workspaceGit: true,
   };

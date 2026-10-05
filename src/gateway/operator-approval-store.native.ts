@@ -1,7 +1,11 @@
+import type { CronReceiptAuthorityAttachment } from "../cron/store/receipt-authority.types.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { operatorApprovalOperations } from "./operator-approval-store.operations.js";
+import {
+  operatorApprovalOperations,
+  type OperatorApprovalCommitReceipt,
+} from "./operator-approval-store.operations.js";
 import type { OperatorApprovalWorkerOperations } from "./operator-approval-store.worker-contract.js";
 
 const operations: {
@@ -18,7 +22,8 @@ export function executeNativeOperatorApproval<Key extends keyof OperatorApproval
   input: OperatorApprovalWorkerOperations[Key]["input"],
   context: OpenClawStateWorkerContext,
   assertCurrent: () => void,
-  onCommitted?: (receipt: { type: "operatorApprovals.resolve"; resolutionKey: string }) => void,
+  receiptAuthority: CronReceiptAuthorityAttachment,
+  onCommitted: (receipt: OperatorApprovalCommitReceipt) => void,
 ): OperatorApprovalWorkerOperations[Key]["output"] {
   context.admission.assertCurrent();
   return runWithSqliteWorkerStateContext(context, () => {
@@ -26,7 +31,7 @@ export function executeNativeOperatorApproval<Key extends keyof OperatorApproval
     return operations[type](input, {
       open: () => openOpenClawStateDatabase(options),
       stateOptions: () => options,
-      native: { assertCurrent, onCommitted },
+      native: { assertCurrent, receiptAuthority, onCommitted },
     });
   });
 }

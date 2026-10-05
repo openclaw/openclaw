@@ -1,6 +1,12 @@
 import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
-import type { SessionEntrySummary, TranscriptEvent } from "./session-accessor.types.js";
+import type {
+  SessionEntrySummary,
+  TranscriptEvent,
+  TranscriptMessageAppendResult,
+} from "./session-accessor.types.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 export type {
   DeletedAgentSessionEntryPurgeParams,
   DeleteSessionEntryLifecycleParams,
@@ -22,11 +28,22 @@ export type SessionEntryStatusSelection = {
   presenceOnly?: boolean;
 };
 
-export type SessionTranscriptContextVersion = {
-  generation: string | null;
-  rawSeq: number | null;
-  updatedAt: number | null;
+export type TranscriptWriteSnapshot<T> = {
+  result: T;
+  lifecycleRevision?: string;
+  before: SessionTranscriptContextVersion;
+  after: SessionTranscriptContextVersion;
 };
+
+export type TranscriptMessageWriteSnapshot<TMessage> = TranscriptWriteSnapshot<
+  TranscriptMessageAppendResult<TMessage> | undefined
+> & {
+  visibleTail: { entryId: string | null; generation: string | null };
+};
+
+export type TranscriptEventAppendResult =
+  | { appended: false }
+  | { appended: true; effectiveParentId?: string | null };
 
 export type SessionTranscriptBoundedActiveContext = {
   activeLeafEntryId: string | null;
@@ -168,20 +185,7 @@ export type TranscriptEventAppendOptions = {
   expectedMutationAt?: number | null;
 };
 
-export type TranscriptAppendRefusal =
-  | {
-      actualSessionIdHash: string;
-      agentIdHash: string;
-      code: "session-rebound";
-      expectedSessionIdHash: string;
-      sessionKeyHash: string;
-    }
-  | {
-      agentIdHash: string;
-      code: "session-entry-missing";
-      expectedSessionIdHash: string;
-      sessionKeyHash: string;
-    };
+export type { TranscriptAppendRefusal } from "./session-transcript-writer-claim-error.js";
 
 export type {
   ForkSessionEntryFromParentTargetParams,

@@ -448,7 +448,7 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
 
-  noteGatewayRuntime(serviceRuntime, process.env);
+  noteGatewayRuntime(serviceRuntime, serviceEnv);
 
   if (serviceRuntime?.status !== "running") {
     if (params.healthSkipped && serviceRuntime?.status !== "stopped") {
@@ -467,6 +467,15 @@ export async function maybeRepairGatewayDaemon(params: {
       serviceRepairPolicy,
     );
     if (start) {
+      if (process.platform === "win32" && serviceRuntime?.state === "Disabled") {
+        try {
+          await service.start({ env: serviceEnv, stdout: process.stdout });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          note(`Gateway service start failed: ${detail}`, "Gateway");
+        }
+        return;
+      }
       const restartResult = await restartGatewayService();
       if (!restartResult) {
         return;

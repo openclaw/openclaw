@@ -851,6 +851,7 @@ private enum MacChatMessageSpeechError: LocalizedError {
 private struct MacChatSurface: View {
     let windowCommands: OpenClawChatWindowCommands
     let sidebarPresence: MacGatewaySidebarPresence?
+    let gatewayTarget: DashboardGatewayTarget?
     @State private var viewModel: OpenClawChatViewModel
     @State private var appState = AppStateStore.shared
     @State private var talkController = TalkModeController.shared
@@ -870,6 +871,7 @@ private struct MacChatSurface: View {
         viewModel: OpenClawChatViewModel,
         windowCommands: OpenClawChatWindowCommands,
         sidebarPresence: MacGatewaySidebarPresence?,
+        gatewayTarget: DashboardGatewayTarget?,
         conversationController: NativeConversationController?,
         usesPrimaryAppRuntime: Bool,
         approvalQueue: ExecApprovalQueueStore?,
@@ -879,6 +881,7 @@ private struct MacChatSurface: View {
         _viewModel = State(initialValue: viewModel)
         self.windowCommands = windowCommands
         self.sidebarPresence = sidebarPresence
+        self.gatewayTarget = gatewayTarget
         self.conversationController = conversationController
         self.usesPrimaryAppRuntime = usesPrimaryAppRuntime
         self.approvalQueue = approvalQueue
@@ -907,6 +910,7 @@ private struct MacChatSurface: View {
             .defaultAppStorage(AppDefaults.standard)
             .environment(\.openClawSidebarPeople, self.sidebarPresence?.people)
             .environment(\.openClawSidebarPeopleActions, self.sidebarPresence?.actions)
+            .modifier(MacSidebarIdentityMenu(target: self.gatewayTarget, healthy: self.viewModel.healthOK))
             .safeAreaInset(edge: .top) {
                 if !self.viewModel.usesWebConversation, let error = self.conversationController?.error {
                     Text(error).font(.callout).foregroundStyle(.secondary).padding(8)
@@ -1222,6 +1226,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             viewModel: vm,
             windowCommands: self.windowCommands,
             sidebarPresence: self.sidebarPresence,
+            gatewayTarget: gatewayTarget,
             conversationController: self.conversationController,
             usesPrimaryAppRuntime: usesPrimaryAppRuntime,
             approvalQueue: gatewayTransport?.connection.approvalQueue,

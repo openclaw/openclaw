@@ -127,7 +127,7 @@ async function createQueryVault(options?: {
 function createAppConfig(): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
   } as OpenClawConfig;
 }
@@ -136,7 +136,7 @@ function createSessionVisibilityAppConfig(): OpenClawConfig {
   return {
     agents: {
       defaults: { sandbox: { sessionToolsVisibility: "all" } },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
     tools: {
       sessions: { visibility: "self" },
@@ -146,7 +146,7 @@ function createSessionVisibilityAppConfig(): OpenClawConfig {
 
 function createAgentSessionVisibilityAppConfig(): OpenClawConfig {
   return {
-    agents: { list: [{ id: "main", default: true }, { id: "secondary" }] },
+    agents: { entries: { main: {}, secondary: {} } },
     tools: { sessions: { visibility: "agent" } },
   } as OpenClawConfig;
 }

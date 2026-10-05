@@ -212,8 +212,6 @@ describe("production lint suppressions", () => {
         "src/agents/auth-profiles/oauth-refresh-peers.ts|preserve-caught-error|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
         "src/agents/provider-http-errors.ts|preserve-caught-error|1",
-        // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
-        "src/agents/sessions/session-manager-persistence-entry.ts|unicorn/prefer-structured-clone|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         // Account defaults and heterogeneous registries erase plugin-specific callback families;
@@ -228,6 +226,8 @@ describe("production lint suppressions", () => {
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
+        // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
+        "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
         // Intl.Collator.compare is a getter returning a bound function.
         "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
@@ -257,7 +257,6 @@ describe("production lint suppressions", () => {
         "src/plugins/plugin-return-value.ts|typescript/prefer-promise-reject-errors|1",
         "src/plugins/plugin-return-value.ts|typescript/unbound-method|1",
         "src/plugins/plugin-return-value.ts|unicorn/no-thenable|1",
-        "src/plugins/provider-auth-persistence.ts|preserve-caught-error|2",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
         // Admission records original factory identities; executable views bind their receivers.
         "src/plugins/registry-registrars-memory.ts|typescript/unbound-method|1",
@@ -267,7 +266,6 @@ describe("production lint suppressions", () => {
         "src/secrets/egress-proxy/proxy-server.ts|no-warning-comments|1",
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|2",
-        "src/state/openclaw-agent-db-admission.ts|typescript/prefer-promise-reject-errors|1",
         // Node worker BroadcastChannel.postMessage accepts only a message, not a browser targetOrigin.
         "src/state/openclaw-agent-worker-store.test-support.ts|unicorn/require-post-message-target-origin|1",
         "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",

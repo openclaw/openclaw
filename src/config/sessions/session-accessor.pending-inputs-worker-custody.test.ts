@@ -27,8 +27,9 @@ describe("accepted input worker custody", () => {
   const fixture = useTempSessionsFixture("openclaw-pending-worker-custody-");
   let receipt: SessionPendingInputReceipt | undefined;
 
-  afterEach(() => {
+  afterEach(async () => {
     receipt?.finish("interrupted");
+    await receipt?.settled?.();
     receipt = undefined;
     closeOpenClawAgentDatabasesForTest();
   });
@@ -76,6 +77,7 @@ describe("accepted input worker custody", () => {
     expect(result.value).toMatchObject({ ok: true, value: { appended: true } });
     custody.publish(result.receipt);
     receipt.finish("cancelled");
+    await receipt.settled?.();
     receipt = undefined;
 
     expect(await loadTranscriptEvents(scope)).toContainEqual(
@@ -115,6 +117,7 @@ describe("accepted input worker custody", () => {
       receipt.run(() => appendTranscriptMessageSync(scope, { message: receipt!.message })),
     ).toMatchObject({ ok: true, value: { appended: true } });
     receipt.finish("cancelled");
+    await receipt.settled?.();
     receipt = undefined;
 
     expect(await loadTranscriptEvents(scope)).toContainEqual(

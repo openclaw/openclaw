@@ -157,7 +157,11 @@ export async function persistSessionTranscriptTurn(
   if (options.sessionLifecyclePatch || options.sessionTurnMutation || options.initialSessionEntry) {
     throw new Error("Cannot mutate a session turn without an expected session id");
   }
-  const target = await resolveTranscriptTurnTarget(scope, options.config);
+  const target = await prepareTranscriptTurnTarget(scope, options.config);
+  const resolved = scope.sessionStore
+    ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey: target.sessionKey })
+    : undefined;
+  const previousSessionEntry = resolved?.existing ?? scope.sessionEntry;
   // Route through the guarded SQLite path when the session entry was loaded
   // from a persisted SQLite row (not an in-memory mirror), so a session-id
   // rotation between resolve and append surfaces a visible session-rebound
@@ -165,7 +169,12 @@ export async function persistSessionTranscriptTurn(
   // entries (from scope.sessionStore/scope.sessionEntry) and transcript-only
   // scopes (no entry) keep the legacy append — the guarded transaction
   // requires a persisted row to validate. (#119221)
-  if (target.entryFromPersistedStore && target.storePath && target.sessionKey && target.sessionId) {
+  if (
+    target.selectedSessionId != null &&
+    target.storePath &&
+    target.sessionKey &&
+    target.sessionId
+  ) {
     return await persistExpectedSessionTranscriptTurn(
       {
         ...scope,
@@ -187,7 +196,7 @@ export async function persistSessionTranscriptTurn(
     () => appendTranscriptTurnMessages(target, options),
   );
   const appendedCount = appendedMessages.filter((message) => message.appended).length;
-  let sessionEntry = target.sessionEntry;
+  let sessionEntry = previousSessionEntry;
   if (
     options.touchSessionEntry === true &&
     appendedCount > 0 &&
@@ -212,7 +221,7 @@ export async function persistSessionTranscriptTurn(
     if (updated && scope.sessionStore) {
       scope.sessionStore[target.sessionKey] = updated;
     }
-    sessionEntry = updated ?? target.sessionEntry;
+    sessionEntry = updated ?? previousSessionEntry;
   }
   await publishTranscriptTurnUpdate({
     target,
@@ -414,26 +423,6 @@ async function prepareTranscriptTurnTarget(
   // Keep the selected locator and private storage namespace across the await.
   // Incognito accessors resolve their owner from env even with a concrete locator.
   return { ...runtimeTarget, storePath: binding.storePath, env: binding.env };
-}
-
-async function resolveTranscriptTurnTarget(
-  scope: SessionTranscriptWriteScope & {
-    sessionEntry?: SessionEntry;
-    sessionStore?: Record<string, SessionEntry>;
-  },
-  config?: OpenClawConfig,
-) {
-  const target = await prepareTranscriptTurnTarget(scope, config);
-  const resolved = scope.sessionStore
-    ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey: target.sessionKey })
-    : undefined;
-  // The target reader selected persisted identity; only the legacy mirror path needs this entry.
-  const sessionEntry = resolved?.existing ?? scope.sessionEntry;
-  return {
-    ...target,
-    sessionEntry,
-    entryFromPersistedStore: target.selectedSessionId != null,
-  };
 }
 
 async function publishTranscriptTurnUpdate(params: {

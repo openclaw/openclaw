@@ -660,5 +660,7 @@ export function createSessionsSpawnTool(
       }),
     ),
   };
-  return bindCollectorSpawnTool(tool, parameters.properties, opts?.signal);
+  return opts?.workerPlacement
+    ? tool
+    : bindCollectorSpawnTool(tool, parameters.properties, opts?.signal);
 }

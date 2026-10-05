@@ -42,6 +42,7 @@ import {
   registerWebPushSubscription,
   resolveVapidKeys,
 } from "./push-web.js";
+import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 
 let tmpDir: string;
 const defaultDevicePreferences = { enabled: true, label: "" };
@@ -602,7 +603,11 @@ describe("approval delivery target persistence", () => {
     const database = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
     });
-    expect(tableExists(database.db, "web_push_approval_deliveries")).toBe(false);
+    expect(
+      runSqliteReadOperationSync(database.db, () =>
+        tableExists(database.db, "web_push_approval_deliveries"),
+      ),
+    ).toBe(false);
 
     expect(
       (
@@ -614,7 +619,11 @@ describe("approval delivery target persistence", () => {
         })
       ).toSorted(),
     ).toEqual([first.subscriptionId, second.subscriptionId].toSorted());
-    expect(tableExists(database.db, "web_push_approval_deliveries")).toBe(true);
+    expect(
+      runSqliteReadOperationSync(database.db, () =>
+        tableExists(database.db, "web_push_approval_deliveries"),
+      ),
+    ).toBe(true);
     await closeOpenClawStateDatabaseAsync();
 
     const expectedSubscriptionIds = [first, second]

@@ -2,6 +2,7 @@ import { basenameFromMediaSource } from "@openclaw/fs-safe/advanced";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { extensionForMime } from "@openclaw/media-core/mime";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
@@ -207,10 +208,11 @@ function resolveAttachmentMaxBytes(params: {
   channel: ChannelId;
   accountId?: string | null;
 }): number | undefined {
-  // Priority: account-specific > channel-level > global default
-  const limitMb =
-    resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb;
-  return typeof limitMb === "number" ? limitMb * 1024 * 1024 : undefined;
+  // Priority: account-specific > channel-level > global default.
+  const limitMb = asPositiveFiniteNumber(
+    resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb,
+  );
+  return limitMb === undefined ? undefined : limitMb * 1024 * 1024;
 }
 
 function inferAttachmentFilename(params: {

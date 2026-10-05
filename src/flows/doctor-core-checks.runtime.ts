@@ -6,10 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isNodeRuntime } from "../daemon/runtime-binary.js";
 import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
 import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
-import {
-  getSystemdCgroupHygieneSummary,
-  type GatewayServiceRuntime,
-} from "../daemon/service-runtime.js";
+import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
 import { resolveGatewayService, readGatewayServiceState } from "../daemon/service.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
@@ -63,10 +60,6 @@ export async function collectLocalAudioAccelerationFindings(): Promise<readonly 
         "Install the matching local model/runtime, or configure an audio-capable tools.media.models CLI entry.",
     },
   ];
-}
-
-function gatewayRuntimeStatus(runtime: GatewayServiceRuntime | undefined): string | undefined {
-  return runtime?.status ?? runtime?.state ?? runtime?.subState;
 }
 
 export async function collectGatewayDaemonFindings(
@@ -160,7 +153,8 @@ export async function collectGatewayDaemonFindings(
       fixHint: ownerHint ?? "Start the installed service with `openclaw gateway start`.",
     });
   }
-  const status = gatewayRuntimeStatus(state.runtime);
+  const runtime = state.runtime;
+  const status = runtime?.status ?? runtime?.state ?? runtime?.subState;
   if (state.loadState.status === "loaded" && !state.running) {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
@@ -232,26 +226,6 @@ function isReadableRecord(value: unknown): value is Record<string, unknown> {
 
 function isTrimmedNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim() === value && value.length > 0;
-}
-
-function hasProviderCatalogKey(params: {
-  value: Record<string, unknown>;
-  key: string;
-  providerId: string;
-  pluginId?: string;
-}): { ok: true; present: boolean } | { ok: false; finding: HealthFinding } {
-  try {
-    return { ok: true, present: params.key in params.value };
-  } catch (error) {
-    return {
-      ok: false,
-      finding: providerCatalogProjectionFinding(
-        params,
-        `Provider catalog ${params.providerId} result keys cannot be checked during doctor validation.`,
-        error,
-      ),
-    };
-  }
 }
 
 function readProviderCatalogValue(params: {
@@ -368,14 +342,17 @@ function collectProviderCatalogResultFindings(params: {
       ),
     ];
   }
-  const hasProvider = hasProviderCatalogKey({
-    value: params.result,
-    key: "provider",
-    providerId: params.providerId,
-    pluginId: params.pluginId,
-  });
-  if (!hasProvider.ok) {
-    return [hasProvider.finding];
+  let hasProvider: boolean;
+  try {
+    hasProvider = "provider" in params.result;
+  } catch (error) {
+    return [
+      providerCatalogProjectionFinding(
+        params,
+        `Provider catalog ${params.providerId} result keys cannot be checked during doctor validation.`,
+        error,
+      ),
+    ];
   }
   const provider = readProviderCatalogValue({
     value: params.result,
@@ -386,7 +363,7 @@ function collectProviderCatalogResultFindings(params: {
   if (!provider.ok) {
     return [provider.finding];
   }
-  if (hasProvider.present && !isReadableRecord(provider.value)) {
+  if (hasProvider && !isReadableRecord(provider.value)) {
     return [
       providerCatalogProjectionFinding(
         params,

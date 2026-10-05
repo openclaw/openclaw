@@ -23,11 +23,9 @@ export type ImageGenerationBackground = "transparent" | "opaque" | "auto";
 
 export type ImageGenerationOpenAIBackground = ImageGenerationBackground;
 
-export type ImageGenerationOpenAIModeration = "low" | "auto";
-
 export type ImageGenerationOpenAIOptions = {
   background?: ImageGenerationOpenAIBackground;
-  moderation?: ImageGenerationOpenAIModeration;
+  moderation?: "low" | "auto";
   outputCompression?: number;
   user?: string;
 };

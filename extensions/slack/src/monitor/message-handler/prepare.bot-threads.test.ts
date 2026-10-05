@@ -107,41 +107,45 @@ describe("Slack bot-thread mention configuration", () => {
     );
   });
 
-  it("denies bot-owned threads when the room is disabled", async () => {
-    const test = fixture({
-      requireMentionInBotThreads: false,
-      channels: { C123: { enabled: false } },
-    });
-    expect(await test.prepare()).toBeNull();
-    expect(test.info).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "channel-not-allowed" }),
-      expect.any(String),
-    );
-  });
-
-  it.each([
-    {
-      scope: "account",
-      slack: {
+  it.each<[string, SlackConfig, string, boolean]>([
+    [
+      "account",
+      {
         requireMentionInBotThreads: true,
         accounts: { work: { requireMentionInBotThreads: false } },
       },
-      accountId: "work",
-    },
-    {
-      scope: "wildcard",
-      slack: {
+      "work",
+      true,
+    ],
+    [
+      "wildcard",
+      {
         requireMentionInBotThreads: true,
         channels: { "*": { requireMentionInBotThreads: false }, C123: {} },
       },
-      accountId: "default",
-    },
-  ])("accepts an unmentioned reply with a $scope override", async ({ slack, accountId }) => {
+      "default",
+      true,
+    ],
+    [
+      "disabled room",
+      { requireMentionInBotThreads: false, channels: { C123: { enabled: false } } },
+      "default",
+      false,
+    ],
+  ])("applies the %s override to unmentioned replies", async (_, slack, accountId, allowed) => {
     const test = fixture(slack, accountId);
     const prepared = await test.prepare();
-    expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
-    expect(prepared?.ctxPayload.MentionSource).toBe("none");
-    expect(prepared?.ctxPayload.MessageThreadId).toBe(test.threadTs);
+    if (allowed) {
+      expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
+      expect(prepared?.ctxPayload.MentionSource).toBe("none");
+      expect(prepared?.ctxPayload.MessageThreadId).toBe(test.threadTs);
+    } else {
+      expect(prepared).toBeNull();
+      expect(test.info).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "channel-not-allowed" }),
+        expect.any(String),
+      );
+    }
   });
 
   it.each([
@@ -195,42 +199,35 @@ describe("Slack bot-thread mention configuration", () => {
     expect((await test.prepare())?.ctxPayload.MentionSource).toBe("explicit_bot");
   });
 
-  it("does not exempt a foreign-owned thread from mention gating", async () => {
-    const test = fixture({ requireMention: true, requireMentionInBotThreads: false });
-    test.message.parent_user_id = "U_ROOT";
-    expect(await test.prepare()).toBeNull();
-  });
-
-  it.each(["user", "bot_id"] as const)(
-    "recognizes fetched bot ownership by %s",
-    async (authorField) => {
-      const test = fixture({ requireMentionInBotThreads: false });
-      test.message.parent_user_id = undefined;
-      test.replies.mockResolvedValue({
-        messages: [{ ts: test.threadTs, text: "Bot root", [authorField]: "B1" }],
-      });
-      expect((await test.prepare())?.ctxPayload.RawBody).toBe("Continue here");
-      expect(test.replies).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each(["wrong timestamp", "unavailable"] as const)(
-    "keeps mention gating for a root lookup with %s",
+  it.each(["user", "bot_id", "foreign", "wrong timestamp", "unavailable"] as const)(
+    "exempts only verified bot-owned roots from mention gating: %s",
     async (kind) => {
-      const test = fixture({ requireMentionInBotThreads: false });
-      test.message.parent_user_id = undefined;
+      const test = fixture({ requireMention: true, requireMentionInBotThreads: false });
+      test.message.parent_user_id = kind === "foreign" ? "U_ROOT" : undefined;
       if (kind === "unavailable") {
         test.replies.mockRejectedValue(new Error("missing_scope"));
       } else {
         test.replies.mockResolvedValue({
-          messages: [{ ts: test.message.ts, user: "B1", text: "Root" }],
+          messages: [
+            {
+              ts: kind === "wrong timestamp" ? test.message.ts : test.threadTs,
+              [kind === "bot_id" ? "bot_id" : "user"]: "B1",
+              text: "Bot root",
+            },
+          ],
         });
       }
-      expect(await test.prepare()).toBeNull();
-      expect(test.info).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "missing-mention" }),
-        expect.any(String),
-      );
+      const prepared = await test.prepare();
+      if (kind === "user" || kind === "bot_id") {
+        expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
+      } else {
+        expect(prepared).toBeNull();
+        expect(test.info).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "missing-mention" }),
+          expect.any(String),
+        );
+      }
+      expect(test.replies).toHaveBeenCalledTimes(kind === "foreign" ? 0 : 1);
     },
   );
 });

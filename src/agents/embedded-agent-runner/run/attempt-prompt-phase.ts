@@ -503,7 +503,6 @@ export async function runEmbeddedAttemptPromptPhase(
         transcriptPrompt: promptContext.promptForSession,
         appendOnlyRuntimeContext,
         promptActiveSession,
-        sessionPromptState,
         toolResultPromptProjectionState,
         trajectoryRecorder,
       });

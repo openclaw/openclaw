@@ -271,6 +271,28 @@ return {
 Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
 
+### Bounded waits
+
+`openclaw/plugin-sdk/time-runtime` exports
+`raceWithTimeout(operation, timeoutMs, onTimeout, { ref? })`. Pass an existing
+promise, or a function returning a promise when the timer must start before the
+work. The timeout callback returns a fallback or throws the caller's error.
+Delays use native `setTimeout` semantics; the timer keeps the process alive
+unless `ref` is `false`, and is cleared when the race settles.
+
+`racePromiseWithAbortSignal(operation, signal?, createError?)` from the same
+subpath bounds observation by caller cancellation. An already-aborted signal
+wins over an already-settled promise. By default it rejects with an `AbortError`
+whose cause is the signal's reason; `createError(signal)` can preserve a
+transport's existing cancellation error. The helper removes its abort listener
+when the race settles and observes late source rejections. A function returning
+a promise starts after the abort listener is registered; an already-aborted
+signal prevents that function from starting.
+
+Neither helper cancels the underlying operation or certifies that cleanup has
+finished. Keep resource settlement, authority checks, and abort side effects
+with the operation's lifecycle owner.
+
 ### Stage timing diagnostics
 
 `openclaw/plugin-sdk/time-runtime` exports `createStageTimingTracker(now?)` and

@@ -274,41 +274,6 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   }
 });
 
-it("discards a palette response after the requesting profile changes", async () => {
-  const { gateway, current } = createGatewayStoreTestStore();
-  const applicationTheme = createApplicationTheme(loadSettings(), gateway);
-  gateway.start();
-  const retired = createDeferred<ThemesListResult>();
-  current().request.mockImplementation((method) =>
-    method === "users.self" ? Promise.resolve(selfProfile("first")) : retired.promise,
-  );
-  current().opts.onHello?.({
-    ...GATEWAY_STORE_TEST_HELLO,
-    auth: { role: "operator", scopes: ["operator.read"] },
-    snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
-  });
-  try {
-    await vi.waitFor(() => expect(current().request).toHaveBeenCalledWith("themes.list", {}));
-    const nextCatalog = builtinCatalog([]);
-    current().request.mockImplementation(async (method) =>
-      method === "users.self" ? selfProfile("second") : nextCatalog,
-    );
-    current().opts.onEvent?.(
-      createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
-    );
-    await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toEqual(BUILTIN_THEMES));
-    retired.resolve(catalog());
-    await retired.promise;
-    expect(document.documentElement.dataset.themeId).toBe("claw");
-    expect(applicationTheme.catalog?.themes.some((theme) => theme.id === descriptor.id)).toBe(
-      false,
-    );
-  } finally {
-    applicationTheme.dispose();
-    gateway.stop();
-  }
-});
-
 it("retries a failed selected palette only after an explicit catalog retry", async () => {
   const { gateway, current } = createGatewayStoreTestStore();
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
@@ -554,9 +519,13 @@ it.each(["success", "failure"] as const)(
   },
 );
 
-it.each(["profile", "client"] as const)(
-  "discards a late personal palette after the requesting %s changes",
-  async (boundary) => {
+it.each([
+  { boundary: "profile", pending: "catalog" },
+  { boundary: "profile", pending: "palette" },
+  { boundary: "client", pending: "palette" },
+] as const)(
+  "discards a late $pending after the requesting $boundary changes",
+  async ({ boundary, pending }) => {
     const personal: ThemeDescriptor = {
       id: "user/personal",
       name: "Personal",
@@ -564,39 +533,48 @@ it.each(["profile", "client"] as const)(
       source: "user",
       modes: ["dark"],
     };
-    patchSettings({ theme: personal.id });
+    const palette = pending === "palette";
+    if (palette) {
+      patchSettings({ theme: personal.id });
+    }
     const response = builtinCatalog([personal]);
-    const retired = createDeferred<ThemesGetResult>();
+    const retired = createDeferred<ThemesGetResult | ThemesListResult>();
     const { gateway, current } = createGatewayStoreTestStore();
     const applicationTheme = createApplicationTheme(loadSettings(), gateway);
     gateway.start();
     current().request.mockImplementation((method) =>
       method === "users.self"
         ? Promise.resolve(selfProfile("first"))
-        : method === "themes.get"
+        : !palette || method === "themes.get"
           ? retired.promise
           : Promise.resolve(response),
     );
-    current().opts.onHello?.({
+    const hello = () => ({
       ...GATEWAY_STORE_TEST_HELLO,
       auth: { role: "operator", scopes: ["operator.read"] },
       snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
     });
+    current().opts.onHello?.(hello());
     try {
       await vi.waitFor(() =>
-        expect(current().request).toHaveBeenCalledWith("themes.get", { id: personal.id }),
+        expect(current().request).toHaveBeenCalledWith(
+          palette ? "themes.get" : "themes.list",
+          palette ? { id: personal.id } : {},
+        ),
       );
       if (boundary === "client") {
         gateway.connect();
       }
-      const nextCatalog = {
-        ...response,
-        theme: personal,
-        definition: createThemeDefinitionFixture({
-          dark: createThemePaletteFixture({ background: "#443355" }),
-        }),
-        current: { ...response.current, id: personal.id },
-      } satisfies ThemesListResult;
+      const nextCatalog: ThemesListResult = palette
+        ? {
+            ...response,
+            theme: personal,
+            definition: createThemeDefinitionFixture({
+              dark: createThemePaletteFixture({ background: "#443355" }),
+            }),
+            current: { ...response.current, id: personal.id },
+          }
+        : builtinCatalog([]);
       current().request.mockImplementation(async (method) =>
         method === "users.self"
           ? selfProfile(boundary === "profile" ? "second" : "first")
@@ -607,23 +585,30 @@ it.each(["profile", "client"] as const)(
           createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
         );
       } else {
-        current().opts.onHello?.({
-          ...GATEWAY_STORE_TEST_HELLO,
-          auth: { role: "operator", scopes: ["operator.read"] },
-          snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
-        });
+        current().opts.onHello?.(hello());
       }
-      await vi.waitFor(() =>
+      if (palette) {
+        await vi.waitFor(() =>
+          expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
+            "--bg: #443355;",
+          ),
+        );
+      } else {
+        await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toEqual(BUILTIN_THEMES));
+      }
+      retired.resolve(palette ? { ...response, theme: personal, definition } : catalog());
+      await retired.promise;
+      if (palette) {
         expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
           "--bg: #443355;",
-        ),
-      );
-      retired.resolve({ ...response, theme: personal, definition });
-      await retired.promise;
-      expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
-        "--bg: #443355;",
-      );
-      expect(applicationTheme.catalog?.error).toBeNull();
+        );
+        expect(applicationTheme.catalog?.error).toBeNull();
+      } else {
+        expect(document.documentElement.dataset.themeId).toBe("claw");
+        expect(applicationTheme.catalog?.themes.some((theme) => theme.id === descriptor.id)).toBe(
+          false,
+        );
+      }
     } finally {
       applicationTheme.dispose();
       gateway.stop();

@@ -55,14 +55,7 @@ function requireModelRunPrompt(value: unknown): string {
   return value;
 }
 
-type ModelRunImageFile = {
-  path: string;
-  fileName: string;
-  mimeType: string;
-  data: string;
-};
-
-async function readModelRunImageFiles(files: string[] | undefined): Promise<ModelRunImageFile[]> {
+async function readModelRunImageFiles(files: string[] | undefined) {
   if (!files || files.length === 0) {
     return [];
   }
@@ -463,7 +456,6 @@ export function registerModelCapabilityCommands(capability: Command): void {
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
-          supported: ["local", "gateway"],
           defaultTransport: "local",
         });
         return runModelRun({

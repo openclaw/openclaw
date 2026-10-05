@@ -5,7 +5,7 @@ import path from "node:path";
 import type { DtsOptions, TsdownPlugin, UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
-  collectChannelConfigDoctorBuildEntries,
+  collectRetainedDoctorBuildEntries,
   collectPluginDeclarationSourceEntries,
   collectSourceCheckoutPluginBuildEntries,
   createBundledPluginBuildInventory,
@@ -416,6 +416,8 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id === "@openclaw/retry" ||
+    id === "@openclaw/worker-runtime" ||
+    id.startsWith("@openclaw/worker-runtime/") ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
     [
@@ -681,6 +683,11 @@ function buildUnifiedDistEntries(): Record<string, string> {
       ]),
     ),
     ...Object.fromEntries(
+      Object.entries(buildPackageDistEntriesFromExports("worker-runtime")).map(
+        ([entry, source]) => [`worker-runtime/${entry}`, source],
+      ),
+    ),
+    ...Object.fromEntries(
       Object.entries(buildPackageDistEntriesFromExports("media-core")).map(([entry, source]) => [
         `media-core/${entry}`,
         source,
@@ -863,6 +870,7 @@ const configs: UserConfig[] = [
   }),
   nodeWorkspacePackageBuildConfig("normalization-core"),
   nodeWorkspacePackageBuildConfig("retry"),
+  nodeWorkspacePackageBuildConfig("worker-runtime"),
   nodeWorkspacePackageBuildConfig("sdk", {
     deps: withExternalPackageSubpaths({
       neverBundle: [
@@ -987,6 +995,9 @@ const configs: UserConfig[] = [
     true,
   ),
   workerDeployBuildConfig({
+    "worker/code-mode-node.worker": "src/agents/code-mode-node.worker.ts",
+  }),
+  workerDeployBuildConfig({
     "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
   }),
   workerDeployBuildConfig({
@@ -995,19 +1006,27 @@ const configs: UserConfig[] = [
   workerDeployBuildConfig({
     "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
   }),
+  workerDeployBuildConfig({
+    "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts",
+  }),
+  workerDeployBuildConfig({
+    "worker/worker-native-lifecycle.worker": "src/infra/worker-native-lifecycle.worker.ts",
+  }),
   ...createManagedHandoffBuildConfigs().map((config) =>
     Object.assign(config, { name: TSDOWN_UNIFIED_CONFIG_GROUP, env }),
   ),
-  nodeBuildConfig(
-    {
-      name: TSDOWN_UNIFIED_CONFIG_GROUP,
-      // Keep retained config repairs in their own graph: shared public SDK chunks
-      // otherwise pull state-migration exports into these pre-install artifacts.
-      entry: collectChannelConfigDoctorBuildEntries(bundledPluginBuildInventory),
-      outDir: "dist/config-doctor",
-      deps: unifiedDeps,
-    },
-    false,
+  ...["config-doctor", "state-retention"].map((surface) =>
+    nodeBuildConfig(
+      {
+        name: TSDOWN_UNIFIED_CONFIG_GROUP,
+        // Keep retained config repairs in their own graph: shared public SDK chunks
+        // otherwise pull state-migration exports into these pre-install artifacts.
+        entry: collectRetainedDoctorBuildEntries({ ...bundledPluginBuildInventory, surface }),
+        outDir: `dist/${surface}`,
+        deps: unifiedDeps,
+      },
+      false,
+    ),
   ),
   workerHelperBuildConfig({
     "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",

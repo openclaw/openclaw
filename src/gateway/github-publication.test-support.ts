@@ -87,9 +87,25 @@ vi.mock("../agents/worktrees/service.js", () => ({
   },
 }));
 
+vi.mock("../agents/worktrees/registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/worktrees/registry-read.js")>()),
+  readLiveRegistryWorktreeByOwner: async (_context: unknown, kind: string, id: string) =>
+    mocks.findWorktree(kind, id),
+}));
+
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadGatewaySessionEntryReadOnly: mocks.loadSession,
+}));
+
+// Preparation and live authority checks use the same fixture session state.
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => mocks.loadSession(params.key, { agentId: params.agentId }),
 }));
 
 vi.mock("../process/exec.js", async (importOriginal) => ({

@@ -224,7 +224,6 @@ export function renderGroupedMessage(
     entryRef?: (element?: Element) => void;
     /** This message's own "Replying to" line, drawn inside the bubble. */
     replyLine?: ReplyLine;
-    onResolveReply?: (replyToId: string) => void;
     onOpenReply?: (replyToId: string) => void;
     replyNavigationId?: string | null;
   },

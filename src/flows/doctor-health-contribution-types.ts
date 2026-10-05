@@ -64,6 +64,8 @@ export type DoctorHealthFlowContext = {
   cfgForPersistence: OpenClawConfig;
   /** The finalized config-flow candidate crossed the atomic writer boundary. */
   configResultWriteCommitted?: boolean;
+  /** External config edits are advisory; dependent cleanup still requires persistence. */
+  externalConfigRepairsPending?: boolean;
   /** The requested config write was refused; later repairs must not consume its candidate. */
   configWriteRefusal?: "validation" | "cron-owner-safety" | "include-ownership" | "config-conflict";
   /** A post-commit failure is terminal for this context; retry needs a fresh inspected snapshot. */

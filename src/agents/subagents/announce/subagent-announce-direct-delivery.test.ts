@@ -241,97 +241,94 @@ describe("late exact requester recovery", () => {
     expect(clearTyping).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { name: "empty final", response: { status: "ok", result: { payloads: [] } } },
-    { name: "accepted turn", response: { status: "accepted" } },
-    { name: "in-flight turn", response: { status: "in_flight" } },
-    { name: "restart interruption", response: { status: "error", stopReason: "restart" } },
-    { name: "old keyed-input rejection", error: new Error("old keyed input rejected") },
-  ])("uses a late exact receipt after $name without replay", async (outcome) => {
+  it.each<{
+    name: string;
+    response?: unknown;
+    error?: Error;
+    patch: Partial<SessionEntry>;
+    expected: { delivered: boolean; requesterVisibleFinalDelivered?: boolean; reason?: string };
+    disposition?: string;
+  }>([
+    ...[
+      { name: "empty final", response: { status: "ok", result: { payloads: [] } } },
+      { name: "accepted turn", response: { status: "accepted" } },
+      { name: "in-flight turn", response: { status: "in_flight" } },
+      { name: "restart interruption", response: { status: "error", stopReason: "restart" } },
+      { name: "old keyed-input rejection", error: new Error("old keyed input rejected") },
+    ].map((outcome) =>
+      Object.assign(outcome, {
+        patch: finalReceipt,
+        expected: { delivered: true, requesterVisibleFinalDelivered: true },
+      }),
+    ),
+    ...[
+      {
+        name: "live claim",
+        patch: {
+          restartRecoveryDeliverySourceRunId: sourceRunId,
+          restartRecoveryDeliveryRunId: "successor",
+        },
+        reason: "requester_turn_pending",
+        disposition: "retryable",
+      },
+      {
+        name: "terminal without receipt",
+        patch: { restartRecoveryTerminalRunIds: [sourceRunId] },
+        reason: "visible_reply_missing",
+        disposition: "permanent_failure",
+      },
+      {
+        name: "unrelated source",
+        patch: { restartRecoveryTerminalRunIds: ["another-source"] },
+        reason: "visible_reply_missing",
+        disposition: undefined,
+      },
+      {
+        name: "replacement session",
+        patch: { ...finalReceipt, sessionId: "replacement" },
+        reason: "visible_reply_missing",
+        disposition: undefined,
+      },
+      {
+        name: "replacement lifecycle",
+        patch: { ...finalReceipt, lifecycleRevision: "replacement" },
+        reason: "visible_reply_missing",
+        disposition: undefined,
+      },
+      {
+        name: "unsent external final",
+        patch: {
+          restartRecoveryTerminalDeliveryEvidence: [
+            { runId: sourceRunId, captured: true, payloads: [{ visible: true }] },
+          ],
+        } satisfies Partial<SessionEntry>,
+        reason: "visible_reply_missing",
+        disposition: undefined,
+      },
+    ].map(({ reason, ...outcome }) =>
+      Object.assign(outcome, {
+        response: { status: "ok", result: { payloads: [] } },
+        expected: { delivered: false, reason },
+      }),
+    ),
+  ])("reconciles the exact late receipt for $name without replay", async (outcome) => {
     const fixture = setup();
     const delivery = fixture.startDelivery();
     await fixture.dispatchEntered.promise;
-    fixture.state.entry = { ...fixture.state.entry, ...finalReceipt };
+    fixture.state.entry = { ...fixture.state.entry, ...outcome.patch };
     fixture.readDone.resolve();
-    if ("error" in outcome) {
+    if (outcome.error) {
       fixture.dispatchDone.reject(outcome.error);
     } else {
       fixture.dispatchDone.resolve(outcome.response);
     }
-    await expect(delivery).resolves.toMatchObject({
-      delivered: true,
-      requesterVisibleFinalDelivered: true,
-    });
+    const result = await delivery;
+    expect(result).toMatchObject(outcome.expected);
+    expect(result.disposition).toBe(outcome.disposition);
     expect(fixture.dispatch).toHaveBeenCalledOnce();
     expect(fixture.send).not.toHaveBeenCalled();
     expect(fixture.steer).not.toHaveBeenCalled();
   });
-
-  it.each([
-    {
-      name: "live claim",
-      patch: {
-        restartRecoveryDeliverySourceRunId: sourceRunId,
-        restartRecoveryDeliveryRunId: "successor",
-      },
-      reason: "requester_turn_pending",
-      disposition: "retryable",
-    },
-    {
-      name: "terminal without receipt",
-      patch: { restartRecoveryTerminalRunIds: [sourceRunId] },
-      reason: "visible_reply_missing",
-      disposition: "permanent_failure",
-    },
-    {
-      name: "unrelated source",
-      patch: { restartRecoveryTerminalRunIds: ["another-source"] },
-      reason: "visible_reply_missing",
-      disposition: undefined,
-    },
-    {
-      name: "replacement session",
-      patch: { ...finalReceipt, sessionId: "replacement" },
-      reason: "visible_reply_missing",
-      disposition: undefined,
-    },
-    {
-      name: "replacement lifecycle",
-      patch: { ...finalReceipt, lifecycleRevision: "replacement" },
-      reason: "visible_reply_missing",
-      disposition: undefined,
-    },
-    {
-      name: "unsent external final",
-      patch: {
-        restartRecoveryTerminalDeliveryEvidence: [
-          { runId: sourceRunId, captured: true, payloads: [{ visible: true }] },
-        ],
-      },
-      reason: "visible_reply_missing",
-      disposition: undefined,
-    },
-  ] satisfies Array<{
-    name: string;
-    patch: Partial<SessionEntry>;
-    reason: string;
-    disposition: string | undefined;
-  }>)(
-    "does not manufacture successful delivery from $name",
-    async ({ patch, reason, disposition }) => {
-      const fixture = setup();
-      const delivery = fixture.startDelivery();
-      await fixture.dispatchEntered.promise;
-      fixture.state.entry = { ...fixture.state.entry, ...patch };
-      fixture.readDone.resolve();
-      fixture.dispatchDone.resolve({ status: "ok", result: { payloads: [] } });
-      const result = await delivery;
-      expect(result).toMatchObject({ delivered: false, reason });
-      expect(result.disposition).toBe(disposition);
-      expect(fixture.dispatch).toHaveBeenCalledOnce();
-      expect(fixture.send).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
     {

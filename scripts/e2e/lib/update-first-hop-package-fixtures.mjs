@@ -229,7 +229,7 @@ function futureFixtureVersion(sourceVersion, sequence) {
   return `${release[1]}.${release[2]}.${Number(release[3]) + 1}-first-hop.${sequence}`;
 }
 
-function stampFixtureVersion(packageRoot, version) {
+export function stampFixtureVersion(packageRoot, version) {
   const paths = resolveFixturePaths(packageRoot);
   const packageJson = readJson(paths.packageJson);
   const buildInfo = readJson(paths.buildInfo);

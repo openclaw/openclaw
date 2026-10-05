@@ -41,7 +41,6 @@ type VoiceCommandContext = {
   discordConfig: DiscordAccountConfig;
   accountId: string;
   groupPolicy: "open" | "disabled" | "allowlist";
-  useAccessGroups: boolean;
   getManager: () => DiscordVoiceManager | null;
   ephemeralDefault: boolean;
 };
@@ -90,7 +89,6 @@ async function authorizeVoiceCommand(
     discordConfig: currentParams.discordConfig,
     accountId: currentParams.accountId,
     groupPolicy: currentParams.groupPolicy,
-    useAccessGroups: currentParams.useAccessGroups,
     guild: interaction.guild,
     guildId: interaction.guild.id,
     channelId,

@@ -11,10 +11,7 @@ import {
   type SessionBindingScope,
 } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  isPluginOwnedBindingMetadata,
-  type PluginBindingMetadata,
-} from "./conversation-binding-metadata.js";
+import { isPluginOwnedBindingMetadata } from "./conversation-binding-metadata.js";
 import {
   addPendingPluginBindingRequest,
   takePluginBindingRequestForApproval,
@@ -163,27 +160,6 @@ function buildApprovalInteractiveReply(
   };
 }
 
-function buildBindingMetadata(params: {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot: string;
-  summary?: string;
-  detachHint?: string;
-  data?: Record<string, unknown>;
-  bindingAttemptId?: string;
-}): PluginBindingMetadata {
-  return {
-    pluginBindingOwner: "plugin",
-    pluginId: params.pluginId,
-    pluginName: params.pluginName,
-    pluginRoot: params.pluginRoot,
-    summary: normalizeOptionalString(params.summary),
-    detachHint: normalizeOptionalString(params.detachHint),
-    data: normalizeBindingData(params.data),
-    bindingAttemptId: normalizeOptionalString(params.bindingAttemptId),
-  };
-}
-
 export function toPluginConversationBinding(
   record:
     | {
@@ -274,15 +250,16 @@ export async function bindConversationNow(params: {
     conversation: ref,
     placement: "current",
     ...(assertCurrent ? { assertCurrent } : {}),
-    metadata: buildBindingMetadata({
+    metadata: {
+      pluginBindingOwner: "plugin",
       pluginId: params.identity.pluginId,
       pluginName: params.identity.pluginName,
       pluginRoot: params.identity.pluginRoot,
-      summary: params.summary,
-      detachHint: params.detachHint,
-      data: params.data,
-      bindingAttemptId: params.bindingAttemptId,
-    }),
+      summary: normalizeOptionalString(params.summary),
+      detachHint: normalizeOptionalString(params.detachHint),
+      data: normalizeBindingData(params.data),
+      bindingAttemptId: normalizeOptionalString(params.bindingAttemptId),
+    },
   });
   const binding = toPluginConversationBinding(record);
   if (!binding) {
@@ -331,17 +308,15 @@ export function buildPluginBindingErrorText(binding: PluginConversationBinding):
   return `The bound plugin ${resolvePluginBindingDisplayName(binding)} hit an error handling this message. This conversation is still bound to that plugin.${buildDetachHintSuffix(binding.detachHint)}`;
 }
 
-function buildPluginBindingFallbackNoticeKey(bindingId: string, scope?: SessionBindingScope) {
+function buildPluginBindingFallbackNoticeKey(bindingId: string, scope: SessionBindingScope) {
   const normalized = bindingId.trim();
   // Adapter binding IDs are local to their channel/account, just like mutations.
-  return normalized && scope
-    ? JSON.stringify([buildChannelAccountKey(scope), normalized])
-    : normalized;
+  return normalized ? JSON.stringify([buildChannelAccountKey(scope), normalized]) : normalized;
 }
 
 export function hasShownPluginBindingFallbackNotice(
   bindingId: string,
-  scope?: SessionBindingScope,
+  scope: SessionBindingScope,
 ): boolean {
   const normalized = buildPluginBindingFallbackNoticeKey(bindingId, scope);
   const cache = pluginBindingGlobalState.fallbackNoticeBindingIds;
@@ -354,7 +329,7 @@ export function hasShownPluginBindingFallbackNotice(
 
 export function markPluginBindingFallbackNoticeShown(
   bindingId: string,
-  scope?: SessionBindingScope,
+  scope: SessionBindingScope,
 ): void {
   pluginBindingGlobalState.fallbackNoticeBindingIds.check(
     buildPluginBindingFallbackNoticeKey(bindingId, scope),

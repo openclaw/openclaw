@@ -293,7 +293,7 @@ describe("board gateway runtime boundaries", () => {
       getGatewayMethodRegistry: () => methodRegistry,
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         tools: { exec: { mode: "ask" } },
       }),
       logGateway: { warn: vi.fn() },
@@ -445,7 +445,7 @@ describe("board gateway runtime boundaries", () => {
     });
     const harness = createHarness(undefined, undefined, undefined, {
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         tools: { exec: { mode: "auto" } },
       }),
     });

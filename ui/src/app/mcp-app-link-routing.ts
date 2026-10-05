@@ -23,8 +23,8 @@ export function startMcpAppRouting(context: Pick<ApplicationContext, "navigate">
     if (!looksLikeMcpAppLink(href)) {
       return;
     }
-    // Chat links use target=_blank by default. Shape matches that fail strict parsing
-    // (userinfo, port, bad deep link, control characters) are dropped; other links navigate normally.
+    // Chat links use target=_blank. Suppress navigation for app-shaped links even
+    // when strict parsing later rejects them.
     event.preventDefault();
     void import("./mcp-app-routing.ts")
       .then(({ navigateMcpAppLink }) => {

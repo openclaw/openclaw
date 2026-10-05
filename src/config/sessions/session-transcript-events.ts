@@ -21,7 +21,10 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreCandidateIdentities,
+} from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
@@ -66,14 +69,7 @@ export async function loadTranscriptEvents(
     captured.storePath ??
     resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteTranscriptReadScope(captured)));
   const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = new Map(
-    candidates
-      .filter((candidate) => !candidate.scope)
-      .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
-        return [identity.canonicalPath, identity] as const;
-      }),
-  );
+  const identities = captureSessionStoreCandidateIdentities(candidates);
   const context = captureOpenClawStateReadWorkerContext({ env: captured.env });
   const assertStateCurrent = () => {
     context.maintenanceScope?.assertAdmission();

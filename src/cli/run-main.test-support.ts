@@ -467,7 +467,6 @@ export {
   outputRootHelpMock,
   outputPrecomputedRootHelpTextMock,
   outputPrecomputedNodesHelpTextMock,
-  outputPrecomputedSubcommandHelpTextMock,
   loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
   tryOutputSetupOnboardConfigureHelpMock,
   buildProgramMock,

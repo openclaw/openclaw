@@ -675,7 +675,7 @@ describe("runGuidedOnboarding", () => {
     localOnboarding.persisted.config = {
       agents: {
         defaults: { workspace: "/tmp/existing-workspace" },
-        entries: { main: { default: true, workspace: "/tmp/existing-workspace" } },
+        entries: { main: { workspace: "/tmp/existing-workspace" } },
       },
       wizard: { securityAcknowledgedAt: pending.securityAcknowledgedAt },
     };

@@ -69,6 +69,45 @@ function snapshot(db: DatabaseSync) {
 }
 
 describe("memory storage migration", () => {
+  it("skips oversized and invalid cache rows visibly across three batches and reruns without writes", () => {
+    const db = legacyDatabase();
+    db.exec("DELETE FROM memory_embedding_cache");
+    const insert = db.prepare(`INSERT INTO memory_embedding_cache
+      (rowid, provider, model, provider_key, hash, embedding, dims, updated_at)
+      VALUES (?, 'provider', 'model', 'key', ?, '[1,2]', 2, 123)`);
+    insert.setReadBigInts(true);
+    for (let index = 0; index < 257; index++) {
+      insert.run(9007199254740993n + BigInt(index), String(index));
+    }
+    db.exec(`INSERT INTO memory_embedding_cache
+      (rowid, provider, model, provider_key, hash, embedding, dims, updated_at) VALUES
+      (-9223372036854775808, 'p', 'm', 'k', 'oversized', '[1]' || replace(hex(zeroblob(524288)), '0', ' '), 1, 1),
+      (-1, 'p', 'm', 'k', 'malformed', '[1,null]', 2, 1),
+      (9223372036854775807, 'p', 'm', 'k', 'invalid-json', 'invalid', 1, 1)`);
+    const warnings: string[] = [];
+    migrateMemoryIndexStorage(db, { onWarning: (warning) => warnings.push(warning) });
+    expect(warnings).toEqual([expect.stringContaining("Skipped 3 memory_embedding_cache rows")]);
+    expect(warnings[0]).toContain("-9223372036854775808, -1, 9223372036854775807");
+    const rows = db
+      .prepare(`SELECT CAST(rowid AS TEXT) AS id, embedding, dims, updated_at
+      FROM memory_embedding_cache ORDER BY rowid`)
+      .all();
+    expect(rows).toHaveLength(257);
+    for (const [index, row] of rows.entries()) {
+      expect(row).toEqual({
+        id: String(9007199254740993n + BigInt(index)),
+        embedding: encodeMemoryEmbedding([1, 2]),
+        dims: 2,
+        updated_at: 123,
+      });
+    }
+    const changes = db.prepare("SELECT total_changes() AS count").get();
+    warnings.length = 0;
+    migrateMemoryIndexStorage(db, { onWarning: (warning) => warnings.push(warning) });
+    expect(warnings).toEqual([]);
+    expect(db.prepare("SELECT total_changes() AS count").get()).toEqual(changes);
+  });
+
   it("converts legacy vectors larger than the child heap while preserving 64-bit storage identities", () => {
     const stateDir = tempDirs.make("memory-storage-heap-");
     const args = [
@@ -222,7 +261,7 @@ describe("memory storage migration", () => {
     );
     expect(
       db.prepare("SELECT length(embedding) AS bytes FROM memory_embedding_cache").get(),
-    ).toEqual({ bytes: 0 });
+    ).toBeUndefined();
   });
 
   it("rolls physical changes back with its enclosing admitted migration", () => {
@@ -380,6 +419,7 @@ describe("memory storage migration", () => {
       CREATE TABLE memory_index_state (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL) STRICT;
       INSERT INTO memory_index_state VALUES(1, 10);
       CREATE INDEX idx_memory_index_chunks_path_source ON memory_index_chunks(path, source);
+      CREATE INDEX idx_memory_index_chunks_path ON memory_index_chunks(path);
       CREATE INDEX idx_memory_embedding_cache_updated_at ON memory_embedding_cache(updated_at);
     `);
     for (const event of ["insert", "update", "delete"]) {
@@ -389,14 +429,14 @@ describe("memory storage migration", () => {
     }
     const indexes = db
       .prepare(
-        "SELECT name, sql FROM sqlite_schema WHERE name IN ('idx_memory_index_chunks_path_source', 'idx_memory_embedding_cache_updated_at') ORDER BY name",
+        "SELECT name, sql FROM sqlite_schema WHERE name IN ('idx_memory_index_chunks_path_source', 'idx_memory_index_chunks_path', 'idx_memory_embedding_cache_updated_at') ORDER BY name",
       )
       .all();
     migrateMemoryIndexStorage(db);
     expect(
       db
         .prepare(
-          "SELECT name, sql FROM sqlite_schema WHERE name IN ('idx_memory_index_chunks_path_source', 'idx_memory_embedding_cache_updated_at') ORDER BY name",
+          "SELECT name, sql FROM sqlite_schema WHERE name IN ('idx_memory_index_chunks_path_source', 'idx_memory_index_chunks_path', 'idx_memory_embedding_cache_updated_at') ORDER BY name",
         )
         .all(),
     ).toEqual(indexes);

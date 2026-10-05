@@ -35,7 +35,7 @@ test("automatic list and search projection reuse conventional state-directory pr
         );
         testState.sessionConfig = { store: storeTemplate };
         testState.agentsConfig = {
-          list: agentIds.map((id, index) => ({ id, default: index === 0 })),
+          entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
         };
         const { getRuntimeConfig } = await getGatewayConfigModule();
         const { resolvePluginMetadataSnapshot } =

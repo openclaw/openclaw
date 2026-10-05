@@ -23,7 +23,6 @@ type ResolveInstallableChannelPluginResult = {
   catalogEntry?: ChannelPluginCatalogEntry;
   configChanged: boolean;
   pluginInstalled: boolean;
-  supportsRequestedCapability?: boolean;
 };
 
 /** Resolve an existing channel plugin, scoped setup plugin, or installable catalog entry. */
@@ -52,7 +51,6 @@ export async function resolveInstallableChannelPlugin(params: {
       plugin: registeredPlugin,
       configChanged: false,
       pluginInstalled: false,
-      supportsRequestedCapability: supports(registeredPlugin),
     };
   }
 
@@ -133,6 +131,5 @@ export async function resolveInstallableChannelPlugin(params: {
     catalogEntry,
     configChanged: nextCfg !== params.cfg,
     pluginInstalled,
-    supportsRequestedCapability: plugin ? supports(plugin) : undefined,
   };
 }

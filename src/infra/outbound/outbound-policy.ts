@@ -15,18 +15,10 @@ import { MessageActionDeniedError } from "./message-action-denial.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
 
-/**
- * Builds a channel-native presentation for forwarded cross-context text.
- */
-type CrossContextPresentationBuilder = (message: string) => MessagePresentation;
-
-/**
- * Text and optional rich-presentation wrapper for cross-context outbound sends.
- */
 export type CrossContextDecoration = {
   prefix: string;
   suffix: string;
-  presentationBuilder?: CrossContextPresentationBuilder;
+  presentationBuilder?: (message: string) => MessagePresentation;
 };
 
 // All mutations are guarded, but markers only apply to outbound payloads that
@@ -339,16 +331,14 @@ export function applyCrossContextDecoration(params: {
 }): {
   message: string;
   presentation?: MessagePresentation;
-  usedPresentation: boolean;
 } {
-  const usePresentation = params.preferPresentation && params.decoration.presentationBuilder;
-  if (usePresentation) {
+  const buildPresentation = params.decoration.presentationBuilder;
+  if (params.preferPresentation && buildPresentation) {
     return {
       message: params.message,
-      presentation: params.decoration.presentationBuilder?.(params.message),
-      usedPresentation: true,
+      presentation: buildPresentation(params.message),
     };
   }
   const message = `${params.decoration.prefix}${params.message}${params.decoration.suffix}`;
-  return { message, usedPresentation: false };
+  return { message };
 }

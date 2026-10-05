@@ -208,58 +208,72 @@ describe("Gateway lock roles", () => {
     }
   });
 
-  it("keeps agent-embedded ownership distinct from a running Gateway", async () => {
-    const stateDir = await fixtureRootTracker.make("agent-embedded-role");
-    const lockDir = path.join(fixtureRoot, "__locks");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}", "utf8");
-    const env = {
-      ...process.env,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const readProcessCmdline = () => ["openclaw", "agent", "--local", "--message", "hello"];
-    const lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      lockDir,
-      platform: "darwin",
-      port: 28789,
-      readProcessCmdline,
-      readProcessStartTime: () => null,
-      role: "agent-embedded",
-      timeoutMs: 30,
-    });
-    expect(lock).not.toBeNull();
-    if (!lock) {
-      throw new Error("Expected embedded agent Gateway lock");
-    }
+  it.each([undefined, 28789])(
+    "observes embedded custody with port %s only when requested",
+    async (port) => {
+      const stateDir = await fixtureRootTracker.make("agent-embedded-role");
+      const lockDir = path.join(fixtureRoot, "__locks");
+      const configPath = path.join(stateDir, "openclaw.json");
+      await fs.writeFile(configPath, "{}", "utf8");
+      const env = {
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      const readProcessCmdline = () => ["openclaw", "agent", "--local", "--message", "hello"];
+      const lock = await acquireGatewayLock({
+        allowInTests: true,
+        env,
+        lockDir,
+        platform: "darwin",
+        port,
+        readProcessCmdline,
+        readProcessStartTime: () => null,
+        role: "agent-embedded",
+        timeoutMs: 30,
+      });
+      expect(lock).not.toBeNull();
+      if (!lock) {
+        throw new Error("Expected embedded agent Gateway lock");
+      }
 
-    try {
-      await expect(
-        readActiveGatewayLockIdentity({
-          env,
-          lockDir,
-          platform: "darwin",
-          readProcessCmdline,
-          readProcessStartTime: () => null,
-        }),
-      ).resolves.toBeUndefined();
-      await expect(
-        acquireGatewayLock({
-          allowInTests: true,
-          env,
-          lockDir,
-          platform: "darwin",
-          pollIntervalMs: 2,
-          readProcessCmdline,
-          readProcessStartTime: () => null,
-          sleep: nativeSleep,
-          timeoutMs: 15,
-        }),
-      ).rejects.toThrow("failed to acquire gateway state ownership");
-    } finally {
-      await lock.release();
-    }
-  });
+      try {
+        await expect(
+          readActiveGatewayLockIdentity({
+            env,
+            lockDir,
+            platform: "darwin",
+            readProcessCmdline,
+            readProcessStartTime: () => null,
+          }),
+        ).resolves.toBeUndefined();
+        await expect(
+          readActiveGatewayLockIdentity({
+            env,
+            lockDir,
+            platform: "darwin",
+            readProcessCmdline,
+            readProcessStartTime: () => null,
+            includeEmbedded: true,
+            requireInspection: true,
+          }),
+        ).resolves.toMatchObject({ pid: process.pid, port });
+        await expect(
+          acquireGatewayLock({
+            allowInTests: true,
+            env,
+            lockDir,
+            platform: "darwin",
+            pollIntervalMs: 2,
+            readProcessCmdline,
+            readProcessStartTime: () => null,
+            sleep: nativeSleep,
+            timeoutMs: 15,
+          }),
+        ).rejects.toThrow("failed to acquire gateway state ownership");
+      } finally {
+        await lock.release();
+      }
+    },
+  );
 });

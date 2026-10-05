@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { coerceErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   WorkerProviderError,
   type WorkerLeaseStatus,
@@ -7,12 +7,13 @@ import {
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import {
   type CrabboxCommandRunner,
   type LeaseCommandContext,
-  runCrabboxCommand,
+  runCrabboxCommandWithCoordinatorRetry,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
@@ -104,7 +105,7 @@ export function createCrabboxWorkerProvider(
   const openclawRoot = dependencies.openclawRoot ?? process.cwd();
   const heartbeats = createCrabboxHeartbeatManager({
     run: (context, signal) =>
-      runCrabboxCommand({
+      runCrabboxCommandWithCoordinatorRetry({
         action: "heartbeat",
         args: [
           "heartbeat",
@@ -118,12 +119,14 @@ export function createCrabboxWorkerProvider(
         ],
         binary: context.binary,
         runCommand,
+        sleep,
         signal,
         timeoutMs: context.heartbeatTimeoutMs,
       }),
     warn,
   });
-  const binaries = new Map<string, string>();
+  const providerAbort = new AbortController();
+  const binaries = new Map<string, Promise<string>>();
   let defaultCandidate: string | undefined;
   const resolveBinary = async (explicit?: string, signal?: AbortSignal): Promise<string> => {
     signal?.throwIfAborted();
@@ -135,12 +138,30 @@ export function createCrabboxWorkerProvider(
         pathEnv: dependencies.pathEnv ?? process.env.PATH,
         platform: dependencies.platform,
       }));
-    const existing = binaries.get(candidate);
-    if (existing) {
-      return existing;
+    // Completed acquisition remains usable by lease cleanup after provider disposal.
+    let resolution = binaries.get(candidate);
+    if (!resolution) {
+      providerAbort.signal.throwIfAborted();
+      // Acquisition belongs to the provider; cancelling one waiter cannot cancel discovery.
+      resolution = ensureManagedCrabboxBinary({
+        binary: candidate,
+        runCommand,
+        signal: providerAbort.signal,
+      })
+        .then(({ binary }) => {
+          providerAbort.signal.throwIfAborted();
+          return binary;
+        })
+        .catch((error: unknown) => {
+          binaries.delete(candidate);
+          throw error;
+        });
+      binaries.set(candidate, resolution);
     }
-    const { binary } = await ensureManagedCrabboxBinary({ binary: candidate, runCommand, signal });
-    binaries.set(candidate, binary);
+    const binary = await racePromiseWithAbortSignal(resolution, signal, ({ reason }) =>
+      toErrorObject(reason, "Crabbox acquisition aborted"),
+    );
+    signal?.throwIfAborted();
     return binary;
   };
   const machineOptions = createCrabboxMachineOptionsResolver({
@@ -154,7 +175,6 @@ export function createCrabboxWorkerProvider(
     warn,
     policy: dependencies.warmImagePolicy,
   });
-  const maintenanceAbort = new AbortController();
   let maintenanceInFlight: Promise<void> | undefined;
   const resolveMaintenanceBinaries = (
     profiles: readonly Parameters<typeof parseCrabboxProfile>[0][],
@@ -162,7 +182,7 @@ export function createCrabboxWorkerProvider(
   ) => resolveCrabboxCheckpointBinaries({ profiles, signal, resolveBinary, warn });
   const snapshots = createCrabboxSnapshotActions({
     manager: warmImages,
-    signal: maintenanceAbort.signal,
+    signal: providerAbort.signal,
     resolveBinaries: resolveMaintenanceBinaries,
   });
   const stopLease = async (context: LeaseCommandContext): Promise<void> => {
@@ -172,6 +192,7 @@ export function createCrabboxWorkerProvider(
       ...context,
       runCommand,
       warn,
+      sleep,
     });
     await warmImages.release(context);
   };
@@ -243,10 +264,9 @@ export function createCrabboxWorkerProvider(
     const setupDeadline =
       deadline +
       countCrabboxProvisionSetupPhases(parsed) * CRABBOX_SETUP_TIMEOUT_MS +
-      nodeBootstrapTimeoutMs +
+      2 * nodeBootstrapTimeoutMs +
       (project
         ? CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
-          nodeBootstrapTimeoutMs +
           resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider)
         : 0);
     const context = { binary, provider: parsed.provider };
@@ -285,6 +305,7 @@ export function createCrabboxWorkerProvider(
           ...context,
           id: leaseId,
           runCommand,
+          sleep,
           timeoutMs: remainingProvisionTimeout(
             deadline,
             resolveCrabboxLifecycleTimeoutMs(parsed.provider),
@@ -311,6 +332,7 @@ export function createCrabboxWorkerProvider(
         profile: parsed,
         runCommand,
         stopLease,
+        sleep,
         signal: preparationSignal,
       };
       if (isNonRunnableState(inspected.state)) {
@@ -452,11 +474,41 @@ export function createCrabboxWorkerProvider(
         );
       }
       let enrollment: CrabboxWorkerNodeEnrollment;
+      let runtimeSetupFailed = false;
       try {
+        if (!project && options?.prepareNodeRuntime) {
+          const runtime = await options.prepareNodeRuntime();
+          assertCurrent();
+          const setup = createCrabboxNodeRuntimeSetup({
+            nodeBootstrap: runtime.nodeBootstrap,
+            workerBundle: runtime.workerBundle,
+            leaseId,
+            target: parsed.target,
+          });
+          await runProvisionSetup({
+            ...inspectedParams,
+            phase: "node runtime preparation",
+            setup: setup.command,
+            forwardedEnv: setup.forwardedEnv,
+            timeoutMs: resolveCrabboxNodeEnrollmentTimeoutMs(runtime.bootstrapTimeoutMs),
+            signal:
+              preparationSignal && runtime.signal
+                ? AbortSignal.any([preparationSignal, runtime.signal])
+                : (preparationSignal ?? runtime.signal),
+          }).catch((error: unknown) => {
+            // Setup owns failure cleanup; the enrollment catch must not stop the lease twice.
+            runtimeSetupFailed = true;
+            throw error;
+          });
+          assertCurrent();
+        }
         enrollment = await beginNodeEnrollment();
         signal?.throwIfAborted();
       } catch (error) {
         signal?.throwIfAborted();
+        if (runtimeSetupFailed) {
+          throw error;
+        }
         if (error instanceof Error && error.name === "AbortError") {
           throw error;
         }
@@ -540,20 +592,21 @@ export function createCrabboxWorkerProvider(
     // Disposable worker desktops may resize only when the RFB server negotiates support.
     allowsDesktopResize: true,
     async dispose() {
-      maintenanceAbort.abort();
+      providerAbort.abort();
       await Promise.all([
         heartbeats.dispose(),
         maintenanceInFlight?.catch(() => {}),
         snapshots.settle(),
+        Promise.allSettled(binaries.values()),
       ]);
     },
     images: snapshots.images,
     maintain(context) {
       context.assertCurrent();
-      maintenanceAbort.signal.throwIfAborted();
+      providerAbort.signal.throwIfAborted();
       return (maintenanceInFlight ??= Promise.resolve()
         .then(async () => {
-          const signal = AbortSignal.any([context.signal, maintenanceAbort.signal]);
+          const signal = AbortSignal.any([context.signal, providerAbort.signal]);
           const assertCurrent = () => {
             signal.throwIfAborted();
             context.assertCurrent();
@@ -612,7 +665,6 @@ export function createCrabboxWorkerProvider(
         (parsed.warmImage === false
           ? 0
           : CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
-            resolveCrabboxNodeEnrollmentTimeoutMs(options?.nodeBootstrapTimeoutMs) +
             resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
       );
     },
@@ -637,6 +689,7 @@ export function createCrabboxWorkerProvider(
       const inspected = await inspectWithContext({
         ...context,
         runCommand,
+        sleep,
       });
       if (!inspected || isNonRunnableState(inspected.state)) {
         await heartbeats.stop(context.id);

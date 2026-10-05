@@ -26,6 +26,7 @@ import {
 } from "./github-personal-publication-store.js";
 import {
   resolveGitHubPublicationWorktreeOwner,
+  readGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity as SessionIdentity,
 } from "./github-publication-availability.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
@@ -294,7 +295,9 @@ export function createPersonalGitHubPublicationCoordinator(
   ): Promise<T> => {
     action.assertCurrent();
     return await placements.withLocalWorkspaceReservation(action, async (assertReservation) => {
-      const worktree = resolveGitHubPublicationWorktreeOwner(action).worktree;
+      const { worktree } = await readGitHubPublicationWorktreeOwner(action);
+      action.assertCurrent();
+      assertReservation();
       const lease = await acquireWorktreeRunLease(worktree.id, { exclusive: true });
       const assertCustody = () => {
         assertReservation();
@@ -442,7 +445,8 @@ export function createPersonalGitHubPublicationCoordinator(
           workspace.assertCurrent();
           bound.assertCurrent();
         };
-        const worktree = resolveGitHubPublicationWorktreeOwner(action).worktree;
+        const { worktree } = await readGitHubPublicationWorktreeOwner(action);
+        assertCurrent();
         const identity = await preparePersonalGitHubPublicationSelection(
           bound,
           workspace.assertCurrent,

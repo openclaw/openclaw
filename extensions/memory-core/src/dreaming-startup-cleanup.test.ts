@@ -52,11 +52,9 @@ function createGateway(
   const config = {
     cron: { enabled: params.cronEnabled ?? true },
     agents: {
-      list: agentIds.map((id, index) => ({
-        id,
-        default: index === 0,
-        workspace: path.join(stateDir, `workspace-${id}`),
-      })),
+      entries: Object.fromEntries(
+        agentIds.map((id) => [id, { workspace: path.join(stateDir, `workspace-${id}`) }]),
+      ),
     },
     plugins: {
       entries: {

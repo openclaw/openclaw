@@ -32,12 +32,9 @@ import {
   validateAgentConfigKeys,
 } from "./migrate-validation.js";
 import { readSelectedWorkspaceFiles } from "./migrate-workspace-files.js";
+import { readClawInstallRecordFromDatabase } from "./provenance-read.kernel.js";
 import { readClawSecondaryReferenceTables } from "./provenance-secondary-references.js";
-import {
-  persistClawMigrationOwnership,
-  readClawInstallRecordFromDatabase,
-  readClawInstallRecords,
-} from "./provenance.js";
+import { persistClawMigrationOwnership, readClawInstallRecords } from "./provenance.js";
 import { readClawManifestFile } from "./reader.js";
 import { isPortableClawAvatar } from "./schema-portability.js";
 import type { ClawManifest, ClawOpenClawProfile } from "./types.js";

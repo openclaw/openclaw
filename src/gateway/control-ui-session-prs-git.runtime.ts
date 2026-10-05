@@ -147,6 +147,7 @@ function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | nul
 
 export async function readCheckoutGitContext(
   root: string,
+  githubHost = "github.com",
 ): Promise<GitReadOperations["checkout.context"]["output"]> {
   const head = readCheckoutHead(root);
   const branch =
@@ -157,7 +158,8 @@ export async function readCheckoutGitContext(
     return null;
   }
   const remoteUrl = await gitOutput(root, ["remote", "get-url", "origin"]);
-  const remote = remoteUrl ? parseGitHubRemoteUrl(remoteUrl) : null;
+  const publicRemote = remoteUrl ? parseGitHubRemoteUrl(remoteUrl) : null;
+  const remote = publicRemote ?? (remoteUrl ? parseGitHubRemoteUrl(remoteUrl, githubHost) : null);
   if (!remote) {
     return null;
   }
@@ -169,6 +171,7 @@ export async function readCheckoutGitContext(
   const defaultBranch = defaultRef?.replace(/^origin\//, "");
   return {
     ...remote,
+    ...(!publicRemote ? { host: githubHost } : {}),
     branch: branch === "HEAD" ? null : branch,
     root,
     ...(defaultBranch ? { defaultBranch } : {}),

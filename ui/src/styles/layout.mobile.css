@@ -3,29 +3,6 @@
    =========================================== */
 
 @media (max-width: 1320px) {
-  .content--chat .content-header {
-    align-items: center;
-    gap: 8px;
-    row-gap: 0;
-    min-height: 44px;
-    max-height: 44px;
-    overflow: visible;
-  }
-
-  .content--chat .content-header > div:first-child {
-    min-width: 0;
-  }
-
-  .content--chat .page-meta {
-    align-self: center;
-    height: 36px;
-    align-items: center;
-    min-width: 0;
-    justify-content: flex-end;
-    flex-wrap: nowrap;
-    row-gap: 0;
-  }
-
   .chat-controls__model {
     grid-area: model;
     min-width: 0;
@@ -317,11 +294,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   .shell--mobile-nav .nav-item {
     font-size: var(--control-ui-text-sm);
-  }
-
-  /* Hide the entire content-header on mobile chat — controls are in mobile gear menu */
-  .content--chat .content-header {
-    display: none;
   }
 
   /* Match desktop: the composer owns its own bottom breathing room, so the

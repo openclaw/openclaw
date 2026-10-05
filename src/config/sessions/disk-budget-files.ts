@@ -39,37 +39,6 @@ export async function removeFileIfExists(filePath: string): Promise<FileRemovalR
   );
 }
 
-export async function removeFileForBudget(params: {
-  filePath: string;
-  canonicalPath?: string;
-  dryRun: boolean;
-  fileSizesByPath: Map<string, number>;
-  simulatedRemovedPaths: Set<string>;
-  onRemovedPath?: (canonicalPath: string) => void;
-}): Promise<FileRemovalResult> {
-  const resolvedPath = path.resolve(params.filePath);
-  const canonicalPath = params.canonicalPath ?? canonicalizePathForComparison(resolvedPath);
-  if (params.dryRun) {
-    // Dry-run deletion is path-deduped so a transcript and pointer alias cannot count the same
-    // artifact twice against the simulated budget.
-    if (params.simulatedRemovedPaths.has(canonicalPath)) {
-      return err("not-removed");
-    }
-    const size = params.fileSizesByPath.get(canonicalPath);
-    if (size === undefined) {
-      return err("not-removed");
-    }
-    params.simulatedRemovedPaths.add(canonicalPath);
-    params.onRemovedPath?.(canonicalPath);
-    return ok(size);
-  }
-  const removal = await removeFileIfExists(resolvedPath);
-  if (removal.ok) {
-    params.onRemovedPath?.(canonicalPath);
-  }
-  return removal;
-}
-
 async function readSessionFileStat(filePath: string): Promise<SessionsDirFileStat | null> {
   const stat = await fs.promises.stat(filePath).catch(() => null);
   return stat?.isFile()

@@ -43,9 +43,8 @@ internal interface TalkSpeechSynthesizing {
 
 /** Gateway RPC client for talk.speak with local-TTS fallback classification. */
 internal class TalkSpeakClient(
-  private val session: GatewaySession? = null,
+  private val requestDetailed: suspend (String, String, Long) -> GatewaySession.RpcResult,
   private val json: Json = Json { ignoreUnknownKeys = true },
-  private val requestDetailed: (suspend (String, String, Long) -> GatewaySession.RpcResult)? = null,
 ) : TalkSpeechSynthesizing {
   override suspend fun synthesize(
     text: String,
@@ -53,16 +52,15 @@ internal class TalkSpeakClient(
   ): TalkSpeakResult {
     val response =
       try {
-        performRequest(
-          method = "talk.speak",
-          paramsJson =
-            json.encodeToString(
-              buildJsonObject {
-                put("text", text)
-                json.encodeToJsonElement(directive ?: TalkDirective()).jsonObject.forEach { (name, value) -> put(name, value) }
-              },
-            ),
-          timeoutMs = 45_000,
+        requestDetailed(
+          "talk.speak",
+          json.encodeToString(
+            buildJsonObject {
+              put("text", text)
+              json.encodeToJsonElement(directive ?: TalkDirective()).jsonObject.forEach { (name, value) -> put(name, value) }
+            },
+          ),
+          45_000,
         )
       } catch (err: CancellationException) {
         throw err
@@ -111,16 +109,6 @@ internal class TalkSpeakClient(
     return reason == "talk_unconfigured" ||
       reason == "talk_provider_unsupported" ||
       reason == "method_unavailable"
-  }
-
-  private suspend fun performRequest(
-    method: String,
-    paramsJson: String,
-    timeoutMs: Long,
-  ): GatewaySession.RpcResult {
-    requestDetailed?.let { return it(method, paramsJson, timeoutMs) }
-    val activeSession = session ?: throw IllegalStateException("session missing")
-    return activeSession.requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
   }
 }
 

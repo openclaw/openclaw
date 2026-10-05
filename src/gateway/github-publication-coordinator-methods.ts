@@ -20,6 +20,7 @@ import {
 import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
+  readGitHubPublicationWorktreeOwner,
   resolveGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity,
 } from "./github-publication-availability.js";
@@ -193,11 +194,12 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       if (!sessionId) {
         throw new Error("GitHub publication session changed.");
       }
-      const initialAuthority = resolveGitHubPublicationWorktreeOwner({
+      const initialAuthority = await readGitHubPublicationWorktreeOwner({
         sessionId,
         sessionKey: input.sessionKey,
         agentId: input.agentId,
       });
+      assertRequester();
       const loaded = initialAuthority.loaded;
       const lifecycleRevision = loaded.entry?.lifecycleRevision ?? null;
       const placement = params.placements.get(sessionId);
@@ -265,11 +267,12 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         );
       }
       const deferred = placement !== undefined && placement.state !== "local";
-      const { worktree } = resolveGitHubPublicationWorktreeOwner({
+      const { worktree } = await readGitHubPublicationWorktreeOwner({
         sessionId,
         sessionKey: loaded.canonicalKey,
         agentId: input.agentId,
       });
+      assertRequester();
       const requestDigest = digestRequest({
         sessionId,
         idempotencyKey: input.idempotencyKey,

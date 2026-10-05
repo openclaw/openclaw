@@ -6,11 +6,9 @@ import {
   readWorkspaceSupportFile,
 } from "../lifecycle/workspace-skill-write.js";
 import {
-  applySkillProposalTransition,
   assertSkillProposalSupportTargetUnchanged,
   markSkillProposalStale,
   withSkillProposalLifecycleDispatch,
-  type SkillProposalApplyTransitionDependencies,
   type SkillProposalTransitionInput,
 } from "./apply-transition.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
@@ -19,11 +17,7 @@ import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin
 import { nextProposalVersion, prepareSkillProposalDraft } from "./proposal-draft.js";
 import { createSkillProposalGenerationDraftFile } from "./proposal-generation.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
-import {
-  assertExpectedRevisionHash,
-  evaluateSkillProposal,
-  SkillProposalCreateTargetConflictError,
-} from "./service-evaluation.js";
+import { assertExpectedRevisionHash } from "./service-evaluation.js";
 import {
   buildSupportFileMetadata,
   mergeProposalOriginRunProvenance,
@@ -42,11 +36,11 @@ import {
 } from "./store.js";
 import type {
   SkillProposalActionInput,
-  SkillProposalApplyResult,
   SkillProposalReadResult,
   SkillProposalRecord,
   SkillProposalReviseInput,
 } from "./types.js";
+export { applySkillProposalTransition as applySkillProposal } from "./apply-transition.js";
 export { readSkillProposalDraftDirectory, readSkillProposalDraftFile } from "./proposal-draft.js";
 export {
   composeSkillBodyPatch,
@@ -72,14 +66,6 @@ function proposalStoreOptions(
   }
   return { ...(env ? { env } : {}), agentId, config };
 }
-
-const APPLY_TRANSITION_DEPENDENCIES = {
-  assertExpectedRevisionHash,
-  evaluateSkillProposal,
-  isCreateTargetConflict: (error: unknown) =>
-    error instanceof SkillProposalCreateTargetConflictError,
-  readRequiredProposal,
-} satisfies SkillProposalApplyTransitionDependencies;
 
 export async function reviseSkillProposal(
   input: SkillProposalReviseInput,
@@ -284,12 +270,6 @@ export async function quarantineSkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalRecord> {
   return await markProposal(input, "quarantined");
-}
-
-export async function applySkillProposal(
-  input: SkillProposalActionInput,
-): Promise<SkillProposalApplyResult> {
-  return await applySkillProposalTransition(input, APPLY_TRANSITION_DEPENDENCIES);
 }
 
 async function markProposal(

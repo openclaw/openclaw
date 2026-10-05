@@ -89,8 +89,6 @@ export async function installPluginFromManagedNpmRoot(
     installPolicyRequest: PluginInstallPolicyRequest;
     npmResolution: NpmSpecResolution;
     policyPreflightSourcePath?: string;
-    policyPreflightSourcePathKind?: "file" | "directory";
-    skipPolicyPreflight?: boolean;
     signal?: AbortSignal;
     expectedReplacementPluginId?: string;
     integrityDrift?: NpmIntegrityDrift;
@@ -124,7 +122,8 @@ export async function installPluginFromManagedNpmRoot(
     return availability;
   }
 
-  if (!params.skipPolicyPreflight) {
+  const policyPreflightSourcePath = params.policyPreflightSourcePath;
+  if (policyPreflightSourcePath) {
     const preflightPolicyResult = await runInstallSourceScan({
       subject: `Plugin "${expectedPluginId ?? params.packageName}"`,
       pluginId: expectedPluginId ?? params.packageName,
@@ -140,8 +139,8 @@ export async function installPluginFromManagedNpmRoot(
           ...(expectedPluginId ? { pluginId: expectedPluginId } : {}),
           requestedSpecifier: params.installPolicyRequest.requestedSpecifier ?? params.displaySpec,
           source: params.installPolicyRequest.source,
-          sourcePath: params.policyPreflightSourcePath ?? targetNpmRoot,
-          sourcePathKind: params.policyPreflightSourcePathKind ?? "directory",
+          sourcePath: policyPreflightSourcePath,
+          sourcePathKind: "file",
         }),
     });
     if (preflightPolicyResult) {
@@ -245,9 +244,7 @@ export async function installPluginFromManagedNpmRoot(
     }
     const npmInstallArgs = resolveNpmCommand(
       createSafeNpmInstallArgs({
-        omitDev: true,
         omitPeer: true,
-        loglevel: "error",
         legacyPeerDeps: true,
         noAudit: true,
         noFund: true,
@@ -543,7 +540,6 @@ export async function installPluginFromManagedNpmRoot(
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       mode: policyMode,
       installPolicyRequest: params.installPolicyRequest,
-      emitSuccessSecurityEvent: false,
     });
     if (!result.ok) {
       return result;

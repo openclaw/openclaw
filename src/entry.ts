@@ -8,10 +8,7 @@ import { disableExitUnsafeCompilers } from "./bootstrap/node-exit-safe-compilers
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
-import {
-  tryOutputPrecomputedCommandHelp,
-  type PrecomputedCommandHelpDeps,
-} from "./cli/precomputed-help.js";
+import { tryOutputPrecomputedCommandHelp } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
@@ -319,17 +316,13 @@ export async function tryHandleRootHelpFastPath(
   }
 }
 
-export async function tryHandlePrecomputedCommandHelpFastPath(
-  argv: string[],
-  deps: PrecomputedCommandHelpDeps = {},
-): Promise<boolean> {
-  const env = deps.env ?? process.env;
-  if (resolveCliContainerTarget(argv, env)) {
+export async function tryHandlePrecomputedCommandHelpFastPath(argv: string[]): Promise<boolean> {
+  if (resolveCliContainerTarget(argv)) {
     return false;
   }
 
   try {
-    return await tryOutputPrecomputedCommandHelp(argv, { ...deps, env });
+    return await tryOutputPrecomputedCommandHelp(argv);
   } catch {
     return false;
   }

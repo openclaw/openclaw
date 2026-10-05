@@ -1,3 +1,7 @@
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage, readErrorCause, readErrorName } from "../infra/errors.js";
 import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
@@ -37,13 +41,7 @@ const DEFAULT_TRANSIENT_PROVIDER_RETRY_OPTIONS = {
 export function resolveTransientProviderRetryOptions(
   options?: TransientProviderRetryConfig,
 ): TransientProviderRetryOptions | undefined {
-  if (!options) {
-    return undefined;
-  }
-  if (options === true) {
-    return DEFAULT_TRANSIENT_PROVIDER_RETRY_OPTIONS;
-  }
-  return options;
+  return options === true ? DEFAULT_TRANSIENT_PROVIDER_RETRY_OPTIONS : options || undefined;
 }
 
 export function providerOperationRetryConfig(
@@ -69,14 +67,6 @@ function readErrorStatus(error: unknown): number | undefined {
   return undefined;
 }
 
-function readErrorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null) {
-    return undefined;
-  }
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "string" ? code : undefined;
-}
-
 // Provider reads get one bounded retry for negative DNS responses. Gateway
 // waits exclude ENOTFOUND because their configured gateway address needs repair.
 const PROVIDER_RETRYABLE_DNS_ERROR_CODE_RE = /\bENOTFOUND\b/i;
@@ -89,7 +79,7 @@ function hasTransientNetworkOrTimeoutSignal(error: unknown, message: string): bo
   if (hasProviderRetryableNetworkCode(message)) {
     return true;
   }
-  const code = readErrorCode(error);
+  const code = readStringField(asOptionalObjectRecord(error), "code");
   if (code && hasProviderRetryableNetworkCode(code)) {
     return true;
   }
@@ -138,13 +128,7 @@ function isTransientProviderOperationError(error: unknown, message: string): boo
 }
 
 export function resolveTransientProviderAttempts(options?: TransientProviderRetryOptions): number {
-  if (!options) {
-    return 1;
-  }
-  if (!Number.isSafeInteger(options.attempts)) {
-    return 1;
-  }
-  return Math.max(1, options.attempts);
+  return options && Number.isSafeInteger(options.attempts) ? Math.max(1, options.attempts) : 1;
 }
 
 export function resolveTransientProviderDelayMs(
@@ -164,20 +148,13 @@ export function resolveTransientProviderDelayMs(
   return Math.min(maxDelayMs, baseDelayMs * 2 ** Math.max(attemptNumber - 1, 0));
 }
 
-export function shouldRetrySameKeyProviderOperation(params: {
-  options: TransientProviderRetryOptions;
-  error: unknown;
-  message: string;
-  provider: string;
-  apiKeyIndex: number;
-  attemptNumber: number;
-  maxAttempts: number;
-  stage?: ProviderOperationRetryStage;
-}): boolean {
-  if (params.attemptNumber >= params.maxAttempts) {
-    return false;
-  }
-  if (params.options.signal?.aborted) {
+export function shouldRetrySameKeyProviderOperation(
+  params: TransientProviderRetryParams & {
+    options: TransientProviderRetryOptions;
+    maxAttempts: number;
+  },
+): boolean {
+  if (params.attemptNumber >= params.maxAttempts || params.options.signal?.aborted) {
     return false;
   }
   const retryParams: TransientProviderRetryParams = {

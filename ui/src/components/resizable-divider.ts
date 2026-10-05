@@ -107,7 +107,9 @@ class ResizableDivider extends OpenClawLitElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.setStaticAccessibilityAttributes();
+    this.setAttribute("role", "separator");
+    this.setAttribute("tabindex", "0");
+    this.setAttribute("aria-orientation", this.orientation);
     this.addEventListener("pointerdown", this.handlePointerDown);
     this.addEventListener("keydown", this.handleKeyDown);
   }
@@ -139,7 +141,10 @@ class ResizableDivider extends OpenClawLitElement {
       return;
     }
     this.classList.add("dragging");
-    this.capturePointer(e.pointerId);
+    this.activePointerId = e.pointerId;
+    if (typeof this.setPointerCapture === "function") {
+      this.setPointerCapture(e.pointerId);
+    }
 
     window.addEventListener("pointermove", this.handlePointerMove);
     for (const type of DRAG_END_EVENTS) {
@@ -223,7 +228,13 @@ class ResizableDivider extends OpenClawLitElement {
     // Releasing capture can synchronously report capture loss. Remove the
     // listener first so one owner end cannot emit resize-end twice.
     this.removeEventListener("lostpointercapture", this.finishDragging);
-    this.releaseActivePointer(pointerId);
+    this.activePointerId = null;
+    if (
+      typeof this.releasePointerCapture === "function" &&
+      (typeof this.hasPointerCapture !== "function" || this.hasPointerCapture(pointerId))
+    ) {
+      this.releasePointerCapture(pointerId);
+    }
     if (this.dragFrame) {
       cancelAnimationFrame(this.dragFrame);
       this.dragFrame = 0;
@@ -288,31 +299,6 @@ class ResizableDivider extends OpenClawLitElement {
 
   private setCurrentAriaValue(value: number) {
     this.setAttribute("aria-valuenow", String(this.toAriaValue(value)));
-  }
-
-  private setStaticAccessibilityAttributes() {
-    this.setAttribute("role", "separator");
-    this.setAttribute("tabindex", "0");
-    this.setAttribute("aria-orientation", this.orientation);
-  }
-
-  private capturePointer(pointerId: number) {
-    this.activePointerId = pointerId;
-    if (typeof this.setPointerCapture !== "function") {
-      return;
-    }
-    this.setPointerCapture(pointerId);
-  }
-
-  private releaseActivePointer(pointerId: number) {
-    this.activePointerId = null;
-    if (typeof this.releasePointerCapture !== "function") {
-      return;
-    }
-    if (typeof this.hasPointerCapture === "function" && !this.hasPointerCapture(pointerId)) {
-      return;
-    }
-    this.releasePointerCapture(pointerId);
   }
 }
 

@@ -278,9 +278,9 @@ const defaultSandbox = agents?.defaults?.sandbox ?? {};
 const defaultDockerImage = defaultSandbox?.docker?.image ?? process.argv[1];
 const defaultBrowserImage = defaultSandbox?.browser?.image ?? process.argv[2];
 const images = new Set();
-const configuredEntries = Array.isArray(agents?.list)
-  ? agents.list.filter((entry) => entry !== null && typeof entry === "object")
-  : [];
+const configuredEntries = Object.values(agents?.entries ?? {}).filter(
+  (entry) => entry !== null && typeof entry === "object",
+);
 const entries = configuredEntries.length > 0 ? configuredEntries : [{ sandbox: {} }];
 
 const matchesBrowser = (rawPattern) => {

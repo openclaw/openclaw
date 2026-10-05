@@ -54,7 +54,6 @@ import {
   isGatewayRequestContextError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
@@ -501,9 +500,6 @@ export async function handleOpenAiHttpRequest(
     ...opts,
     pathname: "/v1/chat/completions",
     requiredOperatorMethod: "chat.send",
-    // Compat HTTP uses a different scope model from generic HTTP helpers:
-    // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes: opts.maxBodyBytes ?? limits.maxBodyBytes,
   });
   if (handled === false) {
@@ -604,8 +600,6 @@ export async function handleOpenAiHttpRequest(
       model,
       user,
       sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: true,
     }));
   } catch (err) {
     if (isGatewayRequestContextError(err)) {

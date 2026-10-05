@@ -166,7 +166,7 @@ export async function listSessions(params: {
 
 export async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    agents: { entries: { main: {}, work: {} } },
   };
   for (const [agentId, name, updatedAt, owner, overrides] of [
     ["main", "active", 400, "owner@example.com", {}],

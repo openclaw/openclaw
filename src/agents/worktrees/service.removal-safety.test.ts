@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as checkoutGitOwner from "./checkout-git-config.js";
 import * as checkoutInspection from "./checkout-inspection.js";
@@ -116,6 +117,62 @@ describe("managed removal custody", () => {
     await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
     expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.outcome).toBe("retained-dirty");
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("hidden change\n");
+  });
+
+  it("finalizes source-only deletion after its producer and command scope are revoked", async () => {
+    const created = await materializeManagedWorktreeFixture({
+      env,
+      name: "revoked-deletion",
+      now: Date.now(),
+      repoRoot: repo,
+      stateDir: env.OPENCLAW_STATE_DIR!,
+      ownerKind: "session",
+    });
+    await fs.writeFile(path.join(created.path, "README.md"), "restorable archived edit\n");
+    const runGit = gitOwner.runGit;
+    let current = true;
+    let stopCommands = () => {};
+    vi.spyOn(gitOwner, "runGit").mockImplementation(async (cwd, args, options) => {
+      const result = await runGit(cwd, args, options);
+      if (args[0] === "worktree" && args[1] === "remove" && result.code === 0) {
+        current = false;
+        stopCommands();
+      }
+      return result;
+    });
+
+    const removed = await withCommandProcessScope(async (stop) => {
+      stopCommands = stop;
+      return await service.remove({
+        id: created.id,
+        reason: "owner-gc",
+        commitGuard: () => {
+          if (!current) {
+            throw new Error("maintenance configuration changed");
+          }
+        },
+      });
+    });
+
+    expect(current).toBe(false);
+    expect(checkoutGitOwner.withWorktreeGitConfig).toHaveBeenCalledWith(
+      created.path,
+      true,
+      expect.any(Object),
+      expect.any(Function),
+    );
+    expect(getRegistryWorktree(env, created.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: removed.snapshotRef,
+    });
+    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
+    await expect(
+      git(repo, "show-ref", "--verify", `refs/openclaw/removals/${created.id}`),
+    ).rejects.toThrow();
+    const restored = await service.restore({ id: created.id });
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+      "restorable archived edit\n",
+    );
   });
 
   it("releases lossless removal custody without recording an outcome after caller revocation", async () => {

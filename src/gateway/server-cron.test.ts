@@ -1935,7 +1935,7 @@ describe("buildGatewayCronService", () => {
 
   it("cron_changed hook event includes agentId from the job", async () => {
     const cfg = createCronConfig("server-cron-hook-agentId");
-    cfg.agents = { entries: { main: { default: true }, yinze: {} } };
+    cfg.agents = { entries: { main: {}, yinze: {} } };
     await withCronService(cfg, async (state) => {
       const job = await addAgentTurnJob(state, "agent-scoped-job", "agent check", {
         agentId: "yinze",
@@ -3211,7 +3211,7 @@ describe("buildGatewayCronService", () => {
       cron: { store: path.join(os.tmpdir(), `server-cron-untargeted-${Date.now()}`, "cron.json") },
       agents: {
         entries: {
-          primary: { default: true, model: "test/primary" },
+          primary: { model: "test/primary" },
           ops: { model: "test/ops" },
         },
       },
@@ -3250,7 +3250,7 @@ describe("buildGatewayCronService", () => {
           },
         },
         entries: {
-          primary: { default: true },
+          primary: {},
         },
       },
     } as OpenClawConfig;
@@ -3359,7 +3359,7 @@ describe("buildGatewayCronService", () => {
     const cfg = createCronConfig("server-cron-unknown-agent");
     cfg.agents = {
       entries: {
-        primary: { default: true, model: "test/primary" },
+        primary: { model: "test/primary" },
         ops: { model: "test/ops" },
       },
     };
@@ -3395,7 +3395,7 @@ describe("buildGatewayCronService", () => {
       },
       agents: {
         entries: {
-          primary: { default: true, model: "test/primary" },
+          primary: { model: "test/primary" },
           ops: { model: "test/ops" },
         },
       },
@@ -3441,7 +3441,7 @@ describe("buildGatewayCronService", () => {
       ...createCronConfig("server-cron-system-owner-wake"),
       agents: {
         defaults: { systemAgent: { agentId: "ops" } },
-        entries: { main: { default: true }, ops: {} },
+        entries: { main: {}, ops: {} },
       },
     } as OpenClawConfig;
     const state = loadCronService(cfg);
@@ -3605,13 +3605,13 @@ describe("buildGatewayCronService", () => {
     startupCfg.agents = {
       defaults: { workspace: path.join(tmpDir, "workspace") },
       entries: {
-        main: { default: true },
+        main: {},
         yinze: { workspace: path.join(tmpDir, "workspace-yinze") },
       },
     };
     const reloadedCfg = {
       ...startupCfg,
-      agents: { ...startupCfg.agents, entries: { main: { default: true } } },
+      agents: { ...startupCfg.agents, entries: { main: {} } },
     } as OpenClawConfig;
     await withCronService(startupCfg, async (state) => {
       const job = await addAgentTurnJob(state, "isolated-subagent-workspace", "read SOW.md", {
@@ -3636,7 +3636,7 @@ describe("buildGatewayCronService", () => {
       cron: { store: path.join(tmpDir, "cron.json") },
       agents: {
         defaults: { workspace: path.join(tmpDir, "workspace") },
-        entries: { main: { default: true }, yinze: {}, other: {} },
+        entries: { main: {}, yinze: {}, other: {} },
       },
     } as OpenClawConfig;
     const state = loadCronService(cfg);
@@ -3672,7 +3672,7 @@ describe("buildGatewayCronService", () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-agent-uncertain-${Date.now()}`);
     const cfg = {
       cron: { store: path.join(tmpDir, "cron.json") },
-      agents: { entries: { main: { default: true }, yinze: {}, other: {} } },
+      agents: { entries: { main: {}, yinze: {}, other: {} } },
     } as OpenClawConfig;
     await withCronService(cfg, async (state) => {
       for (const [agentId, name] of [
@@ -3734,7 +3734,7 @@ describe("buildGatewayCronService", () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-agent-fenced-${Date.now()}`);
     const cfg = {
       cron: { store: path.join(tmpDir, "cron.json") },
-      agents: { entries: { main: { default: true }, yinze: {} } },
+      agents: { entries: { main: {}, yinze: {} } },
     } as OpenClawConfig;
     await withCronService(cfg, async (state) => {
       const job = await addAgentTurnJob(state, "fenced-job", "must not run", {
@@ -3759,12 +3759,12 @@ describe("buildGatewayCronService", () => {
       cron: { store: path.join(tmpDir, "cron.json") },
       agents: {
         defaults: { workspace: path.join(tmpDir, "workspace") },
-        entries: { main: { default: true }, yinze: {} },
+        entries: { main: {}, yinze: {} },
       },
     } as OpenClawConfig;
     const deletedCfg = {
       ...cfg,
-      agents: { ...cfg.agents, entries: { main: { default: true } } },
+      agents: { ...cfg.agents, entries: { main: {} } },
     } as OpenClawConfig;
     const state = loadCronService(cfg);
     const commitStarted = createDeferred();
@@ -3821,7 +3821,7 @@ describe("buildGatewayCronService", () => {
           },
         },
         entries: {
-          main: { default: true },
+          main: {},
           yinze: {
             workspace: path.join(tmpDir, "workspace-yinze"),
             heartbeat: {
@@ -3847,7 +3847,7 @@ describe("buildGatewayCronService", () => {
             deliveryFormat: "text",
           },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(reloadedCfg);

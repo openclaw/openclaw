@@ -3,38 +3,8 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as census from "../infra/openclaw-process-census.js";
-import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import * as usage from "../infra/temp-directory-usage.js";
 import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
-
-const { ps, sysctl } = vi.hoisted(() => ({ ps: vi.fn(), sysctl: vi.fn() }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: ps,
-}));
-vi.mock("node:module", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:module")>();
-  const createRequire = (file: string | URL) => {
-    const require = actual.createRequire(file);
-    return Object.assign(
-      (id: string) =>
-        id === "koffi"
-          ? {
-              load: () => ({
-                func: (signature: string) => (signature.includes("sysctl(") ? sysctl : () => 0),
-              }),
-              errno: () => 22,
-            }
-          : require(id),
-      require,
-    );
-  };
-  return new Proxy(actual, {
-    get(target, key, receiver) {
-      return key === "createRequire" ? createRequire : Reflect.get(target, key, receiver);
-    },
-  });
-});
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
@@ -57,8 +27,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.useRealTimers();
-  ps.mockReset();
-  sysctl.mockReset();
   if (getuidDescriptor) {
     Object.defineProperty(process, "getuid", getuidDescriptor);
   } else {
@@ -84,7 +52,7 @@ it.each([
     removed: false,
   },
   {
-    name: "unrelated root daemon",
+    name: "current user scratch",
     uid: 501,
     peerUid: 0,
     captureUid: 501,
@@ -102,8 +70,7 @@ it.each([
 ])(
   "automatic sweep respects legacy custody: $name",
   async ({ uid, peerUid, captureUid, changed, removed }) => {
-    const inspectProcesses = vi.spyOn(census, "inspectOtherOpenClawProcesses");
-    mockProcessPlatform("darwin");
+    vi.spyOn(usage, "inspectTemporaryDirectoryUsage").mockReturnValue({ kind: "inactive" });
     Object.defineProperty(process, "getuid", { configurable: true, value: () => uid });
     const roots = [
       path.join(temporary, "openclaw-plugin-build-retained"),
@@ -125,31 +92,7 @@ it.each([
       }
       return stat;
     });
-    const peer = 2_000_000_000;
-    ps.mockReturnValue({
-      status: 0,
-      stdout: `${process.pid} ${process.pid} S 0 ${uid}\n${peer} ${peer} S 0 ${peerUid}\n`,
-    });
-    sysctl.mockImplementation((mib: Int32Array, _count: number, output: Buffer, size: Buffer) => {
-      if (mib[1] === 8) {
-        output.writeInt32LE(4096);
-        size.writeBigUInt64LE(4n);
-        return 0;
-      }
-      if (mib[2] === peer) {
-        return -1;
-      }
-      output.writeInt32LE(1);
-      const length = output.write("/node\0openclaw-gateway\0", 4) + 4;
-      size.writeBigUInt64LE(BigInt(length));
-      return 0;
-    });
-    const kill = process.kill.bind(process);
-    vi.spyOn(process, "kill").mockImplementation((pid, signal) =>
-      pid === peer && signal === 0 ? true : kill(pid, signal),
-    );
     await sweepPluginSourceCapturesForTest(stateDir);
-    expect(inspectProcesses).toHaveReturnedWith({ pids: [] });
     for (const root of roots) {
       expect(fs.existsSync(root), root).toBe(!removed);
       if (!removed) {

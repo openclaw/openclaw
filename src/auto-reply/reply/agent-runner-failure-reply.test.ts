@@ -7,8 +7,8 @@ import {
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
-import { SkillLibraryError } from "../../skills/library/errors.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
+import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -130,6 +130,18 @@ describe("buildExternalRunFailureReply", () => {
       });
     },
   );
+
+  it("retains the actual provider rejection when verbose output is off", () => {
+    const message = "The AI service could not accept this request";
+    const error = new FailoverError(message, {
+      reason: "format",
+      rawError: "Invalid service_tier argument",
+    });
+    expect(buildExternalRunFailureReply({ message, error })).toEqual({
+      text: String.raw`LLM request rejected: Invalid service\_tier argument`,
+      isGenericRunnerFailure: false,
+    });
+  });
 
   it("uses preserved format diagnostics without exposing raw details", () => {
     const message = "safe summary";

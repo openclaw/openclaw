@@ -31,6 +31,7 @@ import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-con
 import { getPluginValueInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
 import {
   resolvePluginRuntimeExecutionArtifact,
@@ -372,8 +373,14 @@ function loadSetupManifestRecords(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
+  metadataSnapshot?: PluginMetadataSnapshot;
 }) {
-  const { snapshot: index, manifestRegistry } = loadPluginRegistrySnapshotWithMetadata(params);
+  const { snapshot: index, manifestRegistry } = params.metadataSnapshot
+    ? {
+        snapshot: params.metadataSnapshot.index,
+        manifestRegistry: params.metadataSnapshot.manifestRegistry,
+      }
+    : loadPluginRegistrySnapshotWithMetadata(params);
   if (!manifestRegistry) {
     return loadPluginManifestRegistryForInstalledIndex({ ...params, index, includeDisabled: true })
       .plugins;
@@ -699,6 +706,7 @@ export const resolvePluginSetupCliBackend = withPluginSetupCache(function (param
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): SetupCliBackendEntry | undefined {
   const normalized = normalizeProviderId(params.backend);
 
@@ -710,6 +718,7 @@ export const resolvePluginSetupCliBackend = withPluginSetupCache(function (param
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
+    metadataSnapshot: params.metadataSnapshot,
     normalizedId: normalized,
     listIds: listSetupCliBackendIds,
   });

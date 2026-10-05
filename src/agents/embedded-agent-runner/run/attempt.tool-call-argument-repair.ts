@@ -71,10 +71,6 @@ const TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS: Record<string, string> = {
   old_string: "new_string",
   oldText: "newText",
 };
-const TOOLCALL_REPAIR_TOOL_VALUE_SUCCESSOR_KEYS = new Map<
-  string,
-  ReadonlyMap<string, readonly string[]>
->([["read", new Map([["path", ["offset", "limit"]]])]]);
 const TOOLCALL_REPAIR_JSON_STRING_ESCAPES: Record<string, string> = {
   '"': '"',
   "\\": "\\",
@@ -233,10 +229,7 @@ function shouldCloseSmartQuotedValueAt(
   if (!TOOLCALL_REPAIR_FREEFORM_VALUE_KEYS.has(valueKey)) {
     return (
       TOOLCALL_REPAIR_KNOWN_ARG_KEYS.has(nextKey) ||
-      (TOOLCALL_REPAIR_TOOL_VALUE_SUCCESSOR_KEYS.get(toolName ?? "")
-        ?.get(valueKey)
-        ?.includes(nextKey) ??
-        false)
+      (toolName === "read" && valueKey === "path" && (nextKey === "offset" || nextKey === "limit"))
     );
   }
   return TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS[valueKey] === nextKey;

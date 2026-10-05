@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspect } from "node:util";
 import JSZip from "jszip";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal, createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -573,6 +574,35 @@ describe("managed Crabbox", () => {
 });
 
 describe("Crabbox version admission", () => {
+  it("reports a redacted version failure without retaining private error data", async () => {
+    const token = "synthetic-version-secret-0123456789";
+    const cause = Object.assign(
+      new Error(`output capture failed token=${token}`, {
+        cause: new Error(`nested token=${token}`),
+      }),
+      { stdout: token, stderr: token },
+    );
+    const probe = await probeCrabboxVersion("crabbox", async () => {
+      throw cause;
+    });
+    expect(probe).toMatchObject({
+      status: "indeterminate",
+      reason: expect.stringContaining(
+        "Crabbox version command execution failed: output capture failed",
+      ),
+    });
+    for (
+      let current: unknown = Object.getOwnPropertyDescriptor(probe, "cause")?.value;
+      current instanceof Error;
+      current = current.cause
+    ) {
+      expect(current.message).not.toContain(token);
+    }
+    expect(inspect(probe, { depth: null })).not.toContain(token);
+    expect(probe).not.toHaveProperty("cause");
+    expect(probe).toHaveProperty("reason", expect.not.stringContaining("synthetic-version-secret"));
+  });
+
   it.each([
     ["0.69.0-rc.1", "outdated"],
     ["0.69.0+build.1", "supported"],

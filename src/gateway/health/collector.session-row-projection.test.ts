@@ -129,7 +129,7 @@ describe("health and status resident session summaries", () => {
   it("uses no SQLite for clean repeats and follows dirty and topology publications", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       };
       const mainKey = "agent:main:primary";
       const backfill = observeSessionRowBackfill([mainKey]);

@@ -10,6 +10,7 @@ import { WebSocketServer } from "ws";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import {
@@ -29,6 +30,7 @@ import {
   createSessionMutationTestContext,
 } from "../gateway/server-methods/sessions-mutations.owner.test-support.js";
 import { createWorktreesHandlers } from "../gateway/server-methods/worktrees.js";
+import { startWorktreeMaintenance } from "../gateway/worktree-maintenance.js";
 import {
   acquireGatewayLock,
   readActiveGatewayLockIdentity,
@@ -38,6 +40,10 @@ import {
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as commandRunner from "../process/exec.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import {
   acquireTestPortBlock,
   reserveTestPortListener,
@@ -84,6 +90,9 @@ describe("same-root local mutation routing", () => {
   let claim: TestPortClaim;
   let owner: GatewayLockHandle | null;
   let service: ManagedWorktreeService;
+  const maintenanceClock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(maintenanceClock.clock);
+  let maintenance: ReturnType<typeof startWorktreeMaintenance>;
   let mode: "normal" | "old" | "refused" | "lost-reply" = "normal";
   let missingCapability: string | undefined;
   const requests: string[] = [];
@@ -139,6 +148,13 @@ describe("same-root local mutation routing", () => {
     expect(owner).not.toBeNull();
     const handlers = createWorktreesHandlers(service);
     const context = createSessionMutationTestContext(cfg);
+    maintenance = startWorktreeMaintenance({
+      scheduler,
+      getRuntimeConfig: context.getRuntimeConfig,
+      runGc: () => service.gc(createManagedWorktreeOwnerPolicy(cfg)),
+      onComplete: () => {},
+      onError: (error) => failures.push(error),
+    });
     const client = createSessionMutationTestClient();
     client.connect.scopes = ["operator.admin"];
     server = new WebSocketServer({ host: "127.0.0.1", port: claim.port });
@@ -223,6 +239,8 @@ describe("same-root local mutation routing", () => {
   });
 
   afterAll(async () => {
+    await maintenance.stop();
+    await scheduler.stop();
     await closeMinimalGatewayServer(server);
     await closeOpenClawStateDatabaseAsync();
     await owner?.release();
@@ -685,7 +703,10 @@ describe("same-root local mutation routing", () => {
           await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
         );
         const succeeded = scenario === "live" || scenario === "offline";
-        expect(result.code, result.stderr).toBe(succeeded && kind !== "gc-partial" ? 0 : 1);
+        const backgroundGc = method === "worktrees.gc" && scenario !== "offline";
+        expect(result.code, result.stderr).toBe(
+          succeeded && (backgroundGc || kind !== "gc-partial") ? 0 : 1,
+        );
         expect(methods.slice(before)).toEqual(
           scenario === "live" || scenario === "lost-reply" ? [method] : [],
         );
@@ -704,11 +725,42 @@ describe("same-root local mutation routing", () => {
         }
         // Read the canonical owner's persisted publication after success or a lost
         // reply. Unknown outcomes must never trigger a caller-thread SQL replay.
-        const payload = succeeded ? JSON.parse(result.stdout) : undefined;
-        await prepared.verify(
-          scenario !== "missing-capability",
-          scenario === "lost-reply" ? publishedResults.at(-1) : payload,
-        );
+        let payload =
+          scenario === "lost-reply"
+            ? publishedResults.at(-1)
+            : succeeded
+              ? JSON.parse(result.stdout)
+              : undefined;
+        if (backgroundGc && scenario !== "missing-capability") {
+          expect(payload).toMatchObject({
+            jobId: expect.any(String),
+            state: "queued",
+            startedAt: null,
+            completedAt: null,
+          });
+          await prepared.verify(false);
+          await maintenanceClock.advanceBy(0);
+          mode = "normal";
+          const progress = await runCliProcessChild({
+            nodeArgs: [...entrypoint, "worktrees", "gc", "--job", payload.jobId, "--json"],
+            env,
+          });
+          expect(progress.code, progress.stderr).toBe(kind === "gc-partial" ? 1 : 0);
+          expect(methods.slice(before)).toEqual([method, method]);
+          const completed = JSON.parse(progress.stdout);
+          expect(completed).toMatchObject({
+            jobId: payload.jobId,
+            state: "completed",
+            completedAt: expect.any(Number),
+          });
+          expect(
+            JSON.parse(
+              await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
+            ).worktreeSql,
+          ).toBe(0);
+          payload = completed;
+        }
+        await prepared.verify(scenario !== "missing-capability", payload);
       } finally {
         if (!owner) {
           owner = await acquireGatewayLock({
@@ -723,25 +775,61 @@ describe("same-root local mutation routing", () => {
     },
   );
 
-  it("visibly refuses live sandbox recreate before any worktree SQL or owner dispatch", async () => {
-    const before = methods.length;
-    const result = await runCliProcessChild({
-      nodeArgs: [...entrypoint, "sandbox", "recreate", "--all", "--force"],
-      env,
-    });
-    expect(result.code, result.stderr).toBe(1);
-    expect(result.stderr).toContain("exclusive offline state ownership");
-    expect(methods).toHaveLength(before);
-    expect(
-      JSON.parse(await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"))
-        .worktreeSql,
-    ).toBe(0);
-  });
+  it.each([
+    ["sandbox recreate", ["sandbox", "recreate", "--all", "--force"]],
+    ["exec-policy preset", ["exec-policy", "preset", "deny-all"]],
+    ["exec-policy set", ["exec-policy", "set", "--ask", "always"]],
+  ])(
+    "refuses live %s before changing local state or dispatching to the owner",
+    async (_name, args) => {
+      const before = methods.length;
+      const configBefore = await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8");
+      const result = await runCliProcessChild({
+        nodeArgs: [...entrypoint, ...args],
+        env,
+      });
+      expect(result.code, result.stderr).toBe(1);
+      expect(result.stderr).toContain("exclusive offline state ownership");
+      expect(methods).toHaveLength(before);
+      expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(configBefore);
+      expect(
+        JSON.parse(await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"))
+          .worktreeSql,
+      ).toBe(0);
+    },
+  );
 });
 
 describe("offline local mutation custody", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   afterEach(() => vi.unstubAllEnvs());
+
+  it("keeps offline exec-policy preset writes and their config update working", async () => {
+    const root = roots.make("openclaw-exec-policy-offline-");
+    const env = environment(root);
+    await fs.mkdir(env.OPENCLAW_STATE_DIR!, { recursive: true });
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}\n");
+    const result = await runCliProcessChild({
+      nodeArgs: [...entrypoint, "exec-policy", "preset", "cautious", "--json"],
+      env,
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      preset: "cautious",
+      approvalsExists: true,
+      effectivePolicy: {
+        scopes: [
+          expect.objectContaining({
+            security: expect.objectContaining({ effective: "allowlist" }),
+            ask: expect.objectContaining({ effective: "on-miss" }),
+          }),
+        ],
+      },
+    });
+    expect(JSON.parse(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8"))).toMatchObject({
+      tools: { exec: { host: "gateway", mode: "ask" } },
+    });
+  });
 
   it.skipIf(process.platform === "win32")(
     "retains offline CLI custody through its POSIX setup hook while Gateway startup races",

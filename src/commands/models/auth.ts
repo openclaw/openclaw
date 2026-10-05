@@ -1,7 +1,6 @@
 import {
   cancel,
   confirm as clackConfirm,
-  isCancel,
   password as clackPassword,
   select as clackSelect,
   text as clackText,
@@ -67,8 +66,7 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
-import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
-import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
+import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
 import { saveModelProviderApiKey } from "./auth-api-key.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
 import {
@@ -113,7 +111,7 @@ function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | und
 }
 
 function guardCancel<T>(value: T | typeof import("@clack/prompts").CANCEL_SYMBOL): T {
-  if (typeof value === "symbol" || isCancel(value)) {
+  if (typeof value === "symbol") {
     cancel("Cancelled.");
     process.exit(0);
   }
@@ -177,21 +175,14 @@ type ResolvedModelsAuthContext = {
   providers: ProviderPlugin[];
 };
 
-function listTokenAuthMethods(provider: ProviderPlugin): ProviderAuthMethod[] {
-  return provider.auth.filter((method) => method.kind === "token");
-}
-
 function listProvidersWithTokenMethods(providers: ProviderPlugin[]): ProviderPlugin[] {
-  return providers.filter((provider) => listTokenAuthMethods(provider).length > 0);
+  return providers.filter((provider) => provider.auth.some((method) => method.kind === "token"));
 }
 
 function mergeSetupProviders(
   providers: readonly ProviderPlugin[],
   setupProviders: readonly ProviderPlugin[],
 ): ProviderPlugin[] {
-  if (setupProviders.length === 0) {
-    return [...providers];
-  }
   const setupById = new Map(
     setupProviders.map((provider) => [normalizeProviderId(provider.id), provider] as const),
   );
@@ -224,9 +215,7 @@ function preferSetupAuthProviders(params: {
       }).providers.map((entry) => entry.provider),
     );
   }
-  const requestedProvider = params.requestedProvider
-    ? normalizeManualAuthProvider(params.requestedProvider)
-    : undefined;
+  const requestedProvider = params.requestedProvider;
   if (requestedProvider) {
     const setupProvider = resolvePluginSetupProviderCore({
       provider: requestedProvider,
@@ -321,7 +310,9 @@ async function pickProviderAuthMethod(params: {
   if (rawRequestedMethod) {
     return pickAuthMethod(params.provider, rawRequestedMethod);
   }
-  const methods = params.tokenOnly ? listTokenAuthMethods(params.provider) : params.provider.auth;
+  const methods = params.tokenOnly
+    ? params.provider.auth.filter((method) => method.kind === "token")
+    : params.provider.auth;
   if (params.tokenOnly && methods.length === 0) {
     return null;
   }
@@ -444,15 +435,11 @@ async function persistProviderAuthResult(params: {
         },
       });
       if (defaultModel) {
-        const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+        const warnings = await repairModelSelectionRuntimePlugins({
           cfg: updated,
           model: defaultModel,
         });
-        const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
-          cfg: updated,
-          model: defaultModel,
-        });
-        for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
+        for (const warning of warnings) {
           params.runtime.error?.(warning);
         }
       }
@@ -671,14 +658,7 @@ export async function modelsAuthSetupTokenCommand(
   }
 
   const provider =
-    resolveRequestedLoginProviderOrThrow(tokenProviders, opts.provider) ??
-    tokenProviders[0] ??
-    null;
-  if (!provider) {
-    throw new Error(
-      `No token-capable provider is available. Run ${formatCliCommand("openclaw plugins list")} to verify provider plugins are installed.`,
-    );
-  }
+    resolveRequestedLoginProviderOrThrow(tokenProviders, opts.provider) ?? tokenProviders[0]!;
 
   if (!opts.yes) {
     const proceed = await confirm({
@@ -858,21 +838,18 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
   const providerPlugin =
     provider === "custom" ? null : resolveRequestedLoginProviderOrThrow(tokenProviders, providerId);
   if (providerPlugin) {
-    const tokenMethods = listTokenAuthMethods(providerPlugin);
-    const methodId =
-      tokenMethods.length > 0
-        ? await select({
-            message: "Token method",
-            options: [
-              ...tokenMethods.map((method) => ({
-                value: method.id,
-                label: method.label,
-                hint: method.hint,
-              })),
-              { value: "paste", label: "paste token" },
-            ],
-          })
-        : "paste";
+    const tokenMethods = providerPlugin.auth.filter((method) => method.kind === "token");
+    const methodId = await select({
+      message: "Token method",
+      options: [
+        ...tokenMethods.map((method) => ({
+          value: method.id,
+          label: method.label,
+          hint: method.hint,
+        })),
+        { value: "paste", label: "paste token" },
+      ],
+    });
     if (methodId !== "paste") {
       const prompter = createClackPrompter();
       const method = tokenMethods.find((candidate) => candidate.id === methodId);

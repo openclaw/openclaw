@@ -1,7 +1,13 @@
 import path from "node:path";
+import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import type { WorkerTranscriptMessage } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WorkerTranscriptCommitParamsSchema,
+  WorkerTranscriptMessageSchema,
+  type WorkerTranscriptMessage,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { buildRuntimeContextCustomMessage } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   resolveSessionTranscriptRuntimeTarget,
@@ -14,6 +20,7 @@ import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-eve
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createWorkerTranscriptRuntime } from "../../worker/embedded-agent-transcript.runtime.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
@@ -44,7 +51,7 @@ beforeAll(() => {
   store = createWorkerTranscriptCommitStore({ database: openOpenClawStateDatabase() });
   committer = createWorkerTranscriptCommitter({
     getConfig: () => ({
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { store: storePath },
     }),
     store,
@@ -84,6 +91,54 @@ async function fixture(name: string) {
   };
   return { sessionTarget, identity, message };
 }
+
+it.each([false, true])(
+  "commits and replays hidden context without changing provenance (system updates: %s)",
+  async (inHistorySystemUpdates) => {
+    const { sessionTarget, identity, message } = await fixture(
+      `runtime-context-${inHistorySystemUpdates}`,
+    );
+    const text = "Sender: <operator>\nActive exec sessions: none";
+    const carrier = buildRuntimeContextCustomMessage(
+      text,
+      [{ kind: "conversation-data", text }],
+      inHistorySystemUpdates,
+    );
+    if (!Value.Check(WorkerTranscriptMessageSchema, carrier)) {
+      throw new Error("Worker schema rejected the runtime-owned context message");
+    }
+    const request = { runEpoch: 7, seq: 1, baseLeafId: null, messages: [message, carrier] };
+    expect(Value.Check(WorkerTranscriptCommitParamsSchema, request)).toBe(true);
+    expect(
+      Value.Check(WorkerTranscriptCommitParamsSchema, {
+        ...request,
+        messages: [{ ...carrier, customType: "unrelated-extension-context" }],
+      }),
+    ).toBe(false);
+
+    const input = { identity, sessionTarget, request, assertCurrent: () => undefined };
+    const runtime = createWorkerTranscriptRuntime({
+      commit: async (messages) => {
+        await expect(
+          committer.commit({ ...input, request: { ...request, messages } }),
+        ).resolves.toMatchObject({ ok: true });
+      },
+    });
+    runtime.onMessagePersisted(message);
+    runtime.onMessagePersisted(carrier);
+    await runtime.withSessionWriteSettlement(() => undefined);
+    await expect(committer.commit(input)).resolves.toMatchObject({ ok: true });
+
+    const reopened = await SessionManager.openAsync(sessionTarget);
+    expect(reopened.getEntries()).toHaveLength(2);
+    expect(reopened.buildSessionContext().messages[0]).toMatchObject(message);
+    expect(reopened.buildSessionContext().messages[1]).toEqual({
+      ...carrier,
+      display: false,
+      idempotencyKey: expect.any(String),
+    });
+  },
+);
 
 it.each([false, true])(
   "pins an unbound transcript lifecycle through preparation (replacement: %s)",

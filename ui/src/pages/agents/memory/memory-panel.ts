@@ -460,7 +460,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         phases: dreamingStatus?.phases ?? undefined,
         shortTermEntries: dreamingStatus?.shortTermEntries ?? [],
         promotedEntries: dreamingStatus?.promotedEntries ?? [],
-        dreamingOf: null,
         nextCycle: resolveDreamingNextCycle(dreamingStatus),
         timezone: dreamingStatus?.timezone ?? null,
         statusError: dreaming.dreamingStatusError,

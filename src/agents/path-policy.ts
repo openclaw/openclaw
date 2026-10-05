@@ -56,14 +56,13 @@ export function resolveSandboxPathMapping<
 type RelativePathOptions = {
   allowRoot?: boolean;
   cwd?: string;
-  boundaryLabel?: string;
-  includeRootInError?: boolean;
 };
 
 function toRelativePathUnderRoot(
   root: string,
   candidate: string,
-  options: RelativePathOptions,
+  options: RelativePathOptions = {},
+  sandbox = false,
 ): string {
   const resolvedInput = resolveSandboxInputPath(candidate, options.cwd ?? root);
 
@@ -89,43 +88,28 @@ function toRelativePathUnderRoot(
     relative.startsWith("..\\") ||
     syntax.isAbsolute(relative)
   ) {
-    const boundary = options.boundaryLabel ?? "workspace root";
-    const suffix = options.includeRootInError ? ` (${rootResolved})` : "";
-    throw new Error(`Path escapes ${boundary}${suffix}: ${candidate}`);
+    const boundary = sandbox ? `sandbox root (${rootResolved})` : "workspace root";
+    throw new Error(`Path escapes ${boundary}: ${candidate}`);
   }
   return relative;
 }
 
-/**
- * Return a workspace-relative path for a candidate path after rejecting paths
- * that escape the workspace root.
- */
+/** Return a workspace-relative path after rejecting boundary escapes. */
 export function toRelativeWorkspacePath(
   root: string,
   candidate: string,
-  options?: Pick<RelativePathOptions, "allowRoot" | "cwd">,
+  options?: RelativePathOptions,
 ): string {
-  return toRelativePathUnderRoot(root, candidate, {
-    allowRoot: options?.allowRoot,
-    cwd: options?.cwd,
-  });
+  return toRelativePathUnderRoot(root, candidate, options);
 }
 
-/**
- * Return a sandbox-relative path for a candidate path after rejecting paths that
- * escape the sandbox root. Errors include the sandbox root for operator clarity.
- */
+/** Return a sandbox-relative path, including the sandbox root in boundary errors. */
 export function toRelativeSandboxPath(
   root: string,
   candidate: string,
-  options?: Pick<RelativePathOptions, "allowRoot" | "cwd">,
+  options?: RelativePathOptions,
 ): string {
-  return toRelativePathUnderRoot(root, candidate, {
-    allowRoot: options?.allowRoot,
-    cwd: options?.cwd,
-    boundaryLabel: "sandbox root",
-    includeRootInError: true,
-  });
+  return toRelativePathUnderRoot(root, candidate, options, true);
 }
 
 /** Resolve a user-supplied path against `cwd` using the sandbox input rules. */

@@ -306,13 +306,13 @@ export async function writeRestartSentinelIfUnchanged(params: {
   }
 }
 
-export async function readRestartSentinelSnapshot(): Promise<{
+export async function readRestartSentinelSnapshot(env: NodeJS.ProcessEnv = process.env): Promise<{
   sentinel: RestartSentinel | null;
   revision: number | null;
 }> {
   const reply = await readSentinelState(
     "restartSentinel.snapshot",
-    captureOpenClawStateWorkerContext(),
+    captureOpenClawStateWorkerContext({ env }),
   );
   if (!reply?.ok || reply.type !== "restartSentinel.snapshot") {
     throw new Error("Restart sentinel snapshot unavailable");

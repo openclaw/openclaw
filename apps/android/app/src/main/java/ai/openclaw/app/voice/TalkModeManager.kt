@@ -226,7 +226,7 @@ class TalkModeManager internal constructor(
   private val onBeforeSpeak: suspend () -> Unit = {},
   private val onAfterSpeak: suspend () -> Unit = {},
   private val captureRelayStopNotification: () -> ((isCurrent: () -> Boolean) -> Unit) = { {} },
-  private val talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(session = session),
+  private val talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(requestDetailed = session::requestDetailed),
   private val talkAudioPlayer: TalkAudioPlaying = TalkAudioPlayer(context),
   private val realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
   private val realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -523,19 +523,12 @@ class TalkModeManager internal constructor(
       allowNewCapture = allowNewCapture,
       canStartCapture = canStartCapture,
       completion = null,
-    ).payload
+    ).let { TalkPttStartPayload(it.captureId) }
 
-  private sealed interface PushToTalkStartResult {
-    val payload: TalkPttStartPayload
-
-    data class Started(
-      override val payload: TalkPttStartPayload,
-    ) : PushToTalkStartResult
-
-    data class Existing(
-      override val payload: TalkPttStartPayload,
-    ) : PushToTalkStartResult
-  }
+  private data class PushToTalkStartResult(
+    val captureId: String,
+    val started: Boolean,
+  )
 
   private data class ClearedPushToTalkCapture(
     val transcript: String,
@@ -566,14 +559,13 @@ class TalkModeManager internal constructor(
     if (!allowNewCapture) {
       // A background retry may reconcile an existing capture, but must never create one.
       return activePttCaptureId
-        ?.let(::TalkPttStartPayload)
-        ?.let { PushToTalkStartResult.Existing(it) }
+        ?.let { PushToTalkStartResult(it, started = false) }
         ?: throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
     }
     // PTT begin is idempotent so gateway retries don't start multiple recognizers.
     activePttCaptureId?.let {
       if (pttReleaseCompletion == null) {
-        return PushToTalkStartResult.Existing(TalkPttStartPayload(captureId = it))
+        return PushToTalkStartResult(it, started = false)
       }
     }
     finishingPttCaptureId?.let {
@@ -603,7 +595,7 @@ class TalkModeManager internal constructor(
         }
         activePttCaptureId?.let {
           if (!hasPendingRelease) {
-            return@withContext PushToTalkStartResult.Existing(TalkPttStartPayload(captureId = it))
+            return@withContext PushToTalkStartResult(it, started = false)
           }
         }
         finishingPttCaptureId?.let {
@@ -685,7 +677,7 @@ class TalkModeManager internal constructor(
           completion?.cancel()
           throw err
         }
-        PushToTalkStartResult.Started(TalkPttStartPayload(captureId = captureId))
+        PushToTalkStartResult(captureId, started = true)
       }
     } catch (err: Throwable) {
       withContext(NonCancellable) {
@@ -810,31 +802,17 @@ class TalkModeManager internal constructor(
     }
 
     val completion = CompletableDeferred<TalkPttStopPayload>()
-    return when (
-      val start =
-        startPushToTalk(
-          allowNewCapture = true,
-          canStartCapture = canStartCapture,
-          completion = completion,
-          autoStopAfterMs = maxDurationMs,
-        )
-    ) {
-      is PushToTalkStartResult.Existing -> {
-        TalkPttOnceStart.Busy(
-          TalkPttStopPayload(
-            captureId = start.payload.captureId,
-            transcript = null,
-            status = "busy",
-          ),
-        )
-      }
-
-      is PushToTalkStartResult.Started -> {
-        TalkPttOnceStart.Started(
-          captureId = start.payload.captureId,
-          completion = completion,
-        )
-      }
+    val start =
+      startPushToTalk(
+        allowNewCapture = true,
+        canStartCapture = canStartCapture,
+        completion = completion,
+        autoStopAfterMs = maxDurationMs,
+      )
+    return if (start.started) {
+      TalkPttOnceStart.Started(captureId = start.captureId, completion = completion)
+    } else {
+      TalkPttOnceStart.Busy(TalkPttStopPayload(captureId = start.captureId, transcript = null, status = "busy"))
     }
   }
 
@@ -3097,16 +3075,8 @@ class TalkModeManager internal constructor(
       speed: Double?,
       rateWpm: Int?,
     ): Double? {
-      if (rateWpm != null && rateWpm > 0) {
-        val resolved = rateWpm.toDouble() / 175.0
-        if (resolved <= 0.5 || resolved >= 2.0) return null
-        return resolved
-      }
-      if (speed != null) {
-        if (speed <= 0.5 || speed >= 2.0) return null
-        return speed
-      }
-      return null
+      val resolved = if (rateWpm != null && rateWpm > 0) rateWpm.toDouble() / 175.0 else speed
+      return resolved?.takeUnless { it <= 0.5 || it >= 2.0 }
     }
 
     fun validatedLanguage(value: String?): String? {

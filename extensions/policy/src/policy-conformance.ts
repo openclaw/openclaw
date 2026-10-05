@@ -46,7 +46,7 @@ type PolicyDocument = {
 };
 
 type PolicyDocumentReadResult =
-  | { readonly ok: true; readonly displayName: string; readonly document: PolicyDocument }
+  | ({ readonly ok: true } & PolicyDocument)
   | {
       readonly ok: false;
       readonly displayName: string;
@@ -80,7 +80,7 @@ export async function buildPolicyConformanceReport(params: {
       .filter((result): result is Extract<PolicyDocumentReadResult, { readonly ok: false }> => {
         return !result.ok;
       })
-      .map((result) => invalidParseConformanceFinding(result));
+      .map(invalidParseConformanceFinding);
     return {
       ok: false,
       baselinePath: baselineResult.displayName,
@@ -89,8 +89,8 @@ export async function buildPolicyConformanceReport(params: {
       findings: invalidFindings,
     };
   }
-  const baseline = baselineResult.document;
-  const policy = policyResult.document;
+  const baseline = baselineResult;
+  const policy = policyResult;
   const baselineClaims = collectPolicyRuleClaims(baseline);
   const candidateClaims = collectPolicyRuleClaims(policy);
   const invalidFindings = uniqueConformanceFindings([
@@ -313,6 +313,7 @@ function baselineRuleIsNoOp(metadata: PolicyRuleMetadata, baseline: unknown): bo
     case "allowlist-subset":
       return metadata.emptyList === "disabled" && policyRuleListIsEmpty(baseline);
     case "denylist-superset":
+    case "routing-probes":
       return policyRuleListIsEmpty(baseline);
     case "requires-true":
       return baseline !== true;
@@ -321,8 +322,6 @@ function baselineRuleIsNoOp(metadata: PolicyRuleMetadata, baseline: unknown): bo
     case "exact-list":
     case "ordered-string":
       return false;
-    case "routing-probes":
-      return policyRuleListIsEmpty(baseline);
   }
   return false;
 }
@@ -350,7 +349,7 @@ function missingConformanceFinding(
 function weakerConformanceFinding(
   baseline: PolicyRuleClaim,
   policyDisplayName: string,
-  candidate: PolicyRuleClaim | undefined,
+  candidate: PolicyRuleClaim,
 ): PolicyConformanceFinding {
   return {
     checkId: POLICY_CONFORMANCE_CHECK_IDS.weaker,
@@ -358,7 +357,7 @@ function weakerConformanceFinding(
     message: `${policyDisplayName} ${baseline.propertyPath} is weaker than the baseline policy.`,
     source: "policy",
     path: policyDisplayName,
-    target: candidate?.target ?? `oc://${policyDisplayName}`,
+    target: candidate.target,
     requirement: baseline.target,
     fixHint: `Use an equally or more restrictive ${baseline.propertyPath} value, or update the baseline policy after review.`,
   };
@@ -478,7 +477,7 @@ async function readPolicyDocument(path: string): Promise<PolicyDocumentReadResul
     };
   }
   try {
-    return { ok: true, displayName, document: { displayName, value: JSON5.parse(raw) } };
+    return { ok: true, displayName, value: JSON5.parse(raw) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {

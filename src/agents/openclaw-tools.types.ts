@@ -35,6 +35,8 @@ export type OpenClawSharedToolsOptions = {
   conversationRecall?: ConversationRecallContext;
   /** Host-resolved memory partition shared by plugin tools for this turn. */
   memoryAudience?: MemoryAudience;
+  /** Stable mutation identity supplied only for a provider-owned memory flush. */
+  memoryFlush?: { flushId: string };
   /** Trusted platform-native conversation id for the active inbound turn. */
   nativeChannelId?: string;
   /** Producer-authored bare upload handles mapped to exact sandbox paths. */

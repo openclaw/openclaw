@@ -399,6 +399,7 @@ export abstract class SubagentWaitManager {
         asFiniteNumber(wait.startedAt) ??
         (await this.options.resolveSubagentSessionStartedAt({
           childSessionKey: entry.childSessionKey,
+          childAgentId: entry.childAgentId,
           notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
           assertCurrent,
         }));
@@ -423,6 +424,7 @@ export abstract class SubagentWaitManager {
         const hardRunTimeoutEndedAt = resolveHardRunTimeoutEndedAt(entry, now, observedStartedAt);
         const completion = await this.options.resolveSubagentSessionCompletion({
           childSessionKey: entry.childSessionKey,
+          childAgentId: entry.childAgentId,
           fallbackEndedAt:
             typeof wait.endedAt === "number" ? wait.endedAt : (hardRunTimeoutEndedAt ?? now),
           notBeforeMs: observedStartedAt ?? entry.execution.startedAt ?? entry.createdAt,

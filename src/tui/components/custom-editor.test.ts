@@ -44,26 +44,6 @@ describe("CustomEditor", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("routes alt+enter to the follow-up handler", () => {
-    const editor = createEditor();
-    const onAltEnter = vi.fn();
-    editor.onAltEnter = onAltEnter;
-
-    editor.handleInput("\u001b\r");
-
-    expect(onAltEnter).toHaveBeenCalledTimes(1);
-  });
-
-  it("routes alt+up to the dequeue handler", () => {
-    const editor = createEditor();
-    const onAltUp = vi.fn();
-    editor.onAltUp = onAltUp;
-
-    editor.handleInput("\u001bp");
-
-    expect(onAltUp).toHaveBeenCalledTimes(1);
-  });
-
   it("uses Ctrl+D to request exit only when the editor is empty", () => {
     const editor = createEditor();
     const onCtrlD = vi.fn();

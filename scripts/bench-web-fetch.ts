@@ -97,7 +97,6 @@ const SHELL_HTML = `<!doctype html>
 
 const TEXT_BODY = "OpenClaw web_fetch direct text benchmark body.".repeat(160);
 const MARKDOWN_BODY = "# Web Fetch Benchmark\n\n" + "- markdown list item\n".repeat(220);
-const OFFLINE_PROVIDER_ENV_VARS = ["FIRECRAWL_API_KEY"] as const;
 
 const lookupFn: LookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
 const toolConfig: OpenClawConfig = {
@@ -230,25 +229,6 @@ function installMockFetch(params: { body: string; contentType: string }) {
       }),
     { mock: {} },
   );
-}
-
-async function withOfflineProviderEnv<T>(run: () => Promise<T>): Promise<T> {
-  const previous = new Map<string, string | undefined>();
-  for (const name of OFFLINE_PROVIDER_ENV_VARS) {
-    previous.set(name, process.env[name]);
-    process.env[name] = "";
-  }
-  try {
-    return await run();
-  } finally {
-    for (const [name, value] of previous) {
-      if (value === undefined) {
-        delete process.env[name];
-      } else {
-        process.env[name] = value;
-      }
-    }
-  }
 }
 
 async function loadCaseFactory(): Promise<() => Record<BenchmarkCaseId, BenchmarkCase>> {
@@ -393,13 +373,16 @@ async function main(): Promise<void> {
   const options = parseOptions(args);
   // Preserve runtime import environment, then construct tools inside the offline scope.
   const createCases = await loadCaseFactory();
-  const report = await withOfflineProviderEnv(async () => {
+  const previousApiKey = process.env.FIRECRAWL_API_KEY;
+  process.env.FIRECRAWL_API_KEY = "";
+  let report: BenchmarkReport;
+  try {
     const casesById = createCases();
     const cases: CaseReport[] = [];
     for (const caseId of options.cases) {
       cases.push(await measureCase(caseId, casesById[caseId], options));
     }
-    return {
+    report = {
       cases,
       node: process.version,
       options: {
@@ -410,7 +393,13 @@ async function main(): Promise<void> {
       },
       rssMb: Math.round((process.memoryUsage().rss / 1024 / 1024) * 10) / 10,
     };
-  });
+  } finally {
+    if (previousApiKey === undefined) {
+      delete process.env.FIRECRAWL_API_KEY;
+    } else {
+      process.env.FIRECRAWL_API_KEY = previousApiKey;
+    }
+  }
   await writeReportArtifact(options.output ?? null, `${JSON.stringify(report, null, 2)}\n`);
   if (options.json) {
     console.log(JSON.stringify(report, null, 2));

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 
 const { TEST_STATE_DIR, PREVIOUS_OPENCLAW_STATE_DIR, SANDBOX_REGISTRY_PATH } = vi.hoisted(() => {
@@ -23,6 +24,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import {
   completeSandboxRegistryReservation,
@@ -37,6 +39,7 @@ import {
   updateBrowserRegistry,
   updateRegistry,
 } from "./registry.js";
+import { captureSandboxStateOwner } from "./state-owner.js";
 
 type SandboxBrowserRegistryEntry = import("./registry.js").SandboxBrowserRegistryEntry;
 type SandboxRegistryEntry = import("./registry.js").SandboxRegistryEntry;
@@ -95,7 +98,29 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("registry race safety", () => {
-  it("settles browser reservation and activity in workers with captured immutable fields", async () => {
+  it("refuses queued browser publication after hosted custody is released", async () => {
+    const owner = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: path.join(TEST_STATE_DIR, "openclaw.json"),
+        role: "gateway",
+      },
+    });
+    try {
+      await updateRegistry(containerEntry());
+      const assertCurrent = await captureSandboxStateOwner();
+      const publication = updateBrowserRegistry(browserEntry(), assertCurrent);
+      owner.release();
+      await expect(publication).rejects.toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+      await expect(readBrowserRegistry()).resolves.toEqual({ entries: [] });
+    } finally {
+      owner.release();
+    }
+  });
+
+  it("settles browser activity in workers while preserving captured fields and workspace custody", async () => {
     // Admit the schema before observing the runtime write boundary.
     await updateRegistry(containerEntry());
     const hostSql = vi.spyOn(sqliteQueries, "executeSqliteQuerySync").mockImplementation(() => {
@@ -116,13 +141,8 @@ describe("registry race safety", () => {
     } finally {
       hostSql.mockRestore();
     }
-  });
-
-  it("retains exact browser workspace custody and rejects a rebound owner", async () => {
-    await updateBrowserRegistry(browserEntry({ workspaceDir: "/private/workspace" }));
-    await updateBrowserRegistry(browserEntry({ lastUsedAtMs: 2 }));
     const [selected] = (await readBrowserRegistry()).entries;
-    expect(selected?.workspaceDir).toBe("/private/workspace");
+    expect(selected?.workspaceDir).toBe("/original/workspace");
     expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).not.toThrow();
     await updateBrowserRegistry(browserEntry({ workspaceDir: "/other/workspace" }));
     expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).toThrow("owner changed");
@@ -142,16 +162,6 @@ describe("registry race safety", () => {
     await expect(readRegistryEntry("legacy-container")).resolves.toBeNull();
     await expect(fs.access(SANDBOX_REGISTRY_PATH)).resolves.toBeUndefined();
     await expectPathMissing(path.join(TEST_STATE_DIR, "state", "openclaw.sqlite"));
-  });
-
-  it("reads a single SQLite entry without scanning the full registry", async () => {
-    await updateRegistry(containerEntry({ containerName: "container-x", sessionKey: "sess:x" }));
-    await updateRegistry(containerEntry({ containerName: "container-y", sessionKey: "sess:y" }));
-
-    const entry = await readRegistryEntry("container-x");
-    expect(entry?.containerName).toBe("container-x");
-    expect(entry?.sessionKey).toBe("sess:x");
-    await expect(readRegistryEntry("missing-container")).resolves.toBeNull();
   });
 
   it("captures a Podman target and preserves immutable fields across usage updates", async () => {
@@ -257,38 +267,14 @@ describe("registry race safety", () => {
   });
 
   it("reads registered runtime IDs for one backend and scope newest first", async () => {
-    await updateRegistry(
-      containerEntry({
-        containerName: "openshell-older",
-        backendId: "openshell",
-        sessionKey: "agent:main",
-        lastUsedAtMs: 10,
-      }),
-    );
-    await updateRegistry(
-      containerEntry({
-        containerName: "openshell-newer",
-        backendId: "openshell",
-        sessionKey: "agent:main",
-        lastUsedAtMs: 20,
-      }),
-    );
-    await updateRegistry(
-      containerEntry({
-        containerName: "docker-same-scope",
-        backendId: "docker",
-        sessionKey: "agent:main",
-        lastUsedAtMs: 30,
-      }),
-    );
-    await updateRegistry(
-      containerEntry({
-        containerName: "openshell-other-scope",
-        backendId: "openshell",
-        sessionKey: "agent:other",
-        lastUsedAtMs: 40,
-      }),
-    );
+    for (const [containerName, backendId, sessionKey, lastUsedAtMs] of [
+      ["openshell-older", "openshell", "agent:main", 10],
+      ["openshell-newer", "openshell", "agent:main", 20],
+      ["docker-same-scope", "docker", "agent:main", 30],
+      ["openshell-other-scope", "openshell", "agent:other", 40],
+    ] as const) {
+      await updateRegistry(containerEntry({ containerName, backendId, sessionKey, lastUsedAtMs }));
+    }
 
     await expect(
       readRegisteredSandboxRuntimeIds({
@@ -296,34 +282,6 @@ describe("registry race safety", () => {
         scopeKey: "agent:main",
       }),
     ).resolves.toEqual(["openshell-newer", "openshell-older"]);
-  });
-
-  it("keeps both container updates under concurrent writes", async () => {
-    await Promise.all([
-      updateRegistry(containerEntry({ containerName: "container-a" })),
-      updateRegistry(containerEntry({ containerName: "container-b" })),
-    ]);
-
-    const registry = await readRegistry();
-    expect(
-      registry.entries
-        .map((entry) => entry.containerName)
-        .slice()
-        .toSorted(),
-    ).toEqual(["container-a", "container-b"]);
-  });
-
-  it("prevents concurrent container remove/update from resurrecting deleted entries", async () => {
-    await updateRegistry(containerEntry({ containerName: "container-x" }));
-
-    const updatePromise = updateRegistry(
-      containerEntry({ containerName: "container-x", configHash: "updated" }),
-    );
-    const removePromise = removeRegistryEntry("container-x");
-    await Promise.all([updatePromise, removePromise]);
-
-    const registry = await readRegistry();
-    expect(registry.entries).toHaveLength(0);
   });
 
   it("stores unsafe container names without writing path-derived files", async () => {
@@ -335,39 +293,36 @@ describe("registry race safety", () => {
     await expectPathMissing(`${TEST_STATE_DIR}/escape.json`);
   });
 
-  it("returns registry entries in deterministic container-name order", async () => {
-    await Promise.all([
-      updateRegistry(containerEntry({ containerName: "container-c" })),
-      updateRegistry(containerEntry({ containerName: "container-a" })),
-      updateRegistry(containerEntry({ containerName: "container-b" })),
-    ]);
+  it.each(["container", "browser"] as const)(
+    "keeps concurrent %s updates in deterministic name order",
+    async (kind) => {
+      await Promise.all(
+        ["c", "a", "b"].map((name, index) => {
+          const containerName = `${kind}-${name}`;
+          return kind === "container"
+            ? updateRegistry(containerEntry({ containerName }))
+            : updateBrowserRegistry(browserEntry({ containerName, cdpPort: 9222 + index }));
+        }),
+      );
+      const registry = await (kind === "container" ? readRegistry() : readBrowserRegistry());
+      expect(registry.entries.map((entry) => entry.containerName)).toEqual(
+        ["a", "b", "c"].map((name) => `${kind}-${name}`),
+      );
+    },
+  );
 
-    const registry = await readRegistry();
-    expect(registry.entries.map((entry) => entry.containerName)).toEqual([
-      "container-a",
-      "container-b",
-      "container-c",
-    ]);
-  });
-
-  it("keeps both browser updates under concurrent writes", async () => {
-    await Promise.all([
-      updateBrowserRegistry(browserEntry({ containerName: "browser-a" })),
-      updateBrowserRegistry(browserEntry({ containerName: "browser-b", cdpPort: 9223 })),
-    ]);
-
-    const registry = await readBrowserRegistry();
-    expect(
-      registry.entries
-        .map((entry) => entry.containerName)
-        .slice()
-        .toSorted(),
-    ).toEqual(["browser-a", "browser-b"]);
-  });
-
-  it.each(["name", "generation"] as const)(
-    "prevents a queued browser update from overtaking %s removal",
+  it.each(["container", "name", "generation"] as const)(
+    "prevents a queued update from overtaking %s removal",
     async (removal) => {
+      if (removal === "container") {
+        await updateRegistry(containerEntry({ containerName: "container-x" }));
+        await Promise.all([
+          updateRegistry(containerEntry({ containerName: "container-x", configHash: "updated" })),
+          removeRegistryEntry("container-x"),
+        ]);
+        expect((await readRegistry()).entries).toHaveLength(0);
+        return;
+      }
       const entry = browserEntry({ containerName: "browser-x" });
       await updateBrowserRegistry(entry);
       await updateRegistry(containerEntry({ containerName: "browser-x" }));

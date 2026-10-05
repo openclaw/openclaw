@@ -487,10 +487,11 @@ function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecuta
 
 function getPlaywrightBrowserCachePaths(): string[] {
   const configured = normalizeOptionalString(process.env[PLAYWRIGHT_BROWSERS_PATH_ENV]);
+  const cacheHome = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
   return [
     ...new Set([
       ...(configured && configured !== "0" ? [configured] : []),
-      path.join(os.homedir(), ".cache", "ms-playwright"),
+      path.join(cacheHome, "ms-playwright"),
     ]),
   ];
 }

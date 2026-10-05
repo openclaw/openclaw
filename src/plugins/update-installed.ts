@@ -45,8 +45,6 @@ import {
   buildDryRunPluginUpdateOutcome,
   buildPluginUpdateVersionOutcome,
   formatClawHubInstallFailure,
-  formatGitInstallFailure,
-  formatMarketplaceInstallFailure,
   formatNpmInstallFailure,
   readClawHubTrustErrorCode,
   runPluginUpdateAttempt,
@@ -581,19 +579,8 @@ async function runInstalledPluginUpdate(
                 error: result.error,
               })
             : record.source === "git"
-              ? formatGitInstallFailure({
-                  pluginId,
-                  spec: effectiveSpec!,
-                  phase,
-                  error: result.error,
-                })
-              : formatMarketplaceInstallFailure({
-                  pluginId,
-                  marketplaceSource: record.marketplaceSource!,
-                  marketplacePlugin: record.marketplacePlugin!,
-                  phase,
-                  error: result.error,
-                });
+              ? `Failed to ${phase} ${pluginId}: ${result.error} (git ${effectiveSpec}).`
+              : `Failed to ${phase} ${pluginId}: ${result.error} (marketplace plugin ${record.marketplacePlugin} from ${record.marketplaceSource}).`;
       await recordNpmFailure(message, code);
       continue;
     }

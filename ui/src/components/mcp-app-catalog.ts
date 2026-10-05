@@ -34,7 +34,12 @@ export class McpAppCatalog extends OpenClawLightDomElement {
     sessionKey: this.sessionKey || this.context?.gateway.snapshot.sessionKey || "",
     agentId: this.agentId || this.context?.agentSelection.state.selectedId || undefined,
   });
-  private readonly catalog = new McpAppCatalogController(this, () => this.context, this.target);
+  private readonly catalog = new McpAppCatalogController(
+    this,
+    () => this.context,
+    this.target,
+    () => this.surface === "global",
+  );
   private entries(server: McpAppDiscoveredServer) {
     return server.entrypoints.filter(({ entrypoint }) =>
       this.surface === "file"

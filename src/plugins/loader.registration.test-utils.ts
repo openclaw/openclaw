@@ -708,7 +708,7 @@ describe("loadOpenClawPlugins", () => {
       "active wiki supplement",
     ]);
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
+    expect(resolveMemoryFlushPlan({})?.plan).toMatchObject({ relativePath: "memory/active.md" });
     expect(getMemoryRuntime()).toBe(activeRuntime);
     expect(listMemoryPromptPreparations()).toHaveLength(1);
   });

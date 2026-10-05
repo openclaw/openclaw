@@ -6,7 +6,7 @@
  */
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import type { GatewayServerOptions } from "./server-public.js";
+import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { GatewayStartupCleanupError, rethrowGatewayStartupError } from "./server-shutdown.js";
 
 export { truncateCloseReason } from "./server/close-reason.js";
@@ -31,19 +31,48 @@ export async function startGatewayServer(
     ? null
     : await acquireGatewayLock({ port, listenerMode: "foreground" });
   const gatewayStateOwner = opts.gatewayStateOwner ?? ownedLock ?? undefined;
+  let close: GatewayServer["close"] | undefined;
+  let detachOwner: (() => void) | undefined;
   try {
-    gatewayStateOwner?.assertDatabaseAccess(resolveOpenClawStateSqlitePath());
+    const { captureGatewayStateOwner } = await import("../infra/gateway-state-owner.js");
+    const { createSubsystemLogger } = await import("../logging/subsystem.js");
+    const log = createSubsystemLogger("gateway");
+    const databasePath = resolveOpenClawStateSqlitePath();
+    gatewayStateOwner?.assertDatabaseAccess(databasePath);
+    const signal = captureGatewayStateOwner(databasePath)?.signal;
+    const onOwnerLost = () => {
+      const reason = String(signal?.reason);
+      const restart = close ? opts.hotReloadRecovery?.(reason) : undefined;
+      if (close && (!restart || restart.status === "failed")) {
+        void close({ reason }).catch((error: unknown) => {
+          log.error(`Gateway lost ownership cleanup failed: ${String(error)}`);
+        });
+      }
+    };
+    signal?.addEventListener("abort", onOwnerLost, { once: true });
+    detachOwner = () => signal?.removeEventListener("abort", onOwnerLost);
+    signal?.throwIfAborted();
     const server = await startGatewayServerWithRuntime(port, { ...opts, gatewayStateOwner });
-    return {
-      ...server,
-      close: async (closeOptions) => {
+    let closing: Promise<void> | undefined;
+    const closeServer: GatewayServer["close"] = (closeOptions) => {
+      detachOwner?.();
+      return (closing ??= (async () => {
         await server.close(closeOptions);
         // A failed join retains ownership: another starter must not enter over live work.
         await ownedLock?.release();
-      },
+      })());
     };
+    close = closeServer;
+    if (signal?.aborted) {
+      const reason = signal.reason;
+      return await rethrowGatewayStartupError(reason, () =>
+        closeServer({ reason: String(reason) }),
+      );
+    }
+    return { ...server, close };
   } catch (error) {
-    if (!(error instanceof GatewayStartupCleanupError)) {
+    detachOwner?.();
+    if (!close && !(error instanceof GatewayStartupCleanupError)) {
       await ownedLock?.release();
     }
     throw error;

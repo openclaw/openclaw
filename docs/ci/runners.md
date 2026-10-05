@@ -18,9 +18,16 @@ request; a newer request can cancel and replace that pending request. Hash
 collisions can leave other slots unused; this is a ceiling, not a promise of
 32 busy machines.
 
-Admission expires ten minutes after the workflow was created. A request that
-waits longer fails before checkout or hydration when its runner starts; it can
-still incur runner startup cost. This does not remove the queued job immediately.
+Admission expires 60 minutes after the workflow was created. This bounded queue
+allowance lets waiting clients survive saturation beyond the former ten-minute
+cutoff without admitting arbitrarily old abandoned requests. It is an operating
+bound, not a measured queue percentile or proof that the client is still waiting:
+the delegated warmup contract exposes no requester heartbeat to these workflows,
+and SSH activity is only available after runner assignment. A request that waits
+60 minutes or longer fails before checkout or hydration when its runner starts;
+it can still incur runner startup cost. Abandoned requests younger than the bound
+can still hydrate, so caller cleanup remains required. This does not remove the
+queued job immediately or reset the clock when a runner is assigned.
 Once the request passes that check, checkout and hydration do not recheck queue
 age. They remain bounded by the job timeout and idle limit.
 Stop an abandoned lease by its exact ID instead of leaving a warmup pending.

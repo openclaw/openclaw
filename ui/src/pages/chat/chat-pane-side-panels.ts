@@ -86,6 +86,25 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     this.setSessionObserverVisibility(true);
   }
 
+  requestSubagentsPanel(intent: "open" | "toggle"): void {
+    this.requestBackgroundPanel("subagents", intent);
+  }
+
+  protected requestBackgroundPanel(
+    slot: "subagents" | "processes",
+    intent: "open" | "toggle",
+  ): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    this.commitSidebarLayout(
+      intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, slot)
+        ? closeSlot(state.sidebarLayout, slot)
+        : openSlot(state.sidebarLayout, slot),
+    );
+  }
+
   protected syncSessionCompanionPresentation(presented: boolean): void {
     if (
       this.sessionCompanionPresented === presented &&

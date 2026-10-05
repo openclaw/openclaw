@@ -41,19 +41,15 @@ function isQaLiveOfficialOpenAiBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
     return true;
   }
-  try {
-    const url = new URL(baseUrl.trim());
-    return (
-      url.protocol === "https:" &&
-      url.hostname.toLowerCase() === "api.openai.com" &&
-      (url.pathname === "" ||
-        url.pathname === "/" ||
-        url.pathname === "/v1" ||
-        url.pathname === "/v1/")
-    );
-  } catch {
-    return false;
-  }
+  const url = URL.parse(baseUrl.trim());
+  return (
+    url?.protocol === "https:" &&
+    url.hostname.toLowerCase() === "api.openai.com" &&
+    (url.pathname === "" ||
+      url.pathname === "/" ||
+      url.pathname === "/v1" ||
+      url.pathname === "/v1/")
+  );
 }
 
 function qaLiveOpenAiUsesCodexByDefault(cfg: OpenClawConfig): boolean {

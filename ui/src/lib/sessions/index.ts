@@ -485,6 +485,7 @@ export function createSessionCapability(
         agentId: state.resultCached ? state.agentId : null,
         loading: false,
         error: null,
+        startupPending: false,
         deletedSessions: [],
       });
       return;

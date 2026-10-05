@@ -899,9 +899,9 @@ describe("doctor config flow", () => {
   it("scaffolds custom profiles in both scopes while excluding interpreters", () => {
     const { config } = maybeRepairExecSafeBinProfiles({
       tools: { exec: { safeBins: ["myfilter", "python3"] } },
-      agents: { list: [{ id: "ops", tools: { exec: { safeBins: ["mytool", "node"] } } }] },
+      agents: { entries: { ops: { tools: { exec: { safeBins: ["mytool", "node"] } } } } },
     });
     expect(config.tools?.exec?.safeBinProfiles).toEqual({ myfilter: {} });
-    expect(config.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({ mytool: {} });
+    expect(config.agents?.entries?.ops?.tools?.exec?.safeBinProfiles).toEqual({ mytool: {} });
   });
 });

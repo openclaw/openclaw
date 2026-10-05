@@ -229,7 +229,7 @@ describe("worker environment runtime refresh", () => {
           target: { kind: "gateway" },
         });
       } else {
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: placement!.sessionId,
           environmentId: environment.environmentId,
           ownerEpoch: environment.ownerEpoch,

@@ -12,7 +12,7 @@ import {
 } from "./lib/upgrade-survivor-policy.mjs";
 
 const BASELINE_SHARDED_LANES = new Set(["published-upgrade-survivor", "update-migration"]);
-const SURVIVOR_SCENARIOS_PER_GROUP = 3;
+const SURVIVOR_SCENARIOS_PER_GROUP = 1;
 
 function splitTokens(raw) {
   return [

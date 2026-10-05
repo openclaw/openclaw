@@ -177,8 +177,6 @@ export class RealtimeAudioPacer {
       return 0;
     }
     const clearedAudioBytes = this.queuedAudioBytes;
-    this.clearTimer();
-    this.resetQueue();
     this.resetPlaybackState();
     this.params.send(this.params.serializer.serializeClear());
     return clearedAudioBytes;
@@ -191,8 +189,6 @@ export class RealtimeAudioPacer {
 
   close(): void {
     this.closed = true;
-    this.clearTimer();
-    this.resetQueue();
     this.resetPlaybackState();
   }
 
@@ -213,6 +209,8 @@ export class RealtimeAudioPacer {
   }
 
   private resetPlaybackState(): void {
+    this.clearTimer();
+    this.resetQueue();
     this.playbackSegments = [];
     this.queuedAudioBytes = 0;
     this.sentAudioMs = 0;
@@ -244,16 +242,8 @@ export class RealtimeAudioPacer {
     this.params.onBackpressure?.();
   }
 
-  private get pendingQueueSize(): number {
-    return Math.max(0, this.queue.length - this.queueHead);
-  }
-
   /** Take one queued item without shifting the remaining paced-audio backlog. */
   private takeNextItem(): RealtimeAudioQueueItem | undefined {
-    if (this.queueHead >= this.queue.length) {
-      this.resetQueue();
-      return undefined;
-    }
     const item = this.queue[this.queueHead];
     this.queueHead += 1;
     if (this.queueHead >= this.queue.length) {
@@ -282,13 +272,13 @@ export class RealtimeAudioPacer {
     const now = performance.now();
     this.streamClockMs ??= now;
 
-    while (this.pendingQueueSize > 0 && this.streamClockMs < now + LEAD_MS) {
+    while (this.queueHead < this.queue.length && this.streamClockMs < now + LEAD_MS) {
       const item = this.takeNextItem();
       if (!item) {
         break;
       }
 
-      const sent = item.type === "audio" ? this.sendAudioItem(item) : this.sendMarkItem(item);
+      const sent = item.type === "audio" ? this.sendAudioItem(item) : this.sendMarkItem(item.name);
       if (!sent) {
         this.resetQueue();
         this.queuedAudioBytes = 0;
@@ -297,7 +287,7 @@ export class RealtimeAudioPacer {
       }
     }
 
-    if (this.pendingQueueSize === 0) {
+    if (this.queueHead === this.queue.length) {
       this.streamClockMs = null;
       return;
     }
@@ -326,18 +316,15 @@ export class RealtimeAudioPacer {
     // Confirm playout during long provider chunks, before their final provider mark.
     this.lastPlaybackMarkMs = this.sentAudioMs;
     this.playbackMarkSequence += 1;
-    return this.sendMarkItem({
-      type: "mark",
-      name: `${this.playbackMarkPrefix}-${this.playbackMarkSequence}`,
-    });
+    return this.sendMarkItem(`${this.playbackMarkPrefix}-${this.playbackMarkSequence}`);
   }
 
   /** Send a queued mark frame and bind it to the playback prefix before it. */
-  private sendMarkItem(item: Extract<RealtimeAudioQueueItem, { type: "mark" }>): boolean {
-    const sent = this.params.send(this.params.serializer.serializeMark(item.name));
+  private sendMarkItem(name: string): boolean {
+    const sent = this.params.send(this.params.serializer.serializeMark(name));
     if (sent) {
       this.markBoundaries.push({
-        name: item.name,
+        name,
         sentMs: this.sentAudioMs,
       });
       if (this.markBoundaries.length > MAX_PENDING_MARK_BOUNDARIES) {

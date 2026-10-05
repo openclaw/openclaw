@@ -239,11 +239,6 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     return this.lastNotificationSequence;
   }
 
-  async list(options: WorkboardListOptions = {}): Promise<WorkboardCard[]> {
-    const boardId = normalizeBoardId(options.boardId);
-    return readCards(this.store, boardId === undefined ? undefined : { kind: "board", boardId });
-  }
-
   async stats(input: WorkboardListOptions = {}, now = Date.now()): Promise<WorkboardStatsResult> {
     const boardId = normalizeBoardId(input.boardId);
     const aggregates = await this.store.listStatsAggregates(boardId);

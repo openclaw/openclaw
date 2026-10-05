@@ -19,8 +19,7 @@ const { executeMock, historyMock, hookHistoryMock, hookRunnerMock, beforeReplyMo
 
 let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
 let runPreparedCliAgent: typeof import("./cli-runner.js").runPreparedCliAgent;
-let restoreCliRunnerTestDeps: typeof import("./cli-runner.js").restoreCliRunnerTestDeps;
-let setCliRunnerTestDeps: typeof import("./cli-runner.js").setCliRunnerTestDeps;
+let cliTranscript: typeof import("./command/attempt-execution.helpers.js");
 
 vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: executeMock,
@@ -164,8 +163,8 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
 
 describe("runPreparedCliAgent context engine lifecycle", () => {
   beforeAll(async () => {
-    ({ restoreCliRunnerTestDeps, runCliAgent, runPreparedCliAgent, setCliRunnerTestDeps } =
-      await import("./cli-runner.js"));
+    ({ runCliAgent, runPreparedCliAgent } = await import("./cli-runner.js"));
+    cliTranscript = await import("./command/attempt-execution.helpers.js");
   });
 
   beforeEach(() => {
@@ -187,14 +186,11 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     hookRunnerMock.mockReset().mockReturnValue(null);
     beforeReplyMock.mockClear();
     prepareMock.mockReset();
-    restoreCliRunnerTestDeps();
-    setCliRunnerTestDeps({
-      claudeCliSessionTranscriptHasContent: vi.fn(async () => true),
-    });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockResolvedValue(true);
   });
 
   afterEach(() => {
-    restoreCliRunnerTestDeps();
+    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockRestore();
   });
 
   it("keeps valid-empty isolated completion outside the turn lifecycle", async () => {

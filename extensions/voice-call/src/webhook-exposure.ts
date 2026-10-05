@@ -28,12 +28,8 @@ export function providerRequiresPublicWebhook(providerName: string | undefined):
 
 /** Return true when a webhook URL parses to a local/private host. */
 export function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
-  try {
-    const parsed = new URL(webhookUrl);
-    return isBlockedHostnameOrIp(parsed.hostname);
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(webhookUrl);
+  return parsed ? isBlockedHostnameOrIp(parsed.hostname) : false;
 }
 
 /** Resolve a human-readable webhook exposure status for doctor/setup surfaces. */

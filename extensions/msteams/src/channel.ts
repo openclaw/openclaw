@@ -179,77 +179,26 @@ function resolveGraphActionTarget(
   return currentChatType === "channel" ? "" : (currentChannelTarget ?? "");
 }
 
-type MSTeamsActionTargetParams = {
-  actionLabel: string;
-  toolParams: Record<string, unknown>;
-  currentChannelId?: string | null;
-  currentGraphChannelId?: string | null;
-  currentChatType?: "direct" | "group" | "channel" | null;
-  currentMessageId?: string | number | null;
-  graphOnly?: boolean;
-  allowCurrentMessageIdFallback?: boolean;
-};
-
-function resolveMSTeamsActionTarget(params: MSTeamsActionTargetParams): string {
-  return params.graphOnly
-    ? resolveGraphActionTarget(
-        params.toolParams,
-        params.currentChannelId,
-        params.currentGraphChannelId,
-        params.currentChatType,
-      )
-    : resolveActionTarget(params.toolParams, params.currentChannelId);
-}
-
-async function runWithRequiredActionTarget<T>(
-  params: MSTeamsActionTargetParams & { run: (to: string) => Promise<T> },
-): Promise<T | ReturnType<typeof actionError>> {
-  const to = resolveMSTeamsActionTarget(params);
-  if (!to) {
-    return actionError(`${params.actionLabel} requires a target (to).`);
-  }
-  return await params.run(to);
-}
-
-async function runWithRequiredActionMessageTarget<T>(
-  params: MSTeamsActionTargetParams & {
-    run: (target: { to: string; messageId: string }) => Promise<T>;
-  },
-): Promise<T | ReturnType<typeof actionError>> {
-  const to = resolveMSTeamsActionTarget(params);
+function resolveMSTeamsActionMessageId(
+  ctx: Parameters<NonNullable<ChannelMessageActionAdapter["handleAction"]>>[0],
+  to: string,
+  allowCurrentMessageIdFallback = false,
+): string {
   const canUseCurrentMessageId =
-    params.allowCurrentMessageIdFallback === true &&
+    allowCurrentMessageIdFallback &&
     msteamsContextTargetsMatch(to, {
-      currentChannelId: params.currentChannelId ?? undefined,
-      currentMessagingTarget: params.currentGraphChannelId ?? undefined,
+      currentChannelId: ctx.toolContext?.currentChannelId ?? undefined,
+      currentMessagingTarget:
+        normalizeOptionalString(ctx.toolContext?.currentGraphChannelId) ??
+        normalizeOptionalString(ctx.toolContext?.currentMessagingTarget),
     });
-  const messageIdRaw = canUseCurrentMessageId
+  const messageId = canUseCurrentMessageId
     ? resolveReactionMessageId({
-        args: params.toolParams,
-        toolContext: { currentMessageId: params.currentMessageId ?? undefined },
+        args: ctx.params,
+        toolContext: { currentMessageId: ctx.toolContext?.currentMessageId ?? undefined },
       })
-    : (normalizeOptionalString(params.toolParams.messageId) ?? "");
-  const messageId = messageIdRaw == null ? "" : String(messageIdRaw).trim();
-  if (!to || !messageId) {
-    return actionError(`${params.actionLabel} requires a target (to) and messageId.`);
-  }
-  return await params.run({ to, messageId });
-}
-
-async function runWithRequiredActionPinnedMessageTarget<T>(
-  params: MSTeamsActionTargetParams & {
-    run: (target: { to: string; pinnedMessageId: string }) => Promise<T>;
-  },
-): Promise<T | ReturnType<typeof actionError>> {
-  const to = resolveMSTeamsActionTarget(params);
-  const pinnedMessageId =
-    typeof params.toolParams.pinnedMessageId === "string"
-      ? params.toolParams.pinnedMessageId.trim()
-      : (normalizeOptionalString(params.toolParams.messageId) ?? "");
-  if (!to || !pinnedMessageId) {
-    return actionError(`${params.actionLabel} requires a target (to) and pinnedMessageId.`);
-  }
-  return await params.run({ to, pinnedMessageId });
+    : (normalizeOptionalString(ctx.params.messageId) ?? "");
+  return messageId == null ? "" : String(messageId).trim();
 }
 
 function describeMSTeamsMessageTool({
@@ -524,25 +473,23 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               presentation,
               text: resolveActionContent(ctx.params),
             });
-            return await runWithRequiredActionTarget({
-              actionLabel: "Card send",
-              toolParams: ctx.params,
-              run: async (to) => {
-                const { sendAdaptiveCardMSTeams } = await loadMSTeamsChannelRuntime();
-                const result = await sendAdaptiveCardMSTeams({
-                  cfg: ctx.cfg,
-                  to,
-                  card,
-                  assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-                  onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-                });
-                return jsonActionResult({
-                  ok: true,
-                  channel: "msteams",
-                  messageId: result.messageId,
-                  conversationId: result.conversationId,
-                });
-              },
+            const to = resolveActionTarget(ctx.params);
+            if (!to) {
+              return actionError("Card send requires a target (to).");
+            }
+            const { sendAdaptiveCardMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await sendAdaptiveCardMSTeams({
+              cfg: ctx.cfg,
+              to,
+              card,
+              assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+              onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+            });
+            return jsonActionResult({
+              ok: true,
+              channel: "msteams",
+              messageId: result.messageId,
+              conversationId: result.conversationId,
             });
           }
           if (ctx.action === "upload-file") {
@@ -550,35 +497,32 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             if (!mediaUrl) {
               return actionError("Upload-file requires media, filePath, or path.");
             }
-            return await runWithRequiredActionTarget({
-              actionLabel: "Upload-file",
-              toolParams: ctx.params,
-              currentChannelId: ctx.toolContext?.currentChannelId,
-              run: async (to) => {
-                const { sendMessageMSTeams } = await loadMSTeamsChannelRuntime();
-                const result = await sendMessageMSTeams({
-                  cfg: ctx.cfg,
-                  to,
-                  text: resolveActionContent(ctx.params),
-                  mediaUrl,
-                  filename:
-                    normalizeOptionalString(ctx.params.filename) ??
-                    normalizeOptionalString(ctx.params.title),
-                  mediaAccess: ctx.mediaAccess,
-                  mediaLocalRoots: ctx.mediaLocalRoots,
-                  mediaReadFile: ctx.mediaReadFile,
-                  assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-                  onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-                });
-                return jsonActionResult({
-                  ok: true,
-                  channel: "msteams",
-                  action: "upload-file",
-                  messageId: result.messageId,
-                  conversationId: result.conversationId,
-                  ...(result.pendingUploadId ? { pendingUploadId: result.pendingUploadId } : {}),
-                });
-              },
+            const to = resolveActionTarget(ctx.params, ctx.toolContext?.currentChannelId);
+            if (!to) {
+              return actionError("Upload-file requires a target (to).");
+            }
+            const { sendMessageMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await sendMessageMSTeams({
+              cfg: ctx.cfg,
+              to,
+              text: resolveActionContent(ctx.params),
+              mediaUrl,
+              filename:
+                normalizeOptionalString(ctx.params.filename) ??
+                normalizeOptionalString(ctx.params.title),
+              mediaAccess: ctx.mediaAccess,
+              mediaLocalRoots: ctx.mediaLocalRoots,
+              mediaReadFile: ctx.mediaReadFile,
+              assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+              onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+            });
+            return jsonActionResult({
+              ok: true,
+              channel: "msteams",
+              action: "upload-file",
+              messageId: result.messageId,
+              conversationId: result.conversationId,
+              ...(result.pendingUploadId ? { pendingUploadId: result.pendingUploadId } : {}),
             });
           }
           if (ctx.action === "edit" || ctx.action === "delete") {
@@ -587,160 +531,145 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             if (action === "edit" && !content) {
               return actionError("Edit requires content.");
             }
-            return await runWithRequiredActionMessageTarget({
-              actionLabel: action === "edit" ? "Edit" : "Delete",
-              toolParams: ctx.params,
-              currentChannelId: ctx.toolContext?.currentChannelId,
-              run: async (target) => {
-                const to = await authorizeActionTarget(target.to);
-                const runtime = await loadMSTeamsChannelRuntime();
-                const params = { cfg: ctx.cfg, to, activityId: target.messageId };
-                const result =
-                  action === "edit"
-                    ? await runtime.editMessageMSTeams({ ...params, text: content })
-                    : await runtime.deleteMessageMSTeams(params);
-                return jsonMSTeamsConversationResult(result.conversationId);
-              },
-            });
+            const target = resolveActionTarget(ctx.params, ctx.toolContext?.currentChannelId);
+            const messageId = normalizeOptionalString(ctx.params.messageId) ?? "";
+            if (!target || !messageId) {
+              return actionError(
+                `${action === "edit" ? "Edit" : "Delete"} requires a target (to) and messageId.`,
+              );
+            }
+            const to = await authorizeActionTarget(target);
+            const runtime = await loadMSTeamsChannelRuntime();
+            const params = { cfg: ctx.cfg, to, activityId: messageId };
+            const result =
+              action === "edit"
+                ? await runtime.editMessageMSTeams({ ...params, text: content })
+                : await runtime.deleteMessageMSTeams(params);
+            return jsonMSTeamsConversationResult(result.conversationId);
           }
 
-          const graphActionTarget = {
-            // Normal message-tool search/member-info use channelId as their conversation filter.
-            toolParams:
-              ctx.action === "search" || ctx.action === "member-info"
-                ? {
-                    ...ctx.params,
-                    to:
-                      resolveActionTarget(ctx.params) ||
-                      normalizeOptionalString(ctx.params.channelId),
-                  }
-                : ctx.params,
-            currentChannelId: ctx.toolContext?.currentChannelId,
-            currentGraphChannelId:
-              normalizeOptionalString(ctx.toolContext?.currentGraphChannelId) ??
+          // Normal message-tool search/member-info use channelId as their conversation filter.
+          const graphParams =
+            ctx.action === "search" || ctx.action === "member-info"
+              ? {
+                  ...ctx.params,
+                  to:
+                    resolveActionTarget(ctx.params) ||
+                    normalizeOptionalString(ctx.params.channelId),
+                }
+              : ctx.params;
+          const graphTo = resolveGraphActionTarget(
+            graphParams,
+            ctx.toolContext?.currentChannelId,
+            normalizeOptionalString(ctx.toolContext?.currentGraphChannelId) ??
               normalizeOptionalString(ctx.toolContext?.currentMessagingTarget),
-            currentChatType: ctx.toolContext?.currentChatType,
-            currentMessageId: ctx.toolContext?.currentMessageId,
-            graphOnly: true,
-          };
+            ctx.toolContext?.currentChatType,
+          );
 
           if (ctx.action === "read" || ctx.action === "pin" || ctx.action === "reactions") {
             const action = ctx.action;
-            return await runWithRequiredActionMessageTarget({
-              actionLabel: { read: "Read", pin: "Pin", reactions: "Reactions" }[action],
-              ...graphActionTarget,
-              allowCurrentMessageIdFallback: action === "reactions",
-              run: async (target) => {
-                const to = await authorizeActionTarget(target.to);
-                const runtime = await loadMSTeamsChannelRuntime();
-                const params = { cfg: ctx.cfg, to, messageId: target.messageId };
-                if (action === "read") {
-                  const message = await runtime.getMessageMSTeams(params);
-                  return jsonMSTeamsOkActionResult(action, { message });
-                }
-                if (action === "pin") {
-                  return jsonMSTeamsActionResult(action, await runtime.pinMessageMSTeams(params));
-                }
-                return jsonMSTeamsOkActionResult(
-                  action,
-                  await runtime.listReactionsMSTeams(params),
-                );
-              },
-            });
+            const messageId = resolveMSTeamsActionMessageId(ctx, graphTo, action === "reactions");
+            if (!graphTo || !messageId) {
+              return actionError(
+                `${{ read: "Read", pin: "Pin", reactions: "Reactions" }[action]} requires a target (to) and messageId.`,
+              );
+            }
+            const to = await authorizeActionTarget(graphTo);
+            const runtime = await loadMSTeamsChannelRuntime();
+            const params = { cfg: ctx.cfg, to, messageId };
+            if (action === "read") {
+              const message = await runtime.getMessageMSTeams(params);
+              return jsonMSTeamsOkActionResult(action, { message });
+            }
+            if (action === "pin") {
+              return jsonMSTeamsActionResult(action, await runtime.pinMessageMSTeams(params));
+            }
+            return jsonMSTeamsOkActionResult(action, await runtime.listReactionsMSTeams(params));
           }
 
           if (ctx.action === "unpin") {
-            return await runWithRequiredActionPinnedMessageTarget({
-              actionLabel: "Unpin",
-              ...graphActionTarget,
-              run: async (target) => {
-                const to = await authorizeActionTarget(target.to);
-                const { unpinMessageMSTeams } = await loadMSTeamsChannelRuntime();
-                const result = await unpinMessageMSTeams({
-                  cfg: ctx.cfg,
-                  to,
-                  pinnedMessageId: target.pinnedMessageId,
-                });
-                return jsonMSTeamsActionResult("unpin", result);
-              },
+            const pinnedMessageId =
+              typeof ctx.params.pinnedMessageId === "string"
+                ? ctx.params.pinnedMessageId.trim()
+                : (normalizeOptionalString(ctx.params.messageId) ?? "");
+            if (!graphTo || !pinnedMessageId) {
+              return actionError("Unpin requires a target (to) and pinnedMessageId.");
+            }
+            const to = await authorizeActionTarget(graphTo);
+            const { unpinMessageMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await unpinMessageMSTeams({
+              cfg: ctx.cfg,
+              to,
+              pinnedMessageId,
             });
+            return jsonMSTeamsActionResult("unpin", result);
           }
 
           if (ctx.action === "list-pins") {
-            return await runWithRequiredActionTarget({
-              actionLabel: "List-pins",
-              ...graphActionTarget,
-              run: async (to) => {
-                const allowedTarget = await authorizeActionTarget(to);
-                const { listPinsMSTeams } = await loadMSTeamsChannelRuntime();
-                const result = await listPinsMSTeams({ cfg: ctx.cfg, to: allowedTarget });
-                return jsonMSTeamsOkActionResult("list-pins", result);
-              },
-            });
+            if (!graphTo) {
+              return actionError("List-pins requires a target (to).");
+            }
+            const to = await authorizeActionTarget(graphTo);
+            const { listPinsMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await listPinsMSTeams({ cfg: ctx.cfg, to });
+            return jsonMSTeamsOkActionResult("list-pins", result);
           }
 
           if (ctx.action === "react") {
-            return await runWithRequiredActionMessageTarget({
-              actionLabel: "React",
-              ...graphActionTarget,
-              allowCurrentMessageIdFallback: true,
-              run: async (target) => {
-                const emoji = typeof ctx.params.emoji === "string" ? ctx.params.emoji.trim() : "";
-                const remove = typeof ctx.params.remove === "boolean" ? ctx.params.remove : false;
-                if (!emoji) {
-                  return {
-                    isError: true,
-                    ...textResult(
-                      `React requires an emoji (reaction type). Valid types: ${MSTEAMS_REACTION_TYPES.join(", ")}.`,
-                      {
-                        error: "React requires an emoji (reaction type).",
-                        validTypes: [...MSTEAMS_REACTION_TYPES],
-                      },
-                    ),
-                  };
-                }
-                const to = await authorizeActionTarget(target.to);
-                const runtime = await loadMSTeamsChannelRuntime();
-                const react = remove ? runtime.unreactMessageMSTeams : runtime.reactMessageMSTeams;
-                const result = await react({
-                  cfg: ctx.cfg,
-                  to,
-                  messageId: target.messageId,
-                  reactionType: emoji,
-                });
-                return jsonMSTeamsActionResult("react", {
-                  ...(remove ? { removed: true } : {}),
-                  reactionType: emoji,
-                  ...result,
-                });
-              },
+            const messageId = resolveMSTeamsActionMessageId(ctx, graphTo, true);
+            if (!graphTo || !messageId) {
+              return actionError("React requires a target (to) and messageId.");
+            }
+            const emoji = typeof ctx.params.emoji === "string" ? ctx.params.emoji.trim() : "";
+            const remove = typeof ctx.params.remove === "boolean" ? ctx.params.remove : false;
+            if (!emoji) {
+              return {
+                isError: true,
+                ...textResult(
+                  `React requires an emoji (reaction type). Valid types: ${MSTEAMS_REACTION_TYPES.join(", ")}.`,
+                  {
+                    error: "React requires an emoji (reaction type).",
+                    validTypes: [...MSTEAMS_REACTION_TYPES],
+                  },
+                ),
+              };
+            }
+            const to = await authorizeActionTarget(graphTo);
+            const runtime = await loadMSTeamsChannelRuntime();
+            const react = remove ? runtime.unreactMessageMSTeams : runtime.reactMessageMSTeams;
+            const result = await react({
+              cfg: ctx.cfg,
+              to,
+              messageId,
+              reactionType: emoji,
+            });
+            return jsonMSTeamsActionResult("react", {
+              ...(remove ? { removed: true } : {}),
+              reactionType: emoji,
+              ...result,
             });
           }
 
           if (ctx.action === "search") {
-            return await runWithRequiredActionTarget({
-              actionLabel: "Search",
-              ...graphActionTarget,
-              run: async (to) => {
-                const allowedTarget = await authorizeActionTarget(to);
-                const query = normalizeOptionalString(ctx.params.query);
-                if (!query) {
-                  return actionError("Search requires a target (to) and query.");
-                }
-                const limit = readPositiveIntegerParam(ctx.params, "limit");
-                const from =
-                  typeof ctx.params.from === "string" ? ctx.params.from.trim() : undefined;
-                const { searchMessagesMSTeams } = await loadMSTeamsChannelRuntime();
-                const result = await searchMessagesMSTeams({
-                  cfg: ctx.cfg,
-                  to: allowedTarget,
-                  query,
-                  from: from || undefined,
-                  limit,
-                });
-                return jsonMSTeamsOkActionResult("search", result);
-              },
+            if (!graphTo) {
+              return actionError("Search requires a target (to).");
+            }
+            const to = await authorizeActionTarget(graphTo);
+            const query = normalizeOptionalString(ctx.params.query);
+            if (!query) {
+              return actionError("Search requires a target (to) and query.");
+            }
+            const limit = readPositiveIntegerParam(ctx.params, "limit");
+            const from = typeof ctx.params.from === "string" ? ctx.params.from.trim() : undefined;
+            const { searchMessagesMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await searchMessagesMSTeams({
+              cfg: ctx.cfg,
+              to,
+              query,
+              from: from || undefined,
+              limit,
             });
+            return jsonMSTeamsOkActionResult("search", result);
           }
 
           if (ctx.action === "member-info") {
@@ -748,24 +677,21 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             if (!userId) {
               return actionError("member-info requires a userId.");
             }
-            return await runWithRequiredActionTarget({
-              actionLabel: "member-info",
-              ...graphActionTarget,
-              run: async (target) => {
-                const to = await authorizeActionTarget(target);
-                const currentRequesterId = isCurrentMSTeamsReadTarget({ ctx, target: to })
-                  ? ctx.requesterSenderId
-                  : undefined;
-                const { getMemberInfoMSTeams } = await loadMSTeamsChannelRuntime();
-                const result = await getMemberInfoMSTeams({
-                  cfg: ctx.cfg,
-                  to,
-                  userId,
-                  currentRequesterId,
-                });
-                return jsonMSTeamsOkActionResult("member-info", result);
-              },
+            if (!graphTo) {
+              return actionError("member-info requires a target (to).");
+            }
+            const to = await authorizeActionTarget(graphTo);
+            const currentRequesterId = isCurrentMSTeamsReadTarget({ ctx, target: to })
+              ? ctx.requesterSenderId
+              : undefined;
+            const { getMemberInfoMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await getMemberInfoMSTeams({
+              cfg: ctx.cfg,
+              to,
+              userId,
+              currentRequesterId,
             });
+            return jsonMSTeamsOkActionResult("member-info", result);
           }
 
           if (ctx.action === "channel-list") {
@@ -811,24 +737,19 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             if (!userId) {
               return actionError(`${action} requires a userId.`);
             }
-            return await runWithRequiredActionTarget({
-              actionLabel: action,
-              toolParams: ctx.params,
-              currentChannelId: ctx.toolContext?.currentChannelId,
-              run: async (to) => {
-                const role =
-                  action === "addParticipant"
-                    ? normalizeOptionalString(ctx.params.role)
-                    : undefined;
-                const runtime = await loadMSTeamsChannelRuntime();
-                const params = { cfg: ctx.cfg, to, userId };
-                const result =
-                  action === "addParticipant"
-                    ? await runtime.addParticipantMSTeams({ ...params, role })
-                    : await runtime.removeParticipantMSTeams(params);
-                return jsonMSTeamsOkActionResult(action, result);
-              },
-            });
+            const to = resolveActionTarget(ctx.params, ctx.toolContext?.currentChannelId);
+            if (!to) {
+              return actionError(`${action} requires a target (to).`);
+            }
+            const role =
+              action === "addParticipant" ? normalizeOptionalString(ctx.params.role) : undefined;
+            const runtime = await loadMSTeamsChannelRuntime();
+            const params = { cfg: ctx.cfg, to, userId };
+            const result =
+              action === "addParticipant"
+                ? await runtime.addParticipantMSTeams({ ...params, role })
+                : await runtime.removeParticipantMSTeams(params);
+            return jsonMSTeamsOkActionResult(action, result);
           }
 
           if (ctx.action === "renameGroup") {
@@ -836,20 +757,17 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             if (!name) {
               return actionError("renameGroup requires a name.");
             }
-            return await runWithRequiredActionTarget({
-              actionLabel: "renameGroup",
-              toolParams: ctx.params,
-              currentChannelId: ctx.toolContext?.currentChannelId,
-              run: async (to) => {
-                const { renameGroupMSTeams } = await loadMSTeamsChannelRuntime();
-                const result = await renameGroupMSTeams({
-                  cfg: ctx.cfg,
-                  to,
-                  name,
-                });
-                return jsonMSTeamsOkActionResult("renameGroup", result);
-              },
+            const to = resolveActionTarget(ctx.params, ctx.toolContext?.currentChannelId);
+            if (!to) {
+              return actionError("renameGroup requires a target (to).");
+            }
+            const { renameGroupMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await renameGroupMSTeams({
+              cfg: ctx.cfg,
+              to,
+              name,
             });
+            return jsonMSTeamsOkActionResult("renameGroup", result);
           }
 
           // Return null to fall through to default handler

@@ -1088,23 +1088,22 @@ function nativeEntryIdentity(entry: Pick<NativeI18nEntry, "source" | "surface">)
 }
 
 export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEntry[] {
-  const sitesByIdentity = new Map<string, Map<string, Candidate>>();
-  const entryByIdentity = new Map<string, Pick<NativeI18nEntry, "source" | "surface">>();
+  const entriesByIdentity = new Map<
+    string,
+    { source: string; surface: NativeI18nSurface; sites: Map<string, Candidate> }
+  >();
   for (const candidate of entries) {
     const identity = nativeEntryIdentity(candidate);
-    entryByIdentity.set(identity, { source: candidate.source, surface: candidate.surface });
-    const sites = sitesByIdentity.get(identity) ?? new Map<string, Candidate>();
-    sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
-    sitesByIdentity.set(identity, sites);
+    let entry = entriesByIdentity.get(identity);
+    if (!entry) {
+      entry = { source: candidate.source, surface: candidate.surface, sites: new Map() };
+      entriesByIdentity.set(identity, entry);
+    }
+    entry.sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
   }
-  return [...entryByIdentity]
+  return [...entriesByIdentity]
     .map(([identity, entry]) => {
-      const sites = [
-        ...expectDefined(
-          sitesByIdentity.get(identity),
-          `native i18n sites for ${identity}`,
-        ).values(),
-      ].toSorted(
+      const sites = [...entry.sites.values()].toSorted(
         (left, right) =>
           compareCodePoints(left.path, right.path) || compareCodePoints(left.kind, right.kind),
       );

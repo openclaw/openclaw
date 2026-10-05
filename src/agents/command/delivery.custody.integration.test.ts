@@ -415,7 +415,7 @@ describe("native completion final-send custody", () => {
             // Reconcile native completion state as startup would: queue acknowledgment must not
             // be the only copy of the exact harness completion receipt.
             expect(
-              reconcileHarnessCompletionDelivery({
+              await reconcileHarnessCompletionDelivery({
                 ...target,
                 sourceRunId: source,
                 taskRunId: child,
@@ -471,7 +471,7 @@ describe("native completion marker commit", () => {
             sourceRunId: source,
             taskRunId: claim.taskRunId,
           });
-        expect(reconcile(), binding).toBe(binding === "matching" ? "delivered" : "pending");
+        expect(await reconcile(), binding).toBe(binding === "matching" ? "delivered" : "pending");
         const marker = await persistMarker(target, current, [{ text: "Captured final" }]);
         expect(marker.pendingFinalDeliveryMarkerPersisted, binding).toBe(true);
         const after = read();
@@ -495,7 +495,7 @@ describe("native completion marker commit", () => {
         expect
           .soft(getRestartRecoveryTerminalDeliveryEvidence(cleaned, source), binding)
           .toEqual(before);
-        expect(reconcile(), binding).toBe(binding === "matching" ? "delivered" : "blocked");
+        expect(await reconcile(), binding).toBe(binding === "matching" ? "delivered" : "blocked");
       }
     });
   });

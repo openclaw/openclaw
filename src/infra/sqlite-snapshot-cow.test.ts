@@ -130,56 +130,54 @@ it("rejects an identical replacement for an admitted raw source without retainin
   expect((await fs.readdir(directory)).toSorted()).toEqual(["displaced.sqlite", "source.sqlite"]);
 });
 
-it("clones the main file through the empty-WAL family fallback", async () => {
+it.each(["empty WAL", "source alias"])("keeps an independent raw copy with %s", async (layout) => {
   const { directory, sourcePath } = await fixture();
-  const writer = new DatabaseSync(sourcePath);
-  try {
-    writer.exec("PRAGMA journal_mode=WAL");
-  } finally {
-    writer.close();
+  const alias = path.join(directory, "source-alias.sqlite");
+  if (layout === "empty WAL") {
+    const writer = new DatabaseSync(sourcePath);
+    try {
+      writer.exec("PRAGMA journal_mode=WAL");
+    } finally {
+      writer.close();
+    }
+    await fs.writeFile(`${sourcePath}-wal`, "");
+  } else {
+    await fs.link(sourcePath, alias);
   }
-  await fs.writeFile(`${sourcePath}-wal`, "");
   const bytes = await fs.readFile(sourcePath);
   const prepared = await prepareSqliteReadOnlyCopyInProcess(sourcePath, directory);
   try {
     expect(await fs.readFile(prepared.location)).toEqual(bytes);
-    expect((await fs.stat(`${prepared.location}-wal`)).size).toBe(0);
-    const metadata = await readCloneFileMetadata([sourcePath, prepared.location]);
-    if (metadata[0]) {
-      expect(metadata[1]?.cloneId).toBe(metadata[0].cloneId);
+    const output = await fs.stat(prepared.location);
+    expect(output.nlink).toBe(1);
+    expect(output.ino).not.toBe((await fs.stat(sourcePath)).ino);
+    if (layout === "empty WAL") {
+      expect((await fs.stat(`${prepared.location}-wal`)).size).toBe(0);
+      const metadata = await readCloneFileMetadata([sourcePath, prepared.location]);
+      if (metadata[0]) {
+        expect(metadata[1]?.cloneId).toBe(metadata[0].cloneId);
+      }
+    } else {
+      const writer = new DatabaseSync(prepared.location);
+      try {
+        writer.exec("DELETE FROM payload");
+        expect(writer.prepare("SELECT count(*) AS count FROM payload").get()).toEqual({ count: 0 });
+      } finally {
+        writer.close();
+      }
+      expect(await fs.readFile(alias)).toEqual(bytes);
     }
-    expect((await fs.stat(prepared.location)).ino).not.toBe((await fs.stat(sourcePath)).ino);
+    expect(await fs.readFile(sourcePath)).toEqual(bytes);
   } finally {
     expect(await prepared.cleanupAsync()).toBe(true);
   }
   expect(await fs.readFile(sourcePath)).toEqual(bytes);
-  expect((await fs.stat(`${sourcePath}-wal`)).size).toBe(0);
-  expect((await fs.readdir(directory)).toSorted()).toEqual(["source.sqlite", "source.sqlite-wal"]);
-});
-
-it("keeps read-copy source aliases separate from the writable output", async () => {
-  const { directory, sourcePath, bytes } = await fixture();
-  const alias = path.join(directory, "source-alias.sqlite");
-  await fs.link(sourcePath, alias);
-  const prepared = await prepareSqliteReadOnlyCopyInProcess(sourcePath, directory);
-  try {
-    const output = await fs.stat(prepared.location);
-    expect(output.nlink).toBe(1);
-    expect(output.ino).not.toBe((await fs.stat(sourcePath)).ino);
-    const writer = new DatabaseSync(prepared.location);
-    try {
-      writer.exec("DELETE FROM payload");
-      expect(writer.prepare("SELECT count(*) AS count FROM payload").get()).toEqual({ count: 0 });
-    } finally {
-      writer.close();
-    }
-    expect(await fs.readFile(sourcePath)).toEqual(bytes);
-    expect(await fs.readFile(alias)).toEqual(bytes);
-  } finally {
-    expect(await prepared.cleanupAsync()).toBe(true);
+  if (layout === "empty WAL") {
+    expect((await fs.stat(`${sourcePath}-wal`)).size).toBe(0);
   }
-  expect((await fs.readdir(directory)).toSorted()).toEqual([
-    "source-alias.sqlite",
-    "source.sqlite",
-  ]);
+  expect((await fs.readdir(directory)).toSorted()).toEqual(
+    layout === "empty WAL"
+      ? ["source.sqlite", "source.sqlite-wal"]
+      : ["source-alias.sqlite", "source.sqlite"],
+  );
 });

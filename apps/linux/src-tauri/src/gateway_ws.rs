@@ -3209,7 +3209,7 @@ esac
                 fs::write(self.directory.join("dashboard.json"), response.to_string())
                     .expect("write dashboard response");
                 let cli = OpenClawCli::discover().expect("discover fixture CLI");
-                gateway::ensure_ready(&cli)
+                gateway::dashboard(&cli, gateway::status(&cli)?)
             }
         }
 

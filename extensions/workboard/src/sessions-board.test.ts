@@ -40,6 +40,7 @@ const OTHER_COLUMN: WorkboardSessionsColumn = {
   description: "Remaining sessions.",
   fallback: true,
 };
+const DEFAULT_COLUMNS = ["needs-input", "stuck", "working", "in-review", "merged", "done"];
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(NOW);
@@ -124,11 +125,65 @@ async function createFixture(options: {
     unsubscribe,
     repair,
     context,
-    emit: (key: string) => listener?.({ agentId: "main", sessionKey: key }),
+    emit: (key: string, factsInvalidated?: string) =>
+      listener?.({ agentId: "main", sessionKey: key, factsInvalidated }),
   };
 }
 
 describe("Sessions board rules and live facts", () => {
+  it("filters automation at the roster source unless the scope opts in", async () => {
+    await withService({ facts: [] }, async ({ service, request, store }) => {
+      await service.read(BOARD_ID);
+      expect(request.mock.calls[0]?.[1]).toMatchObject({
+        excludeCron: true,
+        excludeSystem: true,
+      });
+      expect(request.mock.calls[0]?.[1]).not.toHaveProperty("excludeSubagents");
+      await expect(service.move(BOARD_ID, "agent:main:cron:job:trigger", "other")).rejects.toThrow(
+        "not available in this board's scope",
+      );
+      expect(request.mock.lastCall?.[1]).toMatchObject({ excludeCron: true, excludeSystem: true });
+      expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
+      await service.update(BOARD_ID, { scope: { includeAutomation: true } });
+      await service.read(BOARD_ID);
+      expect(request.mock.lastCall?.[1]).not.toHaveProperty("excludeCron");
+      expect(request.mock.lastCall?.[1]).not.toHaveProperty("excludeSystem");
+      expect(request.mock.lastCall?.[1]).not.toHaveProperty("excludeSubagents");
+    });
+  });
+
+  it.each([undefined, "home"])(
+    "excludes each agent's configured Home session (%s) before facts reads and moves",
+    async (mainKey) => {
+      const home = { ...facts(mainKey ?? "main"), isMain: true };
+      const otherHome = {
+        ...facts("other-home", { key: `agent:ops:${mainKey ?? "main"}`, agentId: "ops" }),
+        isMain: true,
+      };
+      const work = facts("subagent:worker");
+      await withService(
+        { facts: [home, otherHome, work] },
+        async ({ service, readSessionFacts, store }) => {
+          expect((await service.read(BOARD_ID)).sessions.map(({ key }) => key)).toEqual([work.key]);
+          expect(readSessionFacts).toHaveBeenCalledExactlyOnceWith({ sessionKeys: [work.key] });
+          await expect(service.move(BOARD_ID, home.key, "other")).rejects.toThrow(
+            "not available in this board's scope",
+          );
+          expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
+          await service.update(BOARD_ID, { scope: { includeHome: true } });
+          expect((await service.read(BOARD_ID)).sessions.map(({ key }) => key)).toEqual([
+            home.key,
+            otherHome.key,
+            work.key,
+          ]);
+          await service.move(BOARD_ID, home.key, "focus");
+          await service.update(BOARD_ID, { scope: { includeHome: false } });
+          expect((await service.read(BOARD_ID)).sessions.map(({ key }) => key)).toEqual([work.key]);
+        },
+      );
+    },
+  );
+
   it("rejects a move when caller authority ends during the facts read", async () => {
     await withService({ facts: [facts("one")] }, async ({ service, store, readSessionFacts }) => {
       const entered = Promise.withResolvers<void>();
@@ -155,81 +210,132 @@ describe("Sessions board rules and live facts", () => {
     });
   });
 
-  it("takes the first full rule match and distinguishes unknown PR state from confirmed none", async () => {
-    const digest = { health: "on-track", headline: "Making progress", revision: 1 } as const;
-    await withService(
-      {
-        spec: {
-          scope: { includeArchived: true },
-          columns: [
-            {
-              id: "review",
-              label: "Review",
-              description: "Active reviewed work.",
-              match: [
-                {
-                  health: ["on-track"],
-                  run: ["active"],
-                  pullRequest: ["open"],
-                  archived: false,
-                },
-                { run: ["failed"], archived: false },
-              ],
-            },
-            {
-              id: "active",
-              label: "Active",
-              description: "All active work.",
-              match: { run: ["active"] },
-            },
-            {
-              id: "no-pr",
-              label: "No PR",
-              description: "Confirmed no pull request.",
-              match: { pullRequest: ["none"] },
-            },
-            OTHER_COLUMN,
-          ],
-        },
-        facts: [
-          facts("all", {
-            run: "active",
-            observerDigest: digest,
-            pullRequests: [{ number: 1, state: "open" }],
-          }),
-          facts("no-digest", { run: "active", pullRequests: [{ number: 2, state: "open" }] }),
-          facts("active-no-pr", { run: "active", observerDigest: digest }),
-          facts("archived", {
-            run: "active",
-            observerDigest: digest,
-            archived: true,
-            pullRequests: [{ number: 3, state: "open" }],
-          }),
-          facts("idle-pr", {
-            observerDigest: digest,
-            pullRequests: [{ number: 4, state: "open" }],
-          }),
-          facts("none"),
-          facts("unknown", { pullRequestsUnavailable: true }),
-          facts("failed", { run: "failed" }),
+  const digest = { health: "on-track", headline: "Making progress", revision: 1 } as const;
+  it.each([
+    {
+      name: "custom rules with conjunctions, alternatives, and unknown PR state",
+      spec: {
+        scope: { includeArchived: true },
+        columns: [
+          {
+            id: "review",
+            label: "Review",
+            description: "Active reviewed work.",
+            match: [
+              {
+                health: ["on-track"],
+                run: ["active"],
+                pullRequest: ["open"],
+                archived: false,
+              },
+              { run: ["failed"], archived: false },
+            ],
+          },
+          {
+            id: "active",
+            label: "Active",
+            description: "All active work.",
+            match: { run: ["active"] },
+          },
+          {
+            id: "no-pr",
+            label: "No PR",
+            description: "Confirmed no pull request.",
+            match: { pullRequest: ["none"] },
+          },
+          OTHER_COLUMN,
         ],
       },
-      async ({ service, request, store }) => {
-        const result = await service.read(BOARD_ID);
+      facts: [
+        facts("all", {
+          run: "active",
+          observerDigest: digest,
+          pullRequests: [{ number: 1, state: "open" }],
+        }),
+        facts("no-digest", { run: "active", pullRequests: [{ number: 2, state: "open" }] }),
+        facts("active-no-pr", { run: "active", observerDigest: digest }),
+        facts("archived", {
+          run: "active",
+          observerDigest: digest,
+          archived: true,
+          pullRequests: [{ number: 3, state: "open" }],
+        }),
+        facts("idle-pr", {
+          observerDigest: digest,
+          pullRequests: [{ number: 4, state: "open" }],
+        }),
+        facts("none"),
+        facts("unknown", { pullRequestsUnavailable: true }),
+        facts("failed", { run: "failed" }),
+      ],
+      placements: [
+        ["all", "review"],
+        ["no-digest", "active"],
+        ["active-no-pr", "active"],
+        ["archived", "active"],
+        ["idle-pr", "other"],
+        ["none", "no-pr"],
+        ["unknown", "other"],
+        ["failed", "review"],
+      ],
+      columns: ["review", "active", "no-pr", "other"],
+      warning: "Pull-request facts for 1 session are not loaded yet.",
+    },
+    {
+      name: "default rule priority for unobserved runs and PRs",
+      spec: createDefaultWorkboardSessionsBoardSpec(),
+      facts: [
+        facts("active", { run: "active" }),
+        facts("failed", { run: "failed" }),
+        facts("unhealthy-active", {
+          run: "active",
+          observerDigest: { health: "stuck", headline: "Stuck", revision: 1 },
+        }),
+        facts("needs-input", {
+          run: "active",
+          observerDigest: { health: "waiting-on-user", headline: "Approval", revision: 1 },
+        }),
+        facts("review", { pullRequests: [{ number: 1, state: "open" }] }),
+        facts("merged", { pullRequests: [{ number: 2, state: "merged" }] }),
+        facts("idle"),
+      ],
+      placements: [
+        ["active", "working"],
+        ["failed", "stuck"],
+        ["unhealthy-active", "stuck"],
+        ["needs-input", "needs-input"],
+        ["review", "in-review"],
+        ["merged", "merged"],
+        ["idle", "done"],
+      ],
+      columns: DEFAULT_COLUMNS,
+      warning: undefined,
+    },
+  ] satisfies Array<{
+    name: string;
+    spec: Partial<WorkboardSessionsBoardSpec>;
+    facts: WorkboardSessionFacts[];
+    placements: string[][];
+    columns: string[];
+    warning: string | undefined;
+  }>)(
+    "classifies sessions using $name",
+    async ({ spec, facts: rows, placements, columns, warning }) => {
+      await withService({ spec, facts: rows }, async ({ service, store, request }) => {
+        const read = await service.read(BOARD_ID);
+        expect(read.columns.map((column) => column.id)).toEqual(columns);
         expect(
-          result.sessions.map(({ label, columnId, source }) => ({ label, columnId, source })),
-        ).toEqual([
-          { label: "all", columnId: "review", source: "state" },
-          { label: "no-digest", columnId: "active", source: "state" },
-          { label: "active-no-pr", columnId: "active", source: "state" },
-          { label: "archived", columnId: "active", source: "state" },
-          { label: "idle-pr", columnId: "other", source: "state" },
-          { label: "none", columnId: "no-pr", source: "state" },
-          { label: "unknown", columnId: "other", source: "state" },
-          { label: "failed", columnId: "review", source: "state" },
-        ]);
+          read.sessions.map(({ label, columnId, source }) => [label, columnId, source]),
+        ).toEqual(placements.map(([label, columnId]) => [label, columnId, "state"]));
         expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
-        expect(result.warning).toContain("pull-request information is unavailable");
+        if (warning) {
+          expect(read.warning).toContain(warning);
+          expect(read.sessions.find((session) => session.label === "unknown")?.reason).toBe(
+            "facts-unavailable",
+          );
+        } else {
+          expect(read.warning).toBeUndefined();
+        }
         expect(request).toHaveBeenCalledWith(
           "sessions.list",
           expect.objectContaining({
@@ -239,116 +345,83 @@ describe("Sessions board rules and live facts", () => {
           }),
           { scopes: ["operator.read"] },
         );
-      },
-    );
-  });
-
-  it("routes unobserved runs and PRs while preserving default rule priority", async () => {
-    await withService(
-      {
-        spec: createDefaultWorkboardSessionsBoardSpec(),
-        facts: [
-          facts("active", { run: "active" }),
-          facts("failed", { run: "failed" }),
-          facts("unhealthy-active", {
-            run: "active",
-            observerDigest: { health: "stuck", headline: "Stuck", revision: 1 },
-          }),
-          facts("needs-input", {
-            run: "active",
-            observerDigest: { health: "waiting-on-user", headline: "Approval", revision: 1 },
-          }),
-          facts("review", { pullRequests: [{ number: 1, state: "open" }] }),
-          facts("merged", { pullRequests: [{ number: 2, state: "merged" }] }),
-          facts("idle"),
-        ],
-      },
-      async ({ service }) => {
-        const read = await service.read(BOARD_ID);
-        expect(read.columns.map((column) => column.id)).toEqual([
-          "needs-input",
-          "stuck",
-          "working",
-          "in-review",
-          "merged",
-          "done",
-        ]);
-        expect(read.sessions.map((session) => [session.label, session.columnId])).toEqual([
-          ["active", "working"],
-          ["failed", "stuck"],
-          ["unhealthy-active", "stuck"],
-          ["needs-input", "needs-input"],
-          ["review", "in-review"],
-          ["merged", "merged"],
-          ["idle", "done"],
-        ]);
-      },
-    );
-  });
+      });
+    },
+  );
 
   it("repairs only old-default rules at startup, preserves custom boards and ordering, and is idempotent", async () => {
-    await withService({ facts: [] }, async ({ service, store, context, logger }) => {
-      await service.stop();
-      const oldSpec = createDefaultWorkboardSessionsBoardSpec();
-      const oldOrder = ["needs-input", "working", "stuck", "in-review", "merged", "done"];
-      oldSpec.columns.sort((a, b) => oldOrder.indexOf(a.id) - oldOrder.indexOf(b.id));
-      for (const column of oldSpec.columns) {
-        if (column.id === "working") {
-          column.match = { run: ["active"], health: ["on-track", "grinding", "wrapping-up"] };
-          column.label = "Building";
-          column.description = "My own description";
-        } else if (column.id === "stuck") {
-          column.match = { health: ["stuck", "failed"] };
+    await withService(
+      { facts: [] },
+      async ({ service, store, context, logger, repair, readSessionFacts }) => {
+        expect(repair).toHaveBeenCalledOnce();
+        await service.read(BOARD_ID);
+        await service.read(BOARD_ID);
+        expect(repair).toHaveBeenCalledOnce();
+        expect(readSessionFacts).not.toHaveBeenCalled();
+        await service.stop();
+        const oldSpec = createDefaultWorkboardSessionsBoardSpec();
+        const oldOrder = ["needs-input", "working", "stuck", "in-review", "merged", "done"];
+        oldSpec.columns.sort((a, b) => oldOrder.indexOf(a.id) - oldOrder.indexOf(b.id));
+        for (const column of oldSpec.columns) {
+          if (column.id === "working") {
+            column.match = { run: ["active"], health: ["on-track", "grinding", "wrapping-up"] };
+            column.label = "Building";
+            column.description = "My own description";
+          } else if (column.id === "stuck") {
+            column.match = { health: ["stuck", "failed"] };
+          }
         }
-      }
-      oldSpec.scope = { maxAgeHours: 24 };
-      await store.updateSessionsBoard(BOARD_ID, oldSpec);
-      await store.upsertBoard({ id: "custom", kind: "sessions" });
-      const customSpec = structuredClone(oldSpec);
-      customSpec.columns = customSpec.columns.map((column) =>
-        column.id === "working" ? { ...column, match: { run: ["active"] } } : column,
-      );
-      const custom = await store.updateSessionsBoard("custom", customSpec);
-      await store.upsertBoard({ id: "custom-order", kind: "sessions" });
-      const reordered = structuredClone(oldSpec);
-      reordered.columns.reverse();
-      await store.updateSessionsBoard("custom-order", reordered);
-      logger.info.mockClear();
-      await service.start(context);
-      const repaired = await store.getSessionsBoard(BOARD_ID);
-      expect(repaired.sessions.columns.map((column) => column.id)).toEqual([
-        "needs-input",
-        "stuck",
-        "working",
-        "in-review",
-        "merged",
-        "done",
-      ]);
-      expect(repaired.sessions.columns.find((column) => column.id === "working")).toMatchObject({
-        label: "Building",
-        description: "My own description",
-        match: { run: ["active"] },
-      });
-      expect(repaired.sessions.columns.find((column) => column.id === "stuck")?.match).toEqual([
-        { health: ["stuck", "failed"] },
-        { run: ["failed"] },
-      ]);
-      expect(repaired.sessions.scope).toEqual({ maxAgeHours: 24 });
-      expect(await store.getSessionsBoard("custom")).toEqual(custom);
-      expect(
-        (await store.getSessionsBoard("custom-order")).sessions.columns.map((column) => column.id),
-      ).toEqual(oldOrder.toReversed());
-      expect(logger.info).toHaveBeenCalledExactlyOnceWith(
-        "Sessions board updated default rules on 2 boards.",
-      );
-      await service.stop();
-      await service.start(context);
-      expect(await store.getSessionsBoard(BOARD_ID)).toEqual(repaired);
-      expect(logger.info).toHaveBeenCalledOnce();
-    });
+        oldSpec.scope = { maxAgeHours: 24 };
+        await store.updateSessionsBoard(BOARD_ID, oldSpec);
+        await store.upsertBoard({ id: "custom", kind: "sessions" });
+        const customSpec = structuredClone(oldSpec);
+        customSpec.columns = customSpec.columns.map((column) =>
+          column.id === "working" ? { ...column, match: { run: ["active"] } } : column,
+        );
+        const custom = await store.updateSessionsBoard("custom", customSpec);
+        await store.upsertBoard({ id: "custom-order", kind: "sessions" });
+        const reordered = structuredClone(oldSpec);
+        reordered.columns.reverse();
+        await store.updateSessionsBoard("custom-order", reordered);
+        logger.info.mockClear();
+        await service.start(context);
+        const repaired = await store.getSessionsBoard(BOARD_ID);
+        expect(repaired.sessions.columns.map((column) => column.id)).toEqual(DEFAULT_COLUMNS);
+        expect(repaired.sessions.columns.find((column) => column.id === "working")).toMatchObject({
+          label: "Building",
+          description: "My own description",
+          match: { run: ["active"] },
+        });
+        expect(repaired.sessions.columns.find((column) => column.id === "stuck")?.match).toEqual([
+          { health: ["stuck", "failed"] },
+          { run: ["failed"] },
+        ]);
+        expect(repaired.sessions.scope).toEqual({ maxAgeHours: 24 });
+        expect(await store.getSessionsBoard("custom")).toEqual(custom);
+        expect(
+          (await store.getSessionsBoard("custom-order")).sessions.columns.map(
+            (column) => column.id,
+          ),
+        ).toEqual(oldOrder.toReversed());
+        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
+          "Sessions board updated default rules on 2 boards.",
+        );
+        await service.stop();
+        await service.start(context);
+        expect(await store.getSessionsBoard(BOARD_ID)).toEqual(repaired);
+        expect(logger.info).toHaveBeenCalledOnce();
+        await service.stop();
+        repair.mockResolvedValueOnce({ placements: 3, boards: 0 });
+        logger.info.mockClear();
+        await service.start(context);
+        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
+          "Sessions board removed 3 non-operator placements.",
+        );
+      },
+    );
   });
 
-  it("shares cached facts across boards, invalidates only changed keys, and coalesces notifications", async () => {
+  it("coalesces notifications and refreshes board facts after publications", async () => {
     await withService(
       { facts: [facts("one"), facts("two")] },
       async ({ service, store, state, emit, readSessionFacts, unsubscribe }) => {
@@ -359,8 +432,7 @@ describe("Sessions board rules and live facts", () => {
         expect(changed).not.toHaveBeenCalled();
         await service.read(BOARD_ID);
         await store.upsertBoard({ id: "second", kind: "sessions" });
-        await service.read("second");
-        expect(readSessionFacts).toHaveBeenCalledOnce();
+        expect((await service.read("second")).sessions).toHaveLength(2);
         changed.mockClear();
         state.facts = [facts("one", { run: "active" }), facts("two")];
         emit(facts("one").key);
@@ -378,11 +450,6 @@ describe("Sessions board rules and live facts", () => {
         await vi.advanceTimersByTimeAsync(1);
         expect(changed).toHaveBeenCalledOnce();
         const read = await service.read(BOARD_ID);
-        expect(readSessionFacts.mock.calls.map(([input]) => input.sessionKeys)).toEqual([
-          [facts("one").key, facts("two").key],
-          [facts("one").key],
-          [facts("one").key],
-        ]);
         expect(read.sessions[0]).toMatchObject({
           columnId: "focus",
           label: "Updated during burst",
@@ -398,7 +465,84 @@ describe("Sessions board rules and live facts", () => {
     );
   });
 
-  it("announces new sessions on an empty board and retries unavailable PR facts after one minute", async () => {
+  it.each([false, true])(
+    "retains ready PR facts through unavailable reads (rate limited: %s) while updating run and health",
+    async (rateLimited) => {
+      const known = [
+        facts("review", { pullRequests: [{ number: 1, state: "open" }] }),
+        facts("merged", { pullRequests: [{ number: 2, state: "merged" }] }),
+        facts("none"),
+      ];
+      await withService(
+        { facts: known, spec: createDefaultWorkboardSessionsBoardSpec() },
+        async ({ service, state, emit }) => {
+          await service.read(BOARD_ID);
+          state.roster = [...known, facts("unknown")];
+          state.facts = state.roster.map((row) => ({
+            ...row,
+            label: "Fresh facts",
+            pullRequests: [],
+            pullRequestsUnavailable: rateLimited ? undefined : true,
+            ...(rateLimited ? { pullRequestsRateLimited: true as const } : {}),
+          }));
+          for (const row of known) {
+            emit(row.key);
+          }
+          const read = await service.read(BOARD_ID);
+          expect(read.sessions.map(({ columnId }) => columnId)).toEqual([
+            "in-review",
+            "merged",
+            "done",
+            "done",
+          ]);
+          expect(read.sessions.map(({ pullRequests }) => pullRequests)).toEqual([
+            [{ number: 1, state: "open" }],
+            [{ number: 2, state: "merged" }],
+            [],
+            [],
+          ]);
+          expect(read.sessions.every(({ label }) => label === "Fresh facts")).toBe(true);
+          expect(read.sessions.slice(2).map(({ reason }) => reason)).toEqual([
+            "fallback",
+            "facts-unavailable",
+          ]);
+          const suffix = rateLimited ? " (GitHub rate limited)" : "";
+          expect(read.warning).toBe(
+            `Pull-request facts for 3 sessions are stale${suffix}. Pull-request facts for 1 session are not loaded yet${suffix}.`,
+          );
+          state.facts[0] = { ...state.facts[0]!, run: "active" };
+          state.facts[1] = {
+            ...state.facts[1]!,
+            observerDigest: { health: "waiting-on-user", headline: "Approval", revision: 1 },
+          };
+          emit(known[0]!.key);
+          emit(known[1]!.key);
+          const changed = await service.read(BOARD_ID);
+          expect(changed.sessions.slice(0, 2)).toMatchObject([
+            { run: "active", columnId: "working", pullRequests: known[0]!.pullRequests },
+            {
+              observerDigest: { health: "waiting-on-user" },
+              columnId: "needs-input",
+              pullRequests: known[1]!.pullRequests,
+            },
+          ]);
+          state.facts[0] = {
+            ...state.facts[0]!,
+            lifecycleRevision: "replacement",
+            run: "idle",
+          };
+          emit(known[0]!.key);
+          expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
+            pullRequests: [],
+            columnId: "done",
+            reason: "facts-unavailable",
+          });
+        },
+      );
+    },
+  );
+
+  it("announces new sessions and backs off unavailable PR retries until success", async () => {
     await withService({ facts: [] }, async ({ service, store, state, emit, readSessionFacts }) => {
       expect((await service.read(BOARD_ID)).sessions).toEqual([]);
       const changed = vi.spyOn(store, "announceChangeEpoch");
@@ -406,28 +550,81 @@ describe("Sessions board rules and live facts", () => {
       emit(facts("new").key);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(changed).toHaveBeenCalledOnce();
-      expect((await service.read(BOARD_ID)).warning).toContain(
-        "pull-request information is unavailable",
-      );
-      const readAt = Date.now();
-      state.facts = [facts("new", { pullRequests: [{ number: 1, state: "open" }] })];
-      expect((await service.read(BOARD_ID)).warning).toContain(
-        "pull-request information is unavailable",
-      );
-      vi.setSystemTime(readAt + 59_999);
       await service.read(BOARD_ID);
-      expect(readSessionFacts).toHaveBeenCalledOnce();
-      vi.setSystemTime(readAt + 60_000);
+      let calls = 1;
+      for (const delay of [60_000, 120_000, 240_000, 480_000, 900_000, 900_000]) {
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        const before = await service.read(BOARD_ID);
+        expect(readSessionFacts).toHaveBeenCalledTimes(calls);
+        await vi.advanceTimersByTimeAsync(1);
+        const reads = await Promise.all([
+          service.read(BOARD_ID),
+          service.read(BOARD_ID),
+          service.read(BOARD_ID),
+        ]);
+        expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+        expect(reads.every((read) => read === reads[0])).toBe(true);
+        expect(reads[0]!.revision!.revision).toBe(before.revision!.revision);
+        expect(reads[0]!.revision!.scope).not.toBe(before.revision!.scope);
+      }
+      state.facts = [facts("new", { pullRequests: [{ number: 1, state: "open" }] })];
+      emit(facts("new").key);
       expect((await service.read(BOARD_ID)).warning).toBeUndefined();
-      expect(readSessionFacts).toHaveBeenCalledTimes(2);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      state.facts = [facts("new", { pullRequestsUnavailable: true })];
+      emit(facts("new").key);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      await vi.advanceTimersByTimeAsync(30_000);
+      emit(facts("new").key);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      state.roster = [...state.roster, facts("second")];
+      state.facts = [...state.facts, facts("second", { pullRequestsUnavailable: true })];
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      expect(readSessionFacts.mock.lastCall?.[0].sessionKeys).toEqual([
+        facts("new").key,
+        facts("second").key,
+      ]);
+      await vi.advanceTimersByTimeAsync(29_999);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(calls);
+      await vi.advanceTimersByTimeAsync(1);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      expect(readSessionFacts.mock.lastCall?.[0].sessionKeys).toEqual([facts("new").key]);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(calls + 1);
+      expect(readSessionFacts.mock.lastCall?.[0].sessionKeys).toEqual([facts("second").key]);
     });
   });
 
-  it("refetches stale facts on demand in batches of 40", async () => {
+  it("shares one projection for 25 authorized rosters and retains unchanged facts", async () => {
     await withService(
       { facts: Array.from({ length: 81 }, (_, index) => facts(String(index))) },
-      async ({ service, readSessionFacts }) => {
-        await service.read(BOARD_ID);
+      async ({ service, store, request, readSessionFacts, emit }) => {
+        const placements = vi.spyOn(store, "listSessionPlacements");
+        const boards = vi.spyOn(store, "getSessionsBoard");
+        const changes = vi.fn();
+        store.subscribeChanges(changes);
+        const readers = await Promise.all(
+          Array.from({ length: 25 }, () =>
+            service.read(BOARD_ID, undefined, { assertCurrent() {} }),
+          ),
+        );
+        const first = readers[0]!;
+        expect(readers.every((read) => read === first)).toBe(true);
+        expect(first.sessions).toHaveLength(81);
+        expect(request).toHaveBeenCalledTimes(25);
+        expect(boards).toHaveBeenCalledOnce();
+        expect(placements).toHaveBeenCalledOnce();
+        expect(Object.isFrozen(first.sessions[0])).toBe(true);
+        emit(facts("0").key, "category");
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(changes).not.toHaveBeenCalled();
+        expect(await service.read(BOARD_ID)).toBe(first);
         expect(readSessionFacts.mock.calls.map(([input]) => input.sessionKeys.length)).toEqual([
           40, 40, 1,
         ]);
@@ -436,12 +633,137 @@ describe("Sessions board rules and live facts", () => {
         expect(readSessionFacts).toHaveBeenCalledTimes(3);
         vi.setSystemTime(NOW + 10 * 60_000);
         await service.read(BOARD_ID);
-        expect(readSessionFacts.mock.calls.map(([input]) => input.sessionKeys.length)).toEqual([
-          40, 40, 1, 40, 40, 1,
+        expect(readSessionFacts).toHaveBeenCalledTimes(3);
+        expect(placements).toHaveBeenCalledOnce();
+        emit(facts("0").key);
+        await vi.advanceTimersByTimeAsync(5_000);
+        const next = await service.read(BOARD_ID);
+        expect(next.revision!.revision).toBeGreaterThan(first.revision!.revision);
+        expect(changes).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ sessionsRevision: next.revision!.revision }),
+        );
+        expect(placements).toHaveBeenCalledTimes(2);
+        expect(boards).toHaveBeenCalledTimes(2);
+      },
+    );
+  });
+
+  it("keeps each visibility projection within its caller's roster and people", async () => {
+    await withService(
+      { facts: [facts("shared"), facts("private")] },
+      async ({ service, request, readSessionFacts }) => {
+        const people = [
+          { identity: { type: "profile", id: "one" }, label: "One", sessionCount: 2 },
+        ];
+        request
+          .mockResolvedValueOnce({ sessions: [facts("shared"), facts("private")], people })
+          .mockResolvedValueOnce({ sessions: [facts("shared")], people: [] });
+        const [owner, viewer] = await Promise.all([
+          service.read(BOARD_ID, { includePeople: true }, { assertCurrent() {} }),
+          service.read(BOARD_ID, { includePeople: true }, { assertCurrent() {} }),
+        ]);
+        expect(owner.sessions.map(({ label }) => label)).toEqual(["shared", "private"]);
+        expect(owner.people).toEqual(people);
+        expect(viewer.sessions.map(({ label }) => label)).toEqual(["shared"]);
+        expect(viewer.people).toEqual([]);
+        expect(viewer.revision!.scope).not.toBe(owner.revision!.scope);
+        request.mockResolvedValueOnce({ sessions: [facts("shared")], people });
+        const otherPeople = await service.read(BOARD_ID, { includePeople: true });
+        expect(otherPeople.sessions).toEqual(viewer.sessions);
+        expect(otherPeople.people).toEqual(people);
+        expect(otherPeople.revision!.scope).not.toBe(viewer.revision!.scope);
+        expect(readSessionFacts.mock.calls.map(([input]) => input.sessionKeys)).toEqual([
+          [facts("shared").key, facts("private").key],
+          [facts("shared").key],
+          [facts("shared").key],
         ]);
       },
     );
   });
+
+  it("expires a cached projection when a session leaves the board's age window", async () => {
+    await withService(
+      { facts: [facts("one")], spec: { scope: { maxAgeHours: 1 } } },
+      async ({ service }) => {
+        const first = await service.read(BOARD_ID);
+        vi.setSystemTime(NOW + 3_600_000);
+        expect(await service.read(BOARD_ID)).toBe(first);
+        vi.setSystemTime(NOW + 3_600_001);
+        const expired = await service.read(BOARD_ID);
+        expect(expired.sessions).toEqual([]);
+        expect(expired.revision!.scope).not.toBe(first.revision!.scope);
+      },
+    );
+  });
+
+  it("checks authority after the caller's roster read even with a warm projection", async () => {
+    await withService({ facts: [facts("one")] }, async ({ service, request }) => {
+      const first = await service.read(BOARD_ID);
+      let active = true;
+      request.mockImplementationOnce(async () => {
+        active = false;
+        return { sessions: [facts("one")] };
+      });
+      await expect(
+        service.read(BOARD_ID, undefined, {
+          assertCurrent() {
+            if (!active) {
+              throw new Error("Caller authority expired");
+            }
+          },
+        }),
+      ).rejects.toThrow("Caller authority expired");
+      expect(await service.read(BOARD_ID)).toBe(first);
+    });
+  });
+
+  it.each(["owner", "joiner"] as const)(
+    "rejects an expired %s without retiring the other caller's authority",
+    async (expired) => {
+      await withService(
+        { facts: [facts("one")] },
+        async ({ service, request, readSessionFacts }) => {
+          const entered = Promise.withResolvers<void>();
+          const joined = Promise.withResolvers<void>();
+          const release = Promise.withResolvers<void>();
+          let active = true;
+          let joinerRosterRead = false;
+          const caller = (name: "owner" | "joiner") => ({
+            assertCurrent() {
+              if (!active && name === expired) {
+                throw new Error("Caller authority expired");
+              }
+              if (name === "joiner" && joinerRosterRead) {
+                joined.resolve();
+              }
+            },
+          });
+          readSessionFacts.mockImplementationOnce(async () => {
+            entered.resolve();
+            await release.promise;
+            return { sessions: [facts("one")] };
+          });
+          const owner = service.read(BOARD_ID, undefined, caller("owner"));
+          await entered.promise;
+          request.mockImplementationOnce(async () => {
+            joinerRosterRead = true;
+            return { sessions: [facts("one")] };
+          });
+          const joiner = service.read(BOARD_ID, undefined, caller("joiner"));
+          const rejected = expect(expired === "owner" ? owner : joiner).rejects.toThrow(
+            "Caller authority expired",
+          );
+          await joined.promise;
+          active = false;
+          release.resolve();
+          await rejected;
+          const survivor = await (expired === "owner" ? joiner : owner);
+          expect(survivor.sessions).toMatchObject([{ key: facts("one").key }]);
+          expect((await service.read(BOARD_ID)).sessions).toEqual(survivor.sessions);
+        },
+      );
+    },
+  );
 
   it("keeps pins across fact changes and returns to rules when their column is deleted", async () => {
     await withService(
@@ -493,35 +815,85 @@ describe("Sessions board rules and live facts", () => {
         await service.read(BOARD_ID);
         expect(logger.warn).toHaveBeenCalledOnce();
         readSessionFacts.mockResolvedValue({ sessions: state.roster });
-        expect((await service.read(BOARD_ID)).warning).toBeUndefined();
+        const recovered = await service.read(BOARD_ID);
+        expect(recovered.warning).toBeUndefined();
+        expect(recovered.revision!.revision).toBe(read.revision!.revision);
+        expect(recovered.revision!.scope).not.toBe(read.revision!.scope);
+        expect(await service.read(BOARD_ID)).toBe(recovered);
         emit(facts("known").key);
+        readSessionFacts.mockResolvedValue({ sessions: [] });
+        expect((await service.read(BOARD_ID)).sessions).toEqual([]);
         readSessionFacts.mockRejectedValue(new Error("second outage"));
-        expect((await service.read(BOARD_ID)).warning).toContain("second outage");
+        const unavailable = await service.read(BOARD_ID);
+        expect(unavailable.warning).toContain("second outage");
+        expect(unavailable.sessions).toMatchObject([
+          { key: facts("known").key, columnId: "other", reason: "facts-unavailable" },
+          { key: facts("new").key, columnId: "other", reason: "facts-unavailable" },
+        ]);
         expect(logger.warn).toHaveBeenCalledTimes(2);
       },
     );
   });
 
   it("does not let an in-flight read overwrite a newer invalidation", async () => {
-    await withService({ facts: [facts("one")] }, async ({ service, emit, readSessionFacts }) => {
-      await service.read(BOARD_ID);
-      emit(facts("one").key);
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      readSessionFacts.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return { sessions: [facts("one")] };
-      });
-      const pending = service.read(BOARD_ID);
-      await entered.promise;
-      emit(facts("one").key);
-      release.resolve();
-      await pending;
-      readSessionFacts.mockResolvedValue({ sessions: [facts("one", { run: "active" })] });
-      expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
-      expect(readSessionFacts).toHaveBeenCalledTimes(3);
-    });
+    await withService(
+      { facts: [facts("one")] },
+      async ({ service, store, emit, readSessionFacts }) => {
+        await service.read(BOARD_ID);
+        emit(facts("one").key);
+        const admittedRevision = store.sessionsRevision;
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        readSessionFacts.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return { sessions: [facts("one")] };
+        });
+        const pending = service.read(BOARD_ID);
+        await entered.promise;
+        emit(facts("one").key);
+        readSessionFacts.mockResolvedValue({ sessions: [facts("one", { run: "active" })] });
+        const current = await service.read(BOARD_ID);
+        release.resolve();
+        const previous = await pending;
+        expect(previous.revision!.revision).toBe(admittedRevision.revision);
+        expect(current.sessions[0]).toMatchObject({ columnId: "focus" });
+        expect(current.revision!.revision).toBeGreaterThan(previous.revision!.revision);
+        expect(await service.read(BOARD_ID)).toBe(current);
+        emit(facts("one").key);
+        readSessionFacts.mockRejectedValue(new Error("facts backend offline"));
+        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
+      },
+    );
+  });
+
+  it("completes during continuous roster invalidation without caching a stale revision", async () => {
+    await withService(
+      { facts: [facts("one")] },
+      async ({ service, store, state, request, emit }) => {
+        const admittedRevision = store.sessionsRevision;
+        let rosterReads = 0;
+        request.mockImplementation(async () => {
+          if (++rosterReads > 2) {
+            throw new Error("Sessions board kept retrying an invalidated roster");
+          }
+          emit(facts("one").key);
+          return { sessions: state.roster };
+        });
+        const duringChurn = await service.read(BOARD_ID);
+        expect(rosterReads).toBe(1);
+        expect(duringChurn.revision!.revision).toBe(admittedRevision.revision);
+        expect(duringChurn.revision!.revision).toBeLessThan(store.sessionsRevision.revision);
+        request.mockImplementation(async () => ({ sessions: state.roster }));
+        const current = await service.read(BOARD_ID);
+        expect(current.revision!.revision).toBe(store.sessionsRevision.revision);
+        expect(current.revision!.scope).not.toBe(duringChurn.revision!.scope);
+        expect(await service.read(BOARD_ID)).toBe(current);
+        state.facts = [facts("one", { run: "active" })];
+        emit(facts("one").key);
+        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
+      },
+    );
   });
 
   it("intersects each caller roster with current identities and excludes the Board agent", async () => {
@@ -574,25 +946,6 @@ describe("Sessions board rules and live facts", () => {
         }
         expect(await store.getSessionsBoard(BOARD_ID)).toEqual(board);
         expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
-      },
-    );
-  });
-
-  it("repairs placements once at startup and stays idle until read", async () => {
-    await withService(
-      { facts: [] },
-      async ({ service, repair, readSessionFacts, context, logger }) => {
-        expect(repair).toHaveBeenCalledOnce();
-        await service.read(BOARD_ID);
-        await service.read(BOARD_ID);
-        expect(repair).toHaveBeenCalledOnce();
-        expect(readSessionFacts).not.toHaveBeenCalled();
-        await service.stop();
-        repair.mockResolvedValueOnce({ placements: 3, boards: 0 });
-        await service.start(context);
-        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
-          "Sessions board removed 3 non-operator placements.",
-        );
       },
     );
   });

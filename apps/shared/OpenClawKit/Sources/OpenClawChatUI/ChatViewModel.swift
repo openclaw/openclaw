@@ -240,7 +240,7 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var canonicalOutboxMessageKeys: [String] = []
     @ObservationIgnored
-    var isFlushingOutbox = false
+    var outboxFlushTask: Task<Void, Never>?
     @ObservationIgnored
     var isOutboxFlushRequestedWhileActive = false
     @ObservationIgnored

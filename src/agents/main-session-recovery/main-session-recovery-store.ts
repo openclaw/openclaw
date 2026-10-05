@@ -242,6 +242,8 @@ export async function claimMainSessionRecoveryOwner(params: {
     // also lose its predecessor before admission. Either way, no row remains to fence.
     return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
+  // A healthy completion may clear recovery between the caller's read and this
+  // transaction. Only that fully clean same-session state can proceed unclaimed.
   const healthyExpectedSession =
     claim.entry &&
     claim.entry.abortedLastRun !== true &&
@@ -250,15 +252,11 @@ export async function claimMainSessionRecoveryOwner(params: {
     (claim.entry.sessionId === params.sessionId ||
       claim.entry.sessionId === params.replacementSessionId);
   if (
-    claim.entry?.sessionId === params.sessionId &&
-    claim.sessionKey &&
-    !isMainRestartRecoveryCandidate(claim.entry, claim.sessionKey)
+    healthyExpectedSession ||
+    (claim.entry?.sessionId === params.sessionId &&
+      claim.sessionKey &&
+      !isMainRestartRecoveryCandidate(claim.entry, claim.sessionKey))
   ) {
-    return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
-  }
-  if (healthyExpectedSession) {
-    // A healthy completion may clear recovery between the caller's read and this
-    // transaction. Only that fully clean same-session state can proceed unclaimed.
     return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
   const reason = claim.transition.kind === "rejected" ? claim.transition.reason : "state_changed";

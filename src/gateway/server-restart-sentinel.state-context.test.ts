@@ -128,8 +128,7 @@ const { loadSessionEntry: realLoadSessionEntry } =
   await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
 const sidecars: Array<{ stop: () => void | Promise<void> }> = [];
 const gatewayLocks: Array<{ release: () => Promise<void> }> = [];
-const { scheduleRestartSentinelWake, refreshLatestUpdateRestartSentinel } =
-  await import("./server-restart-sentinel.js");
+const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 let envSnapshot: ReturnType<typeof captureEnv>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -675,23 +674,6 @@ it.each(["continuation", "other-handoff", "other-run", "restart", "stopped"] as 
     }
   },
 );
-
-it("does not rewrite pending update sentinels during status refresh", async () => {
-  const originalEnv = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-restart-status-") };
-  const sentinel = await writeRestartSentinel(
-    {
-      kind: "update",
-      status: "skipped",
-      ts: 123,
-      stats: { mode: "git", handoffId: "handoff-1", reason: "managed-service-handoff-started" },
-    },
-    originalEnv,
-  );
-
-  await expect(refreshLatestUpdateRestartSentinel(originalEnv)).resolves.toEqual(sentinel.payload);
-
-  expect(await readRestartSentinel(originalEnv)).toEqual(sentinel);
-});
 
 it.each([
   "portable-claim",

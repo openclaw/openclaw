@@ -488,10 +488,6 @@ export function getPluginStateCapacity(
   };
 }
 
-export function closePluginStateDatabase(): void {
-  closeOpenClawStateDatabase();
-}
+export const closePluginStateDatabase: () => void = closeOpenClawStateDatabase;
 
-export async function closePluginStateDatabaseAsync(): Promise<void> {
-  await closeOpenClawStateDatabaseAsync();
-}
+export const closePluginStateDatabaseAsync: () => Promise<void> = closeOpenClawStateDatabaseAsync;

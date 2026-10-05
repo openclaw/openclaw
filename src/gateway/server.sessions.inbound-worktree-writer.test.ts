@@ -32,6 +32,7 @@ test.each([false, true])(
         archived: true,
       }),
     ).toMatchObject({ ok: true });
+    await fixture.cleanupWorktrees();
     if (alreadyRestored) {
       await managedWorktrees.restore({ id: worktree.id });
     }

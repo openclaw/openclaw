@@ -144,8 +144,7 @@ export function modelProviderConfigBusy(context: ApplicationContext): boolean {
   );
 }
 
-export type ModelProviderConfigMutation = {
-  key: string;
+type ModelProviderConfigMutation = {
   raw: Record<string, unknown>;
   note: string;
   replacePaths?: string[];

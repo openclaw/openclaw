@@ -494,6 +494,20 @@ export type GatewayRequestOptions = {
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
+  /** Consume fresh durable facts while their physical reader remains retained. */
+  withCurrent?: <T>(consume: () => T) => Promise<T>;
+  withPreparedCurrent?: <T>(
+    facts: {
+      agentId: string;
+      storePath: string;
+      sessionKey: string;
+      entry: import("../../config/sessions/types.js").SessionEntry | undefined;
+      readSource?: import("../../config/sessions/session-entry-read-source.types.js").CapturedSessionEntryReadSource;
+      members: readonly import("../../config/sessions/session-sharing-store.kernel.js").SessionMember[];
+    },
+    consume: () => T,
+    assertSourceCurrent: () => void,
+  ) => T;
   talkSessionTarget?: import("../talk/session-target.types.js").PreparedTalkSessionTarget;
   /** Original materialized target; Stop must match producer facts, not a later row lookup. */
   admittedTarget?: Readonly<{ agentId: string; sessionKey: string; sessionId: string }>;
@@ -536,7 +550,12 @@ export type GatewayRequestHandlerOptions = Omit<
 };
 
 /** Single gateway method implementation. */
-export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<void> | void;
+export type GatewayRequestHandler = ((
+  opts: GatewayRequestHandlerOptions,
+) => Promise<void> | void) & {
+  prepareRead?: import("./prepared-read.js").GatewayReadPreparation;
+  onReadError?: import("./prepared-read.js").GatewayReadErrorHandler;
+};
 
 /** Registry fragment keyed by gateway protocol method name. */
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;

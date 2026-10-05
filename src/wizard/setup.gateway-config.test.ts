@@ -7,6 +7,7 @@ import {
   withSecureTestNodeCommand,
   withSecureTestNodeExecPath,
 } from "../secrets/test-node-command.test-support.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
@@ -32,6 +33,7 @@ import { configureGatewayForSetup } from "./setup.gateway-config.js";
 import { resolveQuickstartGatewayDefaults } from "./setup.shared.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseAsync());
 
 describe("configureGatewayForSetup", () => {
   function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
@@ -98,7 +100,7 @@ describe("configureGatewayForSetup", () => {
           id: "OPENCLAW_GATEWAY_TOKEN",
         });
         const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
-        const stored = readSecretStoreValue({
+        const stored = await readSecretStoreValue({
           scope: { kind: "team" },
           name: "OPENCLAW_GATEWAY_TOKEN",
         });

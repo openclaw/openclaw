@@ -17,6 +17,14 @@ import {
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
+function copyFixtureFiles(root: string, files: string[]) {
+  for (const file of files) {
+    const target = path.join(root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.cpSync(path.resolve(file), target, { recursive: true });
+  }
+}
+
 function createPreparationFixture(mode: "package-boundary" | "all", signal: AbortSignal) {
   const ancestor = fs.realpathSync.native(fixture.createTempDir("native-preparer-"));
   const root = path.join(ancestor, ".claude/worktrees/validation");
@@ -45,7 +53,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   );
   write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
-  for (const file of [
+  copyFixtureFiles(root, [
     "scripts/prepare-extension-package-boundary-artifacts.mts",
     "scripts/compile-extension-boundary.mts",
     "scripts/run-tsgo.mjs",
@@ -56,11 +64,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     "scripts/lib",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
-  ]) {
-    const target = path.join(root, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.cpSync(path.resolve(file), target, { recursive: true });
-  }
+  ]);
   write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
   for (const name of ["tsx", "@openclaw/fs-safe"]) {
     const target = path.join(root, "node_modules", name);
@@ -121,15 +125,11 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
 }
 
 function writeSelectedConsumer(f: ReturnType<typeof createPreparationFixture>) {
-  for (const file of [
+  copyFixtureFiles(f.root, [
     "scripts/check-file-utils.ts",
     "src/plugins/package-entrypoints.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
-  ]) {
-    const target = path.join(f.root, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.copyFileSync(path.resolve(file), target);
-  }
+  ]);
   f.write(
     "packages/plugin-sdk/tsconfig.json",
     JSON.stringify({
@@ -379,16 +379,12 @@ describe("native declaration preparation", () => {
   it("prepares the full shared SDK when the boundary checker selects no packages", ({ signal }) =>
     fixture.run(async () => {
       const f = createPreparationFixture("package-boundary", signal);
-      for (const file of [
+      copyFixtureFiles(f.root, [
         "scripts/check-extension-package-tsc-boundary.mts",
         "scripts/check-file-utils.ts",
         "src/plugins/package-entrypoints.ts",
         "src/shared/non-packaged-plugin-dirs.ts",
-      ]) {
-        const target = path.join(f.root, file);
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.copyFileSync(path.resolve(file), target);
-      }
+      ]);
       fs.symlinkSync(path.resolve("node_modules/p-map"), path.join(f.root, "node_modules/p-map"));
       fs.mkdirSync(path.join(f.root, "extensions"));
       f.write(
@@ -585,7 +581,6 @@ describe("native declaration preparation", () => {
     { name: "Windows 8.3 short entry", entry: true, workspace: false },
     { name: "Windows 8.3 workspace junction", entry: false, workspace: true },
     { name: "Windows 8.3 short entry and workspace junction", entry: true, workspace: true },
-    { name: "POSIX PWD alias (package-boundary)", mode: "package-boundary" as const },
     { name: "POSIX PWD alias (all)", mode: "all" as const },
   ])(
     "publishes cold native output and reuses warm receipts through $name",
@@ -698,39 +693,37 @@ describe("native declaration preparation", () => {
     },
   );
 
-  it.for(["package-boundary", "all"] as const)(
-    "preserves outputs on compile failure and prunes obsolete declarations after repair (%s)",
+  it(
+    "preserves outputs on compile failure and prunes obsolete declarations after repair",
     { timeout: 30_000 },
-    (mode, { signal }) =>
+    ({ signal }) =>
       fixture.run(async () => {
         const { root, native, write, plugins, recordPath, output, step, run } =
-          createPreparationFixture(mode, signal);
+          createPreparationFixture("all", signal);
         await run();
-        if (mode === "all") {
-          const slackBoundaryEntry = BOUNDARY_PLUGIN_UNITS.find(([id]) => id === "slack")?.[1];
-          if (!slackBoundaryEntry) {
-            throw new Error("Slack extension boundary entry is missing");
-          }
-          write(
-            "consumer.ts",
-            `import { consume } from "./.artifacts/extension-package-boundary/plugins/slack/${slackBoundaryEntry}.js"; consume(value => value.toUpperCase());`,
-          );
-          await step(
-            "isolated-boundary-consumer",
-            [
-              "--ignoreConfig",
-              "--module",
-              "nodenext",
-              "--target",
-              "es2023",
-              "--strict",
-              "--skipLibCheck",
-              "--noEmit",
-              path.join(root, "consumer.ts"),
-            ],
-            native,
-          );
+        const slackBoundaryEntry = BOUNDARY_PLUGIN_UNITS.find(([id]) => id === "slack")?.[1];
+        if (!slackBoundaryEntry) {
+          throw new Error("Slack extension boundary entry is missing");
         }
+        write(
+          "consumer.ts",
+          `import { consume } from "./.artifacts/extension-package-boundary/plugins/slack/${slackBoundaryEntry}.js"; consume(value => value.toUpperCase());`,
+        );
+        await step(
+          "isolated-boundary-consumer",
+          [
+            "--ignoreConfig",
+            "--module",
+            "nodenext",
+            "--target",
+            "es2023",
+            "--strict",
+            "--skipLibCheck",
+            "--noEmit",
+            path.join(root, "consumer.ts"),
+          ],
+          native,
+        );
         const first = readArtifactRecord(recordPath)!;
         expect(first.outputs[`${output}/src/nested.d.ts`]).toBeDefined();
         write("src/plugin-sdk/core.ts", 'export { value } from "../renamed.js";');

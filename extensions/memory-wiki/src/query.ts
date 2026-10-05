@@ -893,30 +893,6 @@ function buildWikiResultMetadata(page: WikiPageSummary) {
   };
 }
 
-function buildClaimResultMetadata(
-  claim: WikiClaim | undefined,
-): Partial<
-  Pick<
-    WikiSearchResult,
-    | "matchedClaimId"
-    | "matchedClaimStatus"
-    | "matchedClaimConfidence"
-    | "evidenceKinds"
-    | "evidenceSourceIds"
-  >
-> {
-  if (!claim) {
-    return {};
-  }
-  return {
-    ...(claim.id ? { matchedClaimId: claim.id } : {}),
-    ...(claim.status ? { matchedClaimStatus: claim.status } : {}),
-    ...(typeof claim.confidence === "number" ? { matchedClaimConfidence: claim.confidence } : {}),
-    evidenceKinds: uniqueStrings(claim.evidence.flatMap((evidence) => evidence.kind ?? [])),
-    evidenceSourceIds: uniqueStrings(claim.evidence.flatMap((evidence) => evidence.sourceId ?? [])),
-  };
-}
-
 function toWikiSearchResult(
   page: QueryableWikiPage,
   query: string,
@@ -945,7 +921,21 @@ function toWikiSearchResult(
     ),
     searchMode: mode,
     ...buildWikiResultMetadata(page),
-    ...buildClaimResultMetadata(matchingClaim),
+    ...(matchingClaim
+      ? {
+          ...(matchingClaim.id ? { matchedClaimId: matchingClaim.id } : {}),
+          ...(matchingClaim.status ? { matchedClaimStatus: matchingClaim.status } : {}),
+          ...(typeof matchingClaim.confidence === "number"
+            ? { matchedClaimConfidence: matchingClaim.confidence }
+            : {}),
+          evidenceKinds: uniqueStrings(
+            matchingClaim.evidence.flatMap((evidence) => evidence.kind ?? []),
+          ),
+          evidenceSourceIds: uniqueStrings(
+            matchingClaim.evidence.flatMap((evidence) => evidence.sourceId ?? []),
+          ),
+        }
+      : {}),
   };
 }
 

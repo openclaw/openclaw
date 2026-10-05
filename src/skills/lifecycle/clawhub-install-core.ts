@@ -355,7 +355,6 @@ export async function checkClawHubSkillTrust(
     subject: {
       kind: "skill",
       packageName: params.slug,
-      workspaceDir: params.workspaceDir,
       ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
     },
     version: params.version,
@@ -401,22 +400,6 @@ export async function performClawHubSkillInstall(
       detail = resolved.detail;
       version = resolved.version;
       official = isDefaultOfficialClawHubSkillSource({ baseUrl: params.baseUrl, detail });
-      const trust = await checkClawHubSkillTrust({
-        ...params,
-        version,
-        skipClawHubTrustCheck: official,
-      });
-      if (!trust.ok) {
-        return { ...trust, version };
-      }
-      trustWarning = trust.warning;
-      params.logger?.info?.(`Downloading ${params.slug}@${version} from ClawHub…`);
-      archive = await downloadClawHubSkillArchive({
-        slug: params.slug,
-        ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-        version,
-        baseUrl: params.baseUrl,
-      });
     } else {
       resolution = assertInstallResolutionAllowed(
         await fetchClawHubSkillInstallResolution({
@@ -455,32 +438,39 @@ export async function performClawHubSkillInstall(
         detail,
         resolution,
       });
-      if (resolution.installKind === "github") {
-        version = resolution.github.commit;
-        // GitHub-backed ClawHub skills are commit resolutions, not ClawHub skill
-        // release versions; the install resolver owns their scan/force policy.
-        params.logger?.info?.(`Downloading ${params.slug}@${version} from GitHub…`);
-        archive = await downloadClawHubGitHubSkillArchive({
-          repo: resolution.github.repo,
-          commit: resolution.github.commit,
-        });
-      } else {
-        version = resolution.archive.version;
-        const trust = await checkClawHubSkillTrust({
-          ...params,
-          version,
-          skipClawHubTrustCheck: official,
-        });
-        if (!trust.ok) {
-          return { ...trust, version };
-        }
-        trustWarning = trust.warning;
-        params.logger?.info?.(`Downloading ${params.slug}@${version} from ClawHub…`);
-        archive = await downloadClawHubSkillArchiveUrl({
-          url: resolution.archive.downloadUrl,
-          baseUrl: params.baseUrl,
-        });
+      version =
+        resolution.installKind === "github" ? resolution.github.commit : resolution.archive.version;
+    }
+
+    if (resolution?.installKind === "github") {
+      // GitHub-backed skills are commit resolutions; their resolver owns scan/force policy.
+      params.logger?.info?.(`Downloading ${params.slug}@${version} from GitHub…`);
+      archive = await downloadClawHubGitHubSkillArchive({
+        repo: resolution.github.repo,
+        commit: resolution.github.commit,
+      });
+    } else {
+      const trust = await checkClawHubSkillTrust({
+        ...params,
+        version,
+        skipClawHubTrustCheck: official,
+      });
+      if (!trust.ok) {
+        return { ...trust, version };
       }
+      trustWarning = trust.warning;
+      params.logger?.info?.(`Downloading ${params.slug}@${version} from ClawHub…`);
+      archive = resolution
+        ? await downloadClawHubSkillArchiveUrl({
+            url: resolution.archive.downloadUrl,
+            baseUrl: params.baseUrl,
+          })
+        : await downloadClawHubSkillArchive({
+            slug: params.slug,
+            ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+            version,
+            baseUrl: params.baseUrl,
+          });
     }
 
     try {

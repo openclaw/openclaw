@@ -264,7 +264,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     requestUpdate,
     sendShortcut,
     canSubmitDraft,
-    commitDraft: (draft) => commitComposerDraft(props, draft),
     syncDraftAfterSend: syncComposerDraftAfterSend,
     showAbortableUi,
     alternateFollowUpMode,

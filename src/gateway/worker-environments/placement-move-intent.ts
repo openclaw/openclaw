@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureColumn, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type {
@@ -28,8 +29,6 @@ import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { boundedWorkerError } from "./worker-error.js";
 
-const MOVE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (";
-const MOVE_SCHEMA_END = "\n) STRICT;";
 const MOVE_OPERATION_PREFIX = "move:v1:";
 const MOVE_MACHINE_CLASS_MAX_LENGTH = 128;
 const MOVE_OS_MAX_LENGTH = 64;
@@ -66,15 +65,6 @@ export type WorkerPlacementMoveIntent = {
 
 const moveQuery = (db: DatabaseSync) => getNodeSqliteKysely<MoveDatabase>(db);
 
-function moveSchemaSql(): string {
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(MOVE_SCHEMA_START);
-  const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(MOVE_SCHEMA_END, start);
-  if (start < 0 || endMarkerStart < start) {
-    throw new Error("Worker placement move schema marker is missing");
-  }
-  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + MOVE_SCHEMA_END.length);
-}
-
 // Placement reads feed the resident session projection; do not repeat DDL/PRAGMA per row.
 const ensuredMoveSchemaHandles = new WeakSet<DatabaseSync>();
 
@@ -82,7 +72,12 @@ function ensureWorkerPlacementMoveSchema(db: DatabaseSync): void {
   if (ensuredMoveSchemaHandles.has(db)) {
     return;
   }
-  db.exec(moveSchemaSql()); // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
+  // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
+  db.exec(
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "worker_session_placement_moves", {
+      errorMessage: "Worker placement move schema marker is missing",
+    }),
+  );
   // Databases that created this table before the column shipped upgrade in place;
   // the column is bare and nullable, so old readers stay compatible.
   ensureColumn(db, "worker_session_placement_moves", "target_machine_class TEXT");

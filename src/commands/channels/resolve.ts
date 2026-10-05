@@ -19,7 +19,7 @@ import { resolveMessageChannelSelection } from "../../infra/outbound/channel-sel
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
-export type ChannelsResolveOptions = {
+type ChannelsResolveOptions = {
   agent?: string;
   channel?: string;
   account?: string;
@@ -37,6 +37,17 @@ function detectAutoKindForPlugin(input: string, plugin: ChannelPlugin): ChannelR
     /^user:/i.test(trimmed)
   ) {
     return "user";
+  }
+  try {
+    const chatType = plugin.messaging?.inferTargetChatType?.({ to: trimmed });
+    if (chatType === "direct") {
+      return "user";
+    }
+    if (chatType === "group" || chatType === "channel") {
+      return "group";
+    }
+  } catch {
+    // Some plugins only accept resolved IDs here; names still need directory lookup.
   }
   const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   const prefixes = [plugin.id, ...(plugin.meta?.aliases ?? [])]

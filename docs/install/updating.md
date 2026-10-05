@@ -469,6 +469,10 @@ update. They are not silently migrated or deleted. Preserve them and use their
 original recovery owner; do not recreate the journal or remove them to bypass
 the refusal.
 
+SQLite recovery and rollback custody verify file identity, size, and content.
+Timestamp-only changes are accepted after verifying identical bytes; replaced
+files or changed database or journal bytes still require recovery by their owner.
+
 For older in-directory activation journals, `openclaw update status --json`
 reports the recorded phase and the original helper's `status` command. The
 current updater only inspects these journals; use their original helper to

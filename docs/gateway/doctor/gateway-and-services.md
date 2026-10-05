@@ -15,6 +15,12 @@ package, bundled UI, and runtime replacement to that host, including when a
 standalone CLI inspects an app-owned Gateway service. For OpenClaw.app payloads,
 update the app to update the Gateway; normal config and state checks still apply.
 
+After repair, Doctor waits for the managed Gateway within a bounded readiness
+budget. If the service manager still reports it running but its listener has not
+opened, Doctor completes with a warning and exit code 0. Check
+`openclaw gateway status` in a minute. A stopped or failed service still reports a
+restoration failure; slow startup does not undo a completed repair.
+
 ## Checks 8-17
 
 <AccordionGroup>

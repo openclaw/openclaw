@@ -64,7 +64,6 @@ export type PairingApprovalPlan = {
   trustedProxyUser: string | undefined;
   isTrustedProxySameKeyUpgrade: boolean;
   allowSetupCodeHandoffBootstrapPairing: boolean;
-  allowControlUiOwnerBootstrapPairing: boolean;
   bootstrapApprovalProfile: DeviceBootstrapProfile | null;
   bootstrapPairingRoles: string[] | undefined;
   bootstrapPairingScopes: string[] | undefined;
@@ -267,7 +266,6 @@ export async function resolvePairingApprovalPlan(
     trustedProxyUser,
     isTrustedProxySameKeyUpgrade,
     allowSetupCodeHandoffBootstrapPairing,
-    allowControlUiOwnerBootstrapPairing,
     bootstrapApprovalProfile: setupCodeHandoffBootstrapProfile ?? controlUiOperatorBootstrapProfile,
     bootstrapPairingRoles,
     bootstrapPairingScopes,

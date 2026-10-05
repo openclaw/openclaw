@@ -66,7 +66,6 @@ const MEMORY_WIKI_IMPORT_RUN_STATE_NAMESPACE = "import-runs";
 export const MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES = 20_000;
 
 let configuredImportRunStore: MemoryWikiImportRunStateStore | undefined;
-const memoryImportRunsByVault = new Map<string, Map<string, ChatGptImportRunRecord>>();
 
 export function resolveMemoryWikiImportRunsDir(vaultRoot: string): string {
   return path.join(vaultRoot, ".openclaw-wiki", "import-runs");
@@ -93,20 +92,6 @@ function resolvePathStateEntryKey(params: {
       "utf8",
     )
     .digest("hex");
-}
-
-function cloneImportRunRecord(record: ChatGptImportRunRecord): ChatGptImportRunRecord {
-  return {
-    ...record,
-    createdPaths: record.createdPaths.map((entry) => ({
-      ...entry,
-      ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
-    })),
-    updatedPaths: record.updatedPaths.map((entry) => ({
-      ...entry,
-      ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
-    })),
-  };
 }
 
 function normalizeMetaRecord(raw: unknown): MemoryWikiImportRunMetaStateRecord | null {
@@ -255,37 +240,6 @@ function toPathRecords(
   ];
 }
 
-function createMemoryFallbackImportRunStore(): MemoryWikiImportRunStateStore {
-  return {
-    async read(vaultRoot, runId) {
-      const vaultRootKey = resolveVaultRootKey(vaultRoot);
-      const record = memoryImportRunsByVault.get(vaultRootKey)?.get(runId);
-      return record ? cloneImportRunRecord(record) : null;
-    },
-    async write(vaultRoot, record) {
-      const vaultRootKey = resolveVaultRootKey(vaultRoot);
-      const records = memoryImportRunsByVault.get(vaultRootKey) ?? new Map();
-      records.set(record.runId, cloneImportRunRecord(record));
-      memoryImportRunsByVault.set(vaultRootKey, records);
-    },
-    async list(vaultRoot) {
-      const vaultRootKey = resolveVaultRootKey(vaultRoot);
-      return [...(memoryImportRunsByVault.get(vaultRootKey)?.values() ?? [])].map(
-        cloneImportRunRecord,
-      );
-    },
-    async rowCount() {
-      let count = 0;
-      for (const records of memoryImportRunsByVault.values()) {
-        for (const record of records.values()) {
-          count += 1 + record.createdPaths.length + record.updatedPaths.length;
-        }
-      }
-      return count;
-    },
-  };
-}
-
 export function createMemoryWikiImportRunStateStore(
   openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
 ): MemoryWikiImportRunStateStore {
@@ -372,10 +326,11 @@ export function configureMemoryWikiImportRunStateStore(
   configuredImportRunStore = store;
 }
 
-function resolveImportRunStore(
-  store?: MemoryWikiImportRunStateStore,
-): MemoryWikiImportRunStateStore {
-  return store ?? configuredImportRunStore ?? createMemoryFallbackImportRunStore();
+function resolveImportRunStore(store = configuredImportRunStore): MemoryWikiImportRunStateStore {
+  if (!store) {
+    throw new Error("Memory Wiki import run state store is not configured.");
+  }
+  return store;
 }
 
 export async function readMemoryWikiImportRunRecord(

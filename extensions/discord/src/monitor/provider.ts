@@ -1,6 +1,7 @@
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import { formatThreadBindingDurationLabel } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
@@ -22,7 +23,10 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  summarizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
@@ -31,10 +35,8 @@ import { parseApplicationIdFromToken } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { setDiscordTranscriptsVoiceManager } from "../voice/transcripts-source.js";
-import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
-import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import { registerDiscordListener } from "./listeners.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
@@ -43,7 +45,6 @@ import { probeDiscordAcpBindingHealth } from "./provider.acp.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { cleanupDiscordProviderStartup } from "./provider.cleanup.js";
 import { resolveDiscordProviderCommandSpecs } from "./provider.commands.js";
-import { logDiscordResolvedConfig } from "./provider.config-log.js";
 import { runDiscordCommandDeployInBackground } from "./provider.deploy.js";
 import { createDiscordProviderInteractionSurface } from "./provider.interactions.js";
 import { logDiscordStartupPhase } from "./provider.startup-log.js";
@@ -77,6 +78,11 @@ const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
 const DISCORD_DISALLOWED_INTENTS_CODE = GatewayCloseCodes.DisallowedIntents;
+
+function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
+  const label = formatThreadBindingDurationLabel(durationMs);
+  return label === "disabled" ? "off" : label;
+}
 
 function isDiscordDisallowedIntentsError(err: unknown): boolean {
   if (!err) {
@@ -184,7 +190,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
     providerSetting: discordCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
   });
-  const useAccessGroups = true;
   const slashCommand = resolveDiscordSlashCommandConfig(discordCfg.slashCommand);
   const sessionPrefix = "discord:slash";
   const ephemeralDefault = slashCommand.ephemeral;
@@ -216,23 +221,24 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
   });
 
   if (discordProviderRuntime.shouldLogVerbose()) {
-    logDiscordResolvedConfig({
-      dmEnabled,
-      dmPolicy,
-      allowFrom,
-      groupDmEnabled,
-      groupDmChannels,
-      groupPolicy,
-      guildEntries,
-      historyLimit,
-      mediaMaxBytes,
-      nativeEnabled,
-      nativeSkillsEnabled,
-      useAccessGroups,
-      threadBindingsEnabled,
-      threadBindingIdleTimeoutMs,
-      threadBindingMaxAgeMs,
+    const allowFromSummary = summarizeStringEntries({
+      entries: allowFrom,
+      limit: 4,
+      emptyText: "any",
     });
+    const groupDmChannelSummary = summarizeStringEntries({
+      entries: groupDmChannels ?? [],
+      limit: 4,
+      emptyText: "any",
+    });
+    const guildSummary = summarizeStringEntries({
+      entries: Object.keys(guildEntries ?? {}),
+      limit: 4,
+      emptyText: "any",
+    });
+    logVerbose(
+      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=on threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
+    );
   }
 
   logStartupPhase("fetch-application-id:start");
@@ -344,7 +350,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       nativeEnabled,
       voiceEnabled,
       groupPolicy,
-      useAccessGroups,
       sessionPrefix,
       ephemeralDefault,
       threadBindings,
@@ -376,9 +381,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       runtime,
       commandDeployHashStore: opts.commandDeployHashStore,
       createClient: discordProviderRuntime.createClient,
-      createGatewayPlugin: createDiscordGatewayPlugin,
-      createGatewaySupervisor: createDiscordGatewaySupervisor,
-      createAutoPresenceController: createDiscordAutoPresenceController,
       isDisallowedIntentsError: isDiscordDisallowedIntentsError,
     });
     lifecycleGateway = gateway;

@@ -132,7 +132,13 @@ verifies each compressed transcript frame against its original bytes, preserves
 row identities and timestamps, and commits table replacements with both schema
 markers. Memory validation and conversion return from SQLite after each row so
 large legacy embedding caches do not accumulate their JSON strings in the
-JavaScript heap. Unknown columns or dependencies that a rebuild would discard
+JavaScript heap. Cache conversion reads windows of 128 rowids and checks the
+embedding byte length inside SQLite before returning text to JavaScript. Invalid
+JSON vectors and cache embeddings larger than 1 MiB are skipped and rebuilt on
+demand. Doctor records their count and first eight rowids as recoverable warnings;
+these derived cache entries do not block the update. The existing transaction
+retains rollback of an interrupted migration, and an already converted cache is
+not reread on rerun. Unknown columns or dependencies that a rebuild would discard
 cause a refusal. Earlier supported schemas run their prerequisite migrations
 first. Conversion needs temporary space for old and replacement tables,
 journal/WAL activity, and the verified backup. Freed pages are reusable; a smaller payload does not by itself

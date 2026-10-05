@@ -31,13 +31,6 @@ export function parseConfigureWizardSections(raw: unknown): {
   return { sections, invalid };
 }
 
-export type ChannelsWizardMode = "configure" | "remove";
-
-export type ConfigureWizardParams = {
-  command: "configure" | "update";
-  sections?: WizardSection[];
-};
-
 export const CONFIGURE_SECTION_OPTIONS = [
   { value: "workspace", label: "Workspace", hint: "Set workspace + sessions" },
   { value: "model", label: "Model", hint: "Pick provider + credentials" },

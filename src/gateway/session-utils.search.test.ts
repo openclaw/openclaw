@@ -20,7 +20,7 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
 
 const baseCfg = {
   session: { mainKey: "main" },
-  agents: { list: [{ id: "main", default: true }] },
+  agents: { entries: { main: {} } },
 } as OpenClawConfig;
 
 function selectSessionKeys(params: {

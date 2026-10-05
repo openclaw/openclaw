@@ -8,7 +8,6 @@ import {
   normalizeNullableString as nonEmptyStringField,
   normalizeOptionalString as normalizeRunId,
 } from "@openclaw/normalization-core/string-coerce";
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -21,6 +20,7 @@ import {
 } from "./tool-loop-argument-churn.js";
 import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
+import { digestToolOutcome } from "./tool-loop-outcome-hash.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
 import { getComputerToolOutcome } from "./tools/computer-tool-outcome.js";
@@ -73,27 +73,6 @@ export function hashToolCall(toolName: string, params: unknown): string {
     return `${toolName}:${sha256Hex(stableStringify(execution))}`;
   }
   return `${toolName}:${sha256Hex(stableStringify(params))}`;
-}
-
-function digestToolOutcome(value: unknown): string {
-  // Canonical IDs retain valid envelope syntax; malformed markers and JSON field
-  // boundaries remain meaningful. Literal/copied envelopes share this syntax rule;
-  // it grants no trust and never changes arguments or delivered content.
-  const canonicalMarkerId = "0000000000000000";
-  const serialized = stableStringify(value, (text) =>
-    text.replace(
-      /(<<<EXTERNAL_UNTRUSTED_CONTENT id=(\\*)")([a-f0-9]{16})(\2">>>(?:(?!<<<(?:END_)?EXTERNAL_UNTRUSTED_CONTENT)[\s\S])*<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\2")\3(\2">>>)/g,
-      // Repeated JSON encoding produces 2^n - 1 backslashes before marker quotes.
-      (match, start: string, escapes: string, _id: string, middle: string, end: string) =>
-        (escapes.length & (escapes.length + 1)) !== 0 ||
-        [...middle.matchAll(/(?<!\\)\\*"/g)].some(
-          (quote) => quote[0].length % (escapes.length + 1) !== 0,
-        )
-          ? match
-          : start + canonicalMarkerId + middle + canonicalMarkerId + end,
-    ),
-  );
-  return sha256Hex(serialized);
 }
 
 function extractTextContent(result: unknown): string {
@@ -327,9 +306,9 @@ function hashToolOutcome(
     }
   }
   if (toolName === "exec" || toolName === "wait") {
-    const outcome = getCodeModeToolOutcome(result);
-    if (outcome !== undefined) {
-      return { resultHash: digestToolOutcome(outcome) };
+    const resultHash = getCodeModeToolOutcome(result);
+    if (resultHash !== undefined) {
+      return { resultHash };
     }
   }
   if (toolName === "exec") {
@@ -485,12 +464,8 @@ export function detectToolCallLoop(
   state: SessionState,
   toolName: string,
   params: unknown,
-  config?: ToolLoopDetectionConfig,
   scope?: ToolLoopDetectionScope,
 ): LoopDetectionResult {
-  if (!config?.enabled) {
-    return { stuck: false };
-  }
   const history = selectHistoryForScope(state.toolCallHistory ?? [], scope);
   const currentHash = hashToolCall(toolName, params);
   const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
@@ -632,7 +607,6 @@ export function recordToolCall(
   toolName: string,
   params: unknown,
   toolCallId?: string,
-  _config?: ToolLoopDetectionConfig,
   scope?: ToolLoopDetectionScope,
 ): void {
   const runId = normalizeRunId(scope?.runId);
@@ -661,7 +635,6 @@ export function recordToolCallOutcome(
     toolCallId?: string;
     result?: unknown;
     error?: unknown;
-    config?: ToolLoopDetectionConfig;
     runId?: string;
   },
 ): ToolCallRecord | undefined {

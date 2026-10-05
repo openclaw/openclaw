@@ -61,9 +61,9 @@ describe("manual cron delivery occurrence", () => {
       const create = nativeWorkers.createRetainedNativeWorker;
       const factory = vi
         .spyOn(nativeWorkers, "createRetainedNativeWorker")
-        .mockImplementation((filename, options, source, resource) => {
+        .mockImplementation((filename, options, source, resource, taskPorts) => {
           if (selected || String(filename) !== readUrl) {
-            return create(filename, options, source, resource);
+            return create(filename, options, source, resource, taskPorts);
           }
           selected = true;
           const nativeOptions = options ?? {};
@@ -82,6 +82,7 @@ describe("manual cron delivery occurrence", () => {
             },
             source,
             resource,
+            taskPorts,
           );
           worker.once("exit", () => {
             exited = true;

@@ -554,15 +554,14 @@ describe("discordPlugin outbound", () => {
   it.each(["cancelled", "revoked"] as const)(
     "does not send queued typing after its owner is %s",
     async (reason) => {
-      const firstResponse = createDeferred<Response>();
+      const releaseWorkers = createDeferred<void>();
       const typingQueued = createDeferred<void>();
-      const fetch = vi
-        .fn<typeof globalThis.fetch>()
-        .mockReturnValueOnce(firstResponse.promise)
-        .mockResolvedValue(new Response(null, { status: 204 }));
+      const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+        await releaseWorkers.promise;
+        return new Response(null, { status: 204 });
+      });
       const rest = new RequestClient("synthetic-token", {
         fetch,
-        scheduler: { maxConcurrency: 1 },
       });
       const post = rest.post.bind(rest);
       vi.spyOn(rest, "post").mockImplementation((...args) => {
@@ -571,7 +570,9 @@ describe("discordPlugin outbound", () => {
         return pending;
       });
       const resolveRest = vi.spyOn(discordClient, "resolveDiscordRest").mockReturnValue(rest);
-      const first = rest.get("/channels/123/messages");
+      const active = Array.from({ length: 4 }, (_, index) =>
+        rest.get(`/channels/blocked-${index}/messages`),
+      );
       const controller = new AbortController();
       let current = true;
       const queued = discordPlugin.heartbeat!.sendTypingGuarded!({
@@ -592,13 +593,13 @@ describe("discordPlugin outbound", () => {
         } else {
           current = false;
         }
-        firstResponse.resolve(Response.json([]));
-        await first;
+        releaseWorkers.resolve();
+        await Promise.all(active);
         await rejected;
-        expect(fetch).toHaveBeenCalledOnce();
+        expect(fetch).toHaveBeenCalledTimes(4);
       } finally {
-        firstResponse.resolve(Response.json([]));
-        await Promise.allSettled([first, queued]);
+        releaseWorkers.resolve();
+        await Promise.allSettled([...active, queued]);
         resolveRest.mockRestore();
       }
     },

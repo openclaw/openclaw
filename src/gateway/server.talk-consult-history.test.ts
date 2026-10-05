@@ -450,6 +450,10 @@ describe("Browser Talk consult input custody", () => {
         makeAgentAssistantMessage({ content: [{ type: "text", text: modelReply }] }),
       ];
       runEmbeddedAgent.mockImplementation(async (params) => {
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "start" },
+        });
         params.onExecutionPhase?.({ phase: "model_call_started" });
         const result = await completeModel(params);
         params.abortSignal?.throwIfAborted();

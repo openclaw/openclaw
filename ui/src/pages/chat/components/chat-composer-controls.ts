@@ -501,8 +501,6 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         { inline: true },
       )}`
     : undefined;
-  // Preserve the click identity without mistaking it for a follow-up mode.
-  const send = (event: Event) => props.onSend(event);
   const abortAction = renderChatAbortAction(props);
 
   // An errored transport remains active. Keep Stop; the alert row owns its error.
@@ -571,7 +569,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
       <button
         class="chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}"
         @pointerdown=${props.onPrimaryActionPointerDown}
-        @click=${send}
+        @click=${props.onSend}
         ?disabled=${!hasSendableContent}
         aria-label=${sendStatus ?? activeRunActionDescription}
         aria-busy=${sendBusy || props.preparingAttachments ? "true" : "false"}
@@ -589,20 +587,15 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
           props.onPrimaryActionPointerDown,
         )
       : sendAction;
-  const desktopPrimaryAction = props.dictation?.active
+  const activePrimaryAction = props.dictation?.active
     ? dictationSendAction
     : props.canAbort && !hasSendableContent
       ? abortAction
-      : sendAction;
-  const mobilePrimaryAction = props.dictation?.active
-    ? dictationSendAction
-    : props.canAbort && !hasSendableContent
-      ? abortAction
-      : hasComposedContent
-        ? sendAction
-        : props.onToggleVoice
-          ? mobileTalkAction
-          : sendAction;
+      : null;
+  const desktopPrimaryAction = activePrimaryAction ?? sendAction;
+  const mobilePrimaryAction =
+    activePrimaryAction ??
+    (hasComposedContent || !props.onToggleVoice ? sendAction : mobileTalkAction);
   const primaryActions =
     mobilePrimaryAction === desktopPrimaryAction
       ? html`<span class="chat-mobile-primary-action chat-desktop-primary-action"

@@ -170,11 +170,9 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
         outcome:
           result.meta.timeoutPhase !== undefined
             ? "timed_out"
-            : runOutcome === "aborted"
-              ? "aborted"
-              : runOutcome === "completed"
-                ? "completed"
-                : "error",
+            : runOutcome === "blocked"
+              ? "error"
+              : runOutcome,
         ...(typeof result.meta.yielded === "boolean" ? { yieldDetected: result.meta.yielded } : {}),
       },
       resultErrorMessage && (runOutcome === "error" || runOutcome === "blocked")

@@ -98,24 +98,6 @@ function clipSpans<T extends { start: number; end: number }>(
   return clipped;
 }
 
-export function clampStyleSpans(
-  spans: MarkdownStyleSpan[],
-  maxLength: number,
-): MarkdownStyleSpan[] {
-  return clipSpans(spans, 0, maxLength, createStyleSpan);
-}
-
-export function clampLinkSpans(spans: MarkdownLinkSpan[], maxLength: number): MarkdownLinkSpan[] {
-  return clipSpans(spans, 0, maxLength, copyMarkdownLinkSpan);
-}
-
-export function clampAnnotationSpans(
-  spans: MarkdownAnnotationSpan[],
-  maxLength: number,
-): MarkdownAnnotationSpan[] {
-  return clipSpans(spans, 0, maxLength, (span) => ({ ...span }));
-}
-
 export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownAnnotationSpan[] {
   const sorted = spans.toSorted((a, b) => a.start - b.start || a.end - b.end);
   const merged: MarkdownAnnotationSpan[] = [];
@@ -124,7 +106,6 @@ export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownA
     if (
       previous &&
       previous.end === span.start &&
-      previous.type === span.type &&
       previous.kind === span.kind &&
       previous.role === span.role
     ) {

@@ -59,6 +59,37 @@ selects that contract when `version: 2` is present.
 - `voicewake.get` returns the stored wake-word triggers.
 - `voicewake.set` updates wake-word triggers and broadcasts the change.
 
+### Channel DM pairing
+
+`channels.pairing.list`, `channels.pairing.approve`, and
+`channels.pairing.dismiss` manage channel DM access requests. They are separate
+from [device bootstrap](/gateway/protocol/rpc-devices-nodes-and-approvals#device-pairing-and-device-tokens).
+
+The existing list request accepts optional `channel` and `accountId` and returns
+`accounts`, `requests`, `commandOwnerConfigured`, and `limits`. Public request
+rows contain a `requestId` and sender/account metadata, never the pairing code.
+Existing approval and dismissal use `channel`, `accountId`, and `requestId`;
+approval also accepts `notify` and `bootstrapCommandOwner`. Approval returns
+`requestId`, `senderId`, `notification`, and `commandOwnerBootstrap`; dismissal
+returns `requestId` and `senderId`. These contracts remain unchanged.
+
+The local CLI uses two explicit, `operator.admin`-protected branches after
+negotiating the corresponding
+[owner capability](/gateway/protocol/versioning#local-state-owner-routing):
+
+| Method                     | Request                                                             | Result                                                                                              |
+| -------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `channels.pairing.list`    | `format: "cli"`, `channel`, `expectedOwnerId`; optional `accountId` | Raw request array containing `id`, `code`, `createdAt`, `lastSeenAt`, and optional `meta`.          |
+| `channels.pairing.approve` | `channel`, `code`, `expectedOwnerId`; optional `accountId`          | `{ id, entry }`, where `entry` is the raw approved request, or `null` when no pending code matches. |
+
+The code selector and existing request-ID selector are mutually exclusive.
+Omitting `accountId` in the CLI branch preserves cross-account listing and code
+lookup; an explicit account restricts both. The owner resolves and mutates the
+matching request. CLI output remains unchanged, and first-command-owner config
+bootstrap and optional notification remain client-side after acknowledgement.
+Neither runs after a refusal or unknown outcome. Listing is mutation-capable
+because it prunes expired or excess pending requests.
+
 ## Plugin management
 
 - `plugins.list` (`operator.read`) returns the installed plugin inventory plus locally curated official picks, diagnostics, and whether the current install mode allows mutations. It includes the current runtime `generation` and each plugin's runtime state separately from configured enablement.

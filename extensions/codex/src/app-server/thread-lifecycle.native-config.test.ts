@@ -1,7 +1,8 @@
 import path from "node:path";
+import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { retainCodexAppServerLiveThread } from "./client-runtime.js";
-import { CodexAppServerRpcError } from "./client.js";
+import { hasCodexAppServerLiveThread, retainCodexAppServerLiveThread } from "./client-runtime.js";
+import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
   getCodexInferenceThread,
@@ -279,11 +280,13 @@ describe("Codex native configuration lifecycle", () => {
   });
 
   it.each([
-    { nativeModel: false, changeModel: false },
-    { nativeModel: true, changeModel: true },
+    { nativeModel: false, changeModel: false, rotateLineage: false },
+    { nativeModel: true, changeModel: true, rotateLineage: false },
+    { nativeModel: true, changeModel: false, rotateLineage: false },
+    { nativeModel: true, changeModel: false, rotateLineage: true },
   ])(
-    "rebinds before warm reuse (native: $nativeModel, changed model: $changeModel)",
-    async ({ nativeModel, changeModel }) => {
+    "rebinds before warm reuse (native: $nativeModel, changed model: $changeModel, rotated lineage: $rotateLineage)",
+    async ({ nativeModel, changeModel, rotateLineage }) => {
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
       await writeCodexAppServerBinding(sessionFile, {
         webSearchThreadConfigFingerprint: JSON.stringify({
@@ -366,6 +369,66 @@ describe("Codex native configuration lifecycle", () => {
         "configRequirements/read",
         ...(nativeModel ? ["thread/read"] : []),
       ]);
+      if (nativeModel && !changeModel) {
+        await retainCodexAppServerLiveThread(
+          client,
+          warm.threadId,
+          warm.liveThreadOwnership?.release,
+          warm.liveThreadConfigFingerprint,
+        );
+        const native = threadStartResult("thread-reused");
+        fixture.seed(
+          { ...native, thread: { ...native.thread, status: { type: "active", activeFlags: [] } } },
+          { loaded: true, subscribed: true },
+        );
+        const resumeCount = request.mock.calls.filter(
+          ([method]) => method === "thread/resume",
+        ).length;
+        const retainedBinding = await readCodexAppServerBinding(sessionFile);
+        const nativeRequest = CodexAppServerClient.prototype.request.bind(client);
+        request.mockImplementation(async (...args) => {
+          const response = await nativeRequest(...args);
+          if (rotateLineage && args[0] === "thread/read") {
+            // The wire read still completes normally. Change the durable lineage
+            // while warm admission awaits it, without changing the native binding.
+            await patchSessionEntry({
+              agentId: "main",
+              sessionKey: "agent:main:session-1",
+              storePath: resolveStorePath(undefined, { agentId: "main" }),
+              update: () => ({ previousSessionId: "replaced-predecessor" }),
+            });
+          }
+          return response;
+        });
+        await expect(startOrResumeThread(common)).rejects.toThrow("active");
+        expect(request.mock.calls.filter(([method]) => method === "thread/resume")).toHaveLength(
+          resumeCount,
+        );
+        expect(
+          request.mock.calls.some(
+            ([method]) => method === "turn/interrupt" || method === "thread/archive",
+          ),
+        ).toBe(false);
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(retainedBinding);
+        expect(hasCodexAppServerLiveThread(client, warm.threadId)).toBe(!rotateLineage);
+        expect(client.getCloseError()).toBeUndefined();
+        expect(
+          request.mock.calls.filter(([method]) => method === "thread/unsubscribe"),
+        ).toHaveLength(rotateLineage ? 1 : 0);
+        if (rotateLineage) {
+          return;
+        }
+        fixture.seed(native, { loaded: true, subscribed: true });
+        await expect(startOrResumeThread(common)).resolves.toMatchObject({
+          threadId: "thread-reused",
+        });
+        expect(request.mock.calls.filter(([method]) => method === "thread/resume")).toHaveLength(
+          resumeCount,
+        );
+        expect(
+          request.mock.calls.filter(([method]) => method === "thread/unsubscribe"),
+        ).toHaveLength(0);
+      }
     },
   );
 });

@@ -150,7 +150,7 @@ canonical_release_body_matches "$NOTES_FILE"
 );
 
 it("renders the extended-stable context through the real publication entry point", () => {
-  const releaseVersion = "2026.7.35";
+  const releaseVersion = "2026.8.35";
   const toolingVersion = "2026.9.5";
   const { root, repository, targetSha } = publicationFixture({ releaseVersion, toolingVersion });
   const workflow = parse(
@@ -183,7 +183,7 @@ it("renders the extended-stable context through the real publication entry point
   expect(
     readFileSync(join(root, "release-notes.md"), "utf8").startsWith(
       "This is a gateway-only `extended-stable` release, which is our current equivalent to LTS. " +
-        "This release is OpenClaw from the end of July 2026, plus critical security updates, " +
+        "This release is OpenClaw from the end of August 2026, plus critical security updates, " +
         "reliability and performance fixes, and features like new model support. " +
         "The latest version of OpenClaw at the time of this release is " +
         "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n",

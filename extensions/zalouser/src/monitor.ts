@@ -210,7 +210,7 @@ async function processMessage(
         isGroup,
         message: message.eventMessage,
       };
-      await sendZaloDeliveredEvent({ ...ack, isSeen: true });
+      await sendZaloDeliveredEvent(ack);
       await sendZaloSeenEvent(ack);
     } catch (err) {
       logVerbose(core, runtime, `zalouser: delivery/seen ack failed for ${chatId}: ${String(err)}`);
@@ -241,7 +241,6 @@ async function processMessage(
         groupId: chatId,
         groupName,
         includeGroupIdAlias: true,
-        includeWildcard: true,
         allowNameMatching,
       }),
     );

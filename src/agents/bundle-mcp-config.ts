@@ -108,46 +108,25 @@ export function loadMergedBundleMcpConfig(params: {
   });
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
   const serverOverrides = params.toolOverrides?.mcpServers;
-  const readServerOverride = (name: string) =>
-    serverOverrides && Object.hasOwn(serverOverrides, name) ? serverOverrides[name] : undefined;
-  const disabledConfiguredNames = new Set(
-    Object.entries(configuredMcp)
-      .filter(([name, server]) => readServerOverride(name) !== true && server.enabled === false)
-      .map(([name]) => name),
+  // Merge owner config first so a disabled override also tombstones its bundle default.
+  const mcpServers = Object.fromEntries(
+    Object.entries({ ...bundleMcp.config.mcpServers, ...configuredMcp }).filter(([name]) => {
+      const override =
+        serverOverrides && Object.hasOwn(serverOverrides, name) ? serverOverrides[name] : undefined;
+      return override !== false && (override === true || configuredMcp[name]?.enabled !== false);
+    }),
   );
-  const enabledConfiguredMcp = Object.fromEntries(
-    Object.entries(configuredMcp).filter(
-      ([name, server]) =>
-        readServerOverride(name) !== false &&
-        (readServerOverride(name) === true || server.enabled !== false),
-    ),
-  );
-  const enabledBundleMcp = Object.fromEntries(
-    Object.entries(bundleMcp.config.mcpServers).filter(
-      ([name]) => readServerOverride(name) !== false && !disabledConfiguredNames.has(name),
-    ),
-  );
+  const isUnshadowedBundleServer = ([name]: [string, unknown]) =>
+    Object.hasOwn(mcpServers, name) && !Object.hasOwn(configuredMcp, name);
   const prepareDataDirsByServer = Object.fromEntries(
-    Object.entries(bundleMcp.prepareDataDirsByServer ?? {}).filter(
-      ([name]) =>
-        Object.hasOwn(enabledBundleMcp, name) && !Object.hasOwn(enabledConfiguredMcp, name),
-    ),
+    Object.entries(bundleMcp.prepareDataDirsByServer ?? {}).filter(isUnshadowedBundleServer),
   );
 
   return {
-    config: {
-      // OpenClaw config is the owner-managed layer, so it overrides bundle defaults.
-      mcpServers: {
-        ...enabledBundleMcp,
-        ...enabledConfiguredMcp,
-      } satisfies BundleMcpConfig["mcpServers"],
-    },
+    config: { mcpServers },
     diagnostics: bundleMcp.diagnostics,
     pluginIdsByServer: Object.fromEntries(
-      Object.entries(bundleMcp.pluginIdsByServer).filter(
-        ([name]) =>
-          Object.hasOwn(enabledBundleMcp, name) && !Object.hasOwn(enabledConfiguredMcp, name),
-      ),
+      Object.entries(bundleMcp.pluginIdsByServer).filter(isUnshadowedBundleServer),
     ),
     prepareDataDirsByServer,
   };

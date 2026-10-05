@@ -29,6 +29,7 @@ import {
 } from "./execution-auth-binding.js";
 import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugin-load-plan.js";
 import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
+import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import {
   applySecretRefHeaderSentinels,
   applyLocalNoAuthHeaderOverride,
@@ -75,6 +76,7 @@ type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 
 type PreparedStreamCompletionModel =
   | (Extract<PreparedSimpleCompletionModel, { model: Model }> & {
+      readServiceTiers?: (model: Model) => readonly string[] | undefined;
       recordServiceTierObservation?: ReturnType<
         NonNullable<PreparedModelRuntimeSnapshot["accountCatalog"]>["prepareServiceTierObserver"]
       >;
@@ -484,16 +486,21 @@ async function prepareSimpleCompletionModelCore(
           }),
           providerRuntimeHandle,
         );
-  const selectedCredential = auth.profileId ? authStore?.profiles[auth.profileId] : undefined;
+  const selectedCredential = resolveSelectedModelCredential({
+    provider: model.provider,
+    profileId: auth.profileId,
+    mode: auth.mode,
+  });
   const recordServiceTierObservation =
     params.transport === "provider-stream" &&
-    auth.profileId &&
-    selectedCredential?.type === "api_key" &&
+    selectedCredential &&
+    selectedCredential.source !== "harness" &&
+    selectedCredential.requirement === "api-key" &&
     model.provider === "openai" &&
     model.api === "openai-responses"
       ? context.preparedModelRuntime.accountCatalog?.prepareServiceTierObserver({
-          profileId: auth.profileId,
-          credential: selectedCredential,
+          selectedCredential,
+          credential: auth.profileId ? authStore?.profiles[auth.profileId] : undefined,
         })
       : undefined;
 
@@ -501,7 +508,21 @@ async function prepareSimpleCompletionModelCore(
     model: bindModelLlmRuntime(preparedModel, modelRuntime.llmRuntime, completionTransport),
     auth: resolvedAuth,
     ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
-    ...(recordServiceTierObservation ? { recordServiceTierObservation } : {}),
+    ...(recordServiceTierObservation
+      ? {
+          recordServiceTierObservation,
+          readServiceTiers: (target: Model) =>
+            selectedCredential && selectedCredential.source !== "harness"
+              ? context.preparedModelRuntime.accountCatalog?.readServiceTiers({
+                  identityKey: selectedCredential.identityKey,
+                  modelId: target.id,
+                  runtimeId: "openclaw",
+                  api: target.api,
+                  baseUrl: target.baseUrl,
+                })
+              : undefined,
+        }
+      : {}),
   };
 }
 

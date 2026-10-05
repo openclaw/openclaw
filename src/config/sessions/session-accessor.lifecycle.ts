@@ -8,19 +8,16 @@ import {
   shouldSkipPluginHostCleanupStore,
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
-import { listSessionEntriesCore, patchSessionEntryCore } from "./session-accessor.entry.js";
-import {
-  applySessionEntryCanonicalReplacements,
-  type SessionEntryCanonicalReplacement,
-} from "./session-accessor.sqlite-replacement-projection.js";
+import { patchSessionEntryCore } from "./session-accessor.entry.js";
+import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import type {
   SessionPatchProjectionSnapshot,
   SessionPatchProjectionTarget,
   SessionPatchProjectionContext,
   SessionPatchProjectionFailure,
-  SessionPatchProjectionOperation,
   SessionPatchProjectionResult,
 } from "./session-accessor.types.js";
+import { readSessionEntrySummariesInWorker } from "./session-entry-read-runtime.js";
 import {
   resolveProjectionExistingEntry,
   SessionLabelOwnerIndex,
@@ -38,16 +35,22 @@ export {
   purgeDeletedAgentSessionEntries,
 } from "./session-accessor.sqlite-projection.js";
 
-/** Projects ordered session patches against one store snapshot and commits once. */
-export async function applySessionPatchProjections<
+/** Projects one session patch against its detached store snapshot and commits once. */
+export async function applySessionPatchProjection<
   TFailure extends SessionPatchProjectionFailure,
 >(params: {
   agentId?: string;
-  operations: readonly SessionPatchProjectionOperation<TFailure>[];
+  /** Revalidates request-scoped authorization after projection and before persistence. */
+  assertCurrent?: () => void;
+  /** Complete key authority for resolvers that can operate on a bounded store view. */
   sessionKeys?: readonly string[];
   storePath: string;
-}): Promise<SessionPatchProjectionResult<TFailure>[]> {
-  return await applySessionEntryCanonicalReplacements({
+  resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
+  project: (
+    context: SessionPatchProjectionContext,
+  ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
+}): Promise<SessionPatchProjectionResult<TFailure>> {
+  return await applySessionEntryCanonicalReplacements<SessionPatchProjectionResult<TFailure>>({
     agentId: params.agentId,
     sessionKeys: params.sessionKeys,
     storePath: params.storePath,
@@ -60,94 +63,33 @@ export async function applySessionPatchProjections<
       );
       const snapshot = { store: workingStore };
       const labelOwners = new SessionLabelOwnerIndex(workingStore);
-      const replacements: SessionEntryCanonicalReplacement[] = [];
-      const results: SessionPatchProjectionResult<TFailure>[] = [];
-      for (const operation of params.operations) {
-        try {
-          const target = operation.resolveTarget(snapshot);
-          const existingEntry = resolveProjectionExistingEntry(snapshot, target);
-          const candidateKeys = uniqueStrings(
-            (target.candidateKeys ?? [target.primaryKey]).map((key) => key.trim()).filter(Boolean),
-          );
-          const projected = await operation.project({
-            ...target,
-            ...snapshot,
-            ...(existingEntry ? { existingEntry } : {}),
-            isLabelInUse: (label) => labelOwners.isLabelInUse(label, candidateKeys),
-          });
-          if (!projected.ok) {
-            results.push(projected);
-            continue;
-          }
-          const authorizationFailure = operation.authorize?.();
-          if (authorizationFailure) {
-            results.push(authorizationFailure);
-            continue;
-          }
-          const previousSessionKeys = candidateKeys.filter(
-            (sessionKey) => sessionKey !== target.primaryKey && workingStore[sessionKey],
-          );
-          replacements.push({
-            entry: projected.entry,
-            previousSessionKeys,
-            sessionKey: target.primaryKey,
-          });
-          const cloned = labelOwners.replaceEntry(
-            candidateKeys,
-            target.primaryKey,
-            projected.entry,
-          );
-          results.push({ ok: true, entry: structuredClone(cloned) });
-        } catch (error) {
-          if (!operation.onError) {
-            throw error;
-          }
-          results.push(operation.onError(error));
-        }
+      const target = params.resolveTarget(snapshot);
+      const existingEntry = resolveProjectionExistingEntry(snapshot, target);
+      const candidateKeys = uniqueStrings(
+        (target.candidateKeys ?? [target.primaryKey]).map((key) => key.trim()).filter(Boolean),
+      );
+      const projected = await params.project({
+        ...target,
+        ...snapshot,
+        ...(existingEntry ? { existingEntry } : {}),
+        isLabelInUse: (label) => labelOwners.isLabelInUse(label, candidateKeys),
+      });
+      if (!projected.ok) {
+        return { result: projected };
       }
-      return { replacements, result: results };
+      params.assertCurrent?.();
+      const previousSessionKeys = candidateKeys.filter(
+        (sessionKey) => sessionKey !== target.primaryKey && workingStore[sessionKey],
+      );
+      const cloned = labelOwners.replaceEntry(candidateKeys, target.primaryKey, projected.entry);
+      return {
+        replacements: [
+          { entry: projected.entry, previousSessionKeys, sessionKey: target.primaryKey },
+        ],
+        result: { ok: true, entry: structuredClone(cloned) },
+      };
     },
   });
-}
-
-/** Applies one patch through the canonical ordered batch projection owner. */
-export async function applySessionPatchProjection<
-  TFailure extends SessionPatchProjectionFailure,
->(params: {
-  agentId?: string;
-  /** Revalidates request-scoped authorization after the writer slot is held. */
-  assertCurrent?: () => void;
-  /** Complete key authority for resolvers that can operate on a bounded store view. */
-  sessionKeys?: readonly string[];
-  storePath: string;
-  resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
-  project: (
-    context: SessionPatchProjectionContext,
-  ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
-}): Promise<SessionPatchProjectionResult<TFailure>> {
-  const [result] = await applySessionPatchProjections({
-    agentId: params.agentId,
-    sessionKeys: params.sessionKeys,
-    storePath: params.storePath,
-    operations: [
-      {
-        resolveTarget: params.resolveTarget,
-        project: params.project,
-        ...(params.assertCurrent
-          ? {
-              authorize: () => {
-                params.assertCurrent?.();
-                return undefined;
-              },
-            }
-          : {}),
-      },
-    ],
-  });
-  if (!result) {
-    throw new Error("Session patch projection produced no result");
-  }
-  return result;
 }
 
 /**
@@ -166,20 +108,15 @@ export async function cleanupPluginHostSessionStore(
   }
   const now = Date.now();
   let cleared = 0;
-  // Select metadata without yielding; saved prompts are reserved from plugin slots.
-  // Check only selected writes; the patch rereads full entries and rechecks authority at commit.
-  for (const { entry, sessionKey } of listSessionEntriesCore({
+  for (const { entry, sessionKey } of await readSessionEntrySummariesInWorker({
     agentId: params.agentId,
     storePath: params.storePath,
-    projection: "list",
+    cleanupSession: params.sessionKey,
   })) {
     if (isLockedHarnessSessionOwnedByPlugin(entry, params.preserveLockedHarnessIds)) {
       continue;
     }
-    if (
-      !matchesPluginHostCleanupSession(sessionKey, entry, params.sessionKey) ||
-      !hasPluginHostCleanupTarget(entry, params)
-    ) {
+    if (!hasPluginHostCleanupTarget(entry, params)) {
       continue;
     }
     if (params.shouldCleanup && !params.shouldCleanup()) {
@@ -191,7 +128,10 @@ export async function cleanupPluginHostSessionStore(
         if (isLockedHarnessSessionOwnedByPlugin(currentEntry, params.preserveLockedHarnessIds)) {
           return null;
         }
-        if (!hasPluginHostCleanupTarget(currentEntry, params)) {
+        if (
+          !matchesPluginHostCleanupSession(sessionKey, currentEntry, params.sessionKey) ||
+          !hasPluginHostCleanupTarget(currentEntry, params)
+        ) {
           return null;
         }
         clearPluginHostCleanupTarget(currentEntry, params);

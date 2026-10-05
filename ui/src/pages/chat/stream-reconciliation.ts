@@ -417,27 +417,22 @@ function currentToolStreamMessageIndex(
   state: StreamReconciliationState,
   startIndex: number,
   endIndex: number,
-  toolCallId?: string,
+  toolCallId: string,
   runId?: string,
 ): number {
   const liveToolRefs = resolveLiveToolStreamRefs(state);
-  const selectedToolIdentity = toolCallId
-    ? resolveMatchingLiveToolIdentity({ id: toolCallId, ...(runId ? { runId } : {}) }, liveToolRefs)
-    : undefined;
-  const liveToolIds = selectedToolIdentity
-    ? new Set([selectedToolIdentity])
-    : toolCallId
-      ? new Set<string>()
-      : new Set(liveToolRefs.map((ref) => ref.identity));
-  if (liveToolIds.size === 0) {
+  const selectedToolIdentity = resolveMatchingLiveToolIdentity(
+    { id: toolCallId, ...(runId ? { runId } : {}) },
+    liveToolRefs,
+  );
+  if (!selectedToolIdentity) {
     return -1;
   }
   for (let index = startIndex; index < endIndex; index++) {
     if (
-      extractToolMessageRefs(messages[index]).some((ref) => {
-        const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
-        return identity !== undefined && liveToolIds.has(identity);
-      })
+      extractToolMessageRefs(messages[index]).some(
+        (ref) => resolveMatchingLiveToolIdentity(ref, liveToolRefs) === selectedToolIdentity,
+      )
     ) {
       return index;
     }

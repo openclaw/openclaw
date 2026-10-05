@@ -20,6 +20,10 @@ import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import {
+  reclaimTokenlessPluginSourceCapture,
+  type TokenlessCaptureSweep,
+} from "./plugin-source-capture-cleanup.js";
+import {
   pluginSourceCaptureMaintenance,
   resolvePluginSourceCaptureStorage,
   runInPluginSourceCaptureContext,
@@ -250,6 +254,7 @@ async function reclaimInstances(
   legacy = false,
   nativeMaintenance?: NativeCaptureMaintenance,
   fallbackPrefix?: string,
+  tokenlessSweep: TokenlessCaptureSweep = {},
 ): Promise<void> {
   let entries: fs.Dirent[];
   try {
@@ -264,7 +269,6 @@ async function reclaimInstances(
     return;
   }
   const cutoff = Date.now() - CAPTURE_GRACE_MS;
-  let legacyAllowed: boolean | undefined;
   const lstatIfPresent = (file: string) =>
     fsPromises.lstat(file).catch((error: unknown) => {
       if (!hasErrnoCode(error, "ENOENT")) {
@@ -309,30 +313,7 @@ async function reclaimInstances(
         if (nativeStat) {
           continue;
         }
-        if (legacy) {
-          if (legacyAllowed === undefined) {
-            const { inspectOtherOpenClawProcesses } =
-              await import("../infra/openclaw-process-census.js");
-            const census = inspectOtherOpenClawProcesses();
-            legacyAllowed = "error" in census || census.pids.length === 0;
-          }
-          if (!legacyAllowed) {
-            continue;
-          }
-          // The census excludes foreign-UID processes, not their scratch. Recheck
-          // ownership after inspection, even when an elevated process could remove it.
-          if (process.getuid && (await fsPromises.lstat(canonical)).uid !== process.getuid()) {
-            continue;
-          }
-        }
-        // Legacy writers have no token. Probe for Windows sharing violations before
-        // removing aged scratch; retain the recognizable name if removal is interrupted.
-        const retired = path.join(
-          root,
-          `${legacy ? PLUGIN_SOURCE_CAPTURE_PREFIX : ""}${randomUUID()}`,
-        );
-        await fsPromises.rename(canonical, retired);
-        await fsPromises.rm(retired, { recursive: true, force: true });
+        await reclaimTokenlessPluginSourceCapture(canonical, stat, legacy, tokenlessSweep);
         continue;
       }
       await reclaimInstance(canonical, stat, nativeMaintenance);
@@ -353,6 +334,7 @@ export async function prunePluginNativeCaptureDirectories(
 ) {
   const removed: string[] = [];
   const warnings: string[] = [];
+  const tokenlessSweep: TokenlessCaptureSweep = {};
   assertCurrent();
   const recordFailure = (error: unknown) => warnings.push(formatErrorMessage(error));
   const maintenance = { retainedPaths, assertCurrent, removed, ...options };
@@ -361,6 +343,8 @@ export async function prunePluginNativeCaptureDirectories(
     recordFailure,
     false,
     maintenance,
+    undefined,
+    tokenlessSweep,
   ).catch(recordFailure);
   await reclaimInstances(
     tmpdir(),
@@ -368,7 +352,11 @@ export async function prunePluginNativeCaptureDirectories(
     false,
     maintenance,
     resolvePluginSourceCaptureFallbackPrefix(stateDir),
+    tokenlessSweep,
   ).catch(recordFailure);
+  if (tokenlessSweep.unknownReason) {
+    warnings.push(`Tokenless temporary roots preserved: ${tokenlessSweep.unknownReason}`);
+  }
   return { removed, warnings };
 }
 
@@ -377,6 +365,7 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
   const root = path.resolve(resolvePluginSourceCapturesDirectory(stateDir));
   let sweep = sweeps.get(root);
   if (!sweep) {
+    const tokenlessSweep: TokenlessCaptureSweep = {};
     let failures = 0;
     let firstFailure: unknown;
     const recordFailure = (error: unknown) => {
@@ -384,7 +373,7 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
         firstFailure = error;
       }
     };
-    sweep = reclaimInstances(root, recordFailure)
+    sweep = reclaimInstances(root, recordFailure, false, undefined, undefined, tokenlessSweep)
       .catch(recordFailure)
       .then(() =>
         reclaimInstances(
@@ -403,7 +392,14 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
             const directory = await fsPromises.realpath(candidate);
             if (!visited.has(directory)) {
               visited.add(directory);
-              await reclaimInstances(directory, recordFailure, true);
+              await reclaimInstances(
+                directory,
+                recordFailure,
+                true,
+                undefined,
+                undefined,
+                tokenlessSweep,
+              );
             }
           } catch (error) {
             if (!hasErrnoCode(error, "ENOENT")) {
@@ -413,6 +409,9 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
         }
       })
       .then(() => {
+        if (tokenlessSweep.unknownReason) {
+          warn(`Tokenless temporary roots preserved: ${tokenlessSweep.unknownReason}`);
+        }
         if (failures === 0) {
           warningBackoff.delete(root);
           return;

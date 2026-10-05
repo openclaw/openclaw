@@ -146,7 +146,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     const requesterAgentId = scenario === "unrelated agent" ? "other" : parentAgentId;
     if (globalParent) {
       setRuntimeConfigSnapshot({
-        agents: { list: [{ id: "main" }, { id: "other" }] },
+        agents: { entries: { main: {}, other: {} } },
         session: { scope: "global" },
       });
     }

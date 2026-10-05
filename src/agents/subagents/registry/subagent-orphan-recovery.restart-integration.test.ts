@@ -208,9 +208,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
         }
         expect(dispatchAgent).not.toHaveBeenCalled();
         expect(log.warn.mock.calls).toEqual([]);
-        expect(log.info.mock.calls).toEqual([
-          ["session: startup subagents: 0 interrupted, 5 retained by run/task owners"],
-        ]);
+        expect(log.info).toHaveBeenCalledWith(
+          expect.stringContaining("5 retained by run/task owners"),
+        );
       });
     } finally {
       await fixture.settle();

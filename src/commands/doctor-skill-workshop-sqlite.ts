@@ -20,8 +20,8 @@ import {
   isUpdateRehearsalReadOnlyPath,
   resolveUpdateRehearsalRoot,
 } from "../infra/update-rehearsal-paths.js";
-import { transitionPendingSkillProposalToStale } from "../skills/workshop/apply-transition.js";
 import { reconcileInterruptedSkillProposalApply } from "../skills/workshop/reconcile-transition.js";
+import { transitionPendingSkillProposalToStale } from "../skills/workshop/service-query.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   parseSkillProposalRow,

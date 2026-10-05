@@ -4,6 +4,7 @@
 import crypto from "node:crypto";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
@@ -23,10 +24,7 @@ export function resolveMcpAuthProfileId(rawServer: unknown): string | undefined 
   if (!isRecord(rawServer) || rawServer.auth !== "oauth" || !isRecord(rawServer.oauth)) {
     return undefined;
   }
-  const authProfileId = rawServer.oauth.authProfileId;
-  return typeof authProfileId === "string" && authProfileId.trim().length > 0
-    ? authProfileId.trim()
-    : undefined;
+  return normalizeOptionalString(rawServer.oauth.authProfileId);
 }
 
 /** Returns whether a server needs an OpenClaw-managed bearer projected externally. */

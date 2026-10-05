@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { coerceSecretRef } from "../../config/types.secrets.js";
+import { parseSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getOAuthApiKey, getOAuthProviders, type OAuthCredentials } from "../../llm/oauth.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
@@ -57,20 +57,6 @@ import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from ".
 
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
 
-/** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
-const BEARER_AUTH_MODES = new Set(["oauth", "token"]);
-
-const isCompatibleModeType = (mode: string | undefined, type: string | undefined): boolean => {
-  if (!mode || !type) {
-    return false;
-  }
-  if (mode === type) {
-    return true;
-  }
-  // Both token and oauth represent bearer-token auth paths — allow bidirectional compat.
-  return BEARER_AUTH_MODES.has(mode) && BEARER_AUTH_MODES.has(type);
-};
-
 function isProfileConfigCompatible(params: {
   cfg?: OpenClawConfig;
   profileId: string;
@@ -78,13 +64,14 @@ function isProfileConfigCompatible(params: {
   mode: "api_key" | "token" | "oauth";
 }): boolean {
   const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
-  if (profileConfig && profileConfig.provider !== params.provider) {
-    return false;
-  }
-  if (profileConfig && !isCompatibleModeType(profileConfig.mode, params.mode)) {
-    return false;
-  }
-  return true;
+  return (
+    !profileConfig ||
+    (profileConfig.provider === params.provider &&
+      (profileConfig.mode === params.mode ||
+        // OAuth and manually supplied bearer tokens share a transport contract.
+        ((profileConfig.mode === "oauth" || profileConfig.mode === "token") &&
+          (params.mode === "oauth" || params.mode === "token"))))
+  );
 }
 
 async function buildOAuthApiKey(
@@ -293,9 +280,9 @@ function authProfileSecretRefKey(
 ): string | undefined {
   const ref =
     profile.type === "api_key"
-      ? (coerceSecretRef(profile.keyRef, defaults) ?? coerceSecretRef(profile.key, defaults))
+      ? (parseSecretRef(profile.keyRef, defaults) ?? parseSecretRef(profile.key, defaults))
       : profile.type === "token"
-        ? (coerceSecretRef(profile.tokenRef, defaults) ?? coerceSecretRef(profile.token, defaults))
+        ? (parseSecretRef(profile.tokenRef, defaults) ?? parseSecretRef(profile.token, defaults))
         : null;
   return ref ? secretRefKey(ref) : undefined;
 }
@@ -357,7 +344,7 @@ function throwUnmaterializedAuthProfileSecretRef(params: {
   agentDir?: string;
   profileId: string;
   pathSuffix: "key" | "token";
-  ref: NonNullable<ReturnType<typeof coerceSecretRef>>;
+  ref: NonNullable<ReturnType<typeof parseSecretRef>>;
 }): never {
   throw new SecretSurfaceUnavailableError({
     ownerKind: "account",
@@ -437,8 +424,8 @@ export async function resolveApiKeyForProfile(
     });
     const inlineValue = cred.type === "api_key" ? cred.key : cred.token;
     const ref =
-      coerceSecretRef(cred.type === "api_key" ? cred.keyRef : cred.tokenRef, refDefaults) ??
-      coerceSecretRef(inlineValue, refDefaults);
+      parseSecretRef(cred.type === "api_key" ? cred.keyRef : cred.tokenRef, refDefaults) ??
+      parseSecretRef(inlineValue, refDefaults);
     const apiKey = normalizeOptionalSecretInput(inlineValue);
     if (ref && (!runtimeProfile.published || !apiKey)) {
       throwUnmaterializedAuthProfileSecretRef({

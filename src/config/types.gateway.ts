@@ -44,7 +44,7 @@ export type GatewayControlUiConfig = Omit<
    * this break-glass flag can migrate an unpaired browser safely.
    */
   dangerouslyDisableDeviceAuth?: boolean;
-  github?: { token?: SecretInput };
+  github?: { host?: string; token?: SecretInput };
 };
 
 /** Gateway authentication strategy for WebSocket and HTTP clients. */

@@ -175,7 +175,7 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
       session: { store: configuredStore },
       agents: {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "marketing" }],
+        entries: { main: {}, marketing: {} },
         defaults: { compaction: { mode: "default", keepRecentTokens: 1, postIndexSync: "off" } },
       },
     },

@@ -42,13 +42,6 @@ type ConfigureProviderChanges = {
   deletes: string[];
 };
 
-export function getSecretProviders(config: OpenClawConfig): Record<string, SecretProviderConfig> {
-  if (!isRecord(config.secrets?.providers)) {
-    return {};
-  }
-  return config.secrets.providers;
-}
-
 function configureCandidateSortKey(candidate: ConfigureCandidate): string {
   if (candidate.configFile === "auth-profile-store") {
     const agentId = candidate.agentId ?? "";
@@ -65,12 +58,7 @@ function resolveAuthProfileProvider(
   if (!profileId) {
     return undefined;
   }
-  const profile = store.profiles?.[profileId];
-  if (!isRecord(profile) || typeof profile.provider !== "string") {
-    return undefined;
-  }
-  const provider = profile.provider.trim();
-  return provider.length > 0 ? provider : undefined;
+  return store.profiles[profileId]?.provider.trim() || undefined;
 }
 
 /** Builds configure candidates for OpenClaw config plus an optional auth-profile scope. */
@@ -188,8 +176,8 @@ export function collectConfigureProviderChanges(params: {
   original: OpenClawConfig;
   next: OpenClawConfig;
 }): ConfigureProviderChanges {
-  const originalProviders = getSecretProviders(params.original);
-  const nextProviders = getSecretProviders(params.next);
+  const originalProviders = params.original.secrets?.providers ?? {};
+  const nextProviders = params.next.secrets?.providers ?? {};
 
   const upserts: Record<string, SecretProviderConfig> = {};
   const deletes: string[] = [];

@@ -205,27 +205,8 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
 }
 
 function resolveScannedEntryType(entry: fs.Dirent, fullPath: string): "file" | "directory" | null {
-  if (entry.isFile()) {
-    return "file";
-  }
-  if (entry.isDirectory()) {
-    return "directory";
-  }
-  if (!entry.isSymbolicLink()) {
-    return null;
-  }
-
-  const stat = pluginCacheStatSync(fullPath);
-  if (!stat) {
-    return null;
-  }
-  if (stat.isFile()) {
-    return "file";
-  }
-  if (stat.isDirectory()) {
-    return "directory";
-  }
-  return null;
+  const type = entry.isSymbolicLink() ? pluginCacheStatSync(fullPath) : entry;
+  return type?.isFile() ? "file" : type?.isDirectory() ? "directory" : null;
 }
 
 function resolvesToSameDirectory(left: string | undefined, right: string | undefined): boolean {

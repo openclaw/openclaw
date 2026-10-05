@@ -54,10 +54,7 @@ describe("persistent upstream fork continuation", () => {
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        list: [
-          { id: "main", agentDir },
-          { id: "source", agentDir: sourceAgentDir },
-        ],
+        entries: { main: { agentDir }, source: { agentDir: sourceAgentDir } },
       },
       session: { store: path.join(root, "openclaw-agent.sqlite") },
     };

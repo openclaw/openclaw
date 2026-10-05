@@ -202,12 +202,8 @@ function parseImageDescribeText(stdout: string) {
 }
 
 function parseJsonObjectFromText<T>(text: string, accepts: (value: unknown) => value is T) {
-  const starts = [...text.matchAll(/\{/gu)]
-    .map((match) => match.index)
-    .filter((index) => index !== undefined);
-  const ends = [...text.matchAll(/\}/gu)]
-    .map((match) => match.index)
-    .filter((index) => index !== undefined);
+  const starts = [...text.matchAll(/\{/gu)].map((match) => match.index);
+  const ends = [...text.matchAll(/\}/gu)].map((match) => match.index);
   for (const start of starts) {
     for (const end of ends.toReversed()) {
       if (end < start) {
@@ -226,7 +222,14 @@ function parseJsonObjectFromText<T>(text: string, accepts: (value: unknown) => v
   return undefined;
 }
 
-function parseVisionAssertion(text: string, expectText: string): VisionAssertion {
+function parseVisionAssertion(text: string | undefined, expectText: string): VisionAssertion {
+  if (!text) {
+    return {
+      expectedText: expectText,
+      matched: false,
+      reason: "Image describe did not return text.",
+    };
+  }
   const parsed = parseJsonObjectFromText(text, (value): value is Record<string, unknown> =>
     Boolean(value && typeof value === "object" && "visible" in value),
   );
@@ -261,24 +264,6 @@ function parseVisionAssertion(text: string, expectText: string): VisionAssertion
       : (reason ?? `Visual assertion did not cite the expected text "${expectText}".`),
     visible,
   };
-}
-
-function evaluateVisualExpectation(text: string | undefined, expectText: string | undefined) {
-  if (!expectText) {
-    return { matched: true };
-  }
-  if (!text) {
-    return {
-      assertion: {
-        expectedText: expectText,
-        matched: false,
-        reason: "Image describe did not return text.",
-      },
-      matched: false,
-    };
-  }
-  const assertion = parseVisionAssertion(text, expectText);
-  return { assertion, matched: assertion.matched };
 }
 
 function browserLaunchScript() {
@@ -446,7 +431,8 @@ export async function runMantisVisualDriver(
       });
       visionText = parseImageDescribeText(described.stdout);
     }
-    const { assertion, matched } = evaluateVisualExpectation(visionText, expectText);
+    const assertion = expectText ? parseVisionAssertion(visionText, expectText) : undefined;
+    const matched = assertion?.matched ?? true;
     result.matched = matched;
     result.status = matched ? "pass" : "fail";
     result.vision.assertion = assertion;

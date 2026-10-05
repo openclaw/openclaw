@@ -26,10 +26,8 @@ import {
 } from "../../model-auth.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
-import {
-  applyPreparedRuntimeAuthToModel,
-  type ModelProviderRequestTransportOverrides,
-} from "../../provider-request-config.js";
+import { applyPreparedRuntimeAuthToModel } from "../../provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "../../provider-request-config.types.js";
 import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-protection.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";

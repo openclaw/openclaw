@@ -318,12 +318,25 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
           );
         }
         const measured = events.filter((event) => event.method === "test.trace");
+        expect(settled).toContain(
+          'openclaw_gateway_rpc_response_bytes_count{method="test.trace"} 3',
+        );
+        expect(
+          measured
+            .filter((event) => event.phase === "response")
+            .map((event) => event.firstResponse),
+        ).toEqual([true, true, false]);
         for (const [metric, phase] of [
           ["first_response", "response"],
           ["handler", "handler"],
         ] as const) {
           const totalMs = measured.reduce(
-            (sum, event) => sum + (event.phase === phase ? event.durationMs : 0),
+            (sum, event) =>
+              sum +
+              (event.phase === phase &&
+              !(event.phase === "response" && event.firstResponse === false)
+                ? event.durationMs
+                : 0),
             0,
           );
           const sample = settled

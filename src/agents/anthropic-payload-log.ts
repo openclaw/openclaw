@@ -27,22 +27,8 @@ type PayloadLogEvent = AgentTraceBase & {
   payloadDigest?: string;
 };
 
-type PayloadLogConfig = {
-  enabled: boolean;
-  filePath: string;
-};
-
 const writers = new Map<string, QueuedFileWriter>();
 const log = createSubsystemLogger("agent/anthropic-payload");
-
-function resolvePayloadLogConfig(env: NodeJS.ProcessEnv): PayloadLogConfig {
-  const enabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? false;
-  const fileOverride = env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE?.trim();
-  const filePath = fileOverride
-    ? resolveUserPath(fileOverride)
-    : path.join(resolveStateDir(env), "logs", "anthropic-payload.jsonl");
-  return { enabled, filePath };
-}
 
 function formatError(error: unknown): string | undefined {
   const message =
@@ -83,7 +69,6 @@ function findLastAssistantUsage(messages: AgentMessage[]): Record<string, unknow
 }
 
 type AnthropicPayloadLogger = {
-  enabled: true;
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
   recordUsage: (messages: AgentMessage[], error?: unknown) => void;
 };
@@ -96,12 +81,16 @@ export function createAnthropicPayloadLogger(
   },
 ): AnthropicPayloadLogger | null {
   const env = params.env ?? process.env;
-  const cfg = resolvePayloadLogConfig(env);
-  if (!cfg.enabled || isIncognitoSessionKey(params.sessionKey)) {
+  const enabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? false;
+  const fileOverride = env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE?.trim();
+  const filePath = fileOverride
+    ? resolveUserPath(fileOverride)
+    : path.join(resolveStateDir(env), "logs", "anthropic-payload.jsonl");
+  if (!enabled || isIncognitoSessionKey(params.sessionKey)) {
     return null;
   }
 
-  const writer = params.writer ?? getQueuedFileWriter(writers, cfg.filePath);
+  const writer = params.writer ?? getQueuedFileWriter(writers, filePath);
   const base = buildAgentTraceBase(params);
 
   const record = (event: PayloadLogEvent) => {
@@ -159,5 +148,5 @@ export function createAnthropicPayloadLogger(
   };
 
   log.info("anthropic payload logger enabled", { filePath: writer.filePath });
-  return { enabled: true, wrapStreamFn, recordUsage };
+  return { wrapStreamFn, recordUsage };
 }

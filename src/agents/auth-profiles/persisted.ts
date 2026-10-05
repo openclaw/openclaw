@@ -3,22 +3,19 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { coerceSecretRef } from "../../config/types.secrets.js";
-import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import { asBoolean } from "../../utils/boolean.js";
-import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
-import { oauthCredentialMetadataSchema } from "./credential-schema.js";
-import { hasUsableOAuthCredential } from "./credential-state.js";
-import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
-import { hasOidcRegistration, isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
-  hasOAuthIdentity,
-  isSafeToAdoptMainStoreOAuthIdentity,
-  normalizeAuthEmailToken,
-  normalizeAuthIdentityToken,
-} from "./oauth-shared.js";
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { coerceSecretRef, isLegacySecretRefWithoutProvider } from "../../config/types.secrets.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
+import { hasOidcRegistration, isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
+import { hasOAuthIdentity, isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
+import { normalizeRawCredentialEntry } from "./persisted-credential.js";
 import {
   getRuntimeExternalCliProfileIds,
   removePersonalAuthProfileReferences,
@@ -40,7 +37,6 @@ import type {
   AuthProfileStore,
   RuntimeAuthProfileStore,
   OAuthCredential,
-  SavedSetupCredential,
 } from "./types.js";
 
 type LoadPersistedAuthProfileStoreOptions = {
@@ -61,126 +57,6 @@ function isRetainedUsageStatsId(
   return Boolean(profiles[profileId]) || profileId.startsWith(INLINE_API_KEY_USAGE_ID_PREFIX);
 }
 
-function normalizeExpiryField(value: unknown): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
-}
-
-function normalizeCredentialMetadata(value: unknown): Record<string, string> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const metadata: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry === "string") {
-      metadata[key] = entry;
-    }
-  }
-  return Object.keys(metadata).length > 0 ? metadata : undefined;
-}
-
-function normalizeSavedSetupCredential(value: unknown): SavedSetupCredential | undefined {
-  if (!isRecord(value) || typeof value.replacement !== "boolean") {
-    return undefined;
-  }
-  const modelRef = readNonBlankString(value.modelRef);
-  const configJson = readNonBlankString(value.configJson);
-  if (!modelRef || !configJson) {
-    return undefined;
-  }
-  const authChoice = readNonBlankString(value.authChoice);
-  const pluginId = readNonBlankString(value.pluginId);
-  return {
-    replacement: value.replacement,
-    modelRef,
-    configJson,
-    ...(value.apiKeyHeader === true ? { apiKeyHeader: true } : {}),
-    ...(readNonBlankString(value.agentRuntimeId)
-      ? { agentRuntimeId: readNonBlankString(value.agentRuntimeId) }
-      : {}),
-    ...(authChoice ? { authChoice } : {}),
-    ...(pluginId ? { pluginId } : {}),
-  };
-}
-
-function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record<string, unknown> {
-  const normalized: Record<string, unknown> = {
-    provider: typeof entry.provider === "string" ? normalizeProviderId(entry.provider) : "",
-  };
-  const setup = normalizeSavedSetupCredential(entry.setup);
-  if (setup) {
-    normalized.setup = setup;
-  }
-  const copyToAgents = asBoolean(entry.copyToAgents);
-  if (copyToAgents !== undefined) {
-    normalized.copyToAgents = copyToAgents;
-  }
-  const email = readNonBlankString(entry.email);
-  if (email !== undefined) {
-    normalized.email = email;
-  }
-  const displayName = readNonBlankString(entry.displayName);
-  if (displayName !== undefined) {
-    normalized.displayName = displayName;
-  }
-  return normalized;
-}
-
-function normalizeRawCredentialEntry(
-  entry: Record<string, unknown>,
-): Partial<AuthProfileCredential> {
-  const normalized: Record<string, unknown> = {
-    type: entry.type,
-    ...normalizeCommonCredentialFields(entry),
-  };
-  if (entry.type === "api_key") {
-    const key = readNonBlankString(entry.key);
-    const keyRef = coerceSecretRef(entry.keyRef);
-    const metadata = normalizeCredentialMetadata(entry.metadata);
-    if (keyRef) {
-      // Canonical refs can alias frozen cached rows; runtime stores remain mutable.
-      normalized.keyRef = structuredClone(keyRef);
-    } else if (key !== undefined) {
-      normalized.key = key;
-    }
-    if (metadata) {
-      normalized.metadata = metadata;
-    }
-  } else if (entry.type === "token") {
-    const token = readNonBlankString(entry.token);
-    const tokenRef = coerceSecretRef(entry.tokenRef);
-    if (token !== undefined) {
-      normalized.token = token;
-    }
-    if (tokenRef) {
-      normalized.tokenRef = structuredClone(tokenRef);
-    }
-  } else if (entry.type === "oauth") {
-    if (isLegacyOAuthRef(entry.oauthRef)) {
-      normalized.oauthRef = structuredClone(entry.oauthRef);
-    }
-    for (const field of [
-      "access",
-      "refresh",
-      ...Object.keys(oauthCredentialMetadataSchema.shape),
-    ]) {
-      const value = readNonBlankString(entry[field]);
-      if (value !== undefined) {
-        normalized[field] = value;
-      }
-    }
-  }
-  if (entry.type !== "api_key") {
-    const expires = normalizeExpiryField(entry.expires);
-    if (expires !== undefined) {
-      normalized.expires = expires;
-    }
-  }
-  return normalized as Partial<AuthProfileCredential>;
-}
-
 function parseCredentialEntry(
   raw: unknown,
   fallbackProvider?: string,
@@ -188,10 +64,10 @@ function parseCredentialEntry(
   if (!isRecord(raw)) {
     return { ok: false, reason: "non_object" };
   }
-  if (!AUTH_PROFILE_TYPES.has(raw.type as AuthProfileCredential["type"])) {
+  const typed = normalizeRawCredentialEntry(raw);
+  if (!typed) {
     return { ok: false, reason: "invalid_type" };
   }
-  const typed = normalizeRawCredentialEntry(raw);
   const provider = typed.provider || fallbackProvider;
   const normalizedProvider = typeof provider === "string" ? normalizeProviderId(provider) : "";
   if (!normalizedProvider) {
@@ -265,6 +141,8 @@ export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore 
       normalizeProviderId(value.provider) &&
       (!Object.hasOwn(value, "type") ||
         value.type === "apiKey" ||
+        (declaredType === "api_key" && isLegacySecretRefWithoutProvider(value.keyRef)) ||
+        (declaredType === "token" && isLegacySecretRefWithoutProvider(value.tokenRef)) ||
         (declaredType === "api_key" &&
           !coerceSecretRef(value.keyRef) &&
           ((isRecord(value.key) && coerceSecretRef(value.key) !== null) ||
@@ -378,8 +256,8 @@ function hasComparableOAuthIdentityConflict(
   if (hasOidcRegistration(existing) || hasOidcRegistration(candidate)) {
     return !isSafeToCopyOAuthIdentity(existing, candidate);
   }
-  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
-  const candidateAccountId = normalizeAuthIdentityToken(candidate.accountId);
+  const existingAccountId = normalizeOptionalString(existing.accountId);
+  const candidateAccountId = normalizeOptionalString(candidate.accountId);
   if (
     existingAccountId !== undefined &&
     candidateAccountId !== undefined &&
@@ -388,8 +266,8 @@ function hasComparableOAuthIdentityConflict(
     return true;
   }
 
-  const existingEmail = normalizeAuthEmailToken(existing.email);
-  const candidateEmail = normalizeAuthEmailToken(candidate.email);
+  const existingEmail = normalizeOptionalLowercaseString(existing.email);
+  const candidateEmail = normalizeOptionalLowercaseString(candidate.email);
   return (
     existingEmail !== undefined && candidateEmail !== undefined && existingEmail !== candidateEmail
   );
@@ -815,5 +693,3 @@ export function loadPersistedSharedAuthProfileStore(
     readPersistedSharedAuthProfileStateRaw(env),
   );
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

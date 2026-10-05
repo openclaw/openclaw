@@ -418,8 +418,6 @@ export function createProviderRegistryResolver(dependencies: {
     workspaceDir?: string;
     /** Use an explicit env when plugin roots should resolve independently from process.env. */
     env?: PluginLoadOptions["env"];
-    /** @deprecated Ignored; tests must provide explicit plugin config. Remove in the next major release. */
-    bundledProviderVitestCompat?: boolean;
     onlyPluginIds?: string[];
     providerRefs?: readonly string[];
     modelRefs?: readonly string[];

@@ -20,7 +20,7 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { model: "unit-test/model", utilityModel: "" },
       },
     };
@@ -125,7 +125,7 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
 
       reportPlacementTransition(
         undefined,
-        placements.fail({ sessionId: target.sessionId, recoveryError: "Worker stopped" }),
+        await placements.fail({ sessionId: target.sessionId, recoveryError: "Worker stopped" }),
       );
       await describe();
       expect(respond).toHaveBeenCalledExactlyOnceWith(true, {

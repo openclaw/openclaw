@@ -202,20 +202,11 @@ export type PluginRuntime = PluginRuntimeCore & {
       workspaceAccess: "none" | "ro" | "rw";
       confinementError?: string;
     };
-    prepareWorkspaceAuthority: (params: {
-      config: OpenClawConfig;
-      agentId?: string;
-      confinedToolNames?: readonly string[];
-      requiredToolNames?: readonly string[];
-      modelProvider?: string;
-      modelId?: string;
-      sessionKey: string;
-      workspaceDir: string;
-    }) => Promise<{
-      sandboxed: boolean;
-      workspaceAccess: "none" | "ro" | "rw";
-      confinementError?: string;
-    }>;
+    prepareWorkspaceAuthority: (
+      params: Parameters<PluginRuntime["sandbox"]["resolveWorkspaceAuthority"]>[0] & {
+        workspaceDir: string;
+      },
+    ) => Promise<ReturnType<PluginRuntime["sandbox"]["resolveWorkspaceAuthority"]>>;
   };
   worktrees: {
     resolveCheckoutRoot: (params: { path: string }) => Promise<string | undefined>;

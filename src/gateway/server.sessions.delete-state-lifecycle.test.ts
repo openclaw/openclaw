@@ -5,6 +5,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { AgentHarnessSessionCleanupError } from "../agents/harness/errors.js";
+import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
+import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import {
   loadSessionEntry,
@@ -77,6 +80,56 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
+
+test.each(["sessions.reset", "sessions.delete"] as const)(
+  "%s preserves the session generation until mandatory native cleanup succeeds",
+  async (method) => {
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = "agent:main:dashboard:mandatory-cleanup";
+    const sessionId = "mandatory-cleanup-session";
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry(sessionId, { lifecycleRevision: "before-cleanup" }),
+      },
+    });
+    const before = loadSessionEntry({ sessionKey, storePath });
+    const registeredHarnesses = listRegisteredAgentHarnesses();
+    const cleanupFailure = new AgentHarnessSessionCleanupError("Native session is still active");
+    let cleanupBlocked = true;
+    registerAgentHarness({
+      id: "mandatory-cleanup-fixture",
+      label: "Mandatory cleanup fixture",
+      supports: () => ({ supported: false }),
+      runAttempt: async () => {
+        throw new Error("not used");
+      },
+      reset: async (input) => {
+        expect(input.sessionId).toBe(sessionId);
+        if (cleanupBlocked) {
+          throw cleanupFailure;
+        }
+      },
+    });
+    try {
+      await expect(directSessionReq(method, { key: sessionKey })).rejects.toThrow(cleanupFailure);
+      expect(loadSessionEntry({ sessionKey, storePath })).toEqual(before);
+
+      cleanupBlocked = false;
+      const retried = await directSessionReq(method, { key: sessionKey });
+      expect(retried.ok, JSON.stringify(retried.error)).toBe(true);
+      const after = loadSessionEntry({ sessionKey, storePath });
+      if (method === "sessions.delete") {
+        expect(retried.payload).toMatchObject({ deleted: true });
+        expect(after).toBeUndefined();
+      } else {
+        expect(after?.lifecycleRevision).toEqual(expect.any(String));
+        expect(after?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
+      }
+    } finally {
+      restoreRegisteredAgentHarnesses(registeredHarnesses);
+    }
+  },
+);
 
 test("repository ownership survives reset and archive, then permanent deletion releases it", async () => {
   const { storePath } = await createSessionStoreDir();

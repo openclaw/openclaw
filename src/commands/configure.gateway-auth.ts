@@ -198,7 +198,6 @@ export async function promptAuthConfig(
         config: next,
         prompter,
         allowKeep: true,
-        ignoreAllowlist: true,
         includeProviderPluginSetups: false,
         loadCatalog: true,
         browseCatalogOnDemand: true,

@@ -13,6 +13,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
+import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -358,7 +359,7 @@ class CronPage extends OpenClawLightDomElement {
       if (isCurrent()) {
         this.cronModelSuggestions = result.models
           .filter((entry) => entry.manualSelectionAllowed !== false)
-          .map((entry) => entry.id);
+          .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
         this.modelSuggestionsError = modelCatalogRefreshError(result);
       }
     } catch (error) {

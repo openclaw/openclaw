@@ -208,7 +208,7 @@ export function createConfigIoContext(
   }
 
   function resolveRuntimePreflightSourceConfig(
-    candidate: OpenClawConfig,
+    candidate: unknown,
     includeFileHashes?: Record<string, string>,
     includeFileTargets?: Record<string, string>,
     baseEnv: NodeJS.ProcessEnv = deps.env,

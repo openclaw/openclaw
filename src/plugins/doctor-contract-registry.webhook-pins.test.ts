@@ -272,9 +272,9 @@ describe("Doctor historical webhook pins", () => {
     await fs.symlink(firstGeneration, configPath, "file");
     const fresh = migrate(config, readOnlyEnv);
     expect(fresh.config.meta?.migrations?.webhookListeners).toBe(true);
-    expect(
-      recordUnwrittenWebhookCompletion({ exists: true, sourceConfig: config }, fresh, readOnlyEnv),
-    ).toBe(true);
+    expect(recordUnwrittenWebhookCompletion({ sourceConfig: config }, fresh, readOnlyEnv)).toBe(
+      true,
+    );
     expect(migrate(config, readOnlyEnv)).toEqual({ config, changes: [] });
     expect(recordGatewayBootStart(env, 1_800_000_000_000)).toBeDefined();
 

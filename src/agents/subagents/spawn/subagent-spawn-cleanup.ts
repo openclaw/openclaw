@@ -1,4 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { callGateway } from "../../../gateway/call.js";
 import { waitForChatAbortControllerRemoval } from "../../../gateway/chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.js";
@@ -272,10 +273,7 @@ export async function retrySubagentCleanup(
     if ((await options?.shouldRetry?.()) === false) {
       return false;
     }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-      timer.unref?.();
-    });
+    await sleepWithAbort(isFastTestRuntimeEnv() ? 1 : 1_000, undefined, { ref: false });
   }
 }
 

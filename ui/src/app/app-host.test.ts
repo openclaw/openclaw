@@ -305,6 +305,7 @@ describe("OpenClaw shell source initialization", () => {
       lastLocalePrefSignature: null,
       outboxStoreImport: { load: vi.fn(async () => undefined) },
       previousGatewayPhase: null,
+      recoverDeletedActiveSession: vi.fn(),
       routeState: {},
       runtimeConfigClient: null,
       runtimeConfigSource: null,

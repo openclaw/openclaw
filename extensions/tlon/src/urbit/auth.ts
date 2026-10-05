@@ -10,7 +10,6 @@ type UrbitAuthenticateOptions = {
   lookupFn?: LookupFn;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   beforeRequest?: () => void;
-  timeoutMs?: number;
 };
 
 export async function authenticate(
@@ -30,7 +29,7 @@ export async function authenticate(
     lookupFn: options.lookupFn,
     fetchImpl: options.fetchImpl,
     beforeRequest: options.beforeRequest,
-    timeoutMs: options.timeoutMs ?? 15_000,
+    timeoutMs: 15_000,
     maxRedirects: 3,
     auditContext: "tlon-urbit-login",
   });

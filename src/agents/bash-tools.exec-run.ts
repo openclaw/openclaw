@@ -24,11 +24,13 @@ import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/s
 import { isSecretEgressProxyActive } from "../secrets/egress-proxy/registry.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
+import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
 import { EXEC_MANUAL_COLLECTION_FOLLOW_UP } from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
@@ -43,7 +45,6 @@ import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
   type ExecProcessHandle,
-  ExecProcessPreflightError,
   execSchema,
   normalizePathPrepend,
   resolveApprovalRunningNoticeMs,
@@ -93,16 +94,25 @@ export function createExecTool(
     resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
       cfg: defaults?.config,
     }).depth > 0;
-  // Agent runs own one tool instance, so the store is read on first exec and reused for that run.
+  // Agent runs own one tool instance; unprepared store snapshots are read on first exec.
   // A new run constructs a new instance and observes later store mutations.
-  let storeEnvPromise: Promise<SecretStoreExecEnvironment>;
-  const resolveStoreEnv = () =>
-    (storeEnvPromise ??= import("../secrets/store/secret-store.js").then((store) =>
-      store.readSecretStoreExecEnvironment({
-        includeSecretSentinels: secretEgressEnabled,
-        excludeNames: preparedRunEnvironment.excludedStoreNames,
-      }),
-    ));
+  let storeEnvPromise: Promise<Readonly<SecretStoreExecEnvironment>> | undefined =
+    defaults?.preparedStoreEnvironment === undefined
+      ? undefined
+      : Promise.resolve(defaults.preparedStoreEnvironment);
+  const resolveStoreEnv = () => {
+    if (storeEnvPromise === undefined) {
+      const context = captureOpenClawStateReadWorkerContext();
+      storeEnvPromise = import("../secrets/store/secret-store.js").then((store) =>
+        store.readSecretStoreExecEnvironment({
+          includeSecretSentinels: secretEgressEnabled,
+          excludeNames: preparedRunEnvironment.excludedStoreNames,
+          context,
+        }),
+      );
+    }
+    return storeEnvPromise;
+  };
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS"),
     10_000,
@@ -143,6 +153,7 @@ export function createExecTool(
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
+    notifyFromConversationTurn,
   } = resolveExecNotificationDefaults(defaults);
   const backgroundFollowUp =
     notifyOnExit && notifyOnExitEmptySuccess
@@ -216,7 +227,7 @@ export function createExecTool(
       let params = requestPreparation.normalizeParams(args);
       // A required command remains an owned tool call until its terminal result is collected.
       // Explicit detached services retain their existing independent process lifetime.
-      const allowBackground = backgroundAvailable && params.required !== true;
+      const allowBackground = backgroundAvailable && params.awaitResults !== true;
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,
       );
@@ -403,7 +414,7 @@ export function createExecTool(
       }
       let run: ExecProcessHandle;
       let settled = false;
-      let effectiveTimeout: number;
+      const effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
       try {
         if (elevatedRequested) {
           logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
@@ -416,6 +427,7 @@ export function createExecTool(
 
         const resolvedExecEnvState = requestPreparation.getResolvedExecEnvPreparedState(params);
         const storeEnv = await resolveStoreEnv();
+        assertSourceActive();
         // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
         // cannot use its sentinels, so both sides of the contract stay absent.
         const useSecretEgress = secretEgressEnabled && host === "gateway";
@@ -428,7 +440,7 @@ export function createExecTool(
         const secretEgressBindings = useSecretEgress
           ? (storeEnv.secretEgressBindings ?? [])
           : undefined;
-        const { env, requestedEnv } = resolvePreparedExecEnvironment({
+        const { env, requestedEnv, executionContext } = resolvePreparedExecEnvironment({
           execParams: params,
           host,
           sandbox,
@@ -450,6 +462,7 @@ export function createExecTool(
             workdir,
             env,
             requestedEnv,
+            executionContext,
             requestedNode: params.node?.trim(),
             boundNode: defaults?.node?.trim(),
             sessionKey: defaults?.sessionKey,
@@ -496,7 +509,7 @@ export function createExecTool(
             : undefined;
 
         if (host === "gateway" && !bypassApprovals) {
-          const gatewayResult = await processGatewayAllowlist({
+          gatewayApproval = await processGatewayAllowlist({
             command: params.command,
             workdir,
             env,
@@ -545,15 +558,14 @@ export function createExecTool(
             processContinuationAvailable: allowBackground,
             trustedSafeBinDirs,
           });
-          const immediateResult = gatewayResult.pendingResult ?? gatewayResult.deniedResult;
+          const immediateResult = gatewayApproval.pendingResult ?? gatewayApproval.deniedResult;
           if (immediateResult) {
             return attachExecApprovalReview(immediateResult, approvalReview);
           }
           signal?.throwIfAborted();
-          gatewayApproval = gatewayResult;
-          execCommandOverride = gatewayResult.allowWithoutEnforcedCommand
+          execCommandOverride = gatewayApproval.allowWithoutEnforcedCommand
             ? undefined
-            : gatewayResult.execCommandOverride;
+            : gatewayApproval.execCommandOverride;
         }
 
         // Pending approvals have not started the command. Add fallback warnings only
@@ -562,7 +574,6 @@ export function createExecTool(
           warnings.push(foregroundFallbackWarning);
         }
 
-        effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
         const usePty = params.pty === true && !sandbox;
 
         // Preflight: check Python shell-syntax mistakes and ambiguous interpreter commands
@@ -600,18 +611,22 @@ export function createExecTool(
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
+          notifyFromConversationTurn,
           timeoutSec: effectiveTimeout,
           processContinuationAvailable: allowBackground,
           startupSignal: signal,
           onUpdate,
           beforeSpawn: gatewayApproval?.revalidateBeforeExecution,
           assertCurrent: gatewayApproval?.assertCurrent,
+          initiateSpawn: gatewayApproval?.initiateSpawn,
+          releaseSpawn: gatewayApproval?.releaseSpawn,
           onSettledBeforeNotify: () => {
             settled = true;
           },
         });
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
+        gatewayApproval?.releaseSpawn?.();
         discardPreparedSandboxWorkdir?.();
         return attachExecApprovalReview(ExecProcessPreflightError.unwrap(error), approvalReview);
       }

@@ -7,6 +7,7 @@ import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
 import { SessionManagerAppend } from "./session-manager-append.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
+import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
 import type {
   BranchSummaryEntry,
   CompactionEntry,
@@ -204,7 +205,10 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return await withSessionManagerWrite(this, async (admission) => {
       this.assertTranscriptWriteActive();
       this.validateLeafControl(captured);
-      if (!admission || isIncognitoSessionKey(this.persistenceTarget?.sessionKey)) {
+      if (
+        !admission ||
+        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) && "db" in admission.database)
+      ) {
         return this.appendLeafControlSync(captured);
       }
       const previousLeafId = this.leafId;
@@ -233,6 +237,9 @@ export class SessionManagerEntries extends SessionManagerAppend {
           throw new SessionTranscriptWriterClaimReboundError();
         }
         assertNavigation();
+        if (committed.viewFailure instanceof SessionManagerActorCommittedError) {
+          throw committed.viewFailure;
+        }
         if (!this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
           if (committed.viewFailure) {
             throw committed.viewFailure;

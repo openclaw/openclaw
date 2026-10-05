@@ -267,7 +267,7 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           return consumer ? !consumer.disjoint : null;
         },
       });
-      return { state, disjoint, parents, destinations, database, nativeIdentity, serving };
+      return { disjoint, parents, destinations, database, nativeIdentity, serving };
     };
     const inspect = () => readInspection().catch(inspectionFailed);
     const before = await inspect();

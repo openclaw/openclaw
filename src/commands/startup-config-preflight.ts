@@ -1,6 +1,5 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../config/io.js";
-import type { ConfigReplaceResult } from "../config/mutate.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
@@ -27,10 +26,7 @@ export type StartupConfigPreflightOptions = {
   observe?: boolean;
   measure?: ConfigSnapshotReadMeasure;
   validateStartupConfig?: (snapshot: ConfigFileSnapshot) => void | Promise<void>;
-  beforeStatePreparation?: (
-    snapshot?: ConfigFileSnapshot,
-    committedWrite?: ConfigReplaceResult,
-  ) => Promise<boolean>;
+  beforeStatePreparation?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
 };
 
 export type StartupConfigPreflightResult = {
@@ -69,14 +65,8 @@ async function prepareStartupConfig(
       observe: options.gateway ? false : options.observe,
       measure,
     });
-  const beforeStatePreparation = async (
-    snapshot?: ConfigFileSnapshot,
-    committedWrite?: ConfigReplaceResult,
-  ) => {
-    if (
-      options.beforeStatePreparation &&
-      !(await options.beforeStatePreparation(snapshot, committedWrite))
-    ) {
+  const beforeStatePreparation = async (snapshot?: ConfigFileSnapshot) => {
+    if (options.beforeStatePreparation && !(await options.beforeStatePreparation(snapshot))) {
       throwStartupMigrationGuardRejected();
     }
     return true;
@@ -90,12 +80,12 @@ async function prepareStartupConfig(
     return result(read);
   }
 
-  const readAdmitted = (committedWrite?: ConfigReplaceResult) =>
+  const readAdmitted = () =>
     readAdmittedConfigSnapshot({
       env,
       readSnapshot,
       validateConfig: options.validateStartupConfig,
-      beforeStatePreparation: (snapshot) => beforeStatePreparation(snapshot, committedWrite),
+      beforeStatePreparation,
     });
   let read = await readAdmitted();
   env = cloneEnvWithPlatformSemantics(process.env);
@@ -166,33 +156,27 @@ async function prepareStartupConfig(
     ) {
       const { applyPluginDoctorCompatibilityMigrations } =
         await import("../plugins/doctor-contract-registry.js");
-      const migrate = (config: OpenClawConfig) => {
-        const migration = applyPluginDoctorCompatibilityMigrations(config, {
-          config,
-          env,
-          pluginIds: HISTORICAL_WEBHOOK_CHANNELS,
-          historicalWebhookListeners: true,
-          startup: true,
-        });
-        if (migration.warnings?.length) {
-          throw new Error(migration.warnings.join("\n"));
-        }
-        return migration;
-      };
-      const migration = migrate(read.snapshot.sourceConfig);
+      const migration = applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
+        config: read.snapshot.sourceConfig,
+        env,
+        pluginIds: HISTORICAL_WEBHOOK_CHANNELS,
+        historicalWebhookListeners: true,
+        startup: true,
+      });
+      if (migration.warnings?.length) {
+        throw new Error(migration.warnings.join("\n"));
+      }
       if (migration.changes.length) {
         await beforeStatePreparation(read.snapshot);
         assertPreflightConfigUnchanged(read.snapshot, (await readSnapshot()).snapshot);
+        assertLeaseCurrent();
         if (!recordUnwrittenWebhookCompletion(read.snapshot, migration, env)) {
-          const { transformConfigFile } = await import("../config/mutate.js");
-          const committedWrite = await transformConfigFile({
-            base: "source",
-            baseHash: read.snapshot.hash ?? undefined,
-            writeOptions: { auditOrigin: "doctor", assertCurrent: assertLeaseCurrent },
-            afterWrite: { mode: "none", reason: "startup config migration" },
-            transform: (config) => ({ nextConfig: migrate(config).config }),
-          });
-          read = await readAdmitted(committedWrite);
+          const { StartupMaintenanceRequiredError } =
+            await import("../infra/startup-maintenance-required.js");
+          throw new StartupMaintenanceRequiredError(
+            "state-migrations",
+            `Webhook listeners require config migration. Run \`openclaw doctor --fix\`, then restart. Startup left the config unchanged.\n${migration.changes.join("\n")}`,
+          );
         }
       }
     }

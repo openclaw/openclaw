@@ -465,6 +465,7 @@ export function writeUpdateCompatibilityChunks(params: {
       relative.startsWith("extensions/") ||
       relative.startsWith("plugin-sdk/") ||
       relative.startsWith("config-doctor/") ||
+      relative.startsWith("state-retention/") ||
       relative.startsWith("native-hook-relay/")
     ) {
       continue;

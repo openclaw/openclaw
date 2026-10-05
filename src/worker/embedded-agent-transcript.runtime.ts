@@ -4,7 +4,13 @@ import type { WorkerInferenceContext } from "../../packages/gateway-protocol/src
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionWriteSettlementRunner } from "../agents/sessions/agent-session.js";
-import type { Context, Message } from "../llm/types.js";
+import {
+  hasRuntimeContextMarker,
+  isRuntimeContextMessage,
+  readRuntimeContextMetadata,
+  type Context,
+  type Message,
+} from "../llm/types.js";
 import { projectWorkerTextOrImageContent } from "./assistant-message-projection.js";
 import {
   windowWorkerReplayMessages,
@@ -20,6 +26,22 @@ import {
 function toWorkerInferenceMessage(
   message: Message,
 ): WorkerMessageProjection<WorkerInferenceContext["messages"][number]> {
+  if (hasRuntimeContextMarker(message) && !isRuntimeContextMessage(message)) {
+    throw new Error(
+      "Cloud worker cannot preserve runtime context with media. Stop or reclaim the cloud worker, then retry locally.",
+    );
+  }
+  if (isRuntimeContextMessage(message)) {
+    return {
+      kind: "complete",
+      message: {
+        role: "user",
+        content: message.content,
+        timestamp: message.timestamp,
+        runtimeContext: readRuntimeContextMetadata(message),
+      },
+    };
+  }
   if (message.role === "user") {
     return {
       kind: "complete",
@@ -30,7 +52,7 @@ function toWorkerInferenceMessage(
             ? message.content
             : message.content.map(projectWorkerTextOrImageContent),
         timestamp: message.timestamp,
-        ...(message.runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
+        ...(message.operatorMessage ? { operatorMessage: message.operatorMessage } : {}),
       },
     };
   }

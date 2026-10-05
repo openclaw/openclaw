@@ -148,6 +148,45 @@ async function invokeExecApprovals(
 }
 
 describe("node host invoke", () => {
+  it.each(["system.run.prepare", "system.run"])(
+    "rejects invalid routing context at %s",
+    async (command) => {
+      for (const executionContext of [
+        null,
+        { senderId: 7 },
+        { subagent: false },
+        { env: { PATH: "other" } },
+        { sessionKey: "agent:main:main" },
+      ]) {
+        const client = new TestGatewayClient({ deviceIdentity: null });
+        const request = vi.spyOn(client, "request").mockResolvedValue(null);
+        await handleInvoke(
+          {
+            id: "invalid-context",
+            nodeId: "node-1",
+            command,
+            paramsJSON: JSON.stringify({
+              command: [process.execPath, "--version"],
+              executionContext,
+            }),
+          },
+          client,
+          { current: async () => [] },
+        );
+        expect(request).toHaveBeenCalledWith(
+          "node.invoke.result",
+          expect.objectContaining({
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              message: expect.stringContaining("executionContext invalid"),
+            },
+          }),
+        );
+      }
+    },
+  );
+
   beforeEach(() => {
     approvalResolutionFailure.error = null;
     execApprovalsStoreMock.ensureError = undefined;

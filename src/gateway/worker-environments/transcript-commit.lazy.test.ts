@@ -62,7 +62,7 @@ async function createFixture() {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: { mainKey: "main", store: storePath },
   };
   await accessor.upsertSessionEntryCore(

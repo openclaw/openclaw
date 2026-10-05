@@ -34,18 +34,6 @@ const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
 const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
 const BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO = 0.1;
 
-export type SessionMaintenanceWarning = {
-  activeSessionKey: string;
-  activeUpdatedAt?: number;
-  totalEntries: number;
-  pruneAfterMs: number;
-  maxEntries: number;
-  wouldPrune: boolean;
-  wouldCap: boolean;
-  capOutcome?: "archive" | "remove" | null;
-  pruneOutcome?: "archive" | "remove" | null;
-};
-
 export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
@@ -569,59 +557,6 @@ function selectSessionEntryCapVictims(
         getSessionMaintenanceActivityAt(store[a]) - getSessionMaintenanceActivityAt(store[b]),
     )
     .slice(0, overflow);
-}
-
-export function getActiveSessionMaintenanceWarning(params: {
-  store: Record<string, SessionEntry>;
-  activeSessionKey: string;
-  pruneAfterMs: number;
-  maxEntries: number;
-  nowMs?: number;
-  preserveKeys?: ReadonlySet<string>;
-  preserveRecentMs?: number | null;
-}): SessionMaintenanceWarning | null {
-  const activeSessionKey = params.activeSessionKey.trim();
-  if (!activeSessionKey) {
-    return null;
-  }
-  const activeEntry = params.store[activeSessionKey];
-  if (!activeEntry) {
-    return null;
-  }
-  if (
-    shouldPreserveMaintenanceEntry({
-      key: activeSessionKey,
-      entry: activeEntry,
-      preserveKeys: params.preserveKeys,
-      preserveRecentMs: params.preserveRecentMs,
-    })
-  ) {
-    return null;
-  }
-  const now = params.nowMs ?? Date.now();
-  const cutoffMs = now - params.pruneAfterMs;
-  const wouldPrune = activeEntry.updatedAt != null ? activeEntry.updatedAt < cutoffMs : false;
-  const wouldCap = selectSessionEntryCapVictims(
-    params.store,
-    params.maxEntries,
-    params.preserveKeys,
-    params.preserveRecentMs,
-  ).includes(activeSessionKey);
-  if (!wouldPrune && !wouldCap) {
-    return null;
-  }
-  const outcome = isSyntheticSessionMaintenanceKey(activeSessionKey) ? "remove" : "archive";
-  return {
-    activeSessionKey,
-    activeUpdatedAt: activeEntry.updatedAt,
-    totalEntries: Object.keys(params.store).length,
-    pruneAfterMs: params.pruneAfterMs,
-    maxEntries: params.maxEntries,
-    wouldPrune,
-    wouldCap,
-    capOutcome: wouldCap ? outcome : null,
-    pruneOutcome: wouldPrune ? outcome : null,
-  };
 }
 
 /**

@@ -257,8 +257,6 @@ function isAsciiMarkupStart(byte: number | undefined): boolean {
   );
 }
 
-type UnicodeMarkupEncoding = "utf-16le" | "utf-16be" | "utf-32le" | "utf-32be";
-
 function readUnicodeCodePoint(
   buffer: Buffer,
   offset: number,
@@ -286,25 +284,6 @@ function containsEncodedMarkupStart(
     }
   }
   return false;
-}
-
-function detectBomlessUnicodeMarkupEncoding(buffer: Buffer): UnicodeMarkupEncoding | undefined {
-  // Only consider code-unit-aligned openers. Decoding then applies the same
-  // root-document policy as ordinary UTF-8, so embedded markup in source text
-  // remains a passive attachment.
-  if (containsEncodedMarkupStart(buffer, 4, true)) {
-    return "utf-32le";
-  }
-  if (containsEncodedMarkupStart(buffer, 4, false)) {
-    return "utf-32be";
-  }
-  if (containsEncodedMarkupStart(buffer, 2, true)) {
-    return "utf-16le";
-  }
-  if (containsEncodedMarkupStart(buffer, 2, false)) {
-    return "utf-16be";
-  }
-  return undefined;
 }
 
 function decodeUtf32(buffer: Buffer, littleEndian: boolean, offset: number): Buffer {
@@ -340,18 +319,20 @@ function decodeTextForActiveContentSniffing(buffer: Buffer): Buffer {
     return Buffer.from(new TextDecoder("utf-16be").decode(buffer.subarray(2)));
   }
 
-  const bomlessEncoding = detectBomlessUnicodeMarkupEncoding(buffer);
-  if (bomlessEncoding === "utf-32le") {
-    return decodeUtf32(buffer, true, 0);
-  }
-  if (bomlessEncoding === "utf-32be") {
-    return decodeUtf32(buffer, false, 0);
-  }
-  if (bomlessEncoding === "utf-16le") {
-    return Buffer.from(buffer.toString("utf16le"));
-  }
-  if (bomlessEncoding === "utf-16be") {
-    return Buffer.from(new TextDecoder("utf-16be").decode(buffer));
+  // Only consider code-unit-aligned openers, preferring UTF-32 before UTF-16.
+  // The decoded root-document check keeps embedded markup in source text passive.
+  for (const width of [4, 2] as const) {
+    for (const littleEndian of [true, false]) {
+      if (containsEncodedMarkupStart(buffer, width, littleEndian)) {
+        return width === 4
+          ? decodeUtf32(buffer, littleEndian, 0)
+          : Buffer.from(
+              littleEndian
+                ? buffer.toString("utf16le")
+                : new TextDecoder("utf-16be").decode(buffer),
+            );
+      }
+    }
   }
   return buffer;
 }
@@ -368,51 +349,6 @@ function startsWithAsciiIgnoreCase(buffer: Buffer, start: number, expected: stri
     }
   }
   return true;
-}
-
-function readAsciiRootTag(buffer: Buffer, start: number): string | undefined {
-  if (buffer[start] !== 0x3c) {
-    return undefined;
-  }
-  let cursor = start + 1;
-  const first = buffer[cursor];
-  if (
-    first === undefined ||
-    !(
-      (first >= 0x41 && first <= 0x5a) ||
-      (first >= 0x61 && first <= 0x7a) ||
-      first === 0x3a ||
-      first === 0x5f ||
-      first >= 0x80
-    )
-  ) {
-    return undefined;
-  }
-  cursor += 1;
-  while (cursor < buffer.length) {
-    const byte = buffer[cursor]!;
-    if (
-      (byte >= 0x41 && byte <= 0x5a) ||
-      (byte >= 0x61 && byte <= 0x7a) ||
-      (byte >= 0x30 && byte <= 0x39) ||
-      byte === 0x2d ||
-      byte === 0x2e ||
-      byte === 0x3a ||
-      byte === 0x5f ||
-      byte >= 0x80
-    ) {
-      cursor += 1;
-      continue;
-    }
-    if (byte === 0x2f || byte === 0x3e || skipAsciiWhitespace(buffer, cursor) > cursor) {
-      return buffer
-        .subarray(start + 1, cursor)
-        .toString("utf8")
-        .toLowerCase();
-    }
-    return undefined;
-  }
-  return undefined;
 }
 
 function skipRootHtmlComment(buffer: Buffer, start: number): number | undefined {
@@ -467,9 +403,13 @@ function sniffActiveTextContent(buffer: Buffer): string | undefined {
     if (startsWithAsciiIgnoreCase(decoded, cursor, "<!doctype")) {
       return "application/xml";
     }
-    const rootTag = readAsciiRootTag(decoded, cursor);
-    if (rootTag) {
-      return rootTag === "svg" ? "image/svg+xml" : "text/html";
+    if (
+      startsWithAsciiIgnoreCase(decoded, cursor, "<svg") &&
+      (decoded[cursor + 4] === 0x2f ||
+        decoded[cursor + 4] === 0x3e ||
+        skipAsciiWhitespace(decoded, cursor + 4) > cursor + 4)
+    ) {
+      return "image/svg+xml";
     }
     // A declaration or closing tag is still a markup-document root even when
     // it is malformed or precedes a later executable element. Reject every

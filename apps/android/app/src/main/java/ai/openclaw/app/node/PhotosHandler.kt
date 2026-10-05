@@ -73,14 +73,7 @@ private object SystemPhotosDataSource : PhotosDataSource {
         if (encoded == null) continue
         if (encoded.base64.length > remainingBudget) break
         remainingBudget -= encoded.base64.length
-        out +=
-          EncodedPhotoPayload(
-            format = "jpeg",
-            base64 = encoded.base64,
-            width = encoded.width,
-            height = encoded.height,
-            createdAt = row.createdAtMs?.let { Instant.ofEpochMilli(it).toString() },
-          )
+        out += encoded.copy(createdAt = row.createdAtMs?.let { Instant.ofEpochMilli(it).toString() })
       } finally {
         bitmap.recycle()
       }
@@ -91,12 +84,6 @@ private object SystemPhotosDataSource : PhotosDataSource {
   private data class PhotoRow(
     val uri: Uri,
     val createdAtMs: Long?,
-  )
-
-  private data class EncodedJpeg(
-    val base64: String,
-    val width: Int,
-    val height: Int,
   )
 
   private fun queryLatestRows(
@@ -198,7 +185,7 @@ private object SystemPhotosDataSource : PhotosDataSource {
     bitmap: Bitmap,
     quality: Double,
     maxBase64Chars: Int,
-  ): EncodedJpeg? {
+  ): EncodedPhotoPayload? {
     var working = bitmap
     try {
       var jpegQuality = (quality.coerceIn(0.1, 1.0) * 100.0).roundToInt().coerceIn(10, 100)
@@ -209,7 +196,8 @@ private object SystemPhotosDataSource : PhotosDataSource {
         val bytes = out.toByteArray()
         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
         if (base64.length <= maxBase64Chars) {
-          return EncodedJpeg(
+          return EncodedPhotoPayload(
+            format = "jpeg",
             base64 = base64,
             width = working.width,
             height = working.height,

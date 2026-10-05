@@ -38,7 +38,6 @@ const UPDATE_STEP_NOTICE_MS = 30_000;
 
 // These CLI-only callbacks can render the row just committed by their ledger owner.
 export type UpdateDisplayProgress = {
-  onHeartbeat?: UpdateStepProgress["onHeartbeat"];
   onStepStart?: (
     step: Parameters<NonNullable<UpdateStepProgress["onStepStart"]>>[0],
     record?: UpdateRunRecord,
@@ -57,11 +56,11 @@ type ProgressController = {
   dispose: () => void;
 };
 
-function readDisplayRecord(runId: string, env?: NodeJS.ProcessEnv, source = "report") {
+function readDisplayRecord(runId: string, env?: NodeJS.ProcessEnv) {
   try {
     return getUpdateRun(runId, { env });
   } catch (error) {
-    defaultRuntime.error(`Update ${source} history unavailable: ${formatErrorMessage(error)}`);
+    defaultRuntime.error(`Update report history unavailable: ${formatErrorMessage(error)}`);
     return undefined;
   }
 }

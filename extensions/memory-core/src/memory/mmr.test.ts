@@ -60,6 +60,26 @@ describe("memory MMR", () => {
       expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
     },
     {
+      name: "diversifies NFC-equivalent Hangul",
+      results: [
+        ["/primary.md", 1, "각"],
+        ["/duplicate.md", 0.98, "\u1100\u1161\u11a8"],
+        ["/diverse.md", 0.94, "나"],
+        ["/tail.md", 0.4, "garden compost schedule"],
+      ],
+      expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
+    },
+    {
+      name: "diversifies NFC-equivalent kana",
+      results: [
+        ["/primary.md", 1, "が"],
+        ["/duplicate.md", 0.98, "\u304b\u3099"],
+        ["/diverse.md", 0.94, "な"],
+        ["/tail.md", 0.4, "garden compost schedule"],
+      ],
+      expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
+    },
+    {
       name: "keeps input order as the tie breaker for equal relevance and diversity",
       results: [
         ["/first.md", 1, "alpha"],

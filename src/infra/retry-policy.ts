@@ -57,38 +57,6 @@ function getChannelApiRetryAfterMs(err: unknown): number | undefined {
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate * 1000 : undefined;
 }
 
-/** Creates a generic rate-limit-aware retry runner from explicit retry policy pieces. */
-export function createRateLimitRetryRunner(params: {
-  retry?: RetryConfig;
-  configRetry?: RetryConfig;
-  verbose?: boolean;
-  defaults: Required<RetryConfig>;
-  logLabel: string;
-  shouldRetry: (err: unknown) => boolean;
-  retryAfterMs?: (err: unknown) => number | undefined;
-}): RetryRunner {
-  const retryConfig = resolveRetryConfig(params.defaults, {
-    ...params.configRetry,
-    ...params.retry,
-  });
-  return <T>(fn: () => Promise<T>, label?: string) =>
-    retryAsync(fn, {
-      ...retryConfig,
-      label,
-      shouldRetry: params.shouldRetry,
-      retryAfterMs: params.retryAfterMs,
-      onRetry: params.verbose
-        ? (info) => {
-            const labelText = info.label ?? "request";
-            const maxRetries = Math.max(1, info.maxAttempts - 1);
-            log.warn(
-              `${params.logLabel} ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
-            );
-          }
-        : undefined,
-    });
-}
-
 /** Creates the channel API retry runner used by outbound messaging integrations. */
 export function createChannelApiRetryRunner(params: {
   retry?: RetryConfig;

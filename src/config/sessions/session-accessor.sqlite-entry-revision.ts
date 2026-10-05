@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { getNodeSqliteKysely, prepareSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
-import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
+import {
+  createSqliteQueryCache,
+  getNodeSqliteKysely,
+  prepareSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -19,7 +22,15 @@ type SessionEntryRevisionDatabase = {
   openclaw_session_nodes_cache_generation: { id: number; generation: unknown };
 };
 
-const generationQueries = new WeakMap<DatabaseSync, () => { generation: unknown } | undefined>();
+const generationQuery = createSqliteQueryCache((database) =>
+  prepareSqliteQueryTakeFirstSync<void, { generation: unknown }>(database, () =>
+    getNodeSqliteKysely<SessionEntryRevisionDatabase>(database)
+      .withSchema("temp")
+      .selectFrom("openclaw_session_nodes_cache_generation")
+      .select("generation")
+      .where("id", "=", 1),
+  ),
+);
 
 function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
   const schema = getAdmittedSqliteSchemaFacts(database);
@@ -70,18 +81,7 @@ function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
 
 export function readSessionNodesGeneration(database: DatabaseSync): number {
   ensureSessionNodesGenerationTracker(database);
-  let query = generationQueries.get(database);
-  if (!query) {
-    query = prepareSqliteQueryTakeFirstSync<void, { generation: unknown }>(database, () =>
-      getNodeSqliteKysely<SessionEntryRevisionDatabase>(database)
-        .withSchema("temp")
-        .selectFrom("openclaw_session_nodes_cache_generation")
-        .select("generation")
-        .where("id", "=", 1),
-    );
-    generationQueries.set(database, query);
-  }
-  const row = query();
+  const row = generationQuery(database)();
   if (typeof row?.generation !== "number") {
     throw new Error("SQLite session_nodes cache generation is unavailable");
   }
@@ -93,8 +93,7 @@ export function readSessionEntryCacheValidityToken(
   mode: "fresh" | "cached" = "fresh",
 ): SqliteSessionEntryRevision {
   return {
-    dataVersion:
-      mode === "cached" ? readSqliteCacheDataVersion(database) : readSqliteDataVersion(database),
+    dataVersion: readSqliteCacheDataVersion(database, mode),
     sessionNodesGeneration: readSessionNodesGeneration(database),
   };
 }

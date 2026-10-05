@@ -339,11 +339,11 @@ function extractToolResults(message: Record<string, unknown>): Array<{
     readNonEmptyString(message.name) ??
     readNonEmptyString(message.tool);
   if ((message.role === "tool" || message.role === "toolResult") && message.content !== undefined) {
-    const contentText = extractAssistantText(message);
     results.push({
       tool: toolName,
       result: message.content,
-      ...(message.isError === true || TOOL_RESULT_ERROR_RE.test(contentText)
+      ...(message.isError === true ||
+      (message.isError !== false && TOOL_RESULT_ERROR_RE.test(extractAssistantText(message)))
         ? { errorClass: "tool-result-error" }
         : {}),
     });
@@ -377,7 +377,7 @@ function extractToolResults(message: Record<string, unknown>): Array<{
       result: content,
       ...(block.is_error === true ||
       type === "tool_result_error" ||
-      TOOL_RESULT_ERROR_RE.test(contentText)
+      (block.is_error !== false && TOOL_RESULT_ERROR_RE.test(contentText))
         ? { errorClass: "tool-result-error" }
         : {}),
     });

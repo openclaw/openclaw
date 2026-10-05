@@ -1,13 +1,22 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, onTestFinished, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareTranscriptMessageAppend } from "../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import {
+  appendAbortedSessionTranscriptPartial,
+  appendSessionTranscriptReport,
+  readLatestSessionTranscriptReport,
+} from "../config/sessions/session-accessor.sqlite-transcript-reports.js";
 import { prepareCustomTranscriptReport } from "../config/sessions/session-accessor.sqlite-transcript-reports.kernel.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { IncognitoTranscriptOperations } from "../config/sessions/session-incognito-transcript-contract.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { AssistantMessage } from "../llm/types.js";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 
@@ -18,16 +27,106 @@ type IncognitoTranscriptTarget = Omit<
   "selection"
 >;
 let actor: IncognitoAgentDatabaseExecution;
+let env: NodeJS.ProcessEnv;
 
 beforeAll(async () => {
+  env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-reports-") };
   const opened = await captureOpenClawAgentDatabaseExecution({
     kind: "ephemeral",
     agentId: "main",
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("incognito-reports-") },
+    env,
     authority,
   });
   assert(opened);
   actor = opened;
+});
+
+it("composes report selection and partial publication without caller-thread SQL", async () => {
+  const target = await create("composition");
+  const scope = {
+    ...target,
+    ...target.fence,
+    agentId: actor.agentId,
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: actor.agentId, env }),
+    env,
+  };
+  const incognito = { actor, authority };
+  const sql = observeHostDataSql();
+  onTestFinished(sql.restore);
+  const update = vi.fn();
+  onTestFinished(onInternalSessionTranscriptUpdate(update));
+  await expect(
+    appendSessionTranscriptReport(
+      scope,
+      {
+        kind: "custom",
+        customTypes: ["status"],
+        selectReport: () => ({ customType: "status", content: "composed report", display: true }),
+      },
+      { incognito },
+    ),
+  ).resolves.toEqual({ ok: true, value: undefined });
+  expect(await readLatestSessionTranscriptReport(scope, ["status"], incognito)).toMatchObject({
+    ok: true,
+    value: { content: "composed report" },
+  });
+  expect(
+    await appendAbortedSessionTranscriptPartial(
+      scope,
+      {
+        runId: "composition-partial",
+        expectedLifecycleRevision: "initial",
+        message: { role: "assistant", content: [{ type: "text", text: "partial answer" }] },
+      },
+      incognito,
+    ),
+  ).toMatchObject({ ok: true, value: { skipped: false, append: { appended: true } } });
+  expect(update).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionKey: target.sessionKey,
+      sessionId: target.sessionId,
+      runId: "composition-partial",
+      target: expect.objectContaining({ storePath: actor.path }),
+    }),
+  );
+  expect(sql.queries).toEqual([]);
+});
+
+it("retains the report writer assertion across actor FIFO waits", async () => {
+  const target = await create("composition-revoked");
+  const scope = { ...target, ...target.fence, agentId: actor.agentId, storePath: actor.path, env };
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const held = actor.run(authority, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  let allowed = true;
+  const pending = withSessionTranscriptWriteAssertion(
+    scope,
+    () => {
+      if (!allowed) {
+        throw new Error("report writer revoked");
+      }
+    },
+    () =>
+      appendSessionTranscriptReport(
+        scope,
+        {
+          kind: "custom",
+          customTypes: ["status"],
+          selectReport: () => ({ customType: "status", content: "refused", display: true }),
+        },
+        { incognito: { actor, authority } },
+      ),
+  );
+  const refused = expect(pending).rejects.toThrow("report writer revoked");
+  await Promise.resolve();
+  allowed = false;
+  release.resolve();
+  await Promise.all([held, refused]);
+  expect(await latest(target)).toEqual({ ok: true, value: undefined });
 });
 afterAll(async () => {
   await actor?.close();
@@ -183,18 +282,11 @@ it("deduplicates assistant reports and settles aborted partials on the same acto
     stopReason: "stop",
     timestamp: 1,
   } satisfies AssistantMessage;
-  const preparedMessage = prepareTranscriptMessageAppend({ message });
-  assert(preparedMessage);
-  const report = { kind: "assistant" as const, message, preparedMessage };
-  await actor.sessions.transcript(authority, {
-    type: "session.report.assistant",
-    input: { ...target, report },
-  });
+  const report = { kind: "assistant" as const, message };
+  const scope = { ...target, ...target.fence, agentId: actor.agentId, storePath: actor.path, env };
+  await appendSessionTranscriptReport(scope, report, { incognito: { actor, authority } });
   const before = await prepare(target, "unused");
-  await actor.sessions.transcript(authority, {
-    type: "session.report.assistant",
-    input: { ...target, report },
-  });
+  await appendSessionTranscriptReport(scope, report, { incognito: { actor, authority } });
   const after = await prepare(target, "unused");
   expect(after.prepared.version).toEqual(before.prepared.version);
   const partial = {

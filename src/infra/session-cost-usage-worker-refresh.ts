@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
@@ -18,9 +19,7 @@ import {
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
 import {
-  applyCostBreakdown,
-  applyCostTotal,
-  applyUsageTotals,
+  computeUsageTokenTotals,
   parseUsageCostTranscriptRecord,
   needsUsageCostEstimate,
   applyUsageCostEstimate,
@@ -147,11 +146,25 @@ function appendParsedEntryToRollup(
   let usageTotals: CostUsageTotals | undefined;
   if (entry.usage) {
     usageTotals = emptyTotals();
-    applyUsageTotals(usageTotals, entry.usage);
-    if (entry.costBreakdown?.total !== undefined) {
-      applyCostBreakdown(usageTotals, entry.costBreakdown);
+    const tokens = computeUsageTokenTotals(entry.usage);
+    usageTotals.input += tokens.input;
+    usageTotals.output += tokens.output;
+    usageTotals.cacheRead += tokens.cacheRead;
+    usageTotals.cacheWrite += tokens.cacheWrite;
+    usageTotals.totalTokens += tokens.totalTokens;
+    const cost = entry.costBreakdown;
+    if (cost?.total !== undefined) {
+      usageTotals.totalCost += cost.total;
+      usageTotals.inputCost += cost.input ?? 0;
+      usageTotals.outputCost += cost.output ?? 0;
+      usageTotals.cacheReadCost += cost.cacheRead ?? 0;
+      usageTotals.cacheWriteCost += cost.cacheWrite ?? 0;
+    } else if (entry.costTotal === undefined) {
+      usageTotals.missingCostEntries = 1;
+      const modelKey = `${normalizeOptionalString(entry.provider) ?? "unknown"}/${normalizeOptionalString(entry.model) ?? "unknown"}`;
+      usageTotals.missingCostByModel = { [modelKey]: 1 };
     } else {
-      applyCostTotal(usageTotals, entry.costTotal, entry.provider, entry.model);
+      usageTotals.totalCost += entry.costTotal;
     }
   }
   const timestamp = entry.timestamp?.getTime();

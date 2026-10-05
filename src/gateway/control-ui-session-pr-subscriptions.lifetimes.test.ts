@@ -116,62 +116,84 @@ describe("recipient publication lifetimes", () => {
     },
   );
 
-  it("retries an unchanged snapshot missed during recipient preparation without duplicating delivery", async () => {
-    vi.useFakeTimers();
-    const entered = createDeferred();
-    const release = createDeferred();
-    let generation = 0;
-    let holdRecipient = false;
-    let snapshot = READY;
-    const broadcastToConnIds = vi.fn();
-    active = createTestControlUiSessionPrSubscriptions({
-      scheduler,
-      broadcastToConnIds,
-      load: async () => snapshot,
-      prepareRead: async (connId) => async () => {
-        const captured = generation;
-        const prepared = {
-          ...target,
-          assertCurrent: () => {
-            if (captured !== generation) {
-              throw new Error("Prepared selection changed");
-            }
-          },
-        };
-        if (connId === "recipient" && holdRecipient) {
-          holdRecipient = false;
-          entered.resolve();
-          await release.promise;
+  it.each(["selection", "grant"] as const)(
+    "continues delivery when a recipient's prepared %s changes",
+    async (boundary) => {
+      vi.useFakeTimers();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const access = new AbortController();
+      let generation = 0;
+      let holdRecipient = false;
+      let snapshot = READY;
+      const broadcastToConnIds = vi.fn();
+      active = createTestControlUiSessionPrSubscriptions({
+        scheduler,
+        broadcastToConnIds,
+        load: async () => snapshot,
+        prepareRead: async (connId) => async () => {
+          if (boundary === "grant" && connId === "recipient" && access.signal.aborted) {
+            return undefined;
+          }
+          const captured = generation;
+          const prepared = {
+            ...target,
+            assertCurrent: () => {
+              if (boundary === "selection" && captured !== generation) {
+                throw new Error("Prepared selection changed");
+              }
+              if (boundary === "grant" && connId === "recipient") {
+                access.signal.throwIfAborted();
+              }
+            },
+          };
+          if (connId === "recipient" && holdRecipient) {
+            holdRecipient = false;
+            entered.resolve();
+            await release.promise;
+          }
+          return prepared;
+        },
+      });
+      for (const connId of boundary === "grant"
+        ? ["first", "recipient", "last"]
+        : ["first", "recipient"]) {
+        await active.replace(connId, ["shared"]);
+      }
+      broadcastToConnIds.mockClear();
+      broadcastToConnIds.mockImplementationOnce(() => {
+        holdRecipient = true;
+      });
+      snapshot = changed;
+      const poll = active.pollNow();
+      try {
+        await entered.promise;
+        generation++;
+        access.abort(new Error("Recipient access retired"));
+        release.resolve();
+        await poll;
+        if (boundary === "selection") {
+          expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(...publication("first"));
+          await active.pollNow();
+          expect(broadcastToConnIds.mock.calls).toEqual(
+            ["first", "recipient"].map((connId) => publication(connId)),
+          );
+          await active.pollNow();
+          expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+        } else {
+          expect(broadcastToConnIds.mock.calls).toEqual(
+            ["first", "last"].map((connId) => publication(connId)),
+          );
+          broadcastToConnIds.mockClear();
+          await active.pollNow();
+          expect(broadcastToConnIds).not.toHaveBeenCalled();
         }
-        return prepared;
-      },
-    });
-    await active.replace("first", ["shared"]);
-    await active.replace("recipient", ["shared"]);
-    broadcastToConnIds.mockClear();
-    broadcastToConnIds.mockImplementationOnce(() => {
-      holdRecipient = true;
-    });
-    snapshot = changed;
-    const poll = active.pollNow();
-    try {
-      await entered.promise;
-      generation++;
-      release.resolve();
-      await poll;
-      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(...publication("first"));
-
-      await active.pollNow();
-      expect(broadcastToConnIds.mock.calls).toEqual(
-        ["first", "recipient"].map((connId) => publication(connId)),
-      );
-      await active.pollNow();
-      expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
-    } finally {
-      release.resolve();
-      await poll;
-    }
-  });
+      } finally {
+        release.resolve();
+        await poll;
+      }
+    },
+  );
 
   it("acknowledges a forced result equal to the normal poll queued before it", async () => {
     vi.useFakeTimers();
@@ -602,56 +624,4 @@ describe("recipient publication lifetimes", () => {
       }
     },
   );
-
-  it("continues to later recipients after one prepared authority rejects the shared snapshot", async () => {
-    vi.useFakeTimers();
-    const entered = createDeferred();
-    const held = createDeferred<ControlUiSessionPrTarget>();
-    const access = new AbortController();
-    const rejectedTarget = { ...target, assertCurrent: () => access.signal.throwIfAborted() };
-    let holdRecipient = false;
-    let snapshot = READY;
-    const broadcastToConnIds = vi.fn();
-    active = createTestControlUiSessionPrSubscriptions({
-      scheduler,
-      broadcastToConnIds,
-      load: async () => snapshot,
-      prepareRead: async (connId) => () => {
-        if (connId === "rejected") {
-          if (holdRecipient) {
-            holdRecipient = false;
-            entered.resolve();
-            return held.promise;
-          }
-          return Promise.resolve(access.signal.aborted ? undefined : rejectedTarget);
-        }
-        return Promise.resolve(target);
-      },
-    });
-    for (const connId of ["first", "rejected", "last"]) {
-      await active.replace(connId, ["shared"]);
-    }
-    broadcastToConnIds.mockClear();
-    broadcastToConnIds.mockImplementationOnce(() => {
-      holdRecipient = true;
-    });
-    snapshot = changed;
-    const poll = active.pollNow();
-    try {
-      await entered.promise;
-      access.abort(new Error("Recipient access retired"));
-      held.resolve(rejectedTarget);
-      await poll;
-
-      expect(broadcastToConnIds.mock.calls).toEqual(
-        ["first", "last"].map((connId) => publication(connId)),
-      );
-      broadcastToConnIds.mockClear();
-      await active.pollNow();
-      expect(broadcastToConnIds).not.toHaveBeenCalled();
-    } finally {
-      held.resolve(rejectedTarget);
-      await poll;
-    }
-  });
 });

@@ -113,16 +113,17 @@ function bindNativeReceiver<T, R>(invoke: (receiver: T, args: unknown[]) => R) {
   };
 }
 
-/** Registration facts and captured stream scopes share the instance's lifetime. */
-export function createPluginInstanceBindings(bindings: {
+type PluginInstanceBindingOwner = {
   instance: PluginInstanceHandle;
   enter: <T>(token: object, run: () => T) => T;
   invoke: <T>(run: () => T) => T;
   lease: () => PluginInstanceCallLease;
   hasToken: (token: object) => boolean;
   isConsumerToken: (token: object) => boolean;
-}) {
-  const { instance } = bindings;
+};
+
+/** Registration facts and captured stream scopes share the instance's lifetime. */
+export function createPluginInstanceBindings(bindings: PluginInstanceBindingOwner) {
   const factories = new WeakSet<object>();
   const admitFactory = (factory: (...args: never[]) => unknown): void => {
     factories.add(factory);
@@ -133,78 +134,57 @@ export function createPluginInstanceBindings(bindings: {
       admit: <T>(run: () => T) => T,
       admitCallback: <T>(run: () => T) => T = (run) => admit(() => bindings.invoke(run)),
     ) {
-      return createPluginBindings(
-        {
-          ...bindings,
-          admitFactory,
-          prepareInvocation: (token, parent) => {
-            const context = pluginInvocationContext.getStore();
-            const consumer = bindings.isConsumerToken(token);
-            // Iterator creation runs inside its admitting call; renewals keep that original parent.
-            const origin = parent ?? pluginInstanceInvocation.getStore()!;
-            // Capture once: replaying AsyncLocalStorage.run copies Node's context map per event.
-            const resource = bindings.enter(token, () => new AsyncResource("OpenClawPluginStream"));
-            return {
-              origin,
-              reenter: <T>(run: () => T): T => {
-                if (consumer && !bindings.hasToken(token)) {
-                  throw new Error(`Plugin ${instance.pluginId} consumer is closed`);
-                }
-                return resource.runInAsyncScope(() => pluginInstanceInvocation.run(origin, run));
-              },
-              assertCurrent: () => {
-                context?.lookup(instance);
-                const current = pluginInvocationContext.getStore();
-                if (current !== context) {
-                  current?.lookup(instance);
-                }
-              },
-              run: <T>(run: () => T): T => resource.runInAsyncScope(run),
-              close: () => resource.emitDestroy(),
-            };
-          },
-          isFactory: (value) => {
-            for (
-              let source: object | undefined = value;
-              source;
-              source = getPluginOriginalValue(source, instance)
-            ) {
-              if (factories.has(source)) {
-                return true;
-              }
-            }
-            return false;
-          },
-        },
-        admit,
-        admitCallback,
-      );
+      return createPluginBindings(bindings, factories, admit, admitCallback);
     },
   };
 }
 
 /** Builds callable views while the exact instance continues to own admission and leases. */
 function createPluginBindings(
-  bindings: {
-    instance: PluginInstanceHandle;
-    prepareInvocation: (
-      token: object,
-      origin?: PluginInstanceInvocation,
-    ) => {
-      origin: PluginInstanceInvocation;
-      reenter: <T>(run: () => T) => T;
-      assertCurrent: () => void;
-      run: <T>(run: () => T) => T;
-      close: () => void;
-    };
-    lease: () => PluginInstanceCallLease;
-    hasToken: (token: object) => boolean;
-    isFactory: (value: object) => boolean;
-    admitFactory: (factory: (...args: never[]) => unknown) => void;
-  },
+  bindings: PluginInstanceBindingOwner,
+  factories: WeakSet<object>,
   admit: <T>(run: () => T) => T,
   admitCallback: <T>(run: () => T) => T,
 ) {
+  const { instance } = bindings;
+  const prepareInvocation = (token: object, parent?: PluginInstanceInvocation) => {
+    const context = pluginInvocationContext.getStore();
+    const consumer = bindings.isConsumerToken(token);
+    // Iterator creation runs inside its admitting call; renewals keep that original parent.
+    const origin = parent ?? pluginInstanceInvocation.getStore()!;
+    // Capture once: replaying AsyncLocalStorage.run copies Node's context map per event.
+    const resource = bindings.enter(token, () => new AsyncResource("OpenClawPluginStream"));
+    return {
+      origin,
+      reenter: <T>(run: () => T): T => {
+        if (consumer && !bindings.hasToken(token)) {
+          throw new Error(`Plugin ${instance.pluginId} consumer is closed`);
+        }
+        return resource.runInAsyncScope(() => pluginInstanceInvocation.run(origin, run));
+      },
+      assertCurrent: () => {
+        context?.lookup(instance);
+        const current = pluginInvocationContext.getStore();
+        if (current !== context) {
+          current?.lookup(instance);
+        }
+      },
+      run: <T>(run: () => T): T => resource.runInAsyncScope(run),
+      close: () => resource.emitDestroy(),
+    };
+  };
+  const isFactory = (value: object) => {
+    for (
+      let source: object | undefined = value;
+      source;
+      source = getPluginOriginalValue(source, instance)
+    ) {
+      if (factories.has(source)) {
+        return true;
+      }
+    }
+    return false;
+  };
   const wrapped = new WeakMap<object, unknown>();
   const factory = {};
   const originalValue = (value: object) => getPluginOriginalValue(value, bindings.instance);
@@ -399,8 +379,8 @@ function createPluginBindings(
                     result,
                     wrapArguments(args).args,
                   );
-                  if (bindings.isFactory(result)) {
-                    bindings.admitFactory(source);
+                  if (isFactory(result)) {
+                    factories.add(source);
                   }
                   return wrap(source);
                 })
@@ -527,7 +507,7 @@ function createPluginBindings(
               return wrapResult(
                 Reflect.apply(value, receiver, call.args),
                 call.callerData,
-                bindings.isFactory(result),
+                isFactory(result),
               );
             }),
           construct: (_target, args, newTarget): object =>
@@ -577,9 +557,9 @@ function createPluginBindings(
     previous?: PluginIteratorAdmission,
   ): PluginIteratorAdmission => {
     const { token, release } = bindings.lease();
-    let invocation: ReturnType<typeof bindings.prepareInvocation>;
+    let invocation: ReturnType<typeof prepareInvocation>;
     try {
-      invocation = bindings.prepareInvocation(token, previous?.origin);
+      invocation = prepareInvocation(token, previous?.origin);
     } catch (error) {
       void release();
       throw error;

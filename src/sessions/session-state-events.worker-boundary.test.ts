@@ -16,12 +16,15 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { recordSessionCreated } from "./session-created.js";
 import {
   acknowledgeSessionStateNotices,
   getSessionStateVersion,
   getSessionStateVersions,
   listSessionStateEventsSince,
   recordSessionStateEvent,
+  recordSessionCompacted,
+  recordSubagentSpawned,
   registerMainSessionGroupWatch,
   registerSessionStateWatch,
 } from "./session-state-events.js";
@@ -43,6 +46,53 @@ afterEach(async () => {
   await cleanupSessionStateTestState();
 });
 
+it("records creation, compaction, spawn and periodic retention without caller-thread SQL", async () => {
+  const database = createDatabaseOptions();
+  const now = Date.now() + 60 * 60_000;
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  openOpenClawStateDatabase(database)
+    .db.prepare(
+      "INSERT INTO session_state_events (session_key, agent_id, kind, actor_type, occurred_at, summary) VALUES (?, 'main', 'compacted', 'system', ?, 'expired')",
+    )
+    .run(child, now - 30 * 24 * 60 * 60_000 - 1);
+  const entry = {
+    sessionId: "created-child",
+    updatedAt: now,
+    createdActor: { type: "system" as const },
+  };
+  const sql = observeMainThreadSql();
+  try {
+    sql.calibrate();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await recordSessionCreated({}, { sessionKey: child, agentId: "main", entry });
+      await recordSessionCompacted({
+        sessionKey: child,
+        operationId: "compact-child",
+        agentId: "main",
+      });
+      await recordSubagentSpawned({
+        childSessionKey: child,
+        childRunId: "spawn-child",
+        requesterSessionKey: nestedWatcher,
+        agentId: "main",
+      });
+    }
+    expect(sql.count()).toBe(0);
+  } finally {
+    sql.restore();
+  }
+  const events = (await listSessionStateEventsSince(child, "main", 0, 200, database)).events;
+  expect(events.map((event) => event.kind)).toEqual(["created", "compacted", "child_spawned"]);
+  const spawned = expectDefined(events.at(-1), "child spawn");
+  expect(readCursor(database, nestedWatcher)).toEqual({
+    last_seen_sequence: spawned.sequence,
+    notified_sequence: spawned.sequence,
+    material_sequence: spawned.sequence,
+  });
+  expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(0);
+  expect(peekSystemEventEntries(watcher)).toHaveLength(1);
+});
+
 it("discovers a cold custom watcher store without caller-thread SQL", async () => {
   const database = createDatabaseOptions();
   const storePath = path.join(database.env.OPENCLAW_STATE_DIR, "custom", "sessions.json");
@@ -56,6 +106,20 @@ it("discovers a cold custom watcher store without caller-thread SQL", async () =
   const sql = observeMainThreadSql();
   try {
     sql.calibrate();
+    await recordSubagentSpawned({
+      childSessionKey: child,
+      childRunId: "custom-store-spawn",
+      requesterSessionKey: watcher,
+      agentId: "main",
+    });
+    expect(sql.count()).toBe(0);
+    publishSystemEventStoreConfig(cfg);
+    await recordSessionCreated(cfg, {
+      sessionKey: child,
+      agentId: "main",
+      entry: { sessionId: "custom-created", updatedAt: 1, createdActor: { type: "system" } },
+    });
+    expect(sql.count()).toBe(0);
     expect(
       await registerSessionStateWatch(
         { watcherSessionKey: watcher, targetSessionKey: child },
@@ -78,6 +142,37 @@ it("discovers a cold custom watcher store without caller-thread SQL", async () =
       .db.prepare("SELECT DISTINCT watcher_store_path FROM session_watch_cursors")
       .all(),
   ).toEqual([{ watcher_store_path: path.join(path.dirname(storePath), "openclaw-agent.sqlite") }]);
+});
+
+it("retains the creation database while notice preparation yields", async () => {
+  const database = createDatabaseOptions();
+  const entered = createDeferred();
+  const prepared = createDeferred<string>();
+  const storePath = resolvePhysicalSessionStorePath({ sessionKey: watcher, env: database.env });
+  publishSystemEventStoreResolver(
+    () => storePath,
+    () => {
+      entered.resolve();
+      return prepared.promise;
+    },
+  );
+  const recording = recordSessionCreated(
+    {},
+    {
+      sessionKey: child,
+      entry: { sessionId: "original-store", updatedAt: 1, createdActor: { type: "system" } },
+    },
+  );
+  await entered.promise;
+  const replacement = createDatabaseOptions();
+  prepared.resolve(storePath);
+  await recording;
+  expect((await listSessionStateEventsSince(child, "main", 0, 200, database)).events).toMatchObject(
+    [{ kind: "created", sessionId: "original-store" }],
+  );
+  expect((await listSessionStateEventsSince(child, "main", 0, 200, replacement)).events).toEqual(
+    [],
+  );
 });
 
 it("does not acknowledge a replacement store from an older consumed notice", async () => {
@@ -337,7 +432,7 @@ it("rolls back watch writes when the system-event store changes at transaction o
   let currentStore = originalStore;
   publishSystemEventStoreResolver(() => currentStore);
   const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  for (const operation of ["register", "acknowledge"] as const) {
+  for (const operation of ["register", "acknowledge", "spawn"] as const) {
     for (const stage of ["transaction", "commit"] as const) {
       currentStore = originalStore;
       const targetSessionKey = `${child}-${operation}-${stage}`;
@@ -377,6 +472,14 @@ it("rolls back watch writes when the system-event store changes at transaction o
               database,
             ),
           ).toBe(false);
+        } else if (operation === "spawn") {
+          await recordSubagentSpawned({
+            childSessionKey: targetSessionKey,
+            childRunId: `spawn-${stage}`,
+            requesterSessionKey: nestedWatcher,
+            agentId: "main",
+          });
+          expect(await getSessionStateVersion(targetSessionKey, "main", database)).toBe(0);
         } else {
           await acknowledgeSessionStateNotices(
             nestedWatcher,

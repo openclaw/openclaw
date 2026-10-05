@@ -58,7 +58,7 @@ export const finalizeSubagentCleanup = async (
   let entry = publishedEntry;
   let runId = entry.runId;
   const runtimeKey = getSubagentRunRuntimeKey(observedEntry);
-  if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+  if (!context.isCleanupAttemptCurrent(entry, cleanupGeneration)) {
     await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
     return;
   }
@@ -66,7 +66,7 @@ export const finalizeSubagentCleanup = async (
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     const current = getCurrentSubagentRunOwner(params.runs, entry);
     assertSubagentRegistryWriteOutcomeKnown([current?.runId ?? runId], stateContext.admission);
-    if (!context.isCleanupGenerationCurrent(runId, entry, cleanupGeneration)) {
+    if (!context.isCleanupGenerationCurrent(entry, cleanupGeneration)) {
       throw new Error("Subagent cleanup generation changed before persistence.");
     }
     if (current) {
@@ -76,7 +76,7 @@ export const finalizeSubagentCleanup = async (
   };
   const isCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
-    return context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration);
+    return context.isCleanupAttemptCurrent(entry, cleanupGeneration);
   };
   const commit = async (
     mutate: (draft: SubagentRunRecord) => void | false,
@@ -98,7 +98,6 @@ export const finalizeSubagentCleanup = async (
     completionReason?: SubagentLifecycleEndedReason,
   ) =>
     finishSubagentCleanup(context, {
-      runId,
       entry,
       cleanup,
       cleanupGeneration,
@@ -246,7 +245,6 @@ export const finalizeSubagentCleanup = async (
     );
   } else if (decision.value?.kind === "give-up") {
     await finalizeResumedAnnounceGiveUp(context, {
-      runId,
       entry,
       reason: decision.value.reason,
       cleanup,

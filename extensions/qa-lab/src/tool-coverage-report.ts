@@ -52,24 +52,7 @@ type QaToolCoverageRow = {
   details?: string;
 };
 
-type QaToolCoverageReport = {
-  runtimePair: [RuntimeId, RuntimeId];
-  generatedAt: string;
-  evaluated: boolean;
-  totalTools: number;
-  requiredTools: number;
-  reportOnlyTools: number;
-  trackedTools: number;
-  nativeWorkspaceTools: number;
-  dynamicIntegrationTools: number;
-  searchableDynamicTools: number;
-  optionalTools: number;
-  passingTools: number;
-  failingTools: number;
-  rows: QaToolCoverageRow[];
-  pass: boolean;
-  failures: string[];
-};
+type QaToolCoverageReport = ReturnType<typeof buildQaToolCoverageReport>;
 
 type ToolFixtureGroup = {
   tool: string;
@@ -246,7 +229,7 @@ export function buildQaToolCoverageReport(params: {
   summary?: QaParitySuiteSummary;
   runtimePair?: [RuntimeId, RuntimeId];
   generatedAt?: string;
-}): QaToolCoverageReport {
+}) {
   const results = new Map(
     (params.summary?.scenarios ?? []).flatMap(({ runtimeParity }) =>
       runtimeParity ? [[runtimeParity.scenarioId, runtimeParity] as const] : [],

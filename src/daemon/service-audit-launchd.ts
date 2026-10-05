@@ -109,7 +109,7 @@ export async function auditLaunchdDefinition(
       );
     }
   }
-  const { stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
+  const { stdoutPath } = resolveGatewaySupervisorLogPaths(env);
   const expected: Record<string, string | number | boolean> = {
     ...LAUNCH_AGENT_POLICY,
     Label: resolveLaunchAgentLabel(env),

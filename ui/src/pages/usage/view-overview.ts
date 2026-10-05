@@ -10,7 +10,6 @@ import "../../components/tooltip.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import {
   buildUsageCostWindows,
-  buildUsageCostWindowSummary,
   formatAnalysisCost,
   formatDayLabel,
   formatFullDate,
@@ -120,12 +119,11 @@ function renderCostWindowComparison(
   rangeEndDate: string,
   timeZone: "local" | "utc",
 ) {
-  const range = buildUsageCostWindowSummary(daily, rangeStartDate, rangeEndDate);
+  const [range, ...windows] = buildUsageCostWindows(daily, rangeStartDate, rangeEndDate);
   if (!range || daily.length === 0) {
     return nothing;
   }
 
-  const windows = buildUsageCostWindows(daily, rangeStartDate, rangeEndDate);
   const today = formatIsoDate(new Date(), timeZone);
   const labelForWindow = (days: number, endDate: string) => {
     if (days === 1) {

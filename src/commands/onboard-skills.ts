@@ -131,13 +131,6 @@ export async function setupSkills(
       skill.missing.bins.length > 0 &&
       isTrustedAutoInstallableSkill(skill),
   );
-  let brewAvailable: boolean | undefined;
-  const detectBrewOnce = async () => {
-    // Brew detection can shell out; cache it for the whole skills step because
-    // install filtering and prompts both need the same answer.
-    brewAvailable ??= (await detectBinary("brew")) || resolveBrewExecutable() !== undefined;
-    return brewAvailable;
-  };
   const readinessByKind = new Map<string, SkillInstallReadiness>();
   const resolveKindReadinessOnce = async (kind: string) => {
     // The lifecycle preflight can shell out (go version, sudo probe); resolve
@@ -152,7 +145,12 @@ export async function setupSkills(
   };
   const inLinuxContainer = process.platform === "linux" && isContainerEnvironment();
   let installable = baseInstallable;
-  if (inLinuxContainer && baseInstallable.length > 0 && !(await detectBrewOnce())) {
+  if (
+    inLinuxContainer &&
+    baseInstallable.length > 0 &&
+    !(await detectBinary("brew")) &&
+    resolveBrewExecutable() === undefined
+  ) {
     // Linux containers without brew cannot use brew-only recipes reliably; hide
     // them from install selection and leave manual instructions in the note.
     installable = baseInstallable.filter((skill) =>

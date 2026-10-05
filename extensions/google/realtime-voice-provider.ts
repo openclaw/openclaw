@@ -124,25 +124,7 @@ const TURN_COVERAGE = {
   "audio-activity-and-all-video": TurnCoverage.TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO,
 } satisfies Record<GoogleRealtimeTurnCoverage, TurnCoverage>;
 
-type GoogleRealtimeVoiceProviderConfig = {
-  apiKey?: string;
-  model?: string;
-  voice?: string;
-  temperature?: number;
-  apiVersion?: string;
-  prefixPaddingMs?: number;
-  silenceDurationMs?: number;
-  startSensitivity?: GoogleRealtimeSensitivity;
-  endSensitivity?: GoogleRealtimeSensitivity;
-  activityHandling?: GoogleRealtimeActivityHandling;
-  turnCoverage?: GoogleRealtimeTurnCoverage;
-  automaticActivityDetectionDisabled?: boolean;
-  enableAffectiveDialog?: boolean;
-  sessionResumption?: boolean;
-  contextWindowCompression?: boolean;
-  thinkingLevel?: GoogleRealtimeThinkingLevel;
-  thinkingBudget?: number;
-};
+type GoogleRealtimeVoiceProviderConfig = Partial<ReturnType<typeof normalizeProviderConfig>>;
 
 type GoogleRealtimeLiveConfig = GoogleRealtimeVoiceProviderConfig & {
   apiKey: string;
@@ -206,43 +188,30 @@ function asTurnCoverage(value: unknown): GoogleRealtimeTurnCoverage | undefined 
   }
 }
 
-function asNonNegativeInteger(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0 });
-}
-
-function resolveGoogleRealtimeProviderConfigRecord(
-  config: Record<string, unknown>,
-): Record<string, unknown> | undefined {
+function normalizeProviderConfig(config: RealtimeVoiceProviderConfig, cfg?: OpenClawConfig) {
   const providers = asOptionalRecord(config.providers);
-  return asOptionalRecord(providers?.google) ?? asOptionalRecord(config.google) ?? config;
-}
-
-function normalizeProviderConfig(
-  config: RealtimeVoiceProviderConfig,
-  cfg?: OpenClawConfig,
-): GoogleRealtimeVoiceProviderConfig {
-  const raw = resolveGoogleRealtimeProviderConfigRecord(config);
+  const raw = asOptionalRecord(providers?.google) ?? asOptionalRecord(config.google) ?? config;
   return {
     apiKey: normalizeResolvedSecretInputString({
-      value: raw?.apiKey ?? cfg?.models?.providers?.google?.apiKey,
+      value: raw.apiKey ?? cfg?.models?.providers?.google?.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
     }),
-    model: normalizeOptionalString(raw?.model),
-    voice: normalizeOptionalString(raw?.speakerVoice) ?? normalizeOptionalString(raw?.voice),
-    temperature: asFiniteNumber(raw?.temperature),
-    apiVersion: normalizeOptionalString(raw?.apiVersion),
-    prefixPaddingMs: asNonNegativeInteger(raw?.prefixPaddingMs),
-    silenceDurationMs: asNonNegativeInteger(raw?.silenceDurationMs),
-    startSensitivity: asSensitivity(raw?.startSensitivity),
-    endSensitivity: asSensitivity(raw?.endSensitivity),
-    activityHandling: asActivityHandling(raw?.activityHandling),
-    turnCoverage: asTurnCoverage(raw?.turnCoverage),
-    automaticActivityDetectionDisabled: asBoolean(raw?.automaticActivityDetectionDisabled),
-    enableAffectiveDialog: asBoolean(raw?.enableAffectiveDialog),
-    sessionResumption: asBoolean(raw?.sessionResumption),
-    contextWindowCompression: asBoolean(raw?.contextWindowCompression),
-    thinkingLevel: asThinkingLevel(raw?.thinkingLevel),
-    thinkingBudget: asSafeIntegerInRange(raw?.thinkingBudget, { min: -1, max: 24_576 }),
+    model: normalizeOptionalString(raw.model),
+    voice: normalizeOptionalString(raw.speakerVoice) ?? normalizeOptionalString(raw.voice),
+    temperature: asFiniteNumber(raw.temperature),
+    apiVersion: normalizeOptionalString(raw.apiVersion),
+    prefixPaddingMs: asSafeIntegerInRange(raw.prefixPaddingMs, { min: 0 }),
+    silenceDurationMs: asSafeIntegerInRange(raw.silenceDurationMs, { min: 0 }),
+    startSensitivity: asSensitivity(raw.startSensitivity),
+    endSensitivity: asSensitivity(raw.endSensitivity),
+    activityHandling: asActivityHandling(raw.activityHandling),
+    turnCoverage: asTurnCoverage(raw.turnCoverage),
+    automaticActivityDetectionDisabled: asBoolean(raw.automaticActivityDetectionDisabled),
+    enableAffectiveDialog: asBoolean(raw.enableAffectiveDialog),
+    sessionResumption: asBoolean(raw.sessionResumption),
+    contextWindowCompression: asBoolean(raw.contextWindowCompression),
+    thinkingLevel: asThinkingLevel(raw.thinkingLevel),
+    thinkingBudget: asSafeIntegerInRange(raw.thinkingBudget, { min: -1, max: 24_576 }),
   };
 }
 
@@ -343,23 +312,6 @@ function buildGoogleLiveConnectConfig(
       ? { enableAffectiveDialog: config.enableAffectiveDialog }
       : {}),
     ...(thinkingConfig ? { thinkingConfig } : {}),
-  };
-}
-
-function toGoogleModelResource(model: string): string {
-  return model.startsWith("models/") ? model : `models/${model}`;
-}
-
-function buildBrowserInitialSetup(model: string) {
-  return {
-    setup: {
-      model: toGoogleModelResource(model),
-      generationConfig: {
-        responseModalities: [Modality.AUDIO],
-      },
-      inputAudioTranscription: {},
-      outputAudioTranscription: {},
-    },
   };
 }
 
@@ -1240,8 +1192,8 @@ async function createGoogleRealtimeBrowserSession(
   req: RealtimeVoiceBrowserSessionCreateRequest,
 ): Promise<RealtimeVoiceBrowserSession> {
   const providerConfig = normalizeProviderConfig(req.providerConfig);
-  const prefixPaddingMs = asNonNegativeInteger(req.prefixPaddingMs);
-  const silenceDurationMs = asNonNegativeInteger(req.silenceDurationMs);
+  const prefixPaddingMs = asSafeIntegerInRange(req.prefixPaddingMs, { min: 0 });
+  const silenceDurationMs = asSafeIntegerInRange(req.silenceDurationMs, { min: 0 });
   const config = {
     ...providerConfig,
     ...(prefixPaddingMs !== undefined ? { prefixPaddingMs } : {}),
@@ -1311,7 +1263,14 @@ async function createGoogleRealtimeBrowserSession(
       outputEncoding: "pcm16",
       outputSampleRateHz: 24_000,
     },
-    initialMessage: buildBrowserInitialSetup(model),
+    initialMessage: {
+      setup: {
+        model: model.startsWith("models/") ? model : `models/${model}`,
+        generationConfig: { responseModalities: [Modality.AUDIO] },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+      },
+    },
     model,
     voice,
     expiresAt: newSessionExpiresAtMs,

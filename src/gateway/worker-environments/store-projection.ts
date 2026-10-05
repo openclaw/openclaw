@@ -4,6 +4,7 @@ import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { registerListener } from "../../shared/listeners.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerEnvironmentAttachmentRecord } from "./session-attachment.js";
@@ -229,11 +230,7 @@ function createWorkerEnvironmentProjection() {
     },
     onCredentialRevoked(listener: (environmentId: string) => void) {
       assertActive();
-      const registration = (environmentId: string) => listener(environmentId);
-      revocationListeners.add(registration);
-      return () => {
-        revocationListeners.delete(registration);
-      };
+      return registerListener(revocationListeners, (environmentId) => listener(environmentId));
     },
     publishCredentialRevoked(environmentId: string) {
       assertActive();

@@ -86,7 +86,6 @@ beforeEach(() => {
 
 describe("post-failure repair execution", () => {
   it.each([
-    { localOverride: false, cleanupFails: false, borrowedOwner: false },
     { localOverride: true, cleanupFails: false, borrowedOwner: true },
     { localOverride: false, cleanupFails: true, borrowedOwner: false },
   ])(

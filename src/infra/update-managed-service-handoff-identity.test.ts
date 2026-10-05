@@ -405,95 +405,83 @@ describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy val
     };
   }
 
-  it("uses one native read for a direct v1 helper and refreshes on the very next validation", () => {
-    const test = fixture(0);
+  it.each([
+    { name: "direct helper birth", edges: 0, change: "helper" },
+    { name: "ancestor helper birth", edges: 3, change: "helper" },
+    { name: "executor birth", edges: 3, change: "executor" },
+    { name: "executor parent", edges: 1, change: "parent" },
+  ] as const)("refreshes $name on the next validation", ({ edges, change }) => {
+    const test = fixture(edges);
     expect(test.current()).toBe(true);
-    expect(test.nativeReads).toEqual([test.helperPid]);
-    test.rows.set(test.helperPid, { parentPid: 1, startedAt: "Thu Sep 24 00:00:01 2026" });
-    expect(test.current()).toBe(false);
-    expect(test.nativeReads).toEqual([test.helperPid, test.helperPid]);
-    expect(test.kill).toHaveBeenCalledWith(test.helperPid, 0);
-    expect(test.storedParent()).toEqual(test.parent);
-  });
-
-  it.each(["helper", "executor"] as const)(
-    "refuses a replaced %s birth on the next validation",
-    (role) => {
-      const test = fixture(3);
-      expect(test.current()).toBe(true);
-      const pid = role === "helper" ? test.helperPid : test.executorPid;
-      const row = test.rows.get(pid)!;
-      test.rows.set(pid, { ...row, startedAt: "Thu Sep 24 00:00:01 2026" });
-      expect(test.current()).toBe(false);
-      expect(test.nativeReads.length).toBe(8);
-      expect(test.storedParent()).toEqual(test.parent);
-    },
-  );
-
-  it("refuses a reparented executor without clearing the retained row", () => {
-    const test = fixture();
-    expect(test.current()).toBe(true);
-    test.rows.get(test.executorPid)!.parentPid = 1;
+    if (edges === 0) {
+      expect(test.nativeReads).toEqual([test.helperPid]);
+    }
+    const pid = change === "helper" ? test.helperPid : test.executorPid;
+    const row = test.rows.get(pid)!;
+    if (change === "parent") {
+      row.parentPid = 1;
+    } else {
+      row.startedAt = "Thu Sep 24 00:00:01 2026";
+    }
     expect(test.current()).toBe(false);
     expect(test.storedParent()).toEqual(test.parent);
-  });
-
-  it("rereads the exact row after capturing process facts", () => {
-    const test = fixture();
-    test.probes.afterRead = () => {
-      test.probes.afterRead = undefined;
-      test.replaceRow();
-    };
-    expect(test.current()).toBe(false);
-    expect(test.storedParent()?.owner).toBe("replacement");
-  });
-
-  it("refuses denied inspection without reclaiming the legacy row", () => {
-    const test = fixture();
-    test.probes.failure = "EPERM";
-    expect(test.current()).toBe(false);
-    expect(test.storedParent()).toEqual(test.parent);
-  });
-
-  it("refuses malformed process metadata without clearing the retained row", () => {
-    const test = fixture();
-    test.probes.output = "truncated process metadata";
-    expect(test.current()).toBe(false);
-    expect(test.storedParent()).toEqual(test.parent);
-  });
-
-  it("retains the independent live-process check after reading a matching birth", () => {
-    const test = fixture();
-    test.kill.mockImplementation(() => {
-      throw Object.assign(new Error("process exited"), { code: "ESRCH" });
-    });
-    expect(test.current()).toBe(false);
-    expect(test.storedParent()).toEqual(test.parent);
+    if (edges === 0) {
+      expect(test.nativeReads).toEqual([test.helperPid, test.helperPid]);
+      expect(test.kill).toHaveBeenCalledWith(test.helperPid, 0);
+    } else if (edges === 3) {
+      expect(test.nativeReads).toHaveLength(8);
+    }
   });
 
   it.each([
-    { edges: 32, accepted: true, reads: 33 },
-    { edges: 33, accepted: false, reads: 32 },
-  ])(
-    "preserves the direct-parent plus 32-edge bound ($edges edges)",
-    ({ edges, accepted, reads }) => {
-      const test = fixture(edges);
-      expect(test.current()).toBe(accepted);
-      expect(test.nativeReads).toHaveLength(reads);
-      expect(new Set(test.nativeReads).size).toBe(reads);
-    },
-  );
-
-  it("preserves PID 1 as a possible required ancestor", () => {
-    const test = fixture(2, true);
-    expect(test.current()).toBe(true);
-    expect(test.nativeReads).toHaveLength(3);
+    "replaced row",
+    "denied inspection",
+    "malformed metadata",
+    "dead process",
+    "cycle",
+  ] as const)("refuses %s without clearing the retained legacy row", (failure) => {
+    const test = fixture(failure === "cycle" ? 3 : 1);
+    switch (failure) {
+      case "replaced row":
+        test.probes.afterRead = () => {
+          test.probes.afterRead = undefined;
+          test.replaceRow();
+        };
+        break;
+      case "denied inspection":
+        test.probes.failure = "EPERM";
+        break;
+      case "malformed metadata":
+        test.probes.output = "truncated process metadata";
+        break;
+      case "dead process":
+        test.kill.mockImplementation(() => {
+          throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+        });
+        break;
+      case "cycle":
+        test.rows.get(test.executorPid + 1)!.parentPid = test.executorPid;
+        break;
+    }
+    expect(test.current()).toBe(false);
+    if (failure === "replaced row") {
+      expect(test.storedParent()?.owner).toBe("replacement");
+    } else {
+      expect(test.storedParent()).toEqual(test.parent);
+    }
+    if (failure === "cycle") {
+      expect(test.nativeReads).toEqual([test.executorPid, test.executorPid + 1]);
+    }
   });
 
-  it("refuses a cycle before the required helper", () => {
-    const test = fixture(3);
-    test.rows.get(test.executorPid + 1)!.parentPid = test.executorPid;
-    expect(test.current()).toBe(false);
-    expect(test.nativeReads).toEqual([test.executorPid, test.executorPid + 1]);
+  it.each([
+    { name: "32 ancestor edges", edges: 32, helperIsInit: false, accepted: true, reads: 33 },
+    { name: "33 ancestor edges", edges: 33, helperIsInit: false, accepted: false, reads: 32 },
+    { name: "PID 1 ancestor", edges: 2, helperIsInit: true, accepted: true, reads: 3 },
+  ])("bounds native ancestry reads with $name", ({ edges, helperIsInit, accepted, reads }) => {
+    const test = fixture(edges, helperIsInit);
+    expect(test.current()).toBe(accepted);
+    expect(test.nativeReads).toHaveLength(reads);
+    expect(new Set(test.nativeReads).size).toBe(reads);
   });
 });

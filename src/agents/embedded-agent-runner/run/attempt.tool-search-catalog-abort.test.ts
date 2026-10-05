@@ -1,8 +1,4 @@
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -11,9 +7,10 @@ import {
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
-import { Agent, type AgentEvent, type AgentTool } from "../../runtime/index.js";
+import { Agent, type AgentEvent } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { wrapToolDefinitions } from "../../sessions/tools/tool-definition-wrapper.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
 import { isToolResultError } from "../../tool-result-error.js";
@@ -110,12 +107,11 @@ describe("runEmbeddedAttempt tool boundaries", () => {
         tempPaths,
         createSession: () => {
           const session = createDefaultEmbeddedSession();
-          // SAFETY: The runner supplied the model and finalized tools to this session factory.
-          const options = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0] as {
-            model: Model;
-            customTools: AgentTool[];
-          };
-          const allTools = options.customTools;
+          const options = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0];
+          if (!options?.customTools) {
+            throw new Error("Expected the embedded attempt to supply custom tools");
+          }
+          const allTools = wrapToolDefinitions(options.customTools);
           expect(allTools.map((tool) => tool.name)).toContain(code ? "exec" : toolName);
           let turn = 0;
           const agent = new Agent({
@@ -354,6 +350,9 @@ describe("runEmbeddedAttempt tool boundaries", () => {
       expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenLastCalledWith(
         expect.objectContaining({ requesterThinkingLevel: "ultra" }),
         [],
+        undefined,
+        undefined,
+        expect.objectContaining({ assertCurrent: expect.any(Function) }),
       );
       expect(sessionOptions.thinkingLevel).toBe(expected ?? "off");
       expect(providerThinkingLevel).toBe(expected);

@@ -4,6 +4,7 @@ import {
   addActiveManagedProxyTlsOptions,
   createHttp1EnvHttpProxyAgent,
   captureChannelReadAuthority,
+  captureEffectAuthority,
   resolveFetch,
   resolveEnvHttpProxyAgentOptions,
 } from "openclaw/plugin-sdk/fetch-runtime";
@@ -176,14 +177,20 @@ function buildSlackFetch(
 
 function fenceSlackReadFetch(
   slackFetch: NonNullable<WebClientOptions["fetch"]>,
+  assertDirectAdapterHandoff?: () => void,
 ): NonNullable<WebClientOptions["fetch"]> {
   // Read/lookup clients are operation-local. Capture before the SDK queues or
   // retries, and also honor a caller scope when an unscoped client is reused.
   const assertReadAuthority = captureChannelReadAuthority();
+  const capturedEffect = captureEffectAuthority();
   return (input, init) => {
-    assertReadAuthority?.();
-    captureChannelReadAuthority()?.();
-    return slackFetch(input, init);
+    const effect = capturedEffect.active ? capturedEffect : captureEffectAuthority();
+    return effect.initiate(() => {
+      assertReadAuthority?.();
+      captureChannelReadAuthority()?.();
+      assertDirectAdapterHandoff?.();
+      return slackFetch(input, init);
+    });
   };
 }
 
@@ -198,7 +205,7 @@ function applySlackApiUrlAndProxyOptions(
   const slackApiUrl = options.slackApiUrl ?? resolveSlackApiUrlFromEnv();
   const fetch = options.fetch ?? buildSlackFetch(dispatcher);
   if (fetch) {
-    options.fetch = fenceSlackReadFetch(fetch);
+    options.fetch = fetch;
   }
   if (slackApiUrl !== undefined) {
     options.slackApiUrl = slackApiUrl;
@@ -212,17 +219,14 @@ function applySlackRequestAuthority(
   dispatcher: SlackProxyDispatcher | undefined,
   assertDirectAdapterHandoff: (() => void) | undefined,
 ): void {
-  if (!assertDirectAdapterHandoff) {
-    return;
-  }
   const slackFetch = options.fetch ?? buildSlackFetch(dispatcher);
   if (!slackFetch) {
-    throw new Error("Slack request fetch is unavailable for live authority.");
+    if (assertDirectAdapterHandoff) {
+      throw new Error("Slack request fetch is unavailable for live authority.");
+    }
+    return;
   }
-  options.fetch = (input, init) => {
-    assertDirectAdapterHandoff();
-    return slackFetch(input, init);
-  };
+  options.fetch = fenceSlackReadFetch(slackFetch, assertDirectAdapterHandoff);
 }
 
 export function resolveSlackWebClientOptions(

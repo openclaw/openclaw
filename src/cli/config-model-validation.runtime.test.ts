@@ -139,7 +139,7 @@ module.exports = {
       const config: OpenClawConfig = {
         agents: {
           defaults: { workspace: state.workspaceDir, model: { primary } },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
         plugins: {
           allow: fixtureProviderIds,

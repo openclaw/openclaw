@@ -33,7 +33,7 @@ import {
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   applySessionEntryReplacements,
-  applySessionPatchProjections,
+  applySessionPatchProjection,
   appendTranscriptEvent,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
@@ -61,7 +61,6 @@ import {
   replaceSessionEntry,
   resetSessionEntryLifecycle,
   SessionInitializationAgentScopeMismatchError,
-  type SessionPatchProjectionOperation,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionEntrySelection,
@@ -83,6 +82,7 @@ import {
   replaceTranscriptEvents,
   trimTranscriptForManualCompact,
 } from "./session-accessor.sqlite-transcript-write.js";
+import { createLegacyUnsequencedTurnFixture } from "./session-accessor.transcript-turn.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import {
@@ -1041,7 +1041,7 @@ describe("session accessor seam", () => {
       updatedAt: 10,
       ...initial,
     });
-    const snapshot = loadReplySessionInitializationSnapshot({
+    const snapshot = await loadReplySessionInitializationSnapshot({
       agentId: "main",
       ...scope,
     });
@@ -1088,7 +1088,7 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadMainInitializationSnapshot(sessionKey);
+    const snapshot = await loadMainInitializationSnapshot(sessionKey);
     if (!snapshot.currentEntry) {
       throw new Error("expected reply session initialization snapshot");
     }
@@ -1134,7 +1134,7 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadMainInitializationSnapshot(sessionKey);
+    const snapshot = await loadMainInitializationSnapshot(sessionKey);
 
     const current = loadSessionEntry({ sessionKey, storePath });
     if (!current) {
@@ -1179,9 +1179,9 @@ describe("session accessor seam", () => {
     expect(persisted?.pendingFinalDelivery).toBeUndefined();
   });
 
-  it("rejects a reply initialization key scoped to another explicit agent", () => {
+  it("rejects a reply initialization key scoped to another explicit agent", async () => {
     try {
-      loadReplySessionInitializationSnapshot({
+      await loadReplySessionInitializationSnapshot({
         agentId: "main",
         sessionKey: "agent:ops:main",
         storePath,
@@ -1263,7 +1263,7 @@ describe("session accessor seam", () => {
         updatedAt: 10,
       },
     );
-    const snapshot = loadMainInitializationSnapshot(sessionKey);
+    const snapshot = await loadMainInitializationSnapshot(sessionKey);
 
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
@@ -1521,54 +1521,39 @@ describe("session accessor seam", () => {
     });
   });
 
-  it("projects ordered patches against one mutable store view", async () => {
-    const keys = ["a", "b", "c", "d"].map((suffix) => `agent:main:batch-${suffix}`);
+  it("projects session patches with label ownership and current request authority", async () => {
+    const keys = ["a", "b"].map((suffix) => `agent:main:project-${suffix}`);
     for (const [index, sessionKey] of keys.entries()) {
       await upsertSessionEntryCore(
         { sessionKey, storePath },
-        { sessionId: `batch-${index}`, updatedAt: index + 1 },
+        { sessionId: `project-${index}`, updatedAt: index + 1 },
       );
     }
-    const snapshots = new Set<object>();
-    const operation = (
-      index: number,
-      label: string,
-      authorize?: () => { ok: false; error: string } | undefined,
-    ): SessionPatchProjectionOperation<{ ok: false; error: string }> => ({
-      resolveTarget: (snapshot) => {
-        snapshots.add(snapshot.store);
-        return { primaryKey: keys[index]! };
-      },
-      project: ({ existingEntry, isLabelInUse }) => {
-        if (isLabelInUse(label)) {
-          return { ok: false as const, error: `duplicate:${label}` };
-        }
-        return { ok: true as const, entry: { ...existingEntry!, label } };
-      },
-      ...(authorize ? { authorize } : {}),
-    });
+    const project = (index: number, label: string, assertCurrent?: () => void) =>
+      applySessionPatchProjection<{ ok: false; error: string }>({
+        storePath,
+        assertCurrent,
+        resolveTarget: () => ({ primaryKey: keys[index]! }),
+        project: ({ existingEntry, isLabelInUse }) => {
+          if (isLabelInUse(label)) {
+            return { ok: false, error: `duplicate:${label}` };
+          }
+          return { ok: true, entry: { ...existingEntry!, label } };
+        },
+      });
 
-    const results = await applySessionPatchProjections({
-      storePath,
-      operations: [
-        operation(0, "Shared"),
-        operation(1, "Shared"),
-        operation(2, "Blocked", () => ({ ok: false, error: "authorization changed" })),
-        operation(3, "Blocked"),
-      ],
+    await expect(project(0, "Shared")).resolves.toMatchObject({
+      ok: true,
+      entry: { label: "Shared" },
     });
-
-    expect(snapshots.size).toBe(1);
-    expect(results.map((result) => (result.ok ? result.entry.label : result.error))).toEqual([
-      "Shared",
-      "duplicate:Shared",
-      "authorization changed",
-      "Blocked",
-    ]);
+    await expect(project(1, "Shared")).resolves.toEqual({ ok: false, error: "duplicate:Shared" });
+    await expect(
+      project(1, "Blocked", () => {
+        throw new Error("authorization changed");
+      }),
+    ).rejects.toThrow("authorization changed");
     expect(loadSessionEntry({ sessionKey: keys[0]!, storePath })?.label).toBe("Shared");
     expect(loadSessionEntry({ sessionKey: keys[1]!, storePath })?.label).toBeUndefined();
-    expect(loadSessionEntry({ sessionKey: keys[2]!, storePath })?.label).toBeUndefined();
-    expect(loadSessionEntry({ sessionKey: keys[3]!, storePath })?.label).toBe("Blocked");
   });
 
   it("inserts and canonically rekeys through the bulk replacement owner", async () => {
@@ -2632,29 +2617,7 @@ describe("session accessor seam", () => {
   });
 
   it("invalidates a legacy multi-message turn when active cursors cannot be proven", async () => {
-    const scope = transcriptScope(
-      "session-legacy-unsequenced-turn",
-      "agent:main:legacy-unsequenced-turn",
-    );
-    await upsertSessionEntryCore(scope, {
-      lifecycleRevision: "legacy-unsequenced-revision",
-      sessionId: scope.sessionId,
-      updatedAt: 10,
-    });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("legacy-unsequenced-root", null, {
-          role: "user",
-          content: "canonical root",
-        }),
-      ],
-      updateMode: "none",
-    });
-    await appendTranscriptEvent(scope, {
-      id: "legacy-unsequenced-child",
-      parentId: "legacy-unsequenced-root",
-      message: { role: "assistant", content: "legacy raw event" },
-    });
+    const scope = await createLegacyUnsequencedTurnFixture(storePath);
 
     const publicUpdates: Array<{ target: unknown; message?: unknown; messageSeq?: number }> = [];
     const internalUpdates: Array<{

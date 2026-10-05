@@ -9,7 +9,6 @@ import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import {
   buildDirectoryInstallResult,
   defaultLogger,
-  emitSuccessfulPluginInstallSecurityEvent,
   ensureOpenClawExtensions,
   formatUnresolvedOpenClawPeerLinkError,
   loadPluginInstallRuntime,
@@ -33,7 +32,6 @@ import { validatePackageExtensionEntriesForInstall } from "./package-entry-resol
 import { linkOpenClawPeerDependencies, resolveOpenClawHostDependency } from "./plugin-peer-link.js";
 
 type ValidatedPackagePlugin = {
-  manifest: PackageManifest;
   pluginId: string;
   manifestName?: string;
   version?: string;
@@ -185,7 +183,6 @@ export async function validatePackagePluginInstallSource(params: {
   return {
     ok: true,
     plugin: {
-      manifest,
       pluginId,
       manifestName: pkgName || undefined,
       version: typeof manifest.version === "string" ? manifest.version : undefined,
@@ -264,7 +261,6 @@ export async function scanAndLinkInstalledPackage(params: {
 export async function installPluginFromInstalledPackageDir(
   params: {
     additionalDependencyPackageDirs?: string[];
-    emitSuccessSecurityEvent?: boolean;
     packageDir: string;
     dependencyScanRootDir?: string;
   } & PackageInstallCommonParams,
@@ -308,20 +304,8 @@ export async function installPluginFromInstalledPackageDir(
   if (postInstallError) {
     return postInstallError;
   }
-  const result = buildDirectoryInstallResult({
+  return buildDirectoryInstallResult({
     ...validated.plugin,
     targetDir: params.packageDir,
   });
-  if (params.emitSuccessSecurityEvent !== false) {
-    emitSuccessfulPluginInstallSecurityEvent(result, {
-      dryRun: params.dryRun,
-      mode: params.mode ?? "install",
-      sourceFamily: sourceFamilyForInstallPolicyKind(
-        params.installPolicyRequest?.kind,
-        "installed-package",
-      ),
-      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-    });
-  }
-  return result;
 }

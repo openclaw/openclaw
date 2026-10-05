@@ -159,7 +159,7 @@ describe("onboarding authored config persistence", () => {
       expect(result.createdAgent).toBe(false);
       expect(result.config.agents?.entries).toEqual(snapshot.config.agents?.entries);
       expect(snapshot.sourceConfigBeforeMigrations?.agents).toEqual(agents);
-      expect(snapshot.sourceConfig.agents?.list).toBeUndefined();
+      expect(snapshot.sourceConfig.agents).not.toHaveProperty("list");
       expect(await fs.readFile(configPath, "utf8")).toBe(raw);
     });
   });

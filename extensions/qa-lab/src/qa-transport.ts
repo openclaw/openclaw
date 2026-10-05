@@ -385,8 +385,14 @@ export function createQaStateBackedTransportAdapter(
   };
 }
 
-function normalizeQaBusOutboundEvent(event: QaBusEvent): QaTransportOutboundEvent | null {
+function normalizeQaTransportOutboundEvent(
+  event: QaBusEvent | QaTransportOutboundEvent,
+): QaTransportOutboundEvent | null {
   switch (event.kind) {
+    case "sent":
+    case "edited":
+    case "deleted":
+      return event;
     case "outbound-message":
       return { cursor: event.cursor, kind: "sent", message: event.message };
     case "message-edited":
@@ -396,12 +402,6 @@ function normalizeQaBusOutboundEvent(event: QaBusEvent): QaTransportOutboundEven
     default:
       return null;
   }
-}
-
-function isQaTransportOutboundEvent(
-  event: QaBusEvent | QaTransportOutboundEvent,
-): event is QaTransportOutboundEvent {
-  return event.kind === "sent" || event.kind === "edited" || event.kind === "deleted";
 }
 
 export async function waitForQaTransportOutboundSequence(params: {
@@ -420,9 +420,7 @@ export async function waitForQaTransportOutboundSequence(params: {
     async () => {
       const ownedEvents = (await params.readEvents())
         .filter((event) => event.cursor > (params.input.sinceCursor ?? 0))
-        .map((event) =>
-          isQaTransportOutboundEvent(event) ? event : normalizeQaBusOutboundEvent(event),
-        )
+        .map(normalizeQaTransportOutboundEvent)
         .filter((event): event is QaTransportOutboundEvent => event !== null)
         .filter(
           ({ message }) =>
@@ -436,15 +434,12 @@ export async function waitForQaTransportOutboundSequence(params: {
           throw new Error(failureReply);
         }
       }
-      const events = ownedEvents.filter(({ message }) => {
-        if (
-          params.input.conversationId &&
-          message.conversation.id !== params.input.conversationId
-        ) {
-          return false;
-        }
-        return !params.input.threadId || message.threadId === params.input.threadId;
-      });
+      const events = ownedEvents.filter(
+        ({ message }) =>
+          (!params.input.conversationId ||
+            message.conversation.id === params.input.conversationId) &&
+          (!params.input.threadId || message.threadId === params.input.threadId),
+      );
       const candidate = events.findLast(
         ({ kind, message }) =>
           kind !== "deleted" &&

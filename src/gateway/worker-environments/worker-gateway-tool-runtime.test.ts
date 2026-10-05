@@ -10,7 +10,9 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
@@ -42,6 +44,7 @@ const policy: WorkerToolSurface["policy"] = {
 };
 const success = { content: [{ type: "text" as const, text: "done" }], details: { status: "ok" } };
 const sink = { send: () => {} };
+const presentation = createToolSurfacePresentationForTest();
 
 function tool(
   name = "remote",
@@ -58,7 +61,7 @@ function tool(
   return result;
 }
 
-function fixture(tools: AnyAgentTool[], prepare = async () => ({ tools, policy })) {
+function fixture(tools: AnyAgentTool[], prepare = async () => ({ tools, policy, presentation })) {
   let current = true;
   const controller = new AbortController();
   const prepareTools = vi.fn(prepare);
@@ -100,9 +103,43 @@ function request(
 }
 
 describe("worker Gateway tool runtime", () => {
+  it("prepares deferred discovery guidance with the model tool projection", async () => {
+    const { runtime } = fixture([], async () => ({
+      tools: [tool("web_fetch")],
+      policy,
+      presentation: createToolSurfacePresentationForTest({
+        tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } },
+      }),
+    }));
+    try {
+      const projection = await runtime.getPromptProjection(identity);
+      expect(projection.tools.map(({ name }) => name)).toEqual([
+        "tool_search",
+        "tool_describe",
+        "tool_call",
+      ]);
+      expect(projection.toolSchemaDirectoryPrompt).toContain(
+        "Deferred names are not directly callable.",
+      );
+      expect(projection.toolSchemaDirectoryPrompt).not.toContain(
+        "Call a unique deferred tool name directly",
+      );
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it("issues one finite surface and invokes only an issued Gateway handle with valid arguments", async () => {
     const execute = vi.fn(async () => success);
     const remote = tool("remote", execute);
+    remote.outputSchema = Type.Object({ status: Type.String() });
+    remote.catalogMode = "direct-only";
+    setPluginToolMeta(remote, {
+      pluginId: "fixture",
+      optional: true,
+      replaySafe: true,
+      trustedLocalMedia: true,
+    });
     bindAgentToolExecutionLocation(remote, {
       kind: "gateway",
       replay: true,
@@ -115,10 +152,14 @@ describe("worker Gateway tool runtime", () => {
     expect(Value.Check(WorkerToolSurfaceSchema, surface)).toBe(true);
     expect(await runtime.getSurface(identity)).toEqual(surface);
     expect(prepareTools).toHaveBeenCalledTimes(1);
+    expect(surface.tools[0]?.plugin).not.toHaveProperty("trustedLocalMedia");
+    expect(getPluginToolMeta(remote)?.trustedLocalMedia).toBe(true);
     expect(surface.tools[0]).toMatchObject({
       execution: "gateway",
       replay: true,
       timeout: { minimumMs: 1000 },
+      plugin: { pluginId: "fixture", optional: true, replaySafe: true },
+      definition: { outputSchema: remote.outputSchema, catalogMode: "direct-only" },
     });
     const invocation = request(surface);
     for (const invalid of [
@@ -168,6 +209,7 @@ describe("worker Gateway tool runtime", () => {
       const prepared = createDeferredCore<{
         tools: AnyAgentTool[];
         policy: WorkerToolSurface["policy"];
+        presentation: WorkerToolSurface["presentation"];
       }>();
       const f = fixture([], () => prepared.promise);
       const surface = f.runtime.getSurface(identity);
@@ -177,7 +219,7 @@ describe("worker Gateway tool runtime", () => {
       } else {
         f.controller.abort(new Error(expected));
       }
-      prepared.resolve({ tools: [tool()], policy });
+      prepared.resolve({ tools: [tool()], policy, presentation });
       await expect(surface).rejects.toThrow(expected);
       await expect(f.runtime.getSurface(identity)).rejects.toThrow(expected);
       expect(f.prepareTools).toHaveBeenCalledTimes(1);
@@ -185,32 +227,22 @@ describe("worker Gateway tool runtime", () => {
     },
   );
 
-  it("rechecks a prepared invocation after yielding before starting the tool", async () => {
-    const execute = vi.fn(async () => success);
-    const f = fixture([tool("remote", execute)]);
-    const surface = await f.runtime.getSurface(identity);
-    const invocation = f.runtime.invoke(identity, request(surface), sink);
-    f.revoke();
-    await expect(invocation).rejects.toThrow("turn authority lost");
-    expect(execute).not.toHaveBeenCalled();
-    await f.runtime.close();
-  });
-
-  it.each(["during execution", "before publication"] as const)(
-    "fences results when authority is lost %s",
+  it.each(["before execution", "during execution", "before publication"] as const)(
+    "fences calls when authority is lost %s",
     async (stage) => {
       const entered = createDeferredCore();
       const completion = createDeferredCore<typeof success>();
-      const f = fixture([
-        tool("remote", () => {
-          entered.resolve();
-          return completion.promise;
-        }),
-      ]);
+      const execute = vi.fn(() => {
+        entered.resolve();
+        return completion.promise;
+      });
+      const f = fixture([tool("remote", execute)]);
       const surface = await f.runtime.getSurface(identity);
       const invocation = f.runtime.invoke(identity, request(surface), sink);
-      await entered.promise;
-      if (stage === "during execution") {
+      if (stage !== "before execution") {
+        await entered.promise;
+      }
+      if (stage !== "before publication") {
         f.revoke();
       }
       completion.resolve(success);
@@ -219,6 +251,7 @@ describe("worker Gateway tool runtime", () => {
         queueMicrotask(f.revoke);
       }
       await expect(invocation).rejects.toThrow("turn authority lost");
+      expect(execute).toHaveBeenCalledTimes(stage === "before execution" ? 0 : 1);
       await f.runtime.close();
     },
   );
@@ -356,29 +389,10 @@ describe("worker Gateway tool runtime", () => {
     await expect(runtime.getSurface(identity)).rejects.toThrow("surface closed");
   });
 
-  it("does not expose a successful result after a per-call cancellation", async () => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const { runtime } = fixture([
-      tool("remote", async () => {
-        entered.resolve();
-        await release.promise;
-        return success;
-      }),
-    ]);
-    const surface = await runtime.getSurface(identity);
-    const invocation = request(surface);
-    const call = runtime.invoke(identity, invocation, sink);
-    await entered.promise;
-    runtime.cancel(invocation);
-    release.resolve();
-    await expect(call).rejects.toThrow("cancelled");
-    await runtime.close();
-  });
-
-  it.each([true, false])(
-    "scopes socket cancellation only to live reads (%s)",
-    async (connectionScoped) => {
+  it.each(["call", "socket read", "socket replay"] as const)(
+    "fences cancelled calls while retaining socket-independent replays (%s)",
+    async (cancellation) => {
+      const connectionScoped = cancellation === "socket read";
       const entered = createDeferredCore<AbortSignal>();
       const release = createDeferredCore();
       const remote = tool("remote", async (_id, _args, signal) => {
@@ -400,12 +414,21 @@ describe("worker Gateway tool runtime", () => {
       const callSignal = await entered.promise;
       const joined = runtime.invoke(identity, request(surface), sink);
       await runtime.getSurface(identity);
-      socket.abort(new Error("socket closed"));
-      expect(callSignal.aborted).toBe(connectionScoped);
+      if (cancellation === "call") {
+        runtime.cancel(request(surface));
+      } else {
+        socket.abort(new Error("socket closed"));
+      }
+      expect(callSignal.aborted).toBe(cancellation !== "socket replay");
       release.resolve();
       const results = Promise.all([active, joined]);
-      if (connectionScoped) {
-        await expect(results).rejects.toThrow("socket closed");
+      if (cancellation !== "socket replay") {
+        await expect(results).rejects.toThrow(
+          cancellation === "call" ? "cancelled" : "socket closed",
+        );
+        if (cancellation === "call") {
+          await expect(active).rejects.toThrow("cancelled");
+        }
       } else {
         await expect(results).resolves.toEqual([success, success]);
       }

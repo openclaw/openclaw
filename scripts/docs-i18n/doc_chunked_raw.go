@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"net/url"
 	"os"
 	"regexp"
@@ -223,43 +224,24 @@ func splitDocBodyIntoBlocks(body string) []string {
 	if current.Len() > 0 {
 		blocks = append(blocks, current.String())
 	}
-	if len(blocks) == 0 {
-		return []string{body}
-	}
 	return blocks
 }
 
 func groupDocBlocks(blocks []string, maxBytes int) [][]string {
-	if len(blocks) == 0 {
-		return nil
-	}
 	if maxBytes <= 0 {
 		maxBytes = defaultDocChunkMaxBytes
 	}
-	groups := make([][]string, 0, len(blocks))
-	current := make([]string, 0, 8)
+	var groups [][]string
 	currentBytes := 0
-	flush := func() {
-		if len(current) == 0 {
-			return
-		}
-		groups = append(groups, current)
-		current = make([]string, 0, 8)
-		currentBytes = 0
-	}
 	for _, block := range blocks {
-		blockBytes := len(block)
-		if len(current) > 0 && currentBytes+blockBytes > maxBytes {
-			flush()
+		if len(groups) == 0 || currentBytes+len(block) > maxBytes {
+			groups = append(groups, []string{})
+			currentBytes = 0
 		}
-		if blockBytes > maxBytes {
-			groups = append(groups, []string{block})
-			continue
-		}
-		current = append(current, block)
-		currentBytes += blockBytes
+		last := len(groups) - 1
+		groups[last] = append(groups[last], block)
+		currentBytes += len(block)
 	}
-	flush()
 	return groups
 }
 
@@ -298,10 +280,11 @@ func validateDocChunkTranslation(source, translated string) error {
 	if err := validateDocChunkLiterals(sourceStructure, translatedStructure); err != nil {
 		return err
 	}
-	if !slices.Equal(sortedKeys(sourceStructure.tagCounts), sortedKeys(translatedStructure.tagCounts)) {
+	keys := slices.Sorted(maps.Keys(sourceStructure.tagCounts))
+	if !slices.Equal(keys, slices.Sorted(maps.Keys(translatedStructure.tagCounts))) {
 		return fmt.Errorf("component tag set mismatch")
 	}
-	for _, key := range sortedKeys(sourceStructure.tagCounts) {
+	for _, key := range keys {
 		if sourceStructure.tagCounts[key] != translatedStructure.tagCounts[key] {
 			return fmt.Errorf("component tag mismatch for %s: source=%d translated=%d", key, sourceStructure.tagCounts[key], translatedStructure.tagCounts[key])
 		}
@@ -620,15 +603,6 @@ func parseDocsMarkdown(source []byte) ast.Node {
 	return goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote)).Parser().Parse(textpkg.NewReader(source))
 }
 
-func sortedKeys(counts map[string]int) []string {
-	keys := make([]string, 0, len(counts))
-	for key := range counts {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	return keys
-}
-
 func updateFenceDelimiter(current, line string) (string, bool) {
 	delimiter := leadingFenceDelimiter(line)
 	if delimiter == "" {
@@ -768,11 +742,13 @@ func planDocChunkSplit(blocks []string, maxBytes, promptBudget int) (docChunkSpl
 	}
 	normalizedSource, _ := stripCommonIndent(source)
 	estimatedPromptCost := estimateDocPromptCost(normalizedSource)
-	if len(blocks) > 1 && promptBudget > 0 && estimatedPromptCost > promptBudget {
+	overBytes := maxBytes > 0 && len(source) > maxBytes
+	overPrompt := promptBudget > 0 && estimatedPromptCost > promptBudget
+	if len(blocks) > 1 && overPrompt {
 		return splitDocChunkBlocksMidpoint(blocks, fmt.Sprintf("prompt-budget:%d>%d", estimatedPromptCost, promptBudget))
 	}
-	if len(blocks) == 1 {
-		return planSingletonDocChunk(blocks[0], maxBytes, promptBudget)
+	if len(blocks) == 1 && (overBytes || overPrompt) {
+		return planSingletonDocChunkWithMode(blocks[0], maxBytes, promptBudget, false)
 	}
 	return docChunkSplitPlan{}, false
 }
@@ -785,30 +761,19 @@ func splitDocChunkBlocksMidpoint(blocks []string, reason string) (docChunkSplitP
 	return docChunkSplitPlan{groups: [][]string{blocks[:mid], blocks[mid:]}, reason: reason}, true
 }
 
-func planSingletonDocChunk(block string, maxBytes, promptBudget int) (docChunkSplitPlan, bool) {
-	normalizedBlock, _ := stripCommonIndent(block)
-	estimatedPromptCost := estimateDocPromptCost(normalizedBlock)
-	overBytes := maxBytes > 0 && len(block) > maxBytes
-	overPrompt := promptBudget > 0 && estimatedPromptCost > promptBudget
-	if !overBytes && !overPrompt {
-		return docChunkSplitPlan{}, false
-	}
-
-	return planSingletonDocChunkWithMode(block, maxBytes, promptBudget, false)
-}
-
 func planSingletonDocChunkWithMode(block string, maxBytes, promptBudget int, force bool) (docChunkSplitPlan, bool) {
 	prefix := "singleton-"
 	if force {
 		prefix = "singleton-retry-"
 	}
-	if sections := splitDocBlockSections(block); len(sections) > 1 {
-		if groups := wrapDocChunkSections(sections); len(groups) > 1 {
-			return docChunkSplitPlan{
-				groups: groups,
-				reason: prefix + "structural",
-			}, true
+	groups := [][]string{}
+	for _, section := range splitDocBlockSections(block) {
+		if strings.TrimSpace(section) != "" {
+			groups = append(groups, []string{section})
 		}
+	}
+	if len(groups) > 1 {
+		return docChunkSplitPlan{groups: groups, reason: prefix + "structural"}, true
 	}
 
 	if groups, ok := splitPureFencedDocSectionWithMode(block, maxBytes, promptBudget, force); ok {
@@ -826,17 +791,6 @@ func planSingletonDocChunkWithMode(block string, maxBytes, promptBudget int, for
 	}
 
 	return docChunkSplitPlan{}, false
-}
-
-func wrapDocChunkSections(sections []string) [][]string {
-	groups := make([][]string, 0, len(sections))
-	for _, section := range sections {
-		if strings.TrimSpace(section) == "" {
-			continue
-		}
-		groups = append(groups, []string{section})
-	}
-	return groups
 }
 
 func splitDocBlockSections(block string) []string {
@@ -916,17 +870,10 @@ func splitPlainDocSectionWithMode(text string, maxBytes, promptBudget int, force
 	if current.Len() > 0 {
 		groups = append(groups, []string{current.String()})
 	}
-	if len(groups) <= 1 {
-		if !force {
-			return nil, false
-		}
-		return splitPlainDocSectionMidpoint(lines)
+	if len(groups) > 1 {
+		return groups, true
 	}
-	return groups, true
-}
-
-func splitPlainDocSectionMidpoint(lines []string) ([][]string, bool) {
-	if len(lines) <= 1 {
+	if !force {
 		return nil, false
 	}
 	mid := len(lines) / 2

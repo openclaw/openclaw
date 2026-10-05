@@ -4,7 +4,7 @@ import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { claimSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { prepareSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { logVerbose } from "../../globals.js";
 import { toPluginConversationBinding } from "../../plugins/conversation-binding.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -108,17 +108,23 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     if (recorder.hasPersisted()) {
       return blockedOwner();
     }
+    const assertCurrent = () => {
+      state.getPreDispatchAbortSignal()?.throwIfAborted();
+      params.replyOptions?.operatorAuthority?.assertCurrent();
+    };
     let attemptedSessionId: string | undefined;
     let lastOwner: PluginBindingTranscriptOwner | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const targetSessionStoreEntry = resolveSessionStoreLookup(
+      const targetSessionStoreEntry = await resolveSessionStoreLookup(
         {
           ...ctx,
           CommandTargetSessionKey: undefined,
           SessionKey: pluginBindingSessionKey,
         },
         cfg,
+        assertCurrent,
       );
+      assertCurrent();
       const targetSessionEntry = targetSessionStoreEntry.entry;
       if (!targetSessionEntry || targetSessionEntry.sessionId === attemptedSessionId) {
         break;
@@ -335,16 +341,15 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     };
   }
 
-  const inboundDedupeClaim = claimInboundDedupe(ctx, {
-    reclaimPendingInput: () => {
-      const sourceRunId = normalizeOptionalString(ctx.MessageSid);
-      return Boolean(
-        params.replyOptions?.userTurnTranscriptRecorder?.getPendingInputMessage?.() &&
-        !params.replyOptions.userTurnTranscriptRecorder.hasPersisted() &&
-        sourceRunId &&
-        sessionStoreEntry.sessionKey &&
-        sessionStoreEntry.entry?.sessionId &&
-        claimSessionPendingInputDedupeRecovery(
+  const sourceRunId = normalizeOptionalString(ctx.MessageSid);
+  const recorder = params.replyOptions?.userTurnTranscriptRecorder;
+  const reclaimPendingInput =
+    recorder?.getPendingInputMessage?.() &&
+    !recorder.hasPersisted() &&
+    sourceRunId &&
+    sessionStoreEntry.sessionKey &&
+    sessionStoreEntry.entry?.sessionId
+      ? await prepareSessionPendingInputDedupeRecovery(
           {
             agentId: sessionStoreEntry.agentId ?? sessionAgentId,
             storePath: sessionStoreEntry.storePath,
@@ -352,9 +357,12 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
             sessionId: sessionStoreEntry.entry.sessionId,
           },
           sourceRunId,
-        ),
-      );
-    },
+        )
+      : undefined;
+  const inboundDedupeClaim = claimInboundDedupe(ctx, {
+    reclaimPendingInput: reclaimPendingInput
+      ? () => !recorder!.hasPersisted() && reclaimPendingInput()
+      : undefined,
   });
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     recordProcessed("skipped", { reason: "duplicate" });

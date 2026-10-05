@@ -226,6 +226,7 @@ describe("offline device placement abandonment", () => {
       expectRetainedDeviceCleanup(fixture);
       expect(fail).toHaveBeenCalledWith(
         expect.objectContaining({ recoveryError: FORCED_WORKER_ABANDONMENT_ERROR }),
+        undefined,
       );
       expect(transfer.close).toHaveBeenCalledWith(active.environmentId);
       expect(invoke).not.toHaveBeenCalled();
@@ -506,14 +507,14 @@ describe("offline device placement abandonment", () => {
     expect(placements.validateTurnClaim(claim)).toBe(false);
     expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
-    expect(() =>
+    await expect(
       placements.startReconcile({
         sessionId: active.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: active.generation + 1,
       }),
-    ).toThrow("Cannot reconcile stale worker placement");
+    ).rejects.toThrow("Cannot reconcile stale worker placement");
     await expect(placements.releaseTurn(claim)).rejects.toThrow(
       "turn claim changed before release",
     );
@@ -625,7 +626,7 @@ describe("offline device placement abandonment", () => {
           },
         });
       } else {
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: source.sessionId,
           environmentId: source.environmentId,
           ownerEpoch: source.activeOwnerEpoch,

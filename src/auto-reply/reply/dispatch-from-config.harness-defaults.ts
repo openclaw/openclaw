@@ -8,6 +8,8 @@ import {
 } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -21,10 +23,6 @@ import {
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
-import {
-  loadSessionStoreEntry,
-  resolveSessionStorePathCore,
-} from "./dispatch-from-config.runtime.js";
 import type { ReplyRunVerbosity } from "./get-reply.types.js";
 
 type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
@@ -45,7 +43,7 @@ export function createShouldEmitVerboseProgress(params: {
   const resolveCurrentExplicitLevel = () => {
     if (params.sessionKey && params.storePath) {
       try {
-        const entry = loadSessionStoreEntry({
+        const entry = loadSessionEntryReadOnly({
           ...(params.agentId ? { agentId: params.agentId } : {}),
           storePath: params.storePath,
           sessionKey: params.sessionKey,
@@ -137,14 +135,17 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
     return undefined;
   }
   try {
+    const allowPluginNormalization = params.cfg.plugins?.enabled !== false;
     const defaultModelRef = resolveDefaultModelForAgent({
       cfg: params.cfg,
       agentId: params.sessionAgentId,
+      allowPluginNormalization,
     });
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
       agentId: params.sessionAgentId,
       defaultProvider: defaultModelRef.provider,
+      allowPluginNormalization,
     });
     const parentSessionKey =
       params.entry?.parentSessionKey ??
@@ -176,7 +177,10 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
     const channelModelCandidate = channelModelOverride
       ? resolveModelRefFromString({
           raw: channelModelOverride.model,
+          cfg: params.cfg,
+          agentId: params.sessionAgentId,
           defaultProvider: defaultModelRef.provider,
+          allowPluginNormalization,
           aliasIndex,
         })?.ref
       : undefined;
@@ -188,7 +192,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
           fallbackAgentId: params.sessionAgentId,
         });
         const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-        return loadSessionStoreEntry({
+        return loadSessionEntryReadOnly({
           agentId,
           storePath,
           sessionKey,
@@ -211,7 +215,10 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
     const turnModelCandidate = params.turnModelOverride
       ? resolveModelRefFromString({
           raw: params.turnModelOverride,
+          cfg: params.cfg,
+          agentId: params.sessionAgentId,
           defaultProvider: defaultModelRef.provider,
+          allowPluginNormalization,
           aliasIndex,
         })?.ref
       : undefined;

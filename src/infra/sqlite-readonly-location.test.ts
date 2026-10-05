@@ -433,7 +433,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     },
   );
 
-  it("rejects an impossible pair after a same-size WAL reset", async () => {
+  it("retries a same-size WAL reset and publishes only the new consistent pair", async () => {
     const livePath = createTempDatabasePath();
     const writer = new sqlite.DatabaseSync(livePath);
     writer.exec(`
@@ -468,9 +468,16 @@ describe("prepareSqliteReadOnlyLocation", () => {
     });
 
     try {
-      await expect(prepareSqliteReadOnlyLocationInProcess(databasePath)).rejects.toThrow(
-        "SQLite WAL generation changed",
-      );
+      const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
+      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+      try {
+        expect(snapshot.prepare("SELECT value FROM before_reset").all()).toEqual([{ value: "A" }]);
+        expect(snapshot.prepare("SELECT value FROM after_reset").all()).toEqual([{ value: "B" }]);
+        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      } finally {
+        snapshot.close();
+        expect(prepared.cleanup()).toBe(true);
+      }
       expect(injected).toBe(true);
       expect(fs.statSync(`${databasePath}-wal`).size).toBe(walSizeBeforeReset);
       expect(readLogicalFamily(databasePath)).toEqual(sourceAfterReset);
@@ -576,7 +583,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     }
   });
 
-  it("refuses a pathname that disappears after its file is opened", async () => {
+  it("retries a transient missing pathname without publishing the unverified attempt", async () => {
     const databasePath = createTempDatabasePath(
       "CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('ok');",
     );
@@ -593,10 +600,15 @@ describe("prepareSqliteReadOnlyLocation", () => {
       return statSync(pathname, options as never);
     }) as typeof fs.statSync);
 
-    await expect(prepareSqliteReadOnlyLocationInProcess(databasePath)).rejects.toThrow(
-      "SQLite source changed while opening",
-    );
-    expect(injected).toBe(true);
+    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
+    const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+    try {
+      expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "ok" }]);
+      expect(injected).toBe(true);
+    } finally {
+      snapshot.close();
+      expect(prepared.cleanup()).toBe(true);
+    }
   });
 
   it("retries cleanup after a transient removal failure", async () => {

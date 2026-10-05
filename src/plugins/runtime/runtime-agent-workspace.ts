@@ -12,6 +12,7 @@ type PluginWorkspaceParams = Omit<
 
 export function ensurePluginAgentWorkspace(params?: PluginWorkspaceParams) {
   const legacy = params?.beforePersistentApply;
+  const assertHost = params?.guard?.assertHost;
   if (!legacy) {
     return ensureAgentWorkspace(params);
   }
@@ -38,7 +39,7 @@ export function ensurePluginAgentWorkspace(params?: PluginWorkspaceParams) {
   return ensureAgentWorkspace({
     ...params,
     guard: {
-      assertHost: () => check(params?.guard?.assertHost),
+      assertHost: () => check(assertHost),
       beforeLegacyApply: () => check(legacy),
     },
   });

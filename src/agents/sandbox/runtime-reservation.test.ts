@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runExecProcess } from "../bash-tools.exec-runtime.js";
 import { registerSandboxBackend } from "./backend.js";
@@ -144,6 +146,48 @@ async function seedLegacyRuntime() {
 }
 
 describe("durable sandbox runtime generations", () => {
+  it("rejects hosted custody released during reserved backend discovery before allocation", async () => {
+    const owner = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: path.join(workspaceDir, "openclaw.json"),
+        role: "gateway",
+      },
+    });
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const allocate = vi.fn();
+    install(async (params) => {
+      entered.resolve();
+      await resume.promise;
+      params.assertRuntimeCurrent?.();
+      allocate();
+      return handle(params);
+    });
+    const preparation = resolve();
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        preparation,
+        "Backend discovery not reached",
+      );
+      owner.release();
+      resume.resolve();
+      const error = await preparation.catch((failure: unknown) => failure);
+      expect(allocate).not.toHaveBeenCalled();
+      expect(error).toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+      expect((await readRegistry()).entries).toEqual([
+        expect.objectContaining({ runtimeState: "pending" }),
+      ]);
+    } finally {
+      resume.resolve();
+      await preparation.catch(() => {});
+      owner.release();
+    }
+  });
+
   it("replays a shared reservation from its original provider workspace", async () => {
     config.agents = {
       ...config.agents,

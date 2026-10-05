@@ -37,7 +37,6 @@ export { shouldHandleTextCommands } from "./commands-text-routing.js";
 
 export type {
   ChatCommandDefinition,
-  CommandArgChoiceContext,
   CommandArgDefinition,
   CommandArgValues,
   CommandArgs,
@@ -325,7 +324,7 @@ export function buildCommandTextFromArgs(
   return raw ? `/${commandName} ${raw}` : `/${commandName}`;
 }
 
-export type ResolvedCommandArgChoice = { value: string; label: string };
+type ResolvedCommandArgChoice = { value: string; label: string };
 
 /** Resolves static or context-aware choices for one command argument. */
 export function resolveCommandArgChoices(

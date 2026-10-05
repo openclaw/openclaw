@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { getNodeSqliteKysely, prepareSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  getNodeSqliteKysely,
+  prepareSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
 
@@ -31,21 +35,13 @@ function prepareHotWatermarkQuery(database: DatabaseSync) {
 
 // Retain compiled SQL per native handle; the shared executor still owns statements
 // and reads current rows with fresh bindings on every call.
-const hotWatermarkQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareHotWatermarkQuery>
->();
+const hotWatermarkQuery = createSqliteQueryCache(prepareHotWatermarkQuery);
 
 /** Reads hot append and rewrite tokens together on the caller's admitted connection. */
 export function readSessionTranscriptHotWatermark(
   database: { db: DatabaseSync },
   sessionId: string,
 ): SessionTranscriptWatermark {
-  let query = hotWatermarkQueries.get(database.db);
-  if (!query) {
-    query = prepareHotWatermarkQuery(database.db);
-    hotWatermarkQueries.set(database.db, query);
-  }
-  const row = query(sessionId);
+  const row = hotWatermarkQuery(database.db)(sessionId);
   return { generation: row?.generation ?? null, maxSeq: row?.max_seq ?? null };
 }

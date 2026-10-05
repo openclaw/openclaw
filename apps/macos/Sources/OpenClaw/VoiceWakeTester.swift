@@ -377,11 +377,7 @@ final class VoiceWakeTester {
         case .authorized: return true
 
         case .notDetermined:
-            return await withCheckedContinuation { continuation in
-                AVCaptureDevice.requestAccess(for: .audio) { granted in
-                    continuation.resume(returning: granted)
-                }
-            }
+            return await AVCaptureDevice.requestAccess(for: .audio)
 
         default:
             return false

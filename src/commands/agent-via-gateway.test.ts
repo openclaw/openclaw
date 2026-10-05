@@ -21,8 +21,15 @@ import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
-import { createLocalGatewayLockOptions } from "./agent-via-gateway.test-support.js";
+import {
+  createExplicitSystemAgentConfig,
+  createGatewayClosedError,
+  createGatewayNormalCloseError,
+  createGatewayTimeoutError,
+  createLocalGatewayLockOptions,
+} from "./agent-via-gateway.test-support.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
 const loadConfig = vi.hoisted(() => vi.fn());
@@ -80,7 +87,6 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
         ...overrides?.agents?.defaults,
       },
       ...(overrides?.agents?.ownership ? { ownership: overrides.agents.ownership } : {}),
-      ...(overrides?.agents?.list ? { list: overrides.agents.list } : {}),
       ...(overrides?.agents?.entries ? { entries: overrides.agents.entries } : {}),
     },
     session: {
@@ -242,50 +248,6 @@ function mockMessages(mock: unknown): string[] {
   return calls.map(([message]) => String(message));
 }
 
-function createGatewayTimeoutError() {
-  const err = new Error("gateway timeout after 90000ms");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "timeout",
-    timeoutMs: 90_000,
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
-function createGatewayClosedError() {
-  const err = new Error("gateway closed (1006 abnormal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "closed",
-    code: 1006,
-    reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
-function createGatewayNormalCloseError() {
-  const err = new Error("gateway closed (1000 normal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "closed",
-    code: 1000,
-    reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
 vi.mock("../config/gateway-dispatch-config.js", () => ({
   readGatewayDispatchConfig: loadConfig,
   readGatewayDispatchConfigWithShellEnvFallback: loadConfigWithShellEnvFallback,
@@ -328,7 +290,6 @@ function resetAgentCliCommandMocksForTest() {
   startOneShotDiagnosticsExporters.mockReset();
   startOneShotDiagnosticsExporters.mockResolvedValue(null);
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
-  agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
   // Each test observes a fresh mock generation, even after the real module was
   // warmed; a single hoisted factory would hide later unexpected imports.
@@ -496,7 +457,7 @@ describe("agentCliCommand", () => {
         expect(agentCommand).not.toHaveBeenCalled();
         expect(jsonRuntime.writeJson).toHaveBeenCalledOnce();
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { entries: { main: {}, ops: {} } } },
     );
   });
 
@@ -588,7 +549,7 @@ describe("agentCliCommand", () => {
           ...remoteGatewayConfig,
           agents: {
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
           },
         },
       );
@@ -631,10 +592,10 @@ describe("agentCliCommand", () => {
           sessionKey: "agent:ops:work",
         });
       },
-      {
+      createCanonicalAgentConfigFixture({
         agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
         session: { mainKey: "work", scope: "per-sender" },
-      },
+      }).config,
     );
   });
 
@@ -651,10 +612,10 @@ describe("agentCliCommand", () => {
           sessionKey: undefined,
         });
       },
-      {
+      createCanonicalAgentConfigFixture({
         agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
         session: { scope: "global" },
-      },
+      }).config,
     );
   });
 
@@ -675,7 +636,7 @@ describe("agentCliCommand", () => {
         agents: {
           ownership: "explicit",
           defaults: { sessionStore: { agentId: "ops" } },
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
         },
         session: { scope: "global" },
       },
@@ -743,7 +704,7 @@ describe("agentCliCommand", () => {
           agents: {
             ...loadRuntimeConfig().agents,
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
           },
         });
 
@@ -753,7 +714,7 @@ describe("agentCliCommand", () => {
         expect(agentCommand).not.toHaveBeenCalled();
       },
       {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        agents: { entries: { ops: {}, research: {} } },
         session: { scope: "global" },
       },
     );
@@ -1156,7 +1117,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBe("ops");
         expect(params.sessionKey).toBe("agent:ops:incident-42");
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { entries: { main: {}, ops: {} } } },
     );
   });
 
@@ -1179,7 +1140,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBe("ops");
         expect(params.sessionKey).toBe("agent:OPS:incident-42");
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { entries: { main: {}, ops: {} } } },
     );
   });
 
@@ -1199,7 +1160,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("agent:ops:incident-42");
       },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 
@@ -1232,7 +1193,7 @@ describe("agentCliCommand", () => {
         expect(params.sessionId).toBe("existing-main-session");
         expect(params.sessionKey).toBe("agent:ops:incident-42");
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { entries: { main: {}, ops: {} } } },
     );
   });
 
@@ -1254,7 +1215,7 @@ describe("agentCliCommand", () => {
           expect(params.agentId).toBe("ops");
           expect(params.sessionKey).toBe(sessionKey);
         },
-        { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+        { agents: { entries: { main: {}, ops: {} } } },
       );
     },
   );
@@ -1275,7 +1236,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("global");
       },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 
@@ -1297,7 +1258,7 @@ describe("agentCliCommand", () => {
         agents: {
           ownership: "explicit",
           defaults: { sessionStore: { agentId: "ops" } },
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
         },
       },
     );
@@ -1319,7 +1280,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("unknown");
       },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 
@@ -1528,7 +1489,7 @@ describe("agentCliCommand", () => {
         });
       },
       {
-        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
         session: { dmScope: "per-channel-peer" },
       },
     );
@@ -2646,66 +2607,20 @@ describe("agentCliCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
   });
 
-  it("keeps a resolved session module cached until the existing lazy reset", async () => {
-    await withTempStore(async () => {
-      mockGatewaySuccessReply();
-      const run = () => agentCliCommand({ message: "hi", to: "+1555" }, runtime);
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(loadAgentSessionModuleMock).toHaveBeenCalledOnce();
-
-      const nextGeneration = vi.fn();
-      vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
-        nextGeneration();
-        return await importOriginal<typeof import("./agent/session.runtime.js")>();
-      });
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(nextGeneration).not.toHaveBeenCalled();
-
-      agentViaGatewayTesting.resetLazyImportsForTests();
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(nextGeneration).toHaveBeenCalledOnce();
-      expect(callGateway).toHaveBeenCalledTimes(3);
-      expect(
-        callGateway.mock.calls.map(([value]) => {
-          const request = requireRecord(value, "gateway request");
-          return requireRecord(request.params, "gateway params").sessionKey;
-        }),
-      ).toEqual(["agent:main:main", "agent:main:main", "agent:main:main"]);
-    });
-  });
-
-  it("keeps a rejected session module cached until the existing lazy reset", async () => {
+  it("stops dispatch and releases signal listeners when the session module fails to load", async () => {
     await withTempStore(async () => {
       const failure = new Error("synthetic session module load failure");
-      const rejectedGeneration = vi.fn(() => {
+      vi.doMock("./agent/session.runtime.js", () => {
         throw failure;
       });
-      vi.doMock("./agent/session.runtime.js", rejectedGeneration);
       const signals = createSignalProcess();
-      const run = () =>
+      await expect(
         agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
           process: signals.processLike,
-        });
-      const firstError = await run().catch((error: unknown) => error);
-      expect(firstError).toBeInstanceOf(Error);
-      expect(firstError).toMatchObject({ cause: failure });
-      expect(rejectedGeneration).toHaveBeenCalledOnce();
-
-      const nextGeneration = vi.fn();
-      vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
-        nextGeneration();
-        return await importOriginal<typeof import("./agent/session.runtime.js")>();
-      });
-      await expect(run()).rejects.toBe(firstError);
-      expect(nextGeneration).not.toHaveBeenCalled();
+        }),
+      ).rejects.toMatchObject({ cause: failure });
       expect(callGateway).not.toHaveBeenCalled();
-      expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
-
-      agentViaGatewayTesting.resetLazyImportsForTests();
-      mockGatewaySuccessReply();
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(nextGeneration).toHaveBeenCalledOnce();
-      expect(callGateway).toHaveBeenCalledOnce();
+      expect(agentCommand).not.toHaveBeenCalled();
       expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
     });
   });

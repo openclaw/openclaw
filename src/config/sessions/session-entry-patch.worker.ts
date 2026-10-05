@@ -1,13 +1,17 @@
+import { isDeepStrictEqual } from "node:util";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { applySessionEntryPatchInDatabase } from "./session-accessor.sqlite-entry-mutation.js";
 import {
   readLifecycleTargetSnapshot,
   readSessionEntrySelectionSnapshot,
+  readExactSessionEntryRowValidated,
 } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { sessionEntryPatchPredicateMatches } from "./session-entry-patch-guard.js";
 import type {
   SessionEntryPatchCommit,
@@ -15,6 +19,7 @@ import type {
   SessionEntryPatchReceipt,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
+import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 
 export function readSessionEntryPatchSnapshot(
   database: OpenClawAgentDatabase,
@@ -41,8 +46,15 @@ export function commitSessionEntryPatch(
         options: {
           consumePendingReset: input.consumePendingReset,
           providerReviewMutation: input.providerReviewMutation,
-          assertCommitAllowed: () =>
-            admit("transaction", { kind: "session-entry-patch-validated" }),
+          assertCommitAllowed: () => {
+            const refusedSource = readRefusedSessionSource(database, input.sources);
+            if (refusedSource) {
+              result = { kind: "session-entry-patch", entry: null, refusedSource };
+              transferSessionEntryWorkerCandidate(database, admit, result);
+              throw new Error("Session source refusal was not rejected");
+            }
+            admit("transaction", { kind: "session-entry-patch-validated" });
+          },
         },
       });
       const publication = mutation.identity
@@ -62,11 +74,54 @@ export function commitSessionEntryPatch(
   });
 }
 
+function readRefusedSessionSource(
+  database: OpenClawAgentDatabase,
+  sources: SessionEntryPatchCommit["sources"],
+): SessionEntryPatchCommitted["refusedSource"] {
+  for (const [index, source] of (sources ?? []).entries()) {
+    if (readOpenClawAgentDatabaseIdentity(database).identity !== source.source.databaseIdentity) {
+      return { index, facts: { entry: undefined } };
+    }
+    const entry = readExactSessionEntryRowValidated(database, source.sessionKey)?.entry;
+    const members =
+      source.members === undefined
+        ? undefined
+        : listSessionMembersInDatabase(database, source.sessionKey).map(
+            (member) => member.identityId,
+          );
+    if (
+      Boolean(entry) !== Boolean(source.expected) ||
+      source.fields.some((field) => !isDeepStrictEqual(entry?.[field], source.expected?.[field])) ||
+      (members !== undefined && !isDeepStrictEqual(members, source.members)) ||
+      (source.transcript &&
+        !isDeepStrictEqual(
+          { ...readTranscriptContextVersionInTransaction(database, source.transcript.sessionId) },
+          source.transcript.version,
+        ))
+    ) {
+      return { index, facts: { entry, members } };
+    }
+  }
+  return undefined;
+}
+
 export function transferSessionEntryWorkerCandidate(
   database: OpenClawAgentDatabase,
   admit: AgentWorkerOperationContext["admit"],
   result: { kind: string },
-): SessionEntryPatchReceipt {
+): SessionEntryPatchReceipt;
+export function transferSessionEntryWorkerCandidate<Receipt>(
+  database: OpenClawAgentDatabase,
+  admit: AgentWorkerOperationContext["admit"],
+  result: { kind: string },
+  wrapReceipt: (receipt: SessionEntryPatchReceipt) => Receipt,
+): Receipt;
+export function transferSessionEntryWorkerCandidate<Receipt>(
+  database: OpenClawAgentDatabase,
+  admit: AgentWorkerOperationContext["admit"],
+  result: { kind: string },
+  wrapReceipt?: (receipt: SessionEntryPatchReceipt) => Receipt,
+): SessionEntryPatchReceipt | Receipt {
   // Deliver the exact candidate before COMMIT; the small native receipt certifies it afterward.
   const transfer = createSqliteWorkerTransferOwner();
   const handle = transfer.start([{ kind: "patch", value: result }].values(), {
@@ -85,9 +140,10 @@ export function transferSessionEntryWorkerCandidate(
       kind: "session-entry-patch-committed",
       transferId: handle.id,
     };
-    deferSqliteWorkerCommitReceipt(database.db, receipt);
-    admit("commit", receipt);
-    return receipt;
+    const publication = wrapReceipt ? wrapReceipt(receipt) : receipt;
+    deferSqliteWorkerCommitReceipt(database.db, publication);
+    admit("commit", publication);
+    return publication;
   } finally {
     transfer.cancel();
   }

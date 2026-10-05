@@ -1,18 +1,11 @@
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import {
-  isGatewayRestartDraining,
-  runWithGatewayDetachedWorkAdmission,
-  runWithGatewayDetachedWorkContinuation,
-} from "../../../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
-import {
-  MIN_ANNOUNCE_RETRY_DELAY_MS,
-  resolveAnnounceRetryDelayMs,
-} from "./subagent-registry-helpers.js";
+import { resolveAnnounceRetryDelayMs } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleCleanupContext } from "./subagent-registry-lifecycle-context.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
@@ -26,12 +19,9 @@ import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 const MAX_DETACHED_CLEANUP_RETRIES = 3;
 
 export function runWithSubagentCleanupWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
-  // Restart remains one-way; only suspension preserves an admitted cleanup owner.
-  // The registry owns cleanup after the spawning tool's caller has retired.
+  // Required cleanup continues under its admitted owner after ingress closes.
   return withoutGatewayToolCallerIdentity(() =>
-    isGatewayRestartDraining()
-      ? runWithGatewayDetachedWorkAdmission(run, "subagents:lifecycle-cleanup")
-      : runWithGatewayDetachedWorkContinuation(run, "subagents:lifecycle-cleanup"),
+    runWithGatewayDetachedWorkContinuation(run, "subagents:lifecycle-cleanup"),
   );
 }
 
@@ -47,14 +37,14 @@ export function scheduleResumeSubagentRun(
   const runtimeKey = getSubagentRunRuntimeKey(entry);
   const timer = setTimeout(() => {
     context.scheduledResumeTimers.delete(timer);
-    void runWithGatewayDetachedWorkAdmission(async () => {
+    void runWithSubagentCleanupWorkAdmission(async () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
       const current = getCurrentSubagentRunOwner(params.runs, entry);
       if (!current) {
         return;
       }
       if (cleanupGeneration !== undefined) {
-        if (!context.isCleanupGenerationCurrent(runId, entry, cleanupGeneration)) {
+        if (!context.isCleanupGenerationCurrent(entry, cleanupGeneration)) {
           return;
         }
         if (current.cleanupHandled) {
@@ -62,7 +52,7 @@ export function scheduleResumeSubagentRun(
             entry,
             stateContext,
             assertCurrent() {
-              if (!context.isCleanupGenerationCurrent(runId, entry, cleanupGeneration)) {
+              if (!context.isCleanupGenerationCurrent(entry, cleanupGeneration)) {
                 throw new Error("Subagent cleanup resume generation changed.");
               }
             },
@@ -78,30 +68,14 @@ export function scheduleResumeSubagentRun(
       if (
         !resumedEntry ||
         (cleanupGeneration !== undefined &&
-          !context.isCleanupGenerationCurrent(runId, entry, cleanupGeneration))
+          !context.isCleanupGenerationCurrent(entry, cleanupGeneration))
       ) {
         return;
       }
       params.resumedRuns.delete(runtimeKey);
       params.resumeSubagentRun(resumedEntry.runId);
-    }, "subagents:resume").catch((err: unknown) => {
+    }).catch((err: unknown) => {
       defaultRuntime.log(`[warn] subagent cleanup resume failed (${runId}): ${String(err)}`);
-      const current = getCurrentSubagentRunOwner(params.runs, entry);
-      try {
-        assertSubagentRegistryWriteSourceCurrent(stateContext);
-      } catch {
-        return;
-      }
-      if (isGatewayRestartDraining() && current && typeof current.cleanupCompletedAt !== "number") {
-        scheduleResumeSubagentRun(
-          context,
-          current.runId,
-          current,
-          Math.max(delayMs, MIN_ANNOUNCE_RETRY_DELAY_MS),
-          cleanupGeneration,
-          stateContext,
-        );
-      }
     });
   }, delayMs);
   timer.unref?.();
@@ -136,7 +110,7 @@ export function runDetachedCleanupAttempt(
     }
   };
   const assertCurrent = () => {
-    if (!context.isCleanupGenerationCurrent(args.runId, args.entry, args.cleanupGeneration)) {
+    if (!context.isCleanupGenerationCurrent(args.entry, args.cleanupGeneration)) {
       throw new Error("Subagent cleanup generation changed before persistence.");
     }
   };
@@ -182,8 +156,8 @@ export function runDetachedCleanupAttempt(
           !current ||
           current.cleanupCompletedAt ||
           !(startCommitted
-            ? context.isCleanupAttemptCurrent(args.runId, args.entry, args.cleanupGeneration)
-            : context.isCleanupGenerationCurrent(args.runId, args.entry, args.cleanupGeneration))
+            ? context.isCleanupAttemptCurrent(args.entry, args.cleanupGeneration)
+            : context.isCleanupGenerationCurrent(args.entry, args.cleanupGeneration))
         ) {
           assertSubagentRegistryWriteSourceCurrent(stateContext);
           await retireSupersededCleanupIfNeeded(context, args.entry, args.cleanupGeneration);
@@ -207,7 +181,7 @@ export function runDetachedCleanupAttempt(
         } catch {
           return;
         }
-        if (!context.isCleanupGenerationCurrent(args.runId, args.entry, args.cleanupGeneration)) {
+        if (!context.isCleanupGenerationCurrent(args.entry, args.cleanupGeneration)) {
           return;
         }
         const failureCount = context.incrementCleanupFailureCount(current);
@@ -227,30 +201,6 @@ export function runDetachedCleanupAttempt(
         defaultRuntime.log(
           `[warn] subagent cleanup admission failed (${args.runId}): ${String(err)}`,
         );
-        if (
-          hasSqliteWorkerOutcomeUnknown(err) ||
-          (err instanceof SubagentRegistryWriteError && err.outcome === "committed")
-        ) {
-          return;
-        }
-        try {
-          assertSubagentRegistryWriteSourceCurrent(stateContext);
-        } catch {
-          return;
-        }
-        if (
-          isGatewayRestartDraining() &&
-          context.isCleanupGenerationCurrent(args.runId, args.entry, args.cleanupGeneration)
-        ) {
-          scheduleResumeSubagentRun(
-            context,
-            args.runId,
-            args.entry,
-            MIN_ANNOUNCE_RETRY_DELAY_MS,
-            args.cleanupGeneration,
-            stateContext,
-          );
-        }
       })
       .finally(() => {
         releaseReservation();

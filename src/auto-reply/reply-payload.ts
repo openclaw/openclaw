@@ -22,7 +22,11 @@ export type {
   ReplyPayloadTtsSupplement,
 } from "../shared/reply-payload.types.js";
 
-export type ReplyMediaFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+export type ReplyMediaFailureCode =
+  | "file-not-found"
+  | "unsupported-format"
+  | "delivery-failed"
+  | "invalid-reference";
 
 /** Adds the BTW question banner for channels that only accept plain text bodies. */
 export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
@@ -108,6 +112,8 @@ const REPLY_MEDIA_FAILURE_MESSAGES: Record<ReplyMediaFailureCode, string> = {
   "file-not-found": "File not found. Check the path and try again.",
   "unsupported-format": "Rejected by the local attachment allowlist. Send a supported file type.",
   "delivery-failed": "Delivery failed. Try sending this file again.",
+  "invalid-reference":
+    "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
 };
 
 function formatReplyMediaFailures(failures: readonly ReplyMediaFailure[]): string {
@@ -335,6 +341,8 @@ export type ReplyPayloadMetadata = {
   toolErrorWarning?: { toolName: string };
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
+  /** Host label or status about the run (truncation, restart, compaction); not the answer. */
+  hostNotice?: true;
   /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
   heartbeatTerminalToolFailure?: {
     toolName: string;
@@ -362,6 +370,22 @@ export function setReplyPayloadMetadata<T extends object>(
 /** Reads internal metadata attached to a reply payload object. */
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
+}
+
+/** Records attachment failures after the ones the payload already carries. */
+export function addReplyPayloadMediaFailures<T extends object>(
+  payload: T,
+  failures: readonly ReplyMediaFailure[] | undefined,
+): T {
+  if (!failures?.length) {
+    return payload;
+  }
+  return setReplyPayloadMetadata(payload, {
+    assistantMediaFailures: [
+      ...(getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []),
+      ...failures,
+    ],
+  });
 }
 
 /** Exact source occurrence represented by one emitted block reply. */
@@ -504,6 +528,15 @@ export function isReplyPayloadStatusNotice(
   payload: Pick<ReplyPayload, "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice">,
 ): boolean {
   return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
+}
+
+/** Host-generated errors, warnings, status lines and run labels; never the model's answer. */
+export function isHostNoticePayload(payload: ReplyPayload): boolean {
+  return (
+    payload.isError === true ||
+    isReplyPayloadStatusNotice(payload) ||
+    getReplyPayloadMetadata(payload)?.hostNotice === true
+  );
 }
 
 /** Classifies terminal vs. supplemental reply lanes, not content, sendability, or authority. */

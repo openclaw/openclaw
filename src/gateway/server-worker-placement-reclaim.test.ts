@@ -30,7 +30,10 @@ import { workerWorkspaceResultStaging } from "./worker-environments/workspace-re
 const lookup = vi.hoisted(() => ({
   value: undefined as ReturnType<typeof import("./session-utils.js").loadSessionEntry> | undefined,
 }));
-vi.mock("./session-utils.js", () => ({ loadSessionEntry: () => lookup.value }));
+vi.mock("./session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils.js")>()),
+  loadSessionEntry: () => lookup.value,
+}));
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   getRuntimeConfig: () => ({}),
@@ -83,12 +86,10 @@ async function scenario(
     store: { [REQUEST.sessionKey]: entry },
   };
   lookup.value = { ...target, cfg: {}, entry, legacyKey: undefined };
-  if (pendingMove) {
-    await replaceSessionEntry(
-      { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
-      entry,
-    );
-  }
+  await replaceSessionEntry(
+    { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
+    entry,
+  );
   const barrierEntered = createDeferred();
   const releaseBarrier = createDeferred();
   const context = createWorkerStopChatContext();
@@ -385,7 +386,7 @@ async function scenario(
   if (beforeStop) {
     // A preceding lifecycle owner holds ingress pending while Stop joins that
     // same owner. This fixes ordering without timer delays or editing ingress.
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("placement-reclaim", {
       scope: storePath,
       identities: [REQUEST.sessionKey, REQUEST.sessionId],
       run: async () => {

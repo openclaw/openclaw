@@ -89,7 +89,6 @@ describe("tool-result projection persistence at dispatch", () => {
       onFinalPromptText: () => {},
       onSteeringAcknowledged: () => {},
       runtimeOnly: false,
-      sessionPromptState,
       systemPrompt: "test prompt",
       toolResultAggregateMaxChars: 8_000,
       toolResultMaxChars: 4_000,

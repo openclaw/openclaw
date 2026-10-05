@@ -39,7 +39,6 @@ import {
   mergeTtsSupplementMessages,
   projectForwardedMessages,
   toProjectedMessages,
-  type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
 import {
   sanitizeChatHistoryContentBlock,
@@ -53,6 +52,7 @@ import type {
   CurrentUserProfileDisplay,
   CurrentUserProfileDisplayResolver,
 } from "./current-user-profile-display.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import { projectTranscriptImageArtifacts } from "./transcript-image-artifacts.js";
 
 export type ChatDisplayProjectionOptions = {

@@ -16,7 +16,7 @@ import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { getPendingWakeCommit } from "../registry/subagent-registry-requester-wake-commit.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
@@ -148,9 +148,7 @@ describe("persisted subagent requester wakes", () => {
         databaseOptions: { database },
       });
 
-      expect(
-        driver.controller.isCleanupAttemptCurrent(input.subagent.runId, input.subagent, generation),
-      ).toBe(delivered);
+      expect(driver.controller.isCleanupAttemptCurrent(input.subagent, generation)).toBe(delivered);
       expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
       expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.cleanupHandled).toBe(
         false,
@@ -793,7 +791,7 @@ describe("persisted subagent requester wakes", () => {
       const before = structuredClone(input);
       if (change === "superseded generation") {
         before.subagent.delivery!.generation = 2;
-        upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(before.subagent));
+        writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(before.subagent)], []);
       }
       const blocked = blockSubagentCompletionDelivery({
         subagent: input.subagent,
@@ -931,7 +929,7 @@ describe("persisted subagent requester wakes", () => {
           } else {
             updated.requesterSettleWake!.rearmGeneration = 2;
           }
-          upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(updated));
+          writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(updated)], []);
         }
         throw new Error("requester unavailable");
       });

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { hashFileDescriptorSync, sameFileMutationFingerprint } from "./file-descriptor.js";
+import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
 
 export type SqliteFileContent = {
   sha256: string;
@@ -55,10 +56,11 @@ export function assertPublishedFileIdentitySync(
 export function assertOpenFileIdentitySync(
   fileDescriptor: number,
   filePath: string,
-  expectedIdentity: Stats,
+  expectedIdentity: Stats | BigIntStats,
 ): void {
-  const openedIdentity = fsSync.fstatSync(fileDescriptor);
-  const currentIdentity = fsSync.lstatSync(filePath);
+  const options = { bigint: typeof expectedIdentity.ino === "bigint" };
+  const openedIdentity = fsSync.fstatSync(fileDescriptor, options);
+  const currentIdentity = fsSync.lstatSync(filePath, options);
   if (
     !openedIdentity.isFile() ||
     !currentIdentity.isFile() ||
@@ -71,7 +73,7 @@ export function assertOpenFileIdentitySync(
 
 export function hashPublishedFileSync(
   filePath: string,
-  expectedIdentity: Stats,
+  expectedIdentity: Stats | BigIntStats,
 ): SqliteFileContent {
   const fileDescriptor = fsSync.openSync(filePath, "r");
   try {
@@ -83,7 +85,7 @@ export function hashPublishedFileSync(
       if (
         initialStat.dev !== finalStat.dev ||
         initialStat.ino !== finalStat.ino ||
-        initialStat.birthtimeNs !== finalStat.birthtimeNs ||
+        readDatabaseIdentityBirthtime(initialStat) !== readDatabaseIdentityBirthtime(finalStat) ||
         initialStat.size !== finalStat.size
       ) {
         throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
@@ -145,14 +147,9 @@ export function sameFileStatFingerprint(
   left: Stats | BigIntStats,
   right: Stats | BigIntStats,
 ): boolean {
-  // Creating the publication hard link changes source ctime, so compare the
-  // mutation fields that remain stable for the same bytes and pathname owner.
-  return (
-    sameFileIdentity(left, right) &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.birthtimeMs === right.birthtimeMs
-  );
+  // Linking/unlinking changes ctime, which Linux can expose as birthtime without statx.
+  // Publication separately verifies bytes; timestamps do not identify the transferred file.
+  return sameFileIdentity(left, right) && left.size === right.size;
 }
 
 export async function removePublicationStagingDirectory(

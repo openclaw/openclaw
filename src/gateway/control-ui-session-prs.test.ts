@@ -61,6 +61,19 @@ describe("parseGitHubRemoteUrl", () => {
     expect(parseGitHubRemoteUrl("ssh://git@github.com/openclaw/openclaw.git")).toEqual(expected);
   });
 
+  it("parses the configured GitHub Enterprise host without admitting another host", () => {
+    const expected = { owner: "acme", repo: "private-repo" };
+    expect(
+      parseGitHubRemoteUrl("https://ghe.example.test/acme/private-repo.git", "ghe.example.test"),
+    ).toEqual(expected);
+    expect(
+      parseGitHubRemoteUrl("git@ghe.example.test:acme/private-repo.git", "ghe.example.test"),
+    ).toEqual(expected);
+    expect(
+      parseGitHubRemoteUrl("https://github.com/acme/private-repo.git", "ghe.example.test"),
+    ).toBeNull();
+  });
+
   it("rejects non-GitHub and malformed remotes", () => {
     expect(parseGitHubRemoteUrl("https://gitlab.com/openclaw/openclaw.git")).toBeNull();
     expect(parseGitHubRemoteUrl("git@github.com:openclaw")).toBeNull();

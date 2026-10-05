@@ -27,13 +27,8 @@ export {
   extractKeywords,
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
-  isQueryStopWordToken,
-  isSessionArchiveArtifactName,
-  isUsageCountedSessionTranscriptFileName,
   listSessionTranscriptCorpusEntriesForAgent,
   matchesSessionEntryPrefixHash,
-  parseCanonicalSessionSyncTargetFromPath,
-  parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
   readTranscriptStatsBatchReadOnlySync,
   readSessionResetRecallCutoff,
@@ -42,11 +37,9 @@ export {
   statSessionEntrySync,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 export type {
-  BuildSessionEntryOptions,
   SessionFileEntry,
   SessionFileState,
   SessionTranscriptCorpusEntry,
-  SessionTranscriptCorpusOptions,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 
 /** Read authoritative admission facts without creating a missing agent database. */

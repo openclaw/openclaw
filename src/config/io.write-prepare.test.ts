@@ -636,7 +636,7 @@ const writeCases: WriteCase[] = [
   },
 ];
 
-function resolveWriteCase(testCase: WriteCase): OpenClawConfig {
+function resolveWriteCase(testCase: WriteCase): unknown {
   return resolvePersistCandidateForWrite({
     runtimeConfig: testCase.current,
     sourceConfig: testCase.source ?? testCase.current,
@@ -644,7 +644,7 @@ function resolveWriteCase(testCase: WriteCase): OpenClawConfig {
     ...(testCase.authored === undefined ? {} : { rootAuthoredConfig: testCase.authored }),
     ...(testCase.before === undefined ? {} : { sourceConfigBeforeMigrations: testCase.before }),
     ...testCase.options,
-  }) as OpenClawConfig;
+  });
 }
 
 describe("config io write prepare", () => {
@@ -823,9 +823,9 @@ describe("config io write prepare", () => {
       preserveLegacyAgentRoster: true,
       explicitSetPaths: [["gateway", "port"]],
       explicitSetValueSource: { gateway: { port: 19001 } },
-    }) as OpenClawConfig;
+    });
 
-    expect(persisted.agents?.entries?.research?.default).toBe(true);
+    expect(persisted).toHaveProperty("agents.entries.research.default", true);
     const reloaded = createCanonicalAgentConfigFixture(persisted).config;
     expect(tryResolveLegacyCompatibilityAgentId(reloaded)).toBe("research");
   });
@@ -863,11 +863,11 @@ describe("config io write prepare", () => {
         nextConfig: roster({ main }),
         unsetPaths,
         allowedAgentRosterRemovals: ["main"],
-      }) as OpenClawConfig,
+      }),
       unsetPaths,
     );
-    expect(persisted.agents).not.toHaveProperty("list");
-    expect(persisted.agents).not.toHaveProperty("entries");
+    expect(persisted).not.toHaveProperty("agents.list");
+    expect(persisted).not.toHaveProperty("agents.entries");
   });
 
   it("prunes empty objects inside arrays during explicit unsets", () => {

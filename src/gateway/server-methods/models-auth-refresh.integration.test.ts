@@ -76,7 +76,7 @@ describe("models.authRefresh", () => {
       for (const resolved of [state.home, resolveStateDir(), resolveConfigPath()]) {
         expect(isPathInside(state.root, resolved)).toBe(true);
       }
-      saveProviderKey("initial-provider-credential");
+      await saveProviderKey("initial-provider-credential");
       const { client, server } = await startGatewayWithClient({
         cfg,
         configPath: state.configPath,
@@ -90,7 +90,7 @@ describe("models.authRefresh", () => {
           "Gateway published its secrets runtime",
         ).warnings.filter((warning) => warning.path === "skills.entries.unavailable.apiKey");
         expect(unrelatedWarnings).toHaveLength(1);
-        deleteSecretStoreEntry({
+        await deleteSecretStoreEntry({
           scope: { kind: "team" },
           name: "REFRESH_PROVIDER_KEY",
           database: { env: state.env },
@@ -107,7 +107,7 @@ describe("models.authRefresh", () => {
           expect.arrayContaining(unrelatedWarnings),
         );
 
-        saveProviderKey("recovered-provider-credential");
+        await saveProviderKey("recovered-provider-credential");
         await expect(
           client.request("models.authRefresh", { agentId: "main", operation: "update" }),
         ).resolves.toEqual({ refreshed: true });

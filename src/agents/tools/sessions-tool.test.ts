@@ -625,8 +625,8 @@ describe("sessions tool", () => {
       callGateway: callGateway as never,
     });
     const guardParams = { cfg, ...sessionScope };
-    const currentRunGuard = createAgentPatchedSessionModelRunGuard(guardParams);
-    const failedCurrentRunGuard = createAgentPatchedSessionModelRunGuard(guardParams);
+    const currentRunGuard = await createAgentPatchedSessionModelRunGuard(guardParams);
+    const failedCurrentRunGuard = await createAgentPatchedSessionModelRunGuard(guardParams);
 
     await tool.execute("patch-model", {
       action: "patch",
@@ -683,7 +683,7 @@ describe("sessions tool", () => {
     expect(loadSessionEntry(sessionScope)).toEqual(entryBeforeFailure);
     expect(await loadTranscriptEvents(transcriptScope)).toEqual(transcriptBeforeFailure);
 
-    const runGuard = createAgentPatchedSessionModelRunGuard(guardParams);
+    const runGuard = await createAgentPatchedSessionModelRunGuard(guardParams);
     await runGuard.fail(failure);
     expect(loadSessionEntry(sessionScope)).toMatchObject({
       model: "good",
@@ -732,12 +732,13 @@ describe("sessions tool", () => {
       },
     );
 
-    await createAgentPatchedSessionModelRunGuard({
+    const guard = await createAgentPatchedSessionModelRunGuard({
       cfg: {},
       agentId: "main",
       sessionKey,
       storePath,
-    }).finish(true);
+    });
+    await guard.finish(true);
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
       "modelFallback",
     );
@@ -785,7 +786,7 @@ describe("sessions tool", () => {
         },
       },
     );
-    const runGuard = createAgentPatchedSessionModelRunGuard({
+    const runGuard = await createAgentPatchedSessionModelRunGuard({
       cfg: {},
       agentId: "main",
       sessionKey,
@@ -834,7 +835,7 @@ describe("sessions tool", () => {
         },
       },
     );
-    const runB = createAgentPatchedSessionModelRunGuard({
+    const runB = await createAgentPatchedSessionModelRunGuard({
       cfg,
       agentId: "main",
       sessionKey,
@@ -850,7 +851,7 @@ describe("sessions tool", () => {
         source: "agent-patch",
       },
     }));
-    const runC = createAgentPatchedSessionModelRunGuard({
+    const runC = await createAgentPatchedSessionModelRunGuard({
       cfg,
       agentId: "main",
       sessionKey,
@@ -866,7 +867,7 @@ describe("sessions tool", () => {
         source: "agent-patch",
       },
     }));
-    const runD = createAgentPatchedSessionModelRunGuard({
+    const runD = await createAgentPatchedSessionModelRunGuard({
       cfg,
       agentId: "main",
       sessionKey,

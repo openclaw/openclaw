@@ -8,7 +8,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import { bindHostSkillCatalog } from "../harness/host-skills.js";
 import { readInstalledSkill } from "../installed-skill-catalog.js";
-import { resolveSandboxDockerConfig } from "./config.js";
+import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxFileIdentity } from "./file-mutation-identity.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import {
@@ -118,11 +118,19 @@ describe("sandbox effective filesystem mounts", () => {
         await fs.mkdir(path.join(workspaceDir, name));
         await fs.writeFile(path.join(workspaceDir, name, "marker"), name);
       }
-      const docker = resolveSandboxDockerConfig({
-        scope: "agent",
-        globalDocker: { binds: [`${workspaceDir}/A:/data:rw`] },
-        agentDocker: { binds: [`${workspaceDir}/B:/data/:ro`] },
-      });
+      const { docker } = resolveSandboxConfigForAgent(
+        {
+          agents: {
+            defaults: {
+              sandbox: { scope: "agent", docker: { binds: [`${workspaceDir}/A:/data:rw`] } },
+            },
+            entries: {
+              test: { sandbox: { docker: { binds: [`${workspaceDir}/B:/data/:ro`] } } },
+            },
+          },
+        },
+        "test",
+      );
       const sandbox = mountedSandbox(workspaceDir, docker);
       const bridge = createSandboxFsBridge({ sandbox });
       expect((await bridge.readFile({ filePath: "/data/marker" })).toString()).toBe("B");

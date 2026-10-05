@@ -241,9 +241,7 @@ describe("completed requester delivery replay fence", () => {
       );
       driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
       await admitted.promise;
-      expect(
-        driver.controller.startSubagentAnnounceCleanupFlow(input.subagent.runId, input.subagent),
-      ).toBe(true);
+      expect(driver.controller.startSubagentAnnounceCleanupFlow(input.subagent)).toBe(true);
       await reported.promise;
       expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.delivery?.status).toBe(
         "suspended",

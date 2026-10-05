@@ -127,7 +127,6 @@ async function markRecoveryStore(params: {
 export async function markRestartAbortedMainSessions(params: {
   resolveGatewayContext: GatewayContextResolver;
   cfg?: OpenClawConfig;
-  additionalCfgs?: Iterable<OpenClawConfig | undefined>;
   stateDir?: string;
   activeRuns: Iterable<RestartRecoveryCandidate>;
   isActiveRun?: (run: RestartRecoveryCandidate) => boolean;
@@ -156,20 +155,17 @@ export async function markRestartAbortedMainSessions(params: {
     }
   };
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
-  const configs = [params.cfg, ...(params.additionalCfgs ?? [])].filter(Boolean);
-  for (const cfg of configs.length > 0 ? configs : [undefined]) {
-    try {
-      for (const target of await discoverRestartRecoveryStoreTargets({ cfg, stateDir })) {
-        addStoreTarget(target);
-      }
-    } catch (err) {
-      if (!cfg) {
-        throw err;
-      }
-      mainSessionRecoveryLog.warn(
-        `failed to resolve configured session stores for restart marker: ${String(err)}`,
-      );
+  try {
+    for (const target of await discoverRestartRecoveryStoreTargets({ cfg: params.cfg, stateDir })) {
+      addStoreTarget(target);
     }
+  } catch (err) {
+    if (!params.cfg) {
+      throw err;
+    }
+    mainSessionRecoveryLog.warn(
+      `failed to resolve configured session stores for restart marker: ${String(err)}`,
+    );
   }
 
   for (const storePath of activeAdmissions.targets.keys()) {

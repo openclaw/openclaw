@@ -141,7 +141,7 @@ export async function prepareSessionLifecycleDrain(
     }
   };
   try {
-    const prepared = await runExclusiveSessionLifecycleMutation({
+    const prepared = await runExclusiveSessionLifecycleMutation("drain", {
       scope: params.storePath,
       identities: params.lifecycleIdentities,
       run: async () => {

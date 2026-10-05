@@ -63,12 +63,12 @@ function hasLiveCompletionOwner(claim: HarnessCompletionRecovery, runId: string)
 }
 
 /** Reconcile before any steer/direct path, including when a restored native parent has no live owner. */
-export function reconcileHarnessCompletionDelivery(
+export async function reconcileHarnessCompletionDelivery(
   params: CompletionTarget & {
     sourceRunId: string;
     taskRunId?: string;
   },
-): "unowned" | "pending" | "delivered" | "blocked" {
+): Promise<"unowned" | "pending" | "delivered" | "blocked"> {
   const entry = readCurrent(params);
   if (!entry) {
     // No saved claim means this reconciler owns nothing; normal admission still
@@ -83,12 +83,25 @@ export function reconcileHarnessCompletionDelivery(
   if (!claim) {
     // Missing metadata is not fresh admission authority. An older writer or
     // bounded receipt eviction can leave the original consumed input intact.
-    return entry.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
-      hasRestartRecoveryTerminalRun(entry, params.sourceRunId) ||
-      readSessionSubmittedInput(
-        { ...params, sessionId: entry.sessionId },
-        `${params.sourceRunId}:user`,
-      )
+    if (
+      entry.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
+      hasRestartRecoveryTerminalRun(entry, params.sourceRunId)
+    ) {
+      return "blocked";
+    }
+    const submitted = await readSessionSubmittedInput(
+      { ...params, sessionId: entry.sessionId },
+      `${params.sourceRunId}:user`,
+    );
+    const current = readCurrent(params);
+    return !current ||
+      current.sessionId !== entry.sessionId ||
+      current.lifecycleRevision !== entry.lifecycleRevision ||
+      current.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
+      current.restartRecoveryHarnessCompletion?.sourceRunId === params.sourceRunId ||
+      hasRestartRecoveryTerminalRun(current, params.sourceRunId) ||
+      getRestartRecoveryTerminalDeliveryEvidence(current, params.sourceRunId)?.harnessCompletion ||
+      submitted
       ? "blocked"
       : "unowned";
   }

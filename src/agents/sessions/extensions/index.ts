@@ -6,7 +6,6 @@ export type {
   ExtensionCommandContextActions,
   ExtensionUIContext,
   InputSource,
-  LoadExtensionsResult,
   SessionStartEvent,
   ToolDefinition,
   ToolInfo,

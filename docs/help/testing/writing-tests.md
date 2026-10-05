@@ -116,6 +116,38 @@ signal with `awaitGateBeforeSettlement(gate, operation, message)` or
 through the owner's injected clock seam. After removing sites, run
 `pnpm check:test-timeout-race-ratchet --prune` to shrink the baseline.
 
+## Module mocks and export completeness
+
+New first-party `vi.mock` and `vi.doMock` factories should preserve the real
+module's exports when the fixture only needs to override a few functions:
+
+```ts
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  start: vi.fn(),
+}));
+```
+
+Use pass-through for **export completeness** only. `importOriginal` and
+`vi.importActual` can return a separate module instance for stateful singletons;
+they do not guarantee shared state or lifecycle identity. Keep a closed mock when
+isolating real state or initialization is the fixture's purpose, and explain that
+contract on the line immediately above the mock call:
+
+```ts
+// mock-isolation: Keep the database and process-wide cache outside this fixture.
+vi.mock("./runtime.js", () => ({ start: vi.fn() }));
+```
+
+`pnpm check:test-mock-exports` checks literal first-party module registrations,
+including relative, workspace-package, and TypeScript-path aliases. Factories
+without a recognizable real-module return/spread need the annotation, including
+indirect factories the syntax check cannot prove. Existing unannotated factories
+have an exact source-target and token-fingerprint baseline; new or changed factories cannot borrow
+another site's allowance. After removing or annotating existing factories, run
+`pnpm check:test-mock-exports --prune` to shrink that baseline. This guard runs
+with the existing CI ratchets and `check:changed`; it does not rewrite tests.
+
 ## Raw SQLite state access
 
 `closeOpenClawStateDatabaseForTest()` closes native handles synchronously, but

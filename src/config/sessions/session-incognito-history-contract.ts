@@ -1,9 +1,16 @@
+import type { SessionEntrySnapshot } from "../../../packages/memory-host-sdk/src/host/session-files.js";
+import type { SessionResetRecallCutoff } from "../../../packages/memory-host-sdk/src/host/session-reset-recall.js";
 import type {
   SessionTranscriptProjectionSelection,
   SessionTranscriptProjectionSelectionResults,
 } from "../../gateway/session-transcript-read.types.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  SessionTranscriptBoundedMessageTailOptions,
+  SessionTranscriptBoundedMessageTailPage,
+  SessionTranscriptMessageEvent,
+} from "./session-accessor.sqlite-projection-read.js";
 import type { SessionTranscriptStats, TranscriptEvent } from "./session-accessor.types.js";
 import type {
   PreparedSessionTranscriptHydration,
@@ -13,9 +20,28 @@ import type {
   SessionPreviewItem,
   SessionTitleFields,
   SessionTranscriptEventMatch,
+  SessionTranscriptContextSnapshot,
   SessionTranscriptModelContext,
   SessionTranscriptWatermark,
 } from "./session-history-read.types.js";
+import type {
+  PendingInputHistoryQuery,
+  PendingInputHistorySnapshot,
+} from "./session-pending-input-history.types.js";
+import type {
+  SessionTranscriptAccountingOptions,
+  SessionTranscriptAccountingSnapshot,
+} from "./session-transcript-accounting.types.js";
+import type {
+  SessionTranscriptAnchorFacts,
+  SessionTranscriptAnchorSelection,
+} from "./session-transcript-anchor-read.kernel.js";
+import type {
+  SessionTranscriptCurrentTurnEntryRead,
+  SessionTranscriptCurrentTurnEntryRequest,
+  SessionTranscriptMaintenanceFacts,
+  SessionTranscriptMaintenanceRead,
+} from "./session-transcript-hydration.types.js";
 import type {
   SessionTranscriptSearchParams,
   SessionTranscriptSearchResult,
@@ -30,12 +56,25 @@ export type IncognitoHistoryTarget = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
+export type IncognitoContextReadResult<Value> =
+  | { ok: true; value: Value }
+  | { ok: false; message: string };
+
 type Reads = {
   [Key in keyof SessionTranscriptProjectionSelectionResults]: {
     input: Omit<Extract<SessionTranscriptProjectionSelection, { kind: Key }>, "kind">;
     output: SessionTranscriptProjectionSelectionResults[Key];
   };
 } & {
+  anchors: { input: SessionTranscriptAnchorSelection; output: SessionTranscriptAnchorFacts };
+  accounting: {
+    input: { options: SessionTranscriptAccountingOptions };
+    output: SessionTranscriptAccountingSnapshot;
+  };
+  "bounded-tail": {
+    input: { options: SessionTranscriptBoundedMessageTailOptions };
+    output: SessionTranscriptBoundedMessageTailPage;
+  };
   title: {
     input: { includeInterSession?: boolean };
     output: { kind: "session-title-fields"; fields: SessionTitleFields };
@@ -69,7 +108,37 @@ type Reads = {
     input: { limits?: { maxBytes: number; maxEvents: number }; maxEventBytes?: number };
     output: PreparedSessionTranscriptHydration;
   };
+  "current-turn-entry": {
+    input: SessionTranscriptCurrentTurnEntryRequest;
+    output: SessionTranscriptCurrentTurnEntryRead;
+  };
+  maintenance: {
+    input: { request: SessionTranscriptMaintenanceRead };
+    output: SessionTranscriptMaintenanceFacts;
+  };
+  "recent-active-events": {
+    input: { maxEvents: number };
+    output: TranscriptEvent[];
+  };
+  "latest-active-message": {
+    input: Record<never, never>;
+    output: SessionTranscriptMessageEvent | undefined;
+  };
+  "pending-inputs": {
+    input: { query: Omit<PendingInputHistoryQuery, "sessionKey" | "sessionId"> };
+    output: PendingInputHistorySnapshot;
+  };
   stats: { input: Record<never, never>; output: SessionTranscriptStats };
+  "memory-entry": { input: Record<never, never>; output: SessionEntrySnapshot };
+  "memory-reset-recall": { input: Record<never, never>; output: SessionResetRecallCutoff };
+  "native-context": {
+    input: Record<never, never>;
+    output: IncognitoContextReadResult<SessionTranscriptContextSnapshot>;
+  };
+  "native-context-current": {
+    input: Pick<SessionTranscriptContextSnapshot, "version"> & { through?: TranscriptEntryAnchor };
+    output: IncognitoContextReadResult<void>;
+  };
 };
 
 export type IncognitoHistoryOperations = {

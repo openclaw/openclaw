@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -400,11 +401,19 @@ describe("personal publication authority and recovery", () => {
   });
 
   it("creates its private table only on admission, publishes the exact account and snapshot, and replays only for its owner", async () => {
+    setRuntimeConfigSnapshot({
+      ...getRuntimeConfigSnapshot(),
+      gateway: {
+        github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+      },
+    });
     const db = openOpenClawStateDatabase().db;
     expect(tableExists(db, table)).toBe(false);
     expect(() => status(randomUUID())).toThrow("not found");
     expect(tableExists(db, table)).toBe(false);
-    const result = await coordinator.requestPersonalForSession(request(), action);
+    const response = await rpc("sessions.github.publish", request());
+    expect(response[0], JSON.stringify(response[2])).toBe(true);
+    const result = response[1];
     expect(result).toMatchObject({
       status: "published",
       publisher: { source: "personal", ...account },

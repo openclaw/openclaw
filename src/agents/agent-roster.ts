@@ -1,8 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { OpenClawConfig } from "../config/types.js";
+import type { LegacyAgentListEntry } from "../config/legacy.roster.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = AgentConfig;
 type AgentRosterProperty = { kind: "entries" | "list"; value: unknown };
 type AgentRosterConfig = {
   readonly agents?: {
@@ -15,25 +16,29 @@ export type ListedAgentEntry = {
   entry: AgentEntry;
   source: { kind: "entries"; key: string } | { kind: "list"; index: number };
 };
+type ListedLegacyAgentEntry = {
+  entry: LegacyAgentListEntry;
+  source: ListedAgentEntry["source"];
+};
 
 function collectAgentEntries(
   cfg: AgentRosterConfig,
   withSource: true,
   limit?: number,
-): ListedAgentEntry[];
+): ListedLegacyAgentEntry[];
 function collectAgentEntries(
   cfg: AgentRosterConfig,
   withSource: false,
   limit?: number,
-): AgentEntry[];
+): LegacyAgentListEntry[];
 function collectAgentEntries(
   cfg: AgentRosterConfig,
   withSource: boolean,
   limit?: number,
-): Array<AgentEntry | ListedAgentEntry> {
+): Array<LegacyAgentListEntry | ListedLegacyAgentEntry> {
   const roster = readAgentRosterProperty(cfg);
   if (roster?.kind === "entries" && isRecord(roster.value)) {
-    const result: Array<AgentEntry | ListedAgentEntry> = [];
+    const result: Array<LegacyAgentListEntry | ListedLegacyAgentEntry> = [];
     for (const id in roster.value) {
       if (!Object.hasOwn(roster.value, id)) {
         continue;
@@ -54,11 +59,11 @@ function collectAgentEntries(
   if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
     return [];
   }
-  const listed: ListedAgentEntry[] = [];
+  const listed: ListedLegacyAgentEntry[] = [];
   roster.value.some((entry, index) => {
     if (entry !== null && typeof entry === "object") {
       // SAFETY: Raw roster compatibility keeps objects verbatim; callers normalize ids.
-      listed.push({ entry: entry as AgentEntry, source: { kind: "list", index } });
+      listed.push({ entry: entry as LegacyAgentListEntry, source: { kind: "list", index } });
     }
     return listed.length === limit;
   });
@@ -125,7 +130,7 @@ export function tryResolveRawLegacyDefaultAgentId(cfg: AgentRosterConfig): strin
   if (cfg.agents?.ownership === "explicit") {
     return undefined;
   }
-  const marked = listAgentEntries(cfg).filter((entry) => entry.default === true);
+  const marked = collectAgentEntries(cfg, false).filter((entry) => entry.default === true);
   return marked.length === 1 ? normalizeAgentId(marked[0]!.id) : undefined;
 }
 

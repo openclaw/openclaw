@@ -11,7 +11,7 @@ import type {
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
 import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
-import { getPluginRegistryGatewayOwner } from "../../plugins/registry-lifecycle.js";
+import { getPluginInstanceGatewayOwner } from "../../plugins/registry-lifecycle.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
@@ -100,14 +100,11 @@ function isValidMiddlewareToolResult(value: unknown): value is OpenClawAgentTool
 }
 
 function descendMiddlewareContentCoerceState(
-  value: unknown,
+  value: object,
   state: MiddlewareContentCoerceState,
 ): MiddlewareContentCoerceState | undefined {
   if (state.depth >= MAX_MIDDLEWARE_CONTENT_DEPTH) {
     return undefined;
-  }
-  if (value === null || typeof value !== "object") {
-    return { depth: state.depth + 1, seen: state.seen };
   }
   return state.seen.has(value)
     ? undefined
@@ -403,7 +400,7 @@ function isRemovedPluginMiddleware(handler: AgentToolResultMiddleware): boolean 
     return false;
   }
   // Decide against the plugin's own Gateway; without that owner a stale handler fails closed.
-  const successor = getPluginRegistryGatewayOwner(instance.owner.registry)?.current();
+  const successor = getPluginInstanceGatewayOwner(instance.owner)?.current();
   return (
     successor !== undefined &&
     !successor.plugins.some(

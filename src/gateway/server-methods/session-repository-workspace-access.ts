@@ -145,7 +145,7 @@ export async function resolveRepositoryWorkspaceAccess(
       if (!mutationService) {
         throw new Error("Cloud repository editing is unavailable; restart the Gateway and retry.");
       }
-      return await runExclusiveSessionLifecycleMutation({
+      return await runExclusiveSessionLifecycleMutation("workspace-edit", {
         scope: loaded.storePath,
         identities: [loaded.canonicalKey, ...loaded.storeKeys, sessionId],
         run: () => {

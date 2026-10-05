@@ -50,11 +50,10 @@ export function renderNostrProfileForm(params: {
     opts: {
       type?: "text" | "url" | "textarea";
       placeholder?: string;
-      maxLength?: number;
       help?: string;
     } = {},
   ) => {
-    const { type = "text", placeholder, maxLength, help } = opts;
+    const { type = "text", placeholder, help } = opts;
     const value = state.values[field] ?? "";
     const error = state.fieldErrors[field];
 
@@ -70,7 +69,7 @@ export function renderNostrProfileForm(params: {
               class="settings-input"
               .value=${value}
               placeholder=${placeholder ?? ""}
-              maxlength=${maxLength ?? 2000}
+              maxlength="2000"
               rows="3"
               aria-describedby=${descriptionIds || nothing}
               aria-invalid=${error ? "true" : nothing}
@@ -88,7 +87,7 @@ export function renderNostrProfileForm(params: {
               type=${type}
               .value=${value}
               placeholder=${placeholder ?? ""}
-              maxlength=${maxLength ?? 256}
+              maxlength="256"
               aria-describedby=${descriptionIds || nothing}
               aria-invalid=${error ? "true" : nothing}
               @input=${(e: InputEvent) => {
@@ -169,18 +168,15 @@ export function renderNostrProfileForm(params: {
     ${renderPicturePreview()}
     ${renderField("name", t("channels.nostr.username"), {
       placeholder: t("channels.nostr.placeholders.username"),
-      maxLength: 256,
       help: t("channels.nostr.usernameHelp"),
     })}
     ${renderField("displayName", t("channels.nostr.displayName"), {
       placeholder: t("channels.nostr.placeholders.displayName"),
-      maxLength: 256,
       help: t("channels.nostr.displayNameHelp"),
     })}
     ${renderField("about", t("channels.nostr.bio"), {
       type: "textarea",
       placeholder: t("channels.nostr.bioPlaceholder"),
-      maxLength: 2000,
       help: t("channels.nostr.bioHelp"),
     })}
     ${renderField("picture", t("channels.nostr.avatarUrl"), {

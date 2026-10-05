@@ -94,24 +94,14 @@ onboarding_log_contains() {
 }
 
 drive_typed_onboarding() {
-  local hook_mode="${OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE:-}"
   wait_for_log "Continue?" 60
   send $'y\r' 0.4
-  if [[ "$hook_mode" != "interactive" ]]; then
-    wait_for_log "Help make OpenClaw better?" 60
-    send $'\r' 0.4
-    wait_for_first_agent_prompt onboarding_log_contains 60 0.4
-    send $'\r' 0.4
-    wait_for_log "to search" 60
-    send $'ollama\r' 0.4
-    return
-  fi
-
+  wait_for_log "Help make OpenClaw better?" 60
+  send $'\r' 0.4
+  wait_for_first_agent_prompt onboarding_log_contains 60 0.4
+  send $'\r' 0.4
   wait_for_log "to search" 60
   send $'ollama\r' 0.4
-  wait_for_log "Enable hooks?" 60
-  send $' \r' 0.4
-  send $'\r' 0.4
 }
 
 openclaw_e2e_install_package "$INSTALL_LOG"

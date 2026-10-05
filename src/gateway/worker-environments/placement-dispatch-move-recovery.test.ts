@@ -114,7 +114,7 @@ describe("worker Gateway move recovery", () => {
         },
         target: { kind: "gateway" },
       });
-      const reconciling = placements.startReconcile({
+      const reconciling = await placements.startReconcile({
         sessionId: active.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
@@ -165,7 +165,7 @@ describe("worker Gateway move recovery", () => {
             operationId: begun.intent.operationId,
             sessionId: active.sessionId,
           });
-          restartedStore.fail({
+          await restartedStore.fail({
             sessionId: active.sessionId,
             expectedGeneration: reconciling.generation,
             recoveryError: "source replaced",

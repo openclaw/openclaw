@@ -5,13 +5,8 @@ import { repeat } from "lit/directives/repeat.js";
 import "../../styles/channels.css";
 import type {
   ChannelsStatusSnapshot,
-  DiscordStatus,
-  GoogleChatStatus,
-  IMessageStatus,
+  ChannelStatus,
   NostrStatus,
-  SignalStatus,
-  SlackStatus,
-  TelegramStatus,
   WhatsAppStatus,
 } from "../../api/types.ts";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
@@ -178,12 +173,12 @@ function buildChannelData(props: ChannelsProps): ChannelsChannelData {
   const channels = props.channels.channelsSnapshot?.channels as Record<string, unknown> | null;
   return {
     whatsapp: (channels?.whatsapp ?? undefined) as WhatsAppStatus | undefined,
-    telegram: (channels?.telegram ?? undefined) as TelegramStatus | undefined,
-    discord: (channels?.discord ?? null) as DiscordStatus | null,
-    googlechat: (channels?.googlechat ?? null) as GoogleChatStatus | null,
-    slack: (channels?.slack ?? null) as SlackStatus | null,
-    signal: (channels?.signal ?? null) as SignalStatus | null,
-    imessage: (channels?.imessage ?? null) as IMessageStatus | null,
+    telegram: (channels?.telegram ?? undefined) as ChannelStatus | undefined,
+    discord: (channels?.discord ?? null) as ChannelStatus | null,
+    googlechat: (channels?.googlechat ?? null) as ChannelStatus | null,
+    slack: (channels?.slack ?? null) as ChannelStatus | null,
+    signal: (channels?.signal ?? null) as ChannelStatus | null,
+    imessage: (channels?.imessage ?? null) as ChannelStatus | null,
     nostr: (channels?.nostr ?? null) as NostrStatus | null,
     channelAccounts: props.channels.channelsSnapshot?.channelAccounts ?? null,
   };

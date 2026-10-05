@@ -423,10 +423,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   async function runInvoke(params: {
     preferMacAppExecHost: boolean;
-    execHostFallbackAllowed?: boolean;
     runViaResponse?: ExecHostResponse | null;
     command?: string[];
     env?: Record<string, string>;
+    executionContext?: InvokeOptions["params"]["executionContext"];
     rawCommand?: string | null;
     systemRunPlan?: SystemRunApprovalPlan | null;
     preparedPlan?: SystemRunApprovalPlan;
@@ -502,6 +502,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       params: {
         command: dispatchCommand,
         env: params.env,
+        executionContext: params.executionContext,
         rawCommand: dispatchRawCommand,
         systemRunPlan,
         cwd: dispatchCwd,
@@ -517,8 +518,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         current: params.skillBinsCurrent ?? (async () => []),
       },
       signal: params.signal,
-      execHostEnforced: false,
-      execHostFallbackAllowed: params.execHostFallbackAllowed ?? true,
       runCommand: spies.runCommand,
       sendInvokeResult: spies.sendInvokeResult,
       sendNodeEvent: spies.sendNodeEvent,
@@ -554,6 +553,13 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     return await runInvoke({ ...params, preferMacAppExecHost: true });
   }
 
+  it("refuses execution context when the companion relay cannot preserve it", async () => {
+    const result = await runMac({ executionContext: { subagent: true } });
+    expectError(result.sendInvokeResult, "executionContext invalid or unsupported");
+    expect(result.requestExecHost).not.toHaveBeenCalled();
+    expect(result.runCommand).not.toHaveBeenCalled();
+  });
+
   it("preserves a native cwd refusal without labelling it approval-required", async () => {
     const result = await runMac({
       runViaResponse: {
@@ -570,7 +576,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("keeps a lost companion response ambiguous", async () => {
-    const result = await runMac({ execHostFallbackAllowed: false });
+    const result = await runMac();
     expect(result.requestExecHost).toHaveBeenCalledOnce();
     expect(result.runCommand).not.toHaveBeenCalled();
     expect(invokeResult(result.sendInvokeResult)).toMatchObject({
@@ -1247,6 +1253,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const { runCommand, sendInvokeResult } = await runLocal({
         command: testCase.command,
         env: testCase.env,
+        executionContext: { subagent: true },
       });
 
       expect(runCommand, testCase.label).not.toHaveBeenCalled();
@@ -1256,6 +1263,62 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       }
     }
   });
+
+  it.each([
+    ["cmd.exe", "/d", "/s", "/c", "echo context"],
+    ["powershell.exe", "-NoProfile", "-Command", "Write-Output context"],
+    ["/bin/sh", "-c", "echo context"],
+  ])("injects routing context after filtering shell overrides for %s", async (...command) => {
+    const { runCommand, sendInvokeResult } = await runLocal({
+      command,
+      executionContext: { senderId: "sender-1", chatId: "chat-1", subagent: true },
+      env: { OPENCLAW_TEST: "untrusted", OPENCLAW_SUBAGENT_EXEC: "0" },
+    });
+    expectOk(sendInvokeResult);
+    expect(runArgv(runCommand)).toEqual(command);
+    expect(firstMockCall(runCommand)[2]).toMatchObject({
+      OPENCLAW_CHANNEL_CONTEXT: '{"sender":{"id":"sender-1"},"chat":{"id":"chat-1"}}',
+      OPENCLAW_SUBAGENT_EXEC: "1",
+    });
+    expect(firstMockCall(runCommand)[2]).not.toHaveProperty("OPENCLAW_TEST");
+  });
+
+  it.each<[InvokeOptions["params"]["executionContext"], string | undefined, string | undefined]>([
+    [{ chatId: "chat-1" }, '{"chat":{"id":"chat-1"}}', undefined],
+    [{ subagent: true }, undefined, "1"],
+    [{}, undefined, undefined],
+    [undefined, undefined, undefined],
+  ])(
+    "applies context %j while preserving legacy inheritance",
+    async (executionContext, channel, subagent) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_CHANNEL_CONTEXT: '{"chat":{"id":"old"}}',
+          OPENCLAW_SUBAGENT_EXEC: "1",
+          OpenClaw_Channel_Context: '{"chat":{"id":"old"}}',
+          OpenClaw_Subagent_Exec: "1",
+        },
+        async () => {
+          const inheritedMarkers = Object.fromEntries(
+            Object.keys(process.env)
+              .filter((key) => /^OPENCLAW_(CHANNEL_CONTEXT|SUBAGENT_EXEC)$/i.test(key))
+              .map((key) => [key, process.env[key]]),
+          );
+          const { runCommand, sendInvokeResult } = await runLocal({ executionContext });
+          expectOk(sendInvokeResult);
+          const env = firstMockCall(runCommand)[2];
+          if (executionContext === undefined) {
+            expect(env).toMatchObject(inheritedMarkers);
+          } else {
+            expect(env?.OPENCLAW_CHANNEL_CONTEXT).toBe(channel);
+            expect(env?.OPENCLAW_SUBAGENT_EXEC).toBe(subagent);
+            expect(env).not.toHaveProperty("OpenClaw_Channel_Context");
+            expect(env).not.toHaveProperty("OpenClaw_Subagent_Exec");
+          }
+        },
+      );
+    },
+  );
 
   it("applies shell-wrapper env allowlist for shell executable commands without inline payload", async () => {
     const { runCommand, sendInvokeResult } = await runLocal({

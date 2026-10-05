@@ -3,7 +3,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTimezone } from "openclaw/plugin-sdk/time-runtime";
 import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
@@ -140,18 +144,16 @@ function sanitizeEnvelopeHeaderPart(value: string) {
 function resolveEnvelopeOptionsMock(cfg?: {
   agents?: {
     defaults?: {
-      envelopeTimezone?: string;
-      envelopeTimestamp?: "on" | "off";
-      envelopeElapsed?: "on" | "off";
       userTimezone?: string;
     };
   };
 }): TestEnvelopeOptions {
   const defaults = cfg?.agents?.defaults;
+  const configuredTimezone = normalizeOptionalString(defaults?.userTimezone);
   return {
-    timezone: defaults?.envelopeTimezone,
-    includeTimestamp: defaults?.envelopeTimestamp !== "off",
-    includeElapsed: defaults?.envelopeElapsed !== "off",
+    timezone: configuredTimezone ? (resolveTimezone(configuredTimezone) ?? "local") : undefined,
+    includeTimestamp: true,
+    includeElapsed: true,
     userTimezone: defaults?.userTimezone,
   };
 }

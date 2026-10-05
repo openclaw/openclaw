@@ -29,6 +29,7 @@ import {
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  collectAgentHarnessMessagingMediaUrls,
   copyInternalToolResultState,
   createAgentHarnessToolExecutionBoundaryRegistry,
   extractMessagingToolSourceReplyPayload,
@@ -42,6 +43,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
@@ -75,13 +77,12 @@ import {
   failedToolResult,
   type CodexDynamicToolRuntimeResponse,
 } from "./dynamic-tool-response-state.js";
+import { resolveCodexToolResultSourceReply } from "./dynamic-tool-source-reply.js";
 import type { CodexDynamicToolCallParams, CodexDynamicToolSpec } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import {
-  collectCodexMessageMediaUrls,
   prepareCodexRemoteWorkspaceMessageMedia,
   resolveCodexMediaSourceUrls,
-  type CodexRemoteWorkspaceFileReader,
 } from "./remote-workspace-media.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
@@ -175,7 +176,7 @@ export type CodexDynamicToolBridge = {
     toolCallId: string,
   ) => AgentHarnessToolExecutionSnapshot | undefined;
   /** Bind the authenticated app-server client once remote thread startup completes. */
-  setRemoteWorkspaceFileReader?: (reader: CodexRemoteWorkspaceFileReader) => void;
+  setRemoteWorkspaceFileReader?: (reader: RemoteWorkspaceFileReader) => void;
   telemetry: AgentHarnessToolResultTelemetry & {
     didDeliverSourceReplyViaMessageTool: boolean;
     sourceReplyDelivered?: true;
@@ -339,7 +340,7 @@ export function createCodexDynamicToolBridge(params: {
       functionToolsOnly: params.functionToolsOnly,
     });
   const resolveAutomationsToolsAllow = createCodexAutomationsToolsAllowResolver(specs);
-  let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
+  let readRemoteWorkspaceFile: RemoteWorkspaceFileReader | undefined;
   return {
     availableTools: availableTools.map((entry) => entry.tool),
     availableSpecs: inheritedSpecs
@@ -633,20 +634,24 @@ export function createCodexDynamicToolBridge(params: {
               resultFailureKind === "blocked" ? undefined : resultFailureKind,
             transcriptDetails: asOptionalRecord(sanitizeToolResult(result))?.details,
           };
-          const toolConfirmedSourceReply =
-            params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-            toolName === "message" &&
-            !resultIsError &&
-            (rawResult.terminate === true || result.terminate === true);
-          const confirmedSourceReply =
-            params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-            toolName === "message" &&
-            (toolConfirmedSourceReply || deliveredSourceReply);
-          const sourceReplyFinal = confirmedSourceReply ? executedArgs.final !== false : undefined;
+          const sourceReply = resolveCodexToolResultSourceReply({
+            sourceReplyDeliveryMode: params.hookContext?.sourceReplyDeliveryMode,
+            canDeliverSourceReply: toolEntry.tool.canDeliverSourceReply,
+            toolName,
+            call,
+            resultIsError,
+            rawResult,
+            result,
+            deliveredSourceReply,
+            executedArgs,
+            runId: toolResultHookContext.runId,
+            payloads: telemetry.messagingToolSourceReplyPayloads,
+            response,
+          });
           const autoDeliveryTtsMediaUrls = getCoreTtsToolResultMediaUrls(rawResult);
           recordAgentHarnessToolResultTelemetry({
             extractSourceReplyPayload: extractMessagingToolSourceReplyPayload,
-            collectMessagingMediaUrls: collectCodexMessageMediaUrls,
+            collectMessagingMediaUrls: collectAgentHarnessMessagingMediaUrls,
             resolveMessagingMediaSourceUrls: (mediaUrls) =>
               resolveCodexMediaSourceUrls(mediaUrls, preparedMessageMedia?.sourcePathsByStagedPath),
             toolName,
@@ -661,22 +666,12 @@ export function createCodexDynamicToolBridge(params: {
             autoDeliveryTtsMediaUrls,
             coreTtsToolResult: autoDeliveryTtsMediaUrls?.length ? rawResult : undefined,
             messagingTarget: confirmedMessagingTarget,
-            sourceReplyFinal,
+            sourceReplyFinal: sourceReply.final,
             trustedLocalMediaToolNames: pluginLocalMediaTrustByToolName.get(toolName),
           });
-          if (deliveredSourceReply || toolConfirmedSourceReply) {
+          if (deliveredSourceReply || sourceReply.toolConfirmed) {
             telemetry.didDeliverSourceReplyViaMessageTool = true;
           }
-          const continuesSourceReplyProgress = confirmedSourceReply && sourceReplyFinal === false;
-          response.terminate =
-            ((rawResult.terminate === true || result.terminate === true) &&
-              !continuesSourceReplyProgress) ||
-            // Yield is an explicit owner-level turn handoff, not termination
-            // inferred from source-reply delivery, so finality does not mask it.
-            isToolResultYield(rawResult) ||
-            isToolResultYield(result) ||
-            (confirmedSourceReply && sourceReplyFinal === true) ||
-            undefined;
           const asyncStarted =
             isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
           response.asyncStarted = asyncStarted || undefined;
@@ -846,13 +841,6 @@ function toToolResultHookContext(
   };
 }
 
-function isToolResultYield(result: AgentToolResult<unknown>): boolean {
-  const details = result.details;
-  if (!isRecord(details) || typeof details.status !== "string") {
-    return false;
-  }
-  return details.status.trim().toLowerCase() === "yielded";
-}
 function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
   return isRecord(details) && details.async === true && details.status === "started";

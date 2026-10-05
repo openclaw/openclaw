@@ -64,7 +64,7 @@ export interface ShellGatewayHost {
   agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null;
   readonly outboxStoreImport: { load: () => Promise<unknown> };
   observeDeletedSessions(sessionState: ApplicationContext["sessions"]["state"]): void;
-  recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]): void;
+  recoverDeletedActiveSession(): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   requestUpdate(): void;
 }
@@ -107,7 +107,7 @@ export class ShellGatewayOwner {
         return;
       }
       this.host.observeDeletedSessions(sessions.state);
-      this.host.recoverDeletedActiveSession(sessions.state);
+      this.host.recoverDeletedActiveSession();
       synchronizeTitle();
     };
     synchronize();
@@ -186,10 +186,7 @@ export class ShellGatewayOwner {
       invalidateChatMetadataStore(client, undefined, undefined, modelInvalidation ?? "preserve");
     }
     if (event.event === "sessions.changed") {
-      const context = this.host.context;
-      if (context) {
-        this.host.recoverDeletedActiveSession(context.sessions.state);
-      }
+      this.host.recoverDeletedActiveSession();
       return;
     }
     if (event.event === "config.changed") {
@@ -346,9 +343,7 @@ export class ShellGatewayOwner {
     this.host.previousGatewayPhase = snapshot.phase;
     this.updateGatewaySessionKey(snapshot);
     const context = this.host.context;
-    if (context) {
-      this.host.recoverDeletedActiveSession(context.sessions.state);
-    }
+    this.host.recoverDeletedActiveSession();
     if (snapshot.phase === "connected" && context) {
       const connectionBootstrap = context.connectionBootstrap;
       void connectionBootstrap.run("runtime-config", async () => {

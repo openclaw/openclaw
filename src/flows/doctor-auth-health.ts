@@ -74,9 +74,9 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
   ) {
     const { runRetiredAuthProfileCleanup, runWriteConfigHealth } =
       await import("./doctor-health-contribution-runners.config.js");
-    await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+    const persisted = await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
     authProfileHealthReady =
-      !ctx.configWriteRefusal && isDeepStrictEqual(ctx.cfg, ctx.cfgForPersistence);
+      persisted && !ctx.configWriteRefusal && isDeepStrictEqual(ctx.cfg, ctx.cfgForPersistence);
     if (authProfileHealthReady) {
       await runRetiredAuthProfileCleanup(ctx);
     }

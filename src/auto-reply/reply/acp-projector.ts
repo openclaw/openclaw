@@ -157,9 +157,9 @@ export function createAcpReplyProjector(params: {
     liveIdleTimer = undefined;
   };
 
-  const drainChunker = (force: boolean) => {
+  const drainChunker = () => {
     chunker.drain({
-      force,
+      force: true,
       emit: (chunk) => {
         blockReplyPipeline.enqueue({ text: chunk });
       },
@@ -176,7 +176,7 @@ export function createAcpReplyProjector(params: {
     const text = liveBufferText;
     liveBufferText = "";
     chunker.append(text);
-    drainChunker(true);
+    drainChunker();
   };
 
   const scheduleLiveIdleFlush = () => {
@@ -192,35 +192,28 @@ export function createAcpReplyProjector(params: {
     }, liveIdleFlushMs);
   };
 
-  const flushBufferedToolDeliveries = async (force: boolean) => {
-    if (!(settings.deliveryMode === "final_only" && force)) {
-      return;
-    }
-    if (!shouldSendToolSummaries()) {
-      pendingToolDeliveries.length = 0;
-      return;
-    }
-    for (const entry of pendingToolDeliveries.splice(0)) {
-      await params.deliver("tool", entry.payload, entry.meta);
-    }
-  };
-
-  const flush = async (force = false): Promise<void> => {
+  const flush = async (): Promise<void> => {
     if (settings.deliveryMode === "live") {
       clearLiveIdleTimer();
       flushLiveBuffer();
     }
-    await flushBufferedToolDeliveries(force);
     if (settings.deliveryMode === "final_only") {
-      if (force && finalOnlyOutputText.trim().length > 0) {
+      if (shouldSendToolSummaries()) {
+        for (const entry of pendingToolDeliveries.splice(0)) {
+          await params.deliver("tool", entry.payload, entry.meta);
+        }
+      } else {
+        pendingToolDeliveries.length = 0;
+      }
+      if (finalOnlyOutputText.trim().length > 0) {
         const text = finalOnlyOutputText;
         finalOnlyOutputText = "";
         await params.deliver("final", { text });
       }
     } else {
-      drainChunker(force);
+      drainChunker();
     }
-    await blockReplyPipeline.flush({ force });
+    await blockReplyPipeline.flush({ force: true });
   };
 
   const emitSystemStatus = async (text: string, opts?: { dedupe?: boolean }) => {
@@ -242,7 +235,7 @@ export function createAcpReplyProjector(params: {
         payload: { text: formatted },
       });
     } else {
-      await flush(true);
+      await flush();
       await params.deliver("tool", { text: formatted });
     }
     lastStatusHash = hash;
@@ -302,7 +295,7 @@ export function createAcpReplyProjector(params: {
       });
       markHiddenToolBoundary(event);
     } else {
-      await flush(true);
+      await flush();
       await params.deliver("tool", { text: toolSummary }, deliveryMeta);
     }
     lastToolHash = hash;

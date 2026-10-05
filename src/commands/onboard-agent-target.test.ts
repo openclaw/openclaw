@@ -3,9 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   applyOnboardingPrimaryModel,
@@ -140,7 +142,8 @@ describe("onboarding agent target", () => {
   });
 
   it("resolves shared system-agent setup to the configured system agent on a legacy roster", () => {
-    const config = {
+    // Raw pre-Doctor roster: the legacy compatibility resolver still honors its marker.
+    const config: OpenClawConfigWithLegacyRoster = {
       agents: {
         defaults: {
           workspace: "/srv/global",
@@ -166,7 +169,7 @@ describe("onboarding agent target", () => {
   it("uses the system agent for explicit fleets without changing legacy ownership", () => {
     const entries = {
       main: { workspace: "/srv/main" },
-      ops: { default: true, workspace: "/srv/ops" },
+      ops: { workspace: "/srv/ops" },
     };
     const pendingAgent = { name: "robby", workspaceDir: "/srv/robby" };
 
@@ -188,13 +191,16 @@ describe("onboarding agent target", () => {
           agents: {
             ownership: "explicit",
             defaults: { systemAgent: { agentId: "main" } },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
         },
         pendingAgent,
       ),
     ).toMatchObject({ agentId: "main" });
-    expect(resolveOnboardingSetupTarget({ agents: { entries } })).toMatchObject({
+    const legacyConfig = createCanonicalAgentConfigFixture({
+      agents: { entries: { ...entries, ops: { ...entries.ops, default: true } } },
+    }).config;
+    expect(resolveOnboardingSetupTarget(legacyConfig)).toMatchObject({
       agentId: "ops",
       workspaceDir: "/srv/ops",
     });
@@ -205,7 +211,7 @@ describe("onboarding agent target", () => {
     const workspaceDir = path.join(stateDir, "requested-workspace");
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      for (const entries of [undefined, { main: {} }, { main: { default: true } }] as const) {
+      for (const entries of [undefined, { main: {} }] as const) {
         const config = {
           agents: { defaults: { workspace: workspaceDir }, ...(entries ? { entries } : {}) },
         };
@@ -223,13 +229,10 @@ describe("onboarding agent target", () => {
       expect(
         resolveOnboardingSetupTarget({
           agents: {
-            entries: { main: { default: true, name: "Authored main", workspace: "/srv/main" } },
+            entries: { main: { name: "Authored main", workspace: "/srv/main" } },
           },
         }),
       ).toMatchObject({ agentId: "main", workspaceDir: "/srv/main" });
-      expect(
-        resolveOnboardingSetupTarget({ agents: { entries: { main: { default: false } } } }),
-      ).toMatchObject({ agentId: "main" });
     });
   });
 
@@ -360,26 +363,25 @@ describe("onboarding agent target", () => {
     expect(updated.agents?.entries?.main?.model).toEqual("openai/main");
   });
 
-  it("preserves every list-form agent when applying the primary model", () => {
+  it("preserves every agent when applying the primary model", () => {
     const config = {
       agents: {
         ownership: "explicit" as const,
-        list: [
-          { id: "main", name: "Main", model: { primary: "openai/main" } },
-          {
-            id: "OPS",
+        entries: {
+          main: { name: "Main", model: { primary: "openai/main" } },
+          OPS: {
             name: "Operations",
             model: { primary: "openai/old", fallbacks: ["openai/fallback"] },
             models: { "openai/old": { alias: "Old" } },
           },
-        ],
+        },
       },
     };
     const target = resolveOnboardingAgentTarget(config, "ops");
 
     const updated = applyOnboardingPrimaryModel(config, target, "openai/new");
 
-    expect(updated.agents?.list).toBeUndefined();
+    expect(updated.agents).not.toHaveProperty("list");
     expect(updated.agents?.entries).toEqual({
       main: { name: "Main", model: { primary: "openai/main" } },
       OPS: {
@@ -390,14 +392,14 @@ describe("onboarding agent target", () => {
     });
   });
 
-  it("preserves every list-form agent when projecting model policy", () => {
+  it("preserves every agent when projecting model policy", () => {
     const config = {
       agents: {
         ownership: "explicit" as const,
-        list: [
-          { id: "main", modelPolicy: { allow: ["openai/main"] } },
-          { id: "ops", modelPolicy: { allow: ["openai/old"] } },
-        ],
+        entries: {
+          main: { modelPolicy: { allow: ["openai/main"] } },
+          ops: { modelPolicy: { allow: ["openai/old"] } },
+        },
       },
     };
     const target = resolveOnboardingAgentTarget(config, "ops");
@@ -413,14 +415,14 @@ describe("onboarding agent target", () => {
       },
     }));
 
-    expect(updated.agents?.list).toBeUndefined();
+    expect(updated.agents).not.toHaveProperty("list");
     expect(updated.agents?.entries).toEqual({
       main: { modelPolicy: { allow: ["openai/main"] } },
       ops: { modelPolicy: { allow: ["openai/new"] } },
     });
   });
 
-  it("provisions the configured default agent workspace and sessions", async () => {
+  it("provisions the sole configured agent workspace and sessions", async () => {
     const stateDir = tempDirs.make("openclaw-onboard-target-");
     const globalWorkspace = path.join(stateDir, "global-workspace");
     const opsWorkspace = path.join(stateDir, "ops-workspace");
@@ -430,7 +432,7 @@ describe("onboarding agent target", () => {
       const config = {
         agents: {
           defaults: { workspace: globalWorkspace },
-          entries: { ops: { default: true, workspace: opsWorkspace } },
+          entries: { ops: { workspace: opsWorkspace } },
         },
       };
       const target = resolveOnboardingAgentTarget(config);

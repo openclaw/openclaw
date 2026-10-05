@@ -1,12 +1,18 @@
 // Loads, updates, restores, and initializes exec approval policy state.
+import type { DatabaseSync } from "node:sqlite";
 import {
   AgentDeletionAuthorityRollbackError,
   AgentDeletionCommitUncertainError,
 } from "../agents/agent-lifecycle-registry.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  registerOpenClawStateDatabaseAsyncResource,
+  requireOpenClawStateDatabaseIdentity,
+} from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import {
   executeExistingOpenClawStateRead,
@@ -31,11 +37,18 @@ import {
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
 import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
+import type {
+  ExecApprovalsFile,
+  ExecApprovalsSnapshot,
+  ExecAsk,
+  ExecSecurity,
+} from "./exec-approvals-core.js";
 import {
   assertNoPendingLegacyExecApprovals,
   ExecApprovalsMigrationRequiredError,
 } from "./exec-approvals-migration-gate.js";
+import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
+import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
 import {
   snapshotFromExecApprovalsDatabase,
   warnFailClosed,
@@ -49,19 +62,13 @@ import {
   snapshotFromExecApprovalsRow,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
+import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 
 class ExecApprovalsStoreUnavailableError extends Error {
   constructor(cause: unknown) {
     super(`Exec approvals SQLite state is unavailable: ${String(cause)}`, { cause });
     this.name = "ExecApprovalsStoreUnavailableError";
   }
-}
-
-function readExecApprovalsSnapshotFromDatabase(
-  options: OpenClawStateDatabaseOptions = {},
-): ExecApprovalsSnapshot {
-  assertNoPendingLegacyExecApprovals();
-  return snapshotFromExecApprovalsDatabase(openOpenClawStateDatabase(options).db);
 }
 
 function readExecApprovalsSnapshotFromDatabaseReadOnly(
@@ -81,7 +88,8 @@ function readExecApprovalsSnapshotWithOptions(
   options: OpenClawStateDatabaseOptions = {},
 ): ExecApprovalsSnapshot {
   try {
-    return readExecApprovalsSnapshotFromDatabase(options);
+    assertNoPendingLegacyExecApprovals();
+    return snapshotFromExecApprovalsDatabase(openOpenClawStateDatabase(options).db);
   } catch (error) {
     if (error instanceof ExecApprovalsMigrationRequiredError) {
       throw error;
@@ -164,9 +172,176 @@ export async function readExecApprovalsPolicyReadOnlyAsync(
   }
 }
 
+type CronExecHostPolicyUse = {
+  ready: boolean;
+  retired: boolean;
+  pending: number;
+  initiating: boolean;
+  accepts: (file: ExecApprovalsFile) => boolean;
+};
+const cronPolicyUses = resolveGlobalSingleton(
+  Symbol.for("openclaw.execApprovalsCronPolicyUses"),
+  () => new Map<string, Set<CronExecHostPolicyUse>>(),
+);
+
+/** Live uses retain eligibility, not policy snapshots; native writers publish before returning. */
+export async function prepareCronExecHostPolicyUse(
+  context: OpenClawStateWorkerContext,
+  params: {
+    agentId: string;
+    security: ExecSecurity;
+    ask: ExecAsk;
+    bypassHostApprovalFloors?: boolean;
+  },
+): Promise<{
+  assertCurrent: () => void;
+  release: () => void;
+  initiate: <T>(effect: () => T, settlement?: Promise<unknown>) => T;
+}> {
+  context.admission.assertCurrent();
+  const requested = { ...params };
+  const key = context.admission.identity.key;
+  const uses = cronPolicyUses.get(key) ?? new Set<CronExecHostPolicyUse>();
+  cronPolicyUses.set(key, uses);
+  const use: CronExecHostPolicyUse = {
+    ready: false,
+    retired: false,
+    pending: 0,
+    initiating: false,
+    accepts(file) {
+      const current = resolveExecApprovalsFromFileInternal({
+        file,
+        agentId: requested.agentId,
+        overrides: requested,
+      }).agent;
+      const security = requested.bypassHostApprovalFloors
+        ? requested.security
+        : minSecurity(requested.security, current.security);
+      const ask = requested.bypassHostApprovalFloors
+        ? requested.ask
+        : maxAsk(requested.ask, current.ask);
+      return security !== "deny" && ask !== "always";
+    },
+  };
+  uses.add(use);
+  let unregister = () => {};
+  const release = () => {
+    use.retired = true;
+    if (use.initiating) {
+      return;
+    }
+    uses.delete(use);
+    if (uses.size === 0 && cronPolicyUses.get(key) === uses) {
+      cronPolicyUses.delete(key);
+    }
+    unregister();
+  };
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    if (!use.ready || use.retired || use.pending > 0) {
+      throw new Error("Exec approval policy changed before cron execution");
+    }
+  };
+  try {
+    unregister = registerOpenClawStateDatabaseAsyncResource({
+      async close(identity) {
+        if (!identity || identity.key === key) {
+          use.initiating = false;
+          release();
+        }
+      },
+    });
+    assertNoPendingLegacyExecApprovals({ env: context.environment });
+    const reply = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "exec-approvals.read" },
+      { context, current: true },
+    );
+    if (!reply?.ok || reply.type !== "exec-approvals.read") {
+      throw new Error("Exec approval policy snapshot is unavailable");
+    }
+    const file = snapshotFromExecApprovalsRow({
+      path: resolveExecApprovalsDisplayPath(context.environment),
+      row: reply.row,
+    }).file;
+    // A commit during this read permanently retires the old use, even after policy restoration.
+    use.retired ||= !use.accepts(file);
+    use.ready = true;
+    assertCurrent();
+    return {
+      assertCurrent,
+      release,
+      initiate(effect, settlement) {
+        assertCurrent();
+        use.retired = true;
+        use.initiating = true;
+        if (settlement) {
+          void settlement.then(
+            () => {
+              use.initiating = false;
+              release();
+            },
+            () => {
+              // Unknown native initiation retains the mutation fence until source retirement.
+            },
+          );
+        }
+        try {
+          return effect();
+        } finally {
+          if (!settlement) {
+            use.initiating = false;
+          }
+          release();
+        }
+      },
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
+function stageCronExecHostPolicyPublication(db: DatabaseSync, file: ExecApprovalsFile): void {
+  if (cronPolicyUses.size === 0) {
+    return;
+  }
+  const key = requireOpenClawStateDatabaseIdentity({ db }).key;
+  const affected = [...(cronPolicyUses.get(key) ?? [])].filter((use) => !use.accepts(file));
+  if (affected.length === 0) {
+    return;
+  }
+  if (affected.some((use) => use.initiating)) {
+    throw new Error(
+      "Exec policy change refused while cron native launch acknowledgement is pending; retry after command startup settles.",
+    );
+  }
+  const retire = () => {
+    for (const use of affected) {
+      use.pending--;
+      use.retired = true;
+    }
+  };
+  if (
+    !stageSqliteTransactionState(db, {
+      stage() {
+        for (const use of affected) {
+          use.pending++;
+        }
+      },
+      commit: retire,
+      // A failed/uncertain write cannot revive this use; a fresh read may prepare another.
+      rollback: retire,
+    })
+  ) {
+    throw new Error("Exec approval policy publication requires its native transaction owner");
+  }
+}
+
 type ExecApprovalsUpdate = {
   baseHash?: string;
   update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
+  assertCurrent?: () => void;
 };
 
 export function replaceExecApprovalsSnapshot(
@@ -202,6 +377,7 @@ function updateExecApprovalsInTransaction(
   assertNoPendingLegacyExecApprovals();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
+      params.assertCurrent?.();
       const current = snapshotFromExecApprovalsRow({
         path: resolveExecApprovalsDisplayPath(),
         row: readExecApprovalsConfigRow(db),
@@ -226,10 +402,13 @@ function updateExecApprovalsInTransaction(
         return current;
       }
       const persistedRaw = writeExecApprovalsConfigRow({ db, file: next });
-      return snapshotFromExecApprovalsRow({
+      const snapshot = snapshotFromExecApprovalsRow({
         path: current.path,
         row: { raw_json: persistedRaw },
       });
+      stageCronExecHostPolicyPublication(db, snapshot.file);
+      params.assertCurrent?.();
+      return snapshot;
     },
     options,
     { operationLabel: "exec-approvals.update" },
@@ -424,12 +603,20 @@ export async function restoreExecApprovalsSnapshotLocked(
         return false;
       }
       assertExecApprovalsMutationAllowed({ db, current: current.file, next: snapshot.file });
+      let restoredRaw: string | undefined;
       if (!snapshot.exists) {
         deleteExecApprovalsConfigRow(db);
       } else {
         const raw = snapshot.raw ?? serializeExecApprovals(snapshot.file);
-        writeExecApprovalsConfigRow({ db, file: snapshot.file, raw });
+        restoredRaw = writeExecApprovalsConfigRow({ db, file: snapshot.file, raw });
       }
+      stageCronExecHostPolicyPublication(
+        db,
+        snapshotFromExecApprovalsRow({
+          path: current.path,
+          row: restoredRaw === undefined ? undefined : { raw_json: restoredRaw },
+        }).file,
+      );
       return true;
     },
     {},
@@ -450,16 +637,7 @@ function ensureExecApprovalsSocket(file: ExecApprovalsFile): ExecApprovalsFile {
   };
 }
 
-function requireInitializedExecApprovals(
-  snapshot: ExecApprovalsSnapshot | null,
-): ExecApprovalsSnapshot {
-  if (!snapshot) {
-    throw new Error("Failed to initialize exec approvals");
-  }
-  return snapshot;
-}
-
-function ensureExecApprovalsSnapshotSync(): ExecApprovalsSnapshot {
+export async function ensureExecApprovalsSnapshot(): Promise<ExecApprovalsSnapshot> {
   const snapshot = readExecApprovalsSnapshot();
   if (
     snapshot.file.socket?.path?.trim() &&
@@ -468,11 +646,9 @@ function ensureExecApprovalsSnapshotSync(): ExecApprovalsSnapshot {
   ) {
     return snapshot;
   }
-  return requireInitializedExecApprovals(
-    updateExecApprovalsInTransaction({ update: ensureExecApprovalsSocket }),
-  );
-}
-
-export async function ensureExecApprovalsSnapshot(): Promise<ExecApprovalsSnapshot> {
-  return ensureExecApprovalsSnapshotSync();
+  const initialized = updateExecApprovalsInTransaction({ update: ensureExecApprovalsSocket });
+  if (!initialized) {
+    throw new Error("Failed to initialize exec approvals");
+  }
+  return initialized;
 }

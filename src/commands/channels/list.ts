@@ -24,7 +24,7 @@ import {
   requireValidChannelConfig,
 } from "./shared.js";
 
-export type ChannelsListOptions = {
+type ChannelsListOptions = {
   json?: boolean;
   all?: boolean;
 };

@@ -4,7 +4,7 @@
  * shared across module reloads and runtime seams.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearContextWindowCaches, REUSED_CONTEXT_WINDOW_CACHE_STATE } from "./context-cache.js";
+import { REUSED_CONTEXT_WINDOW_CACHE_STATE } from "./context-cache.js";
 
 const CONTEXT_WINDOW_RUNTIME_STATE_KEY = Symbol.for("openclaw.contextWindowRuntimeState");
 
@@ -50,10 +50,4 @@ export function beginContextWindowCacheRefresh(): void {
   CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = undefined;
   CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
   CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
-}
-
-/** Reset context-window runtime state and token cache for isolated tests. */
-export function resetContextWindowCacheForTest(): void {
-  beginContextWindowCacheRefresh();
-  clearContextWindowCaches();
 }

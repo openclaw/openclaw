@@ -54,33 +54,6 @@ type HookPackUpdateIntegrityDriftParams = HookNpmIntegrityDriftParams & {
   dryRun: boolean;
 };
 
-function createHookPackUpdateIntegrityDriftHandler(params: {
-  hookId: string;
-  dryRun: boolean;
-  logger: HookPackUpdateLogger;
-  onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
-}) {
-  return async (drift: HookNpmIntegrityDriftParams) => {
-    const payload: HookPackUpdateIntegrityDriftParams = {
-      hookId: params.hookId,
-      spec: drift.spec,
-      expectedIntegrity: drift.expectedIntegrity,
-      actualIntegrity: drift.actualIntegrity,
-      resolution: drift.resolution,
-      resolvedSpec: drift.resolution.resolvedSpec,
-      resolvedVersion: drift.resolution.version,
-      dryRun: params.dryRun,
-    };
-    if (params.onIntegrityDrift) {
-      return await params.onIntegrityDrift(payload);
-    }
-    params.logger.warn?.(
-      `Integrity drift for hook pack "${params.hookId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
-    );
-    return false;
-  };
-}
-
 /** Update npm-installed hook packs and return config changes plus per-pack outcomes. */
 export async function updateNpmInstalledHookPacks(params: {
   config: OpenClawConfig;
@@ -164,6 +137,13 @@ export async function updateNpmInstalledHookPacks(params: {
       continue;
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
+    // Preserve the callback's captured options and receiver during asynchronous installation.
+    const integrityDriftContext = {
+      hookId,
+      dryRun: Boolean(params.dryRun),
+      logger,
+      onIntegrityDrift: params.onIntegrityDrift,
+    };
     const result = await installHooksFromNpmSpec(
       requestDeferredPackageDirInstall(
         {
@@ -175,12 +155,25 @@ export async function updateNpmInstalledHookPacks(params: {
           beforePersistentApply,
           expectedHookPackId: hookId,
           expectedIntegrity,
-          onIntegrityDrift: createHookPackUpdateIntegrityDriftHandler({
-            hookId,
-            dryRun: Boolean(params.dryRun),
-            logger,
-            onIntegrityDrift: params.onIntegrityDrift,
-          }),
+          onIntegrityDrift: async (drift) => {
+            const payload: HookPackUpdateIntegrityDriftParams = {
+              hookId: integrityDriftContext.hookId,
+              spec: drift.spec,
+              expectedIntegrity: drift.expectedIntegrity,
+              actualIntegrity: drift.actualIntegrity,
+              resolution: drift.resolution,
+              resolvedSpec: drift.resolution.resolvedSpec,
+              resolvedVersion: drift.resolution.version,
+              dryRun: integrityDriftContext.dryRun,
+            };
+            if (integrityDriftContext.onIntegrityDrift) {
+              return await integrityDriftContext.onIntegrityDrift(payload);
+            }
+            integrityDriftContext.logger.warn?.(
+              `Integrity drift for hook pack "${integrityDriftContext.hookId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
+            );
+            return false;
+          },
           logger,
         },
         transactionRequest?.assertOwned,

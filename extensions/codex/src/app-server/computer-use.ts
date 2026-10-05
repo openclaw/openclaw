@@ -195,9 +195,14 @@ export async function ensureCodexComputerUse(
     return status;
   }
   if (config.autoInstall) {
-    const blockedAutoInstallStatus = blockUnsafeAutoInstallStatus(config);
-    if (blockedAutoInstallStatus) {
-      throw new CodexComputerUseSetupError(blockedAutoInstallStatus);
+    if (config.marketplaceSource) {
+      throw new CodexComputerUseSetupError(
+        unavailableStatus(
+          config,
+          "auto_install_blocked",
+          "Computer Use auto-install only uses marketplaces Codex app-server has already discovered. Run /codex computer-use install to install from a configured marketplace source.",
+        ),
+      );
     }
     const installedStatus = await inspectCodexComputerUse({
       ...params,
@@ -827,19 +832,6 @@ async function codexNativePluginsDisabled(request: CodexComputerUseRequest): Pro
   );
   // Codex returns the full catalog when limit is omitted; absent plugins remains unknown so polling continues.
   return response.data.find(({ name }) => name === "plugins")?.enabled === false;
-}
-
-function blockUnsafeAutoInstallStatus(
-  config: ResolvedCodexComputerUseConfig,
-): CodexComputerUseStatus | undefined {
-  if (!config.marketplaceSource) {
-    return undefined;
-  }
-  return unavailableStatus(
-    config,
-    "auto_install_blocked",
-    "Computer Use auto-install only uses marketplaces Codex app-server has already discovered. Run /codex computer-use install to install from a configured marketplace source.",
-  );
 }
 
 function findComputerUseMarketplaces(

@@ -48,7 +48,7 @@ async function startDrainedWorkspaceReconciliation(params: {
   ) {
     throw new Error(`Session ${params.turnClaim.sessionId} lost its drained placement owner`);
   }
-  const reconciling = params.placements.startReconcile({
+  const reconciling = await params.placements.startReconcile({
     sessionId: drained.sessionId,
     environmentId: params.environmentId,
     ownerEpoch: params.ownerEpoch,
@@ -86,7 +86,7 @@ export async function completeReclaimedWorkspaceTeardown(params: {
   ownerEpoch: number;
 }): Promise<Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>> {
   const reconciling = await startDrainedWorkspaceReconciliation(params);
-  const completed = params.placements.transition({
+  const completed = await params.placements.transition({
     sessionId: reconciling.sessionId,
     from: "reconciling",
     to: "reclaimed",

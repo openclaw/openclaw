@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+} from "../../test/helpers/sqlite-parent-observer.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "../plugins/managed-npm-retention-contract.js";
 import {
   hasRetainedManagedNpmInstallMarker,
@@ -8,6 +13,7 @@ import {
 } from "../plugins/managed-npm-retention.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupRetainedPluginInstallGenerations } from "./server-retained-plugin-cleanup.js";
 
@@ -36,7 +42,7 @@ it("preserves package files retained by plugin uninstall", async () => {
 });
 
 it.each(["project", "legacy"] as const)(
-  "protects startup and desired %s packages when an update precedes idle cleanup",
+  "refreshes %s cleanup records without caller-thread SQLite and protects live packages",
   async (layout) => {
     await withOpenClawTestState({ label: "gateway-retained-plugin-update" }, async (state) => {
       const writePlugin = (pluginId: string) =>
@@ -53,10 +59,10 @@ it.each(["project", "legacy"] as const)(
       const startupInstallPaths = [path.join(startupPackage, "dist", "index.js")];
       await seedInstalledPluginIndex(
         {
-          "desired-plugin": {
+          "obsolete-plugin": {
             source: "npm",
-            spec: "@openclaw/desired-plugin",
-            installPath: desiredPackage,
+            spec: "@openclaw/obsolete-plugin",
+            installPath: obsoletePackage,
           },
         },
         { env: state.env, candidates: [] },
@@ -68,10 +74,31 @@ it.each(["project", "legacy"] as const)(
           reason: "replaced-plugin-generation",
         });
       }
+      expect(loadInstalledPluginIndexInstallRecordsSync()["obsolete-plugin"]?.installPath).toBe(
+        obsoletePackage,
+      );
+      // Advance the durable ledger without publishing the install-record cache.
+      runOpenClawStateWriteTransaction(({ db }) => {
+        db.prepare(
+          "UPDATE config_machine_state SET value_json = json_set(value_json, '$.index.installRecords', json(?)) WHERE state_key = 'plugins.installedIndex'",
+        ).run(
+          JSON.stringify({
+            "desired-plugin": {
+              source: "npm",
+              spec: "@openclaw/desired-plugin",
+              installPath: desiredPackage,
+            },
+          }),
+        );
+      });
       const log = { info: vi.fn(), warn: vi.fn() };
-      const cleanup = { log, startupInstallPaths };
-
-      await cleanupRetainedPluginInstallGenerations(cleanup);
+      const observer = observeParentSqlite();
+      try {
+        await cleanupRetainedPluginInstallGenerations({ log, startupInstallPaths });
+        expect(observer.counts).toEqual(emptySqliteCounts());
+      } finally {
+        observer.restore();
+      }
 
       expect(fs.existsSync(startupPackage)).toBe(true);
       expect(fs.existsSync(desiredPackage)).toBe(true);
