@@ -324,6 +324,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       activeClaimRunId &&
       admissionRunId !== activeClaimRunId &&
       entry.abortedLastRun === true &&
+      (entry.status === undefined || entry.status === "interrupted") &&
       entry.pendingFinalDelivery === undefined &&
       entry.restartRecoveryBeforeAgentReplyState === undefined &&
       entry.restartRecoveryDeliveryReceiptState === undefined &&
