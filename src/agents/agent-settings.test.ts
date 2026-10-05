@@ -120,7 +120,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
 
   it("does not override when already above floor and not in safeguard mode", () => {
     const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 32_000 } });
-    vi.spyOn(settingsManager, "applyOverrides");
+    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
     applyAgentCompactionSettingsFromConfig({
       settingsManager,
@@ -128,12 +128,12 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     });
 
     expect(settingsManager.getCompactionReserveTokens()).toBe(32_000);
-    expect(settingsManager.applyOverrides).not.toHaveBeenCalled();
+    expect(applyOverrides).not.toHaveBeenCalled();
   });
 
   it("applies keepRecentTokens when explicitly configured", () => {
     const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 20_000 } });
-    vi.spyOn(settingsManager, "applyOverrides");
+    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
     applyAgentCompactionSettingsFromConfig({
       settingsManager,
@@ -149,14 +149,14 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     });
 
     expect(settingsManager.getCompactionKeepRecentTokens()).toBe(15_000);
-    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
+    expect(applyOverrides).toHaveBeenCalledWith({
       compaction: { keepRecentTokens: 15_000 },
     });
   });
 
   it("preserves current keepRecentTokens when safeguard mode leaves it unset", () => {
     const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 25_000 } });
-    vi.spyOn(settingsManager, "applyOverrides");
+    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
     applyAgentCompactionSettingsFromConfig({
       settingsManager,
@@ -164,12 +164,12 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     });
 
     expect(settingsManager.getCompactionKeepRecentTokens()).toBe(20_000);
-    expect(settingsManager.applyOverrides).not.toHaveBeenCalled();
+    expect(applyOverrides).not.toHaveBeenCalled();
   });
 
   it("treats keepRecentTokens=0 as invalid and keeps the current setting", () => {
     const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 25_000 } });
-    vi.spyOn(settingsManager, "applyOverrides");
+    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
     applyAgentCompactionSettingsFromConfig({
       settingsManager,
@@ -177,7 +177,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     });
 
     expect(settingsManager.getCompactionKeepRecentTokens()).toBe(20_000);
-    expect(settingsManager.applyOverrides).not.toHaveBeenCalled();
+    expect(applyOverrides).not.toHaveBeenCalled();
   });
 
   it("caps the effective reserve so small-context models do not compact at token one", () => {
@@ -205,7 +205,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
   it("applies capped floor when current reserve is below it on small-context models", () => {
     // A smaller project reserve is raised to the context-scaled floor.
     const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 2_048 } });
-    vi.spyOn(settingsManager, "applyOverrides");
+    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
     applyAgentCompactionSettingsFromConfig({
       settingsManager,
@@ -213,7 +213,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     });
 
     expect(settingsManager.getCompactionReserveTokens()).toBe(4_096);
-    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
+    expect(applyOverrides).toHaveBeenCalledWith({
       compaction: { reserveTokens: 4_096 },
     });
   });
@@ -231,7 +231,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
 
   it("does not cap floor when context window is large enough", () => {
     const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 16_384 } });
-    vi.spyOn(settingsManager, "applyOverrides");
+    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
     // The large-window default keeps its existing 20,000-token reserve.
     applyAgentCompactionSettingsFromConfig({
@@ -242,7 +242,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(settingsManager.getCompactionReserveTokens()).toBe(
       DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
     );
-    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
+    expect(applyOverrides).toHaveBeenCalledWith({
       compaction: { reserveTokens: DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR },
     });
   });

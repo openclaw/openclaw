@@ -265,9 +265,7 @@ describe.each([false, true])("CLI run rejection (cleanupFails=%s)", (cleanupFail
       await expect(
         settlePreparedCliRun({
           context,
-          run: async () => {
-            throw error;
-          },
+          run: vi.fn().mockRejectedValue(error),
         }),
       ).rejects.toThrow(new Error(String(error)));
       expect(cleanup).toHaveBeenCalledOnce();

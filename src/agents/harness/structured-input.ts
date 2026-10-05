@@ -134,7 +134,7 @@ export function compileStructuredInputForm(params: {
 
   const usedQuestionIds = new Set<string>();
   const fields: StructuredInputField[] = [];
-  for (const [fieldId, schema, fieldMetadata] of validatedFields) {
+  for (const [fieldId, fieldSchema, fieldMetadata] of validatedFields) {
     if (fieldMetadata.otherAnswer) {
       continue;
     }
@@ -147,7 +147,7 @@ export function compileStructuredInputForm(params: {
         secret: fieldMetadata.secret || other?.secret === true,
         otherFieldId: other?.fieldId,
       },
-      schema,
+      fieldSchema,
       options,
     );
     if (typeof field === "string") {

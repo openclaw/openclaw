@@ -1577,14 +1577,14 @@ export function createAuthProfileStoreRuntime(
             runtimeRevision,
           }),
         );
-        const publication = saveAuthProfileStoreInTransaction(
+        const committedPublication = saveAuthProfileStoreInTransaction(
           params.store,
           agentDir,
           params.options,
           database,
           owner,
         );
-        const owned = {
+        const ownedSnapshot = {
           owner,
           credentialsRaw: readPersistedAuthProfileStoreRaw(agentDir, database),
           stateRaw: readPersistedAuthProfileStateRaw(agentDir, database),
@@ -1592,7 +1592,7 @@ export function createAuthProfileStoreRuntime(
           runtimeRevisionAtSaveEdge: runtimeAtSaveEdge.runtimeRevision,
           derivedRuntimeRevisionsAtSaveEdge,
         } satisfies AuthProfileStorePersistenceSnapshot;
-        return { owned, publication };
+        return { owned: ownedSnapshot, publication: committedPublication };
       },
       { env: params.snapshot.owner.env },
     );

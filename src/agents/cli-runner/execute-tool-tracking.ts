@@ -233,8 +233,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       readToolResultDetails(params.result)?.messageDelivery,
     );
     const delivered = deliveryFact
-      ? deliveryFact.status === "settled" &&
-        (params.isError !== true || deliveryFact.partialDelivery)
+      ? deliveryFact.status === "settled" && (!params.isError || deliveryFact.partialDelivery)
       : isDeliveredMessagingToolResult(params);
     if (!delivered) {
       return;
