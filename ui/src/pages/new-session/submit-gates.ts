@@ -40,6 +40,7 @@ type ReasonedSubmitGate =
   | "disconnected"
   | "access"
   | "folder"
+  | "workspace-policy"
   | "placement-recovery"
   | "agents"
   | "agent-not-allowed"
@@ -149,6 +150,25 @@ export function resolveNewSessionSubmitBlock(
 ): NewSessionSubmitBlock | undefined {
   const kind = catalog.isTarget(snapshot.data) ? "terminal" : "session";
   const pendingPlacementActive = Boolean(draft.pendingPlacement.sessionKey);
+  if (gateway.connected && !pendingPlacementActive) {
+    if (
+      place.browser.requiredWorkspace &&
+      (kind === "terminal" || draft.visibility === "incognito")
+    ) {
+      return {
+        gate: "workspace-policy",
+        reason: t(
+          kind === "terminal"
+            ? "newSession.workspaceThreadRequired"
+            : "newSession.workspaceIncognitoUnavailable",
+        ),
+      };
+    }
+    const reason = place.browser.workspaceBlockReason;
+    if (reason) {
+      return { gate: "workspace-policy", reason };
+    }
+  }
   if (
     draft.mentions.length > 0 &&
     (kind === "terminal" ||

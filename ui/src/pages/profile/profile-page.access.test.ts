@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
+import { projectsForGateway } from "../../lib/projects.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   createConnectedContext,
@@ -182,4 +183,36 @@ it("explains action grants independently of the assigned role name", async () =>
   await page.updateComplete;
   expect(action("archive")).toBe("Granted");
   expect(request.mock.calls.every(([method]) => method === "users.self")).toBe(true);
+});
+
+it("shows authoritative project policy and preserves its requirement through a failed refresh", async () => {
+  const request = vi.fn(async () => ({
+    projects: [{ id: "project-one", displayName: "Project One", source: "registered" }],
+    creationPolicy: { workspaceRequired: true, worktreeRequired: true, worktreeBaseRef: "main" },
+  }));
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
+  harness.emitHello(
+    gatewayHelloForMethods(
+      ["projects.list"],
+      ["operator.sessions.read", "operator.sessions.write"],
+    ),
+  );
+  const page = mountProfilePage(harness.context);
+  await vi.waitFor(() => expect(page.textContent).toContain("Project One"));
+  expect(page.textContent).toContain("separate worktree and branch from main");
+  expect(request).toHaveBeenCalledExactlyOnceWith("projects.list", {});
+
+  request.mockRejectedValueOnce(new Error("unavailable"));
+  await projectsForGateway(harness.context.gateway).refresh(true);
+  await page.updateComplete;
+  expect(page.textContent).toContain("Workspace access could not be loaded");
+  expect(page.textContent).toContain("separate worktree and branch from main");
+  expect(page.textContent).not.toContain("None available");
+  const retry = [
+    ...page.querySelectorAll<HTMLButtonElement>("#settings-profile-access button"),
+  ].find((button) => button.textContent?.trim() === "Retry");
+  expect(retry).toBeDefined();
+  retry?.click();
+  await vi.waitFor(() => expect(page.textContent).toContain("Project One"));
+  expect(page.textContent).not.toContain("Workspace access could not be loaded");
 });

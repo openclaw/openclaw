@@ -35,7 +35,7 @@ export function renderNewSessionIncognitoControl(
   const disabled =
     submission.submitting ||
     Boolean(submission.pendingPlacement.sessionKey) ||
-    Boolean(disabledReason);
+    (!active && Boolean(disabledReason));
   const description = disabledReason ?? t("newSession.incognitoDescription");
   return html`
     <div class="new-session-page__incognito-rail">

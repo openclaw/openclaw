@@ -33,6 +33,17 @@ export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode">
 } & (
     | { worktree: true; repository?: undefined }
     | { repository: NonNullable<SessionCreateParams["repository"]>; worktree?: undefined }
+    | {
+        projectId: string;
+        worktree?: undefined;
+        repository?: undefined;
+        worktreeSource?: undefined;
+        worktreeBaseRef?: undefined;
+        worktreeName?: undefined;
+        cwd?: undefined;
+        catalogId?: undefined;
+        incognito?: undefined;
+      }
   );
 
 type SessionPlacementSubmission = {
@@ -102,6 +113,12 @@ export function parseSessionPlacementCreateParams(
     return null;
   }
   const record = value;
+  // Required-workspace creation sends only the selected project. The Gateway
+  // allocates its worktree and dispatch still validates that session's custody.
+  const projectAllocation =
+    isNonEmptyString(record.projectId) &&
+    record.worktree === undefined &&
+    record.repository === undefined;
   if (
     Object.keys(record).some((key) => !PLACEMENT_CREATE_FIELDS.has(key)) ||
     record.key !== sessionKey ||
@@ -116,7 +133,7 @@ export function parseSessionPlacementCreateParams(
         record.worktreeBaseRef !== undefined ||
         record.catalogId !== undefined)) ||
     (record.repository === undefined
-      ? record.worktree !== true
+      ? record.worktree !== true && !projectAllocation
       : !Value.Check(SessionsCreateParamsSchema.properties.repository, record.repository) ||
         record.worktree !== undefined ||
         record.projectId !== undefined ||
@@ -124,6 +141,10 @@ export function parseSessionPlacementCreateParams(
         record.worktreeBaseRef !== undefined ||
         record.worktreeName !== undefined ||
         record.catalogId !== undefined) ||
+    (projectAllocation &&
+      ["worktreeSource", "worktreeBaseRef", "worktreeName", "cwd", "catalogId", "incognito"].some(
+        (key) => record[key] !== undefined,
+      )) ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
     (record.fastMode !== undefined &&

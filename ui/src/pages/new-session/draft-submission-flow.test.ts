@@ -46,6 +46,69 @@ async function readyChatRoute() {
 }
 
 describe("DraftSubmissionFlow", () => {
+  it("retries restored project-only creation before handing off the original first turn", async () => {
+    const { context, flow } = createDraftFixture({
+      methods: ["sessions.create", "sessions.dispatch"],
+      scopes: ["operator.admin"],
+    });
+    const message = "Review the selected project";
+    const original = flow.pendingPlacement.stageCreate({
+      agentId: "main",
+      target: { kind: "device", deviceId: "member-runner" },
+      message,
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      createParams: buildDraftSessionCreateParams({
+        agentId: "main",
+        message,
+        deferInitialTurn: true,
+        projectId: "approved-project",
+        worktree: true,
+        creationPolicy: {
+          workspaceRequired: true,
+          worktreeRequired: true,
+          worktreeBaseRef: "main",
+        },
+      }),
+    });
+    expect(original).toMatchObject({ projectId: "approved-project", message: "" });
+    const messageId = flow.pendingPlacement.messageId;
+    flow.pendingPlacement.reset();
+    flow.restorePendingPlacementRecovery("ws://gateway.example", "principal-a");
+    const start = vi.fn();
+    context.placementStartup.start = start;
+    vi.mocked(context.navigateAndWait).mockImplementation(readyChatRoute);
+    vi.mocked(context.sessions.createResult).mockResolvedValueOnce(null);
+    await vi.waitFor(() => expect(flow.submitDisabledReason()).toBeUndefined());
+    await flow.submit();
+    expect(start).not.toHaveBeenCalled();
+    expect(flow.pendingPlacement.createParams).toEqual(original);
+    expect(flow.pendingPlacement.message).toBe(message);
+    vi.mocked(context.sessions.createResult).mockImplementation(async (params) => ({
+      key: expectDefined(params?.key, "restored placement create key"),
+      initialRun: { status: "idle" },
+    }));
+    await flow.submit();
+    expect(vi.mocked(context.sessions.createResult).mock.calls).toEqual([
+      [original, { reconciliation: "background" }],
+      [original, { reconciliation: "background" }],
+    ]);
+    expect(start).toHaveBeenCalledExactlyOnceWith({
+      recovery: expect.objectContaining({
+        sessionKey: original?.key,
+        phase: "dispatching",
+        message,
+        messageId,
+        target: { kind: "device", deviceId: "member-runner" },
+      }),
+      persistRecovery: true,
+      mode: "dispatch",
+      createdAt: expect.any(Number),
+    });
+    expect(flow.error).toBeNull();
+    expect(flow.pendingPlacement.capture()).toBeNull();
+  });
+
   it.each(["available", "unavailable before create", "unavailable after create"] as const)(
     "preserves the runtime through Auto placement when recovery storage is %s",
     async (storage) => {

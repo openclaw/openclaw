@@ -21,6 +21,7 @@ type DraftRepositorySnapshot = Readonly<{
   folder: string;
   workspace: string;
   workspaceGit: boolean;
+  workspaceRequired?: boolean;
   gateway: ApplicationContext["gateway"]["snapshot"] | undefined;
 }>;
 
@@ -36,6 +37,9 @@ type DraftRepositoryCallbacks = {
 type ResolvedRepository = Exclude<DraftRepositoryState, { kind: "checking" }>;
 
 function initialRepositoryState(snapshot: DraftRepositorySnapshot): DraftRepositoryState {
+  if (snapshot.workspaceRequired) {
+    return { kind: "idle" };
+  }
   if (snapshot.remoteProject) {
     return { kind: "pending-clone", cloneUrl: snapshot.remoteProject.cloneUrl };
   }
@@ -97,7 +101,7 @@ export class DraftRepositoryController {
   }
 
   get preferenceReady(): boolean {
-    return !this.preferredWorktreeRestore;
+    return this.read().workspaceRequired === true || !this.preferredWorktreeRestore;
   }
 
   get hasUserSelection(): boolean {
@@ -266,6 +270,9 @@ export class DraftRepositoryController {
   matchesCurrentRepo(): boolean {
     const snapshot = this.read();
     const state = this.repositoryValue;
+    if (snapshot.workspaceRequired) {
+      return state.kind === "idle";
+    }
     if (state.kind === "pending-clone") {
       return snapshot.remoteProject?.cloneUrl === state.cloneUrl;
     }

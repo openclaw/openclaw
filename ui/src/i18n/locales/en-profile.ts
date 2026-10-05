@@ -16,6 +16,12 @@ const enProfile = {
       serverSettings: "Manage server settings",
       granted: "Granted",
       notGranted: "Not granted",
+      workspace: "Approved workspaces",
+      workspaceDescription:
+        "Choose one for each new session. The server creates a separate worktree and branch from {branch}.",
+      noWorkspaces: "None available. Ask a maintainer to assign a project.",
+      workspaceUnavailable: "Workspace access could not be loaded. Retry to check your policy.",
+      workspaceLoading: "Loading approved workspaces…",
       admin: "You have permission to manage this server.",
       write: "You have permission to send messages and make changes.",
       read: "You have permission to view server information.",

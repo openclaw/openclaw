@@ -116,6 +116,7 @@ export function renderNewSessionPlaceControls({
     recents,
     projectQuery: browser.projectQuery,
     freshWorkspace: place.freshWorkspace,
+    workspaceRequired: browser.requiredWorkspace?.workspaceRequired,
   });
   const checkoutState = resolveCheckoutChip({
     destination: place.cloudProfileId ? "cloud" : place.remotePlacement ? "remote" : "local",
@@ -203,6 +204,7 @@ export function renderNewSessionPlaceControls({
       : renderProjectChip({
           idPrefix,
           state: projectState,
+          workspaceRequired: browser.requiredWorkspace?.workspaceRequired,
           browseAvailable: place.browseAvailable(),
           isAdmin: place.isAdmin(),
           canWrite: place.canWrite(),
@@ -251,28 +253,32 @@ export function renderNewSessionPlaceControls({
           onClose: () => browser.close(),
         })
   }${
-    place.checkoutVisible && !(nativeTerminal && place.terminalOnNode)
-      ? renderCheckoutChip({
-          idPrefix,
-          state: checkoutState,
-          remotePlacement: place.remotePlacement,
-          repository: Boolean(place.remoteRepository),
-          folderLabel: projectState.label,
-          worktree: place.worktree,
-          worktreeAvailable: place.worktreeAvailable(),
-          repositoryUnavailable: place.repository.kind === "unavailable",
-          branches,
-          branchesLoading: place.repository.kind === "checking",
-          baseRef: place.baseRef,
-          worktreeName: place.worktreeName,
-          submitting,
-          pendingPlacement,
-          ...browser.popoverCallbacks("checkout"),
-          onSelectWorktree: (value) => place.selectWorktree(value),
-          onBaseRefInput: (baseRef) => place.setBaseRef(baseRef),
-          onWorktreeNameInput: (worktreeName) => place.setWorktreeName(worktreeName),
-          onConfirm: onFocusComposer,
-        })
-      : nothing
+    !nativeTerminal && browser.requiredWorkspace?.worktreeRequired
+      ? html`<span class="new-session-page__menu-note" data-required-worktree
+          >${t("newSession.requiredWorktree", { branch: browser.requiredWorkspace.worktreeBaseRef })}</span
+        >`
+      : place.checkoutVisible && !(nativeTerminal && place.terminalOnNode)
+        ? renderCheckoutChip({
+            idPrefix,
+            state: checkoutState,
+            remotePlacement: place.remotePlacement,
+            repository: Boolean(place.remoteRepository),
+            folderLabel: projectState.label,
+            worktree: place.worktree,
+            worktreeAvailable: place.worktreeAvailable(),
+            repositoryUnavailable: place.repository.kind === "unavailable",
+            branches,
+            branchesLoading: place.repository.kind === "checking",
+            baseRef: place.baseRef,
+            worktreeName: place.worktreeName,
+            submitting,
+            pendingPlacement,
+            ...browser.popoverCallbacks("checkout"),
+            onSelectWorktree: (value) => place.selectWorktree(value),
+            onBaseRefInput: (baseRef) => place.setBaseRef(baseRef),
+            onWorktreeNameInput: (worktreeName) => place.setWorktreeName(worktreeName),
+            onConfirm: onFocusComposer,
+          })
+        : nothing
   }`;
 }

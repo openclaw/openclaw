@@ -41,6 +41,7 @@ import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accoun
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
+import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -81,6 +82,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private connecting = false;
   private canWrite = false;
   private connectionScopes: readonly string[] | null = null;
+  private projectCatalog: ProjectCatalog | undefined;
   private readonly heroAvatarLoader = new IdentityAvatarController(this);
   private identityRequestId = 0;
   private subscriptions: Array<() => void> = [];
@@ -90,7 +92,9 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
   override connectedCallback() {
     super.connectedCallback();
+    this.projectCatalog = projectsForGateway(this.context.gateway);
     this.subscriptions = [
+      this.projectCatalog.subscribe(() => this.requestUpdate()),
       this.context.gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot)),
       this.context.gateway.subscribeEvents((event) => {
         if (
@@ -120,6 +124,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.connecting = false;
     this.canWrite = false;
     this.connectionScopes = null;
+    this.projectCatalog = undefined;
     super.disconnectedCallback();
   }
 
@@ -375,6 +380,10 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private renderConnectionAccess() {
     const scopes = this.connectionScopes;
+    const catalog = this.projectCatalog?.snapshot;
+    const policy = catalog?.result?.creationPolicy;
+    const workspace = policy && "workspaceRequired" in policy ? policy : undefined;
+    const projects = catalog?.result?.projects ?? [];
     const grants = [
       ["sessionActions", ["operator.sessions.write"]],
       ["archive", ["operator.sessions.write", "operator.sessions.archive"]],
@@ -434,6 +443,39 @@ export class ProfilePage extends OpenClawLightDomElement {
                       })}
                     </div>`,
                 )
+          }
+          ${
+            catalog?.failed
+              ? renderSettingsRow({
+                  title: t("profilePage.access.workspaceUnavailable"),
+                  description: workspace?.workspaceRequired
+                    ? t("profilePage.access.workspaceDescription", {
+                        branch: workspace.worktreeBaseRef,
+                      })
+                    : undefined,
+                  control: html`<button
+                    type="button"
+                    class="btn"
+                    @click=${() => this.projectCatalog?.refresh(true)}
+                  >
+                    ${t("common.retry")}
+                  </button>`,
+                })
+              : workspace?.workspaceRequired
+                ? renderSettingsRow({
+                    title: t("profilePage.access.workspace"),
+                    description: t("profilePage.access.workspaceDescription", {
+                      branch: workspace.worktreeBaseRef,
+                    }),
+                    control: renderSettingsValue(
+                      !catalog?.ready
+                        ? t("profilePage.access.workspaceLoading")
+                        : projects.length
+                          ? projects.map((project) => project.displayName).join(", ")
+                          : t("profilePage.access.noWorkspaces"),
+                    ),
+                  })
+                : nothing
           }
           ${renderSettingsRow({
             title: t("profilePage.access.help"),

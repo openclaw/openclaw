@@ -349,6 +349,7 @@ describe("session placement recovery", () => {
   });
 
   it.each([
+    { projectId: "openclaw" },
     { projectId: "openclaw", worktree: true as const },
     { worktree: true as const, worktreeSource: "empty" as const },
     { repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" } },
@@ -381,6 +382,36 @@ describe("session placement recovery", () => {
       JSON.stringify({ ...creating, createParams: { key: "agent:cloud:other" } }),
     );
     expect(readRecovery()).toBeNull();
+  });
+
+  it.each([
+    { worktree: false },
+    { worktreeSource: "empty" },
+    { worktreeBaseRef: "other" },
+    { worktreeName: "custom" },
+    { cwd: "/workspace/other" },
+    { catalogId: "other" },
+    { incognito: true },
+    { repository: { url: "https://github.com/openclaw/openclaw.git" } },
+    { execNode: "runner" },
+    { projectGitUrl: "https://github.com/openclaw/openclaw.git" },
+    { projectId: "" },
+    { projectId: 42 },
+    { message: "must remain deferred" },
+  ])("rejects selectors outside project-only allocation: %j", (override) => {
+    expect(
+      parseSessionPlacementCreateParams(
+        {
+          key: recovery.sessionKey,
+          agentId: "cloud",
+          message: "",
+          projectId: "openclaw",
+          ...override,
+        },
+        recovery.sessionKey,
+        "cloud",
+      ),
+    ).toBeNull();
   });
 
   it.each([

@@ -130,6 +130,7 @@ export class DraftPlaceState {
         folder: this.folderValue,
         workspace: this.workspacePath(),
         workspaceGit: this.selectedAgent()?.workspaceGit === true,
+        workspaceRequired: this.browser.requiredWorkspace?.workspaceRequired === true,
         gateway: this.read().context?.gateway.snapshot,
       }),
       {
@@ -158,11 +159,15 @@ export class DraftPlaceState {
   }
 
   get worktree(): boolean {
-    return (this.remotePlacement || this.repositoryState.worktree) && !this.remoteRepository;
+    return (
+      Boolean(this.browser.requiredWorkspace?.worktreeRequired) ||
+      ((this.remotePlacement || this.repositoryState.worktree) && !this.remoteRepository)
+    );
   }
 
   get checkoutVisible(): boolean {
     return (
+      !this.browser.requiredWorkspace?.worktreeRequired &&
       !this.freshWorkspace &&
       this.repository.kind !== "direct" &&
       (this.worktreeAvailable() || this.worktree)
@@ -170,19 +175,30 @@ export class DraftPlaceState {
   }
 
   get freshWorkspace(): boolean {
-    return this.remotePlacement && this.freshWorkspaceValue;
+    return (
+      !this.browser.requiredWorkspace?.workspaceRequired &&
+      this.remotePlacement &&
+      this.freshWorkspaceValue
+    );
   }
 
   get remoteRepository(): SessionCreateParams["repository"] {
-    return this.repositoryState.remoteRepository;
+    return this.browser.requiredWorkspace?.workspaceRequired
+      ? undefined
+      : this.repositoryState.remoteRepository;
   }
 
   get worktreeName(): string {
-    return this.freshWorkspace ? "" : this.repositoryState.worktreeName;
+    return this.freshWorkspace || this.browser.requiredWorkspace?.worktreeRequired
+      ? ""
+      : this.repositoryState.worktreeName;
   }
 
   get baseRef(): string {
-    return this.freshWorkspace ? "" : this.repositoryState.baseRef;
+    return (
+      this.browser.requiredWorkspace?.worktreeBaseRef ??
+      (this.freshWorkspace ? "" : this.repositoryState.baseRef)
+    );
   }
 
   get repository() {
@@ -737,11 +753,17 @@ export class DraftPlaceState {
   }
 
   browseAvailable(): boolean {
-    return this.gateway.connected && (this.isAdmin() || Boolean(this.workspacePath()));
+    return (
+      !this.browser.requiredWorkspace?.workspaceRequired &&
+      this.gateway.connected &&
+      (this.isAdmin() || Boolean(this.workspacePath()))
+    );
   }
 
   worktreeAvailable(): boolean {
-    return this.repositoryState.available();
+    return (
+      this.browser.requiredWorkspace?.worktreeRequired === true || this.repositoryState.available()
+    );
   }
 
   private persistPreference(patch: Parameters<DraftGatewayState["persistPreference"]>[2]) {

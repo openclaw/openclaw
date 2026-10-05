@@ -54,6 +54,7 @@ export function resolveProjectChip(params: {
   recents: readonly ProjectRecent[];
   projectQuery: string;
   freshWorkspace?: boolean;
+  workspaceRequired?: boolean;
 }): ProjectChipState {
   const folder = params.folder.trim();
   const selectedProject = params.projects.find((project) => project.id === params.projectId);
@@ -67,15 +68,17 @@ export function resolveProjectChip(params: {
       )
     : params.projects;
   return {
-    label: params.freshWorkspace
-      ? t("newSession.newWorkspace")
-      : selectedProject
-        ? selectedProject.displayName
-        : params.selectedRemoteProject?.identity
-          ? params.selectedRemoteProject.identity
-          : folder
-            ? pathDisplayName(folder)
-            : pathDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
+    label: params.workspaceRequired
+      ? (selectedProject?.displayName ?? t("newSession.chooseWorkspace"))
+      : params.freshWorkspace
+        ? t("newSession.newWorkspace")
+        : selectedProject
+          ? selectedProject.displayName
+          : params.selectedRemoteProject?.identity
+            ? params.selectedRemoteProject.identity
+            : folder
+              ? pathDisplayName(folder)
+              : pathDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
     localProjects,
     recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind !== "project"),
     showWorkspace:
@@ -116,6 +119,7 @@ export function renderProjectChip(params: {
   browser: PlaceBrowserState;
   registerProjectPath: string | null;
   registeringProject: boolean;
+  workspaceRequired?: boolean;
   onGuardTransition: (event: MouseEvent) => void;
   onPopoverShow: () => void;
   onPopoverHide: () => void;
@@ -192,7 +196,7 @@ export function renderProjectChip(params: {
       @wa-after-hide=${params.onPopoverAfterHide}
     >
       ${
-        params.browserOpen
+        params.browserOpen && !params.workspaceRequired
           ? renderPlaceBrowser({
               browser: params.browser,
               id: (params.idPrefix ?? "new-session") + "-place-browser",
@@ -209,7 +213,7 @@ export function renderProjectChip(params: {
                 <div class="new-session-page__menu-title">${t("newSession.projects")}</div>
                 ${html`
                   ${
-                    params.onNewWorkspace && !query
+                    !params.workspaceRequired && params.onNewWorkspace && !query
                       ? renderSessionMenuItem(
                           {
                             value: "new-workspace",
@@ -224,7 +228,7 @@ export function renderProjectChip(params: {
                       : nothing
                   }
                   ${
-                    params.workspace && params.state.showWorkspace
+                    !params.workspaceRequired && params.workspace && params.state.showWorkspace
                       ? renderSessionMenuItem(
                           {
                             value: "workspace",
@@ -241,15 +245,22 @@ export function renderProjectChip(params: {
                       : nothing
                   }
                   <label class="new-session-page__project-search">
-                    <span class="sr-only">${t("newSession.projectSearchPlaceholder")}</span>
+                    <span class="sr-only"
+                      >${t(params.workspaceRequired ? "newSession.approvedProjectSearch" : "newSession.projectSearchPlaceholder")}</span
+                    >
                     <input
                       type="search"
-                      placeholder=${t("newSession.projectSearchPlaceholder")}
+                      placeholder=${t(params.workspaceRequired ? "newSession.approvedProjectSearch" : "newSession.projectSearchPlaceholder")}
                       .value=${params.projectQuery}
                       ?disabled=${params.submitting || params.pendingPlacement}
                       @input=${(event: Event) => params.onProjectQueryInput(inputValue(event))}
                       @keydown=${(event: KeyboardEvent) => {
-                        if (event.key === "Enter" && cloneInput && params.projectAddAvailable) {
+                        if (
+                          event.key === "Enter" &&
+                          cloneInput &&
+                          params.projectAddAvailable &&
+                          !params.workspaceRequired
+                        ) {
                           event.preventDefault();
                           params.onSelectRemoteProject({
                             identity: cloneInput,
@@ -273,7 +284,7 @@ export function renderProjectChip(params: {
                     ),
                   )}
                   ${
-                    cloneInput && params.projectAddAvailable
+                    !params.workspaceRequired && cloneInput && params.projectAddAvailable
                       ? renderSessionMenuItem(
                           {
                             value: "project-clone-url",
@@ -292,7 +303,10 @@ export function renderProjectChip(params: {
                       : nothing
                   }
                   ${
-                    !cloneInput && query.length >= 2 && params.projectSearchAvailable
+                    !params.workspaceRequired &&
+                    !cloneInput &&
+                    query.length >= 2 &&
+                    params.projectSearchAvailable
                       ? html`
                           <div class="new-session-page__menu-title">
                             ${t("newSession.githubProjects")}
@@ -341,15 +355,19 @@ export function renderProjectChip(params: {
                       : nothing
                   }
                   ${
-                    params.projects.length === 0 && params.canWrite && !params.isAdmin
+                    params.workspaceRequired && params.projects.length === 0
                       ? html`<div class="new-session-page__menu-note">
-                          ${t("newSession.projectsAdminHint")}
+                          ${t("newSession.workspacesUnavailable")}
                         </div>`
-                      : nothing
+                      : params.projects.length === 0 && params.canWrite && !params.isAdmin
+                        ? html`<div class="new-session-page__menu-note">
+                            ${t("newSession.projectsAdminHint")}
+                          </div>`
+                        : nothing
                   }
                 `}
                 ${
-                  params.state.recents.length > 0
+                  !params.workspaceRequired && params.state.recents.length > 0
                     ? html`
                         <div class="new-session-page__menu-title">
                           ${t("newSession.recentFolders")}
@@ -386,11 +404,13 @@ export function renderProjectChip(params: {
                     : nothing
                 }
                 ${
-                  browseNeedsAdmin
-                    ? html`<openclaw-tooltip .content=${t("newSession.browseRequiresAdmin")}>
-                        ${browseButton}
-                      </openclaw-tooltip>`
-                    : browseButton
+                  params.workspaceRequired
+                    ? nothing
+                    : browseNeedsAdmin
+                      ? html`<openclaw-tooltip .content=${t("newSession.browseRequiresAdmin")}>
+                          ${browseButton}
+                        </openclaw-tooltip>`
+                      : browseButton
                 }
               </div>
             `

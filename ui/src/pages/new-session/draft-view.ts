@@ -49,6 +49,14 @@ export function renderNewSessionDraftView(options: {
   const preferences = context?.theme.settings;
   const voiceControl = dictation.render(draftOwnerKey, preferences?.realtimeTalkInputDeviceId);
   const dictationLocked = dictation.active;
+  const workspaceMessage =
+    place.browser.requiredWorkspace && (isCatalogTarget || submission.visibility === "incognito")
+      ? t(
+          isCatalogTarget
+            ? "newSession.workspaceThreadRequired"
+            : "newSession.workspaceIncognitoUnavailable",
+        )
+      : place.browser.workspaceStatusMessage;
   return html`
     <div
       class="new-session-page__draft"
@@ -66,6 +74,14 @@ export function renderNewSessionDraftView(options: {
       }}
     >
       ${renderTargetBar()} ${renderNewSessionDraftErrors(place, submission, isCatalogTarget)}
+      ${
+        gateway.connected && !submission.pendingPlacement.sessionKey && workspaceMessage
+          ? html`<div class="callout" role="status" data-workspace-policy>
+              <span class="callout__content">${workspaceMessage}</span>
+              ${place.browser.projectsRetryAvailable ? html`<button class="btn btn--sm" type="button" @click=${() => place.browser.refreshProjects(true)}>${t("common.retry")}</button>` : nothing}
+            </div>`
+          : nothing
+      }
       ${renderNewSessionDraftComposer({
         agent: place.selectedAgent(),
         agentId: place.agentId,

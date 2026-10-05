@@ -9,6 +9,8 @@ import type {
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
@@ -18,6 +20,8 @@ import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
 import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
+
+registerNewSessionSetupEnglish();
 
 type DraftPickerKind = "where" | "project" | "checkout";
 
@@ -142,6 +146,57 @@ export class DraftPlaceBrowser {
     return this.projectCatalog?.snapshot.ready ?? false;
   }
 
+  get projectsFailed(): boolean {
+    return this.projectCatalog?.snapshot.failed ?? false;
+  }
+
+  get creationPolicy() {
+    this.bindProjectCatalog();
+    return this.projectCatalog?.snapshot.result?.creationPolicy;
+  }
+
+  get requiredWorkspace() {
+    const policy = this.creationPolicy;
+    return policy && "workspaceRequired" in policy ? policy : undefined;
+  }
+
+  get projectsRetryAvailable(): boolean {
+    return (
+      this.projectsFailed ||
+      (this.projectsReady && Boolean(this.requiredWorkspace) && !this.projects.length)
+    );
+  }
+
+  get workspaceBlockReason(): string | undefined {
+    this.bindProjectCatalog();
+    // A failed optional catalog is not a grant. Ordinary creation can still ask
+    // the server, which enforces any requirement before allocating or running.
+    if (this.projectsFailed && !this.requiredWorkspace?.workspaceRequired) {
+      return undefined;
+    }
+    return this.workspaceStatusMessage;
+  }
+
+  get workspaceStatusMessage(): string | undefined {
+    this.bindProjectCatalog();
+    if (this.projectsFailed && !this.requiredWorkspace?.workspaceRequired) {
+      return t("newSession.workspaceDiscoveryFailed");
+    }
+    if (!this.projectsReady) {
+      return t(
+        this.projectsFailed
+          ? "newSession.workspacePolicyFailed"
+          : "newSession.workspacePolicyLoading",
+      );
+    }
+    if (this.requiredWorkspace?.workspaceRequired && !this.selectedProject()) {
+      return t(
+        this.projects.length ? "newSession.workspaceRequired" : "newSession.workspacesUnavailable",
+      );
+    }
+    return undefined;
+  }
+
   get projectRecents(): readonly ProjectRecent[] | undefined {
     return this.projectCatalog?.snapshot.result?.recents;
   }
@@ -238,8 +293,9 @@ export class DraftPlaceBrowser {
     this.projectCatalog = gateway ? projectsForGateway(gateway) : undefined;
     this.lastProjectResult = null;
     const update = () => {
-      const result = this.projectCatalog?.snapshot.result ?? null;
-      if (result && result !== this.lastProjectResult) {
+      const snapshot = this.projectCatalog?.snapshot;
+      const result = snapshot?.result ?? null;
+      if (snapshot?.ready && result && result !== this.lastProjectResult) {
         this.lastProjectResult = result;
         if (this.projectId && !result.projects.some((project) => project.id === this.projectId)) {
           this.callbacks.onProjectMissing();
@@ -286,6 +342,9 @@ export class DraftPlaceBrowser {
     workspaceRoots: readonly string[];
     isAdmin: boolean;
   }): ProjectRecent[] {
+    if (this.requiredWorkspace?.workspaceRequired) {
+      return [];
+    }
     const allowGatewayFolder = (folder: string) =>
       params.isAdmin || isKnownWorkspacePath(params.workspaceRoots, folder);
     const serverRecents = this.projectRecents?.filter((recent) =>
@@ -314,6 +373,7 @@ export class DraftPlaceBrowser {
     const normalized = query.trim();
     const context = this.read().context;
     if (
+      this.requiredWorkspace ||
       normalized.length < 2 ||
       projectCloneInput(normalized) ||
       !this.gateway.connected ||
