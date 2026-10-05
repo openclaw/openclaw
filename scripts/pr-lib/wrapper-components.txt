@@ -1656,6 +1656,7 @@ src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
 src/state/openclaw-state-db-initialization.ts
+src/state/openclaw-state-db-integrity-admission.ts
 src/state/openclaw-state-db-legacy-backfills.ts
 src/state/openclaw-state-db-maintenance.ts
 src/state/openclaw-state-db-open.ts
