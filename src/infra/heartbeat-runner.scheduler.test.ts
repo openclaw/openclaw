@@ -433,14 +433,14 @@ describe("ambient owner resolution", () => {
 describe("targeted unscheduled wake dispatch", () => {
   it("runs a targeted manual next-heartbeat wake when recurring heartbeats are disabled", async () => {
     start(config("0m", { main: {} }));
-    const enqueueSystemEvent = vi.fn();
+    const enqueueEvent = vi.fn();
     const scheduler = new GatewayScheduler();
     const state = createCronServiceState({
       scheduler,
       storePath: "/unused/cron.json",
       cronEnabled: true,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      enqueueSystemEvent,
+      enqueueSystemEvent: enqueueEvent,
       requestHeartbeat: (request) => requestHeartbeat({ ...request, coalesceMs: 0 }),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
     });
@@ -452,7 +452,7 @@ describe("targeted unscheduled wake dispatch", () => {
         sessionKey,
       }),
     ).toEqual({ ok: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Operator requested a session update.", {
+    expect(enqueueEvent).toHaveBeenCalledWith("Operator requested a session update.", {
       agentId: "main",
       sessionKey,
     });

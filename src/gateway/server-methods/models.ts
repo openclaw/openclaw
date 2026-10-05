@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -63,7 +62,6 @@ export const modelsHandlers: GatewayRequestHandlers = {
             rawAgentId: params.agentId ?? tryResolveAmbientOwnerAgentId(cfg),
             respond: respondToCaller,
             cfg,
-            normalize: normalizeOptionalString,
           });
         if (!resolved) {
           return undefined;

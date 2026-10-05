@@ -154,13 +154,8 @@ function readOptionalErrorUri(value: unknown, surface: string): string | undefin
   if (raw === undefined) {
     return undefined;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw githubOAuthProtocolError(surface);
-  }
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+  const parsed = URL.parse(raw);
+  if (!parsed || parsed.protocol !== "https:" || parsed.username || parsed.password) {
     throw githubOAuthProtocolError(surface);
   }
   return raw;

@@ -32,6 +32,7 @@ import {
   runGit,
   type GitResult,
 } from "./git.js";
+import { appendNameOrdinal, validateName } from "./name.js";
 import { worktreeOwnerMatches } from "./owner.js";
 import { startWorktreePreparationPhase } from "./preparation-timing.js";
 import {
@@ -50,8 +51,6 @@ import type {
   ManagedWorktreeRecord,
   WorktreeWorkerAuthority,
 } from "./types.js";
-
-const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export async function prepareWorktreeDestination(params: {
   env: NodeJS.ProcessEnv;
@@ -316,13 +315,6 @@ export async function withWorktreeSource<T>(
   });
 }
 
-export function validateName(name: string): string {
-  if (!NAME_PATTERN.test(name)) {
-    throw new Error("worktree name must match [a-z0-9][a-z0-9-]{0,63}");
-  }
-  return name;
-}
-
 export async function findWorktreeByName(
   env: NodeJS.ProcessEnv,
   fingerprint: string,
@@ -376,11 +368,6 @@ async function nameIsUnavailable(
   );
 }
 
-function appendNameOrdinal(name: string, ordinal: number): string {
-  const suffix = `-${ordinal}`;
-  return `${name.slice(0, 64 - suffix.length).replace(/-+$/g, "")}${suffix}`;
-}
-
 async function resolveWorktreeName(
   env: NodeJS.ProcessEnv,
   repoRoot: string,
@@ -428,7 +415,7 @@ async function resolveRepositoryFromRealPath(
   requested: string,
   requestedLabel: string,
 ): Promise<ResolvedRepository> {
-  const sourceRoot = await resolveCheckoutRootFromRealPath(requested, requestedLabel);
+  const { root: sourceRoot } = await resolveCheckoutRootFromRealPath(requested, requestedLabel);
   const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(sourceRoot);
   const origin = await runGit(canonicalRoot, ["config", "--get", "remote.origin.url"]);
   if (origin.termination !== "exit" || (origin.code !== 0 && origin.code !== 1)) {

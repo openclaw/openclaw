@@ -375,7 +375,6 @@ export function createPersonalGitHubPublicationCoordinator(
           repository: row.repository,
           baseBranch: row.base_branch,
         },
-        projectResult: projectGitHubPublicationResult,
         bindWorkspaceSnapshot: () => {
           throw new Error("My GitHub publication is missing its accepted snapshot.");
         },
