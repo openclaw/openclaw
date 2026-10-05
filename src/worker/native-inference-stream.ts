@@ -1,4 +1,4 @@
-import { appendTextDeltaToAssistantMessage } from "../../packages/agent-core/src/agent-stream-response.js";
+import { appendTextDeltaToAssistantMessage } from "@openclaw/llm-core";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type {
   AssistantMessage,
@@ -21,6 +21,7 @@ function stringParts(value: unknown, includeKeys: boolean, strings: string[]): s
     for (const [key, item] of Object.entries(value)) {
       if (includeKeys) {
         strings.push(key);
+        text += key;
       }
       text += stringParts(item, includeKeys, strings);
     }
@@ -44,19 +45,36 @@ function generatedOutput(message: AssistantMessage) {
   } = message;
   const strings: string[] = [];
   let text = "";
+  let structured = "";
+  let all = "";
   for (const block of content) {
     if (block.type === "toolCall") {
       strings.push(block.id, block.name);
-      text += stringParts(block.arguments, true, strings);
-      stringParts(block.thoughtSignature, false, strings);
+      const value =
+        block.id +
+        block.name +
+        stringParts(block.arguments, true, strings) +
+        stringParts(block.thoughtSignature, false, strings);
+      structured += value;
+      all += value;
+    } else if (block.type === "text") {
+      text += block.text;
+      const { type: _type, text: _text, ...fields } = block;
+      const value = stringParts(fields, false, strings);
+      structured += value;
+      all += block.text + value;
     } else {
-      text += block.type === "text" ? block.text : block.thinking;
-      const { type: _type, ...fields } = block;
-      stringParts(fields, false, strings);
+      text += block.thinking;
+      const { type: _type, thinking: _thinking, ...fields } = block;
+      const value = stringParts(fields, false, strings);
+      structured += value;
+      all += block.thinking + value;
     }
   }
-  stringParts(metadata, false, strings);
-  return { text, strings };
+  const metadataText = stringParts(metadata, false, strings);
+  structured += metadataText;
+  all += metadataText;
+  return { all, strings, structured, text };
 }
 
 /** Guard provider output before the shared loop can publish it or execute generated tools. */
@@ -70,14 +88,35 @@ export function createNativeInferenceStreamGuard(native: NativeRuntimeResolved) 
     void (async () => {
       let pending: AssistantMessageEvent[] = [];
       let bytes = 0;
+      let toolArgumentBytes = 0;
       let currentMessage: AssistantMessage | undefined;
       try {
         const source = await start();
         const toolArgumentDeltas = new Map<number, string>();
         const incompleteToolArguments = new Set<number>();
+        const clearToolArguments = (contentIndex: number) => {
+          const delta = toolArgumentDeltas.get(contentIndex);
+          if (delta !== undefined) {
+            toolArgumentBytes -= Buffer.byteLength(delta);
+            toolArgumentDeltas.delete(contentIndex);
+          }
+          incompleteToolArguments.delete(contentIndex);
+        };
+        const removePendingToolDelta = (contentIndex: number) => {
+          const priorIndex = pending.findIndex(
+            (held) => held.type === "toolcall_delta" && held.contentIndex === contentIndex,
+          );
+          if (priorIndex >= 0) {
+            const prior = pending[priorIndex];
+            if (prior) {
+              bytes -= Buffer.byteLength(JSON.stringify(prior));
+              pending.splice(priorIndex, 1);
+            }
+          }
+        };
         const publish = (raw: AssistantMessageEvent) => {
           signal?.throwIfAborted();
-          const event = structuredClone(raw);
+          let event = structuredClone(raw);
           const terminal = event.type === "done" || event.type === "error";
           const snapshot =
             event.type === "done"
@@ -96,7 +135,8 @@ export function createNativeInferenceStreamGuard(native: NativeRuntimeResolved) 
           native.assertProtocolSafe(event);
           const generated = generatedOutput(currentMessage);
           const text = completedText + generated.text;
-          native.assertProtocolSafe(text);
+          const generatedSequences = [text, generated.structured, generated.all];
+          native.assertProtocolSafe(generatedSequences);
           const strings = generated.strings;
           if ("delta" in event) {
             strings.push(event.delta);
@@ -111,16 +151,21 @@ export function createNativeInferenceStreamGuard(native: NativeRuntimeResolved) 
           }
           if (event.type === "toolcall_delta") {
             // Parsed argument snapshots can lag an incomplete JSON key/value.
-            const delta = (toolArgumentDeltas.get(event.contentIndex) ?? "") + event.delta;
+            const priorDelta = toolArgumentDeltas.get(event.contentIndex) ?? "";
+            const delta = priorDelta + event.delta;
             if (Buffer.byteLength(delta) > WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
               throw new Error("Native tool arguments exceeded the protocol budget");
+            }
+            toolArgumentBytes += Buffer.byteLength(delta) - Buffer.byteLength(priorDelta);
+            if (toolArgumentBytes > WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
+              throw new Error("Native tool arguments exceeded the aggregate protocol budget");
             }
             toolArgumentDeltas.set(event.contentIndex, delta);
             strings.push(delta);
             try {
               // JSON escape spelling is not credential spelling. Do not publish
               // raw previews until all their strings can be checked decoded.
-              stringParts(JSON.parse(delta) as unknown, true, strings);
+              strings.push(stringParts(JSON.parse(delta) as unknown, true, strings));
               incompleteToolArguments.delete(event.contentIndex);
             } catch (error) {
               if (!(error instanceof SyntaxError)) {
@@ -128,16 +173,22 @@ export function createNativeInferenceStreamGuard(native: NativeRuntimeResolved) 
               }
               incompleteToolArguments.add(event.contentIndex);
             }
+            event = { ...event, delta };
+            removePendingToolDelta(event.contentIndex);
+          } else if (event.type === "toolcall_end") {
+            removePendingToolDelta(event.contentIndex);
+            clearToolArguments(event.contentIndex);
           }
           native.assertProtocolSafe(strings);
           const hasCredentialPrefix =
-            native.hasCredentialPrefix(text) || strings.some(native.hasCredentialPrefix);
+            generatedSequences.some(native.hasCredentialPrefix) ||
+            strings.some(native.hasCredentialPrefix);
           if (terminal && hasCredentialPrefix) {
             throw new Error("Native stream ended with an unresolved credential prefix");
           }
           if (!terminal && (incompleteToolArguments.size > 0 || hasCredentialPrefix)) {
             bytes += Buffer.byteLength(JSON.stringify(event));
-            if (bytes > WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
+            if (bytes + toolArgumentBytes > WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
               throw new Error("Native credential-prefix buffer exceeded");
             }
             pending.push(event);
@@ -153,10 +204,16 @@ export function createNativeInferenceStreamGuard(native: NativeRuntimeResolved) 
           }
           for (const held of pending) {
             output.push(held);
+            if (held.type === "toolcall_delta") {
+              clearToolArguments(held.contentIndex);
+            }
           }
           pending = [];
           bytes = 0;
           output.push(event);
+          if (event.type === "toolcall_delta") {
+            clearToolArguments(event.contentIndex);
+          }
           if (event.type === "done") {
             completedText = text;
           }

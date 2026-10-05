@@ -210,6 +210,47 @@ describe("worker native inference output owner", () => {
     expect(JSON.stringify(result.events)).not.toContain(secret.slice(0, 12));
     expect(JSON.stringify(result.events)).not.toContain(secret.slice(12));
   });
+  it("guards a credential split across an argument key and value", async () => {
+    const source = createAssistantMessageEventStream();
+    const prefix = secret.slice(0, 7);
+    const suffix = secret.slice(7);
+    const final = message([
+      { type: "toolCall", id: "call", name: "write", arguments: { [prefix]: suffix } },
+    ]);
+    source.push({ type: "done", reason: "toolUse", message: final });
+    source.end();
+    const result = await collect(createNativeInferenceStreamGuard(native())(() => source));
+    expect(result.message.stopReason).toBe("error");
+    expect(JSON.stringify(result.events)).not.toContain(prefix);
+    expect(JSON.stringify(result.events)).not.toContain(suffix);
+  });
+  it("guards a decoded tool preview split across an argument key and value", async () => {
+    const source = createAssistantMessageEventStream();
+    const prefix = secret.slice(0, 7);
+    const suffix = secret.slice(7);
+    const partial = message([{ type: "toolCall", id: "call", name: "write", arguments: {} }]);
+    const raw = JSON.stringify({ [prefix]: suffix });
+    source.push({ type: "start", partial });
+    source.push({ type: "toolcall_delta", contentIndex: 0, delta: raw, partial });
+    source.end(message([]));
+    const result = await collect(createNativeInferenceStreamGuard(native())(() => source));
+    expect(result.message.stopReason).toBe("error");
+    expect(result.events.filter((event) => event.type === "toolcall_delta")).toEqual([]);
+  });
+  it("guards a credential split across tool-call metadata fields", async () => {
+    const source = createAssistantMessageEventStream();
+    const prefix = secret.slice(0, 7);
+    const suffix = secret.slice(7);
+    const final = message([
+      { type: "toolCall", id: prefix, name: suffix, arguments: { value: "ordinary" } },
+    ]);
+    source.push({ type: "done", reason: "toolUse", message: final });
+    source.end();
+    const result = await collect(createNativeInferenceStreamGuard(native())(() => source));
+    expect(result.message.stopReason).toBe("error");
+    expect(JSON.stringify(result.events)).not.toContain(prefix);
+    expect(JSON.stringify(result.events)).not.toContain(suffix);
+  });
   it("checks the authoritative result before exposing the terminal event", async () => {
     const source = createAssistantMessageEventStream();
     source.push({
@@ -277,7 +318,59 @@ describe("worker native inference output owner", () => {
     }
     source.end();
     const result = await collect(createNativeInferenceStreamGuard(native())(() => source));
-    expect(result.events).toEqual(events);
+    expect(result.events.filter((event) => event.type === "toolcall_delta")).toEqual([
+      {
+        type: "toolcall_delta",
+        contentIndex: 0,
+        delta: raw,
+        partial: message([call]),
+      },
+    ]);
+    expect(result.message).toEqual(message([call]));
+  });
+  it("does not replay a published tool argument when trailing whitespace arrives", async () => {
+    const source = createAssistantMessageEventStream();
+    const call = {
+      type: "toolCall" as const,
+      id: "call",
+      name: "write",
+      arguments: { value: "ok" },
+    };
+    const raw = JSON.stringify(call.arguments);
+    source.push({ type: "start", partial: message([]) });
+    source.push({ type: "toolcall_delta", contentIndex: 0, delta: raw, partial: message([call]) });
+    source.push({ type: "toolcall_delta", contentIndex: 0, delta: " ", partial: message([call]) });
+    source.push({
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall: call,
+      partial: message([call]),
+    });
+    source.end(message([call]));
+    const result = await collect(createNativeInferenceStreamGuard(native())(() => source));
+    expect(result.events.filter((event) => event.type === "toolcall_delta")).toEqual([
+      { type: "toolcall_delta", contentIndex: 0, delta: raw, partial: message([call]) },
+    ]);
+  });
+  it("discards an undecodable raw preview when the tool call ends", async () => {
+    const source = createAssistantMessageEventStream();
+    const call = { type: "toolCall" as const, id: "call", name: "write", arguments: {} };
+    source.push({ type: "start", partial: message([call]) });
+    source.push({
+      type: "toolcall_delta",
+      contentIndex: 0,
+      delta: '{"value":"\\u0073ynthetic-sensitive-value',
+      partial: message([call]),
+    });
+    source.push({
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall: call,
+      partial: message([call]),
+    });
+    source.end(message([call]));
+    const result = await collect(createNativeInferenceStreamGuard(native())(() => source));
+    expect(result.events.filter((event) => event.type === "toolcall_delta")).toEqual([]);
     expect(result.message).toEqual(message([call]));
   });
   it("preserves the authoritative final message without releasing uncertified incomplete JSON previews", async () => {
@@ -291,6 +384,29 @@ describe("worker native inference output owner", () => {
       partial: message([]),
     });
     source.end(final);
+    const result = await collect(createNativeInferenceStreamGuard(native())(() => source));
+    expect(result.message).toEqual(final);
+    expect(result.events.filter((event) => event.type === "toolcall_delta")).toEqual([]);
+  });
+  it("coalesces cumulative held tool previews before applying the byte limit", async () => {
+    const source = createAssistantMessageEventStream();
+    const largeText = "ordinary".repeat(140_000);
+    const partial = message([
+      { type: "text", text: largeText },
+      { type: "toolCall", id: "call", name: "write", arguments: {} },
+    ]);
+    source.push({ type: "start", partial });
+    for (let index = 0; index < 25; index += 1) {
+      source.push({
+        type: "toolcall_delta",
+        contentIndex: 1,
+        delta: index === 0 ? '{"value":"' : "x",
+        partial,
+      });
+    }
+    const final = message([{ type: "text", text: largeText }]);
+    source.push({ type: "done", reason: "stop", message: final });
+    source.end();
     const result = await collect(createNativeInferenceStreamGuard(native())(() => source));
     expect(result.message).toEqual(final);
     expect(result.events.filter((event) => event.type === "toolcall_delta")).toEqual([]);
@@ -350,6 +466,26 @@ describe("worker native inference output owner", () => {
     source.push({ type: "toolcall_end", contentIndex: 0, toolCall: call, partial });
     const final = message([call, { type: "text", text: suffix }]);
     source.push({ type: "text_start", contentIndex: 1, partial: final });
+    source.push({ type: "done", reason: "stop", message: final });
+    source.end();
+    const result = await collect(createNativeInferenceStreamGuard(native())(() => source));
+    expect(result.message.stopReason).toBe("error");
+    expect(JSON.stringify(result.events)).not.toContain(prefix);
+    expect(JSON.stringify(result.events)).not.toContain(suffix);
+  });
+  it("keeps text-prefix continuity across an intervening tool block", async () => {
+    const source = createAssistantMessageEventStream();
+    const prefix = secret.slice(0, 12);
+    const suffix = secret.slice(12);
+    const call = { type: "toolCall" as const, id: "call", name: "read", arguments: {} };
+    source.push({ type: "start", partial: message([{ type: "text", text: prefix }]) });
+    source.push({
+      type: "toolcall_end",
+      contentIndex: 1,
+      toolCall: call,
+      partial: message([{ type: "text", text: prefix }, call]),
+    });
+    const final = message([{ type: "text", text: prefix }, call, { type: "text", text: suffix }]);
     source.push({ type: "done", reason: "stop", message: final });
     source.end();
     const result = await collect(createNativeInferenceStreamGuard(native())(() => source));

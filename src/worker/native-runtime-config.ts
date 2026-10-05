@@ -16,7 +16,7 @@ const baseUrl = z
   );
 
 /** Trusted local startup configuration, never a turn-wire configuration surface. */
-export const NativeRuntimeModelSchema = z.strictObject({
+const NativeRuntimeModelSchema = z.strictObject({
   provider,
   id: NativeRuntimeIdentifier,
   api: NativeRuntimeIdentifier,
@@ -61,4 +61,3 @@ export const NativeRuntimeConfigSchema = z.strictObject({
   workspace: z.string().trim().min(1),
 });
 export type NativeRuntimeConfig = z.infer<typeof NativeRuntimeConfigSchema>;
-export type NativeRuntimeModel = z.infer<typeof NativeRuntimeModelSchema>;

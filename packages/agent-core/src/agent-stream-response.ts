@@ -3,7 +3,10 @@ import {
   createEmptyTransportUsage,
   replaceCompactionReplayOwnerContent,
 } from "@openclaw/ai/transports";
-import { PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE } from "@openclaw/llm-core";
+import {
+  appendTextDeltaToAssistantMessage,
+  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+} from "@openclaw/llm-core";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -50,20 +53,6 @@ export type ExecutedToolCallBatch = {
 };
 
 type AssistantMessageUpdateEvent = Extract<AssistantMessageEvent, { contentIndex: number }>;
-
-export function appendTextDeltaToAssistantMessage(
-  message: AssistantMessage,
-  contentIndex: number,
-  delta: string,
-): AssistantMessage {
-  const content = [...message.content];
-  const currentContent = content[contentIndex];
-  content[contentIndex] =
-    currentContent?.type === "text"
-      ? { ...currentContent, text: currentContent.text + delta }
-      : { type: "text", text: delta };
-  return { ...message, content };
-}
 
 function resolveAssistantMessageUpdate(
   event: AssistantMessageUpdateEvent,

@@ -49,6 +49,7 @@ packages/llm-core/src/model-contracts/anthropic.ts
 packages/llm-core/src/model-data.ts
 packages/llm-core/src/types.ts
 packages/llm-core/src/usage-cost.ts
+packages/llm-core/src/utils/assistant-message-events.ts
 packages/llm-core/src/utils/diagnostics.ts
 packages/llm-core/src/utils/event-stream.ts
 packages/llm-core/src/utils/provider-refusal.ts

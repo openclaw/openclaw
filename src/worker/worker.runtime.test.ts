@@ -95,6 +95,7 @@ import {
   registerWorkerGatewayToolRpcTests,
 } from "./worker-runtime-gateway-tools.suite.js";
 import { registerWorkerGitHubFailureTests } from "./worker-runtime-github-failures.suite.js";
+import { registerWorkerNativeInferenceTests } from "./worker-runtime-native-inference.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { registerWorkerPromptTests } from "./worker-runtime-prompt.suite.js";
 import { registerWorkerReplayWindowTests } from "./worker-runtime-replay.suite.js";
@@ -271,6 +272,12 @@ class FakeWorkerGateway {
     });
     if (this.rootDir) {
       await rm(this.rootDir, { recursive: true, force: true });
+    }
+  }
+
+  disconnectClients(): void {
+    for (const client of this.clients) {
+      client.terminate();
     }
   }
 
@@ -1528,6 +1535,8 @@ describe("worker runtime", () => {
       payload: { phase: "finishing", aborted: true },
     });
   });
+
+  registerWorkerNativeInferenceTests({ setup });
 
   it("bounds shutdown when remote inference cancellation cannot settle", async () => {
     const { gateway, launch } = await setup({
