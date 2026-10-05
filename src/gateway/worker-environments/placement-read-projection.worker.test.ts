@@ -74,6 +74,17 @@ describe("worker placement read projection", () => {
     });
     const environments = await createWorkerEnvironmentStore({ database });
     const node = createNodeWorkerBundleTestNode();
+    const environment = environments.get(placement.environmentId!);
+    if (!environment) {
+      throw new Error("Expected the seeded worker environment");
+    }
+    const nodeEnvironment = {
+      ...environment,
+      nodeDeviceId: node.nodeId,
+      desktopAvailable: false,
+      desktopApps: [],
+      tunnelStatus: "connected" as const,
+    };
     const entered = createDeferred<Parameters<NodeWorkerSupervisorTransport["invoke"]>[0]>();
     const reply = createDeferred();
     const warn = vi.fn();
@@ -81,14 +92,7 @@ describe("worker placement read projection", () => {
       gatewayNamespace: "gateway-retention",
       placements: store,
       environments: {
-        list: () =>
-          environments.list().map((record) => ({
-            ...record,
-            nodeDeviceId: node.nodeId,
-            desktopAvailable: false,
-            desktopApps: [],
-            tunnelStatus: "connected" as const,
-          })),
+        list: () => [nodeEnvironment],
       },
       warn,
     });
