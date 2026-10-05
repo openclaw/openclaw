@@ -477,16 +477,6 @@ private func loadAndWaitBootstrap(
     if let sessionId { #expect(vm.sessionId == sessionId) }
 }
 
-/// Wakes on observed view-model mutations instead of a wall-clock deadline, for work no handle can reach.
-@MainActor
-private func waitForObservedState(_ condition: @escaping @MainActor () -> Bool) async {
-    while !condition() {
-        await withCheckedContinuation { continuation in
-            withObservationTracking { _ = condition() } onChange: { continuation.resume() }
-        }
-    }
-}
-
 @discardableResult
 private func sendUserMessage(_ vm: OpenClawChatViewModel, text: String = "hi") async -> Task<Void, Never>? {
     await MainActor.run {
