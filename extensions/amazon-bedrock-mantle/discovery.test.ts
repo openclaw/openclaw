@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const getTokenProviderMock = vi.hoisted(() => vi.fn());
@@ -213,38 +214,51 @@ describe("bedrock mantle discovery", () => {
   it.each(["older", "newer"] as const)(
     "ignores the %s failure that started before an IAM token succeeds",
     async (failureOrder) => {
-      let rejectFailure!: (error: Error) => void;
-      const failure = new Promise<string>((_resolve, reject) => {
-        rejectFailure = reject;
-      });
-      let resolveSuccess!: (token: string) => void;
-      const success = new Promise<string>((resolve) => {
-        resolveSuccess = resolve;
-      });
-      const tokenProviderFactory = vi
-        .fn()
-        .mockImplementationOnce(() => () => (failureOrder === "older" ? failure : success))
-        .mockImplementationOnce(() => () => (failureOrder === "older" ? success : failure))
+      const failure = createDeferred<string>();
+      const success = createDeferred<string>();
+      const firstStarted = createDeferred<void>();
+      const secondStarted = createDeferred<void>();
+      getTokenProviderMock
+        .mockReturnValueOnce(() => {
+          firstStarted.resolve();
+          return failureOrder === "older" ? failure.promise : success.promise;
+        })
+        .mockReturnValueOnce(() => {
+          secondStarted.resolve();
+          return failureOrder === "older" ? success.promise : failure.promise;
+        })
         .mockImplementationOnce(() => {
           throw new Error("same failure");
         });
-      const first = generateToken(tokenProviderFactory, 0);
-      const second = generateToken(tokenProviderFactory, 1);
+      let now = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const first = generateBearerTokenFromIam({ region: testRegion });
+      await firstStarted.promise;
+      now = 1;
+      const second = generateBearerTokenFromIam({ region: testRegion });
+      await secondStarted.promise;
       const [pendingFailure, pendingSuccess] =
         failureOrder === "older" ? [first, second] : [second, first];
 
-      resolveSuccess("recovered-token");
-      await expect(pendingSuccess).resolves.toBe("recovered-token");
-      rejectFailure(new Error("same failure"));
-      await expect(pendingFailure).resolves.toBeUndefined();
-      expect(discoveryDebugSpy).not.toHaveBeenCalled();
+      try {
+        success.resolve("recovered-token");
+        await expect(pendingSuccess).resolves.toBe("recovered-token");
+        failure.reject(new Error("same failure"));
+        await expect(pendingFailure).resolves.toBeUndefined();
+        expect(discoveryDebugSpy).not.toHaveBeenCalled();
 
-      await generateToken(tokenProviderFactory, 7_200_001);
-      expect(discoveryDebugSpy).toHaveBeenCalledOnce();
-      expect(discoveryDebugSpy).toHaveBeenCalledWith("Mantle IAM token generation unavailable", {
-        region: testRegion,
-        error: "same failure",
-      });
+        now = 7_200_001;
+        await generateBearerTokenFromIam({ region: testRegion });
+        expect(discoveryDebugSpy).toHaveBeenCalledOnce();
+        expect(discoveryDebugSpy).toHaveBeenCalledWith("Mantle IAM token generation unavailable", {
+          region: testRegion,
+          error: "same failure",
+        });
+      } finally {
+        success.resolve("recovered-token");
+        failure.reject(new Error("same failure"));
+        await Promise.allSettled([first, second]);
+      }
     },
   );
 

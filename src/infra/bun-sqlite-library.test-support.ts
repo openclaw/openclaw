@@ -62,9 +62,9 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     get isMainThread() {
       return native.enabled ? native.mainThread : actual.isMainThread;
     },
-    getEnvironmentData: (key: unknown) =>
+    getEnvironmentData: (key: Parameters<typeof actual.getEnvironmentData>[0]) =>
       native.enabled ? native.environment.get(key) : actual.getEnvironmentData(key),
-    setEnvironmentData: (key: unknown, value: unknown) => {
+    setEnvironmentData: (...[key, value]: Parameters<typeof actual.setEnvironmentData>) => {
       if (native.enabled) {
         native.publish(key, value);
         native.environment.set(key, value);
@@ -77,6 +77,8 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 // mock-isolation: Simulated Bun admission must not execute the host's native SQLite close probe.
 vi.mock("./bun-sqlite-close-probe.js", () => ({ probeSqliteNativeClose: native.closeProbe }));
 
+// Test startup preloads this owner before file mocks; reevaluate its native imports under them.
+vi.resetModules();
 export const {
   captureSqliteWorkerClosePolicy,
   ensureSqliteLibrarySelected,
