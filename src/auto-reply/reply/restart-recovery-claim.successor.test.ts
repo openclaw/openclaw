@@ -8,6 +8,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { isRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 
@@ -53,6 +54,59 @@ describe("restart recovery claim successors", () => {
       restartRecoverySourceIngress: "control-ui",
       restartRecoveryTerminalRunIds: ["interrupted-run"],
       status: "running",
+    });
+  });
+
+  it("rejects a successor when its recovery transfer loses ownership", async () => {
+    const scope = {
+      storePath: path.join(
+        tempDirs.make("openclaw-reply-claim-refused-successor-"),
+        "sessions.json",
+      ),
+      sessionKey: "agent:main:main",
+    };
+    let entry: InternalSessionEntry = {
+      abortedLastRun: true,
+      restartRecoveryDeliveryRunId: "interrupted-run",
+      restartRecoveryDeliverySourceRunId: "interrupted-run",
+      restartRecoverySourceIngress: "control-ui",
+      sessionId: "session",
+      status: "running",
+      updatedAt: 1,
+    };
+    await replaceSessionEntry(scope, entry);
+    let didSetEntry = false;
+    let replacement: ReturnType<typeof updateSessionEntry> | undefined;
+    const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
+      admissionRunId: "queued-run",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      getEntry: () => entry,
+      getSessionId: () => entry.sessionId,
+      isRestartAbort: () => false,
+      resolveDeliveryContext: () => {
+        replacement ??= updateSessionEntry(scope, () => ({
+          abortedLastRun: false,
+          restartRecoveryDeliveryRunId: "replacement-run",
+          restartRecoveryDeliverySourceRunId: "replacement-run",
+          updatedAt: 2,
+        }));
+        return undefined;
+      },
+      setEntry: (next) => {
+        didSetEntry = true;
+        entry = next;
+      },
+      ...scope,
+    });
+    const outcome = await controller.admitUserTurn().catch((error: unknown) => error);
+    await replacement;
+
+    expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+    expect(didSetEntry).toBe(false);
+    expect(loadSessionEntry(scope)).toMatchObject({
+      restartRecoveryDeliveryRunId: "replacement-run",
+      restartRecoveryDeliverySourceRunId: "replacement-run",
     });
   });
 

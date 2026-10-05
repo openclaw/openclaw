@@ -159,17 +159,23 @@ export function createReplyRestartRecoveryClaimController(params: {
       }
       return result.sessionEntry as SessionEntry;
     }
+    let didCommit = false;
     const persisted = await updateSessionEntry(
       { agentId: params.agentId, storePath: options.storePath, sessionKey: options.sessionKey },
-      (current) =>
-        sessionMatchesExpectedTranscriptTurn(
-          { entry: current },
-          { expectedSessionId: options.sessionId, expectedSessionState },
-        )
-          ? options.patch
-          : null,
+      (current) => {
+        if (
+          !sessionMatchesExpectedTranscriptTurn(
+            { entry: current },
+            { expectedSessionId: options.sessionId, expectedSessionState },
+          )
+        ) {
+          return null;
+        }
+        didCommit = true;
+        return options.patch;
+      },
     );
-    if (!persisted) {
+    if (!didCommit || !persisted) {
       throw createRestartRecoveryClaimChangedError();
     }
     return persisted;
