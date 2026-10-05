@@ -258,12 +258,6 @@ type McpDoctorIssue = {
   message: string;
 };
 
-type McpDoctorServerResult = {
-  name: string;
-  ok: boolean;
-  issues: McpDoctorIssue[];
-};
-
 const MCP_DOCTOR_CONCURRENCY = 4;
 const MCP_CODEX_APPROVAL_ANNOTATION_HINT =
   "tools have no safety annotations; calls require approval in prompting session postures";
@@ -885,7 +879,7 @@ export function registerMcpCli(program: Command) {
       const selected = selectMcpServers(loaded, name, opts);
       const tasks = Object.entries(selected)
         .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([serverName, server]) => async (): Promise<McpDoctorServerResult> => {
+        .map(([serverName, server]) => async () => {
           const issues = await collectMcpDoctorIssues({
             name: serverName,
             server,

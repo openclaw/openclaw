@@ -12,13 +12,6 @@ function installedNpmPackageName(
   );
 }
 
-type TrackedUpdateSelection = {
-  ids: string[];
-  specOverrides?: Record<string, string>;
-  unmatchedIds?: string[];
-  error?: string;
-};
-
 function resolveTrackedUpdateSelection<T>(params: {
   installs: Record<string, T>;
   rawIds: readonly string[];
@@ -26,7 +19,7 @@ function resolveTrackedUpdateSelection<T>(params: {
   packageName: (install: T) => string | undefined;
   installOwnerByPluginId?: ReadonlyMap<string, string>;
   rejectedPluginIds?: ReadonlyMap<string, string>;
-}): TrackedUpdateSelection {
+}) {
   const ids = new Set<string>();
   const overrides = new Map<string, string>();
   const unmatchedIds = new Set<string>();
@@ -83,7 +76,7 @@ export function resolvePluginUpdateSelection(params: {
   rejectedPluginIds?: ReadonlyMap<string, string>;
   rawIds: readonly string[];
   all?: boolean;
-}): Omit<TrackedUpdateSelection, "ids"> & { pluginIds: string[] } {
+}) {
   const { ids, ...selection } = resolveTrackedUpdateSelection({
     ...params,
     packageName: (install) =>
@@ -97,7 +90,7 @@ export function resolveHookPackUpdateSelection(params: {
   installs: Record<string, HookInstallRecord>;
   rawIds: readonly string[];
   all?: boolean;
-}): Omit<TrackedUpdateSelection, "ids"> & { hookIds: string[] } {
+}) {
   const { ids, ...selection } = resolveTrackedUpdateSelection({
     ...params,
     packageName: installedNpmPackageName,

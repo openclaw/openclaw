@@ -45,7 +45,6 @@ import {
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveMergedModelProviderEntry } from "../../config/model-provider-config.js";
@@ -68,17 +67,14 @@ import type {
 import type { GatewayLockIdentity, GatewayLockOptions } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
-import { redactStatusSecrets } from "../status-all/format.js";
+import { redactStatusSecrets as redactAuthProbeError } from "../status-all/format.js";
 import { createAuthProbeWork, disposeAuthProbeDirectory } from "./list.probe.cleanup.js";
 import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
 import { formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
-/** Scrubs credential-shaped text before probe failures cross a UI or CLI boundary. */
-export function redactAuthProbeError(error: string): string {
-  return redactStatusSecrets(error);
-}
+export { redactAuthProbeError };
 
 export type AuthProbeStatus =
   | "ok"
@@ -113,13 +109,11 @@ export type AuthProbeResult = {
   latencyMs?: number;
 };
 
-type AuthProbeTarget = {
-  provider: string;
+type AuthProbeTarget = Pick<
+  AuthProbeResult,
+  "provider" | "profileId" | "label" | "source" | "mode"
+> & {
   model?: { provider: string; model: string } | null;
-  profileId?: string;
-  label: string;
-  source: "profile" | "env" | "models.json";
-  mode?: string;
   boundValue?: string;
   useRuntimeAuth?: boolean;
 };
@@ -873,10 +867,7 @@ async function runTargetsWithConcurrency(params: {
 
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
   const agentDir = params.agentDir ?? resolveAgentDir(cfg, agentId);
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(cfg, agentId) ??
-    resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
 
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -960,17 +951,12 @@ export async function withAuthProbeStateOwnership<T>(
   }
 }
 
-export async function runAuthProbes(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  providers: string[];
-  modelCandidates: string[];
-  options: AuthProbeOptions;
-  onProgress?: (update: { completed: number; total: number; label?: string }) => void;
-  stateOwnership?: AuthProbeStateOwnership;
-}): Promise<AuthProbeSummary> {
+export async function runAuthProbes(
+  params: Parameters<typeof buildProbeTargets>[0] & {
+    onProgress?: Parameters<typeof runTargetsWithConcurrency>[0]["onProgress"];
+    stateOwnership?: AuthProbeStateOwnership;
+  },
+): Promise<AuthProbeSummary> {
   return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
     const startedAt = Date.now();
     const plan = await buildProbeTargets({

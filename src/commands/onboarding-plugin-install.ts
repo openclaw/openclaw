@@ -97,13 +97,8 @@ type OnboardingPluginInstallResult = {
   error?: string;
 };
 
-type OnboardingPluginInstallParams = {
-  cfg: OpenClawConfig;
-  entry: OnboardingPluginInstallEntry;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
+type OnboardingPluginInstallParams = Parameters<typeof ensureOnboardingPluginInstalled>[0] & {
   onCapabilityConsent: PluginCapabilityConsentHandler;
-  beforePersistentEffect?: () => void | Promise<void>;
 };
 
 function incompletePluginInstall(

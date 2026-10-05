@@ -40,11 +40,7 @@ import {
   type DoctorStaleGateway,
 } from "./doctor-maintenance-stale-service.js";
 import { createDoctorMaintenanceState } from "./doctor-maintenance-state.js";
-import type {
-  DoctorConfigWriter,
-  DoctorMaintenance,
-  DoctorMaintenanceParams,
-} from "./doctor-maintenance-types.js";
+import type { DoctorConfigWriter, DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { isDoctorUpdateRepairMode, resolveDoctorRepairMode } from "./doctor-repair-mode.js";
 import {
   assertDoctorServiceSelection,
@@ -58,9 +54,7 @@ import {
   resolveUpdateDoctorGitRecovery,
 } from "./doctor-update-refusal.js";
 
-export async function beginDoctorMaintenance(
-  params: DoctorMaintenanceParams,
-): Promise<DoctorMaintenance | undefined> {
+export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   if (!(params.options.repair === true || params.options.yes === true)) {
     return undefined;
   }

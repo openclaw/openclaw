@@ -44,18 +44,12 @@ type CompatRecordDeadline =
   | { removeAfter: string; previousRemoveAfter?: never }
   | { previousRemoveAfter: string; removeAfter?: never };
 
-type CompatRecordInput = CompatRecordDeadline & {
-  owner: DoctorDeprecationCompatOwner;
-  introduced: string;
-  deprecated?: string;
-  warningStarts?: string;
-  source: string;
-  migration: string;
-  replacement: string;
-  docsPath: string;
-  tests?: readonly string[];
-  notes?: string;
-};
+type CompatRecordInput = CompatRecordDeadline &
+  Omit<
+    DoctorDeprecationCompatRecord,
+    "code" | "status" | "tests" | "removeAfter" | "previousRemoveAfter" | "renewedAt"
+  > &
+  Partial<Pick<DoctorDeprecationCompatRecord, "tests">>;
 
 function compatRecord(
   code: string,
