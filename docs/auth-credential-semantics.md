@@ -97,6 +97,18 @@ writing.
 OAuth upserts recheck the current local or inherited credential after admission,
 before applying the existing generation-replacement rules.
 
+Runtime auth-store updates keep their read, merge, encode, and commit in the
+existing SQLite worker. Update callbacks execute at most once against the
+transaction's current rows; live owner admission is checked again before commit.
+Local updates refuse an observed shared-store change during preparation without
+replaying callbacks. Large cells cross the worker boundary as bounded fields.
+Shared credential publication reuses the committed shared store and leaves
+unaffected local snapshots and their revisions intact. Resolved secrets remain
+with their existing runtime owner.
+Doctor auth repairs retain the native transaction owned by their schema-maintenance
+lease; they do not borrow ordinary worker authority.
+Stored formats, schema versions, and update or rollback behavior are unchanged.
+
 Inline API-key failure bookkeeping reads and updates the selected agent's auth
 state through its existing SQLite worker. It preserves credential bytes and
 other profiles' health state. Runtime snapshot publication reads canonical local

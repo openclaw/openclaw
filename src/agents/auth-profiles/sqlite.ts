@@ -16,10 +16,8 @@ import {
 } from "../../state/openclaw-agent-db-schema-helpers.js";
 import {
   runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseAsync,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -413,41 +411,6 @@ export function runAuthProfileWriteTransaction<T>(
   return runPreparedAuthProfileWriteTransaction(
     prepareAuthProfileWriteTransaction(agentDir, options),
     operation,
-  );
-}
-
-/** Queue the physical agent owner; relocated shared-state auth retains its own coordinator. */
-export async function runAuthProfileWriteTransactionAsync<T>(
-  agentDir: string | undefined,
-  operation: (database: AuthProfileDatabase, owner: PreparedAuthProfileStoreOwner) => T,
-  options: AuthProfileWriteOptions = {},
-): Promise<T> {
-  const prepared = prepareAuthProfileWriteTransaction(agentDir, options);
-  const { databaseTarget } = prepared;
-  if (databaseTarget.kind === "shared-state") {
-    return runPreparedAuthProfileWriteTransaction(prepared, operation);
-  }
-  const assertCurrent = () => {
-    // Doctor can relocate the shared base while this writer waits or validates.
-    if (
-      resolveSharedAuthStorePath(prepared.sharedOwner.env) !==
-        prepared.sharedOwner.sharedDatabasePath ||
-      resolveSharedAuthStoreOwnership(prepared.sharedOwner.env).location !==
-        prepared.sharedOwner.location
-    ) {
-      throw new Error("Auth profile shared owner changed before write admission");
-    }
-  };
-  return runOpenClawAgentWriteAdmission(
-    databaseTarget,
-    () =>
-      withOpenClawAgentDatabaseAsync(
-        databaseTarget,
-        // The async owner retains the cached handle through this synchronous transaction.
-        () => runPreparedAuthProfileWriteTransaction(prepared, operation),
-        assertCurrent,
-      ),
-    true,
   );
 }
 

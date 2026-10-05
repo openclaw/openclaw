@@ -1,10 +1,6 @@
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
-import type {
-  AuthProfileCredential,
-  AuthProfileRowRead,
-  AuthProfileStore,
-  UserModelAuthProfile,
-} from "./types.js";
+import type { AuthStoreUpdateOperations } from "./store-update-kernel.js";
+import type { AuthProfileCredential, AuthProfileStore, UserModelAuthProfile } from "./types.js";
 import type {
   PersonalAuthProfileUsageReduction,
   PersonalAuthProfileUsageResult,
@@ -50,7 +46,7 @@ export type AuthProfileUsageResult =
   | { ok: true; receipt: AuthProfileUsageReceipt }
   | { ok: false; error: OpenClawStateWorkerErrorPayload };
 
-export type AuthProfileWorkerOperations = {
+export type AuthProfileWorkerOperations = AuthStoreUpdateOperations & {
   "authProfiles.personalAccept": {
     input: { profileId: string; credential: AuthProfileCredential };
     output: boolean;
@@ -66,7 +62,7 @@ export type AuthProfileWorkerOperations = {
   };
   "authProfiles.read": {
     input: { artifactPreserving: boolean };
-    output: AuthProfileRowRead;
+    output: void;
   };
   "authProfiles.sharedOwnership": {
     input: { artifactPreserving: boolean };

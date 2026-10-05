@@ -574,12 +574,13 @@ it.each(["local-agent", "legacy-main"] as const)(
         const publication = vi
           .spyOn(snapshots, "noteRuntimeAuthProfileStorePersistedMutation")
           .mockImplementation((...args) => {
-            original(...args);
+            const revision = original(...args);
             if (args[2]?.databasePath === database.path && args[1].stateChanged) {
               commits++;
               closing ??= closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
               void closing.catch(() => {});
             }
+            return revision;
           });
         try {
           await expect(

@@ -181,6 +181,8 @@ export type RuntimeAuthProfileStore = AuthProfileStore & {
   /** Runtime-only built-in CLI winners; internal provenance, never exposed or persisted. */
   runtimeExternalCliProfileIds?: string[];
   runtimeLocalProfileIds?: string[];
+  /** Canonical local OAuth rows may be hidden by shared-store reconciliation. */
+  runtimeHasLocalOAuthProfiles?: boolean;
   /** Provider orders stored by this owner; [] means no local override, even with inherited priority. */
   runtimeLocalOrderProviderIds?: string[];
   runtimeInheritsMainState?: boolean;

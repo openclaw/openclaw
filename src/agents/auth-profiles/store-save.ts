@@ -42,6 +42,7 @@ export function buildLocalAuthProfileStoreForSave(params: {
   agentDir?: string;
   options?: SaveAuthProfileStoreOptions;
   persistedStores: PersistedAuthProfileStores;
+  runtimeStore?: AuthProfileStore;
 }): AuthProfileStore {
   const localStore = cloneAuthProfileStore(removePersonalAuthProfileReferences(params.store));
   for (const [profileId, credential] of Object.entries(localStore.profiles)) {
@@ -89,8 +90,9 @@ export function buildLocalAuthProfileStoreForSave(params: {
       ) {
         // Runtime external profiles are normally overlays. Persist only when they
         // have explicit local state or differ from the runtime snapshot.
-        const runtimeCredential = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-          params.owner.databasePath,
+        const runtimeCredential = (
+          params.runtimeStore ??
+          getRuntimeAuthProfileStoreSnapshotAtDatabasePath(params.owner.databasePath)
         )?.profiles[profileId];
         if (!runtimeCredential || isDeepStrictEqual(runtimeCredential, credential)) {
           return false;

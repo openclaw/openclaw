@@ -442,6 +442,7 @@ export function mergeAuthProfileStores(
     !override.usageStats &&
     override.runtimePersistedProfileIds === undefined &&
     override.runtimeLocalProfileIds === undefined &&
+    override.runtimeHasLocalOAuthProfiles === undefined &&
     override.runtimeLocalOrderProviderIds === undefined &&
     override.runtimeInheritsMainState === undefined &&
     override.runtimeExternalProfileIds === undefined &&
@@ -561,6 +562,9 @@ export function mergeAuthProfileStores(
         ? { runtimePersistedProfileIds: [...new Set(runtimePersistedProfileIds)] }
         : {}),
       ...(runtimeLocalProfileIds ? { runtimeLocalProfileIds } : {}),
+      ...(override.runtimeHasLocalOAuthProfiles !== undefined
+        ? { runtimeHasLocalOAuthProfiles: override.runtimeHasLocalOAuthProfiles }
+        : {}),
       ...(override.runtimeLocalOrderProviderIds !== undefined
         ? { runtimeLocalOrderProviderIds: [...override.runtimeLocalOrderProviderIds] }
         : {}),
