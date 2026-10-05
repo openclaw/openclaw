@@ -2,7 +2,6 @@ import {
   emitSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../../../sessions/session-lifecycle-events.js";
-import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import {
@@ -16,6 +15,7 @@ import {
   projectSubagentRunForSessionList,
 } from "./subagent-delivery-state.js";
 import {
+  freezeSubagentRunReadRecord,
   getSubagentRunsForChildSession,
   immutableSubagentRun,
   subagentRuns,
@@ -58,14 +58,16 @@ const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
 };
 const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunReadRecord> = {
   state: {},
-  copy: (entry) => freezeJsonSnapshot(projectSubagentRunForSessionList(entry)),
+  copy: (entry) => freezeSubagentRunReadRecord(projectSubagentRunForSessionList(entry)),
   project: projectSubagentRunForSessionList,
 };
 const persistedSubagentMaintenanceRunsReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
   state: {},
   retainRetiredPublications: true,
   copy: (entry) =>
-    freezeJsonSnapshot(copySubagentRunRuntimeOwner(entry, projectSubagentRunForMaintenance(entry))),
+    freezeSubagentRunReadRecord(
+      copySubagentRunRuntimeOwner(entry, projectSubagentRunForMaintenance(entry)),
+    ),
   // Maintenance consumes live rows synchronously into keys; only published facts need copies.
   project: (entry) => entry,
 };

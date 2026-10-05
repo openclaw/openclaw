@@ -284,12 +284,13 @@ describe("subagent registry state read cache", () => {
     expect(mocks.loadSubagentRegistryFromSqlite).toHaveBeenCalledTimes(1);
   });
 
-  it("refreshes session-list projections from authoritative writes", async () => {
+  it("refreshes immutable session-list projections from authoritative writes", async () => {
     await prepareEmptyReadCaches();
     const savedRun = createRun("run-saved");
     savedRun.model = "openai/gpt-5.6";
     savedRun.swarmRunId = "stable-collector";
     savedRun.execution.outcome = { status: "ok", error: "not projected" };
+    savedRun.delivery = { status: "pending" };
 
     persistRegistryFixture(new Map([[savedRun.runId, savedRun]]));
 
@@ -301,6 +302,16 @@ describe("subagent registry state read cache", () => {
       execution: { outcome: { status: "ok" } },
     });
     expect(projected?.execution.outcome).not.toHaveProperty("error");
+    expect(() => {
+      projected!.execution.outcome!.status = "error";
+    }).toThrow(TypeError);
+    expect(() => {
+      projected!.delivery!.status = "delivered";
+    }).toThrow(TypeError);
+    expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get(savedRun.runId)).toMatchObject({
+      execution: { outcome: { status: "ok" } },
+      delivery: { status: "pending" },
+    });
     expect(mocks.readCompactRuns).not.toHaveBeenCalled();
   });
 

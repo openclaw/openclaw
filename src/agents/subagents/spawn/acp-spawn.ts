@@ -18,7 +18,6 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveEventSessionRoutingPolicy } from "../../../infra/event-session-routing.js";
 import {
   getSessionBindingService,
-  isSessionBindingError,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -36,11 +35,7 @@ import {
   inheritedToolAllowPatch,
   inheritedToolDenyPatch,
 } from "../../inherited-tool-deny.js";
-import {
-  runSpawnPipeline,
-  summarizeSpawnError,
-  type SpawnBackendAdapter,
-} from "../../spawn-pipeline.js";
+import { runSpawnPipeline, type SpawnBackendAdapter } from "../../spawn-pipeline.js";
 import {
   mintSpawnSessionKey,
   prepareSpawnThreadBinding,
@@ -73,7 +68,11 @@ import {
   shouldStreamAcpSpawnToParent,
   validateAcpResumeSessionOwnership,
 } from "./acp-spawn-requester.js";
-import type { SpawnAcpMode, SpawnAcpResult } from "./acp-spawn-result.js";
+import {
+  buildAcpSpawnFailureResult,
+  type SpawnAcpMode,
+  type SpawnAcpResult,
+} from "./acp-spawn-result.js";
 import {
   bindPreparedAcpThread,
   initializeAcpSpawnRuntime,
@@ -697,23 +696,7 @@ export async function spawnAcpDirect(
     },
   });
   if (!pipelineResult.ok) {
-    const { phase, error, runId } = pipelineResult;
-    const bindingError = phase === "initialize" && isSessionBindingError(error);
-    return {
-      status: "error",
-      errorCode: bindingError
-        ? "thread_binding_invalid"
-        : phase === "dispatch"
-          ? "dispatch_failed"
-          : "spawn_failed",
-      error: bindingError
-        ? error.message
-        : phase === "register"
-          ? `Failed to register ACP run: ${summarizeSpawnError(error)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`
-          : summarizeSpawnError(error),
-      ...(phase !== "initialize" ? { childSessionKey: sessionKey } : {}),
-      ...(phase === "register" && runId ? { runId } : {}),
-    };
+    return buildAcpSpawnFailureResult(pipelineResult, sessionKey);
   }
   return {
     status: "accepted",

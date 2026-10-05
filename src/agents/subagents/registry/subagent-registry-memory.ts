@@ -14,6 +14,7 @@ import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,
@@ -35,8 +36,13 @@ function freezeValue(value: unknown): void {
 
 export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
   prepareGatewayContextBindingOwner(entry);
-  freezeValue(entry);
-  return entry;
+  return freezeSubagentRunReadRecord(entry);
+}
+
+/** Registry projections contain only canonical JSON fields and owner-created containers. */
+export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(record: T): T {
+  freezeValue(record);
+  return record;
 }
 
 // Preflight consults the collector lookup on every Gateway agent request, so it

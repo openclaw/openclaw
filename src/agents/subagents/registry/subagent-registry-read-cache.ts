@@ -4,7 +4,6 @@ import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { SqliteSnapshotCleanupError } from "../../../infra/sqlite-readonly-location-cleanup.js";
 import type { DatabasePathIdentity } from "../../../infra/sqlite-worker-identity.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
-import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import {
   isStateDatabaseReadAdmissionInvalidatedError,
   type OpenClawStateDatabaseReadAdmission,
@@ -29,7 +28,7 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../../../state/openclaw-state-worker-error.js";
-import { immutableSubagentRun } from "./subagent-registry-memory.js";
+import { freezeSubagentRunReadRecord, immutableSubagentRun } from "./subagent-registry-memory.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { rememberSubagentRunVersion } from "./subagent-registry.store.codec.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
@@ -353,7 +352,7 @@ export async function readCompactSubagentRuns(context: OpenClawStateWorkerContex
       cause: hydrateOpenClawStateWorkerError(failure, { includeOrdinary: true }),
     });
   }
-  reply.runs.forEach(freezeJsonSnapshot);
+  reply.runs.forEach(freezeSubagentRunReadRecord);
   return reply.runs;
 }
 
