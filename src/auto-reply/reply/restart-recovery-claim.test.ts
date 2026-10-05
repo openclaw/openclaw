@@ -491,6 +491,93 @@ describe("createReplyRestartRecoveryClaimController", () => {
     });
   });
 
+  it("tracks a channel claim after retiring an aborted Control UI predecessor", async () => {
+    const storePath = path.join(
+      tempDirs.make("openclaw-reply-claim-channel-successor-"),
+      "sessions.json",
+    );
+    const sessionKey = "agent:main:telegram:group:chat";
+    const sessionId = "session";
+    const sourceTurnId = "channel-turn";
+    const deliveryContext = { channel: "telegram", to: "chat", accountId: "default" };
+    let entry: InternalSessionEntry = {
+      abortedLastRun: true,
+      restartRecoveryDeliveryRunId: "interrupted-control-ui-run",
+      restartRecoveryDeliverySourceRunId: "interrupted-control-ui-run",
+      restartRecoverySourceIngress: "control-ui",
+      sessionId,
+      status: "running",
+      updatedAt: 1,
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const recorder = createUserTurnTranscriptRecorder({
+      message: {
+        role: "user",
+        content: "continue from Telegram",
+        idempotencyKey: sourceTurnId,
+        timestamp: Date.now(),
+      },
+      target: {
+        agentId: "main",
+        sessionEntry: entry,
+        sessionId,
+        sessionKey,
+        storePath,
+      },
+      updateMode: "none",
+    });
+    const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
+      admissionRunId: sourceTurnId,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      getEntry: () => entry,
+      getSessionId: () => sessionId,
+      isRestartAbort: () => false,
+      resolveDeliveryContext: () => deliveryContext,
+      setEntry: (next) => {
+        entry = next;
+      },
+      sourceTurnId,
+      storePath,
+      sessionKey,
+    });
+
+    await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
+    const admittedRunId = loadSessionEntry({ storePath, sessionKey })?.restartRecoveryDeliveryRunId;
+    expect(admittedRunId).toEqual(expect.any(String));
+    await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
+    await controller.checkpointBeforeAgentReply({
+      state: "handled-reply",
+      pendingFinalDelivery: {
+        intentId: "channel-intent",
+        text: "channel reply",
+        deliveries: [{ id: "channel-delivery", state: "prepared" }],
+      },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      pendingFinalDelivery: { intentId: "channel-intent", text: "channel reply" },
+      restartRecoveryBeforeAgentReplyState: "handled-reply",
+      restartRecoveryDeliveryRunId: admittedRunId,
+      restartRecoveryDeliverySourceRunId: sourceTurnId,
+      restartRecoverySourceIngress: "channel",
+    });
+
+    entry = (await updateSessionEntry({ storePath, sessionKey }, () => ({
+      abortedLastRun: true,
+    }))) as InternalSessionEntry;
+    await expect(controller.isArmed()).resolves.toBe(true);
+    await controller.clear();
+
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      pendingFinalDelivery: { intentId: "channel-intent", text: "channel reply" },
+      restartRecoveryBeforeAgentReplyState: "handled-reply",
+      restartRecoveryTerminalRunIds: ["interrupted-control-ui-run", sourceTurnId],
+    });
+    expect(
+      loadSessionEntry({ storePath, sessionKey })?.restartRecoveryDeliveryRunId,
+    ).toBeUndefined();
+  });
+
   it.each([
     "restart-handoff",
     "restart-abort",

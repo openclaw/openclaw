@@ -361,9 +361,10 @@ export function createReplyRestartRecoveryClaimController(params: {
           terminalSourceRunId: normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId),
         })
       : {};
-    const successorRecoveryRunId = canTransferAbortedControlUiClaim
-      ? (admissionRunId ?? recoveryRunId)
-      : recoveryRunId;
+    const nextRecoveryRunId =
+      canTransferAbortedControlUiClaim && !recoverableDeliveryContext
+        ? (admissionRunId ?? recoveryRunId)
+        : recoveryRunId;
     const patch: SessionTranscriptTurnLifecyclePatch = recoverableDeliveryContext
       ? {
           ...retiredClaim,
@@ -374,7 +375,7 @@ export function createReplyRestartRecoveryClaimController(params: {
           restartRecoveryDeliveryToolCallId: undefined,
           restartRecoveryDeliveryContext: recoverableDeliveryContext,
           restartRecoveryDeliveryRequestFingerprint: undefined,
-          restartRecoveryDeliveryRunId: recoveryRunId,
+          restartRecoveryDeliveryRunId: nextRecoveryRunId,
           restartRecoveryDeliverySourceRunId: sourceTurnId,
           restartRecoveryRequesterAccountId: normalizeOptionalString(params.requesterAccountId),
           restartRecoveryRequesterSenderId: normalizeOptionalString(params.requesterSenderId),
@@ -397,8 +398,8 @@ export function createReplyRestartRecoveryClaimController(params: {
             restartRecoveryDeliveryToolCallId: undefined,
             restartRecoveryDeliveryContext: undefined,
             restartRecoveryDeliveryRequestFingerprint: undefined,
-            restartRecoveryDeliveryRunId: successorRecoveryRunId,
-            restartRecoveryDeliverySourceRunId: successorRecoveryRunId,
+            restartRecoveryDeliveryRunId: nextRecoveryRunId,
+            restartRecoveryDeliverySourceRunId: nextRecoveryRunId,
             restartRecoveryRequesterAccountId: undefined,
             restartRecoveryRequesterSenderId: undefined,
             restartRecoverySameChannelThreadRequired: undefined,
@@ -419,7 +420,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       storePath: params.storePath,
     });
     params.setEntry(persisted);
-    recoveryRunId = successorRecoveryRunId;
+    recoveryRunId = nextRecoveryRunId;
     recoverySourceRunId = normalizeOptionalString(persisted.restartRecoveryDeliverySourceRunId);
     tracked = persisted.restartRecoveryDeliveryRunId === recoveryRunId;
     trackedSessionId = tracked ? persisted.sessionId : undefined;
