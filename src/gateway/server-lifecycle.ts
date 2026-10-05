@@ -354,12 +354,6 @@ export async function prepareGatewayLifecycle(params: {
     publishPresence: runtime.publishPresence,
   });
   deps.cron = runtimeState.cronState.cron;
-  const pluginHostServices = {
-    get cron() {
-      return kernel.getCronService();
-    },
-  };
-
   const cronReconciliation = createGatewayCronReconciliation({
     port,
     workspaceDir: defaultWorkspaceDir,
@@ -377,9 +371,6 @@ export async function prepareGatewayLifecycle(params: {
       }
     },
   });
-  let deliveryRecoveryStopPromise: Promise<void> | null = null;
-  const stopDeliveryRecoveryForClose = () =>
-    (deliveryRecoveryStopPromise ??= runtimeState.stopDeliveryRecovery());
   let mediaCleanupStopPromise: ReturnType<typeof runtimeState.stopMediaCleanup> | null = null;
   const stopMediaCleanupForClose = () =>
     (mediaCleanupStopPromise ??= runtimeState.stopMediaCleanup());
@@ -422,7 +413,7 @@ export async function prepareGatewayLifecycle(params: {
     connectionDependentSidecarStopOwner.beginClose();
     // Keep late general sidecars owned until received work drains. Fence background
     // producers now, before their plugin/channel and shared-state dependencies can close.
-    void stopDeliveryRecoveryForClose();
+    void runtimeState.stopDeliveryRecovery();
     void stopMediaCleanupForClose();
     void runtimeState.stopGatewayUpdateCheck().catch(() => {});
     void stopConfigReloaderForClose().catch(() => {});
@@ -447,7 +438,7 @@ export async function prepareGatewayLifecycle(params: {
       step("auth-profile-usage", () => closeAuthProfileUsage(params.sdkResourceHost)),
       step("pending-request-entries", () => requestEntryLifetime.waitForPendingEntries()),
       step("model-accounts", stopModelAccountsForClose),
-      step("delivery-recovery", stopDeliveryRecoveryForClose),
+      step("delivery-recovery", runtimeState.stopDeliveryRecovery),
       step("media-cleanup", stopMediaCleanupForClose),
       step("update-check", () => runtimeState.stopGatewayUpdateCheck()),
       step("config-reloader", () => stopConfigReloaderForClose().catch(() => {})),
@@ -704,7 +695,11 @@ export async function prepareGatewayLifecycle(params: {
     runtimeState,
     unavailableGatewayMethods,
     kernel,
-    pluginHostServices,
+    pluginHostServices: {
+      get cron() {
+        return kernel.getCronService();
+      },
+    },
     shutdownRuntime,
     lifecycle,
     cronReconciliation,
