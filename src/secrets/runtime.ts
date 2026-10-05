@@ -156,7 +156,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
         : null;
   let migrationDegradedOwners: DegradedSecretOwner[] = [];
   if (includeAuthStoreRefs) {
-    const loaded = loadAdmittedAuthStores({
+    const loaded = await loadAdmittedAuthStores({
       agentDirs: candidateDirs,
       env: runtimeEnv,
       loadAuthStore: fastPathLoadAuthStore,
@@ -234,7 +234,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   if (includeAuthStoreRefs) {
     const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
     if (!params.loadAuthStore) {
-      const loaded = loadAdmittedAuthStores({
+      const loaded = await loadAdmittedAuthStores({
         agentDirs: candidateDirs,
         env: runtimeEnv,
         loadAuthStore,
