@@ -421,7 +421,7 @@ function findNotesSectionRange(page: string): { start: number; end: number } | n
   const linePrefixLength = heading[0].startsWith("\r\n") ? 2 : heading[0].startsWith("\n") ? 1 : 0;
   const start = searchFrom + heading.index + linePrefixLength;
   let lineStart = searchFrom + heading.index + heading[0].length;
-  let fence: { marker: "\x60" | "~"; length: number } | undefined;
+  let fence: { marker: string; length: number } | undefined;
   while (lineStart < page.length) {
     const newline = page.indexOf("\n", lineStart);
     const lineEnd = newline === -1 ? page.length : newline;
@@ -433,7 +433,10 @@ function findNotesSectionRange(page: string): { start: number; end: number } | n
         fence = undefined;
       }
     } else if (fenceMarker) {
-      fence = { marker: fenceMarker[0] as "\x60" | "~", length: fenceMarker.length };
+      fence = {
+        marker: fenceMarker.startsWith("~") ? "~" : "\x60",
+        length: fenceMarker.length,
+      };
     } else if (/^ {0,3}##[\t ]+/u.test(line)) {
       return { start, end: lineStart };
     }
