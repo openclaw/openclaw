@@ -67,6 +67,47 @@ describe("OpenClaw state snapshot sanitizer", () => {
     expect(row.raw_json).not.toContain("secret-token");
   });
 
+  it("keeps a supported older exec approval policy instead of replacing it with deny-all", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss" },
+      agents: {
+        default: {
+          allowlist: [{ pattern: "/usr/bin/printf", commandText: "printf hello" }],
+        },
+      },
+    });
+    database
+      .prepare(
+        `INSERT INTO exec_approvals_config (
+          config_key, raw_json, socket_path, has_socket_token,
+          default_security, default_ask, default_ask_fallback, auto_allow_skills,
+          agent_count, allowlist_count, updated_at_ms
+        ) VALUES (?, ?, '/stale.sock', 1, 'deny', 'off', 'deny', 0, 0, 0, 1)`,
+      )
+      .run("current", raw);
+
+    sanitizeOpenClawGlobalStateSnapshot(database);
+
+    const row = database
+      .prepare("SELECT * FROM exec_approvals_config WHERE config_key = 'current'")
+      .get() as Record<string, unknown> & { raw_json: string };
+    expect(row).toMatchObject({
+      default_security: "allowlist",
+      default_ask: "on-miss",
+      agent_count: 1,
+      allowlist_count: 1,
+    });
+    const restored = JSON.parse(row.raw_json) as {
+      defaults: { security: string; ask: string };
+      agents: Record<string, { allowlist: { pattern: string }[] }>;
+    };
+    expect(restored.defaults).toMatchObject({ security: "allowlist", ask: "on-miss" });
+    expect(restored.agents.main?.allowlist.map((entry) => entry.pattern)).toEqual([
+      "/usr/bin/printf",
+    ]);
+  });
+
   it.each([
     ["invalid JSON", "{malformed-secret-token", "secret-token"],
     [
