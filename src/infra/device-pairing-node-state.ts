@@ -1,4 +1,5 @@
 import { prepareDevicePairingBinding } from "./device-pairing-binding.js";
+import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import type { DevicePairingBinding } from "./device-pairing-read.types.js";
 import {
@@ -40,8 +41,19 @@ export async function captureNodePairingState(
 export async function resolveCurrentPairedDeviceNodeBinding(
   nodeId: string,
 ): Promise<PairedDeviceNodeBinding | undefined> {
-  await getPairedDevice(nodeId);
-  return getPublishedPairedDeviceBinding(nodeId.trim()) ?? undefined;
+  return withCurrentPairedDeviceNodeBinding(nodeId, (binding) => binding);
+}
+
+/** Refresh one binding and perform a synchronous effect before a local writer can replace it. */
+export async function withCurrentPairedDeviceNodeBinding<T>(
+  nodeId: string,
+  effect: (binding: PairedDeviceNodeBinding | undefined) => T,
+  baseDir?: string,
+): Promise<T> {
+  return withDevicePairingLock(async () => {
+    await getPairedDevice(nodeId, baseDir);
+    return effect(getPublishedPairedDeviceBinding(nodeId.trim(), baseDir) ?? undefined);
+  });
 }
 
 export function isPairedDeviceNodeBindingCurrent(
@@ -94,7 +106,8 @@ export async function captureAuthenticatedNodePairingState(params: {
 export async function isNodePairingGenerationCurrent(
   generation: NodePairingGeneration,
 ): Promise<boolean> {
-  await getPairedDevice(generation.nodeId);
-  const current = getPublishedPairedDeviceBinding(generation.nodeId);
-  return current?.generation === generation.key;
+  return withCurrentPairedDeviceNodeBinding(
+    generation.nodeId,
+    (current) => current?.generation === generation.key,
+  );
 }

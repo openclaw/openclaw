@@ -1,6 +1,7 @@
 import {
   isPairedDeviceNodeBindingCurrent,
   resolveCurrentPairedDeviceNodeBinding,
+  withCurrentPairedDeviceNodeBinding,
 } from "../infra/device-pairing-node-state.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
@@ -49,6 +50,9 @@ export function createGatewayNodeSessionRuntime(params: {
         getConfig: params.getConfig,
         resolveCurrentPairingState:
           params.resolveCurrentPairingState ?? resolveCurrentPairedDeviceNodeBinding,
+        withCurrentPairingState: params.resolveCurrentPairingState
+          ? undefined
+          : withCurrentPairedDeviceNodeBinding,
         isPairingStateCurrent: params.isPairingStateCurrent ?? isPairedDeviceNodeBindingCurrent,
         onPairingInvalidated: params.onPairingInvalidated,
         onDesktopAvailabilityChanged: (nodeId) => {

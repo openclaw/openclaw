@@ -174,6 +174,10 @@ export type NodeRegistryOptions = {
     | undefined;
   getConfig?: () => OpenClawConfig;
   resolveCurrentPairingState?: (nodeId: string) => Promise<PairedDeviceNodeBinding | undefined>;
+  withCurrentPairingState?: <T>(
+    nodeId: string,
+    effect: (binding: PairedDeviceNodeBinding | undefined) => T,
+  ) => Promise<T>;
   isPairingStateCurrent?: (nodeId: string, expected: PairedDeviceNodeBinding) => boolean;
   onPairingGenerationChanged?: (params: {
     nodeId: string;
@@ -264,7 +268,9 @@ export class NodeRegistry {
         this.isCommandAllowed(nodeId, command, this.options.getConfig?.()),
       listCurrentConnected: () => this.listCurrentConnected(),
       getCurrentConnected: (nodeId) => this.getCurrentConnected(nodeId),
-      hasCurrentPairingStateResolver: Boolean(this.options.resolveCurrentPairingState),
+      hasCurrentPairingStateResolver: Boolean(
+        this.options.resolveCurrentPairingState || this.options.withCurrentPairingState,
+      ),
       resolvePairingLease: async (node) => {
         const current = this.nodesById.get(node.nodeId);
         if (
@@ -340,6 +346,19 @@ export class NodeRegistry {
     lease: PairingBoundNodeSessionLease,
     options: { invalidateStale: boolean },
   ): Promise<PairingLeaseResolution> {
+    if (this.options.withCurrentPairingState) {
+      try {
+        return await this.options.withCurrentPairingState(lease.nodeId, (binding) =>
+          this.settlePairingLease({
+            lease,
+            isCurrent: pairingStateMatchesBinding(lease.binding, binding),
+            invalidateStale: options.invalidateStale,
+          }),
+        );
+      } catch {
+        return { status: "unavailable" };
+      }
+    }
     const resolveCurrentPairingState = this.options.resolveCurrentPairingState;
     if (!resolveCurrentPairingState) {
       const current = this.currentSessionForLease(lease);
@@ -362,6 +381,39 @@ export class NodeRegistry {
       return { status: "unavailable" };
     }
     return this.settlePairingLease({ lease, isCurrent, invalidateStale: options.invalidateStale });
+  }
+
+  private async withCurrentPairingLease<T>(
+    lease: PairingBoundNodeSessionLease,
+    effect: (resolution: PairingLeaseResolution) => T,
+  ): Promise<T> {
+    const finish = (resolution: PairingLeaseResolution): T => {
+      if (resolution.status === "current") {
+        if (!this.currentSessionForLease(lease)) {
+          return effect({ status: "stale", presenceInvalidated: false });
+        }
+        if (!isPublishedPairingCurrent(resolution.session, this.options.isPairingStateCurrent)) {
+          return effect({ status: "unavailable" });
+        }
+      }
+      if (resolution.status === "stale" && resolution.presenceInvalidated) {
+        this.publishActiveNodeContext();
+      }
+      return effect(resolution);
+    };
+    const withCurrentPairingState = this.options.withCurrentPairingState;
+    if (withCurrentPairingState) {
+      return await withCurrentPairingState(lease.nodeId, (binding) => {
+        const resolution = this.settlePairingLease({
+          lease,
+          isCurrent: pairingStateMatchesBinding(lease.binding, binding),
+          invalidateStale: true,
+        });
+        return finish(resolution);
+      });
+    }
+    const resolution = await this.resolvePairingLease(lease, { invalidateStale: true });
+    return finish(resolution);
   }
 
   private refreshSessionPolicy(node: NodeSession): void {
@@ -762,17 +814,18 @@ export class NodeRegistry {
       !initial ||
       initial.connId !== connId ||
       initial.client.invalidated === true ||
-      !this.options.resolveCurrentPairingState
+      (!this.options.resolveCurrentPairingState && !this.options.withCurrentPairingState)
     ) {
       return false;
     }
-    const resolution = await this.resolvePairingLease(this.capturePairingLease(initial), {
-      invalidateStale: true,
-    });
-    if (resolution.status === "stale" && resolution.presenceInvalidated) {
-      this.publishActiveNodeContext();
+    try {
+      return await this.withCurrentPairingLease(
+        this.capturePairingLease(initial),
+        (resolution) => resolution.status === "current",
+      );
+    } catch {
+      return false;
     }
-    return resolution.status === "current";
   }
 
   private clearDesktopAvailability(node: NodeSession): void {
@@ -1111,6 +1164,27 @@ export class NodeRegistry {
     this.invokeStreams.sendInput(invokeId, payload);
   }
 
+  /** Wait for pairing publication, then start input delivery under its exact authority. */
+  async sendInvokeInputWhenCurrent(
+    invokeId: string,
+    payload: unknown,
+    assertCurrent?: () => void,
+  ): Promise<void> {
+    const pending = this.pendingInvokes.get(invokeId);
+    const node = pending ? this.nodesById.get(pending.nodeId) : undefined;
+    if (!pending || !node || node.connId !== pending.connId) {
+      throw new Error("node invoke is not pending");
+    }
+    await this.withCurrentPairingLease(this.capturePairingLease(node), (resolution) => {
+      assertCurrent?.();
+      if (resolution.status !== "current" || this.pendingInvokes.get(invokeId) !== pending) {
+        throw new Error("node invoke pairing is no longer current");
+      }
+      // The stream owner rechecks cancellation, deadlines and command policy here.
+      this.invokeStreams.sendInput(invokeId, payload);
+    });
+  }
+
   /** Synchronous effect fence for callbacks retained across awaited host work. */
   isInvokeCurrent(invokeId: string, nodeId: string, connId: string): boolean {
     return this.invokeStreams.isPending(invokeId, nodeId, connId);
@@ -1118,6 +1192,37 @@ export class NodeRegistry {
 
   handleInvokeProgress(params: NodeInvokeProgressParams): boolean {
     return this.invokeStreams.handleProgress(params);
+  }
+
+  async handleInvokeProgressWhenCurrent(params: NodeInvokeProgressParams): Promise<boolean> {
+    return await this.withCurrentPendingInvoke(params.invokeId, params.nodeId, params.connId, () =>
+      this.invokeStreams.handleProgress(params),
+    );
+  }
+
+  private async withCurrentPendingInvoke(
+    invokeId: string,
+    nodeId: string,
+    connId: string | undefined,
+    effect: () => boolean,
+  ): Promise<boolean> {
+    const pending = this.pendingInvokes.get(invokeId);
+    const node = this.nodesById.get(nodeId);
+    if (
+      !pending ||
+      !node ||
+      pending.nodeId !== nodeId ||
+      pending.connId !== connId ||
+      node.connId !== connId
+    ) {
+      return false;
+    }
+    // A failed authority refresh is an RPC failure, not an acknowledged late frame.
+    return await this.withCurrentPairingLease(this.capturePairingLease(node), (resolution) =>
+      resolution.status === "current" && this.pendingInvokes.get(invokeId) === pending
+        ? effect()
+        : false,
+    );
   }
 
   /** Continues only the exact live owner of a pending node invocation. */
@@ -1253,6 +1358,12 @@ export class NodeRegistry {
     return this.invokeStreams.handleResult(params);
   }
 
+  async handleInvokeResultWhenCurrent(params: NodeInvokeResultParams): Promise<boolean> {
+    return await this.withCurrentPendingInvoke(params.id, params.nodeId, params.connId, () =>
+      this.invokeStreams.handleResult(params),
+    );
+  }
+
   sendEvent(nodeId: string, event: string, payload?: unknown): boolean {
     const node = this.nodesById.get(nodeId);
     if (!node) {
@@ -1287,7 +1398,7 @@ export class NodeRegistry {
       initial.connId !== params.connId ||
       initial.pairingIdentity !== params.pairingIdentity ||
       initial.client.invalidated === true ||
-      !this.options.resolveCurrentPairingState
+      (!this.options.resolveCurrentPairingState && !this.options.withCurrentPairingState)
     ) {
       return false;
     }
@@ -1336,7 +1447,7 @@ export class NodeRegistry {
     if (!node) {
       return false;
     }
-    if (this.options.resolveCurrentPairingState) {
+    if (this.options.resolveCurrentPairingState || this.options.withCurrentPairingState) {
       const resolution = await this.resolvePairingLease(this.capturePairingLease(node), {
         invalidateStale: true,
       });

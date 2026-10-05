@@ -242,8 +242,7 @@ export async function invokeNodeClaudeSkillRuntime(params: {
     requireReady: true,
     maxMessageBytes: NODE_CLAUDE_SKILLS_MESSAGE_BYTES,
     sendFrame(frame) {
-      assertCurrent();
-      registry.sendInvokeInput(invokeId!, frame);
+      return registry.sendInvokeInputWhenCurrent(invokeId!, frame, assertCurrent);
     },
     onReady() {
       assertCurrent();

@@ -118,7 +118,7 @@ export async function openOwnedGatewayNodeDuplex(options: {
       if (!invokeId || !framedReady) {
         throw new Error("Node duplex command is not ready for binary messages.");
       }
-      context.nodeRegistry.sendInvokeInput(invokeId, frame);
+      return context.nodeRegistry.sendInvokeInputWhenCurrent(invokeId, frame, assertRuntimeCurrent);
     },
     onReady() {
       if (!invokeId) {
