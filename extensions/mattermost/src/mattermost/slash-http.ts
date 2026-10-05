@@ -468,17 +468,19 @@ async function authorizeSlashInvocation(params: {
         id: senderId,
         meta: { name: senderName },
       });
-      return {
-        ok: false,
-        denyResponse: {
-          response_type: "ephemeral",
-          text: core.channel.pairing.buildPairingReply({
-            channel: "mattermost",
-            idLine: `Your Mattermost user id: ${senderId}`,
-            code,
-          }),
-        },
-      };
+      if (code) {
+        return {
+          ok: false,
+          denyResponse: {
+            response_type: "ephemeral",
+            text: core.channel.pairing.buildPairingReply({
+              channel: "mattermost",
+              idLine: `Your Mattermost user id: ${senderId}`,
+              code,
+            }),
+          },
+        };
+      }
     }
 
     const denyText =

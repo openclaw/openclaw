@@ -1,13 +1,15 @@
 // Mattermost tests cover slash http plugin behavior.
 import { IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
+import { setMattermostRuntime } from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostClient } from "./client.js";
 const clientMocks = vi.hoisted(() => ({
   createMattermostClient: vi.fn(),
-  fetchMattermostChannel: vi.fn(async () => {
+  fetchMattermostChannel: vi.fn<() => Promise<unknown>>(async () => {
     throw new Error("channel lookup intentionally unavailable in token validation tests");
   }),
 }));
@@ -504,5 +506,31 @@ describe("slash-http", () => {
     expect(firstLogMessage(log)).toBe(
       `mattermost: slash command registration check failed for /oc_status: ${"e".repeat(299)}; command lookup: primary failure`,
     );
+  });
+
+  it.each([
+    { code: "PAIR1234", expectedText: "Pairing code: PAIR1234" },
+    { code: "", expectedText: "Unauthorized." },
+  ])("answers a DM pairing slash command with code=$code", async ({ code, expectedText }) => {
+    const runtime = createPluginRuntimeMock();
+    runtime.channel.pairing.upsertPairingRequest.mockResolvedValue({ code, created: false });
+    runtime.channel.pairing.buildPairingReply.mockImplementation(
+      ({ code: replyCode }) => `Pairing code: ${replyCode}`,
+    );
+    setMattermostRuntime(runtime);
+    const command = createCurrentCommand();
+    clientMocks.createMattermostClient.mockReturnValue(createCommandLookupClient({ command }));
+    clientMocks.fetchMattermostChannel.mockResolvedValueOnce({ id: "c1", type: "D" });
+
+    const response = await runSlashRequest({
+      registeredCommands: [createRegisteredCommand()],
+      body: new URLSearchParams(Object.entries(createSlashPayload())).toString(),
+    });
+
+    expect(response.res.statusCode).toBe(200);
+    expect(JSON.parse(response.getBody())).toEqual({
+      response_type: "ephemeral",
+      text: expectedText,
+    });
   });
 });

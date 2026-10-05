@@ -229,4 +229,44 @@ describe("Mattermost model-picker interaction dispatch", () => {
       expect(order).toEqual(["load", "detach", "update"]);
     },
   );
+
+  it.each([
+    { code: "PAIR1234", expectedText: "Pairing code: PAIR1234" },
+    { code: "", expectedText: "Unauthorized." },
+  ])("answers a DM pairing picker action with code=$code", async ({ code, expectedText }) => {
+    mocks.authorize.mockResolvedValueOnce({ ok: false, denyReason: "dm-pairing" });
+    const upsertPairingRequest = vi.fn(async () => ({ code, created: false }));
+    const monitor = {
+      account: { accountId: "default", config: {} },
+      cfg: {},
+      core: {
+        channel: {
+          commands: { shouldHandleTextCommands: vi.fn(() => true) },
+          pairing: {
+            buildPairingReply: vi.fn(
+              ({ code: replyCode }: { code: string }) => `Pairing code: ${replyCode}`,
+            ),
+          },
+          text: { hasControlCommand: vi.fn(() => true) },
+        },
+      },
+      pairing: { readAllowFromStore: vi.fn(async () => []), upsertPairingRequest },
+      resources: {
+        resolveChannelInfo: vi.fn(async () => ({ id: "channel-1", type: "D" })),
+        updateModelPickerPost: vi.fn(),
+      },
+      runtime: { error: vi.fn() },
+    } as unknown as MattermostMonitorContext;
+
+    const response = await createMattermostModelPickerInteractionHandler(monitor)({
+      payload: { channel_id: "channel-1", post_id: "picker-post-1", user_id: "user-1" },
+      userName: "tester",
+      context: {},
+      post: { id: "picker-post-1", channel_id: "channel-1", message: "picker" },
+    });
+
+    expect(upsertPairingRequest).toHaveBeenCalledOnce();
+    expect(response).toEqual({ ephemeral_text: expectedText });
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
 });
