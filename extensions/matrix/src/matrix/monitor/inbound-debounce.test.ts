@@ -172,6 +172,27 @@ describe("matrix inbound debounce", () => {
     });
   });
 
+  it("captions an attachment when E2EE emits every event twice", async () => {
+    const { enqueue, dispatched, claims } = createSubject();
+    const image = media("$img", "m.image", "IMG_0002.jpg");
+    const caption = text("$q", "lool");
+
+    // The decrypt bridge emits room.decrypted_event and room.message for each event.
+    await enqueue(ROOM, image);
+    await enqueue(ROOM, image);
+    expect(dispatched).toHaveLength(0);
+    await enqueue(ROOM, caption);
+    await enqueue(ROOM, caption);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(dispatched).toHaveLength(1);
+    const [{ event, options }] = dispatched as [Dispatched];
+    expect(event.event_id).toBe("$img");
+    expect(event.content).toMatchObject({ body: "lool", filename: "IMG_0002.jpg" });
+    expect(options?.replayClaim).toBe(claims.get("$img"));
+    expect(options?.absorbedReplayClaims).toEqual([claims.get("$q")]);
+  });
+
   it("starts a new batch for a second attachment", async () => {
     const { enqueue, dispatched } = createSubject();
 

@@ -31,6 +31,11 @@ export type MatrixCommandPrefixInputs = { displayName?: string; mentionRegexes: 
 
 const MATRIX_HTML_FORMAT = "org.matrix.custom.html";
 
+// E2EE delivers each decrypted message twice (room.decrypted_event and room.message) within
+// milliseconds. Repeats inside this window are dropped before batching.
+const REPEAT_SIGHTING_TTL_MS = 60_000;
+const REPEAT_SIGHTING_MAX = 1024;
+
 // Audio and stickers stay immediate: voice notes are complete messages on their own.
 const CAPTION_WAITING_MSGTYPES = new Set(["m.image", "m.file", "m.video"]);
 
@@ -304,7 +309,34 @@ export function createMatrixInboundDebouncer(params: {
   // arrival order. Each link ends once its item is registered, not when its turn finishes.
   const ingressChains = new Map<string, Promise<void>>();
 
+  // First sighting per message id. Without this, the second emit of a held attachment fails
+  // canAppend, flushes the attachment alone, and its trailing caption becomes a second turn.
+  const recentSightings = new Map<string, number>();
+  const isRepeatSighting = (roomId: string, event: MatrixRawEvent): boolean => {
+    const eventId = event.event_id?.trim();
+    if (event.type !== EventType.RoomMessage || !eventId) {
+      return false;
+    }
+    const now = Date.now();
+    for (const [id, seenAt] of recentSightings) {
+      if (now - seenAt < REPEAT_SIGHTING_TTL_MS && recentSightings.size < REPEAT_SIGHTING_MAX) {
+        break;
+      }
+      recentSightings.delete(id);
+    }
+    const sightingKey = `${roomId}\u0000${eventId}`;
+    if (recentSightings.has(sightingKey)) {
+      logVerboseMessage(`matrix: debounce skip repeated emit room=${roomId} id=${eventId}`);
+      return true;
+    }
+    recentSightings.set(sightingKey, now);
+    return false;
+  };
+
   return async (roomId: string, event: MatrixRawEvent) => {
+    if (isRepeatSighting(roomId, event)) {
+      return;
+    }
     const key = buildBatchKey(roomId, event);
     if (!key) {
       await debouncer.enqueue({ roomId, event });
