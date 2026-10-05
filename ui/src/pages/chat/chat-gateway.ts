@@ -119,20 +119,20 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
           ? "auth_refresh"
           : undefined;
   const injectedMessageId =
-    payload.state === "final" && payload.runId?.startsWith("inject-")
+    payload.state === "final" && payload.seq === 0 && payload.runId?.startsWith("inject-")
       ? payload.runId.slice("inject-".length)
       : null;
-  const finalMessage =
+  const incomingFinalMessage =
     payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
-  // chat.inject encodes the persisted row ID in its delivery ID, not an agent run.
-  // Use that same identity when session.message or history arrives in either order.
+  // Only seq-zero inject deliveries encode a row ID: ordinary runs start at one
+  // and may use any client-selected ID. Reconcile with session.message/history.
   const normalizedFinalMessage =
-    injectedMessageId && finalMessage
+    injectedMessageId && incomingFinalMessage
       ? {
-          ...finalMessage,
-          __openclaw: { ...asRecord(finalMessage["__openclaw"]), id: injectedMessageId },
+          ...incomingFinalMessage,
+          __openclaw: { ...asRecord(incomingFinalMessage["__openclaw"]), id: injectedMessageId },
         }
-      : finalMessage;
+      : incomingFinalMessage;
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
   const sessionMatches = visibleSessionMatches(state, payload.sessionKey, payload.agentId);
   const activeRunMatches =

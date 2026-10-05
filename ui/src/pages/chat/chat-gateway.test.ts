@@ -108,6 +108,7 @@ it.each([true, false])(
       }
       const event = {
         runId: `inject-${ids[index]}`,
+        seq: 0,
         message: textMessage("assistant", "Synthetic weekly report"),
       };
       receive(state, "final", event);
@@ -151,6 +152,7 @@ it("does not settle the foreground run when an injected note arrives", () => {
   });
   receive(state, "final", {
     runId: "inject-note",
+    seq: 0,
     message: textMessage("assistant", "An independent note"),
   });
   expect(state.chatRunId).toBe("real-run");
@@ -158,6 +160,23 @@ it("does not settle the foreground run when an injected note arrives", () => {
   expect(state.chatStreamStartedAt).toBe(100);
   expect(state.chatMessages.map(extractText)).toEqual(["An independent note"]);
   expect(getChatSessionProjection(state).runs["inject-note"]).toBeUndefined();
+});
+
+it("settles a regular streamed run with an inject-prefixed client ID", () => {
+  const state = createState({ chatRunId: "inject-job" });
+  receive(state, "delta", {
+    runId: "inject-job",
+    seq: 1,
+    message: textMessage("assistant", "Regular reply"),
+  });
+  receive(state, "final", {
+    runId: "inject-job",
+    seq: 2,
+    message: textMessage("assistant", "Regular reply"),
+  });
+  expectSettled(state);
+  expect(state.chatMessages.map(extractText)).toEqual(["Regular reply"]);
+  expect(getChatSessionProjection(state).runs["inject-job"]?.status).toBe("completed");
 });
 
 it.each([
