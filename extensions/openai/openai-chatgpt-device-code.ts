@@ -96,12 +96,15 @@ function sanitizeDeviceCodeErrorText(value: string): string {
 }
 
 function resolveNextDeviceCodePollDelayMs(intervalMs: number, deadlineMs: number): number {
-  const remainingMs = Math.max(0, deadlineMs - Date.now());
+  const remainingMs = Math.max(0, deadlineMs - performance.now());
   return Math.min(Math.max(intervalMs, OPENAI_CODEX_DEVICE_CODE_MIN_INTERVAL_MS), remainingMs);
 }
 
 function resolveDeviceCodePollRequestTimeoutMs(deadlineMs: number): number {
-  return Math.min(OPENAI_CODEX_DEVICE_REQUEST_TIMEOUT_MS, Math.max(0, deadlineMs - Date.now()));
+  return Math.min(
+    OPENAI_CODEX_DEVICE_REQUEST_TIMEOUT_MS,
+    Math.max(0, deadlineMs - performance.now()),
+  );
 }
 
 function isDeviceCodeOperationTimeoutError(error: unknown): boolean {
@@ -259,9 +262,14 @@ async function pollOpenAICodexDeviceCode(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }): Promise<DeviceCodeAuthorizationCode> {
-  const deadline = Date.now() + OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS;
+  // Monotonic deadline so wall-clock jumps (NTP correction, sleep/resume,
+  // manual changes) cannot stretch or shrink the 15-minute device-code budget.
+  // The remaining budget is consumed through setTimeout (waitForDeviceCodePoll)
+  // and buildTimeoutAbortSignal, both monotonic; seeding with Date.now() would
+  // cross clock domains and let a rollback enlarge the budget.
+  const deadline = performance.now() + OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS;
 
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     params.signal?.throwIfAborted();
     const requestTimeoutMs = resolveDeviceCodePollRequestTimeoutMs(deadline);
     if (requestTimeoutMs <= 0) {
