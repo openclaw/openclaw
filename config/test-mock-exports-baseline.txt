@@ -9102,7 +9102,6 @@
 ["src/infra/sqlite-snapshot-staging.worker.test.ts","./worker-task-server.js","b30698992ae5593d28bdfd8b8ee497933a9581d1188c5c4794a6ba2b0d747aa0",1]
 ["src/infra/sqlite-wal.nocow.test.ts","../logging/subsystem.js","b8cda70e858ef4812d631f99d56eab2018f0ea4ce29baadd8470fa981fea3da6",1]
 ["src/infra/sqlite-worker-broker-lifecycle.test.ts","./bun-sqlite-library.js","d09e469bf9b1a79db047fd4527d92966f8d6025bde9328cd1ef6ae713f3c9323",1]
-["src/infra/sqlite-worker-broker-lifecycle.test.ts","./worker-cpu.js","c5415e87fa92eb720242e95cc5e9df896844f167aa16a672aa6ed5531ebd5b70",1]
 ["src/infra/sqlite-worker-broker-reply.cleanup.test.ts","../state/openclaw-state-worker-error.js","0f36cce1a4e0c2647518ee392f68b6c3251ceb614988ddc7ceb3670262cd2fe2",1]
 ["src/infra/sqlite-worker-broker-reply.cleanup.test.ts","./sqlite-transaction.js","0706968b3e1a6e945e28ae3682d7371ce55bbefab4cbb1a62461e03451ac877d",1]
 ["src/infra/sqlite-worker-broker-reply.cleanup.test.ts","./sqlite-worker-transfer.js","cf3f6f53b09f12b061bfba95683620680bdca05618633df60e21b38391d92ce9",1]
