@@ -95,6 +95,7 @@ async function runZaloSend(
 function resolveSendContext(options: ZaloSendOptions): {
   token: string;
   fetcher?: ZaloFetch;
+  missingTokenError: string;
 } {
   if (options.cfg) {
     const account = resolveZaloAccount({
@@ -103,12 +104,21 @@ function resolveSendContext(options: ZaloSendOptions): {
     });
     const token = options.token || account.token;
     const proxy = options.proxy ?? account.config.proxy;
-    return { token, fetcher: resolveZaloProxyFetch(proxy) };
+    const accountPath = `channels.zalo.accounts.${account.accountId}`;
+    return {
+      token,
+      fetcher: resolveZaloProxyFetch(proxy),
+      missingTokenError: `Zalo token not configured for account ${account.accountId} (set ${accountPath}.botToken or ${accountPath}.tokenFile)`,
+    };
   }
 
   const token = options.token ?? resolveZaloToken(undefined, options.accountId).token;
   const proxy = options.proxy;
-  return { token, fetcher: resolveZaloProxyFetch(proxy) };
+  return {
+    token,
+    fetcher: resolveZaloProxyFetch(proxy),
+    missingTokenError: "No Zalo bot token configured",
+  };
 }
 
 export async function sendMessageZalo(
@@ -116,14 +126,14 @@ export async function sendMessageZalo(
   text: string,
   options: ZaloSendOptions = {},
 ): Promise<ZaloSendResult> {
-  const { token, fetcher } = resolveSendContext(options);
+  const { token, fetcher, missingTokenError } = resolveSendContext(options);
   const normalizedChatId = token
     ? stripTargetKindPrefix(stripChannelTargetPrefix(chatId, "zalo", "zl"))
     : "";
   if (!token || !normalizedChatId) {
     return {
       ok: false,
-      error: token ? "No chat_id provided" : "No Zalo bot token configured",
+      error: token ? "No chat_id provided" : missingTokenError,
       receipt: createZaloSendReceipt({ chatId, kind: "unknown" }),
     };
   }
