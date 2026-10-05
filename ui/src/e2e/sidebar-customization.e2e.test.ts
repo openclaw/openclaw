@@ -115,15 +115,15 @@ suite.define(() => {
             },
           });
           await page.addInitScript(
-            ({ key, entry }) =>
+            ({ key, leadEntry }) =>
               localStorage.setItem(
                 key,
                 JSON.stringify({
                   sidebarAgentsMode: "roster",
-                  sidebarEntries: ["route:agents-home", entry, "route:cron"],
+                  sidebarEntries: ["route:agents-home", leadEntry, "route:cron"],
                 }),
               ),
-            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), entry },
+            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), leadEntry: entry },
           );
           await page.goto(`${suite.server.baseUrl}${route}`);
           if (label === "Workboard") {
