@@ -11,6 +11,7 @@ import {
   DEFAULT_WORKER_PENDING_TASKS,
   type WorkerComputeCapacity,
 } from "./worker-task-capacity.js";
+import { captureWorkerTaskContext } from "./worker-task-context.js";
 import type { WorkerTaskHost } from "./worker-task-host.js";
 import { createWorkerNativeSectionState } from "./worker-task-native-sections.js";
 import {
@@ -212,7 +213,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       reject: completion.reject,
       read: () => completion.operation.read(),
       id: ++this.nextTaskId,
-      runInContext: AsyncLocalStorage.snapshot(),
+      runInContext: captureWorkerTaskContext(),
       controller: undefined,
       inputConsumed: false,
       executionNotified: false,

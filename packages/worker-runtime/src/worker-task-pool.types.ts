@@ -1,4 +1,3 @@
-import type { AsyncLocalStorage } from "node:async_hooks";
 import type { Transferable, WorkerOptions } from "node:worker_threads";
 import type { RetainedOperation, RetainedOutcome } from "./retained-operation.js";
 import type { RetainedNativeWorker, WorkerLifecycle } from "./worker-lifecycle.js";
@@ -109,7 +108,7 @@ export type Task<Input, Output> = Omit<PromiseWithResolvers<Output>, "resolve"> 
   resolve(value: Output): void;
   read(): RetainedOutcome<Output>;
   id: number;
-  runInContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
+  runInContext: <T>(operation: () => T) => T;
   /** Allocated when a host request exposes the task's lifetime signal. */
   controller?: AbortController;
   exchange?: WorkerHostExchange;
