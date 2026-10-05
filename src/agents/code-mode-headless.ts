@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { raceWithTimeout } from "@openclaw/retry";
 import { clampNumber } from "../utils.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
-import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
 import type {
   CodeModeExecutorContinuation,
@@ -68,14 +68,28 @@ export function createHeadlessDeadlineScope(
   return {
     deadline,
     signal: controller.signal,
-    wait: <T>(promise: Promise<T>) =>
-      awaitCodeModeDeadline({
-        operation: () => promise,
-        remainingMs: Math.ceil(deadline - performance.now()),
-        signal: controller.signal,
-        createTimeoutError: timeoutError,
-        createAbortError: headlessAbortError,
-      }),
+    wait: async <T>(promise: Promise<T>): Promise<T> => {
+      const remainingMs = Math.ceil(deadline - performance.now());
+      if (remainingMs <= 0) {
+        throw timeoutError();
+      }
+      if (controller.signal.aborted) {
+        throw headlessAbortError(controller.signal);
+      }
+      return await raceWithTimeout(
+        promise,
+        remainingMs,
+        () => {
+          throw timeoutError();
+        },
+        {
+          signal: controller.signal,
+          onAbort: (signal) => {
+            throw headlessAbortError(signal);
+          },
+        },
+      );
+    },
     cleanup: () => {
       controller.abort(new CodeModeHeadlessAbortError());
       clearTimeout(timer);

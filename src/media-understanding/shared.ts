@@ -19,6 +19,7 @@ import {
   resolveProviderRequestPolicyConfig,
 } from "../agents/provider-request-config.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
@@ -191,9 +192,7 @@ export async function waitProviderOperationPollInterval(params: {
   if (remainingMs <= 0) {
     throw createProviderOperationTimeoutError(params.deadline);
   }
-  await new Promise((resolve) => {
-    setTimeout(resolve, Math.min(pollIntervalMs, remainingMs));
-  });
+  await sleepWithAbort(Math.min(pollIntervalMs, remainingMs));
 }
 
 /** Poll a provider-owned request without changing its transport or response contract. */

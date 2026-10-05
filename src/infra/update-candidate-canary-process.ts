@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { signalProcessTree } from "../process/kill-tree.js";
@@ -162,26 +163,12 @@ export async function waitBounded<T>(
   milliseconds: number,
   signal?: AbortSignal,
 ): Promise<{ status: "completed"; value: T } | { status: "deadline" | "aborted" }> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let abort: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      promise.then((value) => ({ status: "completed" as const, value })),
-      new Promise<{ status: "deadline" | "aborted" }>((resolve) => {
-        timer = setTimeout(() => resolve({ status: "deadline" }), Math.max(0, milliseconds));
-        abort = () => resolve({ status: "aborted" });
-        signal?.addEventListener("abort", abort, { once: true });
-        if (signal?.aborted) {
-          abort();
-        }
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-    if (abort) {
-      signal?.removeEventListener("abort", abort);
-    }
-  }
+  return await raceWithTimeout(
+    promise.then((value) => ({ status: "completed" as const, value })),
+    Math.max(0, milliseconds),
+    (): { status: "deadline" | "aborted" } => ({ status: "deadline" }),
+    { signal, onAbort: () => ({ status: "aborted" }) },
+  );
 }
 
 export async function terminateCanary(

@@ -10,6 +10,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { runExec } from "../process/exec.js";
 import { signalProcessTree } from "../process/kill-tree.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -215,70 +216,66 @@ async function startTailscaleRouteOwner(
   let failure: Error | undefined;
   const { promise: exited, resolve: resolveExit } = createDeferredCore();
 
-  const startup = new Promise<void>((resolve, reject) => {
-    const settle = (error?: Error) => {
-      clearTimeout(startupTimer);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const startupTimer = setTimeout(
-      () => settle(new Error("Tailscale route claim did not become ready within 15 seconds")),
-      TAILSCALE_ROUTE_START_TIMEOUT_MS,
-    );
-    startupTimer.unref?.();
-
-    worker.on("message", (message: unknown) => {
-      const event = readRecord(message);
-      if (!event) {
-        return;
-      }
-      if (event.type === "spawned") {
-        if (typeof event.pid !== "number") {
-          return;
-        }
-        routePid = event.pid;
-      } else if (event.type === "ready") {
-        ready = true;
-        active = true;
-        settle();
-      } else if (event.type === "failed") {
-        if (
-          (event.code !== null && typeof event.code !== "number") ||
-          typeof event.stdout !== "string" ||
-          typeof event.stderr !== "string"
-        ) {
-          return;
-        }
-        failure = routeClaimError(
-          {
-            code: event.code,
-            stdout: event.stdout,
-            stderr: event.stderr,
-          },
-          serveStatus,
+  const startup = raceWithTimeout(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        worker.on("message", (message: unknown) => {
+          const event = readRecord(message);
+          if (!event) {
+            return;
+          }
+          if (event.type === "spawned") {
+            if (typeof event.pid !== "number") {
+              return;
+            }
+            routePid = event.pid;
+          } else if (event.type === "ready") {
+            ready = true;
+            active = true;
+            resolve();
+          } else if (event.type === "failed") {
+            if (
+              (event.code !== null && typeof event.code !== "number") ||
+              typeof event.stdout !== "string" ||
+              typeof event.stderr !== "string"
+            ) {
+              return;
+            }
+            failure = routeClaimError(
+              {
+                code: event.code,
+                stdout: event.stdout,
+                stderr: event.stderr,
+              },
+              serveStatus,
+            );
+            if (!ready) {
+              reject(failure);
+            }
+          }
+        });
+        worker.once("error", (error) =>
+          reject(toErrorObject(error, "Tailscale route owner failed")),
         );
-        if (!ready) {
-          settle(failure);
-        }
-      }
-    });
-    worker.once("error", (error) => settle(toErrorObject(error, "Tailscale route owner failed")));
-    worker.once("exit", (code, signal) => {
-      active = false;
-      resolveExit();
-      if (!ready) {
-        settle(
-          failure ??
-            new Error(
-              `Tailscale route owner exited before readiness (${signal ? `signal ${signal}` : `code ${code ?? "unknown"}`})`,
-            ),
-        );
-      }
-    });
-  });
+        worker.once("exit", (code, signal) => {
+          active = false;
+          resolveExit();
+          if (!ready) {
+            reject(
+              failure ??
+                new Error(
+                  `Tailscale route owner exited before readiness (${signal ? `signal ${signal}` : `code ${code ?? "unknown"}`})`,
+                ),
+            );
+          }
+        });
+      }),
+    TAILSCALE_ROUTE_START_TIMEOUT_MS,
+    () => {
+      throw new Error("Tailscale route claim did not become ready within 15 seconds");
+    },
+    { ref: false },
+  );
 
   const stop = async () => {
     if (stopping) {
