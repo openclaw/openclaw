@@ -20,14 +20,21 @@ const CATALOG_LIST_PHASES = new Set([
   "delivery",
 ]);
 
-export function recordGatewayRpcEvent(
+export function recordOperationTimingEvent(
   store: PrometheusMetricStore,
   evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" | "diagnostic.phase.completed" }>,
   metadata: DiagnosticEventMetadata,
 ): void {
   switch (evt.type) {
     case "diagnostic.phase.completed": {
-      if (!metadata.trusted || !evt.name.startsWith(CATALOG_LIST_PHASE_PREFIX)) {
+      if (!metadata.trusted) {
+        return;
+      }
+      if (evt.name === "worktree.preparation") {
+        recordWorktreePreparation(store, evt);
+        return;
+      }
+      if (!evt.name.startsWith(CATALOG_LIST_PHASE_PREFIX)) {
         return;
       }
       const phase = evt.name.slice(CATALOG_LIST_PHASE_PREFIX.length);
@@ -123,5 +130,40 @@ export function recordGatewayRpcEvent(
         );
       }
     }
+  }
+}
+
+function recordWorktreePreparation(
+  store: PrometheusMetricStore,
+  evt: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>,
+) {
+  const { kind, template, outcome } = evt.details ?? {};
+  if (
+    (kind !== "managed" && kind !== "sandbox") ||
+    !["warm", "cold", "unavailable", "reused"].includes(String(template)) ||
+    (outcome !== "returned" && outcome !== "threw")
+  ) {
+    return;
+  }
+  for (const phase of [
+    "total",
+    "allocate",
+    "checkout",
+    "setup",
+    "templatePrepare",
+    "templateApply",
+    "snapshot",
+    "synchronizeCanonical",
+    "synchronizeProjection",
+    "containerStart",
+    "workspaceLayout",
+  ]) {
+    const elapsed = phase === "total" ? evt.durationMs : evt.details?.[phase];
+    store.histogram(
+      "openclaw_worktree_preparation_seconds",
+      "Elapsed managed worktree preparation time; nested phases are inclusive.",
+      { kind, template: String(template), outcome, phase },
+      typeof elapsed === "number" ? seconds(elapsed) : undefined,
+    );
   }
 }

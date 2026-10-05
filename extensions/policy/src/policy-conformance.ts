@@ -69,10 +69,9 @@ type PolicyRuleClaim = {
 export async function buildPolicyConformanceReport(params: {
   readonly baselinePath: string;
   readonly policyPath: string;
-  readonly cwd?: string;
 }): Promise<PolicyConformanceReport> {
-  const baselinePath = resolvePolicyPath(params.baselinePath, params.cwd);
-  const policyPath = resolvePolicyPath(params.policyPath, params.cwd);
+  const baselinePath = resolvePolicyPath(params.baselinePath);
+  const policyPath = resolvePolicyPath(params.policyPath);
   const baselineResult = await readPolicyDocument(baselinePath);
   const policyResult = await readPolicyDocument(policyPath);
   if (!baselineResult.ok || !policyResult.ok) {
@@ -489,6 +488,6 @@ async function readPolicyDocument(path: string): Promise<PolicyDocumentReadResul
   }
 }
 
-function resolvePolicyPath(path: string, cwd: string | undefined): string {
-  return isAbsolute(path) ? path : resolve(cwd ?? process.cwd(), path);
+function resolvePolicyPath(path: string): string {
+  return isAbsolute(path) ? path : resolve(path);
 }

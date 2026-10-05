@@ -285,6 +285,19 @@ these APIs remain supported, with no deprecation warning or required migration.
 Worker activation must preserve them; changing these released contracts requires
 an explicitly approved Plugin SDK major release.
 
+### Memory session binding compatibility
+
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` retains the readers
+published in `v2026.9.8`: `buildSessionEntry(path, options?)`,
+`listSessionTranscriptCorpusEntriesForAgent(agentId, options?)`, and
+`readSessionResetRecallCutoff(scope)`. Their Promise results and synchronous
+`onTranscriptMessage(message, observedAt)` observer remain unchanged. Internal
+incognito actor sources are not plugin arguments.
+
+The `memory-session-released-signatures` compatibility record is active. These
+APIs remain supported without warnings or a required migration; changing their
+released contracts requires an explicitly approved Plugin SDK major release.
+
 ### Native session generation authority
 
 The production-private `agent-harness-session-runtime` subpath retains the

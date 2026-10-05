@@ -75,9 +75,9 @@ function normalizeFiniteRange(value: unknown, min: number, max: number): number 
   return asFiniteNumberInRange(parsed, { min, max });
 }
 
-function normalizeIntegerRange(value: unknown, min: number, max: number): number | undefined {
+function normalizeMinimumDurationMs(value: unknown): number | undefined {
   const parsed = readFiniteNumber(value);
-  return asSafeIntegerInRange(parsed, { min, max });
+  return asSafeIntegerInRange(parsed, { min: 50, max: 2_000 });
 }
 
 function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
@@ -99,15 +99,11 @@ function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
       3,
     ),
     vadThreshold: normalizeFiniteRange(raw.vadThreshold ?? raw.vad_threshold, 0.1, 0.9),
-    minSpeechDurationMs: normalizeIntegerRange(
+    minSpeechDurationMs: normalizeMinimumDurationMs(
       raw.minSpeechDurationMs ?? raw.min_speech_duration_ms,
-      50,
-      2_000,
     ),
-    minSilenceDurationMs: normalizeIntegerRange(
+    minSilenceDurationMs: normalizeMinimumDurationMs(
       raw.minSilenceDurationMs ?? raw.min_silence_duration_ms,
-      50,
-      2_000,
     ),
   };
 }

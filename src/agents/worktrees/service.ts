@@ -38,6 +38,10 @@ import { createWorktreeGcPrefilter, lockState, unlockWorktree } from "./git-lock
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
 import { commandError, worktreePathExists, runGit, requireGit } from "./git.js";
 import { worktreeOwnerMatches } from "./owner.js";
+import {
+  timeWorktreePreparationPhase,
+  withWorktreePreparationTiming,
+} from "./preparation-timing.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
 import {
   readRegistryWorktrees,
@@ -201,7 +205,9 @@ export class ManagedWorktreeService {
   async createWithOutcome(
     params: CreateManagedWorktreeParams,
   ): Promise<ManagedWorktreeCreationOutcome> {
-    return withWorktreeRunEnd(this.env, () => this.createWithOutcomeAccepted(params));
+    return withWorktreePreparationTiming("managed", () =>
+      withWorktreeRunEnd(this.env, () => this.createWithOutcomeAccepted(params)),
+    );
   }
 
   private async createWithOutcomeAccepted(
@@ -228,7 +234,9 @@ export class ManagedWorktreeService {
   async createEmptyWithOutcome(
     params: CreateEmptyManagedWorktreeParams,
   ): Promise<ManagedWorktreeCreationOutcome> {
-    return withWorktreeRunEnd(this.env, () => this.createEmptyWithOutcomeAccepted(params));
+    return withWorktreePreparationTiming("managed", () =>
+      withWorktreeRunEnd(this.env, () => this.createEmptyWithOutcomeAccepted(params)),
+    );
   }
 
   private async createEmptyWithOutcomeAccepted(
@@ -529,18 +537,6 @@ export class ManagedWorktreeService {
       suppliedName,
       suggestedName: params.suggestedName ?? inferredName,
     });
-    const branchExists = await runGit(repository.repoRoot, [
-      "show-ref",
-      "--quiet",
-      "--verify",
-      `refs/heads/${branch}`,
-    ]);
-    if (branchExists.code === 0) {
-      throw new Error(`branch already exists: ${branch}`);
-    }
-    if (branchExists.code !== 1) {
-      throw commandError("git show-ref --verify", branchExists);
-    }
     // Default-base resolution fetches remote refs; it is an effect, not just discovery.
     params.signal?.throwIfAborted();
     params.commitGuard?.();
@@ -652,7 +648,7 @@ export class ManagedWorktreeService {
         },
       });
     };
-    let added = await addCheckout();
+    let added = await timeWorktreePreparationPhase("checkout", addCheckout);
     if (added.code !== 0 && base.remote) {
       if (!(await canResetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, added))) {
         throw commandError("git worktree add", added);
@@ -662,7 +658,7 @@ export class ManagedWorktreeService {
       params.commitGuard?.();
       gitBase = "HEAD";
       recordBase = "HEAD";
-      added = await addCheckout();
+      added = await timeWorktreePreparationPhase("checkout", addCheckout);
     }
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
@@ -704,7 +700,9 @@ export class ManagedWorktreeService {
           });
     if (runRepositorySetup) {
       await requireAllocationSpace(params, this.env, worktreePath, repository, setupBytes);
-      await runSetupScript(repository.sourceRoot, worktreePath, params);
+      await timeWorktreePreparationPhase("setup", () =>
+        runSetupScript(repository.sourceRoot, worktreePath, params),
+      );
     }
     return provisionedPaths;
   }

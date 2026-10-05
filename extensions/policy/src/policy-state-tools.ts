@@ -1,7 +1,7 @@
 import type { PolicyToolEvidence } from "./policy-state-types.js";
 
 export function scanPolicyTools(raw: string): readonly PolicyToolEvidence[] {
-  const section = markdownSectionLines(raw, "tools");
+  const section = markdownSectionLines(raw);
   if (section.length === 0) {
     return [];
   }
@@ -89,10 +89,7 @@ export function scanPolicyTools(raw: string): readonly PolicyToolEvidence[] {
   return tools;
 }
 
-function markdownSectionLines(
-  raw: string,
-  sectionSlug: string,
-): readonly {
+function markdownSectionLines(raw: string): readonly {
   readonly line: number;
   readonly text: string;
   readonly sectionDepth: number;
@@ -134,7 +131,7 @@ function markdownSectionLines(
         section.push({ line: index + 1, text: line, sectionDepth });
         continue;
       }
-      if (depth <= 2 && slug === sectionSlug) {
+      if (depth <= 2 && slug === "tools") {
         if (foundSection) {
           section.push({ line: index + 1, text: line, sectionDepth: depth });
         }

@@ -107,11 +107,12 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
             };
           },
         });
+        // Registry descriptors are normalized inputs; plugin-owned methods default to a required profile.
         registry.gatewayMethodDescriptors = createGatewayMethodDescriptorsFromHandlers({
           handlers: registry.gatewayHandlers,
           owner: { kind: "plugin", pluginId: "synthetic-rpc-proof" },
           defaultScope: "operator.admin",
-        });
+        }).map((descriptor) => Object.assign(descriptor, { profileAccess: "required" as const }));
         const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
         prometheusPlugin.register(
           createTestPluginApi({

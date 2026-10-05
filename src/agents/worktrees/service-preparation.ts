@@ -33,6 +33,7 @@ import {
   type GitResult,
 } from "./git.js";
 import { worktreeOwnerMatches } from "./owner.js";
+import { startWorktreePreparationPhase } from "./preparation-timing.js";
 import {
   readRegistryWorktrees,
   readRegistryWorktreeForMutation,
@@ -65,16 +66,15 @@ export async function prepareWorktreeDestination(params: {
   await fs.mkdir(configuredRoot, { recursive: true });
   // Git canonicalizes checkout paths; creation and lock/adoption comparisons must agree.
   const root = path.join(await fs.realpath(configuredRoot), repository.fingerprint);
-  const name =
-    params.suppliedName ??
-    (await generateName(
-      env,
-      repository.repoRoot,
-      repository.fingerprint,
-      root,
-      params.owner,
-      params.suggestedName,
-    ));
+  const name = await resolveWorktreeName(
+    env,
+    repository.repoRoot,
+    repository.fingerprint,
+    root,
+    params.owner,
+    params.suggestedName,
+    params.suppliedName,
+  );
   return { root, name, worktreePath: path.join(root, name), branch: `openclaw/${name}` };
 }
 
@@ -100,7 +100,15 @@ export async function createWithWorktreeAllocation(
   for (;;) {
     const publication: WorktreeCreationPublication = {};
     try {
-      return await withWorktreeAllocationLease(params, (guard) => run(guard, publication));
+      const allocated = startWorktreePreparationPhase("allocate");
+      try {
+        return await withWorktreeAllocationLease(params, (guard) => {
+          allocated();
+          return run(guard, publication);
+        });
+      } finally {
+        allocated();
+      }
     } catch (error) {
       if (
         collectNestedErrorCandidates(error).some(
@@ -373,14 +381,31 @@ function appendNameOrdinal(name: string, ordinal: number): string {
   return `${name.slice(0, 64 - suffix.length).replace(/-+$/g, "")}${suffix}`;
 }
 
-async function generateName(
+async function resolveWorktreeName(
   env: NodeJS.ProcessEnv,
   repoRoot: string,
   fingerprint: string,
   root: string,
   owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
   suggestedName: string,
+  suppliedName?: string,
 ): Promise<string> {
+  if (suppliedName !== undefined) {
+    const branch = `openclaw/${suppliedName}`;
+    const existing = await runGit(repoRoot, [
+      "show-ref",
+      "--quiet",
+      "--verify",
+      `refs/heads/${branch}`,
+    ]);
+    if (existing.code === 0) {
+      throw new Error(`branch already exists: ${branch}`);
+    }
+    if (existing.code !== 1) {
+      throw commandError("git show-ref --verify", existing);
+    }
+    return suppliedName;
+  }
   validateName(suggestedName);
   for (let ordinal = 1; ordinal <= 1_000; ordinal += 1) {
     const candidate = ordinal === 1 ? suggestedName : appendNameOrdinal(suggestedName, ordinal);

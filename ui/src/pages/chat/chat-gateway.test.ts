@@ -61,6 +61,26 @@ function visibleParts(state: ChatState, includeCurrent = false) {
   return visibleAssistantStreamParts(state, { includeCurrent, isHiddenStreamText: () => false });
 }
 
+function renderedMessageTexts(state: ChatState, paneId: string) {
+  return buildChatItems({
+    paneId,
+    sessionKey: state.sessionKey,
+    runId: state.chatRunId,
+    messages: state.chatMessages,
+    toolMessages: [],
+    streamSegments: state.chatStreamSegments ?? [],
+    stream: state.chatStream,
+    streamStartedAt: state.chatStreamStartedAt,
+    showToolCalls: true,
+  }).flatMap((item) =>
+    item.kind === "group"
+      ? item.messages.map(({ message }) => extractText(message))
+      : item.kind === "stream"
+        ? [item.text.trim()]
+        : [],
+  );
+}
+
 function expectSettled(state: ChatState) {
   expect(state.chatRunId).toBeNull();
   expect(state.chatStream).toBeNull();
@@ -120,22 +140,7 @@ it.each([true, false])(
       expectSettled(state);
       expect(Object.keys(getChatSessionProjection(state).runs)).toEqual([]);
     }
-    const rendered = buildChatItems({
-      paneId: "injected-notes",
-      sessionKey: state.sessionKey,
-      runId: state.chatRunId,
-      messages: state.chatMessages,
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    });
-    expect(
-      rendered.flatMap((item) =>
-        item.kind === "group" ? item.messages.map(({ message }) => extractText(message)) : [],
-      ),
-    ).toEqual([
+    expect(renderedMessageTexts(state, "injected-notes")).toEqual([
       "Previous question",
       "Previous reply",
       "Synthetic weekly report",
@@ -1282,28 +1287,12 @@ describe("handleChatGatewayEvent", () => {
             ["assistant", partial],
           ],
           verify: (state) => {
-            const streamState = state as ChatState & {
-              chatStreamSegments: NonNullable<TerminalErrorFixture["segments"]>;
-            };
-            expect(streamState.chatStreamSegments).toEqual([]);
-            const rendered = buildChatItems({
-              paneId: "terminal-error-stream-owner",
-              sessionKey: state.sessionKey,
-              runId: state.chatRunId,
-              messages: state.chatMessages,
-              toolMessages: [],
-              streamSegments: streamState.chatStreamSegments,
-              stream: state.chatStream,
-              streamStartedAt: state.chatStreamStartedAt,
-              showToolCalls: true,
-            }).flatMap((item) =>
-              item.kind === "group"
-                ? item.messages.map(({ message }) => extractText(message))
-                : item.kind === "stream"
-                  ? [item.text.trim()]
-                  : [],
-            );
-            expect(rendered.filter((text) => text === partial)).toHaveLength(1);
+            expect(state.chatStreamSegments).toEqual([]);
+            expect(
+              renderedMessageTexts(state, "terminal-error-stream-owner").filter(
+                (text) => text === partial,
+              ),
+            ).toHaveLength(1);
           },
         };
       },
@@ -2209,15 +2198,16 @@ describe("loadChatHistory retry handling", () => {
     expect(state.toolStreamOrder).toEqual([]);
   });
 
-  it("timestamps materialized streamed text after the persisted user prompt", async () => {
+  it("keeps materialized text after its prompt without changing the stream timestamp", async () => {
     const userTimestamp = 200;
+    const streamTimestamp = 100;
 
     const persistedUser = textMessage("user", "first", { seq: 1 }, userTimestamp);
     const { state } = createHistorySnapshot([persistedUser], {
       chatMessages: [persistedUser],
       chatRunId: null,
       chatStream: "Partial answer before history catch-up.",
-      chatStreamStartedAt: 100,
+      chatStreamStartedAt: streamTimestamp,
     });
 
     await loadChatHistory(state);
@@ -2229,7 +2219,11 @@ describe("loadChatHistory retry handling", () => {
       "assistant",
       "Partial answer before history catch-up.",
     );
-    expect(requireRecord(state.chatMessages[1]).timestamp).toBe(201);
+    expect(renderedMessageTexts(state, "materialized-stream-order")).toEqual([
+      "first",
+      "Partial answer before history catch-up.",
+    ]);
+    expect(requireRecord(state.chatMessages[1]).timestamp).toBe(streamTimestamp);
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
   });
