@@ -48,12 +48,20 @@ it("prepares the current creation target metadata without caller-thread SQLite",
       .run(sibling);
     const sql = observeHostDataSql();
     try {
-      expect(await readSessionCreateTarget(params, target, "original", [key])).toMatchObject({
+      expect(
+        await readSessionCreateTarget(params, {
+          target,
+          expectedSessionId: "original",
+          lifecycleIdentities: [key],
+        }),
+      ).toMatchObject({
         ok: true,
         value: {
-          sessionId: "original",
-          sessionRoot: "/synthetic/current-root",
-          skillsSnapshot: { prompt: "current metadata", skills: [] },
+          entry: {
+            sessionId: "original",
+            sessionRoot: "/synthetic/current-root",
+            skillsSnapshot: { prompt: "current metadata", skills: [] },
+          },
         },
       });
       expect(sql.queries).toEqual([]);
@@ -93,9 +101,7 @@ it("rechecks creation authority after queued reader admission", async () => {
           }
         },
       },
-      target,
-      "original",
-      [key],
+      { target, expectedSessionId: "original", lifecycleIdentities: [key] },
     );
     current = false;
     const refused = expect(read).rejects.toBe(revoked);

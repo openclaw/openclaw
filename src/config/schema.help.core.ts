@@ -353,6 +353,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
   "agents.entries.*.fastModeDefault":
     'Optional per-agent default for fast mode ("auto", "ultrafast", true, or false). Applies when no per-message or session fast-mode override is set.',
+  "agents.entries.*.newSessionPermissionMode":
+    "Permission mode saved on new attended Gateway sessions when an authenticated operator whose current authority includes a user profile omits a mode. Full requires current operator.admin authority. Explicit choices, existing sessions, forks, autonomous sessions, and unprofiled ephemeral CLI/backend/probe RPC connections remain unchanged. Omit to inherit normal tool policy without saving a session mode.",
   "agents.defaults.fastModeDefault":
     'Default fast-mode policy for the agent loop ("auto", "ultrafast", true, or false). Individual agent entries override it.',
   "agents.entries.*.runtime":

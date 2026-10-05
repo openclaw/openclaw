@@ -4,13 +4,18 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
+  missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/runs.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
-import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
+import { prepareSessionForkFilesystemRoot } from "./server-methods/session-create-root.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
@@ -18,13 +23,33 @@ import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 
+type SessionCreateTargetContext = {
+  target: GatewaySessionStoreTarget;
+  expectedSessionId?: string;
+  lifecycleIdentities: readonly string[];
+  parent?: InternalSessionEntry;
+  parentAgentId?: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+};
+
+type PreparedSessionCreateTarget = {
+  entry: InternalSessionEntry | undefined;
+  permissionMode: InternalSessionEntry["permissionMode"];
+  assertPermissionDefaultCurrent?: () => void;
+  creationSandbox: "required" | undefined;
+  sandboxRequired: boolean;
+  inheritedWorkspace?: Pick<
+    InternalSessionEntry,
+    "projectId" | "spawnedCwd" | "spawnedWorkspaceDir" | "sessionRoot"
+  >;
+};
+
 // The caller holds target lifecycle custody from this reread through commit and rollback.
 export async function readSessionCreateTarget(
   params: CreateGatewaySessionParams,
-  target: GatewaySessionStoreTarget,
-  expectedSessionId: string | undefined,
-  lifecycleIdentities: readonly string[],
-): Promise<Result<InternalSessionEntry | undefined, ErrorShape>> {
+  context: SessionCreateTargetContext,
+): Promise<Result<PreparedSessionCreateTarget, ErrorShape>> {
+  const { target } = context;
   const assertRoutingCurrent = captureSessionMutationRouting(params.cfg);
   const assertCurrent = () => {
     params.commitGuard?.();
@@ -32,13 +57,7 @@ export async function readSessionCreateTarget(
   };
   const validate = (entry: InternalSessionEntry | undefined) => {
     assertCurrent();
-    return validateSessionCreateTarget(
-      params,
-      target,
-      entry,
-      expectedSessionId,
-      lifecycleIdentities,
-    );
+    return validateSessionCreateTarget(params, context, entry);
   };
   assertCurrent();
   // Process-held incognito stores retain their native owner until its complete cutover.
@@ -71,11 +90,10 @@ export async function readSessionCreateTarget(
 
 function validateSessionCreateTarget(
   params: CreateGatewaySessionParams,
-  target: GatewaySessionStoreTarget,
+  context: SessionCreateTargetContext,
   currentTargetEntry: InternalSessionEntry | undefined,
-  expectedSessionId: string | undefined,
-  lifecycleIdentities: readonly string[],
-): Result<InternalSessionEntry | undefined, ErrorShape> {
+): Result<PreparedSessionCreateTarget, ErrorShape> {
+  const { target, expectedSessionId, lifecycleIdentities, operatorAuthority } = context;
   // Lifecycle custody keeps this owner stable through naming and filesystem preparation.
   const existingOwnershipError = resolvePluginSessionOwnershipError({
     action: "adopt",
@@ -137,5 +155,80 @@ function validateSessionCreateTarget(
       return { ok: false, error: creationError };
     }
   }
-  return { ok: true, value: currentTargetEntry };
+  let permissionMode = params.permissionMode;
+  let assertPermissionDefaultCurrent: (() => void) | undefined;
+  if (
+    !currentTargetEntry &&
+    permissionMode === undefined &&
+    params.applyAgentPermissionDefault &&
+    params.creation?.via === "operator" &&
+    params.fork !== true &&
+    !params.initialEntry &&
+    !params.catalogTarget &&
+    !params.authorizedPluginId &&
+    operatorAuthority
+  ) {
+    const configuredMode = resolveAgentConfig(params.cfg, target.agentId)?.newSessionPermissionMode;
+    if (configuredMode) {
+      operatorAuthority.assertCurrent();
+      if (configuredMode === "full" && !operatorAuthority.scopes.includes(ADMIN_SCOPE)) {
+        return {
+          ok: false,
+          error: missingScopeErrorShape({
+            missingScope: ADMIN_SCOPE,
+            requiredScopes: [ADMIN_SCOPE],
+          }),
+        };
+      }
+      permissionMode = configuredMode;
+      assertPermissionDefaultCurrent = () => {
+        operatorAuthority.assertCurrent();
+        const cfg = params.getCurrentConfig?.() ?? params.cfg;
+        if (resolveAgentConfig(cfg, target.agentId)?.newSessionPermissionMode !== configuredMode) {
+          throw new Error("New-session permission default changed; retry creation.");
+        }
+      };
+      assertPermissionDefaultCurrent();
+    }
+  }
+  // Delegated isolation survives changes to the creator's current role.
+  const creationSandbox =
+    params.creation?.sandbox ??
+    (params.creation ? resolveCreatorSandbox(params.cfg, params.creation) : undefined);
+  const sandboxRequired =
+    currentTargetEntry?.sandbox === "required" || creationSandbox === "required";
+  const forkWorkspace =
+    params.fork === true &&
+    context.parent &&
+    !currentTargetEntry &&
+    context.parentAgentId === target.agentId &&
+    !normalizeOptionalString(params.projectId) &&
+    !params.spawnedCwd &&
+    !params.sessionRoot &&
+    !params.execNode &&
+    !params.prepareLifecycle &&
+    !params.pendingWorktree &&
+    !params.pendingProjectGitUrl
+      ? prepareSessionForkFilesystemRoot({
+          cfg: params.cfg,
+          parent: context.parent,
+          targetAgentId: target.agentId,
+          sessionKey: target.canonicalKey,
+          sandboxRequired,
+        })
+      : undefined;
+  if (forkWorkspace && !forkWorkspace.ok) {
+    return { ok: false, error: forkWorkspace.error };
+  }
+  return {
+    ok: true,
+    value: {
+      entry: currentTargetEntry,
+      permissionMode,
+      assertPermissionDefaultCurrent,
+      creationSandbox,
+      sandboxRequired,
+      inheritedWorkspace: forkWorkspace?.value,
+    },
+  };
 }

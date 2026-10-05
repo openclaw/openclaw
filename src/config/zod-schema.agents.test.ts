@@ -3,6 +3,18 @@ import { AgentsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("agent roster ownership", () => {
+  it("accepts new-session permission defaults only on individual agents", () => {
+    const entries = { main: { newSessionPermissionMode: "full" } };
+    expect(AgentsSchema.parse({ entries })?.entries?.main?.newSessionPermissionMode).toBe("full");
+    expect(
+      AgentsSchema.safeParse({ entries, defaults: { newSessionPermissionMode: "full" } }).success,
+    ).toBe(false);
+    expect(
+      AgentsSchema.safeParse({ entries: { main: { newSessionPermissionMode: "invalid" } } })
+        .success,
+    ).toBe(false);
+  });
+
   it("rejects an empty roster after load-time migration", () => {
     expect(AgentsSchema.safeParse({ entries: {} }).success).toBe(false);
   });

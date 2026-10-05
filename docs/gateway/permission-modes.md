@@ -40,6 +40,25 @@ New sessions, including managed worktree sessions, inherit the configured global
 
 Creating a worktree pins the working directory without selecting a permission mode. Explicit modes and modes already saved on existing sessions remain unchanged.
 
+To save an explicit mode on new attended sessions for one agent, set
+`agents.entries.<id>.newSessionPermissionMode` to `read-only`, `guarded`,
+`workspace`, or `full`. This applies when an authenticated operator whose current
+Gateway authority includes a user profile creates a new session through
+`sessions.create`, including the Control UI and Gateway-backed TUI, and omits
+`permissionMode`. The Gateway saves the selected mode before the session runs;
+`full` still requires the requesting operator's
+current `operator.admin` authority. A write-only operator must select another
+mode when the configured default is `full`.
+
+This setting has no global counterpart. Explicit creation choices, existing
+sessions, resets, forks, native catalog sessions, and autonomous or delegated
+creations keep their existing permission behavior. Unprofiled ephemeral
+CLI, backend, and probe RPC connections do not inherit this setting; they can
+request an explicit mode through the existing authorized creation operation.
+Removing the setting stops applying it to future sessions; use the session permission controls to change
+modes already saved. Sandbox requirements, node pairing, placement checks, and
+permission revocation remain independent.
+
 The Control UI permission picker labels Default with the agent's resolved exec posture when it matches a session mode, for example **Default (Guarded)** for `tools.exec.mode: "ask"` without a stricter host approval policy. Resolution includes global settings, agent overrides, and host approval floors. Without those settings or sandboxing, the default is full access. Allowlist-only policy and non-equivalent `security`/`ask` pairs, including `ask: "always"`, keep the plain **Default** label. Agents whose sandbox configuration could apply to their sessions also keep plain **Default**, because effective policy cannot be stated at agent scope. This is display metadata, not an authorization decision or a filesystem-access guarantee; tool policy still applies. Selecting Default clears the session override; it does not save the displayed mode into the session.
 
 ## Delegated setup and repair

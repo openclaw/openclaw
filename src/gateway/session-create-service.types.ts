@@ -146,6 +146,8 @@ export type CreateGatewaySessionParams = {
   /** Canonical agent default prepared by the RPC adapter, used only without a selected root. */
   defaultSessionRoot?: string;
   permissionMode?: SessionEntry["permissionMode"];
+  /** Direct operator ingress may request defaults; live operator authority still authorizes them. */
+  applyAgentPermissionDefault?: boolean;
   toolOverrides?: SessionToolOverrides;
   /** Prepares session-owned resources while the target lifecycle fence is held. */
   prepareLifecycle?: PrepareGatewaySessionLifecycle;
