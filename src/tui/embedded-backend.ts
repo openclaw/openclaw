@@ -659,7 +659,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       cfg,
       entries: [{ agentId: target.agentId, sessionKey: canonicalKey, entry: applied.entry }],
     });
-    return projectSessionPatchResult({
+    const projected = projectSessionPatchResult({
       canonicalKey,
       cfg,
       entry: applied.entry,
@@ -667,6 +667,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       storePath: target.storePath,
       targetAgentId: target.agentId,
     });
+    return { ...projected, entry: { ...projected.entry } };
   }
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
