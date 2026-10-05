@@ -111,7 +111,7 @@ export class FollowupRunDeferredError extends Error {
 }
 
 // Leaf contracts only: get-reply.types.ts imports this module.
-export type FollowupRunObservers = Pick<
+type FollowupRunObservers = Pick<
   GetReplyOptions,
   "onAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
 > & {

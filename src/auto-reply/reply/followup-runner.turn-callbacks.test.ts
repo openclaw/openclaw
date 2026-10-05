@@ -18,7 +18,7 @@ import {
 import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
-import { FollowupRunDeferredError, type FollowupRunObservers } from "./queue/types.js";
+import { FollowupRunDeferredError, type FollowupRun } from "./queue/types.js";
 
 // mock-isolation: Keep database admission outside this queue-to-execution ownership proof.
 vi.mock("./followup-turn-admission.js", () => ({
@@ -43,6 +43,8 @@ vi.mock("./followup-delivery.js", () => ({
   },
   deliverFollowupDecision: async () => ({ kind: "completed", payloads: [] }),
 }));
+
+type FollowupRunObservers = NonNullable<FollowupRun["runObservers"]>;
 
 const { createFollowupRunner } = await import("./followup-runner.js");
 const state = getFollowupTurnTestState();
