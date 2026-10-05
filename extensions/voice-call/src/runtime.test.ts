@@ -1,13 +1,14 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 // Voice Call tests cover runtime plugin behavior.
 import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import { registerFastContextMemoryProvider } from "./runtime.fast-context.test-support.js";
-import { createVoiceCallBaseConfig } from "./test-fixtures.js";
+import { createExternalProviderConfig, createVoiceCallBaseConfig } from "./test-fixtures.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
 const mocks = vi.hoisted(() => ({
@@ -142,33 +143,6 @@ function createBaseConfig(): VoiceCallConfig {
   return createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
 }
 
-function createExternalProviderConfig(params: {
-  provider: "twilio" | "telnyx" | "plivo";
-  publicUrl?: string;
-}): VoiceCallConfig {
-  const config = createVoiceCallBaseConfig({
-    provider: params.provider,
-    tunnelProvider: "none",
-  });
-  config.twilio = {
-    accountSid: "AC123",
-    authToken: "secret",
-  };
-  config.telnyx = {
-    apiKey: "key",
-    connectionId: "conn",
-    publicKey: "pub",
-  };
-  config.plivo = {
-    authId: "MA123",
-    authToken: "secret",
-  };
-  if (params.publicUrl) {
-    config.publicUrl = params.publicUrl;
-  }
-  return config;
-}
-
 type MockSessionEntry = {
   sessionId?: string;
   updatedAt?: number;
@@ -269,6 +243,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   it("explains the missing phone-call owner before provisioning a runtime", async () => {
     await expect(
       createVoiceCallRuntime({
+        scheduler: createTestPluginServiceScheduler(),
         config: createBaseConfig(),
         coreConfig: {
           agents: { ownership: "explicit", entries: { operator: {}, support: {} } },
@@ -291,11 +266,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentId: "OPERATOR",
     },
     {
-      name: "legacy default owner",
-      coreConfig: { agents: { list: [{ id: "support" }, { id: "operator", default: true }] } },
+      name: "explicit owner after another agent",
+      coreConfig: { agents: { entries: { support: {}, operator: {} } } },
+      agentId: "operator",
     },
   ])("preserves the $name for phone-call startup", async ({ coreConfig, agentId }) => {
     const runtime = await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config: { ...createBaseConfig(), agentId },
       coreConfig,
       agentRuntime: {} as never,
@@ -318,6 +295,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
     await expect(
       createVoiceCallRuntime({
+        scheduler: createTestPluginServiceScheduler(),
         config,
         coreConfig: {},
         agentRuntime: {} as never,
@@ -357,6 +335,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     const runtime = await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config: createBaseConfig(),
       coreConfig: {} as OpenClawConfig,
       agentRuntime: {} as never,
@@ -392,6 +371,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.webhookStop.mockRejectedValue(transportFailure);
     mocks.managerStop.mockReturnValue(drain.promise);
     const runtime = await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config: createBaseConfig(),
       coreConfig: {},
       agentRuntime: {} as never,
@@ -418,19 +398,21 @@ describe("createVoiceCallRuntime lifecycle", () => {
     } as OpenClawConfig;
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config: createBaseConfig(),
       coreConfig,
       fullConfig,
       agentRuntime: {} as never,
     });
 
-    expect(mocks.webhookCtorArgs[0]?.[3]).toBe(coreConfig);
-    expect(mocks.webhookCtorArgs[0]?.[4]).toBe(fullConfig);
+    expect(mocks.webhookCtorArgs[0]?.[4]).toBe(coreConfig);
+    expect(mocks.webhookCtorArgs[0]?.[5]).toBe(fullConfig);
   });
 
   it("builds realtime instructions for the agent frozen on each call", async () => {
     const config = createBaseConfig();
     config.realtime.enabled = true;
+    config.agentId = "operator";
     config.realtime.agentContext = {
       enabled: true,
       maxChars: 6000,
@@ -440,13 +422,14 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     const fullConfig: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "operator", default: true, identity: { name: "Main Voice" } },
-          { id: "support", identity: { name: "Support Voice" } },
-        ],
+        entries: {
+          operator: { identity: { name: "Main Voice" } },
+          support: { identity: { name: "Support Voice" } },
+        },
       },
     };
     const runtime = await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config,
       coreConfig: {},
       fullConfig,
@@ -462,22 +445,32 @@ describe("createVoiceCallRuntime lifecycle", () => {
       throw new Error("expected per-call realtime registration resolver");
     }
     expect(runtime.config.agentId).toBe("operator");
-    const defaultRegistration = resolveCallRegistration({
-      callId: "call-default",
-      direction: "outbound",
+    const outboundContact = {
+      direction: "outbound" as const,
       from: "+15550001111",
       to: "+15550002222",
+    };
+    expect(() =>
+      resolveCallRegistration({
+        ...outboundContact,
+        callId: "unowned",
+        sessionKey: "agent:operator:voice:unowned",
+      }),
+    ).toThrow("no recorded agent owner");
+    expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
+    const defaultRegistration = resolveCallRegistration({
+      ...outboundContact,
+      callId: "call-default",
+      agentId: "operator",
     });
     expect(defaultRegistration.agentId).toBe("operator");
     expect(defaultRegistration.instructions).toContain("- Name: Main Voice");
     expect(defaultRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
 
     const supportRegistration = resolveCallRegistration({
+      ...outboundContact,
       callId: "call-support",
       agentId: "support",
-      direction: "outbound",
-      from: "+15550001111",
-      to: "+15550002222",
     });
     expect(supportRegistration.agentId).toBe("support");
     expect(supportRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
@@ -485,11 +478,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(supportRegistration.instructions).not.toContain("Main Voice");
 
     const unknownRegistration = resolveCallRegistration({
+      ...outboundContact,
       callId: "call-unknown",
       agentId: "unknown",
-      direction: "outbound",
-      from: "+15550001111",
-      to: "+15550002222",
     });
     expect(unknownRegistration.instructions).not.toContain("Configured identity:");
     expect(unknownRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
@@ -500,6 +491,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     async (provider) => {
       await expect(
         createVoiceCallRuntime({
+          scheduler: createTestPluginServiceScheduler(),
           config: createExternalProviderConfig({ provider }),
           coreConfig: {} as OpenClawConfig,
           agentRuntime: {} as never,
@@ -512,6 +504,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   it("fails closed when Twilio publicUrl points at a local-only webhook", async () => {
     await expect(
       createVoiceCallRuntime({
+        scheduler: createTestPluginServiceScheduler(),
         config: createExternalProviderConfig({
           provider: "twilio",
           publicUrl: "http://127.0.0.1:3334/voice/webhook",
@@ -525,6 +518,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
   it("accepts an explicit public URL for external voice providers", async () => {
     const runtime = await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config: createExternalProviderConfig({
         provider: "twilio",
         publicUrl: "https://voice.example.com/voice/webhook",
@@ -547,6 +541,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
 
     const runtime = await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config: createExternalProviderConfig({
         provider: "twilio",
         publicUrl: "https://voice.example.com/voice/webhook",
@@ -609,6 +604,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config,
       coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
@@ -680,6 +676,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     ];
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config,
       coreConfig: {} as OpenClawConfig,
       agentRuntime: {} as never,
@@ -725,6 +722,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-aborted",
+      agentId: "main",
       direction: "inbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -732,6 +730,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config,
       coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
@@ -773,6 +772,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
       sessionKey: "voice:call:call-1",
+      agentId: "main",
       direction: "inbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -780,6 +780,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config,
       coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
@@ -824,6 +825,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-locked",
+      agentId: "main",
       direction: "inbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -831,6 +833,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config,
       coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
@@ -871,6 +874,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
+      agentId: "main",
       direction: "inbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -884,6 +888,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config,
       coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
@@ -945,6 +950,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       );
       const call = {
         callId: "call-1",
+        agentId: "main",
         state: "active",
         direction: "inbound",
         from: "+15550001234",
@@ -953,6 +959,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       };
       mocks.managerGetCall.mockReturnValue(call);
       await createVoiceCallRuntime({
+        scheduler: createTestPluginServiceScheduler(),
         config,
         coreConfig: {} as OpenClawConfig,
         agentRuntime: { session: createMockSessionRuntime({}) } as never,
@@ -1019,6 +1026,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
+      agentId: "main",
       direction: "outbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -1026,6 +1034,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config,
       coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,

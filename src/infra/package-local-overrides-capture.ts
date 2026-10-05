@@ -23,7 +23,6 @@ import {
   type LocalOverridePackageRoot,
   type LocalPackageOverrideChange,
   type LocalPackageOverridesPlan,
-  type LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
 
 async function copyOverridePayload(params: {
@@ -92,7 +91,7 @@ async function collectReferencedAddedOverridePaths(params: {
   const scannedPathsByRoot = new Set<string>();
   const modifiedChangesByPath = new Map(
     params.changes
-      .filter((change) => change.kind === "modified" && change.savedPath)
+      .filter((change) => change.kind === "modified")
       .map((change) => [change.path, change]),
   );
   const queue: Array<
@@ -100,7 +99,7 @@ async function collectReferencedAddedOverridePaths(params: {
     | { path: string; rootPath: string; packageRelativePath: string }
   > = [
     ...params.changes.flatMap((change) =>
-      change.kind === "modified" && change.savedPath
+      change.kind === "modified"
         ? [{ path: change.path, rootPath: change.path, sourcePath: change.savedPath }]
         : [],
     ),
@@ -152,7 +151,7 @@ async function collectReferencedAddedOverridePaths(params: {
       const referencedScanKey = `${current.rootPath}\0${referencedPath}`;
       if (!scannedPathsByRoot.has(referencedScanKey)) {
         queue.push(
-          referencedModifiedChange?.savedPath
+          referencedModifiedChange
             ? {
                 path: referencedPath,
                 rootPath: current.rootPath,
@@ -231,7 +230,6 @@ export async function captureLocalPackageOverrides(params: {
         JSON.stringify({ packageRoot, changes }, null, 2) + "\n",
       );
       return {
-        packageRoot,
         recoveryDir: snapshotDir,
         changes,
         result: {
@@ -329,14 +327,10 @@ export async function captureLocalPackageOverrides(params: {
     }
     const finalRecoveryDir = await ensureRecoveryDir();
 
-    const counts = countChanges(changes);
-    const result: LocalPackageOverridesResult = {
-      status: "none",
-      ...counts,
-      applied: 0,
-      conflicts: [],
+    const result = {
+      ...emptyResult("none"),
+      ...countChanges(changes),
       recoveryDir: finalRecoveryDir,
-      warnings: [],
     };
     await fs.writeFile(
       path.join(finalRecoveryDir, "manifest.json"),
@@ -348,7 +342,6 @@ export async function captureLocalPackageOverrides(params: {
       "utf8",
     );
     return {
-      packageRoot: params.recordedPackageRoot ?? params.packageRoot,
       recoveryDir: finalRecoveryDir,
       changes,
       result,

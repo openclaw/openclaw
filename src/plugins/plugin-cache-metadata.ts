@@ -57,7 +57,6 @@ export type PluginCacheMetadata = {
         read: () => BundledProviderPolicySurface | null;
       }
     >;
-    bundledDiscoveryMode?: { value: "compat" | "allowlist" | undefined };
     current: CurrentPluginMetadataCacheState;
     snapshots: Map<string, PluginMetadataSnapshot>;
     discovery: Map<string, PluginDiscoveryResult>;

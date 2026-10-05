@@ -60,10 +60,14 @@ vi.mock("./shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: mocks.acquire,
   releaseLeasedSharedCodexAppServerClient: mocks.release,
 }));
-vi.mock("./thread-lifecycle.js", () => ({ startOrResumeThread: mocks.start }));
+// mock-isolation: Lifecycle imports evaluate binding fingerprints outside this fixture's stubbed binding contract.
+vi.mock("./thread-lifecycle-run.js", () => ({ startOrResumeThread: mocks.start }));
 vi.mock("./session-binding.js", () => ({
   sessionBindingIdentity: () => ({ sessionId: "session" }),
-  resolveCodexSessionBinding: async () => ({ binding: undefined, assertCurrent: mocks.assert }),
+  resolveCodexSessionBinding: async () => ({
+    binding: undefined,
+    authority: { assertLegacyCurrent: mocks.assert },
+  }),
 }));
 vi.mock("./thread-ownership.js", () => ({
   isSameCodexAppServerThreadOwner: () => true,

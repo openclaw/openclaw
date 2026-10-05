@@ -4,7 +4,14 @@ import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { AgentHarnessSessionCleanupError } from "../agents/harness/errors.js";
+import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
+import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import {
   loadSessionEntry,
@@ -77,6 +84,56 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
+
+test.each(["sessions.reset", "sessions.delete"] as const)(
+  "%s preserves the session generation until mandatory native cleanup succeeds",
+  async (method) => {
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = "agent:main:dashboard:mandatory-cleanup";
+    const sessionId = "mandatory-cleanup-session";
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry(sessionId, { lifecycleRevision: "before-cleanup" }),
+      },
+    });
+    const before = loadSessionEntry({ sessionKey, storePath });
+    const registeredHarnesses = listRegisteredAgentHarnesses();
+    const cleanupFailure = new AgentHarnessSessionCleanupError("Native session is still active");
+    let cleanupBlocked = true;
+    registerAgentHarness({
+      id: "mandatory-cleanup-fixture",
+      label: "Mandatory cleanup fixture",
+      supports: () => ({ supported: false }),
+      runAttempt: async () => {
+        throw new Error("not used");
+      },
+      reset: async (input) => {
+        expect(input.sessionId).toBe(sessionId);
+        if (cleanupBlocked) {
+          throw cleanupFailure;
+        }
+      },
+    });
+    try {
+      await expect(directSessionReq(method, { key: sessionKey })).rejects.toThrow(cleanupFailure);
+      expect(loadSessionEntry({ sessionKey, storePath })).toEqual(before);
+
+      cleanupBlocked = false;
+      const retried = await directSessionReq(method, { key: sessionKey });
+      expect(retried.ok, JSON.stringify(retried.error)).toBe(true);
+      const after = loadSessionEntry({ sessionKey, storePath });
+      if (method === "sessions.delete") {
+        expect(retried.payload).toMatchObject({ deleted: true });
+        expect(after).toBeUndefined();
+      } else {
+        expect(after?.lifecycleRevision).toEqual(expect.any(String));
+        expect(after?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
+      }
+    } finally {
+      restoreRegisteredAgentHarnesses(registeredHarnesses);
+    }
+  },
+);
 
 test("repository ownership survives reset and archive, then permanent deletion releases it", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -611,16 +668,26 @@ test("a delayed deletion event cannot erase Side chat for a newer generation", a
   expect(await readState(service, sessionKey)).toEqual(newState);
 });
 
-test("sessions.delete cancels a prepared Side chat ask before its late answer", async () => {
+test("sessions.delete cancels a prepared Side chat ask before its late answer", async ({
+  signal,
+}) => {
   await createSessionStoreDir();
   const sessionKey = "agent:main:companion-active-delete";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("active-generation") } });
   const pending = createDeferred<string>();
-  const { service, run } = await createCompanion(() => pending.promise);
+  const started = createDeferred();
+  const { service, run } = await createCompanion(() => {
+    started.resolve();
+    return pending.promise;
+  });
   const active = ask(service, sessionKey, "Can this survive deletion?");
   const failure = active.catch((error: unknown) => error);
   try {
-    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    await withinTest(
+      awaitGateBeforeSettlement(started.promise, active, "Side chat settled before model start"),
+      signal,
+    );
+    expect(run).toHaveBeenCalledOnce();
     const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
     expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
     expect(run.mock.calls[0]?.[0].signal.aborted).toBe(true);

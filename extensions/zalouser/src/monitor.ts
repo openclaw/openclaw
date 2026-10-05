@@ -2,7 +2,7 @@ import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import {
   createAcceptedChannelDeliveryResult,
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   createChannelPartialDeliveryError,
   implicitMentionKindWhen,
   isChannelPartialDeliveryError,
@@ -12,7 +12,7 @@ import {
 import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { resolveChannelGroupsConfigPath } from "openclaw/plugin-sdk/channel-policy";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -210,7 +210,7 @@ async function processMessage(
         isGroup,
         message: message.eventMessage,
       };
-      await sendZaloDeliveredEvent({ ...ack, isSeen: true });
+      await sendZaloDeliveredEvent(ack);
       await sendZaloSeenEvent(ack);
     } catch (err) {
       logVerbose(core, runtime, `zalouser: delivery/seen ack failed for ${chatId}: ${String(err)}`);
@@ -241,7 +241,6 @@ async function processMessage(
         groupId: chatId,
         groupName,
         includeGroupIdAlias: true,
-        includeWildcard: true,
         allowNameMatching,
       }),
     );
@@ -484,7 +483,7 @@ async function processMessage(
   }
 
   const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
-  const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg: config, route });
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: config, route });
   const body = buildEnvelope({
     channel: "Zalo Personal",
     from: fromLabel,
@@ -625,7 +624,6 @@ async function processMessage(
           core,
           config,
           accountId: account.accountId,
-          tableMode: "off",
         });
       },
       onDelivered: (_payload, _info, result) => {
@@ -666,14 +664,10 @@ async function deliverZalouserReply(params: {
   core: ZalouserCoreRuntime;
   config: OpenClawConfig;
   accountId?: string;
-  tableMode?: MarkdownTableMode;
 }): Promise<{ visibleReplySent: boolean }> {
   const { payload, profile, chatId, isGroup, runtime, core, config, accountId } = params;
-  const tableMode = params.tableMode ?? "code";
   let visibleReplySent = false;
-  const reply = resolveSendableOutboundReplyParts(payload, {
-    text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
-  });
+  const reply = resolveSendableOutboundReplyParts(payload);
   const chunkMode = core.channel.text.resolveChunkMode(config, "zalouser", accountId);
   const textChunkLimit = core.channel.text.resolveTextChunkLimit(config, "zalouser", accountId, {
     fallbackLimit: ZALOUSER_TEXT_LIMIT,
@@ -777,27 +771,17 @@ export async function monitorZalouserProvider(
       const nextGroups = { ...groupsConfig };
       for (const entry of groupKeys) {
         const cleaned = normalizeZalouserAllowEntry(entry);
-        if (/^\d+$/.test(cleaned)) {
-          if (!nextGroups[cleaned]) {
-            nextGroups[cleaned] = expectDefined(
-              groupsConfig[entry],
-              "enumerated Zalouser group config",
-            );
-          }
-          mapping.push(`${entry}→${cleaned}`);
+        const id = /^\d+$/.test(cleaned)
+          ? cleaned
+          : byName.get(normalizeLowercaseStringOrEmpty(cleaned))?.[0]?.groupId;
+        if (!id) {
+          unresolved.push(entry);
           continue;
         }
-        const matches = byName.get(normalizeLowercaseStringOrEmpty(cleaned)) ?? [];
-        const match = matches[0];
-        const id = match?.groupId;
-        if (id) {
-          if (!nextGroups[id]) {
-            nextGroups[id] = expectDefined(groupsConfig[entry], "enumerated Zalouser group config");
-          }
-          mapping.push(`${entry}→${id}`);
-        } else {
-          unresolved.push(entry);
+        if (!nextGroups[id]) {
+          nextGroups[id] = expectDefined(groupsConfig[entry], "enumerated Zalouser group config");
         }
+        mapping.push(`${entry}→${id}`);
       }
       account = {
         ...account,

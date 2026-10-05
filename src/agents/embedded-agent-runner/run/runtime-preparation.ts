@@ -17,7 +17,6 @@ import {
   canRunPreparedAgentRuntimeAuthAttempt,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../../runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../../thinking-runtime.js";
 import { log } from "../logger.js";
 import { formatEmbeddedRunStageSummary } from "./attempt-stage-timing.js";
@@ -139,23 +138,6 @@ export async function prepareEmbeddedRunRuntime(input: {
     outerContextTokenMeta =
       contextTokenBudget === undefined ? {} : { contextTokens: contextTokenBudget };
   };
-  const selectHarnessForModel = (
-    candidate: typeof model,
-    plan?: AgentRuntimeAuthPlan,
-    preparedAuthAttempt?: PreparedAgentRuntimeAuthAttempt,
-  ) =>
-    nativeSessionRuntime?.auth === "native"
-      ? nativeSessionRuntime.harness
-      : selectEmbeddedRunHarness({
-          runParams: params,
-          provider,
-          modelId,
-          model: candidate,
-          plan,
-          preparedAuthAttempt,
-          requestStreamTransportOverrides,
-          pinnedHarnessId,
-        });
   const selectHarnessForPreparedAttempts = (
     candidate: typeof model,
     attempts: readonly PreparedAgentRuntimeAuthAttempt[],
@@ -174,7 +156,17 @@ export async function prepareEmbeddedRunRuntime(input: {
   input.markStartupStage("model-resolution");
   input.notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
-  agentHarness = selectHarnessForModel(models.effective);
+  agentHarness =
+    nativeSessionRuntime?.auth === "native"
+      ? nativeSessionRuntime.harness
+      : selectEmbeddedRunHarness({
+          runParams: params,
+          provider,
+          modelId,
+          model: models.effective,
+          requestStreamTransportOverrides,
+          pinnedHarnessId,
+        });
   pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
   const authStages = log.isEnabled("trace") ? createStageTimingTracker(Date.now) : undefined;
   const preparedAuthPlan = await prepareEmbeddedRunAuthPlan({
@@ -512,7 +504,9 @@ export async function prepareEmbeddedRunRuntime(input: {
   if (sourceReplyDeliveryRuntime?.origin === "runtime_default") {
     // Route/auth/transport preparation owns the final harness selection. Publishing
     // an earlier guess can either suppress a valid final or leak a private one.
-    const visibleReplies = agentHarness.deliveryDefaults?.visibleReplies;
+    const visibleReplies =
+      agentHarness.deliveryDefaults?.visibleReplies ??
+      agentHarness.deliveryDefaults?.sourceVisibleReplies;
     const mode = visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
     sourceReplyDeliveryRuntime.applyPreparedMode(params, mode);
     params.forceMessageTool = mode === "message_tool_only";

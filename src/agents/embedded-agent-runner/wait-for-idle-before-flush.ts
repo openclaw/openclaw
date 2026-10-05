@@ -2,7 +2,7 @@
  * Waits for tool-result streams to become idle before flushing output.
  */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { raceWithTimeout } from "@openclaw/retry";
 import type { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 
 type IdleAwareAgent = {
@@ -27,24 +27,15 @@ async function waitForAgentIdleBestEffort(
   }
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS);
 
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
-    await racePromiseWithAbortSignal(
-      Promise.race([
-        waitForIdle.call(agent).then(() => undefined),
-        new Promise<void>((resolve) => {
-          timeoutHandle = setTimeout(resolve, resolvedTimeoutMs);
-          timeoutHandle.unref?.();
-        }),
-      ]),
-      abortSignal,
+    await raceWithTimeout(
+      waitForIdle.call(agent).then(() => undefined),
+      resolvedTimeoutMs,
+      () => undefined,
+      { ref: false, signal: abortSignal },
     );
   } catch {
     // Best-effort during cleanup.
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
   }
 }
 

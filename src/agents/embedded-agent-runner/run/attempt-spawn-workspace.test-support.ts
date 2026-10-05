@@ -1,3 +1,4 @@
+import "./attempt-spawn-workspace.session-mocks.test-support.js";
 import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -34,6 +35,7 @@ import {
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
+import { runPreparedTestPrompt } from "./attempt-prompt-admission.test-support.js";
 import { getSkillMocks, resetSkillMocks } from "./attempt-skills-mock.test-support.js";
 import {
   readMockSessionCacheTtlTimestamp,
@@ -68,11 +70,7 @@ type CapturedTrajectoryEvent = {
   workspaceDir?: string;
 };
 
-function normalizeMockProviderId(providerId?: string): string {
-  // Provider ids in mocked model routing follow the same lowercase normalization
-  // as production helpers.
-  return normalizeLowercaseStringOrEmpty(providerId);
-}
+const normalizeMockProviderId = normalizeLowercaseStringOrEmpty;
 
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
@@ -84,7 +82,6 @@ type AttemptSpawnWorkspaceHoisted = {
   resolveSandboxContextMock: UnknownMock;
   ensureGlobalUndiciEnvProxyDispatcherMock: UnknownMock;
   ensureGlobalUndiciDispatcherStreamTimeoutsMock: UnknownMock;
-  ensureGlobalUndiciStreamTimeoutsMock: UnknownMock;
   createOpenClawCodingToolsMock: Mock<CreateCodingToolsFn>;
   subscribeEmbeddedAgentSessionMock: Mock<SubscribeEmbeddedAgentSessionFn>;
   installToolResultContextGuardMock: UnknownMock;
@@ -128,7 +125,6 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
   const resolveSandboxContextMock = vi.fn();
   const ensureGlobalUndiciEnvProxyDispatcherMock = vi.fn();
   const ensureGlobalUndiciDispatcherStreamTimeoutsMock = vi.fn();
-  const ensureGlobalUndiciStreamTimeoutsMock = vi.fn();
   const createOpenClawCodingToolsMock = vi.fn<CreateCodingToolsFn>(() => []);
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const installContextEngineLoopHookMock = vi.fn(() => () => {});
@@ -175,6 +171,7 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
   const systemPromptTexts: string[] = [];
   const embeddedSystemPromptInputs: unknown[] = [];
   const trajectoryEvents: CapturedTrajectoryEvent[] = [];
+  const getBranch = vi.fn(() => []);
   const sessionManager = {
     getSessionTarget: vi.fn(() => undefined),
     getSessionId: vi.fn(() => "embedded-session"),
@@ -184,7 +181,8 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
     getEntries: vi.fn(() => []),
-    getBranch: vi.fn(() => []),
+    getBranch,
+    getToolResultProjectionEntries: getBranch,
     getBoundaryCount: vi.fn(() => 0),
     branchAsync: vi.fn(async () => undefined),
     resetLeafAsync: vi.fn(async () => undefined),
@@ -212,7 +210,6 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     resolveSandboxContextMock,
     ensureGlobalUndiciEnvProxyDispatcherMock,
     ensureGlobalUndiciDispatcherStreamTimeoutsMock,
-    ensureGlobalUndiciStreamTimeoutsMock,
     createOpenClawCodingToolsMock,
     subscribeEmbeddedAgentSessionMock,
     installToolResultContextGuardMock,
@@ -308,10 +305,10 @@ vi.mock("../../../trajectory/runtime.js", async () => {
   );
   return {
     ...actual,
-    createTrajectoryRuntimeRecorder: (
+    createTrajectoryRuntimeRecorder: async (
       params: Parameters<typeof actual.createTrajectoryRuntimeRecorder>[0],
     ) => {
-      const recorder = actual.createTrajectoryRuntimeRecorder(params);
+      const recorder = await actual.createTrajectoryRuntimeRecorder(params);
       return {
         enabled: true as const,
         describeFlushState: () => recorder?.describeFlushState(),
@@ -348,7 +345,7 @@ vi.mock("../../sessions/index.js", () => {
 
   return {
     AuthStorage,
-    createAgentSession: (options: CreateAgentSessionOptions = {}) =>
+    createAgentSession: (options: CreateAgentSessionOptions) =>
       hoisted.createAgentSessionMock(options),
     estimateTokens,
     generateSummary: async () => "",
@@ -360,26 +357,11 @@ vi.mock("../../sessions/index.js", () => {
   };
 });
 
+// mock-isolation: Keep session storage and provider runtime outside the attempt fixture.
 vi.mock("../../sessions/sdk.js", () => ({
-  createAgentSessionForEmbeddedRunner: (options: CreateAgentSessionOptions) =>
+  createAgentSession: (options: CreateAgentSessionOptions) =>
     hoisted.createAgentSessionMock(options),
 }));
-
-vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../config/sessions/session-entry-read-runtime.js")>();
-  const readSessionEntryInWorker: typeof actual.readSessionEntryInWorker = async (
-    _scope,
-    assertCurrent,
-  ) => {
-    // These attempt fixtures have no quota-recovery entry; retain the async admission boundary.
-    assertCurrent();
-    await Promise.resolve();
-    assertCurrent();
-    return undefined;
-  };
-  return { ...actual, readSessionEntryInWorker };
-});
 
 vi.mock("../../subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
@@ -417,14 +399,13 @@ vi.mock("../../../infra/machine-name.js", () => ({
   getMachineDisplayName: async () => "test-host",
 }));
 
+// mock-isolation: attempt orchestration observes setup without replacing the process dispatcher.
 vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS: 120_000,
   ensureGlobalUndiciEnvProxyDispatcher: (...args: unknown[]) =>
     hoisted.ensureGlobalUndiciEnvProxyDispatcherMock(...args),
   ensureGlobalUndiciDispatcherStreamTimeouts: (...args: unknown[]) =>
     hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock(...args),
-  ensureGlobalUndiciStreamTimeouts: (...args: unknown[]) =>
-    hoisted.ensureGlobalUndiciStreamTimeoutsMock(...args),
 }));
 
 vi.mock("../../../tts/tts-settings.js", () => ({
@@ -556,15 +537,11 @@ vi.mock("../../system-prompt-report.js", () => ({
   buildSystemPromptReport: () => undefined,
 }));
 
-vi.mock("../system-prompt.js", async () => {
-  const actual = await vi.importActual<typeof import("../system-prompt.js")>("../system-prompt.js");
+vi.mock("../../system-prompt-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../system-prompt-config.js")>();
   return {
     ...actual,
-    applySystemPromptToSession: (session: MutableSession, systemPrompt: string) => {
-      hoisted.systemPromptTexts.push(systemPrompt);
-      session.setBaseSystemPrompt(systemPrompt);
-    },
-    buildEmbeddedSystemPrompt: (params: unknown) => {
+    buildConfiguredAgentSystemPrompt: (params: unknown) => {
       hoisted.embeddedSystemPromptInputs.push(params);
       return "system prompt";
     },
@@ -612,9 +589,9 @@ vi.mock("../../cache-trace.js", () => ({
   createCacheTrace: () => undefined,
 }));
 
+// mock-isolation: Exercise attempt workspace routing without constructing unrelated tools.
 vi.mock("../../agent-tools.js", () => ({
-  createOpenClawCodingTools: hoisted.createOpenClawCodingToolsMock,
-  createOpenClawCodingToolsInternal: hoisted.createOpenClawCodingToolsMock,
+  createOpenClawCodingToolsInternalAsync: hoisted.createOpenClawCodingToolsMock,
   resolveToolLoopDetectionConfig: () => undefined,
 }));
 
@@ -681,13 +658,6 @@ vi.mock("../../tool-fs-policy.js", () => ({
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>
     ({ "read-only": "deny", guarded: "ask", workspace: "auto", full: "full" })[policy.mode],
   resolveEffectiveToolFsWorkspaceOnly: () => false,
-}));
-
-vi.mock("../../transcript-policy.js", () => ({
-  resolveTranscriptPolicy: () => ({
-    allowSyntheticToolResults: false,
-    repairToolUseResultPairing: true,
-  }),
 }));
 
 vi.mock("../cache-ttl.js", () => ({
@@ -847,7 +817,7 @@ type MutableSession = {
   [agentSessionSetContextReplacementHook]: (
     callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
   ) => void;
-  [agentSessionSetPromptPreparation]: (prepare: (() => Promise<void>) | undefined) => void;
+  [agentSessionSetPromptPreparation]: AgentSession[typeof agentSessionSetPromptPreparation];
 };
 
 export type EmbeddedAttemptSession = Omit<MutableSession, "agent"> & {
@@ -910,7 +880,6 @@ export function resetEmbeddedAttemptHarness(
   hoisted.resolveSandboxContextMock.mockReset();
   hoisted.ensureGlobalUndiciEnvProxyDispatcherMock.mockReset();
   hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock.mockReset();
-  hoisted.ensureGlobalUndiciStreamTimeoutsMock.mockReset();
   hoisted.createOpenClawCodingToolsMock.mockReset().mockImplementation((...args: unknown[]) => {
     const options = args[0] as
       | {
@@ -991,7 +960,7 @@ export function createDefaultEmbeddedSession(params?: {
   ) => Promise<void>;
 }): MutableSession {
   let activeToolNames: string[] = [];
-  let promptPreparation: (() => Promise<void>) | undefined;
+  let promptPreparation: Parameters<AgentSession[typeof agentSessionSetPromptPreparation]>[0];
   let promptPreparationInstalled = false;
   let pendingPrompt:
     | {
@@ -1050,6 +1019,7 @@ export function createDefaultEmbeddedSession(params?: {
       activeToolNames = [...toolNames];
     },
     setBaseSystemPrompt: (systemPrompt) => {
+      hoisted.systemPromptTexts.push(systemPrompt);
       session.agent.state.systemPrompt = systemPrompt;
     },
     prompt: async (prompt, options) => {
@@ -1092,16 +1062,11 @@ export function createDefaultEmbeddedSession(params?: {
       // Cases can replace prompt with a real Agent bridge before runner setup.
       // Wrap the composed entrypoint so every fake model-start honors the host hook.
       const prompt = session.prompt;
-      session.prompt = async (...args) => {
-        const currentPreparation = promptPreparation;
-        if (currentPreparation) {
-          await currentPreparation();
-          if (currentPreparation !== promptPreparation) {
-            throw new Error("Session prompt preparation is stale after replacement or disposal.");
-          }
-        }
-        return prompt(...args);
-      };
+      session.prompt = (...args) =>
+        runPreparedTestPrompt(
+          () => promptPreparation,
+          () => prompt(...args),
+        );
     },
   };
 

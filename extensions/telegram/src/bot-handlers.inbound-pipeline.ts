@@ -70,7 +70,6 @@ export function createTelegramInboundPipeline({
     isGroup: boolean;
     isForum: boolean;
     senderId: string;
-    senderUsername: string;
     requireConfiguredGroup: boolean;
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
@@ -121,7 +120,6 @@ export function createTelegramInboundPipeline({
       isGroup,
       isForum,
       senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
-      senderUsername: normalizedMsg.from?.username ?? "",
       requireConfiguredGroup: params.requireConfiguredGroup,
       dmAccess: "silent",
     });
@@ -154,7 +152,6 @@ export function createTelegramInboundPipeline({
         isGroup: event.isGroup,
         isForum: event.isForum,
         senderId: event.senderId,
-        senderUsername: event.senderUsername,
         requireConfiguredGroup: event.requireConfiguredGroup,
         dmAccess: "challenge",
       });
@@ -278,7 +275,6 @@ export function createTelegramInboundPipeline({
       isGroup,
       isForum,
       senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
-      senderUsername: normalizedMsg.from?.username ?? "",
       requireConfiguredGroup: false,
       sendOversizeWarning: true,
       oversizeLogMessage: "media exceeds size limit",
@@ -329,7 +325,6 @@ export function createTelegramInboundPipeline({
           : post.from?.id != null
             ? String(post.from.id)
             : "",
-      senderUsername: post.sender_chat?.username ?? post.from?.username ?? "",
       requireConfiguredGroup: true,
       sendOversizeWarning: false,
       oversizeLogMessage: "channel post media exceeds size limit",

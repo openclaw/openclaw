@@ -18,7 +18,7 @@ type BindingRecordInput = Parameters<typeof resolveConfiguredAcpBindingRecord>[0
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
   agents: {
-    list: [{ id: "codex" }, { id: "claude" }],
+    entries: { codex: {}, claude: {} },
   },
 } satisfies OpenClawConfig;
 
@@ -221,7 +221,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
       ],
       {
         agents: {
-          list: [{ id: "codex", model: { primary: "anthropic/claude-sonnet-4-6" } }],
+          entries: { codex: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
         },
       },
     );
@@ -360,10 +360,9 @@ describe("resolveConfiguredAcpBindingRecord", () => {
       ],
       {
         agents: {
-          list: [
-            { id: "main" },
-            {
-              id: "coding",
+          entries: {
+            main: {},
+            coding: {
               runtime: {
                 type: "acp",
                 acp: {
@@ -374,7 +373,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
                 },
               },
             },
-          ],
+          },
         },
       },
     );
@@ -397,7 +396,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
       ],
       {
         agents: {
-          list: [{ id: "codex", workspace: "/workspace/openclaw" }, { id: "claude" }],
+          entries: { codex: { workspace: "/workspace/openclaw" }, claude: {} },
         },
       },
     );

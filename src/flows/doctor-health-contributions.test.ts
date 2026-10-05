@@ -3,13 +3,13 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDoctorConfigSnapshot } from "../commands/doctor-config-snapshot.test-helpers.js";
+import { migrateLegacySecretInputs } from "../commands/doctor/shared/legacy-secret-inputs.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { fetchNpmPackageTargetStatus } from "../infra/update-check-package-target.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
-import { migrateLegacySecretRefEnvMarkers } from "../secrets/legacy-secretref-env-marker.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
@@ -79,7 +79,6 @@ const mocks = vi.hoisted(() => ({
       profileIds: readonly string[];
     }>,
   })),
-  maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
   removeAuthProfilesAcrossOwnerStores: vi.fn(async () => true),
   collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
@@ -377,10 +376,6 @@ vi.mock("../commands/doctor-plugin-manifests.js", () => ({
   legacyPluginManifestContractMigrationToHealthFinding:
     mocks.legacyPluginManifestContractMigrationToHealthFinding,
   maybeRepairLegacyPluginManifestContracts: mocks.maybeRepairLegacyPluginManifestContracts,
-}));
-
-vi.mock("../commands/doctor-auth-oauth-sidecar.js", () => ({
-  maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
 }));
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
@@ -719,7 +714,6 @@ describe("doctor health contributions", () => {
     });
     mocks.maybeRepairGatewayDaemon.mockResolvedValue(undefined);
     mocks.maybeRepairLegacyPluginManifestContracts.mockResolvedValue(undefined);
-    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue(undefined);
     mocks.noteAuthProfileHealth.mockResolvedValue(undefined);
     mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
     mocks.collectMemorySearchHealthFindings.mockResolvedValue([]);
@@ -749,6 +743,7 @@ describe("doctor health contributions", () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
+      sourceConfig: {},
       config: {},
       issues: [],
     });
@@ -1890,7 +1885,7 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("shared Gateway process environment"),
+      expect.stringContaining("gateway.controlUi.github.host matching gateway.github.host"),
       "GitHub projects",
     );
 
@@ -2127,7 +2122,7 @@ describe("doctor health contributions", () => {
     },
   );
 
-  it("runs the receipted auth migration after repairing OAuth sidecars", async () => {
+  it("runs the receipted auth migration before model diagnostics", async () => {
     const contribution = requireDoctorContribution("doctor:auth-profiles");
     const ctx = createDoctorContext({
       cfg: {},
@@ -2139,10 +2134,6 @@ describe("doctor health contributions", () => {
     await requireDoctorContribution("doctor:auth-profile-migration").run(ctx);
     await contribution.run(ctx);
 
-    expect(mocks.maybeRepairLegacyOAuthSidecarProfiles).toHaveBeenCalledWith({
-      cfg: ctx.cfg,
-      prompter: ctx.prompter,
-    });
     expect(mocks.maybeMigrateAuthProfileJsonStoresToSqlite).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       env: process.env,
@@ -2150,9 +2141,6 @@ describe("doctor health contributions", () => {
       openAICodexAuthProfileIdMap:
         mocks.collectOpenAICodexAuthProfileStoreIdMap.mock.results[0]?.value,
     });
-    expect(mocks.maybeRepairLegacyOAuthSidecarProfiles.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mock.invocationCallOrder[0]!,
-    );
     expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
@@ -3522,7 +3510,7 @@ describe("doctor health contributions", () => {
         },
       },
     } as OpenClawConfig;
-    const migrated = migrateLegacySecretRefEnvMarkers(legacyConfig);
+    const migrated = migrateLegacySecretInputs(legacyConfig);
     expect(migrated.changes).toEqual([
       `Moved models.providers.clawrouter.apiKey ${legacyMarker} marker → structured env SecretRef.`,
     ]);
@@ -3551,7 +3539,7 @@ describe("doctor health contributions", () => {
     ctx.configResult.shouldWriteConfig = false;
     await writeConfigContribution.run(ctx);
 
-    expect(migrateLegacySecretRefEnvMarkers(ctx.cfg).changes).toEqual([]);
+    expect(migrateLegacySecretInputs(ctx.cfg).changes).toEqual([]);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 

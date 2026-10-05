@@ -41,7 +41,7 @@ function createLifecycleConfig(): ClawdbotConfig {
       oc_broadcast_group: ["susan", "main"],
     },
     agents: {
-      list: [{ id: "main" }, { id: "susan" }],
+      entries: { main: {}, susan: {} },
     },
     channels: {
       feishu: {

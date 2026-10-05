@@ -69,7 +69,7 @@ function assertValidGatewayStartupConfigSnapshot(
       : "Unknown validation issue.";
   if (isConfigReadFailure(snapshot)) {
     throw createConfigReadError(
-      snapshot.path,
+      snapshot,
       `${issues}\nResolve the read error shown above, then retry.`,
     );
   }
@@ -82,18 +82,6 @@ function assertValidGatewayStartupConfigSnapshot(
   throw createInvalidConfigError(snapshot.path, `${issues}${recoveryHint}`, {
     recovery: isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot) ? "manual" : "doctor",
   });
-}
-
-function withRuntimeConfig(
-  snapshot: ConfigFileSnapshot,
-  runtimeConfig: OpenClawConfig,
-): ConfigFileSnapshot {
-  copyConfigResolutionFacts(snapshot.sourceConfig, runtimeConfig);
-  return {
-    ...snapshot,
-    runtimeConfig,
-    config: runtimeConfig,
-  };
 }
 
 /** Load and validate the config snapshot, applying runtime-only plugin auto-enable changes. */
@@ -152,8 +140,9 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     runtimeConfig: configSnapshot.runtimeConfig,
     activationConfig: autoEnable.config,
   });
+  copyConfigResolutionFacts(configSnapshot.sourceConfig, runtimeConfig);
   return {
-    snapshot: withRuntimeConfig(configSnapshot, runtimeConfig),
+    snapshot: { ...configSnapshot, runtimeConfig, config: runtimeConfig },
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   };
 }
@@ -207,9 +196,7 @@ export function logGatewayAuthSurfaceDiagnostics(
       continue;
     }
     const stateLabel = state.active ? "active" : "inactive";
-    const inactiveDetails =
-      !state.active && inactiveWarnings.get(path) ? inactiveWarnings.get(path) : undefined;
-    const details = inactiveDetails ?? state.reason;
+    const details = (!state.active && inactiveWarnings.get(path)) || state.reason;
     logSecrets.info(`[SECRETS_GATEWAY_AUTH_SURFACE] ${path} is ${stateLabel}. ${details}`);
   }
 }

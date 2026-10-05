@@ -1,6 +1,7 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
+  normalizeOptionalTrimmedStringList,
   normalizeTrimmedStringList,
   normalizeUniqueTrimmedStringList,
 } from "../../packages/normalization-core/src/string-normalization.js";
@@ -16,6 +17,7 @@ import { isRecord } from "../utils.js";
 import {
   normalizeManifestObjectList,
   normalizeNamedMetadataRecord,
+  omitUndefinedManifestFields,
 } from "./manifest-capability-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import type {
@@ -43,13 +45,23 @@ export function normalizeManifestActivation(value: unknown): PluginManifestActiv
     return undefined;
   }
 
-  const onProviders = normalizeTrimmedStringList(value.onProviders);
-  const onAgentHarnesses = normalizeTrimmedStringList(value.onAgentHarnesses);
-  const onCommands = normalizeTrimmedStringList(value.onCommands);
-  const onChannels = normalizeTrimmedStringList(value.onChannels);
-  const onRoutes = normalizeTrimmedStringList(value.onRoutes);
-  const onConfigPaths = normalizeTrimmedStringList(value.onConfigPaths);
-  const onStartup = typeof value.onStartup === "boolean" ? value.onStartup : undefined;
+  const activation: PluginManifestActivation = {};
+  if (typeof value.onStartup === "boolean") {
+    activation.onStartup = value.onStartup;
+  }
+  for (const key of [
+    "onProviders",
+    "onAgentHarnesses",
+    "onCommands",
+    "onChannels",
+    "onRoutes",
+    "onConfigPaths",
+  ] as const) {
+    const entries = normalizeTrimmedStringList(value[key]);
+    if (entries.length > 0) {
+      activation[key] = entries;
+    }
+  }
   const onCapabilities = normalizeTrimmedStringList(value.onCapabilities).filter(
     (capability): capability is PluginManifestActivationCapability =>
       capability === "provider" ||
@@ -58,16 +70,9 @@ export function normalizeManifestActivation(value: unknown): PluginManifestActiv
       capability === "hook",
   );
 
-  const activation = {
-    ...(onStartup !== undefined ? { onStartup } : {}),
-    ...(onProviders.length > 0 ? { onProviders } : {}),
-    ...(onAgentHarnesses.length > 0 ? { onAgentHarnesses } : {}),
-    ...(onCommands.length > 0 ? { onCommands } : {}),
-    ...(onChannels.length > 0 ? { onChannels } : {}),
-    ...(onRoutes.length > 0 ? { onRoutes } : {}),
-    ...(onConfigPaths.length > 0 ? { onConfigPaths } : {}),
-    ...(onCapabilities.length > 0 ? { onCapabilities } : {}),
-  } satisfies PluginManifestActivation;
+  if (onCapabilities.length > 0) {
+    activation.onCapabilities = onCapabilities;
+  }
 
   return Object.keys(activation).length > 0 ? activation : undefined;
 }
@@ -126,15 +131,12 @@ function normalizeManifestSetupProviders(
     if (!id) {
       return undefined;
     }
-    const authMethods = normalizeTrimmedStringList(entry.authMethods);
-    const envVars = normalizeTrimmedStringList(entry.envVars);
-    const authEvidence = normalizeManifestSetupProviderAuthEvidence(entry.authEvidence);
-    return {
+    return omitUndefinedManifestFields({
       id,
-      ...(authMethods.length > 0 ? { authMethods } : {}),
-      ...(envVars.length > 0 ? { envVars } : {}),
-      ...(authEvidence ? { authEvidence } : {}),
-    };
+      authMethods: normalizeOptionalTrimmedStringList(entry.authMethods),
+      envVars: normalizeOptionalTrimmedStringList(entry.envVars),
+      authEvidence: normalizeManifestSetupProviderAuthEvidence(entry.authEvidence),
+    });
   });
 }
 
@@ -150,22 +152,19 @@ function normalizeManifestSetupProviderAuthEvidence(
       return undefined;
     }
     const fileEnvVar = normalizeOptionalString(entry.fileEnvVar);
-    const fallbackPaths = normalizeTrimmedStringList(entry.fallbackPaths);
-    if (!fileEnvVar && fallbackPaths.length === 0) {
+    const fallbackPaths = normalizeOptionalTrimmedStringList(entry.fallbackPaths);
+    if (!fileEnvVar && !fallbackPaths) {
       return undefined;
     }
-    const requiresAnyEnv = normalizeTrimmedStringList(entry.requiresAnyEnv);
-    const requiresAllEnv = normalizeTrimmedStringList(entry.requiresAllEnv);
-    const source = normalizeOptionalString(entry.source);
-    return {
+    return omitUndefinedManifestFields<PluginManifestSetupProviderAuthEvidence>({
       type: "local-file-with-env",
-      ...(fileEnvVar ? { fileEnvVar } : {}),
-      ...(fallbackPaths.length > 0 ? { fallbackPaths } : {}),
-      ...(requiresAnyEnv.length > 0 ? { requiresAnyEnv } : {}),
-      ...(requiresAllEnv.length > 0 ? { requiresAllEnv } : {}),
+      fileEnvVar,
+      fallbackPaths,
+      requiresAnyEnv: normalizeOptionalTrimmedStringList(entry.requiresAnyEnv),
+      requiresAllEnv: normalizeOptionalTrimmedStringList(entry.requiresAllEnv),
       credentialMarker,
-      ...(source ? { source } : {}),
-    };
+      source: normalizeOptionalString(entry.source),
+    });
   });
 }
 
@@ -215,11 +214,10 @@ export function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunn
     if (!commandName) {
       return undefined;
     }
-    const description = normalizeOptionalString(entry.description) ?? "";
-    return {
+    return omitUndefinedManifestFields({
       commandName,
-      ...(description ? { description } : {}),
-    };
+      description: normalizeOptionalString(entry.description),
+    });
   });
 }
 
@@ -367,72 +365,53 @@ export function normalizeProviderAuthChoices(
     if (!provider || !method || !choiceId) {
       return undefined;
     }
-    const choiceLabel = normalizeOptionalString(entry.choiceLabel) ?? "";
-    const choiceHint = normalizeOptionalString(entry.choiceHint) ?? "";
-    const icon = normalizeSetupPresentationHttpsUrl(entry.icon);
-    const website = normalizeSetupPresentationHttpsUrl(entry.website);
-    const docsUrl = normalizeSetupPresentationHttpsUrl(entry.docsUrl);
-    const assistantPriority =
-      typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
-        ? entry.assistantPriority
-        : undefined;
-    const assistantVisibility =
-      entry.assistantVisibility === "manual-only" ||
-      entry.assistantVisibility === "visible" ||
-      entry.assistantVisibility === "detected-only"
-        ? entry.assistantVisibility
-        : undefined;
-    const deprecatedChoiceIds = normalizeTrimmedStringList(entry.deprecatedChoiceIds);
-    const groupId = normalizeOptionalString(entry.groupId) ?? "";
-    const groupLabel = normalizeOptionalString(entry.groupLabel) ?? "";
-    const groupHint = normalizeOptionalString(entry.groupHint) ?? "";
-    const optionKey = normalizeOptionalString(entry.optionKey) ?? "";
-    const cliFlag = normalizeOptionalString(entry.cliFlag) ?? "";
-    const cliOption = normalizeOptionalString(entry.cliOption) ?? "";
-    const cliDescription = normalizeOptionalString(entry.cliDescription) ?? "";
-    const appGuidedActionLabel = normalizeOptionalString(entry.appGuidedActionLabel) ?? "";
-    const appGuidedAuth =
-      entry.appGuidedAuth === "oauth" || entry.appGuidedAuth === "device-code"
-        ? entry.appGuidedAuth
-        : undefined;
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
       (scope): scope is PluginManifestOnboardingScope =>
         scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
     );
-    const channelLogin = normalizeProviderChannelLogin(entry.channelLogin);
-    return {
+    return omitUndefinedManifestFields<PluginManifestProviderAuthChoice>({
       provider,
       method,
       choiceId,
-      ...(entry.modelTarget === "utility" ? { modelTarget: "utility" as const } : {}),
-      ...(entry.platforms !== undefined
-        ? { platforms: normalizeManifestPlatforms(entry.platforms) }
-        : {}),
-      ...(choiceLabel ? { choiceLabel } : {}),
-      ...(choiceHint ? { choiceHint } : {}),
-      ...(icon ? { icon } : {}),
-      ...(website ? { website } : {}),
-      ...(docsUrl ? { docsUrl } : {}),
-      ...(assistantPriority !== undefined ? { assistantPriority } : {}),
-      ...(assistantVisibility ? { assistantVisibility } : {}),
-      ...(deprecatedChoiceIds.length > 0 ? { deprecatedChoiceIds } : {}),
-      ...(groupId ? { groupId } : {}),
-      ...(groupLabel ? { groupLabel } : {}),
-      ...(groupHint ? { groupHint } : {}),
-      ...(entry.onboardingFeatured === true ? { onboardingFeatured: true } : {}),
-      ...(entry.appGuidedDiscovery === true ? { appGuidedDiscovery: true } : {}),
-      ...(optionKey ? { optionKey } : {}),
-      ...(cliFlag ? { cliFlag } : {}),
-      ...(cliOption ? { cliOption } : {}),
-      ...(cliDescription ? { cliDescription } : {}),
-      ...(entry.appGuidedSecret === true ? { appGuidedSecret: true } : {}),
-      ...(entry.personalAccount === true ? { personalAccount: true } : {}),
-      ...(appGuidedActionLabel ? { appGuidedActionLabel } : {}),
-      ...(appGuidedAuth ? { appGuidedAuth } : {}),
-      ...(entry.credentialOnly === true ? { credentialOnly: true } : {}),
-      ...(channelLogin ? { channelLogin } : {}),
-      ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),
-    };
+      modelTarget: entry.modelTarget === "utility" ? "utility" : undefined,
+      platforms:
+        entry.platforms !== undefined ? normalizeManifestPlatforms(entry.platforms) : undefined,
+      choiceLabel: normalizeOptionalString(entry.choiceLabel),
+      choiceHint: normalizeOptionalString(entry.choiceHint),
+      icon: normalizeSetupPresentationHttpsUrl(entry.icon),
+      website: normalizeSetupPresentationHttpsUrl(entry.website),
+      docsUrl: normalizeSetupPresentationHttpsUrl(entry.docsUrl),
+      assistantPriority:
+        typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
+          ? entry.assistantPriority
+          : undefined,
+      assistantVisibility:
+        entry.assistantVisibility === "manual-only" ||
+        entry.assistantVisibility === "visible" ||
+        entry.assistantVisibility === "detected-only"
+          ? entry.assistantVisibility
+          : undefined,
+      deprecatedChoiceIds: normalizeOptionalTrimmedStringList(entry.deprecatedChoiceIds),
+      groupId: normalizeOptionalString(entry.groupId),
+      groupLabel: normalizeOptionalString(entry.groupLabel),
+      groupHint: normalizeOptionalString(entry.groupHint),
+      onboardingFeatured: entry.onboardingFeatured === true ? true : undefined,
+      appGuidedDiscovery: entry.appGuidedDiscovery === true ? true : undefined,
+      optionKey: normalizeOptionalString(entry.optionKey),
+      cliFlag: normalizeOptionalString(entry.cliFlag),
+      cliOption: normalizeOptionalString(entry.cliOption),
+      cliDescription: normalizeOptionalString(entry.cliDescription),
+      appGuidedSecret: entry.appGuidedSecret === true ? true : undefined,
+      personalAccount: entry.personalAccount === true ? true : undefined,
+      appGuidedActionLabel: normalizeOptionalString(entry.appGuidedActionLabel),
+      appGuidedAuth:
+        entry.appGuidedAuth === "oauth" || entry.appGuidedAuth === "device-code"
+          ? entry.appGuidedAuth
+          : undefined,
+      credentialOnly: entry.credentialOnly === true ? true : undefined,
+      channelLogin: normalizeProviderChannelLogin(entry.channelLogin),
+      onboardingScopes: onboardingScopes.length > 0 ? onboardingScopes : undefined,
+    });
   });
 }
 
@@ -491,16 +470,11 @@ export function normalizeManifestChannelCommandDefaults(
   if (!isRecord(value)) {
     return undefined;
   }
-  const nativeCommandsAutoEnabled =
-    typeof value.nativeCommandsAutoEnabled === "boolean"
-      ? value.nativeCommandsAutoEnabled
-      : undefined;
-  const nativeSkillsAutoEnabled =
-    typeof value.nativeSkillsAutoEnabled === "boolean" ? value.nativeSkillsAutoEnabled : undefined;
-  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
-    ? {
-        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
-        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
-      }
-    : undefined;
+  const commands: PluginManifestChannelCommandDefaults = {};
+  for (const key of ["nativeCommandsAutoEnabled", "nativeSkillsAutoEnabled"] as const) {
+    if (typeof value[key] === "boolean") {
+      commands[key] = value[key];
+    }
+  }
+  return Object.keys(commands).length > 0 ? commands : undefined;
 }

@@ -54,9 +54,14 @@
 
 .chat-footer__context:not(
   :has(
-    > :not(.agent-chat__composer-notices, openclaw-plugin-contributions),
+    > :not(
+      .agent-chat__composer-notices,
+      openclaw-plugin-contributions,
+      openclaw-chat-outbox-recovery
+    ),
     > .agent-chat__composer-notices > *,
-    > openclaw-plugin-contributions > *
+    > openclaw-plugin-contributions > *,
+    > openclaw-chat-outbox-recovery > *
   )
 ) {
   display: none;
@@ -446,12 +451,18 @@
   padding-inline: 8px;
 }
 
-.agent-chat__composer-lead {
+.agent-chat__composer-lead,
+.agent-chat__composer-trail,
+.agent-chat__composer-meta,
+.agent-chat__composer-context {
   display: flex;
   align-items: center;
   gap: 4px;
-  grid-column: 1;
   min-width: 0;
+}
+
+.agent-chat__composer-lead {
+  grid-column: 1;
 }
 
 .agent-chat__composer-footer svg {
@@ -459,22 +470,14 @@
 }
 
 .agent-chat__composer-trail {
-  display: flex;
-  align-items: center;
   justify-content: flex-end;
-  gap: 4px;
   grid-column: 2;
-  min-width: 0;
 }
 
 .agent-chat__composer-meta,
 .agent-chat__composer-context {
-  display: flex;
-  align-items: center;
-  gap: 4px;
   /* These icon groups must not shrink below their controls; model labels can. */
   flex: 0 0 auto;
-  min-width: 0;
 }
 
 /* Keep settings, split view, and run status together in the footer's middle
@@ -495,18 +498,22 @@
   flex: 0 0 auto;
 }
 
-.agent-chat__input-btn {
+.agent-chat__input-btn,
+.chat-send-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   min-width: 36px;
   height: 36px;
-  border-radius: var(--radius-sm);
   border: none;
+  flex-shrink: 0;
+}
+
+.agent-chat__input-btn {
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  flex-shrink: 0;
   padding: 0 10px;
   transition:
     color var(--duration-fast) var(--ease-out),
@@ -533,14 +540,14 @@
   }
 }
 
-.agent-chat__input-btn svg {
+.agent-chat__input-btn svg,
+.chat-send-btn svg {
   width: 18px;
   height: 18px;
-  fill: none;
-  stroke: currentColor;
+}
+
+.agent-chat__input-btn svg {
   stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* Icons draw at 16 regardless of the 20-unit viewBox some of them carry. */
@@ -634,19 +641,11 @@
    accent treatment as .btn.primary; variants (--stop, --voice*) override the
    fill instead of reintroducing borders. */
 .chat-send-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 36px;
   width: 36px;
-  height: 36px;
   border-radius: var(--radius-full);
-  border: none;
   background: var(--primary);
   color: var(--primary-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
-  flex-shrink: 0;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease,
@@ -664,13 +663,7 @@
 }
 
 .chat-send-btn svg {
-  width: 18px;
-  height: 18px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* Capture variants below own their hover fill independently of the primary action. */
@@ -803,11 +796,16 @@
   box-shadow: none;
 }
 
+.chat-send-btn--stop svg,
+.chat-send-btn--dictating > svg,
+.chat-send-btn--voice-live .chat-send-btn__voice-stop-glyph svg {
+  fill: currentColor;
+  stroke: none;
+}
+
 .chat-send-btn--stop svg {
   width: 18px;
   height: 18px;
-  fill: currentColor;
-  stroke: none;
 }
 
 .chat-send-btn--stop:hover:not(:disabled) {
@@ -842,8 +840,6 @@
 .chat-send-btn--dictating > svg {
   width: 14px;
   height: 14px;
-  fill: currentColor;
-  stroke: none;
 }
 
 /* Live voice input: the level meter itself is the control. It stays unframed
@@ -886,8 +882,6 @@
 .chat-send-btn--voice-live .chat-send-btn__voice-stop-glyph svg {
   width: 12px;
   height: 12px;
-  fill: currentColor;
-  stroke: none;
 }
 
 .chat-send-btn--voice-live:hover:not(:disabled) .chat-send-btn__voice-stop-glyph,

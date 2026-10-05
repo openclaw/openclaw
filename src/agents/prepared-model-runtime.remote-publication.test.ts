@@ -51,7 +51,7 @@ const sourceUrl = "https://catalog.openclaw.ai/models/v2/catalog.json";
 const stored = vi.fn();
 const config: OpenClawConfig = {
   agents: {
-    list: [{ id: "default", default: true }, { id: "other" }],
+    entries: { default: {}, other: {} },
     defaults: { model: "custom/remote-200" },
   },
   models: {

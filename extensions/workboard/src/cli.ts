@@ -1,8 +1,4 @@
-import {
-  WORKBOARD_STATUSES,
-  type WorkboardCard,
-  type WorkboardStatus,
-} from "@openclaw/workboard-contract";
+import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
@@ -30,18 +26,14 @@ type DispatchOptions = GatewayOptions & {
   maxStarts?: number;
 };
 
-function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
-  const error = new Error(message) as Error & { code: string; exitCode: number };
-  error.name = "InvalidArgumentError";
-  error.code = "commander.invalidArgument";
-  error.exitCode = 1;
-  return error;
-}
-
-function parsePositiveIntegerOption(value: string, flag: string): number {
+function parseMaxStarts(value: string): number {
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined) {
-    throw invalidCliArgument(`${flag} must be a positive integer.`);
+    throw Object.assign(new Error("--max-starts must be a positive integer."), {
+      name: "InvalidArgumentError",
+      code: "commander.invalidArgument",
+      exitCode: 1,
+    });
   }
   return parsed;
 }
@@ -52,17 +44,6 @@ function writeJson(value: unknown): void {
 
 function writeLine(value: string): void {
   process.stdout.write(`${value}\n`);
-}
-
-function splitLabels(value: string | undefined): string[] | undefined {
-  return value
-    ?.split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function isWorkboardStatus(value: string): value is WorkboardStatus {
-  return (WORKBOARD_STATUSES as readonly string[]).includes(value);
 }
 
 function formatCardLine(card: WorkboardCard): string {
@@ -88,19 +69,6 @@ function writeCard(card: WorkboardCard, options: JsonOptions): void {
   } else {
     writeLine(formatCardLine(card));
   }
-}
-
-async function callWorkboardGateway(
-  method: string,
-  options: GatewayOptions,
-  params?: unknown,
-): Promise<unknown> {
-  return await callGatewayFromCli(method, options, params, {
-    mode: "cli",
-    scopes: options.admin
-      ? ["operator.admin", "operator.write", "operator.read"]
-      : ["operator.write", "operator.read"],
-  });
 }
 
 function isGatewayUnavailableError(error: unknown): boolean {
@@ -199,7 +167,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
           priority: options.priority,
           agentId: options.agent,
           boardId: options.board,
-          labels: splitLabels(options.labels),
+          labels: options.labels,
           workspaceAccess: { unrestricted: true },
         });
         writeCard(card, options);
@@ -230,7 +198,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .requiredOption("--status <status>", "Target status")
     .option("--json", "Print JSON", false)
     .action(async (id: string, options: JsonOptions & { status: string }) => {
-      if (!isWorkboardStatus(options.status)) {
+      if (!(WORKBOARD_STATUSES as readonly string[]).includes(options.status)) {
         throw new Error(`--status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
       }
       const cards = await params.store.list();
@@ -250,7 +218,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       .option(
         "--max-starts <count>",
         "Maximum new worker runs to start in this pass (default 3)",
-        (value: string) => parsePositiveIntegerOption(value, "--max-starts"),
+        parseMaxStarts,
       )
       .option("--admin", "Request full-host workspace access", false)
       .option("--json", "Print JSON", false),
@@ -260,10 +228,20 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
         options.maxStarts === undefined
           ? "workboard.cards.dispatch"
           : "workboard.cards.dispatchWithOptions";
-      const result = await callWorkboardGateway(method, options, {
-        boardId: options.board,
-        ...(options.maxStarts !== undefined ? { maxStarts: options.maxStarts } : {}),
-      });
+      const result = await callGatewayFromCli(
+        method,
+        options,
+        {
+          boardId: options.board,
+          ...(options.maxStarts !== undefined ? { maxStarts: options.maxStarts } : {}),
+        },
+        {
+          mode: "cli",
+          scopes: options.admin
+            ? ["operator.admin", "operator.write", "operator.read"]
+            : ["operator.write", "operator.read"],
+        },
+      );
       if (options.json) {
         writeJson(result);
       } else {

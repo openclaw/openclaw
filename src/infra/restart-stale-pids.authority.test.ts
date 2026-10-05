@@ -44,38 +44,31 @@ describe("terminateStaleGatewayPids", () => {
     mockCleanupSleep.mockResolvedValue(undefined);
   });
 
-  it("preserves a recorded owner even when its lease is expired and marked dead", async () => {
-    mockReadGatewayOwnerLease.mockReturnValue({
-      owner: "gateway-owner",
-      pid: 576,
-      host: "gateway-test-host",
-      startedAt: 1000,
-      port: 18789,
-      mode: "supervised",
-      supervisor: { kind: "systemd", name: "openclaw-gateway.service" },
-      state: "dead",
-      expired: true,
-    });
-    const { terminateStaleGatewayPids } = await import("./restart-stale-pids.js");
-    expect(await terminateStaleGatewayPids([576])).toEqual([]);
-    expect(mockKillProcessTree).not.toHaveBeenCalled();
-    expect(mockSignalProcessTree).not.toHaveBeenCalled();
-    expect(mockCleanupSleep).not.toHaveBeenCalled();
-  });
-
-  it("does not signal a legacy candidate whose start identity is unavailable", async () => {
-    mockGetProcessStartTime.mockReturnValue(null);
-    const { terminateStaleGatewayPids } = await import("./restart-stale-pids.js");
-    expect(await terminateStaleGatewayPids([576])).toEqual([]);
-    expect(mockKillProcessTree).not.toHaveBeenCalled();
-    expect(mockSignalProcessTree).not.toHaveBeenCalled();
-  });
-
-  it("does not signal a definitely dead candidate", async () => {
-    mockIsPidDefinitelyDead.mockReturnValue(true);
-    const { terminateStaleGatewayPids } = await import("./restart-stale-pids.js");
-    expect(await terminateStaleGatewayPids([576])).toEqual([]);
-    expect(mockKillProcessTree).not.toHaveBeenCalled();
-    expect(mockSignalProcessTree).not.toHaveBeenCalled();
-  });
+  it.each(["recorded owner", "missing start identity", "dead candidate"])(
+    "does not signal a PID with %s",
+    async (reason) => {
+      if (reason === "recorded owner") {
+        mockReadGatewayOwnerLease.mockReturnValue({
+          owner: "gateway-owner",
+          pid: 576,
+          host: "gateway-test-host",
+          startedAt: 1000,
+          port: 18789,
+          mode: "supervised",
+          supervisor: { kind: "systemd", name: "openclaw-gateway.service" },
+          state: "dead",
+          expired: true,
+        });
+      } else if (reason === "missing start identity") {
+        mockGetProcessStartTime.mockReturnValue(null);
+      } else {
+        mockIsPidDefinitelyDead.mockReturnValue(true);
+      }
+      const { terminateStaleGatewayPids } = await import("./restart-stale-pids.js");
+      expect(await terminateStaleGatewayPids([576])).toEqual([]);
+      expect(mockKillProcessTree).not.toHaveBeenCalled();
+      expect(mockSignalProcessTree).not.toHaveBeenCalled();
+      expect(mockCleanupSleep).not.toHaveBeenCalled();
+    },
+  );
 });

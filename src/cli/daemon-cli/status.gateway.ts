@@ -10,7 +10,7 @@ import {
   resolveBestEffortGatewayBindHostForDisplay,
 } from "../../infra/network-discovery-display.js";
 import { inspectPortUsage, inspectPortUsages } from "../../infra/ports-inspect.js";
-import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
+import type { PortUsage } from "../../infra/ports-types.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import type { WindowsGatewayFirewallDiagnostic } from "../../infra/windows-gateway-firewall-diagnostics.js";
 import { pickProbeHostForBind } from "./shared.js";
@@ -29,12 +29,7 @@ type GatewayStatusSummary = {
   windowsFirewall?: WindowsGatewayFirewallDiagnostic;
 };
 
-export type PortStatusSummary = {
-  port: number;
-  status: PortUsageStatus;
-  listeners: PortListener[];
-  hints: string[];
-};
+type PortStatusSummary = Pick<PortUsage, "port" | "status" | "listeners" | "hints">;
 
 type ResolvedGatewayStatus = {
   gateway: GatewayStatusSummary;

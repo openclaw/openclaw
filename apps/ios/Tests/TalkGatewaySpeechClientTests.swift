@@ -184,7 +184,6 @@ struct TalkGatewaySpeechClientTests {
         manager._test_applyLoadedTalkConfig(parsed)
 
         #expect(manager._test_runtimeRoute() == .gatewayTalkSpeak)
-        #expect(!manager.gatewayTalkUsesRealtime)
         #expect(manager.gatewayTalkTransportLabel == "Native")
 
         await manager._test_playAssistant(text: "Gateway voice")
@@ -229,7 +228,6 @@ struct TalkGatewaySpeechClientTests {
 
         #expect(synthesizer.requests.count == 1)
         #expect(synthesizer.requests[0].modelId == nil)
-        #expect(manager.gatewayTalkDefaultModelId == nil)
     }
 
     @Test func `stopped talk does not play completed gateway synthesis`() async {

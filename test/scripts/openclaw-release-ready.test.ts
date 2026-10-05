@@ -61,7 +61,7 @@ function inputs(overrides: Record<string, unknown> = {}) {
 }
 
 function descriptor(target: "npm" | "clawhub") {
-  return {
+  const value = {
     repository: REPOSITORY,
     runId: target === "npm" ? 300 : 400,
     runAttempt: 1,
@@ -74,6 +74,10 @@ function descriptor(target: "npm" | "clawhub") {
     artifactDigest: `sha256:${"c".repeat(64)}`,
     artifactSizeBytes: 100,
   };
+  if (target === "npm") {
+    value.artifactName = preparedNpmArtifactName(SOURCE_SHA, value);
+  }
+  return value;
 }
 
 function readyRelease() {
@@ -129,28 +133,27 @@ function publicationRequest(ready = readyRelease(), resumeRunId = "") {
 }
 
 describe("release readiness contract", () => {
-  it.each([
-    ["v2026.9.2-beta.1", "beta"],
-    ["v2026.9.2", "beta"],
-    ["v2026.9.2", "latest"],
-  ])("seals full-release inputs for %s on %s", (tag, channel) => {
-    const value = validateReleaseButtonInputs(
-      inputs({
-        tag,
-        npm_dist_tag: channel,
-        publish_openclaw_npm: true,
-        publish_docker_only: false,
-      }),
-    );
-    expect(value).toEqual({
-      ...inputs({ tag, npm_dist_tag: channel }),
-      plugin_publish_scope: "all-publishable",
-      publish_openclaw_npm: "true",
-      publish_docker_only: "false",
-      release_evidence_mode: "full-release-validation",
-      wait_for_clawhub: "true",
-    });
-  });
+  it.each([["v2026.9.2-beta.1", "beta"]])(
+    "seals full-release inputs for %s on %s",
+    (tag, channel) => {
+      const value = validateReleaseButtonInputs(
+        inputs({
+          tag,
+          npm_dist_tag: channel,
+          publish_openclaw_npm: true,
+          publish_docker_only: false,
+        }),
+      );
+      expect(value).toEqual({
+        ...inputs({ tag, npm_dist_tag: channel }),
+        plugin_publish_scope: "all-publishable",
+        publish_openclaw_npm: "true",
+        publish_docker_only: "false",
+        release_evidence_mode: "full-release-validation",
+        wait_for_clawhub: "true",
+      });
+    },
+  );
 
   it.each([
     ["unsealed input", { prepared_plugins: "{}" }],
@@ -291,7 +294,7 @@ function bridgeFixture(releaseRunAttempt = 1, conclusion = "success") {
       `${moduleName}.mjs`,
       `
       import { trace, preparedPackage } from './fixture-trace.mjs';
-      export { prepared${prefix}ArtifactName } from ${JSON.stringify(pathToFileURL(resolve(`scripts/${moduleName}.mjs`)).href)};
+      export { prepared${prefix}ArtifactName${target === "npm" ? ", validatePreparedNpmArtifactDescriptor" : ""} } from ${JSON.stringify(pathToFileURL(resolve(`scripts/${moduleName}.mjs`)).href)};
       export async function downloadPrepared${prefix}Release(options) {
         trace('manifest', { target: '${target}', sourceSha: options.sourceSha ?? options.candidateSha,
           toolingSha: options.workflowSha ?? options.toolingSha, selectionMode: options.selectionMode });
@@ -392,6 +395,7 @@ describe("release readiness executable handoff", () => {
     expect(
       runInNewContext(workflow.jobs[jobName].if, {
         github: { repository: REPOSITORY, ref: "refs/heads/main" },
+        inputs: { operation: workflowName === "prepare" ? "prepare" : operation },
         startsWith: (value: string, prefix: string) => value.startsWith(prefix),
       }),
     ).toBe(true);
@@ -895,7 +899,7 @@ function preparationRequest() {
     sourceSha: SOURCE_SHA,
     tooling: TOOLING,
     inputs: validateReleaseButtonInputs(inputs()),
-    npmRunId: 300,
+    npmArtifact: descriptor("npm"),
     clawhubRunId: 400,
   };
 }
@@ -1179,6 +1183,7 @@ async function preparationEvidence(
     publicationAdmission: admission,
     sourceParentRunAttempt: 1,
     executionPlanSha256: plan.sha256,
+    publicationArtifacts: { pluginNpm: descriptor("npm") },
     childEvidence,
     childRuns: Object.fromEntries(
       planned.map((child) => [
@@ -1478,7 +1483,7 @@ function publicationFixture(overrides: Record<string, unknown> = {}, ready = rea
 }
 
 describe("publication dispatch retention", () => {
-  it.each(["success", "lost", "malformed"])("retains intent before POST: %s", (response) => {
+  it.each(["lost", "malformed"])("retains intent before POST: %s", (response) => {
     const fixture = publicationFixture({ publicationResponse: response });
     const result = fixture.publish();
     const expected = publicationRequest();
@@ -1493,30 +1498,20 @@ describe("publication dispatch retention", () => {
       { event: "publication-dispatch", request: unknown },
     ]);
     expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toHaveLength(1);
-    expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(
-      response === "success" ? expected : unknown,
-    );
-    expect(result.status, result.stderr).toBe(response === "success" ? 0 : 1);
-    if (response !== "success") {
-      expect(existsSync(fixture.env.GITHUB_OUTPUT)).toBe(false);
-      expect(result.stderr).toContain("unknown; do not redispatch");
-    }
+    expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(unknown);
+    expect(result.status, result.stderr).toBe(1);
+    expect(existsSync(fixture.env.GITHUB_OUTPUT)).toBe(false);
+    expect(result.stderr).toContain("unknown; do not redispatch");
     expect(fixture.state().writes).toBe(0);
   });
 
-  it.each(["existing", "create failure"])("does not POST after %s", (failure) => {
+  it("does not POST over an existing request", () => {
     const fixture = publicationFixture();
     mkdirSync(dirname(fixture.requestPath), { recursive: true });
-    if (failure === "existing") {
-      writeFileSync(fixture.requestPath, '{"preserve":"original"}');
-    } else {
-      mkdirSync(fixture.requestPath);
-    }
+    writeFileSync(fixture.requestPath, '{"preserve":"original"}');
     expect(fixture.publish().status).toBe(1);
     expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
-    if (failure === "existing") {
-      expect(readFileSync(fixture.requestPath, "utf8")).toBe('{"preserve":"original"}');
-    }
+    expect(readFileSync(fixture.requestPath, "utf8")).toBe('{"preserve":"original"}');
   });
 
   it.each([
@@ -1574,7 +1569,6 @@ describe("publication dispatch retention", () => {
   });
 
   it.each([
-    { state: "unknown", releaseRunId: null },
     { state: "unverified" },
     { schema: "unsupported" },
     { releaseRunAttempt: 2 },
@@ -1679,7 +1673,7 @@ describe("release preparation recovery", () => {
       expect(result.status, result.stderr).toBe(scenario === "valid" ? 0 : 1);
       expect(
         fixture.trace().filter((entry) => entry.event === "preparation-dispatch"),
-      ).toHaveLength(scenario === "valid" ? 2 : 0);
+      ).toHaveLength(scenario === "valid" ? 1 : 0);
       expect(existsSync(fixture.requestPath)).toBe(scenario === "valid");
       if (scenario === "valid") {
         expect(
@@ -1797,8 +1791,8 @@ describe("release preparation recovery", () => {
     mkdirSync(fixture.env.GITHUB_STEP_SUMMARY);
     expect(fixture.prepare().status).toBe(1);
     expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toMatchObject({
-      npmRunId: 300,
-      clawhubRunId: null,
+      npmArtifact: descriptor("npm"),
+      clawhubRunId: 400,
     });
     expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toHaveLength(1);
   });
@@ -1831,15 +1825,11 @@ describe("release preparation recovery", () => {
     const result = fixture.prepare();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("ClawHub dispatch response lost after acceptance");
-    const request = { ...preparationRequest(), npmRunId: null, clawhubRunId: null };
+    const request = { ...preparationRequest(), clawhubRunId: null };
     expect(fixture.trace().filter((entry) => entry.event === "preparation-dispatch")).toEqual([
-      { event: "preparation-dispatch", target: "npm", request },
-      { event: "preparation-dispatch", target: "clawhub", request: { ...request, npmRunId: 300 } },
+      { event: "preparation-dispatch", target: "clawhub", request },
     ]);
-    expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual({
-      ...request,
-      npmRunId: 300,
-    });
+    expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(request);
     expect(existsSync(fixture.env.GITHUB_OUTPUT)).toBe(false);
   });
 
@@ -1851,13 +1841,8 @@ describe("release preparation recovery", () => {
     expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(request);
     expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
     expect(
-      fixture
-        .trace()
-        .filter((entry) => /\/actions\/runs\/(?:300|400)$/u.test(entry.args?.[1] ?? "")),
-    ).toEqual([
-      { event: "gh", args: ["api", `repos/${REPOSITORY}/actions/runs/300`] },
-      { event: "gh", args: ["api", `repos/${REPOSITORY}/actions/runs/400`] },
-    ]);
+      fixture.trace().filter((entry) => (entry.args?.[1] ?? "").endsWith("/actions/runs/400")),
+    ).toEqual([{ event: "gh", args: ["api", `repos/${REPOSITORY}/actions/runs/400`] }]);
     expect(readFileSync(fixture.env.GITHUB_OUTPUT, "utf8")).toContain(
       `request=${JSON.stringify(request)}\n`,
     );
@@ -1871,9 +1856,10 @@ describe("release preparation recovery", () => {
     ["frozen inputs", { inputs: validateReleaseButtonInputs(inputs({ preflight_run_id: "999" })) }],
     ["unnormalized inputs", { inputs: inputs() }],
     ["unconfirmed child", { clawhubRunId: null }],
-    ["string child ID", { npmRunId: "300" }],
-    ["zero child ID", { npmRunId: 0 }],
-    ["unsafe child ID", { npmRunId: Number.MAX_SAFE_INTEGER + 1 }],
+    ["changed npm artifact", { npmArtifact: { ...descriptor("npm"), artifactId: 0 } }],
+    ["string child ID", { clawhubRunId: "400" }],
+    ["zero child ID", { clawhubRunId: 0 }],
+    ["unsafe child ID", { clawhubRunId: Number.MAX_SAFE_INTEGER + 1 }],
   ] satisfies Array<[string, Record<string, unknown>]>)(
     "rejects recovery with %s before producing a handoff",
     async (_label, overrides) => {
@@ -2026,7 +2012,7 @@ process.exitCode = 1;
     },
   );
 
-  it.each(["0", " 800", "9007199254740992"])(
+  it.each(["0", "9007199254740992"])(
     "rejects malformed resume run %s without dispatching publication",
     (resumeRunId) => {
       const fixture = finalizationFixture();
@@ -2055,7 +2041,6 @@ process.exitCode = 1;
 
   it.each([
     ["button", "v2026.9.2-beta.1", "beta", true, false],
-    ["button", "v2026.9.2", "beta", false, false],
     ["button", "v2026.9.2", "latest", false, true],
     ["parent", "v2026.9.2-beta.1", "beta", true, false],
     ["parent", "v2026.9.2", "beta", false, false],

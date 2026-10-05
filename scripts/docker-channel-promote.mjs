@@ -45,6 +45,7 @@ const VARIANTS = Object.freeze([
  * @property {boolean} [allowRollback]
  * @property {DockerExec} [execFileSyncImpl]
  * @property {(message: string) => void} [log]
+ * @property {() => void} [revalidateAuthority]
  * @property {(params: DockerAttestationParams) => void} [verifyAttestationsImpl]
  */
 
@@ -86,7 +87,12 @@ export function createDockerChannelPromotionPlan({
   return { channel: policy.channel, promotions, version: policy.version };
 }
 
-function runDocker(args, execFileSyncImpl) {
+/** @param {string[]} args
+ * @param {DockerExec} execFileSyncImpl
+ * @param {() => void} [revalidateAuthority]
+ */
+function runDocker(args, execFileSyncImpl, revalidateAuthority) {
+  revalidateAuthority?.();
   return execFileSyncImpl("docker", args, {
     encoding: "utf8",
     killSignal: "SIGKILL",
@@ -229,6 +235,8 @@ export function promoteDockerChannel(params, options = {}) {
 
   for (const promotion of resolved) {
     const targetArgs = promotion.targetRefs.flatMap((targetRef) => ["--tag", targetRef]);
+    // Candidate publication carries the admission owner through all source and
+    // rollback reads. Standalone historical promotions retain their own gate.
     runDocker(
       [
         "buildx",
@@ -239,6 +247,7 @@ export function promoteDockerChannel(params, options = {}) {
         promotion.sourceDigestRef,
       ],
       execFileSyncImpl,
+      options.revalidateAuthority,
     );
     for (const targetRef of promotion.targetRefs) {
       const targetDigest = inspectManifestDigest(targetRef, execFileSyncImpl);

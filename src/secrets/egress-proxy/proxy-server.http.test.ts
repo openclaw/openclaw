@@ -144,33 +144,34 @@ const CHILD_REQUEST = `
 `;
 
 describe("secret egress plain HTTP", () => {
-  it.each(["localhost", "127.0.0.1", "[::1]"])(
-    "forwards literal loopback %s with an audit",
-    async (host) => {
-      expect(
-        await request({ target: `http://${host}:${host === "[::1]" ? ipv6Port : port}/ok` }),
-      ).toEqual({ status: 200, body: "loopback-ok" });
+  it.each([
+    { host: "localhost", allowed: true },
+    { host: "127.0.0.1", allowed: true },
+    { host: "[::1]", allowed: true },
+    { host: "localhost.example.com", allowed: false },
+    { host: "128.0.0.1", allowed: false },
+    { host: "[::2]", allowed: false },
+  ])("permits only literal loopback HTTP to $host", async ({ host, allowed: permitted }) => {
+    expect(
+      await request({ target: `http://${host}:${host === "[::1]" ? ipv6Port : port}/ok` }),
+    ).toEqual(
+      permitted
+        ? { status: 200, body: "loopback-ok" }
+        : { status: 502, body: "Secret egress proxy refused the request.\n" },
+    );
+    if (permitted) {
       expect(observed).toHaveLength(1);
       expect(observed[0]?.url).toBe("/ok");
       expect(audit).toEqual([
         { kind: "forwarded", host: host === "[::1]" ? "::1" : host, substituted: false },
       ]);
-    },
-  );
-
-  it.each(["example.com", "localhost.example.com", "128.0.0.1", "[::2]"])(
-    "refuses non-loopback plain HTTP to %s",
-    async (host) => {
-      expect(await request({ target: `http://${host}/ok` })).toEqual({
-        status: 502,
-        body: "Secret egress proxy refused the request.\n",
-      });
+    } else {
       expect(observed).toEqual([]);
       expect(audit).toEqual([
         expect.objectContaining({ kind: "refused", reason: "non-https-request" }),
       ]);
-    },
-  );
+    }
+  });
 
   it("requires grant authentication on loopback HTTP", async () => {
     expect(await request({ authenticated: false })).toMatchObject({ status: 407 });

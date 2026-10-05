@@ -48,7 +48,7 @@ type FastContextLookupResult =
  * Owner-held liveness of the live voice request. The realtime surface that owns
  * the call supplies it; the lookup checks it before and after every provider call.
  */
-export type RealtimeVoiceFastContextLiveness = {
+type RealtimeVoiceFastContextLiveness = {
   /** Aborts when the owning consult or call is cancelled. */
   signal?: AbortSignal;
   /** Throws once the call that owns this request is no longer live. */

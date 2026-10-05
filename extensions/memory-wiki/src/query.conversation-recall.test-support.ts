@@ -24,9 +24,9 @@ const CONVERSATION_RECALL = {
 
 function createRecallAppConfig(visibility: "self" | "tree"): OpenClawConfig {
   return {
-    agents: { list: [{ id: "main", default: true }, { id: "secondary" }] },
+    agents: { ownership: "explicit", entries: { main: {}, secondary: {} } },
     tools: { sessions: { visibility } },
-  } as OpenClawConfig;
+  };
 }
 
 // One hit per recall decision: allowed prior private chat, the live anchor, a group

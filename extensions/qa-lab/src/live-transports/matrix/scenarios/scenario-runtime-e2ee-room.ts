@@ -188,18 +188,19 @@ export async function runMatrixQaFaultedRecoveryOwnerVerification(params: {
     ...params.context.faultProxyObserver,
     rules: [buildOwnerSignatureUploadBlockedFaultRule(params.accessToken)],
   });
-  const recoveryClient = await createMatrixQaE2eeScenarioClient({
-    accessToken: params.accessToken,
-    actorId: `driver-recovery-${randomUUID().slice(0, 8)}`,
-    baseUrl: proxy.baseUrl,
-    deviceId: params.deviceId,
-    observedEvents: params.context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
-    scenarioId: "matrix-e2ee-recovery-owner-verification-required",
-    timeoutMs: params.context.timeoutMs,
-    userId: params.userId,
-  });
+  let recoveryClient: MatrixQaE2eeScenarioClient | undefined;
   try {
+    recoveryClient = await createMatrixQaE2eeScenarioClient({
+      accessToken: params.accessToken,
+      actorId: `driver-recovery-${randomUUID().slice(0, 8)}`,
+      baseUrl: proxy.baseUrl,
+      deviceId: params.deviceId,
+      observedEvents: params.context.observedEvents,
+      outputDir: requireMatrixQaE2eeOutputDir(params.context),
+      scenarioId: "matrix-e2ee-recovery-owner-verification-required",
+      timeoutMs: params.context.timeoutMs,
+      userId: params.userId,
+    });
     const verification = await recoveryClient.verifyWithRecoveryKey(params.encodedRecoveryKey);
     const restore = await waitForMatrixQaNonEmptyRoomKeyRestore({
       client: recoveryClient,
@@ -212,7 +213,7 @@ export async function runMatrixQaFaultedRecoveryOwnerVerification(params: {
       verification,
     };
   } finally {
-    await recoveryClient.stop().catch(() => undefined);
+    await recoveryClient?.stop().catch(() => undefined);
     await proxy.stop();
   }
 }

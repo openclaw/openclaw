@@ -36,17 +36,6 @@ function createState(overrides: Partial<ComposerState> = {}): ComposerState {
   };
 }
 
-function reconnectItem(id: string, createdAt: number, state = createState()): ChatQueueItem {
-  return {
-    id,
-    text: `message ${id}`,
-    createdAt,
-    storageScope: outboxStorageScope(state),
-    sendRunId: `run-${id}`,
-    sendState: "waiting-reconnect",
-  };
-}
-
 function admitItem(state: ComposerState, item: ChatQueueItem, sessionKey = state.sessionKey) {
   return admitStoredChatComposerQueueItem(
     state,
@@ -80,56 +69,69 @@ afterEach(() => {
 });
 
 describe("Incognito composer persistence", () => {
-  it("keeps canonical Incognito input out of storage before session metadata arrives", () => {
-    const state = createState({
-      sessionKey: "agent:lily:dashboard:incognito-private",
-      chatMessage: "@Alex private objective",
-      chatMentions: [{ profileId: "alex", start: 0, end: 5 }],
-      chatGoalDraftMode: { action: "start", sessionId: "private-session" },
-      chatReplyTarget: { messageId: "private-reply", text: "Private quote" },
-      connected: true,
-      client: { recoveryScope: "credential", recoveryScopeReady: true },
-    });
-    const queued: ChatQueueItem = {
-      id: "submitted",
-      storageScope: outboxStorageScope(state),
-      text: "Submitted private message",
-      createdAt: 1,
-      sendState: "held",
-    };
-    expect(admitItem(state, queued)).toBe(true);
-    const storageKey = storageTargetForComposer(state).key;
-    const legacy = JSON.parse(sessionStorage.getItem(storageKey)!);
-    Object.assign(legacy.sessions[`${state.sessionKey}\u0000agent:lily`], {
-      draft: state.chatMessage,
-      draftMentions: state.chatMentions,
-      goalMode: state.chatGoalDraftMode,
-      replyTarget: state.chatReplyTarget,
-    });
-    sessionStorage.setItem(storageKey, JSON.stringify(legacy));
-    const persistence = startPersistence(state);
-    expect(persistence.durableScope).toBeNull();
-    expect(sessionStorage.getItem(storageKey)).not.toContain("private objective");
-    expect(persistChatComposerState(state)).toBe(true);
-    const stored = JSON.parse(sessionStorage.getItem(storageTargetForComposer(state).key)!);
-    expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`]).toMatchObject({
-      queue: [queued],
-    });
-    expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].draft).toBeUndefined();
-    expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].draftMentions).toBeUndefined();
-    expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].goalMode).toBeUndefined();
-    expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].replyTarget).toBeUndefined();
-    expect(restoreChatComposerState(state)).toBe(true);
-    expect(state.chatMessage).toBe("@Alex private objective");
-    expect(state.chatMentions).toHaveLength(1);
-    expect(state.chatGoalDraftMode?.action).toBe("start");
-    reloadStorage(state);
-    const restored = createState({ sessionKey: state.sessionKey });
-    expect(restoreChatComposerState(restored)).toBe(true);
-    expect(restored.chatMessage).toBe("");
-    expect(restored.chatQueue).toMatchObject([queued]);
-    persistence.stop();
-  });
+  it.each(["canonical key", "arriving metadata"] as const)(
+    "retires Incognito input identified by %s without clearing live input or queues",
+    (source) => {
+      const state = createState({
+        sessionKey:
+          source === "canonical key" ? "agent:lily:dashboard:incognito-private" : "agent:lily:main",
+        chatMessage: "@Alex private objective",
+        chatMentions: [{ profileId: "alex", start: 0, end: 5 }],
+        chatGoalDraftMode: { action: "start", sessionId: "private-session" },
+        chatReplyTarget: { messageId: "private-reply", text: "Private quote" },
+        connected: true,
+        client: { recoveryScope: "credential", recoveryScopeReady: true },
+      });
+      const queued: ChatQueueItem = {
+        id: "submitted",
+        storageScope: outboxStorageScope(state),
+        text: "Submitted private message",
+        createdAt: 1,
+        sendState: "held",
+      };
+      if (source === "arriving metadata") {
+        expect(persistChatComposerState(state)).toBe(true);
+      }
+      expect(admitItem(state, queued)).toBe(true);
+      const storageKey = storageTargetForComposer(state).key;
+      if (source === "canonical key") {
+        const legacy = JSON.parse(sessionStorage.getItem(storageKey)!);
+        Object.assign(legacy.sessions[`${state.sessionKey}\u0000agent:lily`], {
+          draft: state.chatMessage,
+          draftMentions: state.chatMentions,
+          goalMode: state.chatGoalDraftMode,
+          replyTarget: state.chatReplyTarget,
+        });
+        sessionStorage.setItem(storageKey, JSON.stringify(legacy));
+      }
+      const persistence = startPersistence(state);
+      if (source === "arriving metadata") {
+        state.selectedChatSessionIncognito = true;
+        persistence.persistChangedState();
+      }
+      expect(persistence.durableScope).toBeNull();
+      expect(sessionStorage.getItem(storageKey)).not.toContain("private objective");
+      expect(persistChatComposerState(state)).toBe(true);
+      const stored = JSON.parse(sessionStorage.getItem(storageTargetForComposer(state).key)!);
+      expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`]).toMatchObject({
+        queue: [queued],
+      });
+      expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].draft).toBeUndefined();
+      expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].draftMentions).toBeUndefined();
+      expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].goalMode).toBeUndefined();
+      expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].replyTarget).toBeUndefined();
+      expect(restoreChatComposerState(state)).toBe(true);
+      expect(state.chatMessage).toBe("@Alex private objective");
+      expect(state.chatMentions).toHaveLength(1);
+      expect(state.chatGoalDraftMode?.action).toBe("start");
+      reloadStorage(state);
+      const restored = createState({ sessionKey: state.sessionKey });
+      expect(restoreChatComposerState(restored)).toBe(true);
+      expect(restored.chatMessage).toBe("");
+      expect(restored.chatQueue).toMatchObject([queued]);
+      persistence.stop();
+    },
+  );
 
   it.each(["admit", "update", "remove"] as const)(
     "retires legacy private input during queue %s",
@@ -222,31 +224,6 @@ describe("Incognito composer persistence", () => {
       unsubscribe();
       persistence.stop();
     }
-  });
-
-  it("retires legacy unsent fields when Incognito metadata arrives without clearing live input or queues", () => {
-    const state = createState({
-      chatMessage: "@Alex private legacy draft",
-      chatMentions: [{ profileId: "alex", start: 0, end: 5 }],
-      chatGoalDraftMode: { action: "start", sessionId: "private-session" },
-      chatReplyTarget: { messageId: "private-reply", text: "Private quote" },
-    });
-    expect(persistChatComposerState(state)).toBe(true);
-    const queued = { ...reconnectItem("legacy-queue", 1), sendState: "held" as const };
-    expect(admitItem(state, queued)).toBe(true);
-    const persistence = startPersistence(state);
-    state.selectedChatSessionIncognito = true;
-    persistence.persistChangedState();
-    expect(state.chatMessage).toBe("@Alex private legacy draft");
-    expect(state.chatMentions).toHaveLength(1);
-    expect(state.chatGoalDraftMode?.action).toBe("start");
-    const stored = JSON.parse(sessionStorage.getItem(storageTargetForComposer(state).key)!);
-    const row = stored.sessions[`${state.sessionKey}\u0000agent:lily`];
-    expect(row.draft).toBeUndefined();
-    expect(row.draftMentions).toBeUndefined();
-    expect(row.goalMode).toBeUndefined();
-    expect(row.queue).toMatchObject([queued]);
-    persistence.stop();
   });
 
   it.each([true, false])(

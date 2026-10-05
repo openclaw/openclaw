@@ -75,104 +75,89 @@ function scope() {
   return target;
 }
 
-it("checks a hot durable transcript through the worker without host SQLite", async () => {
-  await expect(restoreSessionColdTranscript(scope())).resolves.toBeUndefined();
-  expect(observed.readMetadata).toHaveBeenCalledOnce();
-  expect(observed.nativeRead).not.toHaveBeenCalled();
-  expect(observed.release).toHaveBeenCalledOnce();
-});
-
-it("retains the captured source for a fresh queued read after another restore", async () => {
-  const target = scope();
-  const originalStateDir = target.env.OPENCLAW_STATE_DIR;
-  const initial =
-    createDeferredCore<Awaited<ReturnType<SessionHistoryWorkerDatabase["readColdMetadata"]>>>();
-  const entered = createDeferredCore();
-  observed.readMetadata.mockImplementationOnce(() => {
-    entered.resolve();
-    return initial.promise;
-  });
-  const pending = restoreSessionColdTranscript(target);
-  await awaitGateBeforeSettlement(entered.promise, pending, "Metadata read was not dispatched");
-  target.env.OPENCLAW_STATE_DIR = path.join(originalStateDir, "replacement");
-  expect(observed.release).not.toHaveBeenCalled();
-  initial.resolve({ kind: "cold-metadata", archive });
-  await pending;
-  expect(observed.readMetadata).toHaveBeenCalledTimes(2);
-  for (const [request] of observed.readMetadata.mock.calls) {
-    expect(request.env.OPENCLAW_STATE_DIR).toBe(originalStateDir);
-  }
-  expect(observed.options.mock.calls[0]?.[0].path).toBe(
-    resolveOpenClawAgentSqlitePath({
-      agentId: "main",
-      env: { OPENCLAW_STATE_DIR: originalStateDir },
-    }),
-  );
-  expect(observed.nativeRead).not.toHaveBeenCalled();
-  expect(observed.release).toHaveBeenCalledOnce();
-});
-
-it.each(["initial", "queued"])(
-  "propagates a rejected %s read without native fallback",
-  async (phase) => {
-    const refused = new Error("worker refused metadata");
-    if (phase === "queued") {
-      observed.readMetadata.mockResolvedValueOnce({ kind: "cold-metadata", archive });
+it.each([false, true])(
+  "retains the captured source through worker metadata (queued: %s)",
+  async (queued) => {
+    const target = scope();
+    const originalStateDir = target.env.OPENCLAW_STATE_DIR;
+    const initial =
+      createDeferredCore<Awaited<ReturnType<SessionHistoryWorkerDatabase["readColdMetadata"]>>>();
+    const entered = createDeferredCore();
+    observed.readMetadata.mockImplementationOnce(() => {
+      entered.resolve();
+      return initial.promise;
+    });
+    const pending = restoreSessionColdTranscript(target);
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "Metadata read was not dispatched");
+      target.env.OPENCLAW_STATE_DIR = path.join(originalStateDir, "replacement");
+      expect(observed.release).not.toHaveBeenCalled();
+    } finally {
+      initial.resolve({ kind: "cold-metadata", archive: queued ? archive : undefined });
+      await expect(pending).resolves.toBeUndefined();
     }
-    observed.readMetadata.mockRejectedValueOnce(refused);
-    await expect(restoreSessionColdTranscript(scope())).rejects.toBe(refused);
+    expect(observed.readMetadata).toHaveBeenCalledTimes(queued ? 2 : 1);
+    for (const [request] of observed.readMetadata.mock.calls) {
+      expect(request.env.OPENCLAW_STATE_DIR).toBe(originalStateDir);
+    }
+    expect(observed.options.mock.calls[0]?.[0].path).toBe(
+      resolveOpenClawAgentSqlitePath({
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: originalStateDir },
+      }),
+    );
     expect(observed.nativeRead).not.toHaveBeenCalled();
     expect(observed.release).toHaveBeenCalledOnce();
   },
 );
 
-it.each(
-  ["caller", "owner", "file"].flatMap((authority) =>
+it.each([
+  ...["caller", "owner", "file", "worker"].flatMap((authority) =>
     ["initial", "queued"].map((phase) => ({ authority, phase })),
   ),
-)(
-  "refuses restoration when its $authority changes during $phase metadata",
-  async ({ authority, phase }) => {
-    const target = scope();
-    const databasePath = resolveOpenClawAgentSqlitePath(target);
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    fs.writeFileSync(databasePath, "original source");
-    const refused = new Error("authority revoked");
-    const assertCurrent = vi.fn();
-    if (phase === "queued") {
-      observed.readMetadata.mockResolvedValueOnce({ kind: "cold-metadata", archive });
+  { authority: "caller", phase: "preparation" },
+])("refuses restoration after $authority failure during $phase", async ({ authority, phase }) => {
+  const target = scope();
+  const refused = new Error("authority revoked");
+  const assertCurrent = vi.fn();
+  const revoke = () => {
+    if (authority === "file") {
+      const databasePath = resolveOpenClawAgentSqlitePath(target);
+      fs.renameSync(databasePath, `${databasePath}.old`);
+      fs.writeFileSync(databasePath, "replacement source");
+    } else {
+      (authority === "caller" ? assertCurrent : observed.assertOwner).mockImplementation(() => {
+        throw refused;
+      });
     }
+  };
+  if (phase === "queued") {
+    observed.readMetadata.mockResolvedValueOnce({ kind: "cold-metadata", archive });
+  }
+  if (authority === "worker") {
+    observed.readMetadata.mockRejectedValueOnce(refused);
+  } else if (phase !== "preparation") {
     observed.readMetadata.mockImplementationOnce(async () => {
-      if (authority === "file") {
-        fs.renameSync(databasePath, `${databasePath}.old`);
-        fs.writeFileSync(databasePath, "replacement source");
-      } else {
-        (authority === "caller" ? assertCurrent : observed.assertOwner).mockImplementation(() => {
-          throw refused;
-        });
-      }
+      revoke();
       return { kind: "cold-metadata", archive };
     });
-    await expect(restoreSessionColdTranscript(target, assertCurrent)).rejects.toThrow(
+  }
+  const pending = restoreSessionColdTranscript(target, assertCurrent);
+  if (phase === "preparation") {
+    revoke();
+  }
+  if (authority === "worker") {
+    await expect(pending).rejects.toBe(refused);
+  } else {
+    await expect(pending).rejects.toThrow(
       authority === "file" ? /Session store changed/ : refused.message,
     );
-    expect(observed.readMetadata).toHaveBeenCalledTimes(phase === "queued" ? 2 : 1);
-    expect(observed.nativeRead).not.toHaveBeenCalled();
-    expect(observed.release).toHaveBeenCalledOnce();
-  },
-);
-
-it("rechecks the caller after preparing the target before dispatching metadata", async () => {
-  let current = true;
-  const pending = restoreSessionColdTranscript(scope(), () => {
-    if (!current) {
-      throw new Error("caller revoked during preparation");
-    }
-  });
-  current = false;
-  await expect(pending).rejects.toThrow("caller revoked during preparation");
-  expect(observed.readMetadata).not.toHaveBeenCalled();
+  }
+  expect(observed.readMetadata).toHaveBeenCalledTimes(
+    phase === "queued" ? 2 : phase === "initial" ? 1 : 0,
+  );
   expect(observed.nativeRead).not.toHaveBeenCalled();
+  expect(observed.release).toHaveBeenCalledTimes(phase === "preparation" ? 0 : 1);
 });
 
 it.each(["key", "path"])(

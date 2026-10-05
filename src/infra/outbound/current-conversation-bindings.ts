@@ -4,8 +4,10 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeConversationText } from "../../acp/conversation-id.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import {
   getActivePluginChannelRegistryFromState,
@@ -163,7 +165,7 @@ export function deleteCurrentConversationBindingRecordsBySession(
 function resolveChannelConversationBindingSupport(params: SessionBindingScope) {
   const normalized =
     normalizeAnyChannelId(params.channel) ??
-    normalizeOptionalLowercaseString(normalizeConversationText(params.channel));
+    normalizeStringifiedOptionalString(params.channel)?.toLowerCase();
   if (!normalized) {
     return undefined;
   }
@@ -524,16 +526,13 @@ function captureGenericBindingSupport(ref: ConversationRef) {
 
 export async function inspectGenericCurrentConversationBindingAsync(
   ref: ConversationRef,
-  options?: { assertCurrent?: () => void },
 ): Promise<SessionBindingRecord | null> {
   const conversation = captureConversationRef(ref);
   const captured = captureGenericBindingSupport(conversation);
   if (!captured.supported) {
     return null;
   }
-  options?.assertCurrent?.();
   const record = await inspectCurrentConversationBindingRecordAsync(conversation);
-  options?.assertCurrent?.();
   captured.assertCurrent();
   return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
 }

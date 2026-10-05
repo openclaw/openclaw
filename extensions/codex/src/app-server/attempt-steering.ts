@@ -49,6 +49,7 @@ export function createCodexSteeringQueue(params: {
   requestTimeoutMs: number;
   signal: AbortSignal;
   assertActive: () => void;
+  withCurrent?: (write: () => void) => Promise<void>;
   prepareMessage: (
     text: string,
     options: CodexSteeringQueueOptions,
@@ -247,7 +248,9 @@ export function createCodexSteeringQueue(params: {
       // No await between final owner validation and RPC dispatch. Only these
       // batches become accepted-unconfirmed if cancellation races the response.
       clientUserMessageId = `openclaw:${params.turnId}:steer:${++batchSequence}`;
-      dispatchedBatches.set(clientUserMessageId, liveItems);
+      if (!params.withCurrent) {
+        dispatchedBatches.set(clientUserMessageId, liveItems);
+      }
       const request = {
         threadId: params.threadId,
         expectedTurnId: params.turnId,
@@ -261,6 +264,8 @@ export function createCodexSteeringQueue(params: {
       await params.client.request("turn/steer", request, {
         timeoutMs: params.requestTimeoutMs,
         signal: params.signal,
+        ...(params.withCurrent ? { withCurrent: params.withCurrent } : {}),
+        onIngressRejected: () => dispatchedBatches.delete(request.clientUserMessageId),
         assertCurrent: () => {
           assertActive();
           // A later preparation or overload retry can revoke earlier items.

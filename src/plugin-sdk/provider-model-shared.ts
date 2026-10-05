@@ -13,13 +13,7 @@ import {
 } from "../plugins/provider-replay-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
-import type {
-  ProviderReasoningOutputModeContext,
-  ProviderReplayPolicyContext,
-  ProviderRuntimeModel,
-  ProviderSanitizeReplayHistoryContext,
-  ProviderSanitizeReplayHistoryContextV2,
-} from "./plugin-entry.js";
+import type { ProviderReplayPolicyContext, ProviderRuntimeModel } from "./plugin-entry.js";
 
 export { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 export {
@@ -387,14 +381,11 @@ export function buildProviderReplayFamilyHooks(
     }
     case "google-gemini":
       return {
-        buildReplayPolicy: () => buildGoogleGeminiReplayPolicy(),
+        buildReplayPolicy: buildGoogleGeminiReplayPolicy,
         // Retained adapter for third-party callers of the legacy family hook.
-        sanitizeReplayHistory: (ctx: ProviderSanitizeReplayHistoryContext) =>
-          sanitizeGoogleGeminiReplayHistory(ctx),
-        sanitizeReplayHistoryAsync: (ctx: ProviderSanitizeReplayHistoryContextV2) =>
-          sanitizeGoogleGeminiReplayHistoryAsync(ctx),
-        resolveReasoningOutputMode: (_ctx: ProviderReasoningOutputModeContext) =>
-          resolveTaggedReasoningOutputMode(),
+        sanitizeReplayHistory: sanitizeGoogleGeminiReplayHistory,
+        sanitizeReplayHistoryAsync: sanitizeGoogleGeminiReplayHistoryAsync,
+        resolveReasoningOutputMode: resolveTaggedReasoningOutputMode,
       };
     case "passthrough-gemini":
       return {
@@ -411,16 +402,6 @@ export function buildProviderReplayFamilyHooks(
   }
   throw new Error("Unsupported provider replay family");
 }
-
-/** @deprecated Provider-owned replay hook shortcut; use local provider hooks instead. */
-export const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
-
-/** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
-export const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "anthropic-by-model",
-});
 
 /** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
 export const NATIVE_ANTHROPIC_REPLAY_HOOKS = buildProviderReplayFamilyHooks({

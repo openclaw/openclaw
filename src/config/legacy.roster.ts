@@ -1,5 +1,56 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AgentDefaultsConfig, AgentModelEntryConfig } from "./types.agent-defaults.js";
+import type { AgentRuntimePolicyConfig, AgentToolModelConfig } from "./types.agents-shared.js";
+import type { AgentConfig, AgentEntryConfig, AgentsConfig } from "./types.agents.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
+
+/** Retired entry fields read only by Doctor, pre-admission migrations, and raw-input compatibility. */
+type RetiredAgentEntryFields = {
+  /** Doctor materializes explicit surface owners before removing this marker. */
+  default?: boolean;
+  /** Doctor requires an intermediate upgrade; current policy is per-model `models[ref].agentRuntime`. */
+  agentRuntime?: AgentModelEntryConfig["agentRuntime"];
+  /** Doctor repairs supported legacy selections; current shared policy is `agents.defaults.compaction`. */
+  compaction?: AgentDefaultsConfig["compaction"];
+};
+
+/** Retired defaults fields read only by Doctor, pre-admission migrations, and raw-input compatibility. */
+type RetiredAgentDefaultsFields = {
+  /** Doctor moves this selection to `agents.defaults.mediaModels.image`. */
+  imageGenerationModel?: AgentToolModelConfig;
+  /** Doctor moves this selection to `agents.defaults.mediaModels.video`. */
+  videoGenerationModel?: AgentToolModelConfig;
+  /** Doctor moves this selection to `agents.defaults.mediaModels.music`. */
+  musicGenerationModel?: AgentToolModelConfig;
+  /** Doctor removes this override; envelope timezone derives from `agents.defaults.userTimezone`. */
+  envelopeTimezone?: string;
+  /** Doctor removes this toggle; built-in envelope timestamps are always on. */
+  envelopeTimestamp?: "on" | "off";
+  /** Doctor removes this toggle; built-in envelope elapsed time is always on. */
+  envelopeElapsed?: "on" | "off";
+  /** Doctor removes this override; built-in time formatting applies. */
+  timeFormat?: "auto" | "12" | "24";
+  /** Doctor moves `gpt5.personality` to `plugins.entries.openai.config.personality`. */
+  promptOverlays?: { gpt5?: { personality?: "friendly" | "on" | "off" } };
+  /** Doctor requires an intermediate upgrade; current policy is per-model `models[ref].agentRuntime`. */
+  agentRuntime?: AgentRuntimePolicyConfig;
+};
+
+export type LegacyAgentListEntry = AgentConfig & RetiredAgentEntryFields;
+type LegacyAgentEntryConfig = AgentEntryConfig & RetiredAgentEntryFields;
+
+/**
+ * Persisted pre-Doctor config: canonical fields plus the retired `agents.list` roster and
+ * retired entry and defaults fields. Validation rejects them, so runtime config never has this shape.
+ */
+export type OpenClawConfigWithLegacyRoster = Omit<OpenClawConfig, "agents"> & {
+  agents?: Omit<AgentsConfig, "entries" | "defaults"> & {
+    defaults?: AgentDefaultsConfig & RetiredAgentDefaultsFields;
+    entries?: Record<string, LegacyAgentEntryConfig>;
+    list?: LegacyAgentListEntry[];
+  };
+};
 
 /** Keeps Doctor's allocated identities tied to their original authored list positions. */
 export function projectLegacyAgentRosterEntries(list: unknown[]) {

@@ -181,6 +181,9 @@ readiness. Gateway startup gets 45 s built and 300 s from source; on a heavily
 loaded host, raise it with `--gateway-ready-timeout-ms` instead of retrying the
 lease.
 
+Recorder readiness gets 30 s; on a heavily loaded host, raise it with
+`--recorder-ready-timeout-ms`.
+
 The named tool-progress shell fixture emits command-style `exec` arguments.
 Use `E2E_ROOT_CONFIG_PATCH='{"tools":{"codeMode":false}}'` for that fixture, or
 choose a code-mode-aware fixture. Keep exec permissions unchanged and verify

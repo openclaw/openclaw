@@ -18,6 +18,7 @@ import {
 import {
   commandFailure,
   isSuccess,
+  matchesCommandFailure,
   runSshScript,
   type WorkerBootstrapCommandRunner,
 } from "./bootstrap-command.js";
@@ -104,13 +105,9 @@ const WORKER_ARTIFACT_PATHS_JS = `const artifactPaths = ${JSON.stringify(WORKER_
 const chunkPathPattern = ${WORKER_BUNDLE_CHUNK_PATH_PATTERN.toString()};`;
 
 const SELECT_NPM_WORKER_FILES_JS = String.raw`const fs = require("node:fs");
-${WORKER_ARTIFACT_PATHS_JS}
-const prefix = "package/dist/worker/";
-const selected = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((entry) => {
-  const name = entry.startsWith(prefix) ? entry.slice(prefix.length) : "";
-  return artifactPaths.includes(name) || chunkPathPattern.test(name);
-});
-if (new Set(selected).size !== selected.length) throw new Error("duplicate worker package artifact");
+const expected = "package/dist/worker-artifacts/" + process.argv[2] + ".tar.gz";
+const selected = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((entry) => entry === expected);
+if (selected.length !== 1) throw new Error("missing or duplicate packaged worker bundle archive");
 process.stdout.write(selected.join("\n") + "\n");`;
 
 // Recompute the gateway's canonical flat file manifest before a receipt can attest to it.
@@ -410,8 +407,11 @@ case "$install" in
       exit 2
     fi
     tar -tzf "$package_archive" > "$staging/npm-members.txt"
-    node -e '${SELECT_NPM_WORKER_FILES_JS}' "$staging/npm-members.txt" > "$staging/npm-worker-files.txt"
+    node -e '${SELECT_NPM_WORKER_FILES_JS}' "$staging/npm-members.txt" "$hash" > "$staging/npm-worker-files.txt"
     tar -xzf "$package_archive" -C "$staging" --strip-components=3 -T "$staging/npm-worker-files.txt"
+    worker_archive=$staging/$hash.tar.gz
+    tar -xzf "$worker_archive" -C "$staging"
+    rm -f "$worker_archive"
     rm -f "$npm_pack_json" "$package_archive" "$staging/npm-members.txt" "$staging/npm-worker-files.txt"
     ;;
   *)
@@ -575,20 +575,12 @@ function parsePreflight(
   expected: WorkerAdmissionHandshake,
   expectedUploadFilename: string,
 ): { action: "current"; receipt: WorkerAdmissionHandshake } | { action: "install"; path: string } {
-  if (
-    result.code === NODE_MISSING_EXIT_CODE ||
-    result.stderr.includes(NODE_MISSING_MARKER) ||
-    result.stdout.includes(NODE_MISSING_MARKER)
-  ) {
+  if (matchesCommandFailure(result, NODE_MISSING_EXIT_CODE, NODE_MISSING_MARKER)) {
     throw new Error(
       "Worker bootstrap requires Node.js on the leased host; install Node in the provider setup phase and retry",
     );
   }
-  if (
-    result.code === NODE_UNSUPPORTED_EXIT_CODE ||
-    result.stderr.includes(NODE_UNSUPPORTED_MARKER) ||
-    result.stdout.includes(NODE_UNSUPPORTED_MARKER)
-  ) {
+  if (matchesCommandFailure(result, NODE_UNSUPPORTED_EXIT_CODE, NODE_UNSUPPORTED_MARKER)) {
     throw new Error(
       "Worker bootstrap requires Node 24.16.0+ or 26.1.0+ with WAL-reset-safe SQLite on the leased host; install a supported Node runtime in the provider setup phase and retry",
     );
@@ -716,11 +708,7 @@ export async function bootstrapWorker(
       }),
     );
     assertCurrent();
-    if (
-      install.code === NPM_MISSING_EXIT_CODE ||
-      install.stderr.includes(NPM_MISSING_MARKER) ||
-      install.stdout.includes(NPM_MISSING_MARKER)
-    ) {
+    if (matchesCommandFailure(install, NPM_MISSING_EXIT_CODE, NPM_MISSING_MARKER)) {
       throw new Error(
         "Worker npm bootstrap requires npm on the leased host; use bundle install or provide npm in the provider setup phase",
       );

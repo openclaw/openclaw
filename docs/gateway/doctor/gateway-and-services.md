@@ -15,6 +15,12 @@ package, bundled UI, and runtime replacement to that host, including when a
 standalone CLI inspects an app-owned Gateway service. For OpenClaw.app payloads,
 update the app to update the Gateway; normal config and state checks still apply.
 
+After repair, Doctor waits for the managed Gateway within a bounded readiness
+budget. If the service manager still reports it running but its listener has not
+opened, Doctor completes with a warning and exit code 0. Check
+`openclaw gateway status` in a minute. A stopped or failed service still reports a
+restoration failure; slow startup does not undo a completed repair.
+
 ## Checks 8-17
 
 <AccordionGroup>
@@ -243,6 +249,7 @@ update the app to update the Gateway; normal config and state checks still apply
     - If token auth requires a token and the configured token SecretRef is unresolved, doctor blocks the install/repair path with actionable guidance.
     - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, doctor blocks install/repair until mode is set explicitly.
     - For Linux user-systemd units, doctor token drift checks include both `Environment=` and `EnvironmentFile=` sources when comparing service auth metadata.
+    - `OPENCLAW_SERVICE_MANAGED_ENV_KEYS` tracks values OpenClaw regenerates from config, `.env`, or SecretRefs; it is not an operator preservation allowlist. Systemd merges operator `Environment=` and `EnvironmentFile=` drop-ins into the effective environment, and `gateway install --force` leaves those drop-ins and their files unchanged. Doctor does not copy their values into the managed base or suggest reinstalling to migrate operator-only managed keys. Unreadable or unverified drop-ins still require inspection. Linux reinstall preserves admitted PATH entries in their existing order, including safe extra directories; missing concrete managed values still report drift. Environment preservation failures show bounded current/installer values for PATH and the Telegram spool timeout, with other values redacted.
     - Doctor service repairs refuse to rewrite, stop, or restart a gateway service from an older OpenClaw binary when the config was last written by a newer version. See [Gateway troubleshooting](/gateway/troubleshooting#split-brain-installs-and-newer-config-guard).
     - `openclaw gateway install --force` rewrites the managed base unit, but never removes operator-owned systemd drop-ins; it warns if a command or working-directory override remains effective.
 

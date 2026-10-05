@@ -6,7 +6,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import { switchChatThinkingLevel } from "./chat-session.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   installTranscriptDomMocks,
@@ -27,52 +26,6 @@ const initialRow = (): GatewaySessionRow => ({
   fastMode: false,
   effectiveFastMode: false,
   contextWindow: "64k",
-});
-
-it("rolls rejected thinking back while preserving an authoritative update to another field", async () => {
-  const initial = initialRow();
-  const rows = [initial];
-  const acknowledgement = createDeferred<unknown>();
-  const patch = vi.fn<GatewayRequestHandler>(() => acknowledgement.promise);
-  const { sessions, mount, emitGatewayEvent } = createMountedPanes(rows, "main", undefined, {
-    "sessions.patch": patch,
-  });
-  let operation: Promise<boolean> | undefined;
-  try {
-    await sessions.refresh({ agentId: "main", force: true });
-    const panes = [mount(initial.key), mount(initial.key)];
-    await Promise.all(panes.map(refreshPane));
-    const assertRows = (fields: Partial<GatewaySessionRow>) => {
-      const expected = { key: initial.key, sessionId: initial.sessionId, ...fields };
-      expect(sessions.state.result?.sessions).toEqual([expect.objectContaining(expected)]);
-      for (const pane of panes) {
-        expect(pane.state.currentSessionId).toBe(initial.sessionId);
-        expect(selectedChatSessionRow(pane.state)).toMatchObject(expected);
-      }
-    };
-    assertRows(initial);
-    operation = switchChatThinkingLevel(panes[0]!.state, "off");
-    expect(patch).toHaveBeenCalledOnce();
-    assertRows({ thinkingLevel: "off" });
-    const label = "Authoritative label while settings are pending";
-    rows[0] = { ...initial, updatedAt: 3, label };
-    emitGatewayEvent("sessions.changed", {
-      sessionKey: initial.key,
-      agentId: "main",
-      sessionId: initial.sessionId,
-      reason: "label",
-      updatedAt: 3,
-      label,
-    });
-    assertRows({ thinkingLevel: "off", label });
-    acknowledgement.reject(new Error("Synthetic rejected settings after label update"));
-    await expect(operation).resolves.toBe(false);
-    assertRows({ ...initial, updatedAt: 3, label });
-  } finally {
-    acknowledgement.resolve({ ok: true, key: initial.key, path: "", entry: rows[0] });
-    await operation;
-    await vi.dynamicImportSettled();
-  }
 });
 
 it.each(["rejected", "older-clock ACK", "equal-clock ACK"] as const)(

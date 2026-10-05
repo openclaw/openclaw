@@ -296,13 +296,11 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
         sessionId: "",
         updatedAt: now,
       },
-      skipForkWhen: (entry) => Boolean(entry.sessionId?.trim()),
-      skipPatch: () => ({ ...deliveryFields, updatedAt: now }),
-      patch: () => ({
-        ...deliveryFields,
-        ...spawnLineage,
-        updatedAt: now,
-      }),
+      entryPatch: {
+        skipExisting: true,
+        skipped: { ...deliveryFields, updatedAt: now },
+        forked: { ...deliveryFields, ...spawnLineage, updatedAt: now },
+      },
     });
     if (forked.status === "forked" || forked.status === "skipped") {
       if (forked.status === "skipped" && forked.decision?.status === "skip") {
@@ -428,13 +426,13 @@ export async function consultRealtimeVoiceAgent(params: {
   };
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
   const lifecycleAbortController = new AbortController();
+  const lifecycleInterruption = new Error(
+    "Realtime voice agent consult interrupted by a session lifecycle change.",
+  );
   const sessionWorkAdmission = await beginSessionWorkAdmission({
     scope: storePath,
     identities: [params.sessionKey, initialSessionEntry?.sessionId],
-    onInterrupt: () =>
-      lifecycleAbortController.abort(
-        new Error("Realtime voice agent consult interrupted by a session lifecycle change."),
-      ),
+    onInterrupt: () => lifecycleAbortController.abort(lifecycleInterruption),
     assertAllowed: () => {
       const currentEntry = params.agentRuntime.session.getSessionEntry({
         agentId,
@@ -464,7 +462,17 @@ export async function consultRealtimeVoiceAgent(params: {
 
   try {
     return await sessionWorkAdmission.run(async () => {
-      await params.agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
+      await params.agentRuntime.ensureAgentWorkspace({
+        dir: workspaceDir,
+        guard: {
+          assertHost: () => {
+            lifecycleAbortController.signal.throwIfAborted();
+            if (!sessionWorkAdmission.isActive()) {
+              throw lifecycleInterruption;
+            }
+          },
+        },
+      });
 
       // The consult session stores normal session metadata so subsequent voice turns can keep
       // routing and, in fork mode, recover useful conversation context from the requester.

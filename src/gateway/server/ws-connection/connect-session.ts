@@ -225,6 +225,7 @@ export async function attachAuthenticatedGatewayConnect(
           authenticatedUserProfile?.profileId,
           preparedProfile?.authority.role ?? null,
           context.configSnapshot,
+          preparedProfile?.authority.githubLogin ?? null,
         )
       : undefined;
   const scopes = rolePolicy

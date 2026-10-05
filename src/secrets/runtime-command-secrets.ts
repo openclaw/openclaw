@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
@@ -120,11 +120,7 @@ function restoreInactiveWebCommandSecretTargets(params: {
     }
     // Provider overrides can make a web SecretRef active for this command only. Other web refs
     // must be restored from source config so assignment analysis keeps them inactive.
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
-      defaults,
-    });
+    const ref = parseSecretRef(target.refValue, defaults) ?? parseSecretRef(target.value, defaults);
     if (!ref) {
       continue;
     }
@@ -202,11 +198,7 @@ async function resolveForcedActiveCommandSecretTargets(params: {
     if (!activePaths.has(target.path)) {
       continue;
     }
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
-      defaults,
-    });
+    const ref = parseSecretRef(target.refValue, defaults) ?? parseSecretRef(target.value, defaults);
     if (!ref) {
       continue;
     }

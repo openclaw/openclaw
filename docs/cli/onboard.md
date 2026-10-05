@@ -100,7 +100,7 @@ not overwrite the existing skill.
   shared-auth ownership still attached to the old `main` installation.
 - `--flow quickstart`: opens the classic wizard with minimal prompts, uses
   a generated Gateway secret by default, without asking you to choose token or
-  password. Existing password-mode configurations are preserved. Explicit local Gateway flags such as
+  password. Existing password and trusted-proxy configurations are preserved. Explicit local Gateway flags such as
   `--gateway-port`, `--gateway-bind`, `--gateway-auth`, and `--tailscale`
   override the corresponding stored or default quickstart values; omitted
   options keep their current values.
@@ -385,6 +385,8 @@ With `--secret-input-mode ref`, onboarding stores new credentials as refs instea
 
 ### Gateway auth (non-interactive)
 
+Existing [trusted-proxy authentication](/gateway/trusted-proxy-auth) and its proxy policy stay intact on rerun unless you explicitly select another auth mode. Selecting Tailscale Funnel while retaining trusted-proxy auth is rejected; switch explicitly with `--gateway-auth password` or keep Tailscale exposure off. Same-host completion uses the configured local password (including SecretRefs) or `OPENCLAW_GATEWAY_PASSWORD`, through the Gateway's loopback listener. Post-setup health checks stay on the configured local Gateway port, ignoring ambient Gateway URL and port overrides.
+
 - Without auth flags or an existing credential, onboarding generates a Gateway secret and stores it as `gateway.auth.token` with `gateway.auth.mode: "token"`. Quickstart keeps its existing plaintext storage default; `--secret-input-mode ref` explicitly requests a reference. Run `openclaw dashboard` to open the Control UI.
 - `--gateway-auth token --gateway-token <token>` stores a supplied plaintext secret.
 - `--gateway-password <value>` selects password mode without an auth-choice prompt; `--gateway-auth password` also explicitly selects password mode. An existing password-mode config stays in password mode on rerun.
@@ -488,6 +490,9 @@ JSON error; add `--non-interactive --accept-risk` for automation.
 With `--modern`, JSON is a one-shot OpenClaw overview and exits after that
 single result. Use `--non-interactive` for other scripts. Invalid existing
 configuration also returns one JSON failure; repair guidance remains on stderr.
+Non-interactive provider setup failures, including an unreachable local model
+server or missing credentials, return a JSON error on stdout and a nonzero exit
+status. Without `--json`, the same recovery guidance is printed as readable text.
 </Note>
 
 ## Provider prefiltering

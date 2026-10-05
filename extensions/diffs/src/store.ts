@@ -26,7 +26,7 @@ import {
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const MAX_TTL_MS = 6 * 60 * 60 * 1000;
 const SWEEP_FALLBACK_AGE_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const CLEANUP_CONCURRENCY = 4;
 const MAX_DECODED_HTML_BYTES = 64 * 1024 * 1024;
 const ARTIFACT_ID_ATTEMPTS = 8;
@@ -75,7 +75,6 @@ export class DiffArtifactStore {
   private readonly rootDir: string;
   private readonly blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
   private readonly logger?: PluginLogger;
-  private readonly cleanupIntervalMs: number;
   private readonly renderingFileIds = new Set<string>();
   private cleanupInFlight: Promise<void> | null = null;
   private cleanupStopped = false;
@@ -85,15 +84,10 @@ export class DiffArtifactStore {
     rootDir: string;
     blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
     logger?: PluginLogger;
-    cleanupIntervalMs?: number;
   }) {
     this.rootDir = path.resolve(params.rootDir);
     this.blobStore = params.blobStore;
     this.logger = params.logger;
-    this.cleanupIntervalMs =
-      params.cleanupIntervalMs === undefined
-        ? DEFAULT_CLEANUP_INTERVAL_MS
-        : Math.max(0, Math.floor(params.cleanupIntervalMs));
   }
 
   async createArtifact(params: CreateArtifactParams): Promise<DiffArtifactMeta> {
@@ -333,7 +327,7 @@ export class DiffArtifactStore {
       return;
     }
 
-    this.nextCleanupAt = now + this.cleanupIntervalMs;
+    this.nextCleanupAt = now + CLEANUP_INTERVAL_MS;
     void this.cleanupExpired().catch((error: unknown) => {
       this.nextCleanupAt = 0;
       this.logger?.warn(`Failed to clean expired diff artifacts: ${String(error)}`);

@@ -201,10 +201,7 @@ describe("LINE rich-message boundaries", () => {
         displayText: "Continue",
       } as const;
       const overhead =
-        Buffer.byteLength(
-          JSON.stringify(createActionCard(title, "x", [{ label: "Continue", action }])),
-          "utf8",
-        ) - 1;
+        Buffer.byteLength(JSON.stringify(createActionCard(title, "x", [action])), "utf8") - 1;
       const text = character.repeat(
         Math.ceil((30_000 - overhead + extraBytes) / Buffer.byteLength(character, "utf8")),
       );

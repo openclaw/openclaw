@@ -1,12 +1,9 @@
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 import { InvalidArgumentError, type Command } from "commander";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import { collectOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { isProxyMachineOutput } from "./proxy-output-mode.js";
-
-const loadProxyRuntime = createLazyPromise(() => import("./proxy-cli.runtime.js"));
 
 function parseIntegerOption(value: string | undefined, flag: string): number {
   const parsed = parseStrictInteger(value);
@@ -44,7 +41,7 @@ export function registerProxyCli(program: Command) {
     .option("--host <host>", "Bind host", "127.0.0.1")
     .option("--port <port>", "Bind port", parsePortOption)
     .action(async (opts: { host?: string; port?: number }) => {
-      const runtime = await loadProxyRuntime();
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.runDebugProxyStartCommand(opts);
     });
 
@@ -57,7 +54,7 @@ export function registerProxyCli(program: Command) {
     .option("--port <port>", "Bind port", parsePortOption)
     .argument("[cmd...]", "Command to run after --")
     .action(async (cmd: string[], opts: { host?: string; port?: number }) => {
-      const runtime = await loadProxyRuntime();
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.runDebugProxyRunCommand({
         host: opts.host,
         port: opts.port,
@@ -93,7 +90,7 @@ export function registerProxyCli(program: Command) {
         apnsAuthority?: string;
         timeoutMs?: number;
       }) => {
-        const runtime = await loadProxyRuntime();
+        const runtime = await import("./proxy-cli.runtime.js");
         await runtime.runProxyValidateCommand({
           json: opts.json,
           proxyUrl: opts.proxyUrl,
@@ -112,7 +109,7 @@ export function registerProxyCli(program: Command) {
     .description("Report current debug proxy transport coverage and remaining gaps")
     .option("--json", "Print machine-readable JSON")
     .action(async () => {
-      const runtime = await loadProxyRuntime();
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.runDebugProxyCoverageCommand();
     });
 
@@ -124,7 +121,7 @@ export function registerProxyCli(program: Command) {
       parsePositiveIntegerOption(value, "--limit"),
     )
     .action(async (opts: { json?: boolean; limit?: number }) => {
-      const runtime = await loadProxyRuntime();
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.runDebugProxySessionsCommand(opts);
     });
 
@@ -138,7 +135,7 @@ export function registerProxyCli(program: Command) {
     .option("--json", "Print machine-readable JSON")
     .option("--session <id>", "Restrict to a capture session id")
     .action(async (opts: { json?: boolean; preset: CaptureQueryPreset; session?: string }) => {
-      const runtime = await loadProxyRuntime();
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.runDebugProxyQueryCommand({
         json: opts.json,
         preset: opts.preset,
@@ -151,7 +148,7 @@ export function registerProxyCli(program: Command) {
     .description("Read a captured payload blob by id")
     .requiredOption("--id <blobId>", "Blob id")
     .action(async (opts: { id: string }) => {
-      const runtime = await loadProxyRuntime();
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.readDebugProxyBlobCommand({ blobId: opts.id });
     });
 
@@ -159,7 +156,7 @@ export function registerProxyCli(program: Command) {
     .command("purge")
     .description("Delete all captured traffic metadata and blobs")
     .action(async () => {
-      const runtime = await loadProxyRuntime();
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.runDebugProxyPurgeCommand();
     });
 }

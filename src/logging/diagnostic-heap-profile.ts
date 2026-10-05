@@ -1,4 +1,5 @@
 import type { HeapProfiler, Runtime } from "node:inspector";
+import type { HeapSpaceInfo } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DiagnosticsHeapProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -28,6 +29,8 @@ type Metadata = {
   includeObjectsCollectedByMinorGC: boolean;
   heapUsedBefore: number;
   heapUsedAfter: number;
+  heapSpacesBefore: HeapSpaceInfo[];
+  heapSpacesAfter: HeapSpaceInfo[];
   rssBefore: number;
   rssAfter: number;
 };
@@ -204,6 +207,8 @@ export function captureDiagnosticHeapProfile(
         ...collectionOptions,
         heapUsedBefore: measurement.before.heapUsed,
         heapUsedAfter: measurement.after.heapUsed,
+        heapSpacesBefore: measurement.before.heapSpaces,
+        heapSpacesAfter: measurement.after.heapSpaces,
         rssBefore: measurement.before.rss,
         rssAfter: measurement.after.rss,
       }),

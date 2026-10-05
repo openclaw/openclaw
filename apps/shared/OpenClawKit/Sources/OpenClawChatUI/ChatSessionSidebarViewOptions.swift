@@ -17,6 +17,7 @@ extension ChatSessionSidebarModel {
         var status: OpenClawChatSidebarStatus = .active
         var ownerFilter = ""
         var showMessagePreview = false
+        var selectedAgentID: String?
 
         var ownerID: String? {
             self.ownerFilter.hasPrefix("owner:") ? String(self.ownerFilter.dropFirst(6)) : nil
@@ -93,8 +94,9 @@ extension ChatSessionSidebarModel {
         }
 
         func sortedByCreation(
-            _ sessions: [OpenClawChatSessionEntry], owners: [OpenClawChatSessionEntry.CreatedActor]? = nil)
-            -> [OpenClawChatSessionEntry]
+            _ sessions: [OpenClawChatSessionEntry],
+            owners: [OpenClawChatSessionEntry.CreatedActor]? = nil,
+            identity: (OpenClawChatSessionEntry) -> String = { $0.key }) -> [OpenClawChatSessionEntry]
         {
             /// ui/src/components/app-sidebar-session-navigation-logic.ts:
             /// valid creation dates first, descending; then first observation and key.
@@ -125,8 +127,8 @@ extension ChatSessionSidebarModel {
                     guard let right else { return true }
                     return left > right
                 }
-                let leftIndex = self.indices[lhs.key] ?? Int.max
-                let rightIndex = self.indices[rhs.key] ?? Int.max
+                let leftIndex = self.indices[identity(lhs)] ?? Int.max
+                let rightIndex = self.indices[identity(rhs)] ?? Int.max
                 return leftIndex == rightIndex ? lhs.key < rhs.key : leftIndex < rightIndex
             }
         }

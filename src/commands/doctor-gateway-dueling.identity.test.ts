@@ -345,34 +345,31 @@ async function exerciseDoctor(
   );
 }
 
-it.each<Installation>([
-  "named",
-  "reverse aliases",
-  "default",
-  "canonical default",
-  "Compose env ports",
-  "explicit relocated",
+it.each<{
+  installation: Installation;
+  difference?: Difference;
+  afterRemoval?: AfterRemoval;
+}>([
+  { installation: "named" },
+  { installation: "reverse aliases" },
+  { installation: "default" },
+  { installation: "canonical default" },
+  { installation: "Compose env ports" },
+  { installation: "explicit relocated" },
+  { installation: "named", difference: "account" },
+  { installation: "named", difference: "user profile" },
+  { installation: "named", difference: "profile environment" },
+  { installation: "named", difference: "profile argument" },
+  { installation: "named", difference: "state file" },
+  { installation: "named", difference: "config file" },
+  { installation: "named", difference: "node service" },
+  { installation: "named", difference: "port" },
+  { installation: "named", difference: "unavailable" },
+  { installation: "named", difference: "confirmation drift" },
+  { installation: "named", afterRemoval: "legacy alias" },
+  { installation: "named", afterRemoval: "unverifiable alias" },
 ])(
-  "Doctor requests removal of the confirmed duplicate user unit for %s installation",
-  async (installation) => exerciseDoctor(installation),
-);
-
-it.each<Difference>([
-  "account",
-  "user profile",
-  "profile environment",
-  "profile argument",
-  "state file",
-  "config file",
-  "node service",
-  "port",
-  "unavailable",
-  "confirmation drift",
-])("Doctor preserves the user unit when system identity differs: %s", async (difference) =>
-  exerciseDoctor("named", difference),
-);
-
-it.each<AfterRemoval>(["legacy alias", "unverifiable alias"])(
-  "Doctor reports the remaining %s without removing it",
-  async (afterRemoval) => exerciseDoctor("named", undefined, afterRemoval),
+  "Doctor only removes confirmed duplicates and reports remaining ownership: %j",
+  async ({ installation, difference, afterRemoval }) =>
+    exerciseDoctor(installation, difference, afterRemoval),
 );

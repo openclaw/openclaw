@@ -18,6 +18,7 @@ describe("Gateway core reload policy", () => {
     { change: "allow", mode: "noop" },
     { change: "remove-policy", mode: "noop" },
     { change: "default", mode: "hot" },
+    { change: "github-assignment", mode: "hot" },
     { change: "remove-role", mode: "hot" },
     { change: "mixed-role", mode: "hot" },
     { change: "mixed-gateway", mode: "restart" },
@@ -55,6 +56,9 @@ describe("Gateway core reload policy", () => {
         break;
       case "default":
         roles.default = "staff";
+        break;
+      case "github-assignment":
+        roles.assignments = { byGithubLogin: { "release-operator": "staff" } };
         break;
       case "remove-role":
         delete roles.definitions.staff;

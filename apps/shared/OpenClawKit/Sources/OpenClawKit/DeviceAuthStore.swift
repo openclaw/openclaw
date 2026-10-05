@@ -329,10 +329,7 @@ public enum DeviceAuthStore {
         storedRole: String,
         entry: DeviceAuthEntry) throws
     {
-        let scopesData = try JSONEncoder().encode(self.normalizeScopes(entry.scopes))
-        guard let scopes = String(bytes: scopesData, encoding: .utf8) else {
-            throw OpenClawNativeStateError("failed to encode device auth scopes as UTF-8")
-        }
+        let scopes = try String(bytes: JSONEncoder().encode(self.normalizeScopes(entry.scopes)), encoding: .utf8)!
         let statement = try database.prepare("""
         INSERT INTO device_auth_tokens (device_id, role, token, scopes_json, updated_at_ms)
         VALUES (?, ?, ?, ?, ?)

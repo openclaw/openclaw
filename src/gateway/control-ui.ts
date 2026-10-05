@@ -832,18 +832,11 @@ const CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH = `${CONTROL_UI_NAMESPA
   "",
 )}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
 
-// v2026.6.1 clients use this pre-#66946 bootstrap suffix, including under a base path.
-const LEGACY_CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw";
-const LEGACY_BOOTSTRAP_CONFIG_PATH = `${LEGACY_CONTROL_UI_NAMESPACE_PREFIX}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
-
 function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
-  if (
+  return (
     pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}` ||
-    pathname === `${basePath}${LEGACY_BOOTSTRAP_CONFIG_PATH}`
-  ) {
-    return true;
-  }
-  return basePath === "" && pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH;
+    (basePath === "" && pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH)
+  );
 }
 
 export async function handleControlUiHttpRequest(

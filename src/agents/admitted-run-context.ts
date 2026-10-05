@@ -9,9 +9,11 @@ import {
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  captureAgentRunDelegatedSourceAssertion,
   claimAgentRunDelegatedAuthority,
   getAgentRunLifecycleGeneration,
   readAgentRunDelegatedAuthorityFailure,
@@ -51,6 +53,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   retain?: () => () => void;
   /** Live assignment from the original prepared profile lease. */
   readCurrentRoleAssignment?: (this: void) => string | null;
+  /** Verified primary login from the same live profile authority. */
+  readCurrentGithubLogin?: (this: void) => string | null;
   /** Prepared role permissions; source-policy changes revoke the owning authority. */
   rolePolicy?: Readonly<{
     sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
@@ -76,20 +80,21 @@ export function createAdmittedRunOperatorAuthority(
   const signal = source.signal;
   let revoked = false;
   let revocationReason: unknown;
-  const assertCurrent = () => {
+  const assertCurrent = composeSessionSourceAssertion([check], (assertSource) => {
     if (revoked) {
       throw revocationReason;
     }
     try {
       signal?.throwIfAborted();
-      check();
+      assertSource();
     } catch (error) {
       revoked = true;
       revocationReason = error;
       throw error;
     }
-  };
+  });
   const readCurrentRoleAssignment = source.readCurrentRoleAssignment;
+  const readCurrentGithubLogin = source.readCurrentGithubLogin;
   const authority = Object.freeze({
     profileId: source.profileId,
     scopes: Object.freeze([...source.scopes]),
@@ -108,6 +113,12 @@ export function createAdmittedRunOperatorAuthority(
       ? () => {
           assertCurrent();
           return readCurrentRoleAssignment();
+        }
+      : undefined,
+    readCurrentGithubLogin: readCurrentGithubLogin
+      ? () => {
+          assertCurrent();
+          return readCurrentGithubLogin();
         }
       : undefined,
     rolePolicy: source.rolePolicy
@@ -320,23 +331,39 @@ export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,
   signal?: AbortSignal,
 ): (() => void) | undefined {
-  const operationalRunInstance = context.operationalRunInstance;
   const authority = getAdmittedRunDelegatedAuthority(context);
-  if (!authority) {
+  return authority ? captureAdmittedRunActiveAssertion(context, authority, signal) : undefined;
+}
+
+/** Capture an already-resolved authority without repeating its source reads. */
+export function captureAdmittedRunActiveAssertion(
+  context: AdmittedRunContext,
+  authority: AgentRunDelegatedAuthority,
+  signal?: AbortSignal,
+) {
+  const operationalRunInstance = context.operationalRunInstance;
+  const lease = delegatedAuthorityLeases.get(context);
+  const refuse = (): never => {
+    throw new Error(
+      "admitted run authority is no longer active",
+      readAgentRunDelegatedAuthorityFailure(authority),
+    );
+  };
+  const source = captureAgentRunDelegatedSourceAssertion(authority, refuse);
+  if (!lease || lease.foregroundClosed || lease.authority !== authority || !source) {
     return undefined;
   }
-  return () => {
+  return composeSessionSourceAssertion([source.assertCurrent], (assertSource) => {
     if (
       signal?.aborted ||
       context.operationalRunInstance !== operationalRunInstance ||
-      getAdmittedRunDelegatedAuthority(context) !== authority
+      delegatedAuthorityLeases.get(context) !== lease ||
+      lease.foregroundClosed
     ) {
-      throw new Error(
-        "admitted run authority is no longer active",
-        readAgentRunDelegatedAuthorityFailure(authority),
-      );
+      refuse();
     }
-  };
+    assertSource();
+  });
 }
 
 /** Idempotently compare-releases the authority captured by this admission. */
@@ -489,13 +516,12 @@ export function prepareAgentRunAdmission(params: {
   let sourceFailure: Error | undefined;
   const assertSourceCurrent =
     (sourceAssertion || assertOperatorCurrent) &&
-    (() => {
+    composeSessionSourceAssertion([sourceAssertion, assertOperatorCurrent], (assertSources) => {
       if (sourceFailure) {
         throw sourceFailure;
       }
       try {
-        sourceAssertion?.();
-        assertOperatorCurrent?.();
+        assertSources();
       } catch (error) {
         sourceFailure = new Error("source execution authority is no longer active", {
           cause: error,

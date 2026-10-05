@@ -16,7 +16,10 @@ import {
   waitForSynchronizedFrameRows,
   type FixtureLogEntry,
 } from "./tui-pty-harness-fixture-test-support.js";
-import { registerTuiReconnectTests } from "./tui-pty-reconnect-test-support.js";
+import {
+  registerTuiDisconnectedDraftTests,
+  registerTuiReconnectTests,
+} from "./tui-pty-reconnect-test-support.js";
 import {
   exerciseStreamingRendering,
   registerToolCardRenderingTests,
@@ -43,6 +46,8 @@ it("rejects rendering oracle false positives", () => {
   expect(streamingPrefixFrame(promptFrame)).toBe(false);
   expect(toolFrame(reversedTool, false)).toBe(false);
 });
+
+registerTuiDisconnectedDraftTests(STARTUP_TIMEOUT_MS, STARTUP_TEST_TIMEOUT_MS);
 
 describe("TUI PTY harness", { concurrent: false }, () => {
   let fixture: Awaited<ReturnType<typeof startTuiFixture>>;

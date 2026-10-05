@@ -30,16 +30,16 @@ import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+import { buildContextEngineBinding } from "./thread-context-engine.js";
 import {
-  buildContextEngineBinding,
-  buildTurnCollaborationMode,
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
-} from "./thread-lifecycle.js";
+} from "./thread-fingerprints.js";
 import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
 import {
   buildCodexHistoryProvenancePrefix,
   buildCodexParentLocalInstructions,
+  buildTurnCollaborationMode,
 } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
@@ -309,7 +309,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
             .map((tool) => tool.name)
             .filter(isNonEmptyString),
-        assertActive: connection.assertCurrent,
+        // Shipped prompt-hook capabilities revalidate synchronously after awaits.
+        assertActive: connection.assertLegacyCurrent,
       },
     });
   const resolveShiftedPromptRanges = (
@@ -563,6 +564,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     const hadInactiveThreadBootstrapBinding = isInactiveThreadBootstrapBinding(binding);
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
       assertCurrent: connection.assertCurrent,
+      authority: connection.authority,
       binding,
       bindingStore,
       identity: bindingIdentity,

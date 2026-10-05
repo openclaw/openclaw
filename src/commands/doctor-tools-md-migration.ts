@@ -20,7 +20,6 @@ import {
 import { shouldMergeToolsMd } from "./doctor-tools-md-migration-content.js";
 import { rewriteLegacyAgentsToolsGuidance as rewriteLegacyToolsGuidance } from "./doctor-tools-md-migration-guidance.js";
 
-const TOOLS_MD_MIGRATION_CHECK_ID = "core/doctor/tools-md-migration";
 const MIGRATED_SUBSECTION_HEADING = "### Local notes (migrated from TOOLS.md)";
 const NO_CLOBBER_PUBLICATION = {
   strategy: "link-or-copy",
@@ -369,26 +368,18 @@ async function removeToolsSource(source: ToolsMdSource, workspaceDir: string): P
   await syncDirectoryIfSupported(workspaceDir);
 }
 
-function archivePathForSource(
-  agentId: string,
-  source: ToolsMdSource,
-  env: NodeJS.ProcessEnv,
-): string {
-  const safeAgentId = agentId.replace(/[^A-Za-z0-9._-]+/g, "-");
-  return path.join(
-    resolveStateDir(env),
-    "backups",
-    "tools-md-migration",
-    `${safeAgentId}-${source.sha256}.md`,
-  );
-}
-
 async function archiveSource(params: {
   agentId: string;
   source: ToolsMdSource;
   env: NodeJS.ProcessEnv;
-}): Promise<string> {
-  const archivePath = archivePathForSource(params.agentId, params.source, params.env);
+}): Promise<void> {
+  const safeAgentId = params.agentId.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const archivePath = path.join(
+    resolveStateDir(params.env),
+    "backups",
+    "tools-md-migration",
+    `${safeAgentId}-${params.source.sha256}.md`,
+  );
   const archiveDir = path.dirname(archivePath);
   await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 });
   const tempPath = `${archivePath}.doctor-writing-${process.pid}-${Date.now()}`;
@@ -410,43 +401,28 @@ async function archiveSource(params: {
       throw new Error(`TOOLS.md migration archive collision at ${archivePath}`, { cause: error });
     }
   }
-  return archivePath;
-}
-
-function migrationFinding(params: {
-  agentId: string;
-  path: string;
-  message: string;
-  severity?: HealthFinding["severity"];
-  requirement: string;
-}): HealthFinding {
-  return {
-    checkId: TOOLS_MD_MIGRATION_CHECK_ID,
-    severity: params.severity ?? "warning",
-    message: params.message,
-    path: params.path,
-    target: params.agentId,
-    requirement: params.requirement,
-    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to merge TOOLS.md into AGENTS.md.`,
-  };
 }
 
 export async function collectToolsMdMigrationFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
+  const MIGRATION_FINDING_DEFAULTS = {
+    checkId: "core/doctor/tools-md-migration",
+    severity: "warning",
+    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to merge TOOLS.md into AGENTS.md.`,
+  } as const;
   const findings: HealthFinding[] = [];
   for (const target of resolveToolsMdMigrationWorkspaceTargets(cfg)) {
     try {
       const source = await readToolsMd(target.workspaceDir);
       if (source) {
-        findings.push(
-          migrationFinding({
-            agentId: target.primaryAgentId,
-            path: source.path,
-            message: `Agent "${target.primaryAgentId}" still stores local tool notes in TOOLS.md.`,
-            requirement: "legacy-tools-md",
-          }),
-        );
+        findings.push({
+          ...MIGRATION_FINDING_DEFAULTS,
+          target: target.primaryAgentId,
+          path: source.path,
+          message: `Agent "${target.primaryAgentId}" still stores local tool notes in TOOLS.md.`,
+          requirement: "legacy-tools-md",
+        });
         if (shouldMergeToolsMd(source.content)) {
           const agentsPath = path.join(target.workspaceDir, DEFAULT_AGENTS_FILENAME);
           const agentsContent = (
@@ -462,27 +438,25 @@ export async function collectToolsMdMigrationFindings(
             agentIds: target.agentIds,
             mergedChars,
           })) {
-            findings.push(
-              migrationFinding({
-                agentId: budget.agentId,
-                path: agentsPath,
-                message: budget.message,
-                requirement: "tools-md-merged-bootstrap-limit",
-              }),
-            );
+            findings.push({
+              ...MIGRATION_FINDING_DEFAULTS,
+              target: budget.agentId,
+              path: agentsPath,
+              message: budget.message,
+              requirement: "tools-md-merged-bootstrap-limit",
+            });
           }
         }
       }
     } catch (error) {
-      findings.push(
-        migrationFinding({
-          agentId: target.primaryAgentId,
-          path: path.join(target.workspaceDir, DEFAULT_TOOLS_FILENAME),
-          message: `Agent "${target.primaryAgentId}" TOOLS.md cannot be migrated: ${errorMessage(error)}`,
-          severity: "error",
-          requirement: "tools-md-migration-blocked",
-        }),
-      );
+      findings.push({
+        ...MIGRATION_FINDING_DEFAULTS,
+        target: target.primaryAgentId,
+        path: path.join(target.workspaceDir, DEFAULT_TOOLS_FILENAME),
+        message: `Agent "${target.primaryAgentId}" TOOLS.md cannot be migrated: ${errorMessage(error)}`,
+        severity: "error",
+        requirement: "tools-md-migration-blocked",
+      });
     }
   }
   return findings;

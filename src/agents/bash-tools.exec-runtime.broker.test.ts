@@ -7,7 +7,7 @@ import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-c
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 

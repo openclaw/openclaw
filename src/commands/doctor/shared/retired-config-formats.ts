@@ -25,7 +25,39 @@ export function findRetiredConfigUpgradeRequirement(
   checkKeys(config, "", ["heartbeat"]);
   checkKeys(config.routing, "routing", ["allowFrom", "groupChat"]);
   checkKeys(config.plugins, "plugins", ["installs"]);
+  const providers = isRecord(config.models) ? config.models.providers : undefined;
+  if (isRecord(providers)) {
+    for (const [id, provider] of Object.entries(providers)) {
+      if (!isRecord(provider)) {
+        continue;
+      }
+      if (provider.api === "openai-codex-responses") {
+        retired.push(`models.providers.${id}.api`);
+      }
+      if (Array.isArray(provider.models)) {
+        provider.models.forEach((model, index) => {
+          if (isRecord(model) && model.api === "openai-codex-responses") {
+            retired.push(`models.providers.${id}.models.${index}.api`);
+          }
+        });
+      }
+    }
+  }
   checkKeys(config.browser, "browser", ["relayBindHost"]);
+  const browser = isRecord(config.browser) ? config.browser : undefined;
+  if (isRecord(browser?.profiles)) {
+    for (const [id, profile] of Object.entries(browser.profiles)) {
+      if (
+        isRecord(profile) &&
+        typeof profile.driver === "string" &&
+        profile.driver.trim() === "extension" &&
+        typeof profile.cdpUrl === "string" &&
+        profile.cdpUrl.trim()
+      ) {
+        retired.push(`browser.profiles.${id}.cdpUrl`);
+      }
+    }
+  }
   checkKeys(
     isRecord(config.browser) ? config.browser.ssrfPolicy : undefined,
     "browser.ssrfPolicy",
@@ -84,10 +116,14 @@ export function findRetiredConfigUpgradeRequirement(
       checkQueueMode(mode, `messages.queue.byChannel.${channel}`);
     }
   }
+  checkKeys(config.talk, "talk", ["mode", "transport", "brain", "model", "voice"]);
   const channels = isRecord(config.channels) ? config.channels : {};
   checkKeys(config.gateway, "gateway", ["webchat"]);
   checkKeys(channels, "channels", ["webchat"]);
-  checkKeys(channels.telegram, "channels.telegram", ["requireMention"]);
+  checkKeys(channels.telegram, "channels.telegram", ["requireMention", "groupMentionsOnly"]);
+  visitChannelEntries(config, "whatsapp", (scope, configPath) => {
+    checkKeys(scope, configPath, ["exposeErrorText"]);
+  });
   const beforeDiscord = retired.length;
   visitChannelEntries(config, "discord", (scope, configPath) => {
     const voice = isRecord(scope.voice) ? scope.voice : {};
@@ -127,6 +163,9 @@ export function findRetiredConfigUpgradeRequirement(
         checkKeys(direct, `${configPath}.direct.${chatId}`, ["threadReplies"]);
       }
     }
+  });
+  visitChannelEntries(config, "nextcloud-talk", (scope, configPath) => {
+    checkKeys(scope, configPath, ["allowPrivateNetwork"]);
   });
   visitChannelEntries(config, "matrix", (scope, configPath) => {
     checkKeys(scope, configPath, ["allowPrivateNetwork"]);

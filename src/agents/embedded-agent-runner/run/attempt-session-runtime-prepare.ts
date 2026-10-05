@@ -1,13 +1,14 @@
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
+import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { getOpenClawSystemUpdateKind } from "../../internal-runtime-context.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
 import {
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   beginSessionSystemPrompt,
   prepareSessionSystemPrompt,
   retireSessionSystemPrompt,
@@ -112,7 +113,16 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   });
   const { isOpenAIResponsesApi, preparedUserTurnMessage, sessionManager, transcriptPolicy } =
     preparedSessionManager;
-  const sessionPromptState = getEmbeddedSessionPromptState(attempt.sessionId);
+  if (codeModeControlsEnabledForRun && toolSearchCatalogRef) {
+    bindCodeModeSessionStore(
+      toolSearchCatalogRef,
+      sessionManager,
+      sessionLock.withOwnedTranscriptWrite,
+    );
+  }
+  const promptStateLease = retainEmbeddedSessionPromptState(attempt.sessionId);
+  resources.promptStateLease = promptStateLease;
+  const sessionPromptState = promptStateLease.state;
   const usesSystemPromptSeries =
     !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
   const promptRouteKey = JSON.stringify([
@@ -242,7 +252,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   if (!input.isRawModelRun) {
     restoreCacheTtlToolResultProjections(
       toolResultPromptProjectionState,
-      sessionManager.getBranch(),
+      sessionManager.getToolResultProjectionEntries(),
     );
   }
   const settleTracker = createEmbeddedAttemptSessionSettleTracker(activeSession);

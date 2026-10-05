@@ -113,7 +113,7 @@ private struct ControlPatchSettlement {
 
 private struct AgentsResolution {
     let displays: [QuickChatAgentDisplay]
-    let selectedID: String?
+    let selected: QuickChatAgentDisplay?
     let target: OpenClawChatSessionTarget?
 }
 
@@ -121,8 +121,7 @@ private struct RetryIdentity {
     let draft: String
     let message: String
     let thinking: String?
-    let sessionKey: String
-    let agentID: String?
+    let route: OpenClawChatSessionTarget
     let attachments: [OpenClawChatAttachmentPayload]
     let idempotencyKey: String
 }
@@ -172,7 +171,6 @@ final class QuickChatModel {
     private(set) var sendAgentID: String?
     private(set) var targetSessionOverride: QuickChatSessionTargetOverride?
     private(set) var agents: [QuickChatAgentDisplay] = []
-    private(set) var defaultAgentID: String?
     private(set) var selectedAgentID: String?
     private(set) var agentDisplay = QuickChatAgentDisplay.placeholder
     private(set) var missingPermissions: [Capability] = []
@@ -327,9 +325,9 @@ final class QuickChatModel {
                 throw OpenClawChatTransportSendError.notDispatched
             }
             return try await lease.patchSessionSettings(
-                sessionKey: target.sessionKey,
-                agentID: target.agentID,
-                patch: settings)
+                target.sessionKey,
+                target.agentID,
+                settings)
         })
     {
         self.sessionKeyProvider = sessionKeyProvider
@@ -421,26 +419,20 @@ final class QuickChatModel {
         guard self.isCurrentPresentation(id) else { return }
         async let permissionStatus = self.permissionStatusProvider(Self.trackedPermissions)
 
-        let agentsResult: Result<AgentsListResult, Error>
-        do {
-            agentsResult = try await .success(self.agentsProvider())
-        } catch {
-            agentsResult = .failure(error)
-        }
+        let agentsResult = try? await self.agentsProvider()
 
         let status = await permissionStatus
         guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
         self.applyPermissionStatus(status)
 
-        switch agentsResult {
-        case let .success(result):
+        if let result = agentsResult {
             let resolution = self.resolveAgents(result)
             await self.awaitControlPatchSettlement(for: resolution.target)
             guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
             self.applyAgentsList(result, resolution: resolution)
             let modelControlsTask = self.modelControlsTask
             _ = await modelControlsTask?.value
-        case .failure:
+        } else {
             await self.refreshFallbackIdentity(id: id)
         }
     }
@@ -748,47 +740,31 @@ final class QuickChatModel {
 
     private func resolveAgents(_ result: AgentsListResult) -> AgentsResolution {
         let displays = result.agents.filter(\.isSelectableAgent).map(QuickChatAgentDisplay.init(summary:))
-        let selectedID: String? = if let selectedAgentID,
-                                     displays.contains(where: { $0.id == selectedAgentID })
-        {
-            selectedAgentID
-        } else if displays.contains(where: { $0.id == result.defaultid }) {
-            result.defaultid
-        } else {
-            displays.first?.id
-        }
+        let selected = displays.first { $0.id == self.selectedAgentID }
+            ?? displays.first { $0.id == result.defaultid }
+            ?? displays.first
 
-        let target = selectedID.map {
+        let target = selected.map {
             Self.routingTarget(
                 scope: result.scope.value as? String,
-                selectedAgentID: $0,
+                selectedAgentID: $0.id,
                 mainKey: result.mainkey)
         }
-        return AgentsResolution(displays: displays, selectedID: selectedID, target: target)
+        return AgentsResolution(displays: displays, selected: selected, target: target)
     }
 
     private func applyAgentsList(_ result: AgentsListResult, resolution: AgentsResolution) {
-        let displays = resolution.displays
-        let selectedID = resolution.selectedID
-
-        self.agents = displays
-        self.defaultAgentID = result.defaultid
-        self.selectedAgentID = selectedID
+        self.agents = resolution.displays
+        self.selectedAgentID = resolution.selected?.id
         self.agentsScope = result.scope.value as? String
         self.agentsMainKey = result.mainkey
-
-        guard let selectedID,
-              let display = displays.first(where: { $0.id == selectedID })
-        else {
-            self.agentDisplay = .placeholder
-            self.baseRoutingTarget = nil
+        self.agentDisplay = resolution.selected ?? .placeholder
+        self.baseRoutingTarget = resolution.target
+        if resolution.target == nil {
             self.setRoutingTarget(nil)
-            return
+        } else {
+            self.applyRoutingTarget()
         }
-        self.agentDisplay = display
-        guard let target = resolution.target else { return }
-        self.baseRoutingTarget = target
-        self.applyRoutingTarget()
     }
 
     private func refreshFallbackIdentity(id: UUID) async {
@@ -801,7 +777,6 @@ final class QuickChatModel {
         self.applyRoutingTarget()
         let modelControlsTask = self.modelControlsTask
         self.agents = []
-        self.defaultAgentID = nil
         self.selectedAgentID = nil
         self.agentsScope = nil
         self.agentsMainKey = nil
@@ -812,7 +787,6 @@ final class QuickChatModel {
             guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
             self.agentDisplay = display
             self.agents = [display]
-            self.defaultAgentID = display.id
             self.selectedAgentID = display.id
         } catch {
             // The fallback session remains sendable even when its optional identity cannot load.
@@ -892,8 +866,7 @@ final class QuickChatModel {
            retryIdentity.draft == draft,
            retryIdentity.message == message,
            retryIdentity.thinking == thinking,
-           retryIdentity.sessionKey == sessionKey,
-           retryIdentity.agentID == agentID,
+           retryIdentity.route == route,
            retryIdentity.attachments == attachments
         {
             idempotencyKey = retryIdentity.idempotencyKey
@@ -903,8 +876,7 @@ final class QuickChatModel {
                 draft: draft,
                 message: message,
                 thinking: thinking,
-                sessionKey: sessionKey,
-                agentID: agentID,
+                route: route,
                 attachments: attachments,
                 idempotencyKey: idempotencyKey)
         }
@@ -913,9 +885,9 @@ final class QuickChatModel {
         }
         self.sendTask = task
         self.sendState = .sending
+        defer { self.sendTask = nil }
         do {
             let status = try await task.value
-            self.sendTask = nil
             switch ChatSendStatus.acceptance(of: status) {
             case .terminalFailure:
                 self.retryIdentity = nil
@@ -940,12 +912,10 @@ final class QuickChatModel {
                 return true
             }
         } catch is CancellationError {
-            self.sendTask = nil
             self.retryIdentity = nil
             self.sendState = .idle
             return false
         } catch {
-            self.sendTask = nil
             self.sendState = self.text == draft ? .failed(error.localizedDescription) : .idle
             return false
         }
@@ -1235,8 +1205,7 @@ extension QuickChatModel {
         do {
             _ = try await self.settingsPatchProvider(request.target, request.settings)
             if request.settings.fastMode != nil,
-               self.retryIdentity?.sessionKey == request.target.sessionKey,
-               self.retryIdentity?.agentID == request.target.agentID
+               self.retryIdentity?.route == request.target
             {
                 self.retryIdentity = nil
             }

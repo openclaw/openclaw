@@ -971,7 +971,7 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
+    expect(firstMockArg(sessionStoreMocks.loadSessionStoreEntry, "session")).toMatchObject({
       agentId: "main",
       storePath: "/tmp/mock-sessions.json",
       sessionKey: "agent:main:main",
@@ -1087,7 +1087,7 @@ describe("dispatchReplyFromConfig", () => {
         exitCode: 2,
       });
       await opts?.onToolResult?.({
-        text: "🛠️ Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
+        text: "Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
         isError: true,
       });
       return { text: "done" } satisfies ReplyPayload;
@@ -1130,7 +1130,7 @@ describe("dispatchReplyFromConfig", () => {
     const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({
-        text: "🛠️ Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
+        text: "Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
         isError: true,
       });
       return { text: "done" } satisfies ReplyPayload;
@@ -1162,7 +1162,7 @@ describe("dispatchReplyFromConfig", () => {
     const dispatcher = createDispatcher();
     const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });
     const failedOutput = {
-      text: "🛠️ Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
+      text: "Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
       isError: true,
     } satisfies ReplyPayload;
 

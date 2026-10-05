@@ -56,24 +56,20 @@ const LEGACY_PREPARATION_LEASE_RENEW_MS = 30_000;
 function withLegacyPreparationLease(
   entry: LegacyQueuedDeliveryPreparation,
   ownerId: string,
-  now = Date.now(),
 ): LegacyQueuedDeliveryPreparation {
   return {
     ...entry,
     retainOnFailure: true,
     legacyPreparationOwnerId: ownerId,
-    legacyPreparationLeaseExpiresAt: now + LEGACY_PREPARATION_LEASE_MS,
+    legacyPreparationLeaseExpiresAt: Date.now() + LEGACY_PREPARATION_LEASE_MS,
   };
 }
 
-function hasActiveLegacyPreparationLease(
-  entry: LegacyQueuedDeliveryPreparation,
-  now = Date.now(),
-): boolean {
+function hasActiveLegacyPreparationLease(entry: LegacyQueuedDeliveryPreparation): boolean {
   return Boolean(
     entry.legacyPreparationOwnerId &&
     typeof entry.legacyPreparationLeaseExpiresAt === "number" &&
-    entry.legacyPreparationLeaseExpiresAt > now,
+    entry.legacyPreparationLeaseExpiresAt > Date.now(),
   );
 }
 
@@ -107,7 +103,6 @@ function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClaw
     preparedMessageId: entry.preparedMessageId,
     deliveryCompletion: entry.deliveryCompletion,
     completionRetention: entry.completionRetention,
-    skipQueue: true,
   } as const;
 }
 
@@ -392,13 +387,11 @@ async function finalizePreparedMigration(params: {
       ...params.entry,
       cfg: params.cfg,
       payloads: acceptedPayloads,
-      skipQueue: true,
     };
     const staged = await stageQueuePayloadMedia({
       payloads: acceptedPayloads,
       mediaAccess: resolveOutboundMediaAccessForSend(
         mediaParams,
-        params.entry.channel,
         collectPayloadMediaSources(acceptedPayloads),
       ),
       maxBytes: resolveOutboundMediaMaxBytes({

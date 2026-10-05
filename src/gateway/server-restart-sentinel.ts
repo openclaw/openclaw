@@ -23,10 +23,7 @@ import { RESTART_CONTINUATION_CONTEXT_PREFIX } from "../infra/heartbeat-events-f
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
   clearRestartSentinelIfRevision,
-  finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
-  readRestartSentinel,
-  type RestartSentinelPayload,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import {
@@ -77,6 +74,7 @@ import {
   type PendingUpdateSentinelIdentity,
 } from "./server-restart-sentinel-snapshot.js";
 import { finalizeRestartUpdateRun } from "./server-restart-update-run.js";
+import { recordLatestUpdateRestartSentinel } from "./server-update-sentinel.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 import {
@@ -88,7 +86,6 @@ const log = createSubsystemLogger("gateway/restart-sentinel");
 const RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS = process.env.VITEST ? 1 : 6_000;
 const CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS = 2_000;
 const CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS = 900;
-let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
 
 /** Settles every queue entry through its durable producer before cron cleanup. */
 export const settleQueuedSessionDelivery: SettleSessionDeliveryFn = async (
@@ -363,10 +360,7 @@ async function loadRestartSentinelStartupTask(params: {
   const noticeContext = params.context;
   const queueContext = noticeContext.workerContext;
   const env = queueContext.environment;
-  const snapshot = await readRestartSentinelStartupSnapshot({
-    ...params,
-    warn: (message) => log.warn(message),
-  });
+  const snapshot = await readRestartSentinelStartupSnapshot(params);
   if (!snapshot) {
     return null;
   }
@@ -690,31 +684,4 @@ export async function scheduleRestartSentinelWake(params: {
     return;
   }
   await runStartupTasks({ tasks: [task], log });
-}
-
-export async function refreshLatestUpdateRestartSentinel(
-  env: NodeJS.ProcessEnv = captureDeliveryQueueStateContext().workerContext.environment,
-): Promise<RestartSentinelPayload | null> {
-  const current = await readRestartSentinel(env);
-  if (
-    current?.payload.kind === "update" &&
-    isPendingControlPlaneUpdateRestartSentinel(current.payload)
-  ) {
-    latestUpdateRestartSentinel = structuredClone(current.payload);
-    return structuredClone(latestUpdateRestartSentinel);
-  }
-  const finalized = await finalizeUpdateRestartSentinelRunningVersion(undefined, env);
-  const sentinel = finalized ?? current;
-  if (sentinel?.payload.kind === "update") {
-    latestUpdateRestartSentinel = structuredClone(sentinel.payload);
-  }
-  return structuredClone(latestUpdateRestartSentinel);
-}
-
-export function getLatestUpdateRestartSentinel(): RestartSentinelPayload | null {
-  return structuredClone(latestUpdateRestartSentinel);
-}
-
-export function recordLatestUpdateRestartSentinel(payload: RestartSentinelPayload): void {
-  latestUpdateRestartSentinel = structuredClone(payload);
 }

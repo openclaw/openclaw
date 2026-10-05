@@ -84,7 +84,7 @@ Allow `workspace.skills` and `file.create`, read access to the workspace, and
 write access to these paths (replace `/workspace` with the configured root):
 
 - `/workspace/skills` and `/workspace/skills/**`, including native replacement staging.
-- `/workspace/.clawhub/lock.json` and `/workspace/.clawdhub/lock.json` for installation tracking.
+- `/workspace/.clawhub/lock.json` for installation tracking.
 - `/workspace/.openclaw/skill-installs/**` for temporary source uploads.
 
 The adapter opens an admitted node operation before uploading a bounded source

@@ -257,7 +257,7 @@ describe("bootstrap limit resolvers", () => {
       {
         agents: {
           defaults,
-          list: [{ id: "worker", bootstrapMaxChars: 0.5, bootstrapTotalMaxChars: 0.5 }],
+          entries: { worker: { bootstrapMaxChars: 0.5, bootstrapTotalMaxChars: 0.5 } },
         },
       },
       "worker",

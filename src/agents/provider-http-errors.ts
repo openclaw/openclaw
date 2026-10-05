@@ -18,7 +18,7 @@ import {
 } from "../infra/http-body.js";
 import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
 import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
-import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
 import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 export { asBoolean } from "../utils/boolean.js";

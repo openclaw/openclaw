@@ -43,24 +43,16 @@ import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunne
 import { boundedWorkerError } from "./worker-error.js";
 
 export function nodeWorkerSpawnResultFromReceipt(
-  receipt: NodeWorkerSupervisorReceipt,
+  receipt: TerminalNodeWorkerSupervisorReceipt,
 ): SpawnResult {
-  if (
-    receipt.state === "completed" ||
-    receipt.state === "failed" ||
-    receipt.state === "interrupted" ||
-    receipt.state === "cancelled"
-  ) {
-    return {
-      stdout: receipt.state === "completed" ? receipt.resultJson : "",
-      stderr: receipt.state === "completed" ? "" : receipt.errorText,
-      code: receipt.state === "completed" ? 0 : 1,
-      signal: null,
-      killed: receipt.state === "cancelled" || receipt.state === "interrupted",
-      termination: "exit",
-    };
-  }
-  throw new Error("node worker launch returned without a terminal receipt");
+  return {
+    stdout: receipt.state === "completed" ? receipt.resultJson : "",
+    stderr: receipt.state === "completed" ? "" : receipt.errorText,
+    code: receipt.state === "completed" ? 0 : 1,
+    signal: null,
+    killed: receipt.state === "cancelled" || receipt.state === "interrupted",
+    termination: "exit",
+  };
 }
 
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;

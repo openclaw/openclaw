@@ -2,7 +2,6 @@ import { z } from "zod";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { parseWorkerCapacity } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import { workerProtocolObject } from "../worker/protocol-record.js";
-import { WORKER_TOOL_NAMES, type WorkerToolName } from "../worker/tool-authority.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
 export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
@@ -38,7 +37,7 @@ const LEGACY_NODE_WORKER_LAUNCH_TOOL_NAMES = Object.freeze([
   "sessions_spawn",
   "sessions_send",
   "portal",
-] satisfies WorkerToolName[]);
+]);
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
   code: "update-required",
@@ -58,15 +57,10 @@ const CapacitySnapshot = z.transform((value, context) => {
   }
   return capacity;
 });
-// Unknown names are ignored so newer nodes can still declare to this Gateway.
 const LaunchToolNames = z
   .array(z.string().min(1).max(64))
   .max(64)
-  .refine((names) => new Set(names).size === names.length)
-  .transform((names): readonly WorkerToolName[] => {
-    const declared = new Set<string>(names);
-    return WORKER_TOOL_NAMES.filter((name) => declared.has(name));
-  });
+  .refine((names) => new Set(names).size === names.length);
 const WorkerHost = z
   .union([
     workerProtocolObject({
@@ -173,7 +167,7 @@ export function resolveNodeWorkerExecutionIssue(
 
 export function resolveNodeWorkerLaunchToolNames(
   workerHost: NodeWorkerHostDeclaration | undefined,
-): readonly WorkerToolName[] {
+): readonly string[] {
   return (
     (workerHost?.enabled && workerHost.launchToolNames) || LEGACY_NODE_WORKER_LAUNCH_TOOL_NAMES
   );

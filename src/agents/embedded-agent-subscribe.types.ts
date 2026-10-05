@@ -4,6 +4,7 @@
 import type {
   BlockReplyContext,
   PartialReplyPayload,
+  ReasoningStreamPayload,
   SourceReplyDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
@@ -28,13 +29,6 @@ import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
 import type { NormalizedUsage } from "./usage.js";
 export type { BlockReplyChunking } from "./embedded-agent-subscribe.shared-types.js";
-
-type ReasoningStreamPayload = Pick<
-  ReplyPayload,
-  "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
-> & {
-  requiresReasoningProgressOptIn?: boolean;
-};
 
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
@@ -155,6 +149,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   replaySafeToolNames?: ReadonlySet<string>;
   /** Exact names of the marked Code Mode `exec` control tool(s) registered for this run. */
   codeModeExecToolNames?: ReadonlySet<string>;
+  /** Exact names of tools whose author declared `canDeliverSourceReply`. */
+  sourceReplyCapableToolNames?: ReadonlySet<string>;
   /** Canonical owner keys for unique plugin tools that can change durable state. */
   sideEffectToolOwners?: ReadonlyMap<string, string>;
   /**

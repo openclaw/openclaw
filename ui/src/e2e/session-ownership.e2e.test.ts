@@ -750,7 +750,7 @@ suite.define(() => {
     expect(await gateway.getRequests("session.members.add")).toHaveLength(0);
   });
 
-  it("scrolls and pages high-volume sharing through one compact menu", async () => {
+  it("scrolls the complete sharing directory through one compact menu", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1280 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -936,7 +936,7 @@ suite.define(() => {
     expect(afterScroll.firstMemberTop).toBeLessThan(beforeScroll.firstMemberTop);
     await expectBrowser(
       dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
-    ).toHaveCount(20);
+    ).toHaveCount(30);
     await expect
       .poll(() => tooltipTitleText(longNameItem.locator(".chat-pane__sharing-member-label")))
       .toBe(longMemberLabel);
@@ -945,13 +945,12 @@ suite.define(() => {
       .toBe(longMemberId);
     await expectBrowser(selectedIndicator).toHaveCount(1);
     expect(await selectedIndicator.getAttribute("aria-label")).not.toBeNull();
-    await dropdown.getByRole("button", { name: "Next", exact: true }).click();
-    await expectBrowser(
-      dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
-    ).toHaveCount(10);
-    // The final page retains both non-human icons; owner-chip presentation is human-only.
+    // All identities share one list; owner-chip presentation remains human-only.
     await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
-    await expectBrowser(dropdown.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
+    await expectBrowser(dropdown.getByRole("button", { name: "Next", exact: true })).toHaveCount(0);
+    await expectBrowser(
+      dropdown.getByRole("button", { name: "Previous", exact: true }),
+    ).toHaveCount(0);
   });
 
   it("clears a selected draft mode when sharing policy becomes unavailable", async () => {

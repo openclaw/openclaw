@@ -193,7 +193,7 @@ run_remote_testbox_gates() {
       const { parsePositiveInt } = await import(pathToFileURL(process.argv[1] + "/lib/numeric-options.mjs").href);
       const value = process.argv[2].trim();
       if (value) {
-        try { console.log(parsePositiveInt(value, process.argv[3])); }
+        try { process.stdout.write(String(parsePositiveInt(value, process.argv[3]))); }
         catch (error) { console.error(error.message); process.exitCode = 2; }
       }
     ' "$script_parent_dir" "${!name}" "$name") || return 2

@@ -6,11 +6,13 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import {
   createPackageIntegrityReader,
   PackageIntegrityLimitError,
 } from "./package-update-integrity.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
@@ -49,6 +51,8 @@ describe("package verification bounds", () => {
         if (observation !== "racy") {
           now = clock() + 6_000;
         }
+        const hash = interceptPackageFileHashes();
+        const hashedFiles = () => hash.mock.calls.map(([file]) => file);
         const open = vi.spyOn(fs, "open");
         const packageOpens = () =>
           open.mock.calls
@@ -56,22 +60,25 @@ describe("package verification bounds", () => {
             .filter((file) => file.startsWith(`${packageRoot}${path.sep}`));
         const reader = createPackageIntegrityReader();
         const first = await reader.tree(packageRoot);
-        const files = packageOpens();
+        const files = hashedFiles();
         expect(files).toContain(empty);
+        expect(new Set(files).size).toBe(files.length);
+        hash.mockClear();
         open.mockClear();
         const journal = JSON.stringify(first);
         const reuse = observation === "journal" ? JSON.parse(journal) : first;
         expect(await reader.tree(packageRoot, packageRoot, reuse)).toEqual(first);
         // The version read still opens the manifest once, independently of its digest.
-        expect(packageOpens()).toEqual(
-          observation === "settled" ? [path.join(packageRoot, "package.json")] : files,
-        );
+        expect(hashedFiles()).toEqual(observation === "settled" ? [] : files);
+        expect(packageOpens()).toEqual([path.join(packageRoot, "package.json")]);
         if (observation === "racy") {
           // Aging alone cannot turn an earlier racy read into settled evidence.
           now = clock() + 6_000;
+          hash.mockClear();
           open.mockClear();
           expect(await reader.tree(packageRoot, packageRoot, first)).toEqual(first);
-          expect(packageOpens()).toEqual(files);
+          expect(hashedFiles()).toEqual(files);
+          expect(packageOpens()).toEqual([path.join(packageRoot, "package.json")]);
         }
       });
     },
@@ -98,21 +105,20 @@ describe("package verification bounds", () => {
         }
         const release = createDeferredCore();
         const admitted = createDeferredCore();
-        const opened: string[] = [];
-        const realOpen = fs.open.bind(fs);
-        const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const file = String(args[0]);
-          if (file.startsWith(`${packageRoot}${path.sep}`)) {
-            opened.push(file);
-          }
+        const hashed: string[] = [];
+        const hash = interceptPackageFileHashes(async (file, _stat, next) => {
+          hashed.push(file);
+          // Queue real work before blocking its result so flush owns every job.
+          const hashing = next();
           if (changed.includes(file)) {
-            if (opened.length === changed.length) {
+            if (hashed.length === changed.length) {
               admitted.resolve();
             }
             await release.promise;
           }
-          return realOpen(...args);
+          return hashing;
         });
+        const open = vi.spyOn(fs, "open");
         const walking = reader.tree(packageRoot, packageRoot, first);
         try {
           await withinTest(
@@ -125,9 +131,13 @@ describe("package verification bounds", () => {
           );
           release.resolve();
           const second = await withinTest(walking, signal);
-          expect(opened).toEqual([...changed, path.join(packageRoot, "package.json")]);
+          expect(hashed).toEqual(changed);
+          expect(open.mock.calls.map(([file]) => String(file))).toEqual([
+            path.join(packageRoot, "package.json"),
+          ]);
           expect(second.digest).not.toBe(first.digest);
           open.mockRestore();
+          hash.mockImplementation((_file, _stat, next) => next());
           expect(second).toEqual(await reader.tree(packageRoot));
         } finally {
           release.resolve();
@@ -162,7 +172,7 @@ describe("package verification bounds", () => {
       const second = path.join(packageRoot, "dist", "b-second.js");
       for (const file of [first, second]) {
         await fs.writeFile(file, "");
-        await fs.truncate(file, 600 * 1024 * 1024);
+        await fs.truncate(file, 5 * 1024 * 1024 * 1024);
       }
       const secondStat = await fs.lstat(second, { bigint: true });
       const lstat = fs.lstat.bind(fs);
@@ -176,28 +186,21 @@ describe("package verification bounds", () => {
       const refusal = Object.assign(new Error("earlier package bytes could not be read"), {
         code: "EIO",
       });
-      const realOpen = fs.open.bind(fs);
-      let firstHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
-      let closed = false;
-      const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        if (String(args[0]) === second) {
+      let settled = false;
+      const hash = interceptPackageFileHashes(async (file, _stat, next) => {
+        if (file === second) {
           throw new Error("The aggregate byte limit admitted another package file");
         }
-        const handle = await realOpen(...args);
-        if (String(args[0]) === first) {
-          firstHandle = handle;
-          const close = handle.close.bind(handle);
-          vi.spyOn(handle, "close").mockImplementation(async () => {
-            await close();
-            closed = true;
-          });
-          vi.spyOn(handle, "read").mockImplementation(async () => {
-            reading.resolve();
-            await release.promise;
-            throw refusal;
-          });
+        if (file !== first) {
+          return next();
         }
-        return handle;
+        reading.resolve();
+        try {
+          await release.promise;
+          throw refusal;
+        } finally {
+          settled = true;
+        }
       });
       const beforeActivate = vi.fn();
       const onLiveMutation = vi.fn();
@@ -223,8 +226,8 @@ describe("package verification bounds", () => {
         expect(result.step.stderrTail).toContain(refusal.message);
         expect(result.step.stderrTail).not.toContain("byte limit exceeded");
         expect(result.step.advisory).toBeUndefined();
-        expect(closed).toBe(true);
-        expect(open.mock.calls.some(([file]) => String(file) === second)).toBe(false);
+        expect(settled).toBe(true);
+        expect(hash.mock.calls.some(([file]) => file === second)).toBe(false);
         expect(beforeActivate).not.toHaveBeenCalled();
         expect(onLiveMutation).not.toHaveBeenCalled();
         expect(onTransaction).not.toHaveBeenCalled();
@@ -235,7 +238,6 @@ describe("package verification bounds", () => {
       } finally {
         release.resolve();
         await update;
-        await firstHandle?.close();
       }
     });
   });
@@ -315,14 +317,15 @@ describe("package verification bounds", () => {
         }
         const target = phase === "retained" ? retained : runtime;
         const now = Date.now.bind(Date);
-        const open = fs.open.bind(fs);
+        const lstat = fs.lstat.bind(fs);
         let elapsed = 0;
         vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          const stat = await lstat(...args);
           if (elapsed === 0 && String(args[0]) === target) {
             elapsed = 31_000;
           }
-          return open(...args);
+          return stat;
         });
         const result = await transaction.rollback(() => {});
         expect(elapsed).toBe(31_000);
@@ -351,22 +354,23 @@ describe("package verification bounds", () => {
         if (outcome === "launcher limit") {
           await fs.truncate(launcher, 1024 * 1024 + 1);
         }
-        const open = fs.open.bind(fs);
-        const stalled = createDeferredCore();
         const blocked = createDeferredCore();
+        const started = createDeferredCore();
         let entered = false;
         if (budget === "byte") {
           const payload = path.join(packageRoot, "runtime-payload.bin");
           await fs.writeFile(payload, "");
-          await fs.truncate(payload, 1024 * 1024 * 1024 + 1);
+          await fs.truncate(payload, 8 * 1024 * 1024 * 1024 + 1);
         } else {
-          vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-            if (!entered && String(args[0]) === path.join(packageRoot, "dist", "index.js")) {
+          interceptPackageFileHashes(async (file, _stat, next) => {
+            if (!entered && file === path.join(packageRoot, "dist", "index.js")) {
               entered = true;
-              stalled.resolve();
+              started.resolve();
               await blocked.promise;
+              // The deadline has abandoned this intercepted job before it reports.
+              return "late hash result";
             }
-            return open(...args);
+            return next();
           });
         }
         let transaction: PackageUpdateTransaction | undefined;
@@ -386,7 +390,7 @@ describe("package verification bounds", () => {
           if (budget === "time") {
             await withinTest(
               awaitGateBeforeSettlement(
-                stalled.promise,
+                started.promise,
                 update,
                 "Baseline fingerprint settled before its walk stalled",
               ),
@@ -481,21 +485,16 @@ describe("package verification bounds", () => {
           return handle;
         }
         if (++manifestOpens === 1) {
-          const close = handle.close.bind(handle);
-          vi.spyOn(handle, "close").mockImplementation(async () => {
-            await close();
-            await fs.truncate(manifest, size);
-            grew = true;
-          });
-        } else {
-          // Intercept either read path before buffering an oversized sparse file.
-          const rejectOversizedRead = async () => {
-            oversizedRead = true;
-            throw new Error("oversized metadata allocation intercepted");
-          };
-          vi.spyOn(handle, "readFile").mockImplementation(rejectOversizedRead);
-          vi.spyOn(handle, "read").mockImplementation(rejectOversizedRead);
+          await fs.truncate(manifest, size);
+          grew = true;
         }
+        // The first main-thread open is the bounded manifest read, after hashing.
+        const rejectOversizedRead = async () => {
+          oversizedRead = true;
+          throw new Error("oversized metadata allocation intercepted");
+        };
+        vi.spyOn(handle, "readFile").mockImplementation(rejectOversizedRead);
+        vi.spyOn(handle, "read").mockImplementation(rejectOversizedRead);
         return handle;
       });
       const beforeActivate = vi.fn();
@@ -614,62 +613,52 @@ describe("package verification bounds", () => {
     },
   );
 
-  it.for(["open", "read"] as const)(
-    "settles bounded parallel hashes after stalled %s without continuing the walk",
+  it.for(["queued hash", "hash report"] as const)(
+    "settles bounded parallel hashes after a stalled %s without continuing the walk",
     async (operation, { signal }) => {
       await withTestDir({ prefix: "openclaw-rollback-deadline-" }, async (base) => {
         const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
-        const realOpen = fs.open.bind(fs);
-        const firstEntered = createDeferredCore();
+        const window = 64;
+        const full = createDeferredCore();
         const files = [
           path.join(packageRoot, "dist", "index.js"),
-          ...Array.from({ length: 4 }, (_, index) =>
-            path.join(packageRoot, "dist", `peer-${index}.js`),
+          ...Array.from({ length: window }, (_, index) =>
+            path.join(packageRoot, "dist", `peer-${String(index).padStart(3, "0")}.js`),
           ),
         ];
         for (const file of files.slice(1)) {
           await fs.writeFile(file, "export default 1;\n");
         }
-        const entries = new Map(
-          await Promise.all(
-            files.map(async (file) => {
-              const handle = await realOpen(file, "r");
-              const stat = await handle.stat({ bigint: true });
-              const late = createDeferredCore<typeof handle>();
-              const closed = createDeferredCore();
-              const realClose = handle.close.bind(handle);
-              const close = vi.spyOn(handle, "close").mockImplementation(async () => {
-                await realClose();
-                closed.resolve();
-              });
-              vi.spyOn(handle, "stat").mockResolvedValue(stat);
-              const read = vi.spyOn(handle, "read").mockImplementation(() => {
-                firstEntered.resolve();
-                return new Promise(() => {});
-              });
-              return [file, { handle, stat, late, closed, realClose, close, read }] as const;
-            }),
-          ),
+        const jobs = new Map(
+          files.map((file) => [
+            file,
+            { release: createDeferredCore(), settled: createDeferredCore() },
+          ]),
         );
-        const realLstat = fs.lstat.bind(fs);
-        const lstat = vi.spyOn(fs, "lstat").mockImplementation((...args) => {
-          const entry = entries.get(String(args[0]));
-          return entry && args[1]?.bigint ? Promise.resolve(entry.stat) : realLstat(...args);
-        });
         const admitted: string[] = [];
-        const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const file = String(args[0]);
-          const entry = entries.get(file);
-          if (!entry) {
-            return realOpen(...args);
+        const started: Promise<string>[] = [];
+        interceptPackageFileHashes(async (file, _stat, next) => {
+          const job = jobs.get(file);
+          if (!job || admitted.includes(file)) {
+            return next();
           }
           admitted.push(file);
-          if (operation === "open") {
-            firstEntered.resolve();
-            return entry.late.promise;
+          // Exercise both work not yet started and a completed real hash whose
+          // report is delayed. The worker test owns mid-syscall descriptor proof.
+          const result = operation === "hash report" ? next() : Promise.resolve("late hash result");
+          started.push(result);
+          if (admitted.length === window) {
+            full.resolve();
           }
-          return entry.handle;
+          try {
+            const value = await result;
+            await job.release.promise;
+            return value;
+          } finally {
+            job.settled.resolve();
+          }
         });
+        const lstat = vi.spyOn(fs, "lstat");
         const beforeActivate = vi.fn();
         const onLiveMutation = vi.fn();
         const observations = captureReaderLogs();
@@ -682,13 +671,12 @@ describe("package verification bounds", () => {
         });
         try {
           await withinTest(
-            awaitGateBeforeSettlement(
-              firstEntered.promise,
-              update,
-              "Fingerprinting settled before the owned read stalled",
-            ),
+            awaitGateBeforeSettlement(full.promise, update, "the admission window never filled"),
             signal,
           );
+          await withinTest(Promise.all(started), signal);
+          expect(admitted).toEqual(files.slice(0, window));
+          expect(lstat.mock.calls.some(([file]) => String(file) === files[window])).toBe(false);
           await vi.advanceTimersByTimeAsync(40);
           const result = await withinTest(update, signal);
           expect(result.status).toBe("committed");
@@ -697,7 +685,7 @@ describe("package verification bounds", () => {
           );
           expect(beforeActivate).toHaveBeenCalledOnce();
           expect(onLiveMutation).toHaveBeenCalledOnce();
-          expect(admitted).toEqual(files.slice(0, 4));
+          expect(admitted).toEqual(files.slice(0, window));
           const baseline = observations.filter(
             (record) => record.readerId === observations[0]?.readerId,
           );
@@ -711,8 +699,7 @@ describe("package verification bounds", () => {
             budgetMs: 40,
             deadlineClock: "wall",
           });
-          // A pending close may accompany the stalled read. Neither is a joined OS operation.
-          expect(Number(settled!.pendingIo)).toBeGreaterThan(0);
+          expect(Number(settled!.pendingIo)).toBeGreaterThanOrEqual(window);
           expect(settled!.deadlineAtUnixMs).toBe(begin!.deadlineAtUnixMs);
           expect(settled!.elapsedMs).toBe(
             Number(settled!.settledAtMonotonicMs) - Number(begin!.startedAtMonotonicMs),
@@ -720,35 +707,22 @@ describe("package verification bounds", () => {
           expect(Number(settled!.timeoutObservedAtMonotonicMs)).toBeLessThanOrEqual(
             Number(settled!.settledAtMonotonicMs),
           );
-          if (operation === "open") {
-            for (const file of admitted) {
-              const entry = entries.get(file)!;
-              entry.late.resolve(entry.handle);
-            }
-          }
           for (const file of admitted) {
-            const entry = entries.get(file)!;
-            await withinTest(entry.closed.promise, signal);
-            expect(entry.close).toHaveBeenCalledTimes(1);
-            if (operation === "open") {
-              expect(entry.read).not.toHaveBeenCalled();
-            }
+            jobs.get(file)!.release.resolve();
           }
+          await withinTest(
+            Promise.all(admitted.map((file) => jobs.get(file)!.settled.promise)),
+            signal,
+          );
           await expect(
             fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
           ).resolves.toContain('"version":"2.0.0"');
           await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
         } finally {
-          for (const entry of entries.values()) {
-            entry.late.resolve(entry.handle);
+          for (const job of jobs.values()) {
+            job.release.resolve();
           }
-          await vi.advanceTimersByTimeAsync(40);
-          open.mockRestore();
-          lstat.mockRestore();
           vi.useRealTimers();
-          for (const entry of entries.values()) {
-            await entry.realClose();
-          }
           await update;
         }
       });
@@ -763,11 +737,14 @@ describe("package verification bounds", () => {
         throw new Error("diagnostics sink failed");
       });
       loggingState.rawConsole = { log: sink, info: sink, warn: sink, error: sink };
-      vi.spyOn(fs, "open").mockRejectedValue(new Error("reader unavailable"));
+      const hash = interceptPackageFileHashes(async () => {
+        throw new Error("reader unavailable");
+      });
       const beforeActivate = vi.fn();
       const onLiveMutation = vi.fn();
       const result = await swapStagedPackageInstall({ ...params, beforeActivate, onLiveMutation });
       expect(sink).toHaveBeenCalled();
+      expect(hash).toHaveBeenCalled();
       expect(result.status).toBe("failed");
       expect(result.step.stderrTail).toContain("reader unavailable");
       expect(result.step.stderrTail).not.toContain("diagnostics sink failed");
@@ -780,12 +757,15 @@ describe("package verification bounds", () => {
     });
   });
 
-  it("records a cleanup-only deadline without claiming successful reader completion", async () => {
+  it("records a cleanup-only deadline without claiming successful reader completion", async ({
+    signal,
+  }) => {
     await withTestDir({ prefix: "openclaw-rollback-close-deadline-" }, async (base) => {
       const { params } = await createPackageSwapFixture(base);
       await fs.unlink(path.join(params.stage.layout.binDir, "openclaw"));
       const observations = captureReaderLogs();
       const release = createDeferredCore();
+      const entered = createDeferredCore();
       let closing: Promise<void> | undefined;
       const opendir = fs.opendir.bind(fs);
       vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
@@ -795,13 +775,21 @@ describe("package verification bounds", () => {
           const close = resource.close.bind(resource);
           vi.spyOn(resource, "close").mockImplementation(() => {
             closing = release.promise.then(() => close());
+            entered.resolve();
             return closing;
           });
         }
         return directory;
       });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const update = swapStagedPackageInstall({ ...params, timeoutMs: 40 });
       try {
-        const result = await swapStagedPackageInstall({ ...params, timeoutMs: 40 });
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, update, "directory cleanup never started"),
+          signal,
+        );
+        await vi.advanceTimersByTimeAsync(40);
+        const result = await withinTest(update, signal);
         // Preserve the existing best-effort close policy, but report its timeout.
         expect(result.status).toBe("committed");
         expect(observations.findLast((record) => record.event === "reader-settled")).toMatchObject({
@@ -813,14 +801,18 @@ describe("package verification bounds", () => {
       } finally {
         release.resolve();
         await closing;
+        vi.useRealTimers();
+        await update;
       }
     });
   });
 
   it.each([
-    { shape: "single directory", width: 50_000 },
-    { shape: "nested directories", width: 30_000 },
+    { shape: "single directory", width: 500_000 },
+    { shape: "nested directories", width: 300_000 },
   ])("bounds the whole-tree inventory across $shape", async ({ width }) => {
+    // Exercise the entry cap independently of host speed and the elapsed-time budget.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
     await withTestDir({ prefix: "openclaw-rollback-entry-bound-" }, async (base) => {
       const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
       const nested = path.join(packageRoot, "dist");
@@ -848,7 +840,7 @@ describe("package verification bounds", () => {
         });
         return directory;
       });
-      const open = vi.spyOn(fs, "open");
+      const hash = interceptPackageFileHashes();
       const beforeActivate = vi.fn();
       const onLiveMutation = vi.fn();
       const result = await swapStagedPackageInstall({
@@ -865,11 +857,9 @@ describe("package verification bounds", () => {
       );
       await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
       // Includes one overflow entry; the root itself consumes the other slot.
-      expect(discovered).toBeLessThanOrEqual(50_000);
+      expect(discovered).toBeLessThanOrEqual(500_000);
       expect(result.step.advisory?.message).toContain("entry limit exceeded");
-      expect(open.mock.calls.some(([file]) => String(file) === path.join(nested, "index.js"))).toBe(
-        false,
-      );
+      expect(hash.mock.calls.some(([file]) => file === path.join(nested, "index.js"))).toBe(false);
     });
   });
 });

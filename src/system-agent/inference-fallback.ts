@@ -3,7 +3,6 @@ import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig,
@@ -84,10 +83,7 @@ export async function verifySystemAgentInferenceWithFallback(
       ? (snapshot.runtimeConfig ?? snapshot.config)
       : {};
   const requestedAgentId = resolveAmbientOwnerAgentId(config, params.requestingAgentId);
-  const candidateAgentIds = new Set([
-    requestedAgentId,
-    ...listAgentIds(config).map((agentId) => normalizeAgentId(agentId)),
-  ]);
+  const candidateAgentIds = new Set([requestedAgentId, ...listAgentIds(config)]);
   const resolveRoute =
     deps.resolveRoute ??
     ((candidateConfig: OpenClawConfig, agentId: string) =>

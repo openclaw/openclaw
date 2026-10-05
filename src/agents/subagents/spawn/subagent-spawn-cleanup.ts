@@ -1,4 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { callGateway } from "../../../gateway/call.js";
 import { waitForChatAbortControllerRemoval } from "../../../gateway/chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.js";
@@ -259,7 +260,7 @@ function isDefinitiveAbortMiss(response: unknown, gatewayRunId: string): boolean
 
 export async function retrySubagentCleanup(
   attempt: () => boolean | Promise<boolean>,
-  options?: { shouldRetry?: () => boolean; onError?: (error: unknown) => void },
+  options?: { shouldRetry?: () => boolean | Promise<boolean>; onError?: (error: unknown) => void },
 ): Promise<boolean> {
   for (;;) {
     try {
@@ -269,17 +270,15 @@ export async function retrySubagentCleanup(
     } catch (error) {
       options?.onError?.(error);
     }
-    if (options?.shouldRetry?.() === false) {
+    if ((await options?.shouldRetry?.()) === false) {
       return false;
     }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-      timer.unref?.();
-    });
+    await sleepWithAbort(isFastTestRuntimeEnv() ? 1 : 1_000, undefined, { ref: false });
   }
 }
 
 type SessionCleanupOptions = {
+  waitForCleanup?: () => Promise<void> | undefined;
   isCurrent?: () => boolean;
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
@@ -320,7 +319,19 @@ async function waitForProvisionalSessionDeletion(
       deleted = outcome === "deleted";
       return outcome !== "failed";
     },
-    { shouldRetry: options?.isCurrent },
+    {
+      shouldRetry: async () => {
+        for (
+          let pending = options?.waitForCleanup?.();
+          pending;
+          pending = options?.waitForCleanup?.()
+        ) {
+          await pending;
+        }
+        // A provisional claim pauses cleanup; decide ownership after that claim settles.
+        return options?.isCurrent?.() !== false;
+      },
+    },
   );
   return deleted;
 }
@@ -333,6 +344,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
   waitForSessionDeletion?: boolean;
+  waitForCleanup?: () => Promise<void> | undefined;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
 }): Promise<{ attachmentsRemoved: boolean; sessionDeleted: boolean }> {

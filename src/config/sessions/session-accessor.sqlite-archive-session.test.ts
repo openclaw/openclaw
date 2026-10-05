@@ -285,12 +285,16 @@ describe("SQLite transcript archive sessions", () => {
         )
         .get(sessionIds[0]);
     const pending = readPending();
-    database.db.exec(`
+    const databaseOptions = { agentId: database.agentId, path: database.path, env: testState.env };
+    // Fixture DDL must share admission with native worker writes and checkpoint cleanup.
+    await writeAdmission.runOpenClawAgentWriteAdmission(databaseOptions, () =>
+      database.db.exec(`
         CREATE TRIGGER refuse_archive_result BEFORE UPDATE OF published_at
         ON session_transcript_archives BEGIN
           SELECT RAISE(ABORT, 'synthetic archive result recording failure');
         END;
-      `);
+      `),
+    );
     try {
       await expect(deleteArchivedSession(sessionKey)).rejects.toThrow(
         "synthetic archive result recording failure",
@@ -301,7 +305,9 @@ describe("SQLite transcript archive sessions", () => {
         loadTranscriptEvents({ sessionKey, sessionId: sessionIds[0], storePath }),
       ).resolves.toEqual([]);
     } finally {
-      database.db.exec("DROP TRIGGER refuse_archive_result");
+      await writeAdmission.runOpenClawAgentWriteAdmission(databaseOptions, () =>
+        database.db.exec("DROP TRIGGER refuse_archive_result"),
+      );
     }
 
     await expect(deleteArchivedSession(sessionKey)).resolves.toMatchObject({

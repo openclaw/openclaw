@@ -12,7 +12,10 @@ import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { projectForwardedMessages } from "./chat-display-projection.history.js";
+import {
+  prepareForwardedMessageCronJobNameResolver,
+  projectForwardedMessages,
+} from "./chat-display-projection.history.js";
 import { SerializedJsonArray } from "./serialized-json.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import {
@@ -102,13 +105,7 @@ it("batches automation names across history reads after rename and deletion with
       );
       try {
         const result = await read();
-        expect(counter.counts.names, operation).toBe(
-          operation.startsWith("no-id-") ||
-            operation.endsWith("-rpc") ||
-            operation.endsWith("-anchor")
-            ? 0
-            : 1,
-        );
+        expect(counter.counts.names, operation).toBe(0);
         return result;
       } finally {
         counter.restore();
@@ -197,7 +194,10 @@ it("batches automation names across history reads after rename and deletion with
           const appended = await measure(`${name}-sse`, async () =>
             (
               await currentSse.prepareInlineMessage({
-                message: { role: "user", content: `Next message after ${name}.` },
+                message:
+                  name === "Renamed report"
+                    ? { role: "assistant", content: "NO_REPLY" }
+                    : { role: "user", content: `Next message after ${name}.` },
               })
             )(),
           );
@@ -218,8 +218,12 @@ it("batches automation names across history reads after rename and deletion with
       }
       expect(
         (
-          await measure(`${name}-live`, () =>
-            projectSessionMessagePayload({ message, sessionKey: scope.sessionKey }),
+          await measure(`${name}-live`, async () =>
+            projectSessionMessagePayload({
+              message,
+              sessionKey: scope.sessionKey,
+              resolveCronJobName: await prepareForwardedMessageCronJobNameResolver([message]),
+            }),
           )
         ).payload?.message,
       ).toMatchObject(firstExpected);
@@ -234,9 +238,9 @@ it("batches automation names across history reads after rename and deletion with
     });
     try {
       expect(() => projectSessionMessagePayload({ message, sessionKey: scope.sessionKey })).toThrow(
-        /prohibited|not authorized|access/iu,
+        /prepared/iu,
       );
-      expect(deniedNameReads).toBe(1);
+      expect(deniedNameReads).toBe(0);
       database.db.setAuthorizer(() => constants.SQLITE_DENY);
       expect(projectForwardedMessages([])).toEqual([]);
       const ordinary = [{ role: "user", content: "No automation." }];

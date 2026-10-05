@@ -31,10 +31,10 @@ public actor GatewayChannelActor {
     private var disconnectError: Error?
     private var automaticReconnectRequested = false
     var connectWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
-    private var url: URL
-    private var token: String?
-    private var bootstrapToken: String?
-    private var password: String?
+    private let url: URL
+    private let token: String?
+    private let bootstrapToken: String?
+    private let password: String?
     private let authBindingKey: SymmetricKey?
     private let session: WebSocketSessioning
     private var backoffMs: Double = 500
@@ -457,31 +457,16 @@ public actor GatewayChannelActor {
             clientMode: "ui",
             clientDisplayName: InstanceIdentity.displayName)
         let clientDisplayName = options.clientDisplayName ?? InstanceIdentity.displayName
-        let clientId = options.clientId
-        let clientMode = options.clientMode
         let role = options.role
         let protocols = self.supportedProtocols
-        let deviceIdentityProfile = options.deviceIdentityProfile
-        let requestedScopes = options.scopes
-        let scopesAreExplicit = options.scopesAreExplicit
-        let includeDeviceIdentity = options.includeDeviceIdentity
-        let allowStoredDeviceAuth = options.allowStoredDeviceAuth
-        let deviceAuthGatewayID = options.deviceAuthGatewayID
         let identity = try Self.loadDeviceIdentityForConnect(
-            includeDeviceIdentity: includeDeviceIdentity,
-            profile: deviceIdentityProfile)
-        let selectedAuth = self.selectConnectAuth(
-            role: role,
-            includeDeviceIdentity: includeDeviceIdentity,
-            allowStoredDeviceAuth: allowStoredDeviceAuth,
-            deviceAuthGatewayID: deviceAuthGatewayID,
-            deviceIdentityProfile: deviceIdentityProfile,
-            deviceId: identity?.deviceId,
-            requestedScopes: requestedScopes)
+            includeDeviceIdentity: options.includeDeviceIdentity,
+            profile: options.deviceIdentityProfile)
+        let selectedAuth = self.selectConnectAuth(options: options, deviceId: identity?.deviceId)
         let scopes = self.resolveConnectScopes(
             role: role,
-            requestedScopes: requestedScopes,
-            scopesAreExplicit: scopesAreExplicit,
+            requestedScopes: options.scopes,
+            scopesAreExplicit: options.scopesAreExplicit,
             selectedAuth: selectedAuth)
 
         let reqId = UUID().uuidString
@@ -510,10 +495,10 @@ public actor GatewayChannelActor {
         let connectNonce = connectChallenge.nonce
         try self.ensureCurrentConnectAttempt(attemptID, task: task)
         try self.requireCurrentConnection(connectionGeneration)
-        if includeDeviceIdentity, let identity {
+        if let identity {
             let deviceAuthFields = GatewayDeviceAuthPayload.Fields(
                 deviceId: identity.deviceId,
-                client: .init(id: clientId, mode: clientMode),
+                client: .init(id: options.clientId, mode: options.clientMode),
                 role: role,
                 scopes: scopes,
                 signedAtMs: signedAtMs,
@@ -575,14 +560,14 @@ public actor GatewayChannelActor {
                 self.backoffMs = min(self.backoffMs, 250)
             } else if selectedAuth.authDeviceToken != nil,
                       let identity,
-                      self.shouldClearStoredDeviceTokenAfterRetry(error)
+                      (error as? GatewayConnectAuthError)?.detail == .authDeviceTokenMismatch
             {
                 // Retry failed with an explicit device-token mismatch; clear stale local token.
                 DeviceAuthStore.clearToken(
                     deviceId: identity.deviceId,
                     role: role,
-                    gatewayID: deviceAuthGatewayID,
-                    profile: deviceIdentityProfile)
+                    gatewayID: options.deviceAuthGatewayID,
+                    profile: options.deviceIdentityProfile)
             }
             throw error
         }
@@ -630,46 +615,44 @@ extension GatewayChannelActor {
     }
 
     private func selectConnectAuth(
-        role: String,
-        includeDeviceIdentity: Bool,
-        allowStoredDeviceAuth: Bool,
-        deviceAuthGatewayID: String?,
-        deviceIdentityProfile: GatewayDeviceIdentityProfile,
-        deviceId: String?,
-        requestedScopes: [String]) -> SelectedConnectAuth
+        options: GatewayConnectOptions,
+        deviceId: String?) -> SelectedConnectAuth
     {
         let explicitToken = self.token?.trimmedNonEmpty
         let explicitBootstrapToken = self.bootstrapToken?.trimmedNonEmpty
         let explicitPassword = self.password?.trimmedNonEmpty
-        let storedEntry =
-            (includeDeviceIdentity && allowStoredDeviceAuth && deviceId != nil)
-            ? DeviceAuthStore.loadToken(
-                deviceId: deviceId!,
-                role: role,
-                gatewayID: deviceAuthGatewayID,
-                profile: deviceIdentityProfile)
-            : nil
+        let storedEntry: DeviceAuthEntry? = if options.includeDeviceIdentity, options.allowStoredDeviceAuth,
+                                               let deviceId
+        {
+            DeviceAuthStore.loadToken(
+                deviceId: deviceId,
+                role: options.role,
+                gatewayID: options.deviceAuthGatewayID,
+                profile: options.deviceIdentityProfile)
+        } else {
+            nil
+        }
         let storedToken = storedEntry?.token
         let storedScopes = storedEntry?.scopes ?? []
         let requestedScopesExceedStoredToken = Self.requestedScopesExceedStoredToken(
-            role: role,
-            requestedScopes: requestedScopes,
+            role: options.role,
+            requestedScopes: options.scopes,
             storedToken: storedToken,
             storedScopes: storedScopes)
         let suppressedDeviceTokenRetry =
-            includeDeviceIdentity && self.pendingDeviceTokenRetry &&
+            options.includeDeviceIdentity && self.pendingDeviceTokenRetry &&
             requestedScopesExceedStoredToken && storedToken != nil && explicitToken != nil
         // Scope upgrades must be judged from the requested scopes. A stale
         // device-token retry carries the old grant and is rejected before pairing repair.
         let shouldUseDeviceRetryToken =
-            includeDeviceIdentity && self.pendingDeviceTokenRetry &&
+            options.includeDeviceIdentity && self.pendingDeviceTokenRetry &&
             !requestedScopesExceedStoredToken && storedToken != nil && explicitToken != nil &&
             self.isTrustedDeviceRetryEndpoint()
         let authToken =
             explicitToken ??
             // A freshly scanned setup code should force the bootstrap pairing path instead of
             // silently reusing an older stored device token.
-            (includeDeviceIdentity && explicitPassword == nil && explicitBootstrapToken == nil
+            (options.includeDeviceIdentity && explicitPassword == nil && explicitBootstrapToken == nil
                 ? storedToken
                 : nil)
         let authBootstrapToken =
@@ -717,9 +700,6 @@ extension GatewayChannelActor {
         storedScopes: [String]) -> Bool
     {
         let requested = Set(requestedScopes.compactMap(\.trimmedNonEmpty))
-        if requested.isEmpty {
-            return true
-        }
         let allowedSet = Set(storedScopes.compactMap(\.trimmedNonEmpty))
         let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines)
         if normalizedRole != "operator" {
@@ -842,9 +822,9 @@ extension GatewayChannelActor {
             let details = gatewayErrorDetails(res.error)
             throw GatewayConnectAuthError(
                 message: res.error?.message ?? "gateway connect failed",
-                detailCodeRaw: details["code"]?.value as? String,
+                detailCode: details["code"]?.value as? String,
                 canRetryWithDeviceToken: details["canRetryWithDeviceToken"]?.value as? Bool ?? false,
-                recommendedNextStepRaw: details["recommendedNextStep"]?.value as? String,
+                recommendedNextStep: details["recommendedNextStep"]?.value as? String,
                 requestId: details["requestId"]?.value as? String,
                 detailsReason: details["reason"]?.value as? String,
                 ownerRaw: details["owner"]?.value as? String,
@@ -1234,18 +1214,11 @@ extension GatewayChannelActor {
         storedToken: String?,
         attemptedDeviceTokenRetry: Bool) -> Bool
     {
-        if self.deviceTokenRetryBudgetUsed || attemptedDeviceTokenRetry {
-            return false
-        }
-        guard explicitGatewayToken != nil, storedToken != nil else {
-            return false
-        }
-        guard self.isTrustedDeviceRetryEndpoint() else {
-            return false
-        }
-        guard let authError = error as? GatewayConnectAuthError else {
-            return false
-        }
+        guard !self.deviceTokenRetryBudgetUsed, !attemptedDeviceTokenRetry,
+              explicitGatewayToken != nil, storedToken != nil,
+              self.isTrustedDeviceRetryEndpoint(),
+              let authError = error as? GatewayConnectAuthError
+        else { return false }
         return authError.canRetryWithDeviceToken
     }
 
@@ -1253,22 +1226,9 @@ extension GatewayChannelActor {
         guard let authError = error as? GatewayConnectAuthError else {
             return false
         }
-        if authError.isNonRecoverable {
-            return true
-        }
-        if authError.detail == .authTokenMismatch,
-           self.deviceTokenRetryBudgetUsed, !self.pendingDeviceTokenRetry
-        {
-            return true
-        }
-        return false
-    }
-
-    private func shouldClearStoredDeviceTokenAfterRetry(_ error: Error) -> Bool {
-        guard let authError = error as? GatewayConnectAuthError else {
-            return false
-        }
-        return authError.detail == .authDeviceTokenMismatch
+        return authError.isNonRecoverable ||
+            (authError.detail == .authTokenMismatch &&
+                self.deviceTokenRetryBudgetUsed && !self.pendingDeviceTokenRetry)
     }
 
     private func isTrustedDeviceRetryEndpoint() -> Bool {
@@ -1370,13 +1330,13 @@ extension GatewayChannelActor {
         // Zero leaves terminal-operation deadlines to the Gateway owner.
         let effectiveTimeout = Self.resolveRequestTimeoutMs(timeoutMs, defaultMs: self.defaultRequestTimeoutMs)
         let payload = try self.encodeRequest(method: method, params: params, kind: "request")
-        let cancellationGate = GatewayRequestCancellationGate()
+        let cancellationGate = Mutex(false)
         let response: ResponseFrame
         do {
             response = try await withTaskCancellationHandler {
                 try Task.checkCancellation()
                 return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ResponseFrame, Error>) in
-                    guard !cancellationGate.isCancelled else {
+                    guard !cancellationGate.withLock({ $0 }) else {
                         cont.resume(throwing: CancellationError())
                         return
                     }
@@ -1398,7 +1358,7 @@ extension GatewayChannelActor {
                     self.pending[payload.id] = request
                     let transportLifetime = request.transportLifetime
                     Task {
-                        guard !cancellationGate.isCancelled else {
+                        guard !cancellationGate.withLock({ $0 }) else {
                             self.finishRequest(id: payload.id, result: .failure(CancellationError()))
                             return
                         }
@@ -1419,7 +1379,7 @@ extension GatewayChannelActor {
                     }
                 }
             } onCancel: {
-                cancellationGate.cancel()
+                cancellationGate.withLock { $0 = true }
                 Task { await self.finishRequest(id: payload.id, result: .failure(CancellationError())) }
             }
         } catch {

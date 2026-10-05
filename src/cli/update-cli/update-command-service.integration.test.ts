@@ -37,6 +37,7 @@ import {
   registerRecoveryTests,
   writeRecoveryConfig,
 } from "./update-command-service-recovery.test-support.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 import { registerPackageRootRollbackTests } from "./update-command-service-rollback.test-support.js";
 import {
   preservedActivationCases,
@@ -46,7 +47,6 @@ import {
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
-  revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
 
 const mocks = vi.hoisted(() => ({
@@ -443,6 +443,7 @@ describe("preserved update activation with real version guards", () => {
         retried ||= stale;
         if (stale) {
           return {
+            outcome: "failed",
             healthy: false,
             staleGatewayPids: [4242],
             runtime: { status: "running" },
@@ -837,6 +838,7 @@ describe("preserved update activation with real version guards", () => {
     });
     if (demandOnly) {
       mocks.health.mockImplementation(async ({ port }) => ({
+        outcome: nativeRunning ? "ready" : "failed",
         healthy: nativeRunning,
         staleGatewayPids: [],
         runtime: { status: nativeRunning ? "running" : "stopped" },
@@ -845,6 +847,7 @@ describe("preserved update activation with real version guards", () => {
     }
     if (scenario === "stale retry") {
       mocks.health.mockResolvedValueOnce({
+        outcome: "failed",
         healthy: false,
         staleGatewayPids: [4242],
         runtime: { status: "stopped" },
@@ -880,6 +883,7 @@ describe("preserved update activation with real version guards", () => {
         );
       }
       mocks.health.mockImplementation(async ({ port }) => ({
+        outcome: "failed",
         healthy: false,
         staleGatewayPids: [],
         runtime: { status: "stopped" },

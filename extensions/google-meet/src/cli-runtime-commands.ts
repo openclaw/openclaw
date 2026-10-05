@@ -1,5 +1,9 @@
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { callGoogleMeetRuntime, type GoogleMeetCliCommandContext } from "./cli-command-context.js";
+import {
+  callGoogleMeetRuntime,
+  resolveCliMeetingInput as resolveMeetingInput,
+  type GoogleMeetCliCommandContext,
+} from "./cli-command-context.js";
 import {
   callGoogleMeetGateway,
   parseGoogleMeetBrowserTransport,
@@ -18,7 +22,7 @@ import {
 } from "./cli-shared.js";
 
 export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandContext): void {
-  const { root, callGateway, operationTimeoutMs, resolveMeetingInput } = context;
+  const { root, operationTimeoutMs } = context;
 
   root
     .command("join")
@@ -32,7 +36,6 @@ export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandCon
     .action(async (url: string | undefined, options: JoinOptions) => {
       const payload = resolveCliJoinRequest(resolveMeetingInput(context.config, url), options);
       const delegated = await callGoogleMeetGateway({
-        callGateway,
         method: "googlemeet.join",
         payload,
         timeoutMs: operationTimeoutMs,

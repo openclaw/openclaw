@@ -39,14 +39,6 @@ function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagen
   );
 }
 
-function assertCanonicalSubagentRunRecord(
-  entry: SubagentRunRecord,
-): asserts entry is CanonicalSubagentRunRecord {
-  if (!isCanonicalSubagentRunRecord(entry)) {
-    throw new Error("subagent run is missing canonical nested state");
-  }
-}
-
 /** Rehydrates one sqlite row into the normalized subagent run record shape. */
 export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | null {
   const stored = row.payload_json ? safeParseJson(row.payload_json) : undefined;
@@ -88,12 +80,10 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
 
 /** Canonically serializes a run before an outer transaction acquires the write lock. */
 export function bindSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
-  return bindMutableSubagentRunRecord(structuredClone(entry));
-}
-
-function bindMutableSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
-  const normalized = normalizeSubagentRunState(entry);
-  assertCanonicalSubagentRunRecord(normalized);
+  const normalized = normalizeSubagentRunState(structuredClone(entry));
+  if (!isCanonicalSubagentRunRecord(normalized)) {
+    throw new Error("subagent run is missing canonical nested state");
+  }
   return {
     run_id: normalized.runId,
     child_session_key: normalized.childSessionKey,

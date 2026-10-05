@@ -7,7 +7,6 @@ import type { PackageDistContentInventoryEntry } from "./package-dist-inventory.
 
 export type LocalOverridePackageRoot = Awaited<ReturnType<typeof openFsRoot>>;
 
-type LocalPackageOverrideKind = "added" | "modified" | "deleted";
 export type LocalPackageOverrideConflictReason =
   | "target-changed"
   | "target-exists"
@@ -18,14 +17,19 @@ export type LocalPackageOverrideConflictReason =
   | "rollback-failed";
 
 export type LocalPackageOverrideChange = {
-  kind: LocalPackageOverrideKind;
   path: string;
-  baseline?: PackageDistContentInventoryEntry;
   dependencies?: string[];
   reapply?: boolean;
-  savedPath?: string;
-  mode?: number;
-};
+} & (
+  | { kind: "deleted"; baseline: PackageDistContentInventoryEntry }
+  | { kind: "added"; savedPath: string; mode: number }
+  | {
+      kind: "modified";
+      baseline: PackageDistContentInventoryEntry;
+      savedPath: string;
+      mode: number;
+    }
+);
 
 export type LocalPackageOverridesResult = {
   status: "none" | "preserved" | "applied" | "conflict" | "error";
@@ -42,7 +46,6 @@ export type LocalPackageOverridesResult = {
 };
 
 export type LocalPackageOverridesPlan = {
-  packageRoot: string;
   recoveryDir: string;
   changes: LocalPackageOverrideChange[];
   result: LocalPackageOverridesResult;
@@ -81,7 +84,6 @@ export type LocalPackageOverrideTargetProbe =
   | {
       status: "present";
       hardlinked: boolean;
-      mode: number;
       safeFile: boolean;
     };
 
@@ -93,7 +95,6 @@ export async function probeLocalOverrideTarget(
     return {
       status: "present",
       hardlinked: stats.nlink > 1n,
-      mode: Number(stats.mode & 0o777n),
       safeFile: stats.isFile() && !stats.isSymbolicLink(),
     };
   } catch (error) {
@@ -271,11 +272,11 @@ export function mergeLocalOverrideFileMode(targetMode: number, overrideMode: num
 export async function writeFileWithMode(
   content: Buffer,
   destination: string,
-  mode?: number,
+  mode: number,
 ): Promise<void> {
   await fs.mkdir(path.dirname(destination), { recursive: true });
   await fs.writeFile(destination, content);
-  if (mode !== undefined && process.platform !== "win32") {
+  if (process.platform !== "win32") {
     await fs.chmod(destination, mode);
   }
 }

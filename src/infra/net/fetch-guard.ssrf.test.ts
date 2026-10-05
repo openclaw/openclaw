@@ -1,6 +1,7 @@
+import { lookup as dnsLookup } from "node:dns/promises";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import type { Dispatcher } from "undici";
+import { getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForControlUiDocument } from "../../commands/control-ui-handoff.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -13,7 +14,7 @@ import {
 import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
 import type { DispatcherAwareRequestInit } from "./runtime-fetch.js";
 import {
-  ensureGlobalUndiciStreamTimeouts,
+  ensureGlobalUndiciDispatcherStreamTimeouts,
   resetGlobalUndiciStreamTimeoutsForTests,
 } from "./undici-global-dispatcher.js";
 
@@ -37,6 +38,7 @@ vi.mock("../../logger.js", async (original) => ({
   ...(await original<typeof import("../../logger.js")>()),
   logWarn: logWarnMock,
 }));
+vi.mock("node:dns/promises", { spy: true });
 vi.mock("node:net", async (original) => ({
   ...(await original<typeof import("node:net")>()),
   getDefaultAutoSelectFamily: () => true,
@@ -70,7 +72,7 @@ function expectDispatch(owner: typeof agentCtor, origin: string, path: string, m
   const record = createRequireRecord("record", "expected-record")(owner.mock.instances[0]);
   expect(record.dispatch).toHaveBeenCalledExactlyOnceWith({ origin, path, method }, {});
 }
-function installRuntime(fetch = fetchStub()) {
+function installRuntime(fetch: NonNullable<GuardedFetchOptions["fetchImpl"]> = fetchStub()) {
   Reflect.set(globalThis, TEST_UNDICI_RUNTIME_DEPS_KEY, {
     Agent: agentCtor,
     EnvHttpProxyAgent: envHttpProxyAgentCtor,
@@ -746,15 +748,11 @@ describe("configured local-origin bypass", () => {
       dispatchAttached(input, init);
       return new Response(null, { status: 200, headers: { "content-type": "text/html" } });
     });
-    const lookupFn = lookup("127.0.0.1");
+    installRuntime(fetchImpl);
     const readiness = await waitForControlUiDocument({
       url: "http://127.0.0.1:18789/dashboard/",
-      deps: {
-        fetch: (options) =>
-          fetchConfiguredLocalOriginWithSsrFGuard({ ...options, fetchImpl, lookupFn }),
-      },
     });
-    expect(lookupFn).toHaveBeenCalledWith("127.0.0.1", { all: true });
+    expect(dnsLookup).toHaveBeenCalledWith("127.0.0.1", { all: true });
     if (routing === "blocked") {
       expect(readiness).toEqual({
         ready: false,
@@ -905,23 +903,32 @@ describe("request lifecycle", () => {
   });
 
   it("inherits the global stream timeout and checks authority after DNS", async () => {
-    ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
-    installRuntime();
-    const fetchImpl = fetchStub();
-    const beforeRequest = vi.fn();
-    const lookupFn = createPublicLookup();
-    const result = await guardedRequest(fetchImpl, { lookupFn, beforeRequest });
-    expect(lookupFn).toHaveBeenCalledBefore(beforeRequest);
-    expect(beforeRequest).toHaveBeenCalledBefore(fetchImpl);
-    expect(agentCtor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowH2: false,
-        bodyTimeout: 1_900_000,
-        headersTimeout: 1_900_000,
-        connect: expect.objectContaining({ lookup: expect.any(Function) }),
-      }),
-    );
-    await result.release();
+    const previous = getGlobalDispatcher();
+    try {
+      ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
+      installRuntime();
+      const fetchImpl = fetchStub();
+      const beforeRequest = vi.fn();
+      const lookupFn = createPublicLookup();
+      const result = await guardedRequest(fetchImpl, { lookupFn, beforeRequest });
+      expect(lookupFn).toHaveBeenCalledBefore(beforeRequest);
+      expect(beforeRequest).toHaveBeenCalledBefore(fetchImpl);
+      expect(agentCtor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          allowH2: false,
+          bodyTimeout: 1_900_000,
+          headersTimeout: 1_900_000,
+          connect: expect.objectContaining({ lookup: expect.any(Function) }),
+        }),
+      );
+      await result.release();
+    } finally {
+      const current = getGlobalDispatcher();
+      setGlobalDispatcher(previous);
+      if (current !== previous) {
+        await current.destroy();
+      }
+    }
   });
 
   it("propagates a final dispatch rejection without sending the request", async () => {

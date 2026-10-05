@@ -8,12 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  classifyGatewayProbePath,
-  isProtectedPluginRoutePathFromContext,
-  resolvePluginRoutePathContext,
-  resolveGatewayPort,
-} from "openclaw/plugin-sdk/gateway-config-runtime";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import {
   asObjectRecord,
   collectChannelAccountScopes,
@@ -29,13 +24,16 @@ import {
 } from "./accounts.js";
 import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
-import { hasTelegramBotEndpointApiRoot, normalizeTelegramApiRoot } from "./api-root.js";
+import { hasTelegramBotEndpointApiRoot } from "./api-root.js";
 import {
   legacyConfigRules as TELEGRAM_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeTelegramCompatibilityConfig,
 } from "./doctor-contract.js";
 import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
-import { telegramWebhookHost } from "./webhook-legacy.js";
+import {
+  DEFAULT_TELEGRAM_WEBHOOK_PATH,
+  resolveTelegramWebhookPathConflict,
+} from "./webhook-route.js";
 
 type TelegramAllowFromInvalidHit = { path: string; entry: string };
 type TelegramApiRootBotEndpointHit = {
@@ -171,10 +169,16 @@ function scanTelegramBotEndpointApiRoots(cfg: OpenClawConfig): TelegramApiRootBo
     if (typeof value !== "string" || !hasTelegramBotEndpointApiRoot(value)) {
       continue;
     }
+    const url = new URL(value.trim());
+    const segments = url.pathname.split("/").filter(Boolean);
+    segments.pop();
+    url.pathname = segments.length > 0 ? `/${segments.join("/")}` : "/";
+    url.search = "";
+    url.hash = "";
     hits.push({
       path: `${scope.prefix}.apiRoot`,
       pathSegments: [...scope.pathSegments, "apiRoot"],
-      normalized: normalizeTelegramApiRoot(value),
+      normalized: url.toString().replace(/\/+$/u, ""),
     });
   }
   return hits;
@@ -189,7 +193,7 @@ function collectTelegramApiRootWarnings(params: {
   }
   const samplePath = sanitizeForLog(params.hits[0]?.path ?? "channels.telegram.apiRoot");
   return [
-    `- ${samplePath} points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. This can make startup calls like deleteWebhook, deleteMyCommands, and setMyCommands fail with 404 even when direct curl commands work.`,
+    `- ${samplePath} points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. Telegram refuses this value until it is repaired.`,
     `- Run "${params.doctorFixCommand}" to remove the trailing /bot<TOKEN> path from Telegram apiRoot.`,
   ];
 }
@@ -553,37 +557,19 @@ export const telegramDoctor: ChannelDoctorAdapter = {
         continue;
       }
       const legacyListener = resolveTelegramLegacyWebhookListener(config.legacyWebhook);
-      const path = config.webhookPath ?? "/telegram-webhook";
-      const pathname = URL.parse(path, "http://localhost")?.pathname ?? path;
-      const probe = classifyGatewayProbePath(pathname);
-      const pathConflict =
-        path === "/healthz"
-          ? "is reserved for webhook listener health checks"
-          : probe === "live" || probe === "ready" || probe === "startup"
-            ? "is reserved for Gateway probes"
-            : isProtectedPluginRoutePathFromContext(resolvePluginRoutePathContext(pathname))
-              ? "requires Gateway authentication"
-              : undefined;
+      const path = config.webhookPath ?? DEFAULT_TELEGRAM_WEBHOOK_PATH;
+      const pathConflict = resolveTelegramWebhookPathConflict(path);
       if (pathConflict) {
         warningNotes.push(
-          `Telegram account "${accountId}" resolves webhookPath to ${path}, which ${pathConflict}. Set webhookPath to /telegram-webhook and update webhookUrl or its reverse-proxy mapping. ${legacyListener && path !== "/healthz" ? "The legacy listener remains available; verify delivery on the new route before setting legacyWebhook: false." : "This account cannot start until its webhook path is changed."}`,
+          `Telegram account "${accountId}" resolves webhookPath to ${path}, which ${pathConflict.message}. Set webhookPath to /telegram-webhook and update webhookUrl or its reverse-proxy mapping. ${legacyListener && pathConflict.kind !== "health" ? "The legacy listener remains available; verify delivery on the new route before setting legacyWebhook: false." : "This account cannot start until its webhook path is changed."}`,
         );
         continue;
       }
       const destination = `Gateway port ${resolveGatewayPort(cfg, env)}${path}`;
-      if (!telegramWebhookHost.getWebhookLegacyListener) {
-        // The shipped host collects warningNotes, but does not render infoNotes.
-        warningNotes.push(
-          legacyListener
-            ? `Telegram account "${accountId}": the 2026.9.6 compatibility listener ${legacyListener.host}:${legacyListener.port} serves this account directly. This host cannot share a legacy port across accounts; use distinct endpoints or move the reverse proxy for ${config.webhookUrl} to ${destination}, verify delivery, then set legacyWebhook: false.`
-            : `Telegram account "${accountId}": legacyWebhook: false disables the 2026.9.6 compatibility listener. Route ${config.webhookUrl} to ${destination}.`,
-        );
-        continue;
-      }
       infoNotes.push(
         legacyListener
           ? `Telegram account "${accountId}": legacy listener ${legacyListener.host}:${legacyListener.port} forwards to ${destination}. Move the reverse proxy for ${config.webhookUrl} to that Gateway route, verify delivery, then set legacyWebhook: false to disable legacy forwarding for this account.`
-          : `Telegram account "${accountId}": legacyWebhook: false disables legacy forwarding for this account. Route ${config.webhookUrl} to ${destination}.`,
+          : `Telegram account "${accountId}": no legacy listener is configured. The advertised webhook URL must reach ${destination}.`,
       );
     }
     return { changeNotes: [], infoNotes, warningNotes };

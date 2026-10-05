@@ -21,6 +21,7 @@ import {
   readPublicationArtifactArchive,
   sha256Digest,
 } from "./actions-artifact-archive.mjs";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./arg-utils.mts";
 import { readBoundedResponseText } from "./bounded-response.mjs";
 import { collectPublishableCorePackages } from "./npm-core-release-packages.mjs";
 import { resolveNpmJsonEntries } from "./npm-json-output.mts";
@@ -32,7 +33,12 @@ import {
 } from "./plugin-npm-release.ts";
 import {
   DIAGNOSTIC_MAX_PACKAGES,
-  diagnosticStates,
+  diagnosticChildNames,
+  diagnosticId,
+  diagnosticOutcome,
+  diagnosticRef,
+  diagnosticSchema,
+  diagnosticSha,
   diagnosticError,
   diagnosticPackage,
   diagnosticStage,
@@ -76,11 +82,6 @@ type NpmViewFields = {
   tarball?: string;
 };
 
-type FetchWithRetryResult = {
-  response: Response;
-  signal: AbortSignal;
-};
-
 type WorkflowRunSummary = {
   id: string;
   runAttempt?: number;
@@ -121,104 +122,9 @@ const RELEASE_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
 const DIAGNOSTIC_FILE = "release-postpublish-diagnostics.json";
 const DIAGNOSTIC_MAX_BYTES = 128 * 1024;
-const diagnosticChildNames = [
-  "fullReleaseValidation",
-  "openclawNpm",
-  "pluginNpm",
-  "pluginClawHub",
-  "pluginClawHubBootstrap",
-  "npmTelegram",
-] as const;
 type DiagnosticStageName = (typeof diagnosticStageNames)[number];
 type NpmDiagnosticScope = { stage: "coreNpm" } | { stage: "pluginNpm"; packageName: string };
 type DiagnosticChildName = (typeof diagnosticChildNames)[number];
-const diagnosticId = z.string().max(20).regex(POSITIVE_INTEGER_PATTERN).nullable();
-const diagnosticSha = z.string().regex(COMMIT_SHA_PATTERN).nullable();
-const diagnosticRef = z
-  .string()
-  .max(200)
-  .regex(/^(?:refs\/(?:heads|tags)\/)?[A-Za-z0-9][A-Za-z0-9._/-]*$/u)
-  .nullable();
-const diagnosticOutcome = z.enum([
-  "success",
-  "failure",
-  "cancelled",
-  "skipped",
-  "timed_out",
-  "action_required",
-  "neutral",
-  "stale",
-  "unknown",
-]);
-const diagnosticSchema = z.object({
-  schemaVersion: z.literal(1),
-  kind: z.literal("release-postpublish-diagnostics"),
-  invocationId: z.string().uuid(),
-  context: z.object({
-    repository: z
-      .string()
-      .max(200)
-      .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u)
-      .nullable(),
-    releaseVersion: z
-      .string()
-      .max(80)
-      .regex(/^[0-9]+(?:\.[0-9]+){2}(?:-[a-z0-9.-]+)?$/u)
-      .nullable(),
-    releaseTag: z
-      .string()
-      .max(81)
-      .regex(/^v[0-9]+(?:\.[0-9]+){2}(?:-[a-z0-9.-]+)?$/u)
-      .nullable(),
-    npmDistTag: z.enum(["latest", "beta", "alpha", "extended-stable"]).nullable(),
-    requestedSourceSha: diagnosticSha,
-    toolingSha: diagnosticSha,
-    suppliedToolingSha: diagnosticSha,
-    suppliedToolingRef: diagnosticRef,
-    parentRunId: diagnosticId,
-    parentRunAttempt: diagnosticId,
-    validationEvidence: z.object({
-      mode: z.enum(["full-release-validation", "authorized-beta-focused-v1"]).nullable(),
-      runId: diagnosticId,
-      runAttempt: diagnosticId,
-    }),
-  }),
-  selection: z.object({
-    plugins: z.array(diagnosticPackage.shape.name).max(DIAGNOSTIC_MAX_PACKAGES),
-    pluginsTruncated: z.boolean(),
-    workflowRef: diagnosticRef,
-    clawHubWorkflowRef: diagnosticRef,
-  }),
-  verification: diagnosticStates,
-  currentStage: z.enum(diagnosticStageNames).nullable(),
-  stages: z.record(z.enum(diagnosticStageNames), diagnosticStage),
-  children: z.record(
-    z.enum(diagnosticChildNames),
-    z.object({
-      suppliedRunId: diagnosticId,
-      runAttempt: diagnosticId,
-      producerRunAttempt: diagnosticId,
-      status: z.enum([
-        "queued",
-        "in_progress",
-        "completed",
-        "waiting",
-        "pending",
-        "requested",
-        "unknown",
-      ]),
-      conclusion: diagnosticOutcome,
-      failedJobCount: z.number().int().min(0).max(10000).nullable(),
-      readbackArtifactId: diagnosticId,
-      packageArtifactId: diagnosticId,
-    }),
-  ),
-  jobOutcomeBeforeArtifactUploads: diagnosticOutcome,
-  stepOutcomes: z.object({
-    coreStart: diagnosticOutcome,
-    completion: diagnosticOutcome,
-  }),
-});
 type PostpublishDiagnostic = z.infer<typeof diagnosticSchema>;
 
 function diagnosticValue<T>(schema: z.ZodType<T>, value: unknown): T | null {
@@ -822,94 +728,79 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     workflowRuns: {},
   };
 
-  for (let index = 0; index < values.length; index += 1) {
-    const arg = values[index];
-    const next = () => {
-      const value = values[index + 1];
-      if (value === undefined || value.startsWith("-")) {
-        throw new Error(`${arg} requires a value.`);
-      }
-      index += 1;
-      return value;
-    };
-
-    switch (arg) {
-      case "--tag":
-        parsed.tag = next();
-        break;
-      case "--dist-tag":
-        parsed.distTag = next();
-        break;
-      case "--repo":
-        parsed.repo = next();
-        break;
-      case "--registry":
-        parsed.registry = next();
-        break;
-      case "--release-sha":
-        parsed.releaseSha = next();
-        if (!COMMIT_SHA_PATTERN.test(parsed.releaseSha)) {
+  const valueFlag = (flag: string, key: string, transform?: (value: string) => unknown) =>
+    stringFlag<ReleaseVerifyBetaArgs>(flag, key, {
+      allowEmpty: true,
+      allowInline: false,
+      missingValueMessage: `${flag} requires a value.`,
+      rejectShortOptions: true,
+      repeatable: true,
+      transform,
+    });
+  parseFlagArgs(
+    values,
+    parsed,
+    [
+      ...(
+        [
+          ["--tag", "tag"],
+          ["--dist-tag", "distTag"],
+          ["--repo", "repo"],
+          ["--registry", "registry"],
+          ["--workflow-ref", "workflowRef"],
+          ["--clawhub-workflow-ref", "clawHubWorkflowRef"],
+          ["--evidence-out", "evidenceOut"],
+          ["--postpublish-verifier", "postpublishVerifier"],
+        ] as const
+      ).map(([flag, key]) => valueFlag(flag, key)),
+      ...(
+        [
+          ["--full-release-validation-run", "fullReleaseValidation"],
+          ["--openclaw-npm-run", "openclawNpm"],
+          ["--plugin-npm-run", "pluginNpm"],
+          ["--plugin-clawhub-run", "pluginClawHub"],
+          ["--plugin-clawhub-bootstrap-run", "pluginClawHubBootstrap"],
+          ["--npm-telegram-run", "npmTelegram"],
+        ] as const
+      ).map(([flag, key]) =>
+        valueFlag(flag, "workflowRuns", (value) => ({ ...parsed.workflowRuns, [key]: value })),
+      ),
+      ...(
+        [
+          ["--skip-postpublish", "skipPostpublish"],
+          ["--skip-github-release", "skipGitHubRelease"],
+          ["--skip-clawhub", "skipClawHub"],
+          ["--rerun-failed-clawhub", "rerunFailedClawHub"],
+        ] as const
+      ).map(([flag, key]) => booleanFlag(flag, key, true, { repeatable: true })),
+      valueFlag("--release-sha", "releaseSha", (value) => {
+        if (!COMMIT_SHA_PATTERN.test(value)) {
           throw new Error("--release-sha must be a full 40-character lowercase commit SHA.");
         }
-        break;
-      case "--workflow-ref":
-        parsed.workflowRef = next();
-        break;
-      case "--clawhub-workflow-ref":
-        parsed.clawHubWorkflowRef = next();
-        break;
-      case "--plugins":
-        parsed.pluginSelection = parsePluginReleaseSelection(next());
-        if (parsed.pluginSelection.length === 0) {
-          throw new Error("--plugins requires at least one plugin package name.");
-        }
-        break;
-      case "--clawhub-bootstrap-plugins":
-        parsed.clawHubBootstrapPlugins = parsePluginReleaseSelection(next());
-        if (parsed.clawHubBootstrapPlugins.length === 0) {
-          throw new Error("--clawhub-bootstrap-plugins requires at least one package name.");
-        }
-        break;
-      case "--evidence-out":
-        parsed.evidenceOut = next();
-        break;
-      case "--postpublish-verifier":
-        parsed.postpublishVerifier = next();
-        break;
-      case "--full-release-validation-run":
-        parsed.workflowRuns.fullReleaseValidation = next();
-        break;
-      case "--openclaw-npm-run":
-        parsed.workflowRuns.openclawNpm = next();
-        break;
-      case "--plugin-npm-run":
-        parsed.workflowRuns.pluginNpm = next();
-        break;
-      case "--plugin-clawhub-run":
-        parsed.workflowRuns.pluginClawHub = next();
-        break;
-      case "--plugin-clawhub-bootstrap-run":
-        parsed.workflowRuns.pluginClawHubBootstrap = next();
-        break;
-      case "--npm-telegram-run":
-        parsed.workflowRuns.npmTelegram = next();
-        break;
-      case "--skip-postpublish":
-        parsed.skipPostpublish = true;
-        break;
-      case "--skip-github-release":
-        parsed.skipGitHubRelease = true;
-        break;
-      case "--skip-clawhub":
-        parsed.skipClawHub = true;
-        break;
-      case "--rerun-failed-clawhub":
-        parsed.rerunFailedClawHub = true;
-        break;
-      default:
+        return value;
+      }),
+      ...(
+        [
+          ["--plugins", "pluginSelection", "at least one plugin package name"],
+          ["--clawhub-bootstrap-plugins", "clawHubBootstrapPlugins", "at least one package name"],
+        ] as const
+      ).map(([flag, key, required]) =>
+        valueFlag(flag, key, (value) => {
+          const packages = parsePluginReleaseSelection(value);
+          if (packages.length === 0) {
+            throw new Error(`${flag} requires ${required}.`);
+          }
+          return packages;
+        }),
+      ),
+    ],
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
         throw new Error(`Unknown argument: ${arg}`);
-    }
-  }
+      },
+    },
+  );
 
   if (parsed.skipPostpublish && parsed.postpublishVerifier !== undefined) {
     throw new Error("--postpublish-verifier cannot be combined with --skip-postpublish.");
@@ -938,35 +829,6 @@ export function resolveOpenClawNpmPostpublishVerifier(rootDir: string, override?
     throw new Error("--postpublish-verifier must select the trusted tooling verifier.");
   }
   return verifier;
-}
-
-async function fetchWithRetry(
-  url: string,
-  options: RequestInit,
-  attempts: number,
-): Promise<FetchWithRetryResult> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const signal = AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS);
-      const response = await fetch(url, {
-        ...options,
-        signal,
-      });
-      if (response.status !== 429 && response.status < 500) {
-        return { response, signal };
-      }
-      await cancelResponseBody(response);
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    if (attempt < attempts) {
-      await sleep(attempt * 1000);
-    }
-  }
-  const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${url} did not return a stable response: ${message}`);
 }
 
 async function cancelResponseBody(response: Response): Promise<void> {
@@ -1040,12 +902,28 @@ export async function readBoundedJsonResponse(
 }
 
 export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
-  const { response } = await fetchWithRetry(url, { method, redirect: "manual" }, 5);
-  try {
-    return response.status;
-  } finally {
-    await cancelResponseBody(response);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method,
+        redirect: "manual",
+        signal: AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS),
+      });
+      await cancelResponseBody(response);
+      if (response.status !== 429 && response.status < 500) {
+        return response.status;
+      }
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 5) {
+      await sleep(attempt * 1000);
+    }
   }
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`${url} did not return a stable response: ${message}`);
 }
 
 async function readNpmBetaFloorError(

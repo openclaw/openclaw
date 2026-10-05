@@ -24,7 +24,7 @@ test.each([false, true])(
         { agentId: "research", sessionKey: "agent:research:matrix:group:!Room:example.org" },
       ] as const;
       const config = {
-        agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+        agents: { entries: { main: {}, research: {} } },
       } satisfies OpenClawConfig;
       const entry = {
         sessionId: "group-member",
@@ -115,7 +115,7 @@ test("discovers groups across more than the handle cap without writable database
     );
     const config = {
       agents: {
-        list: agentIds.map((id, index) => ({ id, ...(index === 0 ? { default: true } : {}) })),
+        entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
       },
     } satisfies OpenClawConfig;
 

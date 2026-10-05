@@ -50,14 +50,10 @@ export type NodeInvokeProgressParams = {
   chunk: string;
 };
 
-export type NodeInvokeResultParams = {
+export type NodeInvokeResultParams = NodeInvokeResult & {
   id: string;
   nodeId: string;
   connId: string | undefined;
-  ok: boolean;
-  payload?: unknown;
-  payloadJSON?: string | null;
-  error?: { code?: string; message?: string } | null;
 };
 
 const MAX_PENDING_PROGRESS_CHUNKS = 128;

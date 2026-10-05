@@ -9,6 +9,7 @@ import JSON5 from "json5";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import type { Requirements } from "./requirements.js";
 
 /** Reads a frontmatter field only when it is represented as a string value. */
 export function getFrontmatterString(
@@ -46,21 +47,10 @@ export function resolveOpenClawManifestBlock(params: {
   }
 }
 
-type OpenClawManifestRequires = {
-  /** All binaries that must be available. */
-  bins: string[];
-  /** Alternative binaries where any one match is enough. */
-  anyBins: string[];
-  /** Environment variables required by the entry. */
-  env: string[];
-  /** Config paths required by the entry. */
-  config: string[];
-};
-
 /** Extracts normalized runtime requirement lists from an OpenClaw manifest block. */
 export function resolveOpenClawManifestRequires(
   metadataObj: Record<string, unknown>,
-): OpenClawManifestRequires | undefined {
+): Omit<Requirements, "os"> | undefined {
   const requiresRaw = asOptionalObjectRecord(metadataObj.requires);
   if (!requiresRaw) {
     return undefined;

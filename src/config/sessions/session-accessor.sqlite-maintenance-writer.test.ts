@@ -130,7 +130,7 @@ it("resolves protection once before capping aged candidates", async () => {
   const provider = vi.fn(() => [key(2)]);
   const unregister = registerSessionMaintenancePreserveKeysProvider(provider);
   try {
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [key(1)],
       run: async () => {
@@ -214,7 +214,10 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
         }),
       { agentId: "main", path: database.path },
     );
-    expect(plan.archivedSessionKeys.toSorted()).toEqual(victims.toSorted());
+    expect(plan.archivedEntries).toEqual([
+      { sessionKey: key("oldest"), sessionId: "bounded-0" },
+      { sessionKey: key("tie-\u{10000}"), sessionId: "bounded-2" },
+    ]);
     expect(plan).toMatchObject({ archived: 2, capArchived: 2, capped: 2 });
     expect(parse.mock.calls.some(([serialized]) => serialized.includes(untouchedPayload))).toBe(
       false,
@@ -252,7 +255,7 @@ it.each(["session-key", "session-id"] as const)(
       );
     const identity = identityKind === "session-key" ? target.sessionKey : target.sessionId;
 
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [identity],
       run: async () => {

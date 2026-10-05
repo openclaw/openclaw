@@ -415,7 +415,7 @@ final class StatusMenuRenderer: NSObject {
         }
 
         entries.append(self.debugSeparator("logging"))
-        let enabled = AppLogSettings.fileLoggingEnabled()
+        let enabled = DiagnosticsFileLog.isEnabled()
         let title = enabled ? String(localized: "File Logging: On") : String(localized: "File Logging: Off")
         let fileLogging = self.debugItem("fileLogging", title, "doc.text.magnifyingglass")
         fileLogging.state = enabled ? .on : .off
@@ -508,7 +508,7 @@ final class StatusMenuRenderer: NSObject {
         case "verbose":
             Task { _ = await DebugActions.toggleVerboseLoggingMain() }
         case "fileLogging":
-            let enabled = !AppLogSettings.fileLoggingEnabled()
+            let enabled = !DiagnosticsFileLog.isEnabled()
             AppDefaults.standard.set(enabled, forKey: debugFileLogEnabledKey)
             sender.state = enabled ? .on : .off
             sender.title = enabled ? String(localized: "File Logging: On") : String(localized: "File Logging: Off")

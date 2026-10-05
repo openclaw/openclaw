@@ -19,8 +19,9 @@ import { renderCatalogGridSkeleton } from "./catalog-skeleton.ts";
 import { renderArtTile } from "./consent-dialog.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
-  renderPluginCardIdentity,
+  renderPluginAuthor,
   renderPluginCardSummary,
+  renderPluginOfficialBadge,
   renderPluginStateStatus,
 } from "./plugin-card.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.ts";
@@ -40,9 +41,7 @@ export type PluginCatalogResultsProps = {
   categoriesError: string | null;
   onRetryCategories: () => void;
   featured: readonly PluginDiscoveryEntry[];
-  featuredLoading: boolean;
   trending: readonly PluginDiscoveryEntry[];
-  trendingLoading: boolean;
   loadingMore: boolean;
   loadMoreError: string | null;
   intent: PluginDiscoveryIntent;
@@ -140,7 +139,7 @@ const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
 };
 
 function categoryIcon(icon: string | undefined): TemplateResult {
-  return (icon && CATEGORY_ICONS[icon]) || icons.box;
+  return (icon && Object.hasOwn(CATEGORY_ICONS, icon) && CATEGORY_ICONS[icon]) || icons.box;
 }
 
 function renderCatalogIcon(
@@ -215,14 +214,13 @@ function renderCatalogCard(
         >
           ${renderCatalogIcon(plugin, props)}
         </span>
-        ${renderPluginCardIdentity({
-          name: plugin.catalog.name,
-          attribution: {
-            ...(plugin.catalog.author ? { author: plugin.catalog.author } : {}),
-            official: plugin.catalog.official,
-          },
-          linkedAuthor: true,
-        })}
+        <div class="installed-plugins-card__identity">
+          <div class="plugin-card-title-row">
+            <h3>${plugin.catalog.name}</h3>
+            ${plugin.catalog.official ? renderPluginOfficialBadge() : nothing}
+          </div>
+          ${renderPluginAuthor(plugin.catalog.author, { linked: true })}
+        </div>
       </div>
       <div class="plugin-catalog-card__action">
         ${
@@ -430,14 +428,7 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
     items.some((plugin) =>
       categories.some((category) => plugin.catalog.categories.includes(category.slug)),
     );
-  if (
-    !hasAnySection &&
-    !props.loading &&
-    !props.featuredLoading &&
-    !props.trendingLoading &&
-    !props.error &&
-    !props.remoteError
-  ) {
+  if (!hasAnySection && !props.loading && !props.error && !props.remoteError) {
     return renderPanelEmptyState({
       icon: icons.search,
       heading: t("pluginsPage.noDiscoveryResults"),
@@ -451,7 +442,7 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
         id: intent,
         title: t(label),
         items: props[intent],
-        loading: props[`${intent}Loading`],
+        loading: props.loading,
         onViewAll: () => props.onIntentChange(intent),
         props,
       }),

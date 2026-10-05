@@ -34,6 +34,7 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
+import { gcManagedWorktrees } from "../../lib/worktrees/gc-worktrees.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 
@@ -236,7 +237,9 @@ class WorktreesPage extends OpenClawLightDomElement {
       return;
     }
     this.gcLoading = true;
-    await this.runOperation(scope, () => scope.client.request("worktrees.gc", {}));
+    await this.runOperation(scope, () =>
+      gcManagedWorktrees(scope.client, () => this.gateway.isCurrent(scope)),
+    );
   }
 
   private toggleCreate() {

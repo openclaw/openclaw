@@ -20,6 +20,7 @@ import {
 } from "./embedded-agent-subscribe.handlers.tools.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
+import { prepareToolResult } from "./embedded-agent-tool-results.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
@@ -64,7 +65,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     // Model facts advance before persistence, independently of queued reply delivery.
     ctx.captureModelEvent(evt);
     // Capture tool facts before reply delivery can delay their lifecycle handlers.
-    recordEmbeddedToolTrajectoryEvent(ctx, evt);
+    const readResult =
+      evt.type === "tool_execution_end" ? prepareToolResult(evt.result) : undefined;
+    recordEmbeddedToolTrajectoryEvent(ctx, evt, readResult);
     switch (evt.type) {
       case "message_start":
         void scheduleEvent(evt, () => handleMessageStart(ctx, evt));
@@ -91,7 +94,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         void scheduleEvent(evt, () => handleToolExecutionUpdate(ctx, evt));
         return;
       case "tool_execution_end":
-        void scheduleEvent(evt, () => handleToolExecutionEnd(ctx, evt));
+        void scheduleEvent(evt, () => handleToolExecutionEnd(ctx, evt, readResult!));
         return;
       case "agent_start":
         void scheduleEvent(evt, () => handleAgentStart(ctx));

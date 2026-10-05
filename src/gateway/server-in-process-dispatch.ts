@@ -5,13 +5,14 @@ import {
 } from "../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
-import { createAbortError } from "../infra/abort-signal.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { registerDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
-import { bindCreatedInputMutationAuthority } from "./server-methods/session-mutation-guards.js";
+import { bindInProcessRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
 export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
@@ -28,6 +29,7 @@ type InProcessGatewayDispatchOptions = {
   onSignalAbort?: () => Promise<void> | void;
   requestIdPrefix?: string;
   prepareDispatchCurrent?: () => Promise<void>;
+  assertPreparationCurrent?: () => void;
   sessionMutationCommitGuard?: () => void;
   assertCreatedInputSourceCurrent?: () => void;
   timeoutMs?: number;
@@ -92,8 +94,6 @@ async function waitForDispatch<T>(
   onTimeout?: () => void,
   requestTimeoutMs?: number,
 ): Promise<T> {
-  let timeout: NodeJS.Timeout | undefined;
-  let onAbort: (() => void) | undefined;
   let releaseDeadline: (() => void) | undefined;
   try {
     if (signal?.aborted) {
@@ -105,31 +105,30 @@ async function waitForDispatch<T>(
     }
     releaseDeadline =
       deadlineMs === undefined ? undefined : registerDiagnosticToolExecutionDeadline(deadlineMs);
-    const cancellation = new Promise<never>((_resolve, reject) => {
-      if (remainingTimeoutMs !== undefined) {
-        timeout = setTimeout(() => {
-          onTimeout?.();
-          reject(
-            new GatewayProtocolRequestTimeoutError(
+    const abortError = (aborted: AbortSignal) => resolveDispatchAbortError(method, aborted);
+    return await (remainingTimeoutMs === undefined
+      ? racePromiseWithAbortSignal(promise, signal, abortError)
+      : raceWithTimeout(
+          promise,
+          remainingTimeoutMs,
+          () => {
+            onTimeout?.();
+            throw new GatewayProtocolRequestTimeoutError(
               {
                 method,
                 timeoutMs: requestTimeoutMs ?? remainingTimeoutMs,
                 requestSent: true,
               },
               `gateway request timeout for ${method}`,
-            ),
-          );
-        }, remainingTimeoutMs);
-      }
-      if (signal) {
-        onAbort = () => reject(resolveDispatchAbortError(method, signal));
-        signal.addEventListener("abort", onAbort, { once: true });
-        if (signal.aborted) {
-          onAbort();
-        }
-      }
-    });
-    return await Promise.race([promise, cancellation]);
+            );
+          },
+          {
+            signal,
+            onAbort: (aborted) => {
+              throw abortError(aborted);
+            },
+          },
+        ));
   } catch (error) {
     if (signal?.aborted && onSignalAbort) {
       await Promise.resolve()
@@ -139,12 +138,6 @@ async function waitForDispatch<T>(
     throw error;
   } finally {
     releaseDeadline?.();
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    if (signal && onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
   }
 }
 
@@ -198,7 +191,7 @@ export async function dispatchGatewayRequestInProcessRaw(
     const execution = options.context
       .trackExecution(() =>
         handleGatewayRequest(
-          bindCreatedInputMutationAuthority(
+          bindInProcessRequestMutationAuthority(
             {
               req,
               requestEntry: entry,
@@ -226,6 +219,7 @@ export async function dispatchGatewayRequestInProcessRaw(
               ...(options.signal ? { signal: options.signal } : {}),
             },
             options.assertCreatedInputSourceCurrent,
+            options.assertPreparationCurrent,
           ),
         )
           .then(() => {

@@ -9,10 +9,7 @@ import {
   getRegistryWorktree,
   WorktreeRemovalContentionError,
 } from "../agents/worktrees/registry.js";
-import {
-  acquireWorktreeRunLease,
-  resolveWorktreeIdForPath,
-} from "../agents/worktrees/run-lease.js";
+import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../agents/worktrees/run-lease.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../agents/worktrees/service.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
@@ -107,7 +104,7 @@ test.each(["restore-failed", "placement-changed"] as const)(
             .mockRejectedValueOnce(new Error("worktree checkout unavailable"))
         : undefined;
     const worktreeLifecycle = await import("../sessions/session-worktree-lifecycle.js");
-    const synchronize = worktreeLifecycle.synchronizeSessionWorktreeArchive;
+    const synchronize = worktreeLifecycle.restoreSessionWorktree;
     const sqliteScope = resolveSqliteScope({ storePath, sessionKey: key });
     const writerQueuePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(sqliteScope));
     const writerStarted = createDeferredCore();
@@ -116,7 +113,7 @@ test.each(["restore-failed", "placement-changed"] as const)(
     let admission: ReturnType<typeof coordinator.ensureDispatchReplyOperation> | undefined;
     const placementChange = placements
       ? vi
-          .spyOn(worktreeLifecycle, "synchronizeSessionWorktreeArchive")
+          .spyOn(worktreeLifecycle, "restoreSessionWorktree")
           .mockImplementationOnce(async (params) => {
             const assertCurrent = await synchronize(params);
             heldWriter = runExclusiveSqliteSessionWrite(
@@ -144,7 +141,11 @@ test.each(["restore-failed", "placement-changed"] as const)(
         expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(true);
         await placements!.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
         // A stopped replacement is eligible, but cannot reuse preparation owned by the prior placement.
-        placements!.fail({ sessionId, expectedGeneration: 1, recoveryError: "preparation failed" });
+        await placements!.fail({
+          sessionId,
+          expectedGeneration: 1,
+          recoveryError: "preparation failed",
+        });
         releaseWriter.resolve();
         await heldWriter;
         await expect(admission).rejects.toThrow("changed before mutation");
@@ -186,7 +187,7 @@ test("sessions.create only allocates worktrees for lifecycle-manageable agent ow
   const workspace = await initializeRemoteBackedGitWorkspace(openClawState.root);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  testState.agentsConfig = { entries: { ops: {} } };
   const { storePath } = await createSessionStoreDir();
   const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
   const allocatedWorktreeIds = new Set<string>();
@@ -364,12 +365,12 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
         actorId: creatorProfileId,
       }),
     ]);
-    const admittedWorktreeId = await resolveWorktreeIdForPath({
+    const selected = await resolveWorktreeForPath({
       sessionEntry: persisted,
       candidatePaths: [persisted?.spawnedCwd],
     });
-    expect(admittedWorktreeId).toBe(successorWorktree.id);
-    const runLease = await acquireWorktreeRunLease(admittedWorktreeId!);
+    expect(selected?.record.id).toBe(successorWorktree.id);
+    const runLease = await acquireWorktreeRunLease(selected!.record.id, { source: selected });
     await runLease.release();
   } finally {
     releaseRemoval();

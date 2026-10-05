@@ -135,6 +135,19 @@ function registerAgentDatabaseResource(resource: AgentDatabaseResource): () => v
     ...resource,
     path: path.resolve(resource.path),
   };
+  assertAgentDatabaseResourceAdmission(owned);
+  const unregister = () => resources.active.delete(owned);
+  getOpenClawDatabaseMaintenanceScope()?.own(unregister, "agent-resources", () =>
+    closeAgentDatabaseResource(owned),
+  );
+  resources.active.add(owned);
+  return unregister;
+}
+
+/** Fresh native opens and resource registrations share the same close custody. */
+export function assertAgentDatabaseResourceAdmission(
+  owned: Parameters<typeof matchesAgentDatabaseClose>[1],
+): void {
   if (
     [...resources.selections.keys()].some((selection) =>
       matchesAgentDatabaseClose(selection, owned),
@@ -153,12 +166,6 @@ function registerAgentDatabaseResource(resource: AgentDatabaseResource): () => v
   ) {
     throw new Error(`Agent database resources are closing: ${owned.path}`);
   }
-  const unregister = () => resources.active.delete(owned);
-  getOpenClawDatabaseMaintenanceScope()?.own(unregister, "agent-resources", () =>
-    closeAgentDatabaseResource(owned),
-  );
-  resources.active.add(owned);
-  return unregister;
 }
 
 function closeAgentDatabaseResource(
@@ -226,20 +233,33 @@ export async function drainAgentDatabaseResources<T>(
   selection: AgentDatabaseCloseSelection,
   closeNative: () => Promise<T>,
 ): Promise<T> {
-  const ownedSelection = { ...selection };
-  const completion = createDeferredCore();
-  // A close may have no observer; its caller still receives the original failure.
-  void completion.promise.catch(() => {});
-  resources.selections.set(ownedSelection, completion.promise);
-  try {
-    const results = await Promise.allSettled(revokeAgentDatabaseResources(ownedSelection));
+  return withAgentDatabaseCloseFence(selection, async () => {
+    const results = await Promise.allSettled(revokeAgentDatabaseResources(selection));
     const errors = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
     if (errors.length > 0) {
       throw new AggregateError(errors, "Agent database resource drainage failed");
     }
-    const result = await closeNative();
+    return closeNative();
+  });
+}
+
+/** Keep the complete selection fenced while its physical databases retire independently. */
+export async function withAgentDatabaseCloseFence<T>(
+  selection: AgentDatabaseCloseSelection,
+  close: (resourcePaths: readonly string[]) => Promise<T>,
+): Promise<T> {
+  const ownedSelection = { ...selection };
+  const completion = createDeferredCore();
+  // A close may have no observer; its caller still receives the original failure.
+  void completion.promise.catch(() => {});
+  resources.selections.set(ownedSelection, completion.promise);
+  try {
+    const resourcePaths = [...new Set([...resources.active, ...resources.closing.keys()])]
+      .filter((resource) => matchesAgentDatabaseClose(ownedSelection, resource))
+      .map((resource) => resource.path);
+    const result = await close(resourcePaths);
     completion.resolve();
     return result;
   } catch (error) {

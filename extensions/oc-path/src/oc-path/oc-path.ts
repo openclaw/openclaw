@@ -11,6 +11,7 @@
  */
 
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { containsAsciiControlCharacter as hasControlChar } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "./sentinel.js";
 
@@ -22,18 +23,6 @@ const MAX_SUB_SEGMENTS_PER_SLOT = 64;
 export const MAX_TRAVERSAL_DEPTH = 256;
 
 const BOM = "﻿";
-
-// Walk by char code rather than regex — the no-control-regex lint rule
-// rejects character classes covering U+0000–U+001F + U+007F.
-function hasControlChar(s: string): boolean {
-  for (let i = 0; i < s.length; i++) {
-    const cc = s.charCodeAt(i);
-    if (cc <= 0x1f || cc === 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
 
 const RESERVED_CHARS_RE = /[?&%]/;
 

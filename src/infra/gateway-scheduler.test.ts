@@ -103,23 +103,6 @@ describe("Gateway timed work", () => {
     await scheduler.stop();
   });
 
-  it("arms only the earliest wake and fences canceled host wakes and replaced registrations", async () => {
-    const { time, scheduler } = fixture();
-    const run = vi.fn();
-    const retired = scheduler.schedule({ id: "approval:one", atMs: 2_000, run });
-    const oldWake = time.wakes[0];
-    scheduler.schedule({ id: "approval:one", atMs: 1_500, run });
-    retired.cancel();
-    expect(oldWake).toBeDefined();
-    await oldWake?.run();
-    expect(scheduler.nextWakeAtMs).toBe(1_500);
-    expect(time.armedAtMs).toBe(1_500);
-    await time.advanceTo(1_500);
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    await scheduler.stop();
-  });
-
   it("coalesces sleep and forward jumps into one pass while retaining absolute deadlines", async () => {
     const { time, scheduler } = fixture();
     const periodic = vi.fn();
@@ -147,9 +130,13 @@ describe("Gateway timed work", () => {
       const retiredRun = vi.fn();
       const run = vi.fn();
       const retired = scheduler.schedule({ id: "queue", atMs: 2_000, run: retiredRun });
+      const oldWake = time.wakes[0];
       scheduler.schedule({ id: "queue", atMs, mode, run });
       retired.cancel();
+      expect(oldWake).toBeDefined();
+      await oldWake?.run();
       expect(scheduler.nextWakeAtMs).toBe(nextWakeAtMs);
+      expect(time.armedAtMs).toBe(nextWakeAtMs);
       await time.advanceTo(nextWakeAtMs);
       expect(run).toHaveBeenCalledOnce();
       expect(retiredRun).not.toHaveBeenCalled();
@@ -158,9 +145,13 @@ describe("Gateway timed work", () => {
     },
   );
 
-  it.each([{ delayMs: 2_000 }, { atMs: 6_500 }])(
-    "does not postpone elapsed eligibility after a backward wall-clock correction: %j",
-    async (deadline) => {
+  it.each([
+    { deadline: { delayMs: 2_000 }, clock: "elapsed" },
+    { deadline: { atMs: 6_500 }, clock: "elapsed" },
+    { deadline: { delayMs: 2_000 }, clock: "wall" },
+  ])(
+    "retains $clock eligibility after a backward wall-clock correction: $deadline",
+    async ({ deadline, clock }) => {
       const { time, scheduler } = fixture();
       const run = vi.fn();
       time.setTime(9_000);
@@ -170,30 +161,21 @@ describe("Gateway timed work", () => {
       await time.advanceBy(500);
       scheduler.schedule({ id: "queue", ...deadline, mode: "earliest", run });
       expect(scheduler.nextWakeAtMs).toBe(5_000);
-      await time.advanceTo(5_000);
+      if (clock === "wall") {
+        time.setTime(6_499);
+        scheduler.schedule({ id: "other", atMs: 6_499, run: () => {} });
+        await time.wake();
+        expect(run).not.toHaveBeenCalled();
+        expect(scheduler.nextWakeAtMs).toBe(6_500);
+        await time.advanceBy(1);
+      } else {
+        await time.advanceTo(5_000);
+      }
       expect(run).toHaveBeenCalledOnce();
       expect(scheduler.nextWakeAtMs).toBeNull();
       await scheduler.stop();
     },
   );
-
-  it("keeps the earlier wall deadline as well as the elapsed deadline", async () => {
-    const { time, scheduler } = fixture();
-    const run = vi.fn();
-    time.setTime(9_000);
-    scheduler.schedule({ id: "queue", delayMs: 1_000, mode: "earliest", run });
-    time.setTime(4_000);
-    await time.advanceBy(500);
-    scheduler.schedule({ id: "queue", delayMs: 2_000, mode: "earliest", run });
-    time.setTime(6_499);
-    scheduler.schedule({ id: "other", atMs: 6_499, run: () => {} });
-    await time.wake();
-    expect(run).not.toHaveBeenCalled();
-    expect(scheduler.nextWakeAtMs).toBe(6_500);
-    await time.advanceBy(1);
-    expect(run).toHaveBeenCalledOnce();
-    await scheduler.stop();
-  });
 
   it("retains an already elapsed wake when another due job refreshes its deadline", async () => {
     const { time, scheduler } = fixture();

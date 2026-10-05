@@ -45,7 +45,6 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerMayCopySourcesInProcess,
 } from "./openclaw-state-maintenance-context.js";
-import type { OpenClawStateReadReceipt } from "./openclaw-state-read-error.js";
 import {
   startOpenClawStateReadOperation,
   type OpenClawStateReadCompletion,
@@ -58,6 +57,7 @@ import {
   runSynchronousReadScope,
 } from "./openclaw-state-read-scope.js";
 import type {
+  OpenClawStateReadReceipt,
   OpenClawStateReadOptions,
   OpenClawStateReadCommand,
   OpenClawStateReadReply,
@@ -84,10 +84,10 @@ const stateSnapshotReads = resolveGlobalSingleton(
     >(),
 );
 
-/** Opaque identity for derived facts scoped to these owned private database bytes. */
+/** Stable identity and private bytes for reads within the enclosing snapshot scope. */
 export function getActiveOpenClawStateDatabaseReadSnapshot(
   options: OpenClawStateDatabaseOptions = {},
-): object | undefined {
+): Readonly<{ location: string }> | undefined {
   const current = stateSnapshotReads.getStore();
   return current?.path === resolveReadOnlyPath(options) ? current : undefined;
 }
@@ -548,7 +548,10 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
 /** Publication guards need current rows, never an inherited discovery snapshot. */
 export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & {
+    /** Existing host mutation guards may read natively outside worker admission grants. */
+    allowNativeRead?: true;
+  } = {},
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): T | undefined {
   const pathname = resolveReadOnlyPath(options);
@@ -570,7 +573,9 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
     return withOpenClawStateReadOnlyLocation(
       operation,
       pathname,
-      prepareSqliteReadOnlyLocationSync(pathname),
+      options.allowNativeRead && !isArtifactPreservingStateRead() && !openStateSchemaReadAdmission
+        ? pathname
+        : prepareSqliteReadOnlyLocationSync(pathname),
       openStateSchemaReadAdmission,
     );
   });

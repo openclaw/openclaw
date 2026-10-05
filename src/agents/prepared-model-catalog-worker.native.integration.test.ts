@@ -10,28 +10,15 @@ describe("prepared native model catalog worker boundary", () => {
     await expectNativeHarnessModelsPublishedFromWorker({ makeTempDir, retireAfterTest });
   });
 
-  it("retains legacy hook rows through consecutive failures without retaining old augmentation rows", async () => {
+  it.each([
+    { catalogReturnsRows: true, aliasOnly: false },
+    { catalogReturnsRows: false, aliasOnly: false },
+    { catalogReturnsRows: true, aliasOnly: true },
+  ])("refreshes legacy catalogs (rows=$catalogReturnsRows, alias=$aliasOnly)", async (options) => {
     await expectLegacyWorkerCatalogRetention({
       makeTempDir,
       retireAfterTest,
-      catalogReturnsRows: true,
-    });
-  });
-
-  it("publishes fresh augmentation rows after a configured-only worker acquisition fails", async () => {
-    await expectLegacyWorkerCatalogRetention({
-      makeTempDir,
-      retireAfterTest,
-      catalogReturnsRows: false,
-    });
-  });
-
-  it("retains a legacy catalog returned only under a registered provider alias", async () => {
-    await expectLegacyWorkerCatalogRetention({
-      makeTempDir,
-      retireAfterTest,
-      catalogReturnsRows: true,
-      aliasOnly: true,
+      ...options,
     });
   });
 });

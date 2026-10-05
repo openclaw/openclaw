@@ -1,8 +1,4 @@
-import {
-  WORKBOARD_STATUSES,
-  type WorkboardCard,
-  type WorkboardStatus,
-} from "@openclaw/workboard-contract";
+import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import type { ResolveAgentWorkspaceRuntime } from "./dispatcher-workspace.js";
@@ -18,10 +14,6 @@ import {
 
 const ADMIN_SCOPE = "operator.admin";
 const WRITE_SCOPE = "operator.write";
-
-function splitArgs(input: string | undefined): string[] {
-  return (input ?? "").trim().split(/\s+/).filter(Boolean);
-}
 
 function formatCardLine(card: WorkboardCard): string {
   const boardId = card.metadata?.automation?.boardId ?? "default";
@@ -55,10 +47,6 @@ function formatCardDetails(card: WorkboardCard): string {
   return lines.join("\n");
 }
 
-function isWorkboardStatus(value: string): value is WorkboardStatus {
-  return (WORKBOARD_STATUSES as readonly string[]).includes(value);
-}
-
 function requireWriteAccess(params: {
   senderIsOwner?: boolean;
   gatewayClientScopes?: readonly string[];
@@ -88,7 +76,7 @@ async function handleWorkboardCommand(params: {
   resolveAgentWorkspaceRuntime?: ResolveAgentWorkspaceRuntime;
   workspaceAccess?: WorkboardWorkspaceAccess;
 }): Promise<{ text: string; isError?: boolean }> {
-  const [action = "list", ...rest] = splitArgs(params.args);
+  const [action = "list", ...rest] = (params.args ?? "").trim().split(/\s+/).filter(Boolean);
   if (action === "help") {
     return {
       text: [
@@ -145,7 +133,7 @@ async function handleWorkboardCommand(params: {
         isError: true,
       };
     }
-    if (!isWorkboardStatus(status)) {
+    if (!(WORKBOARD_STATUSES as readonly string[]).includes(status)) {
       return {
         text: `status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`,
         isError: true,

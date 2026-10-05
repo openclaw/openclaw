@@ -6,6 +6,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
+import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { browserInspectScript } from "./browser-inspect-script.ts";
 import {
   readBrowserTabTarget,
@@ -405,14 +406,13 @@ export async function captureBrowserScreenshot(
 
 export async function clickBrowserCoords(
   client: BrowserRequestClient,
-  params: { targetId: string; x: number; y: number; doubleClick?: boolean },
+  params: { targetId: string; x: number; y: number },
 ) {
   await browserAction(client, {
     kind: "clickCoords",
     targetId: params.targetId,
     x: Math.max(0, Math.round(params.x)),
     y: Math.max(0, Math.round(params.y)),
-    ...(params.doubleClick ? { doubleClick: true } : {}),
   });
 }
 
@@ -599,18 +599,8 @@ export async function fetchBrowserScreenshotDataUrl(params: {
   } finally {
     clearTimeout(timeout);
   }
-  return await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-      } else {
-        reject(new Error(t("browser.errors.screenshotReadFailed")));
-      }
-    });
-    reader.addEventListener("error", () =>
-      reject(reader.error ?? new Error(t("browser.errors.screenshotReadFailed"))),
-    );
-    reader.readAsDataURL(blob);
+  return readBlobAsDataUrl(blob, {
+    readError: () => t("browser.errors.screenshotReadFailed"),
+    invalidResultError: () => t("browser.errors.screenshotReadFailed"),
   });
 }

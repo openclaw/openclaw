@@ -5,7 +5,6 @@ import type { SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
-  uiConversationMatches,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -386,12 +385,4 @@ export function setChatError(
   if (requestUpdate) {
     state.requestUpdate?.();
   }
-}
-
-export function chatScopedEventSessionMatches(
-  state: ChatState,
-  sessionKey: string,
-  agentId?: string | null,
-): boolean {
-  return uiConversationMatches(state, state.sessionKey, sessionKey, agentId);
 }

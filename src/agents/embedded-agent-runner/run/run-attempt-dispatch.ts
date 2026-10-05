@@ -165,11 +165,22 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     provider,
     runtimePlan,
   });
+  if (!params.admittedRunContext) {
+    throw new Error("embedded attempt reached dispatch without an admitted run context");
+  }
+  const admittedRunContext = params.admittedRunContext;
+  const assertTrajectoryCurrent = resolveAdmittedRunActiveAssertion(
+    admittedRunContext,
+    params.abortSignal,
+  );
+  if (!assertTrajectoryCurrent) {
+    throw new Error("embedded attempt reached dispatch without an active admitted run");
+  }
   const trajectoryRecorder =
     runtime.agentHarness.id === CODEX_HARNESS_ID &&
     !params.disableTrajectory &&
     params.sessionPersistence !== "detached"
-      ? createTrajectoryRuntimeRecorder({
+      ? await createTrajectoryRuntimeRecorder({
           cfg: params.config,
           env: process.env,
           runId: params.runId,
@@ -195,6 +206,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
           workspaceDir,
         })
       : undefined;
+  assertTrajectoryCurrent();
   let startupStagesEmitted = input.startupStagesEmitted;
   if (!startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
@@ -248,10 +260,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     modelMaxTokens: effectiveModel.maxTokens,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
   });
-  if (!params.admittedRunContext) {
-    throw new Error("embedded attempt reached dispatch without an admitted run context");
-  }
-  const admittedRunContext = params.admittedRunContext;
   const assertActiveRun = resolveAdmittedRunActiveAssertion(
     admittedRunContext,
     attemptAbortController.signal,
@@ -401,6 +409,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     trigger: params.trigger,
     terminalReplyExpectation: resolveReplyExpectation(params),
     memoryFlushWritePath: params.memoryFlushWritePath,
+    memoryFlushTools: params.memoryFlushTools,
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
@@ -604,6 +613,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
     gitCoauthorPrompt,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
@@ -657,6 +667,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     forceMessageTool: params.forceMessageTool,
     enableHeartbeatTool: params.enableHeartbeatTool,
     forceHeartbeatTool: params.forceHeartbeatTool,
+    continuesConversation: params.continuesConversation,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     internalEvents: params.internalEvents,
     runtimeContextFragments: params.runtimeContextFragments,

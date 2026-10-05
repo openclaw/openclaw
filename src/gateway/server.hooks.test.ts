@@ -77,7 +77,10 @@ function agentMapping(route: string, overrides: HookMappingConfig = {}): HookMap
 function setHookAgentRoster(explicitSole = false): void {
   testState.agentsConfig = explicitSole
     ? { ownership: "explicit", entries: { main: {} } }
-    : { entries: { main: { default: true }, hooks: {} } };
+    : { ownership: "explicit", entries: { main: {}, hooks: {} } };
+  if (!explicitSole) {
+    testState.agentConfig = { ...testState.agentConfig, systemAgent: { agentId: "main" } };
+  }
 }
 
 function mockIsolatedRunOk(once = false): void {
@@ -376,6 +379,29 @@ describe("gateway server hooks", () => {
       expect(mappedEvents).toHaveLength(1);
       expect(mappedEvents[0]?.text).toBe("Mapped wake: Email");
       drainSystemEvents("agent:hooks:hook:wake:fixed");
+
+      for (const route of ["wake", "mapped-wake"]) {
+        const sessionKey =
+          route === "wake" ? "agent:main:hook:wake:direct" : "agent:hooks:hook:wake:fixed";
+        const payload = (index: number) =>
+          route === "wake"
+            ? { text: `Direct wake ${index}`, sessionKey: "hook:wake:direct" }
+            : { subject: `Email ${index}` };
+        for (let index = 0; index < 20; index++) {
+          const admitted = await postHook(port, route, payload(index));
+          await expect(admitted.json()).resolves.toMatchObject({ eventOutcome: "queued" });
+        }
+        const pending = peekSystemEventEntries(sessionKey);
+        const coalesced = await postHook(port, route, payload(19));
+        await expect(coalesced.json()).resolves.toMatchObject({ eventOutcome: "coalesced" });
+        const refused = await postHook(port, route, payload(20), { status: 503 });
+        await expect(refused.json()).resolves.toMatchObject({
+          ok: false,
+          error: expect.stringContaining("queue is full"),
+        });
+        expect(peekSystemEventEntries(sessionKey)).toEqual(pending);
+        drainSystemEvents(sessionKey);
+      }
     });
 
     testState.sessionConfig = { scope: "global" };

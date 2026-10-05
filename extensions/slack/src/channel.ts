@@ -8,7 +8,6 @@ import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-h
 import {
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
-  type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import {
   createChannelMessageAdapterFromOutbound,
@@ -444,10 +443,7 @@ const slackMessageAdapter = {
   },
 } satisfies typeof slackMessageAdapterBase;
 
-export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = createChatChannelPlugin<
-  ResolvedSlackAccount,
-  SlackProbe
->({
+export const slackPlugin = createChatChannelPlugin<ResolvedSlackAccount, SlackProbe, unknown, 2>({
   base: {
     ...slackPluginBase,
     allowlist: {
@@ -691,12 +687,14 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
     }),
     gateway: {
+      apiVersion: 2,
       startAccount: async (ctx) => {
         const account = ctx.account;
         const botToken = account.botToken?.trim();
         const appToken = account.appToken?.trim();
         ctx.log?.info(`[${account.accountId}] starting provider`);
         return (await loadSlackMonitorModule()).monitorSlackProvider({
+          scheduler: ctx.scheduler,
           botToken: botToken ?? "",
           appToken: appToken ?? "",
           accountId: account.accountId,

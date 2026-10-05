@@ -399,14 +399,14 @@ describe("gateway node session runtime", () => {
           projectSessionLifecycle: false,
           verboseLevel: "full",
         };
-        handler(event);
+        return handler(event);
       };
       try {
-        emit(1, "assistant", { text: "A", delta: "A" });
+        await emit(1, "assistant", { text: "A", delta: "A" });
         await Promise.all(sends);
         delayed = true;
-        emit(2, "assistant", { text: "AB", delta: "B" });
-        emit(
+        await emit(2, "assistant", { text: "AB", delta: "B" });
+        await emit(
           4,
           stream,
           stream === "tool"
@@ -436,7 +436,7 @@ describe("gateway node session runtime", () => {
         ).toBeGreaterThan(tailIndex);
       } finally {
         pairing.resolve("generation-a");
-        handler.dispose();
+        await handler.dispose();
         chatRunState.clear();
         vi.useRealTimers();
       }

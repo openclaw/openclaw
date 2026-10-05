@@ -61,7 +61,6 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
     ...(entry.collectorCompletion
       ? { collectorCompletion: { status: entry.collectorCompletion.status } }
       : {}),
-    ...(entry.childAgentId ? { childAgentId: entry.childAgentId } : {}),
     ...(entry.requesterAgentId ? { requesterAgentId: entry.requesterAgentId } : {}),
     ...(entry.model ? { model: entry.model } : {}),
     ...(entry.generation !== undefined ? { generation: entry.generation } : {}),
@@ -232,6 +231,36 @@ export function isCompletedRequesterDeliveryBlocked(
     isDeliverySuspended(entry) &&
     entry.delivery?.suspendedReason === "permanent_failure" &&
     entry.delivery.lastDropReason === "message_tool_delivery_missing"
+  );
+}
+
+/** Delivered child history releases its requester only after every completion owner settles. */
+export function isSettledSubagentRequesterHistory(entry: SubagentRunRecord): boolean {
+  const endedAt = entry.execution.endedAt;
+  const cleanedAt = entry.cleanupCompletedAt;
+  return (
+    entry.execution.status === "terminal" &&
+    typeof endedAt === "number" &&
+    Number.isFinite(endedAt) &&
+    typeof cleanedAt === "number" &&
+    Number.isFinite(cleanedAt) &&
+    cleanedAt >= endedAt &&
+    entry.delivery?.status === "delivered" &&
+    !entry.requesterTurnRunId &&
+    !entry.requesterSettleWake &&
+    !entry.retireAfterRequesterTurn &&
+    !entry.wakeOnDescendantSettle &&
+    !entry.pauseReason &&
+    !entry.killIntent &&
+    !entry.killReconciliation &&
+    !entry.execution.restartRecovery &&
+    !entry.terminalOwner &&
+    !entry.suppressAnnounceReason &&
+    !entry.collect &&
+    !entry.collectorCompletion &&
+    !entry.collectorLaunchCleanupPending &&
+    !entry.swarmLaunchPending &&
+    !entry.queuedLaunch
   );
 }
 

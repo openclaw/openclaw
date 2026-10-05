@@ -753,7 +753,7 @@ extension OpenClawChatView {
             },
             inlineWidgetResolverReady: self.viewModel.healthOK,
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
-                await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
+                await viewModel?.transport.resolveInlineWidgetResource(path: path, replacing: failedResource)
             },
             mediaArtifactResolverReady: self.viewModel.healthOK,
             mediaPlaybackAllowed: self.mediaPlaybackAllowed,
@@ -998,33 +998,29 @@ extension OpenClawChatView {
 
     @ViewBuilder
     private func messageListOverlay(hasVisibleContent: Bool) -> some View {
-        if self.viewModel.isLoading {
-            EmptyView()
-        } else if self.composerChrome == .clean, self.visibleEmptyAssistantIntro != nil {
-            EmptyView()
-        } else if let error = activeErrorText {
-            if hasVisibleContent {
-                EmptyView()
-            } else {
-                let presentation = self.errorPresentation(for: error)
+        if !self.viewModel.isLoading, self.visibleEmptyAssistantIntro == nil {
+            if let error = activeErrorText {
+                if !hasVisibleContent {
+                    let presentation = self.errorPresentation(for: error)
+                    ChatNoticeCard(
+                        systemImage: presentation.systemImage,
+                        title: presentation.title,
+                        message: presentation.message,
+                        actionTitle: "Refresh",
+                        action: { self.viewModel.refresh() })
+                        .padding(.horizontal, 24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else if self.showsEmptyState {
                 ChatNoticeCard(
-                    systemImage: presentation.systemImage,
-                    title: presentation.title,
-                    message: presentation.message,
-                    actionTitle: "Refresh",
-                    action: { self.viewModel.refresh() })
+                    systemImage: "bubble.left.and.bubble.right.fill",
+                    title: self.emptyStateTitle,
+                    message: self.emptyStateMessage,
+                    actionTitle: nil,
+                    action: nil)
                     .padding(.horizontal, 24)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        } else if self.showsEmptyState {
-            ChatNoticeCard(
-                systemImage: "bubble.left.and.bubble.right.fill",
-                title: self.emptyStateTitle,
-                message: self.emptyStateMessage,
-                actionTitle: nil,
-                action: nil)
-                .padding(.horizontal, 24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -1155,24 +1151,19 @@ extension OpenClawChatView {
     }
 
     private func restoreInitialScrollPosition() {
-        switch chatReaderInitialRestorePolicy() {
-        case .liveEdge:
+        if chatReaderInitialRestorePolicy() == .latestTurn,
+           let latestTurnStartID = self.latestVisibleTurnStartID
+        {
+            self.followTarget = nil
+            self.hasNewerContentBelow = chatReaderHasNewerContent(
+                after: latestTurnStartID,
+                visibleIDs: self.transcriptPresentation.rows.map(\.id),
+                hasTransientContent: self.hasVisibleTransientContent)
+            self.moveScrollPosition(to: latestTurnStartID, anchor: Layout.newTurnAnchor)
+        } else {
             self.followTarget = .latest
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID)
-        case .latestTurn:
-            if let latestTurnStartID = latestVisibleTurnStartID {
-                self.followTarget = nil
-                self.hasNewerContentBelow = chatReaderHasNewerContent(
-                    after: latestTurnStartID,
-                    visibleIDs: self.transcriptPresentation.rows.map(\.id),
-                    hasTransientContent: self.hasVisibleTransientContent)
-                self.moveScrollPosition(to: latestTurnStartID, anchor: Layout.newTurnAnchor)
-            } else {
-                self.followTarget = .latest
-                self.hasNewerContentBelow = false
-                self.moveScrollPosition(to: self.scrollerBottomID)
-            }
         }
     }
 

@@ -23,7 +23,6 @@ describe("createLineImageSetIngressBuffer", () => {
     setId?: string;
     senderKey?: string;
     event?: string;
-    flushDelayMs?: number;
   }) =>
     buffer.admit({
       laneKey: params.laneKey ?? "user:U1",
@@ -34,7 +33,6 @@ describe("createLineImageSetIngressBuffer", () => {
       event: params.event ?? `image-${params.index}`,
       lifecycle: `claim-${params.index}`,
       ...(params.total === undefined ? {} : { total: params.total }),
-      ...(params.flushDelayMs === undefined ? {} : { flushDelayMs: params.flushDelayMs }),
     });
 
   it("hands the holder the whole set, in the order the sender picked", async () => {
@@ -54,12 +52,12 @@ describe("createLineImageSetIngressBuffer", () => {
     // Without `total` the timer is the only completion signal. A part slower
     // than the delay must extend the set, not open a second one that answers
     // the same send a second time.
-    const held = arrive({ index: 1, flushDelayMs: 100 });
-    await vi.advanceTimersByTimeAsync(80);
-    const second = arrive({ index: 2, flushDelayMs: 100 });
-    await vi.advanceTimersByTimeAsync(80);
-    const third = arrive({ index: 3, flushDelayMs: 100 });
-    await vi.advanceTimersByTimeAsync(100);
+    const held = arrive({ index: 1 });
+    await vi.advanceTimersByTimeAsync(3_200);
+    const second = arrive({ index: 2 });
+    await vi.advanceTimersByTimeAsync(3_200);
+    const third = arrive({ index: 3 });
+    await vi.advanceTimersByTimeAsync(4_000);
 
     const delivery = await held;
     // Released before the assertions below: a set that wrongly closed early
@@ -77,14 +75,14 @@ describe("createLineImageSetIngressBuffer", () => {
     // before that must not start one either, or the set closes on time it spent
     // queued and the parts still to come open a second set.
     const occupied = await buffer.enterLane("user:U1");
-    const held = arrive({ index: 1, flushDelayMs: 100 });
-    await vi.advanceTimersByTimeAsync(60);
-    const second = arrive({ index: 2, flushDelayMs: 100 });
-    await vi.advanceTimersByTimeAsync(200);
+    const held = arrive({ index: 1 });
+    await vi.advanceTimersByTimeAsync(2_400);
+    const second = arrive({ index: 2 });
+    await vi.advanceTimersByTimeAsync(8_000);
     occupied();
-    await vi.advanceTimersByTimeAsync(30);
-    const third = arrive({ index: 3, flushDelayMs: 100 });
-    await vi.advanceTimersByTimeAsync(120);
+    await vi.advanceTimersByTimeAsync(1_200);
+    const third = arrive({ index: 3 });
+    await vi.advanceTimersByTimeAsync(4_800);
 
     const delivery = await held;
     delivery?.finish();
@@ -120,9 +118,9 @@ describe("createLineImageSetIngressBuffer", () => {
   });
 
   it("delivers what arrived when LINE never reports a total", async () => {
-    const held = arrive({ index: 1, flushDelayMs: 1_000 });
+    const held = arrive({ index: 1 });
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(4_000);
     await expect(held).resolves.toMatchObject({ events: ["image-1"] });
   });
 
@@ -151,7 +149,6 @@ describe("createLineImageSetIngressBuffer", () => {
       index: 1,
       laneKey: "user:UB",
       setId: "set-b",
-      flushDelayMs: 5_000,
     });
     await expect(
       arrive({ index: 2, total: 2, laneKey: "user:UA", setId: "set-a" }),
@@ -159,7 +156,7 @@ describe("createLineImageSetIngressBuffer", () => {
 
     await expect(senderA).resolves.toMatchObject({ events: ["image-1", "image-2"] });
 
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(4_000);
     await expect(senderB).resolves.toMatchObject({ events: ["image-1"] });
   });
 
@@ -215,7 +212,7 @@ describe("createLineImageSetIngressBuffer", () => {
   });
 
   it("holds the set on its first part only", async () => {
-    const held = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
+    const held = arrive({ index: 1, total: 3 });
     let holderResolved = false;
     void held.then(() => {
       holderResolved = true;
@@ -224,7 +221,7 @@ describe("createLineImageSetIngressBuffer", () => {
     await expect(arrive({ index: 2, total: 3 })).resolves.toBeNull();
     expect(holderResolved).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(4_000);
     await expect(held).resolves.toMatchObject({ events: ["image-1", "image-2"] });
   });
 
@@ -232,7 +229,7 @@ describe("createLineImageSetIngressBuffer", () => {
   // on the lane. A late part matching that set must not join it - those parts are
   // already the turn, so it would be dropped and its claim left unsettled.
   it("starts a new set for a part arriving after the holder took the last one", async () => {
-    const held = arrive({ index: 1, total: 2, flushDelayMs: 1_000 });
+    const held = arrive({ index: 1, total: 2 });
     await expect(arrive({ index: 2, total: 2 })).resolves.toBeNull();
     const set = await held;
     if (!set) {
@@ -241,7 +238,7 @@ describe("createLineImageSetIngressBuffer", () => {
     expect(set.events).toEqual(["image-1", "image-2"]);
 
     // Same set id, arriving while the holder is still delivering.
-    const late = arrive({ index: 3, flushDelayMs: 1_000 });
+    const late = arrive({ index: 3 });
     let lateResolved = false;
     void late.then(() => {
       lateResolved = true;
@@ -250,7 +247,7 @@ describe("createLineImageSetIngressBuffer", () => {
     expect(lateResolved).toBe(false);
 
     set.finish();
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(4_000);
     // It becomes its own delivery rather than vanishing into the sealed set.
     await expect(late).resolves.toMatchObject({
       events: ["image-3"],
@@ -261,17 +258,17 @@ describe("createLineImageSetIngressBuffer", () => {
   // The lane is released so the rest of a set can be claimed at all. Anything else
   // the sender sent afterwards has to wait, or it overtakes the images.
   it("keeps a later unrelated event behind an incomplete set", async () => {
-    const held = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
+    const held = arrive({ index: 1, total: 3 });
     let laneFree = false;
     const later = buffer.enterLane("user:U1").then((release) => {
       laneFree = true;
       release();
     });
 
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(laneFree).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(2_000);
     const set = await held;
     if (!set) {
       throw new Error("the first part should hold the set");
@@ -285,9 +282,9 @@ describe("createLineImageSetIngressBuffer", () => {
   });
 
   it("does not report parts an earlier piece of the same set already delivered", async () => {
-    const first = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
-    void arrive({ index: 2, total: 3, flushDelayMs: 1_000 });
-    await vi.advanceTimersByTimeAsync(1_000);
+    const first = arrive({ index: 1, total: 3 });
+    void arrive({ index: 2, total: 3 });
+    await vi.advanceTimersByTimeAsync(4_000);
     const firstSet = await first;
     if (!firstSet) {
       throw new Error("the first part should hold the set");
@@ -297,17 +294,17 @@ describe("createLineImageSetIngressBuffer", () => {
 
     // The straggler opens its own set carrying the same total. Counting it
     // against that total alone would tell the model two images were lost.
-    const second = arrive({ index: 3, total: 3, flushDelayMs: 1_000 });
-    await vi.advanceTimersByTimeAsync(1_000);
+    const second = arrive({ index: 3, total: 3 });
+    await vi.advanceTimersByTimeAsync(4_000);
     const secondSet = await second;
     expect(secondSet?.missing).toBeUndefined();
     secondSet?.finish();
   });
 
   it("does not count a redelivered part as one more image of the same set", async () => {
-    const first = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
-    void arrive({ index: 2, total: 3, flushDelayMs: 1_000 });
-    await vi.advanceTimersByTimeAsync(1_000);
+    const first = arrive({ index: 1, total: 3 });
+    void arrive({ index: 2, total: 3 });
+    await vi.advanceTimersByTimeAsync(4_000);
     const firstSet = await first;
     expect(firstSet?.missing).toBe(1);
     firstSet?.finish();
@@ -315,16 +312,16 @@ describe("createLineImageSetIngressBuffer", () => {
     // A turn that failed is retried, and LINE redelivers the same events. The
     // carry has to recognise them the way the set itself does, or the notice
     // reports fewer missing parts every time the turn is retried.
-    const retry = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
-    void arrive({ index: 2, total: 3, flushDelayMs: 1_000 });
-    await vi.advanceTimersByTimeAsync(1_000);
+    const retry = arrive({ index: 1, total: 3 });
+    void arrive({ index: 2, total: 3 });
+    await vi.advanceTimersByTimeAsync(4_000);
     const retrySet = await retry;
     expect(retrySet?.missing).toBe(1);
     retrySet?.finish();
   });
 
   it("lets an unrelated lane through while a set is still forming", async () => {
-    const held = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
+    const held = arrive({ index: 1, total: 3 });
 
     const release = await buffer.enterLane("user:UOTHER");
     expect(buffer.isBusy("user:UOTHER")).toBe(true);
@@ -334,7 +331,7 @@ describe("createLineImageSetIngressBuffer", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(buffer.isBusy("user:UOTHER")).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(4_000);
     (await held)?.finish();
   });
 });

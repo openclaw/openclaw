@@ -123,7 +123,7 @@ describe("session transcript runtime read fence", () => {
     await expect(
       runSessionColdStorageMaintenance({
         config: {
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           session: {
             store: options.path,
             maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

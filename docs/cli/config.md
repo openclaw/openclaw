@@ -32,11 +32,21 @@ Entries in `env.vars` are ignored, including differently cased spellings; flat
 or change the host-selected read-only mode. Only the host value `1` enables
 this switch. Existing `OPENCLAW_NIX_MODE` behavior is unchanged.
 
-Config writes are blocked, including setup, onboarding, doctor repairs, plugin
+Config writes are blocked, including setup, onboarding, Doctor config repairs, plugin
 install/update/uninstall/enable/disable, and mutating `openclaw update` flows.
 Startup-derived defaults stay runtime-only. Change the config through your
 external deployment system, then let the Gateway reload it or restart the Gateway
 as needed. Runtime state still needs a writable `OPENCLAW_STATE_DIR`.
+
+Doctor's `--fix --non-interactive` pass, including the official Docker image's
+startup pass, still repairs writable SQLite, session, and plugin state in this
+mode. Pending config repairs are printed as a redacted merge patch to apply in
+your external deployment source; the mounted config and its includes stay
+unchanged. Valid config permits Gateway startup even with optional repairs
+pending. If legacy or invalid config prevents startup, Doctor exits nonzero and
+names the required edits. State schema migration runs before config repair so
+plugin and session migrations can use the current schema; keep a matched
+pre-upgrade state backup when reverting to an older image.
 
 `OPENCLAW_CONFIG_READONLY=1` uses generic externally managed config messages and
 does not enable Nix-specific installation or service behavior. `OPENCLAW_NIX_MODE=1`
@@ -173,6 +183,8 @@ machine-output spelling and keeps stdout reserved for the schema document.
 ### `config validate`
 
 Schema refusals from `config set`, `config patch`, and `config unset` explain the affected setting and confirm that no settings were saved. Correct the reported value or use `openclaw config schema` to inspect supported settings, then retry. These refusals still exit with status 1. Explicit validation reports settings that need correction without changing the file; `config validate --json` retains its `valid: false`, `error`, and `issues` fields for scripts.
+
+Config read failures name the file being read and preserve the underlying error. Resolve the reported file-access or runtime problem, then retry; a read failure alone does not mean the settings need repair.
 
 Human validation diagnostics quote literal record keys, such as `agents.defaults.models["provider/model.v1"].alias`, instead of displaying the dot inside a key as nested traversal. Numeric array positions use brackets, such as `agents.entries.main.skills[0]`. The `issues[].path` field in `config validate --json` keeps its existing dot-joined representation.
 

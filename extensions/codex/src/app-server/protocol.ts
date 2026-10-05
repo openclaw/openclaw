@@ -129,40 +129,36 @@ export type CodexTurnEnvironmentParams = JsonObject & {
   cwd: string;
 };
 
-export type CodexThreadStartParams = JsonObject & {
-  threadSource?: string | null;
-  input?: CodexUserInput[];
-  cwd?: string;
-  projectId?: string | null;
+type CodexThreadConfigurationParams = JsonObject & {
   runtimeWorkspaceRoots?: string[] | null;
-  model?: string;
   modelProvider?: string | null;
-  config?: JsonObject;
-  personality?: CodexPersonality | null;
   approvalPolicy?: CodexApprovalPolicy | null;
   approvalsReviewer?: CodexApprovalsReviewer | null;
   sandbox?: CodexSandboxMode | null;
   serviceTier?: CodexServiceTier | null;
-  dynamicTools?: CodexDynamicToolSpec[] | null;
   developerInstructions?: string;
+};
+
+export type CodexThreadStartParams = CodexThreadConfigurationParams & {
+  threadSource?: string | null;
+  input?: CodexUserInput[];
+  cwd?: string;
+  projectId?: string | null;
+  model?: string;
+  config?: JsonObject;
+  personality?: CodexPersonality | null;
+  dynamicTools?: CodexDynamicToolSpec[] | null;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;
   ephemeral?: boolean;
 };
 
-export type CodexThreadResumeParams = JsonObject & {
+export type CodexThreadResumeParams = CodexThreadConfigurationParams & {
   threadId: string;
   cwd?: string | null;
-  runtimeWorkspaceRoots?: string[] | null;
   model?: string;
-  modelProvider?: string | null;
   personality?: CodexPersonality | null;
-  approvalPolicy?: CodexApprovalPolicy | null;
-  approvalsReviewer?: CodexApprovalsReviewer | null;
-  sandbox?: CodexSandboxMode | null;
-  serviceTier?: CodexServiceTier | null;
   config?: JsonObject;
-  developerInstructions?: string;
   excludeTurns?: boolean;
   initialTurnsPage?: {
     limit?: number | null;
@@ -177,23 +173,16 @@ export type CodexThreadStartResponse = {
   modelProvider?: string | null;
 };
 
-export type CodexThreadForkParams = JsonObject & {
+export type CodexThreadForkParams = CodexThreadConfigurationParams & {
   threadId: string;
   lastTurnId?: string | null;
   beforeTurnId?: string | null;
   path?: string | null;
   model?: string | null;
-  modelProvider?: string | null;
-  serviceTier?: CodexServiceTier | null;
   cwd?: string | null;
-  runtimeWorkspaceRoots?: string[] | null;
-  approvalPolicy?: CodexApprovalPolicy | null;
-  approvalsReviewer?: CodexApprovalsReviewer | null;
-  sandbox?: CodexSandboxMode | null;
   permissions?: string | null;
   config?: JsonObject | null;
   baseInstructions?: string;
-  developerInstructions?: string;
   ephemeral?: boolean;
   threadSource?: string | null;
   excludeTurns?: boolean;
@@ -422,21 +411,10 @@ export type CodexThreadItem = {
   [key: string]: unknown;
 };
 
-type CodexStrictReviewRequiredNotification = {
-  method: "autoApprovalReview/strictReviewRequired";
-  params: JsonObject & {
-    threadId: string;
-    turnId: string;
-    startedAtMs: number;
-  };
+export type CodexServerNotification = {
+  method: string;
+  params?: JsonValue;
 };
-
-export type CodexServerNotification =
-  | CodexStrictReviewRequiredNotification
-  | {
-      method: string;
-      params?: JsonValue;
-    };
 
 export type CodexDynamicToolCallParams = {
   namespace?: string | null;
@@ -537,12 +515,7 @@ export type CodexLoginAccountParams =
       type: "apiKey";
       apiKey: string;
     }
-  | {
-      type: "chatgptAuthTokens";
-      accessToken: string;
-      chatgptAccountId: string;
-      chatgptPlanType: string | null;
-    };
+  | (CodexChatgptAuthTokensRefreshResponse & { type: "chatgptAuthTokens" });
 
 export type CodexRequestObject = Record<string, unknown>;
 

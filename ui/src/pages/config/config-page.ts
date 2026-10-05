@@ -29,8 +29,7 @@ import {
   UI_APPEARANCE_DEFAULTS,
   type UiSettings,
 } from "../../app/settings.ts";
-import { startThemeTransition } from "../../app/theme-transition.ts";
-import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
@@ -79,7 +78,7 @@ import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
 import { renderMcp, renderMcpIntro } from "./mcp.ts";
 import "./meeting-capture.ts";
 import "./memory-page.ts";
-import { narrowMemorySchema } from "./memory-schema.ts";
+import { memorySettingsSchema } from "./memory-schema.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import { renderSecurity, type SecurityOverview } from "./security.ts";
 import {
@@ -180,20 +179,7 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
   }
 }
 
-export function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
-  const root =
-    asConfigRecord((config as { configForm?: unknown } | null)?.configForm) ??
-    asConfigRecord(config);
-  if (!root) {
-    return {
-      gatewayAuth: "unknown",
-      execPolicy: "unknown",
-      browserEnabled: true,
-      browserEnabledOverridden: false,
-      toolProfile: "",
-      toolProfileOverridden: false,
-    };
-  }
+export function extractQuickSettingsSecurity(root: Record<string, unknown>): SecurityOverview {
   const gateway = asConfigRecord(root.gateway);
   const auth = asConfigRecord(gateway?.auth);
   const tools = asConfigRecord(root.tools);
@@ -780,12 +766,11 @@ export class ConfigPage extends OpenClawLightDomElement {
     const preference = this.currentSyncedPref("theme");
     const reset = preference.overridden && theme === preference.resetValue;
     this.customThemeImportOwner.recordActivation(reset ? null : theme);
-    startThemeTransition({
-      currentTheme: resolveTheme(this.settings.theme, this.settings.themeMode),
-      nextTheme: resolveTheme(theme, this.settings.themeMode),
-      applyTheme: () =>
-        reset ? this.resetSyncedAppearancePref("theme") : this.applySettings({}, theme),
-    });
+    if (reset) {
+      this.resetSyncedAppearancePref("theme");
+    } else {
+      this.applySettings({}, theme);
+    }
   }
 
   private setThemeMode(mode: ThemeMode) {
@@ -1172,8 +1157,8 @@ export class ConfigPage extends OpenClawLightDomElement {
         .pluginsHref=${pathForRoute("plugins", this.context.basePath)}
         .memoryImportHref=${pathForRoute("memory-import", this.context.basePath)}
         .routeData=${this.routeData}
-        .buildEditor=${(keys: readonly string[]) =>
-          renderSectionEditor("memory", t("tabs.memory"), narrowMemorySchema(props.schema, keys))}
+        .buildEditor=${() =>
+          renderSectionEditor("memory", t("tabs.memory"), memorySettingsSchema(props.schema))}
       ></openclaw-memory-settings>`;
     }
     if (this.pageId === "talk") {

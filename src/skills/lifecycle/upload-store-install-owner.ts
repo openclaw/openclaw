@@ -21,6 +21,7 @@ export async function withSkillUploadInstallOwner<T>(
   const cleanupContext = {
     environment: context.environment,
     existingSchemaPath: context.existingSchemaPath,
+    stateIntegrity: context.stateIntegrity,
   };
   const assertOwned = () => {
     if (!active || !identity) {

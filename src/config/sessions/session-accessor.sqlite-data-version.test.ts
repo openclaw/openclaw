@@ -1,10 +1,12 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
+import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.test-support.js";
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -239,7 +241,7 @@ describe("SQLite session entry cache", () => {
   );
 
   it.each(["plugin-owned-state", "promoted-slots"] as const)(
-    "scans plugin cleanup metadata without decoding saved prompts (%s)",
+    "cleans selected plugin metadata without materializing siblings or saved prompts (%s)",
     async (mode) => {
       const scope = createSessionScope("plugin-cleanup");
       const siblingScope = { ...scope, sessionKey: "agent:main:plugin-cleanup-sibling" };
@@ -262,17 +264,26 @@ describe("SQLite session entry cache", () => {
       const database = openOpenClawAgentDatabase(scope);
 
       parseSessionEntryCalls.mockClear();
-      expect(
-        await cleanupPluginHostSessionStore({
-          agentId: scope.agentId,
-          storePath: database.path,
-          sessionKey: scope.sessionKey,
-          pluginId: "fixture",
-          sessionEntrySlotKeys: new Set(["fixtureState"]),
-          mode,
-        }),
-      ).toBe(1);
-      expect(parseSessionEntryCalls).toHaveBeenCalled();
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      try {
+        expect(
+          await cleanupPluginHostSessionStore({
+            agentId: scope.agentId,
+            storePath: database.path,
+            sessionKey: scope.sessionKey,
+            pluginId: "fixture",
+            sessionEntrySlotKeys: new Set(["fixtureState"]),
+            mode,
+          }),
+        ).toBe(1);
+        expect(
+          clone.mock.calls.some(
+            ([value]) => isRecord(value) && value.sessionId === "plugin-cleanup-sibling",
+          ),
+        ).toBe(false);
+      } finally {
+        clone.mockRestore();
+      }
       expect(
         parseSessionEntryCalls.mock.calls.every(([json]) => Buffer.byteLength(json) < 1024),
       ).toBe(true);
@@ -422,6 +433,8 @@ describe("SQLite session entry cache", () => {
 
   it("does not revalidate session nodes after a same-connection transcript write", async () => {
     const { scope, sibling } = await seedPair("transcript-write");
+    // Seed maintenance must settle before measuring a same-connection cache write.
+    await closeOpenClawAgentDatabasesAsync(scope.env.OPENCLAW_STATE_DIR);
     openOpenClawAgentDatabase(scope);
     const first = listingEntries(scope);
 

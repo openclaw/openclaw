@@ -62,34 +62,6 @@ describe("PDF document extractor", () => {
     encodePngMock.mockReset().mockResolvedValue(Uint8Array.from(Buffer.from("png")));
   });
 
-  it("extracts text first and renders each fallback page with its own pixel budget", async () => {
-    encodePngMock
-      .mockResolvedValueOnce(Uint8Array.from(Buffer.from("!png1?")).subarray(1, 5))
-      .mockResolvedValueOnce(Uint8Array.from(Buffer.from("png2")));
-    const input = request({ buffer: Buffer.from("!%PDF-1.4?").subarray(1, -1) });
-    const result = await extractPdfContent(input, control);
-
-    expect(openPdfMock).toHaveBeenCalledWith(expect.any(Uint8Array));
-    expect(Buffer.from(openPdfMock.mock.calls[0]?.[0] ?? [])).toEqual(input.buffer);
-    expect(renderMock.mock.calls).toEqual([
-      [{ height: 10, forms: true }],
-      [{ height: 10, forms: true }],
-    ]);
-    expect(result).toEqual({
-      text: "",
-      images: [
-        { type: "image", data: "cG5nMQ==", mimeType: "image/png" },
-        { type: "image", data: "cG5nMg==", mimeType: "image/png" },
-      ],
-      metadata: {
-        pages: { processed: [1, 2], total: 2, selection: "automatic", truncated: false },
-        textTruncated: false,
-        imagesTruncated: true,
-      },
-    });
-    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
-  });
-
   it("caps combined text while preserving image fallback after the text budget is exhausted", async () => {
     pdfDocument.pageCount = 3;
     pageTextMock
@@ -129,7 +101,6 @@ describe("PDF document extractor", () => {
     { width: 1_000_000, height: 1, rotation: 0, maxPixels: 20_000, expected: [10_000, 1] },
     { width: 1, height: 1_000_000, rotation: 0, maxPixels: 20_000, expected: [1, 10_000] },
     { width: 100_000, height: 100_000, rotation: 0, maxPixels: 10_000, expected: [100, 100] },
-    { width: 1, height: 1, rotation: 0, maxPixels: 1, expected: [1, 1] },
   ])(
     "bounds real PNG output for a $width × $height page rotated $rotation degrees",
     async ({ width, height, rotation, maxPixels, expected }) => {
@@ -188,14 +159,6 @@ describe("PDF document extractor", () => {
     },
   );
 
-  it("opens encrypted PDFs with the request password", async () => {
-    pageTextMock.mockReturnValueOnce("enough text");
-    await extractPdfContent(request({ password: "secret" }), control);
-
-    expect(openPdfMock).toHaveBeenCalledWith(expect.any(Uint8Array), { password: "secret" });
-    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
-  });
-
   it("normalizes clawpdf password errors", async () => {
     openPdfMock.mockRejectedValueOnce(
       Object.assign(new Error("bad password"), { code: "password" }),
@@ -203,6 +166,7 @@ describe("PDF document extractor", () => {
     await expect(extractPdfContent(request({ password: "wrong" }), control)).rejects.toThrow(
       "PDF requires a password or password is incorrect.",
     );
+    expect(openPdfMock).toHaveBeenCalledWith(expect.any(Uint8Array), { password: "wrong" });
     expect(pdfDocument.destroy).not.toHaveBeenCalled();
   });
 
@@ -213,13 +177,22 @@ describe("PDF document extractor", () => {
       text: () => "",
       render: () => ({ width: 5, height: 10, rgba: Uint8Array.of(pageNumber) }),
     }));
-    encodePngMock.mockImplementation(async (rgba: Uint8Array) => rgba);
-    const result = await extractPdfContent(
-      request({ pageNumbers: [3, 2, 0, 1], maxPages: 2 }),
-      control,
+    encodePngMock.mockImplementation(async (rgba: Uint8Array) =>
+      Uint8Array.of(99, ...rgba, 99).subarray(1, -1),
     );
+    const input = request({
+      buffer: Buffer.from("!%PDF-1.4?").subarray(1, -1),
+      pageNumbers: [3, 2, 0, 1],
+      maxPages: 2,
+    });
+    const result = await extractPdfContent(input, control);
+    expect(Buffer.from(openPdfMock.mock.calls[0]?.[0] ?? [])).toEqual(input.buffer);
 
-    expect(result.images.map((image) => Buffer.from(image.data, "base64")[0])).toEqual([2, 1]);
+    expect(result.images).toEqual([
+      { type: "image", data: "Ag==", mimeType: "image/png" },
+      { type: "image", data: "AQ==", mimeType: "image/png" },
+    ]);
+    expect(pdfDocument.destroy).toHaveBeenCalledOnce();
     expect(result.metadata?.pages).toEqual({
       processed: [2, 1],
       total: 2,

@@ -2,6 +2,7 @@ import {
   isSystemEventStoreCurrent,
   recordSystemEventStoreReplaced,
 } from "../../../infra/system-event-ownership.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { defaultRuntime } from "../../../runtime.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
@@ -24,6 +25,8 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const pendingStoreRetirements = new Map<object, Promise<void>>();
+const reportedOwnerlessStoreRetirements = new WeakSet<object>();
+const log = createSubsystemLogger("agents/subagent-registry");
 
 export async function suspendPendingFinalDelivery(
   context: SubagentLifecycleCleanupContext & SubagentLifecycleWakeContext,
@@ -85,7 +88,7 @@ export function isSubagentCompletionDeliveryAllowed(
       committedDeliveryOwner.requesterSettleWake?.rearmGeneration &&
     entry.requesterSettleWake?.batchRunIds?.toSorted().join("\0") ===
       committedDeliveryOwner.requesterSettleWake?.batchRunIds?.toSorted().join("\0");
-  const { runId, requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
+  const { requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
   const allowed =
     !subagentRuns.isCompletionAuthorityRetired(entry) &&
     entry.suppressCompletionDelivery !== true &&
@@ -95,7 +98,7 @@ export function isSubagentCompletionDeliveryAllowed(
         committedDelivery?.status === "delivered" &&
         committedDelivery.generation === entry.delivery.generation &&
         committedDelivery.deliveredAt === entry.delivery.deliveredAt)) &&
-    context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration);
+    context.isCleanupAttemptCurrent(entry, cleanupGeneration);
   if (
     !allowed ||
     isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId)
@@ -156,9 +159,13 @@ export function suspendReplacedStoreNotifications(
           storeReplaced: true,
         }))
       ) {
-        options.warn("subagent notification store retirement has no current native owner", {
-          runId: entry.runId,
-        });
+        const owner = getSubagentRunRuntimeKey(entry);
+        if (!reportedOwnerlessStoreRetirements.has(owner)) {
+          reportedOwnerlessStoreRetirements.add(owner);
+          log.info("subagent notification store retirement has no current native owner", {
+            runId: entry.runId,
+          });
+        }
         continue;
       }
       current = getCurrentSubagentRunOwner(options.runs, entry);
@@ -190,7 +197,7 @@ export function retireSupersededCleanupInBackground(
   // A late delivery callback still owns retirement through its original source.
   void runWithSubagentCleanupWorkAdmission(async () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
-    await retireSupersededCleanupIfNeeded(context, runId, entry, generation);
+    await retireSupersededCleanupIfNeeded(context, entry, generation);
   }).catch((error: unknown) => {
     defaultRuntime.log(
       `[warn] subagent superseded cleanup retirement failed (${runId}): ${String(error)}`,

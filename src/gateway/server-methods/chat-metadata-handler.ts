@@ -11,7 +11,7 @@ import { PreparedModelRuntimePublicationSupersededError } from "../../agents/pre
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { readUserProfileAliasRevision } from "../../state/user-profile-events.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { readOperatorRolePolicyRevision } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE } from "../operator-scopes.js";
@@ -26,6 +26,7 @@ import {
   chatMetadataSessionFields,
   type ChatMetadataReadParams,
 } from "./chat-metadata-contract.js";
+import { createPreparedReadHandler } from "./prepared-read.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { prepareAuthenticatedProfile } from "./users-profile-access.js";
@@ -145,42 +146,61 @@ export async function resolveChatMetadataReadParams(
   };
 }
 
-export async function handleChatMetadataRequest(
-  options: GatewayRequestHandlerOptions,
-): Promise<void> {
-  const { params, respond, context, client } = options;
-  if (!assertValidParams(params, validateChatMetadataParams, "chat.metadata", respond)) {
-    return;
-  }
-  let scope: ChatMetadataReadParams | undefined;
-  try {
-    const draftAccountSelection =
-      !params.sessionKey && params.authProfileId
-        ? await preparePersonalModelAccountSelection(
-            options,
-            params.authProfileId,
-            SESSION_READ_SCOPE,
-          )
-        : undefined;
-    scope = await resolveChatMetadataReadParams(options, params, draftAccountSelection);
-    if (!scope) {
-      return;
+export const handleChatMetadataRequest = createPreparedReadHandler(
+  async (options) => {
+    const { params, respond: respondToCaller, context, client } = options;
+    if (!assertValidParams(params, validateChatMetadataParams, "chat.metadata", respondToCaller)) {
+      return undefined;
     }
-    scope.assertCurrent?.();
-    const metadata = await context.readChatMetadata(scope);
-    scope.draftAccountSelection?.assertCurrent();
-    scope.assertCurrent?.();
-    const cfg = context.getRuntimeConfig();
-    const policy = prepareOperatorModelPresentation({
-      cfg,
-      policyConfig: context.getCommittedRuntimeConfig?.() ?? cfg,
-      client,
-    })?.forAgent(scope.agentId, metadata.models);
-    respond(
-      true,
-      projectModelFastModeCatalog(policy ? policy.metadata(metadata) : metadata, client),
-    );
-  } catch (error) {
+    let scope: ChatMetadataReadParams | undefined;
+    try {
+      const draftAccountSelection =
+        !params.sessionKey && params.authProfileId
+          ? await preparePersonalModelAccountSelection(
+              options,
+              params.authProfileId,
+              SESSION_READ_SCOPE,
+            )
+          : undefined;
+      scope = await resolveChatMetadataReadParams(options, params, draftAccountSelection);
+      if (!scope) {
+        return undefined;
+      }
+      if (params.includeModels === false) {
+        scope.includeModels = false;
+      }
+      const readScope = scope;
+      const assertCurrent = () => {
+        readScope.draftAccountSelection?.assertCurrent();
+        readScope.assertCurrent?.();
+      };
+      assertCurrent();
+      return {
+        assertCurrent,
+        release: readScope.release,
+        run: async (respond) => {
+          const metadata = await context.readChatMetadata(readScope);
+          assertCurrent();
+          const cfg = context.getRuntimeConfig();
+          const policy =
+            metadata.models &&
+            prepareOperatorModelPresentation({
+              cfg,
+              policyConfig: context.getCommittedRuntimeConfig?.() ?? cfg,
+              client,
+            })?.forAgent(readScope.agentId, metadata.models);
+          respond(
+            true,
+            projectModelFastModeCatalog(policy ? policy.metadata(metadata) : metadata, client),
+          );
+        },
+      };
+    } catch (error) {
+      scope?.release?.();
+      throw error;
+    }
+  },
+  (error, { respond }) => {
     if (error instanceof SessionMutationAuthorizationChangedError) {
       respond(false, undefined, error.error);
       return;
@@ -189,7 +209,5 @@ export async function handleChatMetadataRequest(
       throw error;
     }
     respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
-  } finally {
-    scope?.release?.();
-  }
-}
+  },
+);

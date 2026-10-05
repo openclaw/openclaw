@@ -21,7 +21,10 @@ import { ADMIN_SCOPE, READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
-import { connectChatMetadataAccount } from "./chat-metadata-runtime.test-support.js";
+import {
+  connectChatMetadataAccount,
+  createChatMetadataHarness,
+} from "./chat-metadata-runtime.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 function createPersonalMetadataFixture(
@@ -134,6 +137,49 @@ function dispatchMetadata(
 }
 
 describe("chat metadata ownership", () => {
+  it("serves commands without preparing a catalog when the client reads models separately", async () => {
+    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+    const harness = createChatMetadataHarness(config);
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => config,
+      readChatMetadata: harness.runtime.read,
+    });
+    const request = async (includeModels?: boolean) => {
+      const respond = vi.fn<RespondFn>();
+      await expectDefined(
+        chatHistoryHandlers["chat.metadata"],
+        "metadata handler",
+      )({
+        params: { agentId: "main", ...(includeModels === false ? { includeModels } : {}) },
+        context,
+        client: null,
+        respond,
+        req: { type: "req", id: "commands-only", method: "chat.metadata" },
+        isWebchatConnect: () => false,
+      });
+      return respond;
+    };
+    try {
+      await harness.runtime.refresh();
+      const compact = await request(false);
+      expect(compact).toHaveBeenCalledWith(true, {
+        commands: [{ name: "command-1-1" }],
+        swarmEnabled: true,
+      });
+      expect(harness.buildProjection).not.toHaveBeenCalled();
+      const legacy = await request();
+      expect(legacy).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          models: [expect.objectContaining({ id: "first" })],
+          commands: [{ name: "command-1-1" }],
+        }),
+      );
+    } finally {
+      await harness.runtime.stop();
+    }
+  });
+
   it("creates and reuses a legacy requester profile through chat.metadata without host SQL", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {
       ensureProfileForEmail("admitted@example.test");
@@ -517,31 +563,18 @@ describe("chat metadata dispatch authority", () => {
         fixture.role.agents = ["main"];
         fixture.role.sessions.others = "view";
         await state.writeConfig(fixture.config);
-        const accountRead = vi.spyOn(userModelAccounts, "isUserModelAuthProfileOwner");
-        try {
-          const { pending, respond } = dispatchMetadata(
-            fixture,
-            selector === "draft"
-              ? { agentId: "other", authProfileId: fixture.authProfileId }
-              : { sessionKey: "agent:other:missing-metadata" },
-          );
-          await pending;
+        const { pending, respond } = dispatchMetadata(
+          fixture,
+          selector === "draft"
+            ? { agentId: "other", authProfileId: fixture.authProfileId }
+            : { sessionKey: "agent:other:missing-metadata" },
+        );
+        await pending;
 
-          expect(respond).toHaveBeenCalledExactlyOnceWith(true, fixture.metadata);
-          expect(fixture.readChatMetadata).toHaveBeenCalledWith(
-            expect.objectContaining({ agentId: "other" }),
-          );
-          if (selector === "draft") {
-            expect(accountRead).toHaveBeenCalledWith({
-              profileId: fixture.owner.id,
-              authProfileId: fixture.authProfileId,
-            });
-          } else {
-            expect(accountRead).not.toHaveBeenCalled();
-          }
-        } finally {
-          accountRead.mockRestore();
-        }
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, fixture.metadata);
+        expect(fixture.readChatMetadata).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "other" }),
+        );
       });
     },
   );

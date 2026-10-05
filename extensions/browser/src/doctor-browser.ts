@@ -52,25 +52,11 @@ function collectBrowserDoctorProfiles(cfg: OpenClawConfig, resolved: ResolvedBro
 export async function noteChromeMcpBrowserReadiness(
   cfg: OpenClawConfig,
   deps?: {
-    platform?: NodeJS.Platform;
     noteFn?: typeof note;
-    env?: NodeJS.ProcessEnv;
-    getUid?: () => number;
-    resolveManagedExecutable?: typeof resolveBrowserExecutableForPlatform;
-    resolveChromeExecutable?: (platform: NodeJS.Platform) => { path: string } | null;
-    readVersion?: (executablePath: string) => string | null;
-    configDir?: string;
   },
 ) {
   const noteFn = deps?.noteFn ?? note;
-  const platform = deps?.platform ?? process.platform;
-  const env = deps?.env ?? process.env;
-  const getUid = deps?.getUid ?? (() => process.getuid?.() ?? -1);
-  const resolveManagedExecutable =
-    deps?.resolveManagedExecutable ?? resolveBrowserExecutableForPlatform;
-  const resolveChromeExecutable =
-    deps?.resolveChromeExecutable ?? resolveGoogleChromeExecutableForPlatform;
-  const readVersion = deps?.readVersion ?? readBrowserVersion;
+  const platform = process.platform;
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const { managed: managedProfiles, chromeMcp: profiles } = collectBrowserDoctorProfiles(
     cfg,
@@ -87,11 +73,9 @@ export async function noteChromeMcpBrowserReadiness(
       "Browser relay authentication",
     );
   }
-  const extensionStateDir = deps?.configDir ?? CONFIG_DIR;
-  const extensionCopyPath = path.join(extensionStateDir, "browser", "chrome-extension");
   // General Doctor also runs unattended inside the Gateway. Profile discovery can
   // block on OS permission prompts, so leave it to explicit browser commands.
-  if (fs.existsSync(extensionCopyPath)) {
+  if (fs.existsSync(path.join(CONFIG_DIR, "browser", "chrome-extension"))) {
     noteFn(
       [
         "- Chrome extension native bootstrap was not inspected; registration status is unavailable in Doctor.",
@@ -114,23 +98,28 @@ export async function noteChromeMcpBrowserReadiness(
   }
   const managedExecutables = new Map<
     string | undefined,
-    ReturnType<typeof resolveManagedExecutable>
+    ReturnType<typeof resolveBrowserExecutableForPlatform>
   >();
   const missingExecutableProfiles = managedProfiles.filter((profile) => {
     const executablePath = profile.executablePath;
     if (!managedExecutables.has(executablePath)) {
       managedExecutables.set(
         executablePath,
-        resolveManagedExecutable({ ...resolved, executablePath }, platform),
+        resolveBrowserExecutableForPlatform({ ...resolved, executablePath }, platform),
       );
     }
     return !managedExecutables.get(executablePath);
   });
   const missingDisplay = managedProfiles
-    .map((profile) => getManagedBrowserMissingDisplayError(resolved, profile, { platform, env }))
+    .map((profile) =>
+      getManagedBrowserMissingDisplayError(resolved, profile, { platform, env: process.env }),
+    )
     .filter((error) => error !== null);
   const shouldWarnRootNoSandbox =
-    platform === "linux" && managedProfiles.length > 0 && !resolved.noSandbox && getUid() === 0;
+    platform === "linux" &&
+    managedProfiles.length > 0 &&
+    !resolved.noSandbox &&
+    process.getuid?.() === 0;
 
   if (missingExecutableProfiles.length > 0) {
     noteFn(
@@ -184,7 +173,7 @@ export async function noteChromeMcpBrowserReadiness(
     return;
   }
 
-  const chrome = resolveChromeExecutable(platform);
+  const chrome = resolveGoogleChromeExecutableForPlatform(platform);
   const autoProfileLabel = autoConnectProfiles.map((profile) => profile.name).join(", ");
 
   if (!chrome) {
@@ -207,7 +196,7 @@ export async function noteChromeMcpBrowserReadiness(
     return;
   }
 
-  const versionRaw = readVersion(chrome.path);
+  const versionRaw = readBrowserVersion(chrome.path);
   const major = parseBrowserMajorVersion(versionRaw);
   const lines = [
     `- Chrome MCP existing-session is configured for profile(s): ${profileLabel}.`,

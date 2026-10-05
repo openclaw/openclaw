@@ -1,6 +1,10 @@
 import { expect, test, vi } from "vitest";
 import { getRuntimeConfig as getCurrentRuntimeConfig } from "../config/io.js";
-import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
+import {
+  onAgentRuntimeEvent,
+  type AgentEventPayload,
+  type AgentEventStream,
+} from "../infra/agent-events.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChatRunState } from "./server-chat-state.js";
@@ -8,7 +12,7 @@ import type { ChatRunRegistration, ChatRunState } from "./server-chat-state.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import { agentDiscoveryMock } from "./test-helpers.runtime-state.js";
 
-type AgentEventHandler = (event: AgentEventPayload) => void;
+type AgentEventHandler = (event: AgentEventPayload) => void | Promise<void>;
 
 type AgentEventOverrideKey =
   | "agentId"
@@ -40,7 +44,7 @@ export function emitAgentEvent(
   data: Record<string, unknown>,
   overrides: AgentEventOverrides = {},
 ) {
-  handler({ runId, seq: 1, stream, ts: Date.now(), data, ...overrides });
+  return handler({ runId, seq: 1, stream, ts: Date.now(), data, ...overrides });
 }
 
 export function emitAgentEvents(
@@ -48,8 +52,31 @@ export function emitAgentEvents(
   runId: string,
   events: readonly AgentEventCase[],
 ) {
-  events.forEach(([stream, data, overrides], index) =>
-    emitAgentEvent(handler, runId, stream, data, { seq: index + 1, ...overrides }),
+  return Promise.all(
+    events.map(([stream, data, overrides], index) =>
+      Promise.resolve(
+        emitAgentEvent(handler, runId, stream, data, { seq: index + 1, ...overrides }),
+      ),
+    ),
+  );
+}
+
+/** Preserve synchronous event ingress while joining every accepted handler at unsubscribe. */
+export function subscribeAgentEvents(handler: AgentEventHandler) {
+  const pending: Array<Promise<void>> = [];
+  const unsubscribe = onAgentRuntimeEvent((event) => {
+    const accepted = Promise.resolve(handler(event));
+    pending.push(accepted);
+    // Observe rejection now; drain retains the original promise and still fails.
+    accepted.catch(() => undefined);
+  });
+  const drain = () => Promise.all(pending);
+  return Object.assign(
+    async () => {
+      unsubscribe();
+      await drain();
+    },
+    { drain },
   );
 }
 
@@ -266,5 +293,92 @@ export function registerChatConnectionIdentityTest(harness: {
         ]),
       );
     });
+  });
+}
+
+/** Bounded widget retention shares the agent-event fixture without growing its event-fanout suite. */
+export function registerBoundedWidgetSnapshotsTest({
+  createHarness,
+  widgetResult,
+  logWarnMock,
+}: {
+  createHarness: () => ReturnType<
+    typeof import("./server-chat.agent-events.test-harness.js").createAgentEventTestHarness
+  >;
+  widgetResult: typeof import("./server-chat.agent-events.test-harness.js").widgetResult;
+  logWarnMock: ReturnType<typeof vi.fn>;
+}) {
+  test("keeps live widget snapshots bounded without retaining failed or node-panel results", async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    h.registerNamed("widgets");
+    let seq = 0;
+    const id = (index: number) => `cv_${index.toString(16).padStart(32, "0")}`;
+    const publish = (result: ReturnType<typeof widgetResult>, isError = false) =>
+      h.emit(
+        "run-widgets",
+        "tool",
+        {
+          phase: "result",
+          name: "show_widget",
+          result,
+          isError,
+        },
+        { seq: ++seq },
+      );
+    const publishWidget = async (index: number, titleChars = 1_700) => {
+      const result = widgetResult(id(index), "assistant_message", "a".repeat(titleChars));
+      // These fixtures survive embedded and default Codex tool-result text caps.
+      expect(result.content[0]?.text.length).toBeLessThan(8_000);
+      await publish(result);
+    };
+    const snapshot = async () => {
+      await h.emit("run-widgets", "assistant", { text: `Widgets ready: ${seq}.` }, { seq: ++seq });
+      vi.advanceTimersByTime(75);
+      return h
+        .chat()
+        .at(-1)?.[1]
+        .message.content.filter((block: { type: string }) => block.type === "canvas")
+        .map((block: { preview: { viewId: string } }) => block.preview.viewId);
+    };
+    await publish(widgetResult("failed"), true);
+    await publish(widgetResult("node", "node_panel"));
+    for (let index = 0; index < 34; index++) {
+      await publishWidget(index);
+    }
+    const initial = Array.from({ length: 32 }, (_, index) => id(index + 2));
+    expect(await snapshot()).toEqual(initial);
+    await publishWidget(33);
+    expect(await snapshot()).toEqual(initial);
+    expect(logWarnMock).not.toHaveBeenCalled();
+
+    await publishWidget(34, 7_000);
+    const firstEviction = Array.from({ length: 30 }, (_, index) => id(index + 5));
+    expect.soft(await snapshot()).toEqual(firstEviction);
+    await publishWidget(34, 7_000);
+    expect.soft(await snapshot()).toEqual(firstEviction);
+    expect.soft(logWarnMock).toHaveBeenCalledTimes(1);
+    await publishWidget(35, 7_000);
+    await publishWidget(36, 7_000);
+    expect.soft(await snapshot()).toEqual(Array.from({ length: 25 }, (_, index) => id(index + 12)));
+    expect.soft(logWarnMock).toHaveBeenCalledTimes(3);
+
+    // A descriptor that cannot fit alone must retire the old suffix too.
+    await publish(widgetResult(id(37), "assistant_message", "a".repeat(65_536)));
+    expect.soft(await snapshot()).toEqual([]);
+    await publish(widgetResult(id(38), "assistant_message", "a".repeat(65_536)));
+    expect.soft(await snapshot()).toEqual([]);
+    await publishWidget(39);
+    expect.soft(await snapshot()).toEqual([id(39)]);
+    expect
+      .soft(logWarnMock.mock.calls)
+      .toEqual(
+        Array.from({ length: 5 }, () => [
+          "Live chat canvas preview omitted: display descriptors exceed the 64 KiB limit.",
+        ]),
+      );
+    await h.emit("run-widgets", "lifecycle", { phase: "end" }, { seq: ++seq });
+    expect(h.chat().at(-1)?.[1].message.content).toHaveLength(2);
+    await h.handler.dispose();
   });
 }

@@ -10,9 +10,9 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "../../doctor-contract-api.js";
 
-const migration = stateMigrations.find((entry) => entry.id === "discord-legacy-state");
+const migration = stateMigrations.find((entry) => entry.id === "discord-retired-state");
 if (!migration) {
-  throw new Error("Discord Doctor migration is missing");
+  throw new Error("Discord retired-state declaration is missing");
 }
 
 let stateWorkspace: TempWorkspace;
@@ -44,7 +44,7 @@ function migrationInput() {
   } satisfies Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
 }
 
-describe("Discord Doctor state migration", () => {
+describe("Discord retired state admission", () => {
   it.each(["model-picker-preferences.json", "thread-bindings.json"])(
     "preserves %s discovered after preview and requires the bridge release",
     async (name) => {
@@ -56,7 +56,7 @@ describe("Discord Doctor state migration", () => {
       await fs.writeFile(sourcePath, bytes);
 
       const advice = expect.stringContaining(
-        'Install OpenClaw 2026.9.5, run "openclaw doctor --fix", then upgrade to latest.',
+        "Install OpenClaw 2026.9.5. Run openclaw doctor --fix before upgrading to latest.",
       );
       const result = await migration.migrateLegacyState(input);
       expect(result).toEqual({ changes: [], warnings: [advice] });

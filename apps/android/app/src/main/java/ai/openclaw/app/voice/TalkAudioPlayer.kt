@@ -33,10 +33,10 @@ internal class TalkAudioPlayer(
   private val context: Context,
 ) : TalkAudioPlaying {
   private val lock = Any()
-  private var active: ActivePlayback? = null
+  private var active: (() -> Unit)? = null
 
   override suspend fun play(audio: TalkSpeakAudio) {
-    when (val mode = resolvePlaybackMode(audio)) {
+    when (val mode = resolvePlaybackMode(audio.outputFormat, audio.mimeType, audio.fileExtension)) {
       is TalkPlaybackMode.Pcm -> playPcm(audio.bytes, mode.sampleRate)
       is TalkPlaybackMode.Compressed -> playCompressed(audio.bytes, mode.fileExtension)
     }
@@ -44,17 +44,10 @@ internal class TalkAudioPlayer(
 
   override fun stop() {
     synchronized(lock) {
-      active?.cancel()
+      active?.invoke()
       active = null
     }
   }
-
-  internal fun resolvePlaybackMode(audio: TalkSpeakAudio): TalkPlaybackMode =
-    resolvePlaybackMode(
-      outputFormat = audio.outputFormat,
-      mimeType = audio.mimeType,
-      fileExtension = audio.fileExtension,
-    )
 
   companion object {
     internal fun resolvePlaybackMode(
@@ -137,15 +130,12 @@ internal class TalkAudioPlayer(
           .setBufferSizeInBytes(maxOf(minBufferSize, bytes.size))
           .build()
       val finished = CompletableDeferred<Unit>()
-      val playback =
-        ActivePlayback(
-          cancel = {
-            finished.completeExceptionally(CancellationException("assistant speech cancelled"))
-            runCatching { track.pause() }
-            runCatching { track.flush() }
-            runCatching { track.stop() }
-          },
-        )
+      val playback: () -> Unit = {
+        finished.completeExceptionally(CancellationException("assistant speech cancelled"))
+        runCatching { track.pause() }
+        runCatching { track.flush() }
+        runCatching { track.stop() }
+      }
       register(playback)
       try {
         val written = track.write(bytes, 0, bytes.size)
@@ -204,13 +194,10 @@ internal class TalkAudioPlayer(
               prepare()
             }
           }
-        val playback =
-          ActivePlayback(
-            cancel = {
-              finished.completeExceptionally(CancellationException("assistant speech cancelled"))
-              runCatching { player.stop() }
-            },
-          )
+        val playback: () -> Unit = {
+          finished.completeExceptionally(CancellationException("assistant speech cancelled"))
+          runCatching { player.stop() }
+        }
         register(playback)
         try {
           withContext(Dispatchers.Main) {
@@ -235,14 +222,14 @@ internal class TalkAudioPlayer(
     }
   }
 
-  private fun register(playback: ActivePlayback) {
+  private fun register(playback: () -> Unit) {
     synchronized(lock) {
-      active?.cancel()
+      active?.invoke()
       active = playback
     }
   }
 
-  private fun clear(playback: ActivePlayback) {
+  private fun clear(playback: () -> Unit) {
     synchronized(lock) {
       if (active === playback) {
         active = null
@@ -262,7 +249,3 @@ internal sealed interface TalkPlaybackMode {
     val fileExtension: String,
   ) : TalkPlaybackMode
 }
-
-private class ActivePlayback(
-  val cancel: () -> Unit,
-)

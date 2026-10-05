@@ -1,5 +1,4 @@
 import { resolveMediaGeometryOverrides } from "../media-generation/geometry-normalization.js";
-import { hasMediaNormalizationEntry } from "../media-generation/runtime-shared.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
   normalizeVideoGenerationDuration,
@@ -11,15 +10,6 @@ import type {
   VideoGenerationProvider,
   VideoGenerationResolution,
 } from "./types.js";
-
-const VIDEO_RESOLUTION_ORDER: readonly VideoGenerationResolution[] = [
-  "360P",
-  "480P",
-  "540P",
-  "720P",
-  "768P",
-  "1080P",
-];
 
 type ResolvedVideoGenerationOverrides = {
   size?: string;
@@ -56,7 +46,6 @@ export function resolveVideoGenerationOverrides(params: {
     aspectRatio: params.aspectRatio,
     resolution: params.resolution,
     capabilities: caps,
-    resolutionOrder: VIDEO_RESOLUTION_ORDER,
     reportUnrecognizedOverrides: true,
     useAspectRatioForRequestedSize: true,
   });
@@ -112,12 +101,6 @@ export function resolveVideoGenerationOverrides(params: {
     audio,
     watermark,
     ignoredOverrides,
-    normalization:
-      hasMediaNormalizationEntry(normalization.size) ||
-      hasMediaNormalizationEntry(normalization.aspectRatio) ||
-      hasMediaNormalizationEntry(normalization.resolution) ||
-      hasMediaNormalizationEntry(normalization.durationSeconds)
-        ? normalization
-        : undefined,
+    normalization: Object.keys(normalization).length ? normalization : undefined,
   };
 }

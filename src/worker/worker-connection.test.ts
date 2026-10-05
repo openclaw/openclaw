@@ -797,6 +797,46 @@ describe("WorkerConnection state listener isolation", () => {
 });
 
 describe("WorkerConnection inference listener isolation", () => {
+  it.each([
+    ["unknown event", { ...inferenceEventFrame(1), event: "worker.unknown" }],
+    ["wrong frame type", { ...inferenceEventFrame(1), type: "res" }],
+    ["extra field", { ...inferenceEventFrame(1), extra: true }],
+    ["invalid payload", { ...inferenceEventFrame(1), payload: {} }],
+    [
+      "wrong session",
+      {
+        ...inferenceEventFrame(1),
+        payload: { ...inferenceEventFrame(1).payload, sessionId: "other" },
+      },
+    ],
+    [
+      "wrong epoch",
+      {
+        ...inferenceTerminalFrame(1),
+        payload: { ...inferenceTerminalFrame(1).payload, runEpoch: 2 },
+      },
+    ],
+    [
+      "invalid terminal",
+      {
+        ...inferenceTerminalFrame(1),
+        payload: { ...inferenceTerminalFrame(1).payload, outcome: {} },
+      },
+    ],
+  ])("rejects %s before notifying inference listeners", (_label, frame) => {
+    const dispatcher = createFrameDispatcher();
+    const listener = vi.fn();
+    dispatcher.onInferenceEvent(listener);
+    dispatcher.onInferenceTerminal(listener);
+    const close = vi.fn();
+    const socket = { readyState: WebSocket.OPEN, close };
+
+    dispatcher.dispatchReadyFrame(frame, socket);
+
+    expect(close).toHaveBeenCalledWith(1008, "invalid-frame");
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("continues event delivery and processes later frames after an observer throws", () => {
     const dispatcher = createFrameDispatcher();
     const observed: number[] = [];

@@ -13,10 +13,36 @@ OpenClaw stores control-plane state in the shared state database and agent data 
 
 Schema-version, integrity, canonical-index, and table-existence checks belong to open/admission and the migration owner after migrations; runtime paths must carry admitted schema facts with the handle, never re-query them, and use fresh `PRAGMA data_version` probes to observe foreign commits on the next unpinned read while preserving active SQLite snapshots. Existing per-call checks are legacy and must be migrated when touched.
 
-The Gateway does not schedule full-database integrity scans after startup or on a
-daily timer. Use [Doctor maintenance](/reference/database-schemas/integrity-and-recovery#integrity-checks)
-for operator-requested or scheduled full verification. Admission-requested
-background `quick_check` work remains limited to the requested agent database.
+Shared-state and agent read-only connections reuse bounded prepared statements under their native connection lifecycle. Queries still execute on every read. Read admission shares one freshness probe within its synchronous operation; schema-fact lookups reuse the admitted handle without probing again. Write transactions refresh after acquiring `BEGIN`, before consuming those facts. Explicit fresh probes always execute, even inside another read operation. A foreign commit compares the schema and user versions before retaining or replacing schema facts, preserving active SQLite snapshots. Closing or replacing the connection clears retained statements and facts.
+
+Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent, so warm writes preserve schema facts for that handle and its local siblings. First use after rollback or a foreign schema change still creates missing storage through normal write admission. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
+
+Retaining an already-open agent handle holds its lifetime without querying SQLite. Its read or transaction owner refreshes schema facts when consuming data; canonical readiness owns the freshness check before reusing its clean-store decision.
+
+Agent ownership metadata follows that admitted read revision as well. Unchanged
+reads reuse the handle's metadata; foreign commits, local mutations, and schema
+changes require a new ownership read. Transactions, pinned snapshots, and dynamic
+authorizers keep querying the metadata. This changes no schema, stored bytes, or
+update behavior.
+
+Registry discovery reuses successful migration checks for the admitted schema
+generation. The minute retention sweep reads deletion history in a worker and
+shares one matcher across its agent stores; live deletion status and lifecycle
+commit guards still apply. Legacy watch-marker discovery uses an indexed prefix
+range. Retention continues as rows age, even without writes; schema, upgrade, and
+retention policies are unchanged.
+
+Session row-facts reads reuse a canonical continuation's existing transaction
+instead of nesting a savepoint. Reads without an active transaction still open
+one so entry metadata, board presence, and transcript watermarks share a snapshot.
+
+Canonical main-key policy reads reuse the existing reader admission's value only within a current read operation. The connection owner tracks local SQL mutations, including raw and trigger-driven writes; its mutation revision, admitted schema facts, and observed foreign-commit version invalidate that value. Transactions, pinned snapshots, native mutation callbacks, and authorizer-controlled reads continue querying the policy. Continuation authority remains with canonical session admission.
+
+The Gateway does not schedule daily full-database scans. Admission-requested
+background checks stay limited to the requested agent database: `quick_check`
+for clean restart proof, or a full check after proven same-boot process death.
+See [integrity admission and Doctor maintenance](/reference/database-schemas/integrity-and-recovery#integrity-checks)
+for the provenance requirements and operator-requested verification.
 
 Two mechanisms back that contract. CI runs
 `scripts/check-native-state-schema-version.mjs`, which fails the build when the

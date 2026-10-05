@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import {
@@ -15,10 +18,6 @@ export const CODEX_HARNESS_ID = "codex";
 const OPENAI_RESPONSES_API = "openai-responses";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 
-function normalizeRuntimeId(value: string | undefined): string {
-  return value?.trim().toLowerCase() ?? "";
-}
-
 export function resolveAttemptTrajectoryAttribution(params: {
   model: { api?: string; provider?: string };
   modelId: string;
@@ -28,15 +27,15 @@ export function resolveAttemptTrajectoryAttribution(params: {
     observability?: Pick<AgentRuntimePlan["observability"], "harnessId">;
   };
 }): { modelApi?: string; modelId: string; provider: string } {
-  const authProfileProvider = normalizeRuntimeId(
+  const authProfileProvider = normalizeLowercaseStringOrEmpty(
     params.runtimePlan.auth?.authProfileProviderForAuth,
   );
-  const harnessId = normalizeRuntimeId(params.runtimePlan.observability?.harnessId);
+  const harnessId = normalizeLowercaseStringOrEmpty(params.runtimePlan.observability?.harnessId);
   if (
     harnessId === CODEX_HARNESS_ID &&
     authProfileProvider !== OPENAI_PROVIDER_ID &&
-    normalizeRuntimeId(params.model.provider) === OPENAI_PROVIDER_ID &&
-    normalizeRuntimeId(params.model.api) === OPENAI_RESPONSES_API
+    normalizeLowercaseStringOrEmpty(params.model.provider) === OPENAI_PROVIDER_ID &&
+    normalizeLowercaseStringOrEmpty(params.model.api) === OPENAI_RESPONSES_API
   ) {
     return {
       modelApi: OPENAI_CODEX_RESPONSES_API,

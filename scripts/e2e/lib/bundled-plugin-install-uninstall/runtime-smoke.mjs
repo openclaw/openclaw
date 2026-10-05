@@ -301,19 +301,11 @@ export function activateSmokePlugin(config, pluginId, channels = []) {
 }
 
 export function withSmokeTtsConfig(config, tts) {
-  if (process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy") {
-    return {
-      ...config,
-      messages: { ...config.messages, tts: { ...config.messages?.tts, ...tts } },
-    };
-  }
   return { ...config, tts: { ...config.tts, ...tts } };
 }
 
 export function readSmokeTtsConfig(config) {
-  return process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy"
-    ? config.messages?.tts
-    : config.tts;
+  return config.tts;
 }
 
 function channelActivationEnvName(channel) {

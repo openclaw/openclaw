@@ -28,6 +28,8 @@ describe("persisted auth profile boundary", () => {
     { type: "api_key", provider: "example", api_key: "synthetic-key" },
     { type: "api_key", provider: "example", key: { source: "env", id: "SYNTHETIC_KEY" } },
     { type: "token", provider: "example", token: { source: "env", id: "SYNTHETIC_TOKEN" } },
+    { type: "api_key", provider: "example", keyRef: { source: "env", id: "SYNTHETIC_KEY" } },
+    { type: "token", provider: "example", tokenRef: { source: "env", id: "SYNTHETIC_TOKEN" } },
   ])(
     "refuses unmigrated credential fields before publishing a partial store ($type/$mode)",
     (credential) => {
@@ -98,7 +100,7 @@ describe("persisted auth profile boundary", () => {
           type: "api_key",
           provider: " OpenAI ",
           key: "demo-openai-key",
-          keyRef: { source: "env", id: "OPENAI_API_KEY" },
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           metadata: { account: "acct_123", bad: 123 },
           copyToAgents: "yes",
           email: ["wrong"],

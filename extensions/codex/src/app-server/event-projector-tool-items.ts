@@ -20,28 +20,6 @@ import {
 } from "./tool-progress-normalization.js";
 import { projectCodexWebSearchItem } from "./web-search-item.js";
 
-const CODE_MODE_NATIVE_PATCH_SOURCE_RE =
-  /^\s*(?:\/\/[^\r\n]*\r?\n\s*)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+tools\.apply_patch\(\s*("(?:\\[\s\S]|[^"\\])*")\s*\)\s*;?\s*text\(\s*\1\s*\)\s*;?\s*$/u;
-
-export function readCodeModeNativePatchInput(source: unknown): string | undefined {
-  if (typeof source !== "string") {
-    return undefined;
-  }
-  const match = CODE_MODE_NATIVE_PATCH_SOURCE_RE.exec(source);
-  if (!match?.[2]) {
-    return undefined;
-  }
-  try {
-    const patch: unknown = JSON.parse(match[2]);
-    return typeof patch === "string" &&
-      /^\*\*\* Begin Patch\r?\n[\s\S]*\r?\n\*\*\* End Patch(?:\r?\n)?$/u.test(patch)
-      ? patch
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function readInterceptedNativePatchInput(
   command: unknown,
 ): { input: string; cwd?: string } | undefined {
@@ -185,17 +163,13 @@ export function itemToolResult(item: CodexThreadItem): Record<string, unknown> |
     });
   }
   if (item.type === "webSearch") {
-    return webSearchToolResult(item);
+    return sanitizeCodexAgentEventRecord({
+      status: itemStatus(item),
+      ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
+      ...webSearchToolArgs(item),
+    });
   }
   return undefined;
-}
-
-function webSearchToolResult(item: CodexThreadItem): Record<string, unknown> {
-  return sanitizeCodexAgentEventRecord({
-    status: itemStatus(item),
-    ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
-    ...webSearchToolArgs(item),
-  });
 }
 
 type CodexFileChangeSummary = {

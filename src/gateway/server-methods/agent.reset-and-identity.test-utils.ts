@@ -342,7 +342,7 @@ describe("gateway agent handler", () => {
   });
 
   it("does not auto-route voice wake requests with another agent's explicit main session", async () => {
-    const opsAgentCfg = { agents: { list: [{ id: "main" }, { id: "ops" }] } };
+    const opsAgentCfg = { agents: { entries: { main: {}, ops: {} } } };
     mocks.listAgentIds.mockReturnValue(["main", "ops"]);
     mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
       version: 1,
@@ -452,7 +452,7 @@ describe("gateway agent handler", () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {
         session: { mainKey: "work" },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       },
       storePath: "/tmp/sessions.json",
       entry: {
@@ -728,7 +728,7 @@ describe("gateway agent handler", () => {
   it("resets the selected global agent session for bare /new without startup context", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} } },
       session: { scope: "global" },
     };
     mocks.performGatewaySessionReset.mockClear();
@@ -803,7 +803,7 @@ describe("gateway agent handler", () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} } },
       session: { scope: "global" },
     };
     mocks.performGatewaySessionReset.mockClear();
@@ -915,7 +915,7 @@ describe("gateway agent handler", () => {
     mocks.loadConfigReturn = {
       agents: {
         defaults: { workspace: "/tmp/workspace" },
-        list: [{ id: "main", identity: { avatar: "/Users/test/private/avatar.png" } }],
+        entries: { main: { identity: { avatar: "/Users/test/private/avatar.png" } } },
       },
     };
 
@@ -944,7 +944,7 @@ describe("gateway agent handler", () => {
       mocks.loadConfigReturn = {
         agents: {
           defaults: { workspace },
-          list: [{ id: "main", identity: { avatar: "avatars/main.png" } }],
+          entries: { main: { identity: { avatar: "avatars/main.png" } } },
         },
       };
 
@@ -968,7 +968,7 @@ describe("gateway agent handler", () => {
     ["text", "PS"],
   ] as const)("preserves %s avatar values in agent.identity.get", async (_kind, avatar) => {
     mocks.loadConfigReturn = {
-      agents: { list: [{ id: "main", identity: { avatar } }] },
+      agents: { entries: { main: { identity: { avatar } } } },
     };
 
     const respond = await invokeAgentIdentityGet(
@@ -982,7 +982,7 @@ describe("gateway agent handler", () => {
   it("prefixes same-origin avatar routes in agent.identity.get when Control UI has a base path", async () => {
     mocks.loadConfigReturn = {
       gateway: { controlUi: { basePath: "/openclaw" } },
-      agents: { list: [{ id: "main", identity: { avatar: "/avatar/main" } }] },
+      agents: { entries: { main: { identity: { avatar: "/avatar/main" } } } },
     };
 
     const respond = await invokeAgentIdentityGet(
@@ -1000,7 +1000,7 @@ describe("gateway agent handler", () => {
       mocks.loadConfigReturn = {
         agents: {
           defaults: { workspace },
-          list: [{ id: "main", identity: { avatar: "avatars/missing.png" } }],
+          entries: { main: { identity: { avatar: "avatars/missing.png" } } },
         },
       };
 
@@ -1026,7 +1026,7 @@ describe("gateway agent handler", () => {
         mocks.loadConfigReturn = {
           agents: {
             defaults: { workspace },
-            list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+            entries: { main: { workspace, identity: { avatar: "avatar.png" } } },
           },
         };
 
@@ -1064,7 +1064,7 @@ describe("gateway agent handler", () => {
       mocks.loadConfigReturn = {
         agents: {
           defaults: { workspace },
-          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+          entries: { main: { workspace, identity: { avatar: "avatar.png" } } },
         },
       };
 
@@ -1101,7 +1101,7 @@ describe("gateway agent handler", () => {
       mocks.loadConfigReturn = {
         agents: {
           defaults: { workspace },
-          list: [{ id: "main", workspace, identity: { emoji: "🦞" } }],
+          entries: { main: { workspace, identity: { emoji: "🦞" } } },
         },
       };
 

@@ -61,24 +61,27 @@ function heldByThisProcess(state: LockState): boolean {
   return state.kind === "live" && state.pid === process.pid;
 }
 
-async function runLock(record: ManagedWorktreeRecord) {
-  return await runGit(record.repoRoot, [
-    "worktree",
-    "lock",
-    "--reason",
-    `openclaw pid=${process.pid}`,
-    record.path,
-  ]);
+type LockOptions = Pick<NonNullable<Parameters<typeof runGit>[2]>, "signal" | "beforeRun">;
+
+async function runLock(record: ManagedWorktreeRecord, options?: LockOptions) {
+  return await runGit(
+    record.repoRoot,
+    ["worktree", "lock", "--reason", `openclaw pid=${process.pid}`, record.path],
+    options,
+  );
 }
 
-export async function lockWorktreeForProcess(record: ManagedWorktreeRecord): Promise<void> {
-  const result = await runLock(record);
+export async function lockWorktreeForProcess(
+  record: ManagedWorktreeRecord,
+  options?: LockOptions,
+): Promise<boolean> {
+  const result = await runLock(record, options);
   if (result.code === 0) {
-    return;
+    return true;
   }
   const state = await lockState(record);
   if (heldByThisProcess(state)) {
-    return;
+    return false;
   }
   // Reclaim dead-pid residue, as remove()/release() do. Concurrent reclaimers can
   // both win this observe-then-unlock race; fixing it requires a guard shared by
@@ -86,15 +89,19 @@ export async function lockWorktreeForProcess(record: ManagedWorktreeRecord): Pro
   if (state.kind !== "dead") {
     throw commandError("git worktree lock", result);
   }
-  await unlockWorktree(record);
-  const retry = await runLock(record);
+  await unlockWorktree(record, options);
+  const retry = await runLock(record, options);
   if (retry.code !== 0 && !heldByThisProcess(await lockState(record))) {
     throw commandError("git worktree lock", retry);
   }
+  return retry.code === 0;
 }
 
-export async function unlockWorktree(record: ManagedWorktreeRecord): Promise<void> {
-  const result = await runGit(record.repoRoot, ["worktree", "unlock", record.path]);
+export async function unlockWorktree(
+  record: ManagedWorktreeRecord,
+  options?: Pick<NonNullable<Parameters<typeof runGit>[2]>, "signal" | "beforeRun">,
+): Promise<void> {
+  const result = await runGit(record.repoRoot, ["worktree", "unlock", record.path], options);
   if (result.code !== 0) {
     throw commandError("git worktree unlock", result);
   }

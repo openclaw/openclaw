@@ -76,17 +76,19 @@ function repairDanglingSkillWorkshopCollectionReviewIndex(database: DatabaseSync
   });
 }
 
-/** Admit the schema before Doctor begins its write transaction. */
-function admitStateDatabaseForSchemaRepair(
+/** Admit Doctor repair, then return the ownership-rechecked catalog repair operation. */
+export function prepareStateDatabaseSchemaRepair(
   database: DatabaseSync,
   pathname: string,
   env: NodeJS.ProcessEnv,
-): boolean {
+): () => string[] {
   const danglingWorkshopIndex = hasDanglingSkillWorkshopCollectionReviewIndex(database);
+  const assertWriteAllowed = () =>
+    assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
   const admit = () => {
     assertSupportedStateSchemaVersion(database, pathname);
     if (danglingWorkshopIndex) {
-      assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
+      assertWriteAllowed();
     }
   };
   if (danglingWorkshopIndex) {
@@ -95,34 +97,13 @@ function admitStateDatabaseForSchemaRepair(
   } else {
     admit();
   }
-  return danglingWorkshopIndex;
-}
-
-/** Recheck write ownership after BEGIN IMMEDIATE and before catalog mutation. */
-function assertStateDatabaseSchemaRepairWriteAllowed(
-  database: DatabaseSync,
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-  danglingWorkshopIndex: boolean,
-): void {
-  const assertAllowed = () =>
-    assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
-  if (danglingWorkshopIndex) {
-    withSqliteWritableSchema(database, assertAllowed);
-  } else {
-    assertAllowed();
-  }
-}
-
-/** Admit Doctor repair, then return the ownership-rechecked catalog repair operation. */
-export function prepareStateDatabaseSchemaRepair(
-  database: DatabaseSync,
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-): () => string[] {
-  const danglingWorkshopIndex = admitStateDatabaseForSchemaRepair(database, pathname, env);
   return () => {
-    assertStateDatabaseSchemaRepairWriteAllowed(database, pathname, env, danglingWorkshopIndex);
+    // Recheck ownership after BEGIN IMMEDIATE and before catalog mutation.
+    if (danglingWorkshopIndex) {
+      withSqliteWritableSchema(database, assertWriteAllowed);
+    } else {
+      assertWriteAllowed();
+    }
     return repairDanglingSkillWorkshopCollectionReviewIndex(database)
       ? ["Removed dangling legacy Skill Workshop review index"]
       : [];
@@ -155,24 +136,8 @@ const STATE_V5_ADDITIVE_TABLES = [
   "worker_transcript_commits",
   ...STATE_V6_ADDITIVE_TABLES,
 ] as const;
-const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
-  5: STATE_V5_ADDITIVE_TABLES,
-  6: STATE_V6_ADDITIVE_TABLES,
-  7: STATE_V6_ADDITIVE_TABLES,
-  8: STATE_V6_ADDITIVE_TABLES,
-  9: STATE_V6_ADDITIVE_TABLES,
-  10: STATE_V6_ADDITIVE_TABLES,
-  11: STATE_V6_ADDITIVE_TABLES,
-  12: STATE_V6_ADDITIVE_TABLES,
-  13: LAZY_ADDITIVE_STATE_TABLES,
-  14: LAZY_ADDITIVE_STATE_TABLES,
-  15: LAZY_ADDITIVE_STATE_TABLES,
-  16: LAZY_ADDITIVE_STATE_TABLES,
-  17: LAZY_ADDITIVE_STATE_TABLES,
-  18: LAZY_ADDITIVE_STATE_TABLES,
-  19: LAZY_ADDITIVE_STATE_TABLES,
-} as const satisfies Record<number, readonly string[]>;
-type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
+const STATE_MIGRATION_VERSIONS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] as const;
+type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];
 
 /** Require canonical shared-state ownership without requiring the latest schema. */
 export function assertOpenClawStateDatabaseOwner(
@@ -256,7 +221,11 @@ function assertOpenClawStateDatabaseVersionForMigration(
   }
   assertSqliteSchemaTablesPresent(database, options.pathname, OPENCLAW_STATE_SCHEMA_SQL, {
     allowedMissingTables: [
-      ...STATE_MIGRATION_ALLOWED_MISSING_TABLES[options.version],
+      ...(options.version === 5
+        ? STATE_V5_ADDITIVE_TABLES
+        : options.version < 13
+          ? STATE_V6_ADDITIVE_TABLES
+          : LAZY_ADDITIVE_STATE_TABLES),
       ...DOCTOR_OWNED_STATE_TABLES,
     ],
   });
@@ -267,7 +236,7 @@ export const openClawStateMigrationAssertions = new Map<
   number,
   (database: DatabaseSync, options: { pathname: string }) => void
 >(
-  ([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] as const).map(
+  STATE_MIGRATION_VERSIONS.map(
     (version) =>
       [
         version,

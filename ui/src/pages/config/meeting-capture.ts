@@ -257,7 +257,7 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
     } else {
       sources[this.editing] = source;
     }
-    this.context.runtimeConfig.patchForm(["transcripts", "autoStart"], [...sources]);
+    this.context.runtimeConfig.patchForm(["transcripts", "autoStart"], sources);
     this.editSource(null);
   }
 

@@ -14,6 +14,7 @@ import {
 } from "./openclaw-state-db-contract.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import {
+  ensureColumn,
   tableExists,
   tableHasColumn,
   tablePrimaryKeyColumns,
@@ -54,10 +55,7 @@ export function migrateWorkerPlacementExecutionModeSchema(
     "terminal_reason TEXT",
     "terminal_at_ms INTEGER",
   ]) {
-    const column = definition.split(" ", 1)[0]!;
-    if (!tableHasColumn(db, "worker_session_placements", column)) {
-      db.exec(`ALTER TABLE worker_session_placements ADD COLUMN ${definition};`);
-    }
+    ensureColumn(db, "worker_session_placements", definition);
   }
   const placementSchema = extractSqliteTableSchema(
     OPENCLAW_STATE_SCHEMA_SQL,

@@ -2,6 +2,7 @@ import {
   emitSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../../../sessions/session-lifecycle-events.js";
+import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import {
@@ -14,11 +15,14 @@ import {
   projectSubagentRunForMaintenance,
   projectSubagentRunForSessionList,
 } from "./subagent-delivery-state.js";
-import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
+import {
+  getSubagentRunsForChildSession,
+  immutableSubagentRun,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
   assertSubagentReadContext,
-  captureSubagentFactsAdmission,
   consumeFreshSubagentRuns,
   getSessionListLookup,
   getSubagentRunsSnapshot,
@@ -54,22 +58,20 @@ import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
   state: {},
-  captureAdmission: captureSubagentFactsAdmission,
   load: loadSubagentRegistryFromSqlite,
-  copy: (entry) => copySubagentRunRuntimeOwner(entry, structuredClone(entry)),
+  copy: immutableSubagentRun,
   project: (entry) => entry,
 };
 const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunReadRecord> = {
   state: {},
-  captureAdmission: captureSubagentFactsAdmission,
-  copy: projectSubagentRunForSessionList,
+  copy: (entry) => freezeJsonSnapshot(projectSubagentRunForSessionList(entry)),
   project: projectSubagentRunForSessionList,
 };
 const persistedSubagentMaintenanceRunsReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
   state: {},
-  captureAdmission: captureSubagentFactsAdmission,
   load: () => loadSubagentMaintenanceRunsFromSqlite(),
-  copy: (entry) => copySubagentRunRuntimeOwner(entry, projectSubagentRunForMaintenance(entry)),
+  copy: (entry) =>
+    freezeJsonSnapshot(copySubagentRunRuntimeOwner(entry, projectSubagentRunForMaintenance(entry))),
   // Maintenance consumes live rows synchronously into keys; only published facts need copies.
   project: (entry) => entry,
 };
@@ -472,8 +474,6 @@ export function getSubagentSessionListRunsSnapshotForSessions(
   return getSubagentRunsSnapshot(inMemoryRuns, cache, {
     // The loader owns cache selection so topology and metadata use the same source.
     fresh: true,
-    // Descendant queries only inspect records, matching their unscoped snapshots.
-    borrowPersisted: true,
     load: () => {
       if (cached) {
         return indexed ? indexedSnapshotRows(cached, indexed.cacheKeys) : cached.values();
@@ -494,7 +494,7 @@ export function getSubagentRunsSnapshotForController(
   }
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentRunsReadCache, {
     selectCached: (lookup) => lookup.selectControllers(new Set([key])),
-    load: () => loadSubagentRunsForControllerFromSqlite(key),
+    load: () => loadSubagentRunsForControllerFromSqlite(key).map(freezeJsonSnapshot),
     matches: (entry) => resolveControllerSessionKey(entry) === key,
   });
 }
@@ -510,7 +510,7 @@ export function getSubagentRunsSnapshotForChildSession(
   }
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentRunsReadCache, {
     selectCached: (lookup) => lookup.selectChildren(new Set([key])),
-    load: () => loadSubagentRunsForChildSessionFromSqlite(key),
+    load: () => loadSubagentRunsForChildSessionFromSqlite(key).map(freezeJsonSnapshot),
     matches: (entry) => matchesSubagentChildSessionOwner(entry, key, childAgentId),
   });
 }

@@ -24,7 +24,10 @@ import {
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
 } from "../lib/sessions/session-key.ts";
-import { projectSidebarAgentSessionRows } from "./app-sidebar-agent-session-rows.ts";
+import {
+  projectSidebarAgentSessionRows,
+  type SidebarHomeSession,
+} from "./app-sidebar-agent-session-rows.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
 import { scheduleSidebarChildSessions } from "./app-sidebar-child-session-data.ts";
 import {
@@ -112,13 +115,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   private readonly rowsMemo = new SidebarProjectionMemo<SidebarRecentSession[]>();
   private readonly catalogsMemo = new SidebarProjectionMemo<SidebarSessionCatalog[]>();
   private readonly sectionsMemo = new SidebarProjectionMemo<SidebarVisibleSections>();
-  private readonly homeMemos = new Map<string, SidebarProjectionMemo<SidebarRecentSession>>();
+  private readonly homeMemos = new Map<string, SidebarProjectionMemo<SidebarHomeSession>>();
   readonly sessionData = new SessionDataController(this);
   readonly sessionPullRequests = new SessionPullRequestIndicatorsController(this, {
     getConnected: () => this.connected,
     getRows: () =>
       mergeAdoptedSessionPullRequestRows({
-        rows: this.visibleSessionRowsInOrder(),
+        rows: [
+          ...this.visibleSessionRowsInOrder(),
+          ...(this.groupedSessionSource?.agentIds.flatMap((agentId) => {
+            const home = this.visibleHomeSession(agentId);
+            return home ? [home] : [];
+          }) ?? []),
+        ],
         adopted: adoptedCatalogSessionKeys(this.visibleSessionCatalogs()),
         sessionsResult: this.groupedSessionSource?.result ?? this.sessionData.sessionsResult,
         sessionResultsByAgent: this.sessionData.sessionResultsByAgent,
@@ -253,7 +262,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   protected override willUpdate(changedProperties: PropertyValues<this>) {
     if (this.emptyGroups.reconcile() && this.sidebarMenus.sessionSortMenuPosition) {
-      this.sidebarMenus.closeSessionSortMenu();
+      this.sidebarMenus.closePositionedMenu("sessionSort");
     }
     super.willUpdate(changedProperties);
   }
@@ -412,15 +421,12 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   };
 
   /** Collapsed zones keep full rows for true header counts and status dots. */
-  protected zonedVisibleSections(
-    rows: SidebarRecentSession[],
-    catalogs = this.sidebarSessionCatalogs(),
-  ): SidebarVisibleSections {
+  protected zonedVisibleSections(rows: SidebarRecentSession[]): SidebarVisibleSections {
     return memoizedSidebarSections(
       this.sectionsMemo,
       this,
       rows,
-      catalogs,
+      this.sidebarSessionCatalogs(),
       this.rosterVisibleSessionLimits,
     );
   }
@@ -702,13 +708,20 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return this.attention.createResolver();
   }
 
-  projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession {
+  projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarHomeSession {
     let memo = this.homeMemos.get(agentId);
     if (!memo) {
-      memo = new SidebarProjectionMemo<SidebarRecentSession>();
+      memo = new SidebarProjectionMemo<SidebarHomeSession>();
       this.homeMemos.set(agentId, memo);
     }
     return memoizedSidebarHome(memo, this, row, agentId);
+  }
+
+  /** Header metadata follows session filters; Home navigation and child hydration do not. */
+  visibleHomeSession(agentId: string): SidebarRecentSession | null {
+    const row = this.mainSessionRow(agentId);
+    const home = row ? this.projectHomeSession(row, agentId) : null;
+    return home?.metadataVisible ? home : null;
   }
 
   /** Gateway row backing the identity card (unread/running state), if loaded. */

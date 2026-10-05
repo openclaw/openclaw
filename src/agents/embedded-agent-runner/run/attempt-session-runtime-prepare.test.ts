@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   createAnthropicPayloadLogger: vi.fn(),
   createCacheTrace: vi.fn(),
   createSessionSettleTracker: vi.fn(),
-  getSessionPromptState: vi.fn(),
+  retainSessionPromptState: vi.fn(),
   beginSessionSystemPrompt: vi.fn(() => false),
   installContextGuards: vi.fn(),
   prepareAgentSession: vi.fn(),
@@ -25,7 +25,7 @@ vi.mock("../session-prompt-state.js", async (importOriginal) => {
   const { prepareSessionSystemPrompt, persistSessionSystemPrompt, retireSessionSystemPrompt } =
     await importOriginal<typeof import("../session-prompt-state.js")>();
   return {
-    getEmbeddedSessionPromptState: mocks.getSessionPromptState,
+    retainEmbeddedSessionPromptState: mocks.retainSessionPromptState,
     beginSessionSystemPrompt: mocks.beginSessionSystemPrompt,
     prepareSessionSystemPrompt,
     persistSessionSystemPrompt,
@@ -68,6 +68,7 @@ function createFixture() {
   const sessionManager = {
     kind: "manager",
     getBranch: () => [activeMarker],
+    getToolResultProjectionEntries: () => [activeMarker],
     getEntries: () => [activeMarker, { ...activeMarker, data: "sibling" }],
   };
   const activeSession = {
@@ -84,6 +85,7 @@ function createFixture() {
   };
   const boundary = { setCurrentUserTimestampOverride: vi.fn() };
   const promptState = { toolResults: { projected: true } };
+  const promptStateLease = { state: promptState, [Symbol.dispose]: vi.fn() };
   const abortActiveSession = vi.fn(async () => undefined);
   const buildAbortSettlePromise = vi.fn(() => null);
   const trackPromptSettlePromise = vi.fn((promise: Promise<void>) => promise);
@@ -135,9 +137,9 @@ function createFixture() {
     order.push("boundary");
     return boundary;
   });
-  mocks.getSessionPromptState.mockImplementation(() => {
+  mocks.retainSessionPromptState.mockImplementation(() => {
     order.push("prompt-state");
-    return promptState;
+    return promptStateLease;
   });
   mocks.createSessionSettleTracker.mockImplementation(() => {
     order.push("settle-tracker");
@@ -165,6 +167,7 @@ function createFixture() {
   });
 
   const resourceEvents: Record<string, string> = {
+    promptStateLease: "own-prompt-state",
     session: "own-session",
     sessionManager: "own-manager",
     getUserTranscriptContexts: "own-user-transcript-contexts",
@@ -247,6 +250,7 @@ function createFixture() {
     onSessionYieldReady,
     order,
     promptState,
+    promptStateLease,
     sessionManager,
     settingsManager,
     trajectoryRecorder,
@@ -285,6 +289,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       };
       Object.assign(fixture.sessionManager, {
         getBranch: () => entries,
+        getToolResultProjectionEntries: () => entries,
         getSessionTarget: () => undefined,
         getSessionId: () => "interrupted-route-retirement",
         appendCustomEntryAsync,
@@ -355,6 +360,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     };
     Object.assign(fixture.sessionManager, {
       getBranch: () => entries,
+      getToolResultProjectionEntries: () => entries,
       getSessionTarget: () => undefined,
       getSessionId: () => "restart-notice",
       appendCustomEntryAsync,
@@ -457,6 +463,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       "manager",
       "own-manager",
       "prompt-state",
+      "own-prompt-state",
       "own-user-transcript-contexts",
       "agent-session",
       "own-session",
@@ -533,6 +540,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     );
 
     expect(fixture.resources.sessionManager).toBe(fixture.sessionManager);
+    expect(fixture.resources.promptStateLease).toBe(fixture.promptStateLease);
     expect(fixture.resources.session).toBe(fixture.activeSession);
     expect(fixture.resources.removeToolResultContextGuard).toBe(fixture.contextGuards.remove);
     expect(fixture.resources.buildAbortSettlePromise).toBe(fixture.buildAbortSettlePromise);

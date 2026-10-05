@@ -43,7 +43,6 @@ export async function runGatewayStatusProbePass(params: {
   sshTarget: string | null;
   sshRouteTarget?: string | null;
   sshIdentity: string | null;
-  loadSshTunnelModule: () => Promise<typeof import("../../infra/ssh-tunnel.js")>;
   localTlsFingerprint?: string;
   signal?: AbortSignal;
 }): Promise<{
@@ -71,7 +70,7 @@ export async function runGatewayStatusProbePass(params: {
       return null;
     }
     try {
-      const { startSshPortForward } = await params.loadSshTunnelModule();
+      const { startSshPortForward } = await import("../../infra/ssh-tunnel.js");
       const tunnel = await startSshPortForward({
         target: sshTarget,
         identity: params.sshIdentity ?? undefined,
@@ -98,7 +97,7 @@ export async function runGatewayStatusProbePass(params: {
   const [discovery, tunnelFirst] = await Promise.all([discoveryTask, tunnelTask]);
 
   if (!sshTarget && params.opts.sshAuto) {
-    const { parseSshTarget } = await params.loadSshTunnelModule();
+    const { parseSshTarget } = await import("../../infra/ssh-tunnel.js");
     sshTarget = pickAutoSshTargetFromDiscovery({
       discovery,
       parseSshTarget,

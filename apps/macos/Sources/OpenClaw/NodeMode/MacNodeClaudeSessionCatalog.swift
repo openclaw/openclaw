@@ -264,6 +264,15 @@ enum MacNodeClaudeSessionCatalog {
             MacNodeClaudeSessionCatalogContract.pluginId,
             root: root)
         else { return false }
+        let pluginConfig = OpenClawConfigFile.pluginEntry(
+            MacNodeClaudeSessionCatalogContract.pluginId,
+            root: root)?["config"] as? [String: Any]
+        let sessionCatalog = pluginConfig?["sessionCatalog"] as? [String: Any]
+        if let enabled = sessionCatalog?["enabled"] as? NSNumber,
+           CFGetTypeID(enabled) == CFBooleanGetTypeID(), !enabled.boolValue
+        {
+            return false
+        }
         let projectsURL = self.projectsURL(homeURL: homeURL, environment: environment)
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(
@@ -1041,9 +1050,7 @@ extension MacNodeClaudeSessionCatalog {
         if let maxBytes, data.count > maxBytes {
             throw CatalogError.responseTooLarge
         }
-        guard let result = String(data: data, encoding: .utf8)
-        else { throw CatalogError.unavailable }
-        return result
+        return String(bytes: data, encoding: .utf8)!
     }
 
     private static func truncateUTF8(_ value: String, maxBytes: Int) -> String {

@@ -18,9 +18,16 @@ request; a newer request can cancel and replace that pending request. Hash
 collisions can leave other slots unused; this is a ceiling, not a promise of
 32 busy machines.
 
-Admission expires ten minutes after the workflow was created. A request that
-waits longer fails before checkout or hydration when its runner starts; it can
-still incur runner startup cost. This does not remove the queued job immediately.
+Admission expires 60 minutes after the workflow was created. This bounded queue
+allowance lets waiting clients survive saturation beyond the former ten-minute
+cutoff without admitting arbitrarily old abandoned requests. It is an operating
+bound, not a measured queue percentile or proof that the client is still waiting:
+the delegated warmup contract exposes no requester heartbeat to these workflows,
+and SSH activity is only available after runner assignment. A request that waits
+60 minutes or longer fails before checkout or hydration when its runner starts;
+it can still incur runner startup cost. Abandoned requests younger than the bound
+can still hydrate, so caller cleanup remains required. This does not remove the
+queued job immediately or reset the clock when a runner is assigned.
 Once the request passes that check, checkout and hydration do not recheck queue
 age. They remain bounded by the job timeout and idle limit.
 Stop an abandoned lease by its exact ID instead of leaving a warmup pending.
@@ -32,6 +39,18 @@ task-owned run remains pending, use `gh run cancel <run-id> --repo openclaw/open
 and confirm its terminal state. If the lease-to-run match is unavailable, report
 the unresolved cleanup instead of canceling a guessed run.
 Do not retry in a loop when the pool is full.
+
+If the admission job cannot read its GitHub Actions run, it denies admission and
+reports the HTTP status, a fixed error classification, and validated GitHub request
+ID and rate-limit/retry headers when available. Error bodies are limited to 8 KiB
+within the existing 15-second request deadline; raw response messages and bodies
+are never logged. A bare `403` is reported as `forbidden`, not assumed to be a
+permission or rate-limit failure. Use the request ID to investigate the original
+GitHub response; a later successful request does not explain an earlier rejection.
+Honor `retry-after` (seconds) before a later request. When
+`x-ratelimit-remaining=0`, wait until `x-ratelimit-reset` (UTC epoch seconds).
+Admission does not retry or change token permissions, and caller cleanup remains
+required for a failed request.
 
 Idle requests are capped at 15 minutes. The existing Testbox monitor continues
 to protect active SSH commands. Stop retained leases when their task finishes;

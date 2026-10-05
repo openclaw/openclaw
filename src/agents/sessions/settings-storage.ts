@@ -3,7 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
 import { resolveJsonSaveTarget } from "../../infra/json-file.js";
-import type { Transport } from "../../llm/types.js";
+import type { ThinkingBudgets, Transport } from "../../llm/types.js";
 import { CONFIG_DIR_NAME } from "../package-metadata.js";
 
 interface CompactionSettings {
@@ -12,45 +12,39 @@ interface CompactionSettings {
   keepRecentTokens?: number; // default: 20000
 }
 
-export interface BranchSummarySettings {
+interface BranchSummarySettings {
   reserveTokens?: number; // default: 16384 (tokens reserved for prompt + LLM response)
   skipPrompt?: boolean; // default: false - when true, skips "Summarize branch?" prompt and defaults to no summary
 }
 
-export interface ProviderRetrySettings {
+interface ProviderRetrySettings {
   timeoutMs?: number; // SDK/provider request timeout in milliseconds
   maxRetries?: number; // transient provider retry attempts
   maxRetryDelayMs?: number; // default: 60000 (max server-requested delay before failing)
 }
 
-export interface RetrySettings {
+interface RetrySettings {
   enabled?: boolean; // default: true
   maxRetries?: number; // default: 3
   baseDelayMs?: number; // default: 2000 (exponential backoff: 2s, 4s, 8s)
   provider?: ProviderRetrySettings;
 }
 
-export interface TerminalSettings {
+interface TerminalSettings {
   showImages?: boolean; // default: true (only relevant if terminal supports images)
   imageWidthCells?: number; // default: 60 (preferred inline image width in terminal cells)
   clearOnShrink?: boolean; // default: false (clear empty rows when content shrinks)
   showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
 }
 
-export interface ImageSettings {
+interface ImageSettings {
   autoResize?: boolean; // default: true (resize images to 2000x2000 max for better model compatibility)
   blockImages?: boolean; // default: false - when true, prevents all images from being sent to LLM providers
 }
 
-export interface ThinkingBudgetsSettings {
-  minimal?: number;
-  low?: number;
-  medium?: number;
-  high?: number;
-  max?: number;
-}
+export interface ThinkingBudgetsSettings extends ThinkingBudgets {}
 
-export interface MarkdownSettings {
+interface MarkdownSettings {
   codeBlockIndent?: string; // default: "  "
 }
 

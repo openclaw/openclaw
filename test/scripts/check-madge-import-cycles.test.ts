@@ -60,43 +60,53 @@ async function runChecker(root: string, signal: AbortSignal) {
 }
 
 describe("Madge import-cycle CLI", () => {
-  it("joins its compiler after a clean graph and ignores dynamic-import edges", async ({
-    signal,
-  }) => {
-    await fixtures.run(async () => {
-      const root = createCheckerFixture({
+  describe.each<{
+    name: string;
+    files: Record<string, string>;
+    config?: object;
+    status: number;
+    stdout?: string;
+    stderr?: string;
+  }>([
+    {
+      name: "clean graph with dynamic imports",
+      files: {
         "src/a.ts": 'export const value = 1; void import("./b.js");',
         "src/b.ts": 'import { value } from "./a.js"; export const copy = value;',
         "src/dist/ignored.ts": 'import "./ignored.js";',
-      });
-      const result = await runChecker(root, signal);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toBe("Madge import cycle check: 0 cycle(s).\n");
-    });
-  });
-
-  it("preserves alias, re-export and type-only cycle diagnostics", async ({ signal }) => {
-    await fixtures.run(async () => {
-      const root = createCheckerFixture({
+      },
+      status: 0,
+      stdout: "Madge import cycle check: 0 cycle(s).\n",
+    },
+    {
+      name: "alias, re-export and type-only cycle",
+      files: {
         "src/a.ts": 'export { value } from "@fixture/b"; export type Value = number;',
         "src/b.ts": 'import type { Value } from "./a.js"; export const value: Value = 1;',
+      },
+      status: 1,
+      stdout: "Madge import cycle check: 1 cycle(s).\n",
+      stderr: "# cycle 1\n  src/a.ts\n  -> src/b.ts\n",
+    },
+    {
+      name: "invalid project configuration",
+      files: { "src/a.ts": "export const value = 1;" },
+      config: { unknownCompilerOption: true },
+      status: 1,
+      stderr: "error TS5023",
+    },
+  ])("$name", ({ files, config, status, stdout, stderr }) => {
+    it("joins its compiler and preserves diagnostics", async ({ signal }) => {
+      await fixtures.run(async () => {
+        const result = await runChecker(createCheckerFixture(files, config), signal);
+        expect(result.status, result.stderr).toBe(status);
+        if (stdout !== undefined) {
+          expect(result.stdout).toBe(stdout);
+        }
+        if (stderr !== undefined) {
+          expect(result.stderr).toContain(stderr);
+        }
       });
-      const result = await runChecker(root, signal);
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("Madge import cycle check: 1 cycle(s).\n");
-      expect(result.stderr).toContain("# cycle 1\n  src/a.ts\n  -> src/b.ts\n");
-    });
-  });
-
-  it("closes the compiler when the project configuration is invalid", async ({ signal }) => {
-    await fixtures.run(async () => {
-      const root = createCheckerFixture(
-        { "src/a.ts": "export const value = 1;" },
-        { unknownCompilerOption: true },
-      );
-      const result = await runChecker(root, signal);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("error TS5023");
     });
   });
 });

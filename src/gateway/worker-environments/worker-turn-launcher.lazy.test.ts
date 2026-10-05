@@ -137,7 +137,7 @@ describe("worker turn execution loading", () => {
             owner: retained.owner,
           });
         } else if (scenario === "placement-drained") {
-          fixture.placements.startDrain({
+          await fixture.placements.startDrain({
             sessionId: placement.sessionId,
             environmentId: placement.environmentId,
             ownerEpoch: placement.activeOwnerEpoch,
@@ -269,7 +269,7 @@ describe("worker turn execution loading", () => {
           if (placement?.state !== "active") {
             throw new Error("expected active sandbox placement");
           }
-          fixture.placements.startDrain({
+          await fixture.placements.startDrain({
             sessionId: placement.sessionId,
             environmentId: placement.environmentId,
             ownerEpoch: placement.activeOwnerEpoch,

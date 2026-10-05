@@ -103,33 +103,73 @@ describe("status model authentication and endpoint", () => {
   });
 
   it.each([
-    ["api_key", "api-key (codex)", "https://api.openai.com/v1"],
-    ["oauth", "oauth (codex)", "https://chatgpt.com/backend-api/codex"],
+    ["api_key", undefined, "api-key (codex)", "https://api.openai.com/v1"],
+    ["oauth", undefined, "oauth (codex)", "https://chatgpt.com/backend-api/codex"],
+    ["oauth", { accountType: "chatgpt", authMode: "oauth" }, "oauth (codex)", undefined],
+    ["oauth", { accountType: "apiKey", authMode: "api_key" }, "api-key (codex)", undefined],
+    ["oauth", { accountType: "chatgpt", authMode: "token" }, "token (codex)", undefined],
+    ["oauth", { accountType: "chatgpt" }, "native (codex)", undefined],
   ] as const)(
-    "renders the prepared %s mode and selected route without a host credential",
-    async (mode, authLabel, endpoint) => {
-      expect(await statusAuth({ source: "native", mode })(selection)).toEqual({
+    "renders prepared %s with discovery %j without inventing credentials or routes",
+    async (mode, nativeDiscovery, authLabel, endpoint) => {
+      expect(await statusAuth({ source: "native", mode }, { nativeDiscovery })(selection)).toEqual({
         authLabel,
         endpoint,
       });
     },
   );
 
-  it("uses the built-in prepared route even when the displayed auth label is overridden", async () => {
-    const resolve = statusAuth(undefined, {
-      profiles: { "openai:test": { type: "api_key", provider: "openai", key: "synthetic-key" } },
-    });
-    expect(
-      await resolve({
-        ...selection,
-        runtimeId: "openclaw",
-        authLabelOverride: "oauth (personal account)",
-      }),
-    ).toEqual({
-      authLabel: "oauth (personal account)",
-      endpoint: "https://api.openai.com/v1",
-    });
-  });
+  it.each(["display override", "configured key"] as const)(
+    "pairs the built-in API-key route with %s despite an OAuth label or profile",
+    async (source) => {
+      const override = source === "display override";
+      const profiles: AuthProfileStore["profiles"] = override
+        ? { "openai:test": { type: "api_key", provider: "openai", key: "synthetic-key" } }
+        : {
+            "openai:chatgpt": {
+              type: "oauth",
+              provider: "openai",
+              access: "native-access",
+              refresh: "native-refresh",
+              expires: Date.now() + 60_000,
+            },
+          };
+      if (!override) {
+        vi.spyOn(authProfiles, "loadAuthProfileStoreWithoutExternalProfiles").mockReturnValue({
+          version: 1,
+          profiles,
+        });
+      }
+      const resolve = statusAuth(undefined, {
+        profiles,
+        config: override
+          ? cfg
+          : {
+              ...cfg,
+              models: {
+                providers: {
+                  openai: {
+                    auth: "api-key",
+                    apiKey: "configured-platform-key",
+                    baseUrl: "https://api.openai.com/v1",
+                    models: [],
+                  },
+                },
+              },
+            },
+      });
+      expect(
+        await resolve({
+          ...selection,
+          runtimeId: "openclaw",
+          ...(override ? { authLabelOverride: "oauth (personal account)" } : {}),
+        }),
+      ).toEqual({
+        authLabel: override ? "oauth (personal account)" : "api-key",
+        endpoint: "https://api.openai.com/v1",
+      });
+    },
+  );
 
   it.each(["openclaw", "codex"])(
     "keeps a pinned personal SIWC account on Responses with %s despite native login",
@@ -172,103 +212,36 @@ describe("status model authentication and endpoint", () => {
     },
   );
 
-  it("pairs authored API-key routing with its selected auth instead of stored OAuth", async () => {
-    const profiles: AuthProfileStore["profiles"] = {
-      "openai:chatgpt": {
-        type: "oauth",
-        provider: "openai",
-        access: "native-access",
-        refresh: "native-refresh",
-        expires: Date.now() + 60_000,
-      },
-    };
-    vi.spyOn(authProfiles, "loadAuthProfileStoreWithoutExternalProfiles").mockReturnValue({
-      version: 1,
-      profiles,
-    });
-    const resolve = statusAuth(undefined, {
-      profiles,
-      config: {
-        ...cfg,
-        models: {
-          providers: {
-            openai: {
-              auth: "api-key",
-              apiKey: "configured-platform-key",
-              baseUrl: "https://api.openai.com/v1",
-              models: [],
-            },
-          },
-        },
-      },
-    });
-    expect(await resolve({ ...selection, runtimeId: "openclaw" })).toEqual({
-      authLabel: "api-key",
-      endpoint: "https://api.openai.com/v1",
-    });
-  });
-
-  it("does not infer a native endpoint from account discovery without a route", async () => {
-    expect(
-      await statusAuth(
-        { source: "native", mode: "oauth" },
-        { nativeDiscovery: { accountType: "chatgpt", authMode: "oauth" } },
-      )(selection),
-    ).toEqual({ authLabel: "oauth (codex)", endpoint: undefined });
-  });
-
-  it("does not describe an absent or retired native login as authenticated", async () => {
-    expect(await statusAuth()(selection)).toEqual({ authLabel: "unknown" });
-    expect(
-      await statusAuth({ source: "native", mode: "api_key" }, { current: () => false })(selection),
-    ).toEqual({ authLabel: "unknown" });
-  });
-
-  it.each([
-    ["apiKey", "api_key", "api-key (codex)"],
-    ["chatgpt", "token", "token (codex)"],
-  ] as const)(
-    "renders %s discovery with its observed %s mode",
-    async (accountType, authMode, label) => {
-      expect(
-        await statusAuth(
-          { source: "native", mode: "oauth" },
-          { nativeDiscovery: { accountType, authMode } },
-        )(selection),
-      ).toMatchObject({ authLabel: label });
+  it.each<{
+    reason: string;
+    mode?: PreparedAgentCredentialMode;
+    options?: Parameters<typeof statusAuth>[1];
+  }>([
+    { reason: "absent native login" },
+    {
+      reason: "retired owner",
+      mode: { source: "native", mode: "api_key" },
+      options: { current: () => false },
     },
-  );
-
-  it("does not borrow a local mode for a remote account with an unknown mode", async () => {
-    expect(
-      await statusAuth(
-        { source: "native", mode: "oauth" },
-        { nativeDiscovery: { accountType: "chatgpt" } },
-      )(selection),
-    ).toEqual({ authLabel: "native (codex)", endpoint: undefined });
-  });
-
-  it("does not substitute native login for an unavailable explicit profile", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "status-pin",
-      updatedAt: 1,
-      authProfileOverride: "openai:missing",
-      authProfileOverrideSource: "user",
-      modelProvider: "openai",
-    };
-    expect(
-      await statusAuth({ source: "native", mode: "api_key" }, { sessionEntry })(selection),
-    ).toEqual({ authLabel: "unknown" });
-  });
-
-  it("respects an explicitly empty account order", async () => {
-    expect(
-      await statusAuth(
-        { source: "native", mode: "api_key" },
-        {
-          config: { ...cfg, auth: { order: { openai: [] } } },
+    {
+      reason: "unavailable explicit profile",
+      mode: { source: "native", mode: "api_key" },
+      options: {
+        sessionEntry: {
+          sessionId: "status-pin",
+          updatedAt: 1,
+          authProfileOverride: "openai:missing",
+          authProfileOverrideSource: "user",
+          modelProvider: "openai",
         },
-      )(selection),
-    ).toEqual({ authLabel: "unknown" });
+      },
+    },
+    {
+      reason: "explicitly empty account order",
+      mode: { source: "native", mode: "api_key" },
+      options: { config: { ...cfg, auth: { order: { openai: [] } } } },
+    },
+  ])("reports unknown authentication for $reason", async ({ mode, options }) => {
+    expect(await statusAuth(mode, options)(selection)).toEqual({ authLabel: "unknown" });
   });
 });

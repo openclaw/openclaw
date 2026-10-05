@@ -33,8 +33,10 @@ export async function resolveEmbeddedAttemptMemoryAudience(params: {
     assertMemoryAudienceSession(params.memoryAudience, params.sessionKey);
     return { memoryAudience: params.memoryAudience, release: retainedAudience };
   }
-  // Only a native memory provider consumes audiences; legacy owners resolve none,
-  // so their turns take no session leases and read no lineage.
+  // Detached maintenance runs use their explicit delegation instead of deriving
+  // access from the maintenance copy's deliberately non-owner sender bit. Only a
+  // native memory provider consumes audiences; legacy owners resolve none, so
+  // their turns take no session leases and read no lineage.
   if (!params.admission || resolveLoadedMemoryProviderKind(params.config ?? {}) !== "native") {
     return { release: retainedAudience };
   }

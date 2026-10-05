@@ -142,8 +142,31 @@ export class DraftPlaceBrowser {
     return this.projectCatalog?.snapshot.ready ?? false;
   }
 
+  get projectsLoading(): boolean {
+    return this.projectCatalog?.loading ?? false;
+  }
+
   get projectRecents(): readonly ProjectRecent[] | undefined {
     return this.projectCatalog?.snapshot.result?.recents;
+  }
+
+  get githubHost(): string | undefined {
+    return this.projectCatalog?.snapshot.result?.githubHost;
+  }
+
+  get defaultRemoteProject(): DraftRemoteProject | null {
+    const configured = this.projectCatalog?.snapshot.result?.defaultRepository;
+    return configured
+      ? {
+          identity: configured.identity,
+          cloneUrl: configured.url,
+          ...(configured.ref ? { defaultBranch: configured.ref } : {}),
+        }
+      : null;
+  }
+
+  get defaultRemoteProjectProfileId(): string {
+    return this.projectCatalog?.snapshot.result?.defaultRepository?.profileId ?? "";
   }
 
   get projectId(): string {
@@ -379,17 +402,9 @@ export class DraftPlaceBrowser {
 
   selectGatewayBrowser(path?: string) {
     this.browserOpenValue = true;
-    this.loadBrowser(path && isAbsolutePath(path) ? path : undefined);
-    this.focusProjectView(".new-session-page__browser-path");
-  }
-
-  loadBrowser(path: string | undefined) {
-    const snapshot = this.read().context?.gateway.snapshot;
-    if (snapshot?.phase !== "connected" || !snapshot.client || !this.browserOpenValue) {
-      return;
-    }
     this.browserProjectPathValue = null;
-    void this.browser.navigate(path);
+    void this.browser.navigate(path && isAbsolutePath(path) ? path : undefined, "initial");
+    this.focusProjectView(".new-session-page__browser-path");
   }
 
   async registerBrowserProject(path: string) {

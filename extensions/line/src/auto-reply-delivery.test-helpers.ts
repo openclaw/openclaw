@@ -84,7 +84,7 @@ export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoRepl
   );
   const deps: LineAutoReplyDeps = {
     buildTemplateMessageFromPayload: () => null,
-    processLineMessage: (text) => ({ text, flexMessages: [] }),
+    processLineMessage: (text) => (text ? [{ type: "text", text }] : []),
     chunkMarkdownText: (text) => [text],
     replyMessageLine,
     pushMessagesLine,

@@ -29,41 +29,6 @@ export type ReadResponseTextPrefixOptions = {
   onTimeout?: (params: { timeoutMs: number }) => Error;
 };
 
-async function readResponsePrefixFromReader(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  maxBytes: number,
-  stopAtLimit: boolean,
-  options?: ReadResponseTextPrefixOptions,
-): Promise<ReadResponsePrefixResult> {
-  const chunks: Uint8Array[] = [];
-  const result = await withResponseBodyIdleTimeout(
-    reader,
-    options?.chunkTimeoutMs || undefined,
-    options?.onIdleTimeout,
-    (refreshTimeout) =>
-      consumeResponseBytes({
-        maxBytes,
-        stopAtLimit,
-        read: () => {
-          refreshTimeout?.();
-          return reader.read();
-        },
-        onChunk: (chunk) => chunks.push(chunk),
-        onLimit: () => {
-          // Capture tees must not delay bounded dispatcher release.
-          void reader.cancel().catch(() => undefined);
-        },
-      }),
-  );
-
-  return {
-    // Full-body readers reject overflow before allocating a contiguous copy.
-    // MiB limits can yield fractional bytes; retained slices contain only whole bytes.
-    materializeBuffer: () => Buffer.concat(chunks, Math.floor(Math.min(result.size, maxBytes))),
-    ...result,
-  };
-}
-
 async function readResponsePrefix(
   response: Response,
   maxBytes: number,
@@ -106,14 +71,42 @@ async function readResponsePrefix(
       onTimeout: options?.onTimeout,
       signal: options?.signal,
       cancel: async (error) => await reader.cancel(error),
-      read: async () => await readResponsePrefixFromReader(reader, maxBytes, stopAtLimit, options),
+      read: async () => {
+        const chunks: Uint8Array[] = [];
+        const result = await withResponseBodyIdleTimeout(
+          reader,
+          options?.chunkTimeoutMs || undefined,
+          options?.onIdleTimeout,
+          (refreshTimeout) =>
+            consumeResponseBytes({
+              maxBytes,
+              stopAtLimit,
+              read: () => {
+                refreshTimeout?.();
+                return reader.read();
+              },
+              onChunk: (chunk) => chunks.push(chunk),
+              onLimit: () => {
+                // Capture tees must not delay bounded dispatcher release.
+                void reader.cancel().catch(() => undefined);
+              },
+            }),
+        );
+        return {
+          // Full-body readers reject overflow before allocating a contiguous copy.
+          // MiB limits can yield fractional bytes; retained slices contain only whole bytes.
+          materializeBuffer: () =>
+            Buffer.concat(chunks, Math.floor(Math.min(result.size, maxBytes))),
+          ...result,
+        };
+      },
     });
   } finally {
     reader.releaseLock();
   }
 }
 
-export type ReadResponseTextPrefixResult = {
+type ReadResponseTextPrefixResult = {
   text: string;
   size: number;
   truncated: boolean;
@@ -162,10 +155,6 @@ export async function readResponseTextSnippet(
   const maxBytes = options?.maxBytes ?? 8 * 1024;
   const maxChars = options?.maxChars ?? 200;
   const prefix = await readResponseTextPrefix(response, maxBytes, options);
-  if (!prefix.text) {
-    return undefined;
-  }
-
   const collapsed = prefix.text.replace(/\s+/g, " ").trim();
   if (!collapsed) {
     return undefined;

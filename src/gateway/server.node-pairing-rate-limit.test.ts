@@ -239,7 +239,9 @@ describe("node pairing rate limit", () => {
 
       expect(connected).toHaveLength(3);
       expect(rateLimited).toHaveLength(5);
-      expect((await listNodePairing()).pending).toHaveLength(3);
+      const pairing = await listNodePairing();
+      expect(pairing.pending).toHaveLength(0);
+      expect(pairing.paired).toHaveLength(3);
     });
   });
 
@@ -296,7 +298,7 @@ describe("node pairing rate limit", () => {
       }
 
       const pending = (await listNodePairing()).pending;
-      expect(pending).toHaveLength(4);
+      expect(pending).toHaveLength(1);
       expect(pending.find((entry) => entry.nodeId === pairedIdentity.deviceId)?.caps).toEqual([
         "camera",
         "screen",

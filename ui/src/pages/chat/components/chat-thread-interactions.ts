@@ -15,6 +15,7 @@ import type { BrowserTabSelection } from "../../../components/browser/browser-ta
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
@@ -38,28 +39,26 @@ import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
-import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
-import { isConfirmedActionPopoverFocused } from "./chat-message-confirmation.ts";
-import type { MessageActionDetails } from "./chat-message-markdown.ts";
-import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
-import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
   dismissConfirmedActionPopovers,
+  isConfirmedActionPopoverFocused,
   openChatRewindConfirmation,
-  type MessageReplyTarget,
-} from "./chat-message.ts";
+} from "./chat-message-confirmation.ts";
+import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.ts";
+import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import type { ReplyMessageStatus } from "./chat-reply-preview.ts";
 import {
   handleChatSelectionPointerUp,
   isChatSelectionPopupFocused,
   removeChatSelectionPopup,
 } from "./chat-selection-popup.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -103,7 +102,6 @@ type ReplyMessageAccess = {
   read: (messageId: string) => unknown;
   /** How the Gateway answered a lookup without a message. */
   status?: (messageId: string) => ReplyMessageStatus | undefined;
-  request: (messageId: string) => void;
   open: (messageId: string) => void;
 };
 
@@ -137,7 +135,6 @@ export type ChatThreadProps = ChatSendStatusActions & {
   /** Browser-local active run identity, retained across transient disconnects. */
   runId?: string | null;
   runUsageById?: ReadonlyMap<string, RunOutputUsage>;
-  runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
   initialTurnId?: string;
   pendingInputs?: ChatPendingInputsPage["items"];
@@ -148,6 +145,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   runWorking?: boolean;
   startupLabel?: string;
   waitingApproval?: boolean;
+  subagentSessions?: readonly GatewaySessionRow[];
   questionPrompts?: readonly QuestionPrompt[];
   asyncQuestions?: AsyncQuestionPresentation;
   sessions: SessionsListResult | null;
@@ -185,7 +183,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   typingActors?: readonly ChatTypingActorView[];
   typingOverflow?: ChatTypingOverflow;
   onOpenSidebar?: (content: SidebarContent) => void;
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
   onNavigate?: (routeId: "cron", options: { search: string }) => void;
   onRequestOpenImage?: () => number;

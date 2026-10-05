@@ -23,6 +23,8 @@ import {
   startClaimedGateway,
 } from "../gateway/test-helpers.listener.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withTimeout } from "../utils/with-timeout.js";
@@ -130,6 +132,8 @@ describe("gateway-hosted exec approvals", () => {
         clearConfigCache();
         clearSessionStoreCacheForTest();
 
+        // Shared channel stubs make post-connect health checks load unrelated channel runtimes.
+        setActivePluginRegistry(createEmptyPluginRegistry());
         return await startGatewayServer(claim.port, {
           bind: "loopback",
           auth: { mode: "token", token },

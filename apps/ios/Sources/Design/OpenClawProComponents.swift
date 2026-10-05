@@ -9,11 +9,6 @@ enum OpenClawProMetric {
     static let bottomScrollInset: CGFloat = 96
 }
 
-enum OpenClawSpacing {
-    static let space1: CGFloat = 4
-    static let space2: CGFloat = 8
-}
-
 enum OpenClawRadius {
     static let xs: CGFloat = 8
     static let sm: CGFloat = 10
@@ -67,51 +62,6 @@ struct ProCard<Content: View>: View {
     }
 }
 
-private struct OpenClawGlassButtonModifier: ViewModifier {
-    let prominent: Bool
-    let tint: Color?
-
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            if self.prominent {
-                content
-                    .font(OpenClawType.subheadSemiBold)
-                    .buttonStyle(.glassProminent)
-                    .tint(self.tint ?? OpenClawBrand.accent)
-            } else {
-                content
-                    .font(OpenClawType.subheadSemiBold)
-                    .buttonStyle(.glass)
-                    .tint(self.tint)
-            }
-        } else if self.prominent {
-            content
-                .font(OpenClawType.subheadSemiBold)
-                .buttonStyle(.borderedProminent)
-                .tint(self.tint ?? OpenClawBrand.accent)
-        } else {
-            content
-                .font(OpenClawType.subheadSemiBold)
-                .buttonStyle(.bordered)
-                .tint(self.tint)
-        }
-    }
-}
-
-private struct OpenClawGlassSurfaceModifier: ViewModifier {
-    let radius: CGFloat
-
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: .rect(cornerRadius: self.radius))
-        } else {
-            content.background(
-                .regularMaterial,
-                in: RoundedRectangle(cornerRadius: self.radius, style: .continuous))
-        }
-    }
-}
-
 extension View {
     func proPanelSurface(
         tint: Color? = nil,
@@ -124,12 +74,42 @@ extension View {
             isProminent: isProminent))
     }
 
+    @ViewBuilder
     func openClawGlassButton(prominent: Bool = false, tint: Color? = nil) -> some View {
-        modifier(OpenClawGlassButtonModifier(prominent: prominent, tint: tint))
+        if #available(iOS 26.0, *) {
+            if prominent {
+                self
+                    .font(OpenClawType.subheadSemiBold)
+                    .buttonStyle(.glassProminent)
+                    .tint(tint ?? OpenClawBrand.accent)
+            } else {
+                self
+                    .font(OpenClawType.subheadSemiBold)
+                    .buttonStyle(.glass)
+                    .tint(tint)
+            }
+        } else if prominent {
+            self
+                .font(OpenClawType.subheadSemiBold)
+                .buttonStyle(.borderedProminent)
+                .tint(tint ?? OpenClawBrand.accent)
+        } else {
+            self
+                .font(OpenClawType.subheadSemiBold)
+                .buttonStyle(.bordered)
+                .tint(tint)
+        }
     }
 
-    func openClawGlassSurface(radius: CGFloat = OpenClawProMetric.controlRadius) -> some View {
-        modifier(OpenClawGlassSurfaceModifier(radius: radius))
+    @ViewBuilder
+    func openClawGlassSurface() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: .rect(cornerRadius: OpenClawProMetric.controlRadius))
+        } else {
+            self.background(
+                .regularMaterial,
+                in: RoundedRectangle(cornerRadius: OpenClawProMetric.controlRadius, style: .continuous))
+        }
     }
 }
 
@@ -189,27 +169,23 @@ struct OpenClawSidebarHeaderAction {
 }
 
 struct OpenClawSidebarControlButton: View {
-    let headerAction: OpenClawSidebarHeaderAction
-
-    init(action: OpenClawSidebarHeaderAction) {
-        self.headerAction = action
-    }
+    let action: OpenClawSidebarHeaderAction
 
     var body: some View {
         self.identified(self.button.buttonStyle(.plain))
     }
 
     private var button: some View {
-        Button(action: self.headerAction.action) {
+        Button(action: self.action.action) {
             self.icon
         }
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
-        .accessibilityLabel(self.headerAction.accessibilityLabel.text)
+        .accessibilityLabel(self.action.accessibilityLabel.text)
     }
 
     private var icon: some View {
-        Image(systemName: self.headerAction.systemName)
+        Image(systemName: self.action.systemName)
             .font(OpenClawType.subheadSemiBold)
             .foregroundStyle(OpenClawBrand.accent)
             .frame(
@@ -219,7 +195,7 @@ struct OpenClawSidebarControlButton: View {
 
     @ViewBuilder
     private func identified(_ button: some View) -> some View {
-        if let accessibilityIdentifier = headerAction.accessibilityIdentifier {
+        if let accessibilityIdentifier = self.action.accessibilityIdentifier {
             button.accessibilityIdentifier(accessibilityIdentifier)
         } else {
             button
@@ -463,7 +439,7 @@ struct OpenClawStatusBadge: View {
     let tone: OpenClawStatusTone
 
     var body: some View {
-        HStack(spacing: OpenClawSpacing.space1 + 2) {
+        HStack(spacing: 6) {
             Circle()
                 .fill(self.tone.color)
                 .frame(width: 7, height: 7)
@@ -472,7 +448,7 @@ struct OpenClawStatusBadge: View {
                 .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(self.tone.color)
         }
-        .padding(.horizontal, OpenClawSpacing.space2)
+        .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background {
             Capsule()

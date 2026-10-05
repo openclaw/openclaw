@@ -58,9 +58,9 @@ describe("prepareChatSendUserTurn", () => {
     { profileId: "profile-ada", synthetic: false, verified: false, allowed: false },
   ])(
     "projects the verified requester without changing command allowlists: %j",
-    ({ profileId, synthetic, verified, allowed }) => {
+    async ({ profileId, synthetic, verified, allowed }) => {
       const { controller } = createUserTurnInputController("/status");
-      const prepared = prepareChatSendUserTurn({
+      const prepared = await prepareChatSendUserTurn({
         request: {
           inboundMessage: "/status",
           clientInfo: createClientInfo({
@@ -127,7 +127,7 @@ describe("prepareChatSendUserTurn", () => {
             ? { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT }
             : {},
         );
-        const prepared = prepareChatSendUserTurn({
+        const prepared = await prepareChatSendUserTurn({
           request: {
             inboundMessage: "hello",
             clientInfo,
@@ -252,7 +252,7 @@ describe("prepareChatSendUserTurn", () => {
           ? ensureGatewayOwnerProfile("Gateway Owner")
           : ensureProfileForEmail("chat-sandbox-creator@example.com");
         const { controller } = createUserTurnInputController();
-        const prepared = prepareChatSendUserTurn({
+        const prepared = await prepareChatSendUserTurn({
           request: {
             inboundMessage: "hello",
             clientInfo: createClientInfo(),
@@ -322,7 +322,7 @@ describe("prepareChatSendUserTurn", () => {
     async ({ inboundMessage, suppressed }) => {
       const { controller, readInput } = createUserTurnInputController(inboundMessage);
       const parsedMessage = `${inboundMessage}\n[media attached: media://inbound/voice.mp3]`;
-      const prepared = prepareChatSendUserTurn({
+      const prepared = await prepareChatSendUserTurn({
         request: {
           inboundMessage,
           clientInfo: createClientInfo({ displayName: "Gateway CLI" }),
@@ -428,7 +428,7 @@ describe("prepareChatSendUserTurn", () => {
 
   it("carries pre-staged media and device ownership without UI sender decoration", async () => {
     const { controller, readInput } = createUserTurnInputController();
-    const prepared = prepareChatSendUserTurn({
+    const prepared = await prepareChatSendUserTurn({
       request: {
         inboundMessage: "hello",
         clientInfo: createClientInfo({
@@ -512,7 +512,7 @@ describe("prepareChatSendUserTurn", () => {
     const { controller, readInput } = createUserTurnInputController("inspect");
     const mediaRef = "media://inbound/image-1.png";
     const receipt = "[Source Receipt]\nbridge=fixture\n[/Source Receipt]";
-    const prepared = prepareChatSendUserTurn({
+    const prepared = await prepareChatSendUserTurn({
       request: {
         inboundMessage: "inspect",
         clientInfo: createClientInfo(),
@@ -575,7 +575,7 @@ describe("prepareChatSendUserTurn", () => {
 
   it("persists video then image as claim-only facts with the image at fact index one", async () => {
     const { controller, readInput } = createUserTurnInputController();
-    prepareChatSendUserTurn({
+    await prepareChatSendUserTurn({
       request: {
         inboundMessage: "hello",
         clientInfo: createClientInfo(),
@@ -647,7 +647,7 @@ describe("prepareChatSendUserTurn", () => {
       .mockResolvedValueOnce({ entries: [], omission: "inline-image-save-failed" });
     try {
       const { controller, readInput } = createUserTurnInputController();
-      const prepared = prepareChatSendUserTurn({
+      const prepared = await prepareChatSendUserTurn({
         request: {
           inboundMessage: "hello",
           clientInfo: createClientInfo(),
@@ -709,7 +709,7 @@ describe("prepareChatSendUserTurn", () => {
       });
     try {
       const { controller } = createUserTurnInputController();
-      const prepared = prepareChatSendUserTurn({
+      const prepared = await prepareChatSendUserTurn({
         request: {
           inboundMessage: "inspect",
           clientInfo: createClientInfo({
@@ -773,7 +773,7 @@ describe("prepareChatSendUserTurn", () => {
   ])("persists structured inbound $kind history facts", async ({ kind, mimeType, fileName }) => {
     const { controller, readInput } = createUserTurnInputController();
     const mediaRef = `media://inbound/${fileName}`;
-    prepareChatSendUserTurn({
+    await prepareChatSendUserTurn({
       request: {
         inboundMessage: "play this",
         clientInfo: createClientInfo(),
@@ -830,7 +830,7 @@ describe("prepareChatSendUserTurn", () => {
   it("persists and prunes the managed PDF claim as structured ownership", async () => {
     const { controller, readInput } = createUserTurnInputController();
     const mediaRef = "media://inbound/report.pdf";
-    prepareChatSendUserTurn({
+    await prepareChatSendUserTurn({
       request: {
         inboundMessage: "read this",
         clientInfo: createClientInfo(),
@@ -912,7 +912,7 @@ describe("prepareChatSendUserTurn", () => {
 
     try {
       const { controller, readInput } = createUserTurnInputController();
-      prepareChatSendUserTurn({
+      await prepareChatSendUserTurn({
         request: {
           inboundMessage: "inspect",
           clientInfo: createClientInfo(),

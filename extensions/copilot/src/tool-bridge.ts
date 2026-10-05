@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   convertMcpCallToolResult,
   type Tool as SdkTool,
@@ -28,7 +29,7 @@ import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { isRawCopilotModelRun } from "./attempt-mode.js";
 
 type CreateOpenClawCodingTools =
-  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
+  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingToolsAsync"];
 type OpenClawCodingToolsOptions = NonNullable<Parameters<CreateOpenClawCodingTools>[0]>;
 type AgentHarnessToolSurfaceRuntime = ReturnType<typeof createAgentHarnessToolSurfaceRuntime>;
 type CatalogExecuteParams = Parameters<
@@ -172,11 +173,11 @@ export async function createCopilotToolBridge(
   }
   const bindingCwd = toolOptions.cwd ?? toolOptions.workspaceDir;
   const bindingOptions = bindingCwd ? { cwd: bindingCwd } : undefined;
-  const createToolSurface = hostCapabilities.createToolSurface;
-  if (!createToolSurface) {
+  const createToolSurfaceAsync = hostCapabilities.createToolSurfaceAsync;
+  if (!createToolSurfaceAsync) {
     throw new Error("Copilot tool construction requires a current host capability");
   }
-  const sourceTools = createToolSurface(toolOptions, bindingOptions);
+  const sourceTools = await createToolSurfaceAsync(toolOptions, bindingOptions);
   const boundSourceTools = new Set(sourceTools);
 
   const allowedSourceTools = applyEmbeddedAttemptToolsAllow(
@@ -212,13 +213,16 @@ export async function createCopilotToolBridge(
     throw new Error(`[copilot-tool-bridge] duplicate tool names: ${duplicateNames.join(", ")}`);
   }
 
+  // The pooled SDK client dispatches handlers in the context of the turn that
+  // opened it, whose async work scope is closed by a later turn.
+  const runInAttemptContext = AsyncLocalStorage.snapshot();
   let sequentialBarrier = Promise.resolve();
   const pendingCalls = new Set<Promise<void>>();
   const scheduleToolExecution: ScheduleToolExecution = (executionMode, execute) => {
     // SDK handlers arrive independently. An exclusive call waits for earlier
     // work across the attempt and blocks later calls, regardless of tool name.
     const ready = executionMode === "sequential" ? Promise.all(pendingCalls) : sequentialBarrier;
-    const run = ready.then(execute);
+    const run = ready.then(() => runInAttemptContext(execute));
     const settled = run.then(
       () => undefined,
       () => undefined,

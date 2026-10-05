@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -49,11 +52,9 @@ function createGateway(
   const config = {
     cron: { enabled: params.cronEnabled ?? true },
     agents: {
-      list: agentIds.map((id, index) => ({
-        id,
-        default: index === 0,
-        workspace: path.join(stateDir, `workspace-${id}`),
-      })),
+      entries: Object.fromEntries(
+        agentIds.map((id) => [id, { workspace: path.join(stateDir, `workspace-${id}`) }]),
+      ),
     },
     plugins: {
       entries: {
@@ -63,7 +64,7 @@ function createGateway(
     ...(params.sessionStore ? { session: { store: params.sessionStore } } : {}),
   } as OpenClawConfig;
   const onMock = vi.fn<OpenClawPluginApi["on"]>();
-  const services: OpenClawPluginService[] = [];
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const cron = {
     isEnabled: vi.fn(async () => params.cronEnabled ?? true),
@@ -83,7 +84,7 @@ function createGateway(
     pluginConfig: {},
     logger,
     on: onMock,
-    registerService: (service: OpenClawPluginService) => services.push(service),
+    registerService: (service) => services.push(service),
   });
   Object.assign(api.runtime, { config: { current: () => config } });
   registerShortTermPromotionDreaming(api);
@@ -92,7 +93,8 @@ function createGateway(
   if (!service) {
     throw new Error("memory-core-dreaming service missing");
   }
-  const serviceContext = { config, stateDir, logger, getCron: () => cron };
+  const scheduler = createTestPluginServiceScheduler();
+  const serviceContext = { config, stateDir, logger, getCron: () => cron, scheduler };
   const startService = async () => {
     await service.start(serviceContext);
   };
@@ -107,7 +109,12 @@ function createGateway(
     await hook({ port: 0 }, { config, getCron: () => cron });
   };
   const stop = async () => {
-    await service.stop?.(serviceContext);
+    scheduler.beginClose();
+    try {
+      await service.stop?.(serviceContext);
+    } finally {
+      await scheduler.stop();
+    }
   };
   stopGateway = stop;
   return { config, cron, logger, start, startService, stop };

@@ -174,11 +174,9 @@ public enum ShareGatewayRelaySettings {
         guard config.token != nil || config.password != nil else {
             return self.deleteCredentials()
         }
-        guard let data = try? JSONEncoder().encode(config),
-              let json = String(data: data, encoding: .utf8)
-        else { return false }
+        guard let data = try? JSONEncoder().encode(config) else { return false }
         return GenericPasswordKeychainStore.saveString(
-            json,
+            String(bytes: data, encoding: .utf8)!,
             service: self.relayCredentialService,
             account: self.relayCredentialAccount,
             accessGroup: OpenClawAppGroup.identifier)

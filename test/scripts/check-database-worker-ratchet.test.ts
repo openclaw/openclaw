@@ -78,21 +78,47 @@ function anotherFactory() {
 }
 `;
   fs.writeFileSync(file, source);
+  const eventRelative = "src/sessions/session-state-events.kernel.ts";
+  const eventFile = path.join(root, eventRelative);
+  fs.mkdirSync(path.dirname(eventFile), { recursive: true });
+  const eventSource = `
+import { executeSqliteQuerySync as query } from "./queries.js";
+function recordSessionStateEventInDatabase() {
+  query(sql);
+  const registeredWatcherKeys = notify
+    ? query(sql).rows.map(() => query(sql))
+    : [];
+  const otherKeys = query(sql);
+}
+function anotherRecorder() {
+  const registeredWatcherKeys = query(sql);
+}
+`;
+  fs.writeFileSync(eventFile, eventSource);
   git("init");
   git("add", ".");
   git("commit", "-m", "base");
   const rows = inventory(root);
   expect(rows.map(({ tier, calls }) => [tier, calls.length])).toEqual([
     ["T1", 2],
+    ["T1", 4],
     ["T2", 1],
+    ["W", 1],
     ["W", 1],
   ]);
   expect(rows.find(({ tier }) => tier === "W")?.calls[0].operation).toBe(
     "createPlacementTurnClaimOps.releaseTurn",
   );
+  expect(
+    rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls[0],
+  ).toMatchObject({
+    operation: "recordSessionStateEventInDatabase",
+    binding: "registeredWatcherKeys",
+  });
   const errors = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "log").mockImplementation(() => {});
   fs.writeFileSync(file, "\n\n" + source);
+  fs.writeFileSync(eventFile, "\n\n" + eventSource);
   expect(main(root, ["--base", "HEAD"])).toBe(0);
   fs.writeFileSync(path.join(root, "src/another-runtime.ts"), "executeSqliteQuerySync(sql);\n");
   expect(main(root, ["--base", "HEAD"])).toBe(1);

@@ -39,22 +39,17 @@ const loadGatewayPluginRuntime = createLazyRuntimeModule(
 
 function createRuntimeGateway(): PluginRuntime["gateway"] {
   return {
-    isAvailable: async () => {
-      const runtime = await loadGatewayPluginRuntime();
-      return runtime.hasInProcessGatewayContext();
-    },
+    isAvailable: async () => (await loadGatewayPluginRuntime()).hasInProcessGatewayContext(),
     request: async (method, params, options) => {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
     },
-    openPluginPanel: async (params) => {
-      const runtime = await loadGatewayPluginRuntime();
-      return runtime.openPluginPanelForRequester(params);
-    },
-    readSessionFacts: async (params) => {
-      const runtime = await loadGatewayPluginRuntime();
-      return runtime.readTrustedPluginSessionFacts(params);
-    },
+    openPluginPanel: async (params) =>
+      (await loadGatewayPluginRuntime()).openPluginPanelForRequester(params),
+    readSessionFacts: async (params) =>
+      (await loadGatewayPluginRuntime()).readTrustedPluginSessionFacts(params),
+    withSessionReadScope: async (run) =>
+      (await loadGatewayPluginRuntime()).withTrustedPluginSessionReadScope(run),
     subscribeSessionChanges: subscribeRuntimeSessionChanges,
     withUserProfileIdentity: async (params, run) => {
       const captured = {
@@ -66,6 +61,8 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.withTrustedPluginUserProfileIdentity(captured, run);
     },
+    resolveGitHubAccount: async ({ login, signal }) =>
+      (await loadGatewayPluginRuntime()).resolveTrustedPluginGitHubAccount({ login, signal }),
   };
 }
 
@@ -119,10 +116,7 @@ function createRuntimeLlmFacade(): PluginRuntime["llm"] {
   );
   return {
     acquireLocalService: loadAcquireLocalService,
-    complete: async (params) => {
-      const llm = await loadLlm();
-      return llm.complete(params);
-    },
+    complete: createLazyRuntimeMethod(loadLlm, (llm) => llm.complete),
   };
 }
 
@@ -222,6 +216,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
   let modelConfig = _options.modelConfig;
   const runtime: PluginRuntime = {
     version: VERSION,
+    capabilities: base.capabilities,
     decisions: {
       evaluate: async (...args) =>
         (await import("../../decisions/runtime.js")).evaluateDecision(...args),

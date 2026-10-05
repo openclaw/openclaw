@@ -179,8 +179,8 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
 
 /** Normalize ws/wss and direct devtools URLs back to the HTTP JSON endpoint base. */
 export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
-  try {
-    const url = new URL(cdpUrl);
+  const url = URL.parse(cdpUrl);
+  if (url) {
     if (url.protocol === "ws:") {
       url.protocol = "http:";
     } else if (url.protocol === "wss:") {
@@ -189,15 +189,14 @@ export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
     url.pathname = url.pathname.replace(/\/devtools\/browser\/.*$/, "");
     url.pathname = url.pathname.replace(/\/cdp$/, "");
     return url.toString().replace(/\/$/, "");
-  } catch {
-    // Best-effort fallback for non-URL-ish inputs.
-    return cdpUrl
-      .replace(/^ws:/, "http:")
-      .replace(/^wss:/, "https:")
-      .replace(/\/devtools\/browser\/.*$/, "")
-      .replace(/\/cdp$/, "")
-      .replace(/\/$/, "");
   }
+  // Best-effort fallback for non-URL-ish inputs.
+  return cdpUrl
+    .replace(/^ws:/, "http:")
+    .replace(/^wss:/, "https:")
+    .replace(/\/devtools\/browser\/.*$/, "")
+    .replace(/\/cdp$/, "")
+    .replace(/\/$/, "");
 }
 
 function fingerprintCdpIdentity(value: string): string {

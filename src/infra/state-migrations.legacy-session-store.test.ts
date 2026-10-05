@@ -10,8 +10,6 @@ import {
 } from "./state-migrations.legacy-session-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const DAY_MS = 24 * 60 * 60 * 1000;
-const MODEL_KEY = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
 const MAIN_KEY = "agent:main:main";
 const legacyEntry = {
   sessionId: " session-1 ",
@@ -28,22 +26,6 @@ beforeEach(() => {
   storePath = path.join(root, "sessions.json");
 });
 const writeStore = (value: unknown) => fs.writeFile(storePath, JSON.stringify(value));
-function maintain(modelRunPruneAfterMs: number) {
-  return loadLegacySessionStore(storePath, {
-    runMaintenance: true,
-    maintenanceConfig: {
-      mode: "enforce",
-      pruneAfterMs: 30 * DAY_MS,
-      archiveDashboardAfterMs: null,
-      modelRunPruneAfterMs,
-      maxEntries: 2,
-      preserveRecentMs: null,
-      resetArchiveRetentionMs: null,
-      maxDiskBytes: null,
-      highWaterBytes: null,
-    },
-  });
-}
 function expectNormalized(store: Record<string, unknown>, channel: string) {
   expect(store.malformed).toBeUndefined();
   expect(store[MAIN_KEY]).toMatchObject({
@@ -54,49 +36,6 @@ function expectNormalized(store: Record<string, unknown>, channel: string) {
     expect(store[MAIN_KEY]).not.toHaveProperty(key);
   }
 }
-
-it.each([DAY_MS, 0])(
-  "applies model-run retention %s during legacy maintenance",
-  async (retention) => {
-    const now = Date.now();
-    await writeStore({
-      [MODEL_KEY]: { sessionId: "session-model-run", updatedAt: now - 2 * DAY_MS },
-      "agent:main:old": { sessionId: "session-old", updatedAt: now - 3 * DAY_MS },
-      "agent:main:active": { sessionId: "session-active", updatedAt: now },
-    });
-    const store = maintain(retention);
-    const present = retention === 0;
-    expect(store[MODEL_KEY] != null).toBe(present);
-    expect(Object.keys(store)).toHaveLength(present ? 3 : 2);
-    expect(Object.values(store).filter((entry) => entry.archivedAt === undefined)).toHaveLength(2);
-    expect(store["agent:main:active"]).toMatchObject({ sessionId: "session-active" });
-    expect(store["agent:main:active"]?.archivedAt).toBeUndefined();
-    expect(store["agent:main:old"]).toMatchObject({ sessionId: "session-old" });
-    if (present) {
-      expect(store[MODEL_KEY]).toMatchObject({ sessionId: "session-model-run" });
-      expect(store[MODEL_KEY]?.archivedAt).toBeUndefined();
-      expect(store["agent:main:old"]?.archivedAt).toEqual(expect.any(Number));
-    } else {
-      expect(store["agent:main:old"]?.archivedAt).toBeUndefined();
-    }
-  },
-);
-
-it("does not treat archived rows as legacy maintenance pressure", async () => {
-  const now = Date.now();
-  await writeStore({
-    [MODEL_KEY]: { sessionId: "session-model-run", updatedAt: now - 2 * DAY_MS },
-    "agent:main:active": { sessionId: "session-active", updatedAt: now },
-    "agent:main:archived": {
-      archivedAt: now - DAY_MS,
-      sessionId: "session-archived",
-      updatedAt: now - 3 * DAY_MS,
-    },
-  });
-  const store = maintain(DAY_MS);
-  expect(store[MODEL_KEY]).toBeDefined();
-  expect(store["agent:main:archived"]?.archivedAt).toBe(now - DAY_MS);
-});
 
 it("stages prompt blobs after a recreated session directory", async () => {
   const storeDir = path.join(root, "sessions");

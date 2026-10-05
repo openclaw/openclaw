@@ -1,9 +1,4 @@
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
-/**
- * Session manager wrapper for tool-result transcript guards.
- *
- * Installs message-write hooks, input provenance handling, and pending tool-result flush behavior once per manager.
- */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareModelVisibleToolTextBlock } from "../logging/redact.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -43,26 +38,32 @@ import {
 import { resolveTranscriptLoggingConfig } from "./transcript-redact-text.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
-type GuardedSessionManager = SessionManager & {
-  hasPendingToolResults?: () => boolean;
-  /** Flush any synthetic tool results for pending tool calls. Idempotent. */
-  flushPendingToolResults?: () => void;
-  /** Await committed synthetic tool results for pending tool calls. Idempotent. */
-  flushPendingToolResultsAsync?: () => Promise<void>;
-  /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
-  clearPendingToolResults?: () => void;
-  /** Persist the next user message when an earlier canonical entry was removed. */
-  clearNextUserMessagePersistenceSuppression?: () => void;
-  /** Refresh the exact owning run when a caller reuses this guarded manager. */
-  setTranscriptRunContext?: (
-    runId: string | undefined,
-    prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage | undefined,
-    skipBeforeMessageWriteHooks: boolean | undefined,
-    assistantErrorTranscript: AssistantErrorTranscript | undefined,
-    inputProvenance: InputProvenance | undefined,
-    suppressNextUserMessagePersistence: boolean | undefined,
-  ) => void;
-};
+type GuardedSessionManager = SessionManager &
+  Partial<
+    Pick<
+      ReturnType<typeof installSessionToolResultGuard>,
+      | "hasPendingToolResults"
+      | "flushPendingToolResults"
+      | "flushPendingToolResultsAsync"
+      | "clearPendingToolResults"
+      | "clearNextUserMessagePersistenceSuppression"
+    >
+  > & {
+    /** Refresh the exact owning run when a caller reuses this guarded manager. */
+    setTranscriptRunContext?: (
+      runId: string | undefined,
+      prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage | undefined,
+      skipBeforeMessageWriteHooks: boolean | undefined,
+      assistantErrorTranscript: AssistantErrorTranscript | undefined,
+      inputProvenance: InputProvenance | undefined,
+      suppressNextUserMessagePersistence: boolean | undefined,
+      preparedUserTurn: {
+        message: PersistedUserTurnMessage | undefined;
+        recorder: UserTurnTranscriptRecorder | undefined;
+        replayKey: string | undefined;
+      },
+    ) => void;
+  };
 
 /**
  * Apply the tool-result guard to a SessionManager exactly once and expose
@@ -114,8 +115,9 @@ export function guardSessionManager(
   let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
   let inputProvenance = opts?.inputProvenance;
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
-  const preparedUserReplayKey =
-    opts?.preparedUserTurnTranscriptRecorder?.getPersistedMessage?.()?.idempotencyKey ===
+  let preparedUserTurnTranscriptRecorder = opts?.preparedUserTurnTranscriptRecorder;
+  let preparedUserReplayKey =
+    preparedUserTurnTranscriptRecorder?.getPersistedMessage?.()?.idempotencyKey ===
     pendingPreparedUserTurnMessage?.idempotencyKey
       ? pendingPreparedUserTurnMessage?.idempotencyKey
       : undefined;
@@ -127,6 +129,11 @@ export function guardSessionManager(
       opts?.assistantErrorTranscript,
       inputProvenance,
       preparedUserReplayKey === undefined && opts?.suppressNextUserMessagePersistence,
+      {
+        message: pendingPreparedUserTurnMessage,
+        recorder: preparedUserTurnTranscriptRecorder,
+        replayKey: preparedUserReplayKey,
+      },
     );
     return guardedSessionManager;
   }
@@ -268,7 +275,7 @@ export function guardSessionManager(
       const recorder =
         runtimeContext?.recorder ??
         (prepared !== undefined && prepared === pendingPreparedUserTurnMessage
-          ? opts?.preparedUserTurnTranscriptRecorder
+          ? preparedUserTurnTranscriptRecorder
           : undefined);
       if (message.role === "user") {
         opts?.onUserMessagePreparingForPersistence?.(message, recorder, prepared);
@@ -342,14 +349,16 @@ export function guardSessionManager(
     errors,
     provenance,
     suppressUserPersistence,
+    preparedUserTurn,
   ) => {
     guard.setTranscriptRunId(runId, errors);
-    if (suppressUserPersistence !== undefined) {
-      guard.setNextUserMessagePersistenceSuppression(suppressUserPersistence);
-    }
+    guard.setNextUserMessagePersistenceSuppression(suppressUserPersistence === true);
     prepareAssistantTranscriptMessage = prepare;
     skipBeforeMessageWriteHooks = skipHooks;
     inputProvenance = provenance;
+    pendingPreparedUserTurnMessage = preparedUserTurn.message;
+    preparedUserTurnTranscriptRecorder = preparedUserTurn.recorder;
+    preparedUserReplayKey = preparedUserTurn.replayKey;
   };
   return guardedSessionManager;
 }

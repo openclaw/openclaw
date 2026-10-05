@@ -84,20 +84,12 @@ function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customTh
 }
 
 function focusCustomThemeImportInput() {
-  const schedule =
-    typeof requestAnimationFrame === "function"
-      ? requestAnimationFrame
-      : (cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0);
-  schedule(() => {
-    const input = globalThis.document?.querySelector<HTMLInputElement>(
-      "[data-custom-theme-import-input]",
-    );
+  requestAnimationFrame(() => {
+    const input = document.querySelector<HTMLInputElement>("[data-custom-theme-import-input]");
     if (!input) {
       return;
     }
-    if (typeof input.scrollIntoView === "function") {
-      input.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
-    }
+    input.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
     input.focus();
     input.select();
   });

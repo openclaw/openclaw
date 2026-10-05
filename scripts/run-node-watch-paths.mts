@@ -20,6 +20,7 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   "packages/media-understanding-common/src",
   "packages/normalization-core/src",
   "packages/retry/src",
+  "packages/worker-runtime/src",
   "packages/acp-core/src",
   "packages/terminal-core/src",
   "packages/net-policy/src",

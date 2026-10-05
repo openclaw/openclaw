@@ -91,7 +91,7 @@ describe("config write guard after unreadable config", () => {
     const liveConfig = {
       gateway: { mode: "local", port: 18789, auth: { mode: "token" } },
       channels: { telegram: { enabled: true } },
-      agents: { list: [{ id: "main" }] },
+      agents: { entries: { main: {} } },
       meta: { lastTouchedVersion: "2026.5.3-1" },
     };
     const liveBytes = `${JSON.stringify(liveConfig, null, 2)}\n`;

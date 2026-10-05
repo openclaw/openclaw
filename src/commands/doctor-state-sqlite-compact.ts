@@ -37,15 +37,9 @@ type DoctorStateSqliteCompactOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-type DoctorStateSqliteCompactDeps = {
-  busyTimeoutMs?: number;
-  withMaintenanceLock?: typeof withDoctorSqliteMaintenanceLock;
-};
-
 /** Compact only the canonical shared state database resolved for this invocation. */
 export async function runDoctorStateSqliteCompact(
   options: DoctorStateSqliteCompactOptions = {},
-  deps: DoctorStateSqliteCompactDeps = {},
 ): Promise<DoctorStateSqliteCompactReport> {
   const env = options.env ?? process.env;
   const sqlitePath = resolveOpenClawStateSqlitePath(env);
@@ -61,8 +55,7 @@ export async function runDoctorStateSqliteCompact(
   if (!stat.isFile()) {
     throw new Error(`Canonical OpenClaw state database is not a regular file: ${sqlitePath}`);
   }
-  const withMaintenanceLock = deps.withMaintenanceLock ?? withDoctorSqliteMaintenanceLock;
-  return await withMaintenanceLock({
+  return await withDoctorSqliteMaintenanceLock({
     env,
     operation: "state SQLite compaction",
     protectedPaths: resolveSqliteDatabaseFilePaths(sqlitePath),
@@ -84,7 +77,6 @@ export async function runDoctorStateSqliteCompact(
           clearOpenClawStateDatabaseOpenFailure(sqlitePath);
           ensureOpenClawStatePermissions(sqlitePath, env);
         },
-        ...(deps.busyTimeoutMs !== undefined ? { busyTimeoutMs: deps.busyTimeoutMs } : {}),
         sqlitePath,
         validateBeforeMutation: (database) => {
           authority.assertCurrent();

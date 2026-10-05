@@ -64,7 +64,7 @@ import {
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { renderReplyLine, type ReplyLine } from "./chat-reply-attribution.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
   renderToolApprovalReviews,
   renderToolCard,
@@ -127,9 +127,7 @@ function renderInlineToolCards(
         return renderToolCard(card, {
           ...opts,
           expanded,
-          onToggleExpanded: opts.onToggleToolExpanded
-            ? () => opts.onToggleToolExpanded?.(disclosureId, expanded)
-            : () => undefined,
+          onToggleExpanded: () => opts.onToggleToolExpanded?.(disclosureId, expanded),
         });
       })}
     </div>
@@ -187,7 +185,6 @@ export function renderGroupedMessage(
     showToolCalls?: boolean;
     runActive?: boolean;
     asyncQuestions?: AsyncQuestionPresentation;
-    autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
     isUserMessageExpanded?: (messageId: string) => boolean;
@@ -217,13 +214,13 @@ export function renderGroupedMessage(
     githubRepo?: MarkdownRenderOptions["githubRepo"];
     githubRepositories?: MarkdownRenderOptions["githubRepositories"];
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+    fileLinkSessionKey?: string;
     avatar?: TemplateResult | typeof nothing;
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
     entryRef?: (element?: Element) => void;
     /** This message's own "Replying to" line, drawn inside the bubble. */
     replyLine?: ReplyLine;
-    onResolveReply?: (replyToId: string) => void;
     onOpenReply?: (replyToId: string) => void;
     replyNavigationId?: string | null;
   },
@@ -622,6 +619,7 @@ export function renderGroupedMessage(
       class="${bubbleClasses}"
       ${opts.entryRef ? ref(opts.entryRef) : nothing}
       data-message-id=${messageKey}
+      data-file-session-key=${opts.fileLinkSessionKey ?? nothing}
       data-entry-id=${opts.entryId || nothing}
       data-message-text=${actionText || nothing}
       .messageActions=${opts.messageActions}

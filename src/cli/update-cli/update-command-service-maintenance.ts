@@ -313,7 +313,7 @@ async function stopManagedServiceBeforeMutableUpdate(
             inspectedService,
             serviceEnv,
             params.timeoutMs,
-            params.phase === "inspect"
+            params.phase === "inspect" && !params.assertCurrent
               ? undefined
               : { managerUid: params.expectedService?.serviceManagerUid, assertCurrent },
           ),

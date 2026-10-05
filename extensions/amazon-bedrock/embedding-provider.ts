@@ -116,20 +116,7 @@ type AwsSdk = typeof import("@aws-sdk/client-bedrock-runtime");
 type AwsCredentialProvider = typeof import("@aws-sdk/credential-provider-node").defaultProvider;
 type AwsCredentialProviderLoader = () => Promise<AwsCredentialProvider | null>;
 
-let sdkPromise: Promise<AwsSdk> | null = null;
 let credentialProviderPromise: Promise<AwsCredentialProvider | null> | null = null;
-
-async function loadSdk(): Promise<AwsSdk> {
-  try {
-    return await (sdkPromise ??= import("@aws-sdk/client-bedrock-runtime"));
-  } catch {
-    sdkPromise = null;
-    throw new Error(
-      "No API key found for provider bedrock: @aws-sdk/client-bedrock-runtime is not installed. " +
-        "Install it with: npm install @aws-sdk/client-bedrock-runtime",
-    );
-  }
-}
 
 function loadDefaultCredentialProvider(): Promise<AwsCredentialProvider | null> {
   return (credentialProviderPromise ??= import("@aws-sdk/credential-provider-node")
@@ -264,7 +251,13 @@ function parseCohereBatch(family: Family, raw: Uint8Array | undefined): number[]
 export async function createBedrockEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: BedrockEmbeddingClient }> {
-  const { BedrockRuntimeClient, InvokeModelCommand } = await loadSdk();
+  const { BedrockRuntimeClient, InvokeModelCommand } =
+    await import("@aws-sdk/client-bedrock-runtime").catch(() => {
+      throw new Error(
+        "No API key found for provider bedrock: @aws-sdk/client-bedrock-runtime is not installed. " +
+          "Install it with: npm install @aws-sdk/client-bedrock-runtime",
+      );
+    });
   const client = resolveBedrockEmbeddingClient(options, BedrockRuntimeClient);
   const spec = resolveSpec(client.model);
   const family = spec?.family ?? inferFamily(client.model);

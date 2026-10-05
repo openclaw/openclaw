@@ -4,6 +4,7 @@ import type { CodexServiceTier } from "./protocol.js";
 export type ThreadOwnerToken = {
   invalidated: boolean;
   invalidate: () => void;
+  releaseAfterProtection?: () => Promise<void>;
 };
 
 export type ThreadReleaseTransition = {
@@ -35,7 +36,11 @@ export type RetainedLiveThread = {
   ephemeralPolicy?: CodexEphemeralThreadPolicy;
   serviceTier?: CodexServiceTier | null;
   expiresAt: number;
-  release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
+  release: (
+    threadId: string,
+    assertCurrent?: () => void,
+    withCurrent?: (write: () => void) => Promise<void>,
+  ) => Promise<void>;
 };
 
 export type CodexAppServerLiveThreadOwnership = {
@@ -44,7 +49,11 @@ export type CodexAppServerLiveThreadOwnership = {
   ephemeralPolicy?: CodexEphemeralThreadPolicy;
   serviceTier?: CodexServiceTier | null;
   /** Releases this active claim or the exact idle record it published. */
-  release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
+  release: (
+    threadId: string,
+    assertCurrent?: () => void,
+    withCurrent?: (write: () => void) => Promise<void>,
+  ) => Promise<void>;
   /** Forgets this local owner after native shutdown, without unsubscribing a successor. */
   forget: () => void;
 };
@@ -68,6 +77,7 @@ export function createThreadOwnerToken(
         return;
       }
       owner.invalidated = true;
+      owner.releaseAfterProtection = undefined;
       try {
         onInvalidated?.();
       } catch (error) {
@@ -184,4 +194,28 @@ export function createCodexEphemeralThreadPolicy({
     refreshableInstructions,
     nativeRefreshableInstructions: refreshableInstructions,
   };
+}
+
+/** Final process settlement releases only the exact deferred physical claim. */
+export function releaseThreadProtection(runtime: ThreadOwnershipState, threadId: string): boolean {
+  const count = runtime.protectedThreads.get(threadId) ?? 0;
+  if (count > 1) {
+    runtime.protectedThreads.set(threadId, count - 1);
+    return false;
+  }
+  runtime.protectedThreads.delete(threadId);
+  const claimed = runtime.claimedThreads.get(threadId);
+  const release = claimed?.releaseAfterProtection;
+  if (claimed) {
+    claimed.releaseAfterProtection = undefined;
+  }
+  if (release) {
+    void release().catch((error: unknown) => {
+      embeddedAgentLog.warn("codex protected thread release failed", {
+        threadId,
+        reason: formatErrorMessage(error),
+      });
+    });
+  }
+  return true;
 }

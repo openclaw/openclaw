@@ -14,7 +14,7 @@ import { useAutoCleanupTempDirTracker, withTempDir } from "openclaw/plugin-sdk/t
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexOpenClawPromptContext,
-  buildCodexWatchedSessionsContext,
+  prepareCodexWatchedSessionsContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
@@ -426,7 +426,7 @@ describe("Codex app-server attempt context", () => {
     });
   });
 
-  it("stitches watched-session context into the per-turn OpenClaw prompt context", () => {
+  it("stitches watched-session context into the per-turn OpenClaw prompt context", async () => {
     const attempt = { config: {} } as EmbeddedRunAttemptParams;
 
     expect(
@@ -441,7 +441,7 @@ describe("Codex app-server attempt context", () => {
 
     // No ambient watches (and no state) must render nothing, not an empty section.
     expect(
-      buildCodexWatchedSessionsContext({
+      await prepareCodexWatchedSessionsContext({
         attempt,
         dynamicTools: [
           {
@@ -452,6 +452,7 @@ describe("Codex app-server attempt context", () => {
           },
         ],
         sessionKey: "agent:codex-test:main",
+        assertCurrent: () => {},
       }),
     ).toBe(undefined);
   });

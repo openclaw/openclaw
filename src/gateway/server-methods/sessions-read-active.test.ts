@@ -68,7 +68,7 @@ afterEach(async () => {
 it("selects current work before pagination and represents an isolated cron run once", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} } },
     };
     const context = requestContext(config);
     const client = identifiedClient("viewer@example.test");
@@ -188,7 +188,7 @@ it.each(["global", "unknown"] as const)(
   async (sessionKey) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const config: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
         session: { scope: "global", store: state.statePath("{agentId}.sqlite") },
       };
       const sessionId = `restored-${sessionKey}`;
@@ -255,7 +255,7 @@ it.each(["global", "unknown"] as const)(
       const agents = ["main", "ops", "research", "private"] as const;
       const config: OpenClawConfig = {
         session: { scope: "global", store: state.statePath("{agentId}.sqlite") },
-        agents: { list: agents.map((id) => ({ id, ...(id === "main" ? { default: true } : {}) })) },
+        agents: { entries: Object.fromEntries(agents.map((id) => [id, {}])) },
       };
       const context = requestContext(config);
       const client = identifiedClient("viewer@example.test");

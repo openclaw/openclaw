@@ -106,17 +106,19 @@ type RowFixture = {
   name: string;
   key: string;
   entry?: InternalSessionEntry;
+  acpMeta?: SessionEntry["acp"];
   store?: Record<string, SessionEntry>;
   runs?: SubagentRunRecord[];
   transcript?: boolean;
   omitRowContext?: boolean;
+  expectedIsDock?: boolean;
   decoration?: "current" | "stale";
 };
 
 function config(): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "main", default: true, identity: { name: "Fixture agent" } }],
+      entries: { main: { identity: { name: "Fixture agent" } } },
       defaults: {
         model: { primary: "row-fixture/primary" },
         thinkingDefault: "off",
@@ -218,8 +220,9 @@ function fixtures(): RowFixture[] {
     {
       name: "single-row snapshot without an explicit swarm context",
       key: "agent:main:dashboard:single",
-      entry: BASE_ENTRY,
+      entry: { ...BASE_ENTRY, createdSurface: "plugin-dock" },
       omitRowContext: true,
+      expectedIsDock: true,
     },
     {
       name: "live status and persisted running lifecycle",
@@ -343,16 +346,14 @@ function fixtures(): RowFixture[] {
     {
       name: "ACP metadata owns the runtime",
       key: "agent:main:acp:golden",
-      entry: {
-        ...BASE_ENTRY,
-        acp: {
-          backend: "acpx",
-          agent: "fixture",
-          runtimeSessionName: "golden-acp",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: START,
-        },
+      entry: BASE_ENTRY,
+      acpMeta: {
+        backend: "acpx",
+        agent: "fixture",
+        runtimeSessionName: "golden-acp",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: START,
       },
     },
     {
@@ -500,6 +501,7 @@ test("preserves complete base rows across time and caller presentation fixtures"
         agentId: "main",
         key: fixture.key,
         entry: fixture.entry,
+        preparedAcpMeta: fixture.acpMeta ?? null,
         store: fixture.store ?? (fixture.entry ? { [fixture.key]: fixture.entry } : {}),
         storePath,
         now: TIMES[0],
@@ -552,8 +554,15 @@ test("preserves complete base rows across time and caller presentation fixtures"
       rows.forEach((row, index) => {
         expect(row.snapshotAt).toBe(TIMES[index]);
         expect(structuredClone(row).snapshotAt).toBe(TIMES[index]);
-        // Sampling metadata is additive; retain golden coverage of every existing wire field.
-        const { snapshotAt: _snapshotAt, ...previousWireFields } = row;
+        expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
+        expect(row.isDock).toBe(fixture.expectedIsDock ?? false);
+        // Assert additive fields separately while preserving the frozen wire-byte coverage.
+        const {
+          snapshotAt: _snapshotAt,
+          createdSurface: _createdSurface,
+          isDock: _isDock,
+          ...previousWireFields
+        } = row;
         const json = JSON.stringify(previousWireFields);
         const actualHash = createHash("sha256").update(json).digest("hex");
         const hashes = GOLDEN_HASHES[fixture.name];

@@ -60,6 +60,10 @@ import {
   loadAgentRestartRecoveryOperations,
   loadAgentEntryReadOperations,
   loadAgentEntryPatchOperations,
+  loadAgentCompoundOperations,
+  loadAgentNativeBindingOperations,
+  loadAgentMessageCutOperations,
+  prepareAgentNativeBindingOperation,
   loadAgentTrajectoryOperations,
   loadAgentArchiveOperations,
   loadAgentAcpOperations,
@@ -77,7 +81,10 @@ import {
   requireOpenClawStateDatabaseIdentity,
   retainOpenClawStateDatabase,
 } from "./openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 export function createSqliteWorkerBackend(
@@ -363,7 +370,15 @@ function openAgentDatabaseBackend(
     "session.entry.read": loadAgentEntryReadOperations,
     "session.entry.patch.prepare": loadAgentEntryPatchOperations,
     "session.entry.patch.commit": loadAgentEntryPatchOperations,
+    "session.turn.prepare": loadAgentCompoundOperations,
+    "session.turn.commit": loadAgentCompoundOperations,
+    "session.lifecycle.reset": loadAgentCompoundOperations,
+    "session.lifecycle.project": loadAgentCompoundOperations,
+    "session.nativeBindings.delete": loadAgentNativeBindingOperations,
+    "session.messageCut.commit": loadAgentMessageCutOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
+    "trajectory.retention.begin": loadAgentTrajectoryOperations,
+    "trajectory.retention.delete": loadAgentTrajectoryOperations,
     "session.archives.preparePublication": loadAgentArchiveOperations,
     "session.archives.recordPublication": loadAgentArchiveOperations,
     "session.transcript.initialize": loadAgentTranscriptOperations,
@@ -375,6 +390,8 @@ function openAgentDatabaseBackend(
     "conversation.delivery.begin": loadConversationDeliveryOperations,
     "conversation.delivery.transition": loadConversationDeliveryOperations,
     "session.pendingInputs.withdraw": loadAgentPendingInputOperations,
+    "session.pendingInputs.read": loadAgentPendingInputOperations,
+    "session.pendingInputs.mutate": loadAgentPendingInputOperations,
     "session.pendingInputs.interruptHistory": loadAgentPendingInputOperations,
     "session.archivePruning.deletePublished": loadAgentArchivePruningOperations,
     "session.archivePruning.pruneRetention": loadAgentArchivePruningOperations,
@@ -393,6 +410,23 @@ function openAgentDatabaseBackend(
     options,
     admit,
     writeTransaction,
+    writeSharedTransaction(source, write) {
+      const retained = expectDefined(shared, "Native binding shared-state owner");
+      const sharedIdentity = requireOpenClawStateDatabaseIdentity(retained);
+      if (
+        sharedIdentity.key !== source.key ||
+        sharedIdentity.canonicalPath !== source.canonicalPath ||
+        sharedIdentity.birthtime !== source.birthtime
+      ) {
+        throw new Error("Native binding settlement changed its captured shared-state owner");
+      }
+      assertExistingDatabaseIdentity(source.canonicalPath, source.key, source.birthtime);
+      return runOpenClawStateWriteTransaction(
+        write,
+        { database: retained, path: retained.path, env: input.environment },
+        { operationLabel: "session.native-binding.settlement" },
+      );
+    },
   };
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
@@ -466,6 +500,18 @@ function openAgentDatabaseBackend(
         return domain.prepare(command);
       }
       const preparing = registry.prepare(command.type);
+      const nativeBindings =
+        command.type === "session.nativeBindings.delete"
+          ? command.input
+          : command.type === "session.messageCut.commit"
+            ? command.input.nativeBindings
+            : undefined;
+      if (nativeBindings) {
+        return Promise.all([
+          preparing,
+          prepareAgentNativeBindingOperation(nativeBindings, input.environment),
+        ]).then(() => {});
+      }
       if (
         command.type === "session.maintenance.prepare" ||
         command.type === "session.maintenance.metadata"
@@ -509,6 +555,12 @@ function openAgentDatabaseBackend(
         throw openingFailure.error;
       }
       domain.assertSettled();
+      if (shared) {
+        assertTransactionUsable(shared.db);
+        if (!shared.db.isOpen || shared.db.isTransaction) {
+          throw new Error("Agent database command left its shared-state participant unsettled");
+        }
+      }
       if (database) {
         assertTransactionUsable(database.db);
         if (!identity || !database.db.isOpen || database.db.isTransaction) {

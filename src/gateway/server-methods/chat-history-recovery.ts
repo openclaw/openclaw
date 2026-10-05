@@ -32,7 +32,7 @@ export function resolveEmbeddedAgentRunRecoverySnapshot(params: {
   });
 }
 
-export type ChatHistoryMethod = "chat.history" | "chat.startup";
+export type ChatHistoryMethod = "chat.history" | "chat.startup" | "chat.message.get";
 
 export function respondChatHistoryUnavailable(
   method: ChatHistoryMethod,

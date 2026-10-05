@@ -17,10 +17,6 @@ type HarnessVariant = {
   id: string;
   label: string;
   runtime?: RuntimeId;
-  model?: string;
-  configPatch?: Record<string, unknown>;
-  systemPromptOverlay?: string;
-  toolDescriptionOverlay?: Record<string, string>;
 };
 
 export type HarnessParityDrift =

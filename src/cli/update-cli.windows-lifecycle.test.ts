@@ -284,7 +284,7 @@ describe("update-cli", () => {
       let taskEnabled = true;
       const nativeCommands: string[][] = [];
       vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
-        if (argv[0] === "git" && argv[3] === "rev-parse") {
+        if (argv[0] === "git" && argv[argv.indexOf("-C") + 2] === "rev-parse") {
           return commandResult({ stdout: `${root}\n` });
         }
         if (argv[0] !== "schtasks") {

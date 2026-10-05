@@ -5,13 +5,6 @@ import PeekabooAutomationKit
 import PeekabooFoundation
 import SwiftUI
 
-enum QuickChatWindowActivationPolicy: Equatable, Sendable {
-    case regular
-    case accessory
-    case prohibited
-    case unknown
-}
-
 struct QuickChatWindowCandidateInput: Equatable, Sendable {
     let windowID: Int
     let processID: Int32
@@ -19,7 +12,7 @@ struct QuickChatWindowCandidateInput: Equatable, Sendable {
     let appName: String
     let title: String
     let bounds: CGRect
-    let activationPolicy: QuickChatWindowActivationPolicy
+    let activationPolicy: ServiceApplicationActivationPolicy
     let isRenderable: Bool
 }
 
@@ -77,12 +70,6 @@ enum QuickChatCapturePickerMode {
     case area
 }
 
-private final class QuickChatWindowPickerPanel: NSPanel {
-    override var canBecomeKey: Bool {
-        true
-    }
-}
-
 @MainActor
 final class QuickChatWindowPicker {
     typealias InteractionHandler = @MainActor (Bool) -> Void
@@ -99,7 +86,7 @@ final class QuickChatWindowPicker {
     private let permissionStatusProvider: PermissionStatusProvider
     private let permissionGrantProvider: PermissionGrantProvider
 
-    private var panels: [QuickChatWindowPickerPanel] = []
+    private var panels: [QuickChatPanel] = []
     private var escapeMonitor: Any?
     private var operationID = UUID()
     private var captureTask: Task<Void, Never>?
@@ -196,8 +183,7 @@ final class QuickChatWindowPicker {
         self.operationID = UUID()
         self.discoveryTask?.cancel()
         self.discoveryTask = nil
-        self.captureTask?.cancel()
-        self.captureTask = nil
+        SimpleTaskSupport.stop(task: &self.captureTask)
         if let pipelineID = self.activePipelineID {
             self.activePipelineID = nil
             self.model.cancelCapturePipeline(pipelineID)
@@ -235,7 +221,7 @@ final class QuickChatWindowPicker {
         for application in applications {
             // Only regular apps can contribute picker candidates; querying accessory or
             // prohibited processes just burns their per-request timeout.
-            let policy = Self.activationPolicy(application.activationPolicy)
+            let policy = application.activationPolicy ?? .unknown
             guard policy == .regular, application.processIdentifier != ownProcessID else { continue }
             try Task.checkCancellation()
             guard let output = try? await self.applicationService.listWindows(
@@ -342,8 +328,8 @@ final class QuickChatWindowPicker {
         return true
     }
 
-    private static func makeOverlayPanel(frame: NSRect) -> QuickChatWindowPickerPanel {
-        let panel = QuickChatWindowPickerPanel(
+    private static func makeOverlayPanel(frame: NSRect) -> QuickChatPanel {
+        let panel = QuickChatPanel(
             contentRect: frame,
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
@@ -425,23 +411,18 @@ final class QuickChatWindowPicker {
         }
         self.captureTask = Task { [weak self] in
             guard let self else { return }
+            defer { self.clearCaptureTask(for: operationID) }
             do {
                 try await Task.sleep(for: .milliseconds(80))
                 guard self.operationID == operationID,
                       self.model.activePresentationID == presentationID,
                       !Task.isCancelled
-                else {
-                    self.clearCaptureTask(for: operationID)
-                    return
-                }
+                else { return }
                 let data = try await capture()
                 guard self.operationID == operationID,
                       self.model.activePresentationID == presentationID,
                       !Task.isCancelled
-                else {
-                    self.clearCaptureTask(for: operationID)
-                    return
-                }
+                else { return }
                 if mode == .area {
                     self.finishInteraction(invalidateOperation: false)
                 }
@@ -453,10 +434,7 @@ final class QuickChatWindowPicker {
                 guard accepted,
                       self.operationID == operationID,
                       self.model.activePresentationID == presentationID
-                else {
-                    self.clearCaptureTask(for: operationID)
-                    return
-                }
+                else { return }
                 try? await Task.sleep(for: .seconds(0.45))
                 let stillCurrent = self.operationID == operationID &&
                     self.model.activePresentationID == presentationID &&
@@ -466,7 +444,7 @@ final class QuickChatWindowPicker {
                     self.onSendAccepted()
                 }
             } catch is CancellationError {
-                self.clearCaptureTask(for: operationID)
+                return
             } catch {
                 // A stale operation cannot fail or restore a newer capture's presentation.
                 self.model.failCapturePipeline(pipelineID)
@@ -502,17 +480,6 @@ final class QuickChatWindowPicker {
             panel.orderOut(nil)
         }
         self.panels.removeAll()
-    }
-
-    private static func activationPolicy(
-        _ policy: ServiceApplicationActivationPolicy?) -> QuickChatWindowActivationPolicy
-    {
-        switch policy {
-        case .regular: .regular
-        case .accessory: .accessory
-        case .prohibited: .prohibited
-        case .unknown, nil: .unknown
-        }
     }
 }
 

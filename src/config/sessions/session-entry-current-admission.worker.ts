@@ -65,7 +65,7 @@ function createCurrentEntryRead(
               projection: "list",
             })?.entry
           : lookup === "logical"
-            ? readSessionEntryRow(database, sessionKey, "full")?.entry
+            ? readSessionEntryRow(database, sessionKey, "list")?.entry
             : readExactSessionEntryRow(database, sessionKey, "list", "canonical")?.entry;
       if (options.projection === "capability") {
         entry = current ? projectSessionEntryCapabilityFacts(current) : undefined;
@@ -74,6 +74,7 @@ function createCurrentEntryRead(
       entry = current
         ? {
             sessionId: current.sessionId,
+            previousSessionId: current.previousSessionId,
             ...(current.archivedAt === undefined ? {} : { archivedAt: current.archivedAt }),
             ...(current.repositoryWorkspaceId === undefined
               ? {}

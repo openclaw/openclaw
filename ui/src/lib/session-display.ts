@@ -72,6 +72,15 @@ type SessionWorktreeDisplayRow = {
   spawnedCwd?: string;
 };
 
+function resolveWorktreeBranch(row: SessionWorktreeDisplayRow): string | undefined {
+  const branch =
+    normalizeOptionalString(row.repository?.branch) ??
+    normalizeOptionalString(row.worktree?.branch);
+  return !row.repository && branch?.startsWith(WORKTREE_BRANCH_PREFIX)
+    ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
+    : branch;
+}
+
 export type SessionWorkContext =
   | { kind: "project"; name: string; path: string; cwd?: string; branch?: string }
   | { kind: "workspace"; name: string; path: string };
@@ -91,19 +100,13 @@ export function resolveSessionWorkContext(
         : undefined;
     const repositoryDirectory =
       remoteDirectory ?? (row.execNode ? normalizeOptionalString(row.execCwd) : undefined);
-    const branch =
-      normalizeOptionalString(row.repository?.branch) ??
-      normalizeOptionalString(row.worktree?.branch);
     return {
       kind: "project",
       name: pathDisplayName(repoRoot),
       // Project grouping uses the source repository, not this task checkout.
       path: repoRoot,
       cwd: row.repository ? repositoryDirectory : normalizeOptionalString(row.spawnedCwd),
-      branch:
-        !row.repository && branch?.startsWith(WORKTREE_BRANCH_PREFIX)
-          ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
-          : branch,
+      branch: resolveWorktreeBranch(row),
     };
   }
 
@@ -125,13 +128,7 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   const repoRoot =
     normalizeOptionalString(row.repository?.url.replace(/\.git$/u, "")) ??
     normalizeOptionalString(row.worktree?.repoRoot);
-  const rawBranch =
-    normalizeOptionalString(row.repository?.branch) ??
-    normalizeOptionalString(row.worktree?.branch);
-  const branch =
-    !row.repository && rawBranch?.startsWith(WORKTREE_BRANCH_PREFIX)
-      ? rawBranch.slice(WORKTREE_BRANCH_PREFIX.length)
-      : rawBranch;
+  const branch = resolveWorktreeBranch(row);
   const checkout = repoRoot
     ? branch
       ? `${pathDisplayName(repoRoot)} ⎇ ${branch}`

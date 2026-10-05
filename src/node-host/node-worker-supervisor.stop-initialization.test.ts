@@ -3,7 +3,9 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
+import type { NodeWorkerWorkspaceExecInput } from "../worker/node-workspace-protocol.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import {
@@ -13,6 +15,7 @@ import {
 } from "./node-worker-process-identity.js";
 import { createNodeWorkerContainerFixture } from "./node-worker-supervisor.container.test-support.js";
 import {
+  createNodeWorkerSupervisorFixture,
   waitForChildExit,
   waitForChildLine,
   waitForIdentityDeath,
@@ -26,11 +29,83 @@ import {
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 import { inspectOwnedNodeWorkerTree } from "./node-worker-tree-control.js";
+import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useStateDatabaseTempDirs();
 const fileLockModule = createRequire(import.meta.url).resolve("@openclaw/fs-safe/file-lock");
 
 describe("node worker environment stop after failed initialization", () => {
+  it.each([false, true])(
+    "holds workspace admission through supervisor settlement (fails: %s)",
+    async (fails) => {
+      const root = tempDirs.make("node-worker-stop-settlement-");
+      const workspace = new NodeWorkerWorkspaceRuntime({
+        root,
+        env: {
+          PATH: path.dirname(process.execPath),
+          HOME: root,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+        },
+      });
+      const { supervisor } = createNodeWorkerSupervisorFixture(root, { workspace });
+      const entered = createDeferred();
+      const finish = createDeferred();
+      const failure = new Error("worker journal cleanup is uncertain");
+      const initialize = supervisor.initialize.bind(supervisor);
+      vi.spyOn(supervisor, "initialize").mockImplementationOnce(async () => {
+        entered.resolve();
+        await finish.promise;
+        if (fails) {
+          throw failure;
+        }
+        await initialize();
+      });
+      const identity = {
+        gatewayNamespace: "gateway-preview",
+        environmentId: "worker:preview",
+        sessionId: "conversation-preview",
+        generation: 1,
+      };
+      const command: NodeWorkerWorkspaceExecInput = {
+        ...identity,
+        nativeProcessOwner: true,
+        argv: [path.basename(process.execPath), "-e", "process.stdout.write('fresh')"],
+      };
+      const stopping = supervisor.stopEnvironment({ ...identity, ownerEpoch: 1 });
+      void stopping.catch(() => undefined);
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          stopping,
+          "supervisor cleanup did not begin",
+        );
+        await expect(workspace.exec(command)).rejects.toThrow("retired");
+        expect(() =>
+          supervisor.observeProcesses({
+            ...identity,
+            ownerEpoch: 1,
+            placementGeneration: 1,
+            expectedBundleHash: "a".repeat(64),
+            operation: { action: "list" },
+          }),
+        ).toThrow("retired");
+        finish.resolve();
+        if (fails) {
+          await expect(stopping).rejects.toBe(failure);
+          await expect(workspace.exec(command)).rejects.toThrow("retired");
+          await supervisor.stopEnvironment({ ...identity, ownerEpoch: 1 });
+        } else {
+          await stopping;
+        }
+        expect((await workspace.exec(command)).stdout).toBe("fresh");
+      } finally {
+        finish.resolve();
+        await stopping.catch(() => undefined);
+        await supervisor.close();
+      }
+    },
+  );
+
   it.runIf(process.platform === "linux" || process.platform === "darwin")(
     "settles native recovery without publishing capacity until the unrelated container recovers",
     async () => {

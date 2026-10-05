@@ -107,12 +107,6 @@ export type CommandNormalizeOptions = {
   targetedCommandMode?: "pre-identity";
 };
 
-/** Cached exact/regex command detector built from current registry aliases. */
-export type CommandDetection = {
-  exact: Set<string>;
-  regex: RegExp;
-};
-
 /** Inputs for deciding whether text slash commands should run on a surface. */
 export type ShouldHandleTextCommandsParams = {
   cfg: OpenClawConfig;

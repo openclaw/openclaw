@@ -385,6 +385,10 @@ export type AgentHarnessResultClassification =
 export type AgentHarnessDeliveryDefaults = {
   /** Default visible-reply policy when config does not override the harness. */
   visibleReplies?: "automatic" | "message_tool";
+  /**
+   * @deprecated Use visibleReplies. Kept for existing harness plugins.
+   */
+  sourceVisibleReplies?: "automatic" | "message_tool";
 };
 
 /** Exact node authority and worker capacity required by one paired-device runtime. */
@@ -539,6 +543,7 @@ type AgentHarnessContract<
 
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
 
+  /** Throw AgentHarnessSessionCleanupError when required cleanup must block session replacement. */
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
   /** Invalidate native context only when a same-key history cut commits; preserve compaction. */
   withSessionContextReset?<T>(
@@ -610,6 +615,17 @@ type AgentHarnessContract<
   loadModelCatalog?(
     params: AgentHarnessModelCatalogParams,
   ): Promise<AgentHarnessModelCatalogResult>;
+  /**
+   * Narrows resolved picker tiers for this runtime. Synchronous, no I/O or discovery;
+   * return a subset without mutating inputs. This does not grant execution authority.
+   */
+  filterModelServiceTiers?(params: {
+    config: OpenClawConfig;
+    agentId?: string;
+    provider: string;
+    modelId: string;
+    serviceTiers: readonly string[];
+  }): readonly string[];
   /**
    * Reads current, secret-free native account evidence for this exact catalog scope/model.
    * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is

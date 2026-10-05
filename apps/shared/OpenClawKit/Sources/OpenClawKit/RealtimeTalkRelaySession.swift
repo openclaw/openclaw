@@ -724,17 +724,8 @@ extension RealtimeTalkRelaySession {
             self.hasReceivedReady = true
             self.finishStartupWait(.ready)
             self.onStatus("Listening (Realtime)")
-        case "audio":
-            self.output.withLock { $0.handleOutputAudio(payload) }
-            self.drainOutputEffects()
-        case "audioDone":
-            self.output.withLock { $0.handleOutputAudioDone(payload) }
-            self.drainOutputEffects()
-        case "clear":
-            self.output.withLock { $0.handleOutputClear(payload) }
-            self.drainOutputEffects()
-        case "mark":
-            self.output.withLock { $0.handlePlaybackMark(payload) }
+        case "audio", "audioDone", "clear", "mark":
+            self.output.withLock { _ = $0.handleAudioEvent(event) }
             self.drainOutputEffects()
         case "transcript":
             self.handleTranscriptEvent(payload)
@@ -904,7 +895,6 @@ extension RealtimeTalkRelaySession {
                     method: "talk.client.toolCall",
                     payload: startPayload,
                     decodeAs: ToolCallStartResponse.self,
-                    timeoutSeconds: 30,
                     lifecycleGeneration: lifecycleGeneration)
                 guard let runId = startResponse.runId ?? startResponse.idempotencyKey else {
                     throw NSError(domain: "RealtimeTalkRelay", code: 3, userInfo: [
@@ -914,8 +904,7 @@ extension RealtimeTalkRelaySession {
                 }
                 let completion = await self.waitForChatCompletion(
                     runId: runId,
-                    stream: completionStream,
-                    timeoutSeconds: 120)
+                    stream: completionStream)
                 try await self.ensureCurrentLifecycle(lifecycleGeneration)
                 result = completion.failed
                     ? ["error": AnyCodable("OpenClaw tool call failed")]
@@ -970,7 +959,6 @@ extension RealtimeTalkRelaySession {
             method: "talk.session.steer",
             payload: payload,
             decodeAs: AnyCodable.self,
-            timeoutSeconds: 30,
             lifecycleGeneration: lifecycleGeneration)
         try await self.ensureCurrentLifecycle(lifecycleGeneration)
         return response.dictionaryValue ?? ["result": response]
@@ -991,14 +979,12 @@ extension RealtimeTalkRelaySession {
             method: "talk.session.submitToolResult",
             payload: payload,
             decodeAs: TalkSessionOkResult.self,
-            timeoutSeconds: 30,
             lifecycleGeneration: lifecycleGeneration)
     }
 
     private func waitForChatCompletion(
         runId: String,
-        stream: AsyncStream<EventFrame>,
-        timeoutSeconds: Int) async -> ChatCompletionResult
+        stream: AsyncStream<EventFrame>) async -> ChatCompletionResult
     {
         await withTaskGroup(of: ChatCompletionResult.self) { group in
             group.addTask {
@@ -1023,7 +1009,7 @@ extension RealtimeTalkRelaySession {
                 return ChatCompletionResult(text: nil, failed: true)
             }
             group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: 120 * 1_000_000_000)
                 return ChatCompletionResult(text: nil, failed: true)
             }
             let result = await group.next() ?? ChatCompletionResult(text: nil, failed: true)
@@ -1036,11 +1022,10 @@ extension RealtimeTalkRelaySession {
         method: String,
         payload: [String: AnyCodable],
         decodeAs type: T.Type,
-        timeoutSeconds: Int,
         lifecycleGeneration: UInt64) async throws -> T
     {
         try await self.ensureCurrentLifecycle(lifecycleGeneration)
-        let response = try await self.transport.request(method, payload, Double(timeoutSeconds * 1000))
+        let response = try await self.transport.request(method, payload, 30000)
         try await self.ensureCurrentLifecycle(lifecycleGeneration)
         return try JSONDecoder().decode(type, from: response)
     }

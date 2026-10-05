@@ -145,21 +145,35 @@ async function resolveCloudflareAccessIdentity(
   };
 }
 
-async function resolveGitHubUserIdentityByLogin(
+export async function resolveGitHubUserIdentityByLogin(
   username: string,
+  options?: { signal?: AbortSignal; allowAnonymousRetry?: boolean },
 ): Promise<ResolvedGitHubUserIdentity> {
   const requestedLogin = normalizeGitHubLogin(username);
   if (!requestedLogin) {
     throw new TypeError("GitHub username is invalid");
   }
-  const token = githubApiToken();
+  const token = githubApiToken(process.env, undefined, "github.com");
   let payload: unknown;
   try {
-    payload = await gitHubPublicApi.fetchGitHubJson(
-      `${gitHubPublicApi.GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
-      fetch,
-      token,
-    );
+    const request = async (requestToken: string | undefined) => {
+      const response = await gitHubPublicApi.fetchGitHubApi(
+        `${gitHubPublicApi.GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
+        fetch,
+        requestToken,
+        undefined,
+        undefined,
+        undefined,
+        options?.signal,
+        undefined,
+        gitHubPublicApi.GITHUB_API_ORIGIN,
+      );
+      return await gitHubPublicApi.readGitHubJsonResponse(response);
+    };
+    payload =
+      options?.allowAnonymousRetry === false
+        ? await request(token)
+        : await gitHubPublicApi.withOptionalGitHubAuth(token, request);
   } catch (error) {
     if (error instanceof gitHubPublicApi.ControlUiGitHubError) {
       throw error;
@@ -217,6 +231,9 @@ function resolveGitHubUserIdentityById(
           undefined,
           undefined,
           cached?.etag,
+          undefined,
+          undefined,
+          gitHubPublicApi.GITHUB_API_ORIGIN,
         );
         let identity: ResolvedGitHubUserIdentity;
         if (response.status === 304 && cached?.etag) {
@@ -331,7 +348,7 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     }
     const identityBinding = { accountId, email: access.principal };
     // Service auth raises public-data quota; Access still owns the signed-in account id.
-    const token = githubApiToken();
+    const token = githubApiToken(process.env, undefined, "github.com");
     let lookup: GitHubIdentityLookup;
     try {
       lookup = await gitHubPublicApi.withOptionalGitHubAuth(token, (requestToken) =>

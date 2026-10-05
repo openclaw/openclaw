@@ -25,7 +25,7 @@ import { runMainOrRootHelp } from "./entry.js";
 import { openNodeSqliteDatabase } from "./infra/node-sqlite.js";
 import { resetLogger, setLoggerOverride } from "./logging/logger.js";
 import { createPluginCliLoadSession } from "./plugins/cli-registry-loader.js";
-import { registerPluginCliCommands } from "./plugins/cli.js";
+import { registerPluginCliCommandsFromValidatedConfig } from "./plugins/cli.js";
 import { createPluginCache, retirePluginCache } from "./plugins/plugin-cache.js";
 import { createDeferredCore } from "./shared/deferred.js";
 
@@ -98,9 +98,8 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
               const session = createPluginCliLoadSession(cache, { resources });
               try {
                 await session.withCache(async () => {
-                  await registerPluginCliCommands(
+                  await registerPluginCliCommandsFromValidatedConfig(
                     program,
-                    config,
                     fixtureEnv,
                     { pluginSdkResolution: "src" },
                     { primary: "memory", session },

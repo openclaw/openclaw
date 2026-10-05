@@ -53,17 +53,11 @@ export function toFiniteScore(value: unknown, fallback: number): number {
 
 export function isGenericDailyHeading(heading: string): boolean {
   const normalized = heading.trim().replace(/\s+/g, " ");
-  if (!normalized) {
-    return true;
-  }
-  const lower = normalized.toLowerCase();
-  if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
-    return true;
-  }
-  if (lower === "morning" || lower === "afternoon" || lower === "evening" || lower === "night") {
-    return true;
-  }
-  return GENERIC_DAY_HEADING_RE.test(normalized);
+  return (
+    !normalized ||
+    /^(today|yesterday|tomorrow|morning|afternoon|evening|night)$/i.test(normalized) ||
+    GENERIC_DAY_HEADING_RE.test(normalized)
+  );
 }
 
 export function normalizeSnippet(raw: string): string {
@@ -72,17 +66,11 @@ export function normalizeSnippet(raw: string): string {
 
 const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 
-function resolvePromotedSnippetCharLimit(maxTokens: number): number {
-  const tokenLimit = toFiniteNonNegativeInt(
-    maxTokens,
-    DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-  );
-  // This is an inexpensive display-size guard, not a tokenizer contract.
-  return tokenLimit * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
-}
-
 function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
-  const limit = resolvePromotedSnippetCharLimit(maxTokens);
+  // This is an inexpensive display-size guard, not a tokenizer contract.
+  const limit =
+    toFiniteNonNegativeInt(maxTokens, DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS) *
+    PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
   if (limit === 0 || snippet.length <= limit) {
     return snippet;
   }
@@ -278,16 +266,8 @@ export function normalizeIsoDay(isoLike: string): string | null {
   return match?.[1] ?? null;
 }
 
-export function totalSignalCountForEntry(entry: {
-  recallCount?: number;
-  dailyCount?: number;
-  groundedCount?: number;
-}): number {
-  return (
-    Math.max(0, Math.floor(entry.recallCount ?? 0)) +
-    Math.max(0, Math.floor(entry.dailyCount ?? 0)) +
-    Math.max(0, Math.floor(entry.groundedCount ?? 0))
-  );
+export function totalSignalCountForEntry(entry: ShortTermRecallEntry): number {
+  return entry.recallCount + entry.dailyCount + entry.groundedCount;
 }
 
 export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): ShortTermRecallStore {
@@ -506,16 +486,12 @@ export function calculateRecencyComponent(ageDays: number, halfLifeDays: number)
 
 export function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
-  if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
-    return false;
-  }
-  if (SHORT_TERM_PATH_RE.test(normalized)) {
-    return true;
-  }
-  if (SHORT_TERM_SESSION_CORPUS_RE.test(normalized)) {
-    return true;
-  }
-  return SHORT_TERM_BASENAME_RE.test(normalized);
+  return (
+    !DREAMING_MEMORY_PATH_RE.test(normalized) &&
+    (SHORT_TERM_PATH_RE.test(normalized) ||
+      SHORT_TERM_SESSION_CORPUS_RE.test(normalized) ||
+      SHORT_TERM_BASENAME_RE.test(normalized))
+  );
 }
 
 export function isShortTermSessionCorpusPath(filePath: string): boolean {

@@ -116,7 +116,9 @@ vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
   closeOpenClawAgentDatabaseByPath: edge.nativeClose,
   retainAgentDatabase: () => edge.releaseAgent,
 }));
-vi.mock("./openclaw-state-db.js", () => ({ openOpenClawStateDatabase: () => ({}) }));
+vi.mock("./openclaw-state-db.js", () => ({
+  openOpenClawStateDatabase: () => ({ db: { isOpen: true, isTransaction: false } }),
+}));
 vi.mock("./openclaw-state-db-cache.js", () => ({
   requireOpenClawStateDatabaseIdentity: () => ({ key: "file:state" }),
   retainOpenClawStateDatabase: () => ({
@@ -368,7 +370,11 @@ it.each([
       expect(settleNative).not.toHaveBeenCalled();
       retired.resolve();
       const failure = await completion.promise;
-      expect(settleNative).toHaveBeenCalledExactlyOnceWith({ kind: "unknown", error: failure });
+      expect(settleNative).toHaveBeenCalledExactlyOnceWith({
+        kind: "unknown",
+        error: failure,
+        nativeStopped: true,
+      });
       if (outcome === "direct refusal") {
         expect(failure).toBe(refused);
       } else {
@@ -459,6 +465,7 @@ describe("committed agent registration across failed native opening", () => {
         expect(settleNative).toHaveBeenCalledExactlyOnceWith({
           kind: "unknown",
           error: expect.objectContaining({ message: openingError.message }),
+          nativeStopped: true,
         });
         expect(failure).toMatchObject({
           cause: {
@@ -527,6 +534,7 @@ describe("committed agent registration across failed native opening", () => {
         expect(settleNative).toHaveBeenCalledExactlyOnceWith({
           kind: "unknown",
           error: expect.objectContaining({ message: cleanupFailure.message }),
+          nativeStopped: true,
         });
       } finally {
         retired.resolve();
@@ -602,6 +610,7 @@ describe("committed agent registration across failed native opening", () => {
       expect(settleNative).toHaveBeenCalledExactlyOnceWith({
         kind: "unknown",
         error: expect.objectContaining({ message: reply.error.message }),
+        nativeStopped: true,
       });
     },
   );

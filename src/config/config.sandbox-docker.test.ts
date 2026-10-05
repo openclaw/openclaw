@@ -1,13 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
   DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS,
-  resolveSandboxBrowserConfig,
-  resolveSandboxDockerConfig,
+  resolveSandboxConfigForAgent,
 } from "../agents/sandbox/config.js";
+import type { AgentSandboxConfig } from "./types.agents-shared.js";
 import { validateConfigObject } from "./validation.js";
 
 function validateSandbox(kind: "docker" | "browser", value: Record<string, unknown>) {
   return validateConfigObject({ agents: { defaults: { sandbox: { [kind]: value } } } });
+}
+
+function resolveSandbox(defaults: AgentSandboxConfig, agent: AgentSandboxConfig = {}) {
+  return resolveSandboxConfigForAgent(
+    { agents: { defaults: { sandbox: defaults }, entries: { test: { sandbox: agent } } } },
+    "test",
+  );
 }
 
 describe("sandbox docker config", () => {
@@ -83,50 +90,38 @@ describe("sandbox docker config", () => {
 
   it("uses agent override precedence for dangerous sandbox docker booleans", () => {
     for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
-      const inherited = resolveSandboxDockerConfig({
-        scope: "agent",
-        globalDocker: { [key]: true },
-        agentDocker: {},
-      });
+      const inherited = resolveSandbox({ scope: "agent", docker: { [key]: true } }).docker;
       expect(inherited[key]).toBe(true);
 
-      const overridden = resolveSandboxDockerConfig({
-        scope: "agent",
-        globalDocker: { [key]: true },
-        agentDocker: { [key]: false },
-      });
+      const overridden = resolveSandbox(
+        { scope: "agent", docker: { [key]: true } },
+        { docker: { [key]: false } },
+      ).docker;
       expect(overridden[key]).toBe(false);
 
-      const sharedScope = resolveSandboxDockerConfig({
-        scope: "shared",
-        globalDocker: { [key]: true },
-        agentDocker: { [key]: false },
-      });
+      const sharedScope = resolveSandbox(
+        { scope: "shared", docker: { [key]: true } },
+        { docker: { [key]: false } },
+      ).docker;
       expect(sharedScope[key]).toBe(true);
     }
   });
   it("ignores agent browser binds under shared scope", () => {
-    const resolved = resolveSandboxBrowserConfig({
-      scope: "shared",
-      globalBrowser: { binds: ["/global:/global:ro"] },
-      agentBrowser: { binds: ["/agent:/agent:rw"] },
-    });
+    const resolved = resolveSandbox(
+      { scope: "shared", browser: { binds: ["/global:/global:ro"] } },
+      { browser: { binds: ["/agent:/agent:rw"] } },
+    ).browser;
     expect(resolved.binds).toEqual(["/global:/global:ro"]);
 
-    const resolvedNoGlobal = resolveSandboxBrowserConfig({
-      scope: "shared",
-      globalBrowser: {},
-      agentBrowser: { binds: ["/agent:/agent:rw"] },
-    });
+    const resolvedNoGlobal = resolveSandbox(
+      { scope: "shared", browser: {} },
+      { browser: { binds: ["/agent:/agent:rw"] } },
+    ).browser;
     expect(resolvedNoGlobal.binds).toBeUndefined();
   });
 
   it("defaults browser network to dedicated sandbox network", () => {
-    const resolved = resolveSandboxBrowserConfig({
-      scope: "agent",
-      globalBrowser: {},
-      agentBrowser: {},
-    });
+    const resolved = resolveSandbox({ scope: "agent", browser: {} }).browser;
     expect(resolved.network).toBe("openclaw-sandbox-browser");
   });
 });

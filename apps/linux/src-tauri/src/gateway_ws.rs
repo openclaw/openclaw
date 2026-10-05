@@ -333,7 +333,6 @@ struct RequestFailure {
     disconnect: bool,
     connect_details: ConnectErrorDetails,
     connect_state: Option<GatewayConnectionState>,
-    tls_failure: bool,
 }
 
 impl RequestFailure {
@@ -343,13 +342,12 @@ impl RequestFailure {
             disconnect: true,
             connect_details: ConnectErrorDetails::default(),
             connect_state: None,
-            tls_failure: false,
         }
     }
 
     fn tls(message: impl Into<String>) -> Self {
         Self {
-            tls_failure: true,
+            connect_state: Some(GatewayConnectionState::TlsFailure),
             ..Self::transport(message)
         }
     }
@@ -360,12 +358,12 @@ impl RequestFailure {
             disconnect: false,
             connect_details: ConnectErrorDetails::from_value(details),
             connect_state: None,
-            tls_failure: false,
         }
     }
 
     fn classify_connect(mut self, auth: &GatewayAuth) -> Self {
-        self.connect_state = classify_connect_failure(self.connect_details.code(), !auth.is_none());
+        self.connect_state = classify_connect_failure(self.connect_details.code(), !auth.is_none())
+            .or(self.connect_state);
         self
     }
 
@@ -1084,15 +1082,9 @@ impl GatewayClient {
             let failure = connection_result.as_ref().err();
             let disconnected_state = failure
                 .and_then(|failure| failure.connect_state)
-                .or_else(|| {
-                    failure
-                        .is_some_and(|failure| failure.tls_failure)
-                        .then_some(GatewayConnectionState::TlsFailure)
-                })
                 .unwrap_or(GatewayConnectionState::Down);
-            let pause_reconnect = failure
-                .map(|failure| should_pause_reconnect(&failure.connect_details))
-                .unwrap_or(false);
+            let pause_reconnect =
+                failure.is_some_and(|failure| failure.connect_details.should_pause_reconnect());
             let notice = failure.and_then(|failure| {
                 connection_notice(
                     disconnected_state,
@@ -1704,10 +1696,6 @@ fn classify_connect_failure(
     credential_required.then_some(GatewayConnectionState::CredentialRequired)
 }
 
-fn should_pause_reconnect(details: &ConnectErrorDetails) -> bool {
-    details.should_pause_reconnect()
-}
-
 fn short_device_id(device_id: &str) -> Option<String> {
     let short = device_id
         .chars()
@@ -1939,55 +1927,46 @@ async fn perform_session_request(
     request: GatewayRequest,
     deadline: Instant,
 ) -> Result<GatewayResponse, RequestFailure> {
+    let generation = match &request {
+        GatewayRequest::AgentsList => GatewayGeneration(connection_generation),
+        GatewayRequest::ChatSend { generation, .. }
+        | GatewayRequest::ChatHistory { generation, .. }
+        | GatewayRequest::RefreshCanvasSurface { generation, .. } => *generation,
+        #[cfg(target_os = "linux")]
+        GatewayRequest::Desktop { generation, .. } => GatewayGeneration(*generation),
+        #[cfg(target_os = "linux")]
+        GatewayRequest::SuspendPrepare { route, .. }
+        | GatewayRequest::SuspendResume { route, .. } => GatewayGeneration(route.generation),
+    };
+    let authority = RequestDispatch {
+        generation,
+        connection_generation,
+        deadline: match &request {
+            GatewayRequest::ChatHistory { deadline, .. } => *deadline,
+            _ => deadline,
+        },
+        #[cfg(target_os = "linux")]
+        sleep_route: None,
+    };
     match request {
         #[cfg(target_os = "linux")]
-        GatewayRequest::Desktop {
-            generation,
-            method,
-            params,
-        } => request_on_session(
-            client,
-            session,
-            method.name(),
-            params,
-            RequestDispatch {
-                generation: GatewayGeneration(generation),
-                connection_generation,
-                deadline,
-                sleep_route: None,
-            },
-        )
-        .await
-        .map(GatewayResponse::Desktop),
+        GatewayRequest::Desktop { method, params, .. } => {
+            request_on_session(client, session, method.name(), params, authority)
+                .await
+                .map(GatewayResponse::Desktop)
+        }
         GatewayRequest::AgentsList => request_agents_list_session(session, deadline)
             .await
             .map(GatewayResponse::AgentsList),
-        GatewayRequest::ChatSend { params, generation } => {
+        GatewayRequest::ChatSend { params, .. } => {
             let params = serde_json::to_value(params).map_err(|error| {
                 RequestFailure::transport(format!("Could not encode chat.send: {error}"))
             })?;
-            request_on_session(
-                client,
-                session,
-                "chat.send",
-                params,
-                RequestDispatch {
-                    generation,
-                    connection_generation,
-                    deadline,
-                    #[cfg(target_os = "linux")]
-                    sleep_route: None,
-                },
-            )
-            .await
-            .map(GatewayResponse::ChatSend)
+            request_on_session(client, session, "chat.send", params, authority)
+                .await
+                .map(GatewayResponse::ChatSend)
         }
-        GatewayRequest::ChatHistory {
-            target,
-            generation,
-            offset,
-            deadline,
-        } => {
+        GatewayRequest::ChatHistory { target, offset, .. } => {
             let mut params = json!({
                 "sessionKey": target.session_key,
                 "limit": 200,
@@ -2002,20 +1981,8 @@ async fn perform_session_request(
             }
             // Decode this optional method as data so unsupported/malformed history cannot
             // turn a successfully completed send into a broken connection or another send.
-            let value: Value = request_on_session(
-                client,
-                session,
-                "chat.history",
-                params,
-                RequestDispatch {
-                    generation,
-                    connection_generation,
-                    deadline,
-                    #[cfg(target_os = "linux")]
-                    sleep_route: None,
-                },
-            )
-            .await?;
+            let value: Value =
+                request_on_session(client, session, "chat.history", params, authority).await?;
             serde_json::from_value(value)
                 .map(GatewayResponse::ChatHistory)
                 .map_err(|_| {
@@ -2025,28 +1992,14 @@ async fn perform_session_request(
                     )
                 })
         }
-        GatewayRequest::RefreshCanvasSurface {
-            observed_url,
-            generation,
-        } => {
+        GatewayRequest::RefreshCanvasSurface { observed_url, .. } => {
             let mut params = json!({ "surface": "canvas" });
             if let Some(observed_url) = observed_url {
                 params["observedUrl"] = Value::String(observed_url);
             }
-            let response: PluginSurfaceRefreshResponse = request_on_session(
-                client,
-                session,
-                "plugin.surface.refresh",
-                params,
-                RequestDispatch {
-                    generation,
-                    connection_generation,
-                    deadline,
-                    #[cfg(target_os = "linux")]
-                    sleep_route: None,
-                },
-            )
-            .await?;
+            let response: PluginSurfaceRefreshResponse =
+                request_on_session(client, session, "plugin.surface.refresh", params, authority)
+                    .await?;
             let canvas = response
                 .plugin_surface_urls
                 .and_then(|urls| urls.get("canvas").cloned())
@@ -2061,10 +2014,8 @@ async fn perform_session_request(
             "gateway.suspend.prepare",
             json!({ "requestId": request_id }),
             RequestDispatch {
-                generation: GatewayGeneration(route.generation),
                 sleep_route: Some(route),
-                connection_generation,
-                deadline,
+                ..authority
             },
         )
         .await
@@ -2079,10 +2030,8 @@ async fn perform_session_request(
             "gateway.suspend.resume",
             json!({ "suspensionId": suspension_id }),
             RequestDispatch {
-                generation: GatewayGeneration(route.generation),
                 sleep_route: Some(route),
-                connection_generation,
-                deadline,
+                ..authority
             },
         )
         .await
@@ -3209,7 +3158,7 @@ esac
                 fs::write(self.directory.join("dashboard.json"), response.to_string())
                     .expect("write dashboard response");
                 let cli = OpenClawCli::discover().expect("discover fixture CLI");
-                gateway::ensure_ready(&cli)
+                gateway::dashboard(&cli, gateway::status(&cli)?)
             }
         }
 
@@ -4075,8 +4024,12 @@ esac
     #[test]
     fn tls_failures_have_a_distinct_connectivity_state() {
         let failure =
-            RequestFailure::from_shared(SharedClientError::Tls("fixture TLS failure".to_string()));
-        assert!(failure.tls_failure);
+            RequestFailure::from_shared(SharedClientError::Tls("fixture TLS failure".to_string()))
+                .classify_connect(&GatewayAuth::None);
+        assert_eq!(
+            failure.connect_state,
+            Some(GatewayConnectionState::TlsFailure)
+        );
         assert_eq!(
             GatewayConnectionState::TlsFailure.event_name(),
             "tls-failure"
@@ -4394,7 +4347,7 @@ esac
                 failure.connect_state,
                 Some(GatewayConnectionState::CredentialRequired)
             );
-            assert!(should_pause_reconnect(&failure.connect_details));
+            assert!(failure.connect_details.should_pause_reconnect());
             assert!(!should_clear_stored_device_token(&failure, &auth));
             let state = failure.connect_state.expect("classified state");
             let notice = connection_notice(state, &failure.connect_details, true);
@@ -4448,18 +4401,18 @@ esac
     fn reconnect_pause_requires_explicit_server_policy() {
         let pause_details = json!({ "pauseReconnect": true });
         let paused = RequestFailure::method_with_details("pause", Some(&pause_details));
-        assert!(should_pause_reconnect(&paused.connect_details));
+        assert!(paused.connect_details.should_pause_reconnect());
 
         let terminal_details = json!({ "retryable": false });
         let terminal = RequestFailure::method_with_details("terminal", Some(&terminal_details));
-        assert!(should_pause_reconnect(&terminal.connect_details));
+        assert!(terminal.connect_details.should_pause_reconnect());
 
         let retry_details = json!({ "retryable": true, "pauseReconnect": false });
         let retry = RequestFailure::method_with_details("retry", Some(&retry_details));
-        assert!(!should_pause_reconnect(&retry.connect_details));
-        assert!(!should_pause_reconnect(
-            &RequestFailure::transport("transport").connect_details
-        ));
+        assert!(!retry.connect_details.should_pause_reconnect());
+        assert!(!RequestFailure::transport("transport")
+            .connect_details
+            .should_pause_reconnect());
     }
 
     #[test]

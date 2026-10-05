@@ -38,7 +38,6 @@ import {
   registerProviderAuthRuntimeSnapshotActivationOwner,
 } from "../secrets/runtime-state.js";
 import { logRuntimeSecretWarnings } from "../secrets/runtime-warning-log.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
 import {
   assertRuntimeGatewayAuthNotKnownWeak,
   hasActiveGatewayAuthSecretRef,
@@ -98,12 +97,6 @@ export function createRuntimeSecretsActivator(params: {
   const deferredStateTransitions = new WeakMap<object, DeferredSecretsStateTransition>();
   let pendingDeferredLineageRevision: number | null = null;
   let secretsActivationTail: Promise<void> = Promise.resolve();
-  const loadSecretsRuntime = createLazyPromise(() => import("../secrets/runtime.js"), {
-    cacheRejections: true,
-  });
-  const loadAuthProfiles = createLazyPromise(() => import("../agents/auth-profiles.js"), {
-    cacheRejections: true,
-  });
   const startupManifestRegistry =
     params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
   const runWithSecretsActivationLock = async <T>(operation: () => Promise<T>): Promise<T> => {
@@ -119,14 +112,14 @@ export function createRuntimeSecretsActivator(params: {
 
   const loadActivateRuntimeSecretsSnapshot = async (source?: OpenClawConfig) => {
     if (source) {
-      const runtime = await loadSecretsRuntime();
+      const runtime = await import("../secrets/runtime.js");
       return (snapshot: PreparedRuntimeSecretsSnapshot) =>
         runtime.activateSecretsRuntimeSnapshotWithSource(snapshot, source);
     }
     if (params.activateRuntimeSecretsSnapshot) {
       return params.activateRuntimeSecretsSnapshot;
     }
-    return (await loadSecretsRuntime()).activateSecretsRuntimeSnapshot;
+    return (await import("../secrets/runtime.js")).activateSecretsRuntimeSnapshot;
   };
 
   const supersededActivation = new Error("Secrets runtime publication was superseded.");
@@ -167,7 +160,7 @@ export function createRuntimeSecretsActivator(params: {
     >
   ) => {
     const restoration = snapshot
-      ? (await loadSecretsRuntime()).prepareSecretsRuntimeSnapshotRestore(
+      ? (await import("../secrets/runtime.js")).prepareSecretsRuntimeSnapshotRestore(
           snapshot,
           expectedRevision,
           ownedSnapshot,
@@ -439,11 +432,11 @@ export function createRuntimeSecretsActivator(params: {
                   refreshHandler: {
                     preflight: async (refreshParams) =>
                       await (
-                        await loadSecretsRuntime()
+                        await import("../secrets/runtime.js")
                       ).preflightActiveSecretsRuntimeSnapshotRefresh(refreshParams),
                     refresh: async (refreshParams) =>
                       await (
-                        await loadSecretsRuntime()
+                        await import("../secrets/runtime.js")
                       ).refreshActiveSecretsRuntimeSnapshotForConfig(refreshParams),
                   },
                 }),
@@ -451,12 +444,12 @@ export function createRuntimeSecretsActivator(params: {
           }
         }
         const loadAuthStore = startupPreflight
-          ? (await loadAuthProfiles()).loadAuthProfileStoreWithoutExternalProfiles
+          ? (await import("../agents/auth-profiles.js")).loadAuthProfileStoreWithoutExternalProfiles
           : undefined;
         const secretsRuntime =
           params.prepareRuntimeSecretsSnapshot && params.activateRuntimeSecretsSnapshot
             ? null
-            : await loadSecretsRuntime();
+            : await import("../secrets/runtime.js");
         const prepareRuntimeSecretsSnapshot =
           params.prepareRuntimeSecretsSnapshot ?? secretsRuntime!.prepareSecretsRuntimeSnapshot;
         const allowUnavailableSecretOwners =

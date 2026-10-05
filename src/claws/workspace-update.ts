@@ -19,7 +19,6 @@ import {
 const MAX_UPDATE_FILE_BYTES = 1024 * 1024;
 
 export type ClawWorkspaceUpdateExecution = {
-  appliedPaths: string[];
   rollback: () => Promise<void>;
 };
 
@@ -42,7 +41,7 @@ export async function applyClawWorkspaceUpdate(
     (action) => action.kind === "workspaceFile" && action.action !== "unchanged",
   );
   if (actions.length === 0) {
-    return { appliedPaths: [], rollback: async () => undefined };
+    return { rollback: async () => undefined };
   }
   const workspaceRoot = resolve(targetAddPlan.agent.workspace);
   const packageRoot = resolve(targetAddPlan.claw.packageRoot);
@@ -61,7 +60,6 @@ export async function applyClawWorkspaceUpdate(
   );
   const targetActions = clawWorkspaceActionsById(targetAddPlan.actions);
   const undo: Array<() => Promise<void>> = [];
-  const appliedPaths: string[] = [];
 
   const rollback = async () => {
     const failures = await collectClawRollbackFailures(undo.toReversed());
@@ -119,7 +117,6 @@ export async function applyClawWorkspaceUpdate(
           await workspace.remove(path);
         }
         deleteClawWorkspaceFileRecord(updatePlan.agentId, path, options);
-        appliedPaths.push(path);
         continue;
       }
 
@@ -175,7 +172,6 @@ export async function applyClawWorkspaceUpdate(
       });
       await workspace.write(path, content, { mkdir: true, overwrite: existed });
       upsertClawWorkspaceFile(record, options);
-      appliedPaths.push(path);
     }
   } catch (error) {
     try {
@@ -188,5 +184,5 @@ export async function applyClawWorkspaceUpdate(
     }
     throw error;
   }
-  return { appliedPaths, rollback };
+  return { rollback };
 }

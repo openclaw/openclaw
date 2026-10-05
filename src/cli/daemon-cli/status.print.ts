@@ -180,10 +180,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const configPath = `${shortenHomePath(config.path)}${config.exists ? "" : " (missing)"}${config.valid ? "" : " (invalid)"}`;
       printInfo(`Config (${kind}):`, configPath);
       if (!config.valid && config.issues?.length) {
-        const issueLabel = kind === "cli" ? "Config issue:" : "Service config issue:";
+        const issueLabel =
+          kind === "cli" ? "Warning: Config issue:" : "Warning: Service config issue:";
         for (const issue of config.issues.slice(0, 5)) {
-          defaultRuntime.error(
-            `${errorText(issueLabel)} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
+          printWarning(
+            `${issueLabel} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
           );
         }
       }
@@ -195,6 +196,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           printWarning(formatConfigIssueLine(warning, "-", { normalizeRoot: true }));
         }
       }
+    }
+    if (!status.config.cli.valid || status.config.daemon?.valid === false) {
+      printWarning(`Run \`${formatCliCommand("openclaw doctor --fix")}\` to repair configuration.`);
     }
     if (status.config.mismatch) {
       printError(
@@ -401,6 +405,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
+  const disabledTask = process.platform === "win32" && service.runtime?.state === "Disabled";
   if (service.runtime?.missingUnit) {
     if (serviceTargetsProbe) {
       printError("Service unit not found.");
@@ -413,24 +418,26 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     }
   } else if (
     service.runtime?.missingGuiSession ||
-    (serviceLoaded && service.runtime?.status === "stopped")
+    (serviceLoaded && (disabledTask || service.runtime?.status === "stopped"))
   ) {
-    const missingGuiSession = service.runtime.missingGuiSession;
+    const missingGuiSession = service.runtime?.missingGuiSession;
     const startLimitHit = process.platform === "linux" && isSystemdStartLimitHit(service.runtime);
-    printError(
-      missingGuiSession
-        ? "LaunchAgent plist exists, but macOS has no usable GUI session for this user."
-        : startLimitHit
-          ? // systemd gave up restarting after repeated crashes; sending the operator
-            // to restart (which now clears the failed latch) beats "exited immediately".
-            `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
-              "openclaw gateway restart",
-            )} or inspect logs.`
-          : "Service is loaded but not running (likely exited immediately).",
-    );
+    if (!disabledTask) {
+      printError(
+        missingGuiSession
+          ? "LaunchAgent plist exists, but macOS has no usable GUI session for this user."
+          : startLimitHit
+            ? // systemd gave up restarting after repeated crashes; sending the operator
+              // to restart (which now clears the failed latch) beats "exited immediately".
+              `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
+                "openclaw gateway restart",
+              )} or inspect logs.`
+            : "Service is loaded but not running (likely exited immediately).",
+      );
+    }
     const env = service.command?.environment ?? process.env;
     for (const hint of buildGatewayRuntimeRecoveryHints({
-      kind: missingGuiSession ? "gui-session" : "stopped",
+      kind: missingGuiSession ? "gui-session" : disabledTask ? "disabled-task" : "stopped",
       restartCommand: formatCliCommand("openclaw gateway restart", env),
       env,
       logFile: status.logFile,
@@ -537,7 +544,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const scope = service.runtime?.systemd?.scope === "system" ? "--system" : "--user";
       printError(`Logs: journalctl ${scope} -u ${quoteCliArg(unit)} -n 200 --no-pager`);
     } else if (process.platform === "darwin") {
-      const logs = resolveGatewaySupervisorLogPaths(serviceEnv, { platform: "darwin" });
+      const logs = resolveGatewaySupervisorLogPaths(serviceEnv);
       // The plist points both launchd handles at this file, so startup crashes that
       // never reached the logger land here too; do not advertise a separate stderr.
       defaultRuntime.error(
@@ -589,19 +596,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${expectedVersion}${resolvedTarget}`,
         );
       }
-      const repairs = drift.drifts.map((entry) => ({
-        entry,
-        command: resolvePluginVersionDriftUpdateCommand(entry),
-      }));
-      const updateCommands = repairs
-        .map(({ command }) => command)
-        .filter((command): command is string => Boolean(command))
-        .map((command) => formatCliCommand(command));
-      const unresolvedRepairs = repairs.filter(
-        ({ entry, command }) => !command && !resolvePluginVersionDriftRegistryLag(entry),
-      );
-      for (const { entry } of repairs) {
+      const updateCommands: string[] = [];
+      const unresolvedRepairs: typeof drift.drifts = [];
+      for (const entry of drift.drifts) {
+        const command = resolvePluginVersionDriftUpdateCommand(entry);
         const registryLag = resolvePluginVersionDriftRegistryLag(entry);
+        if (command) {
+          updateCommands.push(formatCliCommand(command));
+        } else if (!registryLag) {
+          unresolvedRepairs.push(entry);
+        }
         if (registryLag) {
           defaultRuntime.log(
             `- ${entry.pluginId}: registry version ${registryLag.registryVersion} is already installed; no release reaches ${registryLag.expectedVersion} yet, so no update command applies.`,
@@ -610,7 +614,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       }
       if (unresolvedRepairs.length > 0) {
         printError("Plugin repair target resolution failed:");
-        for (const { entry } of unresolvedRepairs) {
+        for (const entry of unresolvedRepairs) {
           const targetResolution = entry.targetResolution;
           const detail =
             targetResolution?.status === "unresolved"

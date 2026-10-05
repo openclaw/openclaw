@@ -30,6 +30,7 @@ const RESERVED_NAMESPACE_GLOBALS = new Set([
   "Date",
   "Error",
   "globalThis",
+  "load",
   "log",
   "json",
   "JSON",
@@ -45,6 +46,7 @@ const RESERVED_NAMESPACE_GLOBALS = new Set([
   "Set",
   "setTimeout",
   "skills",
+  "store",
   "String",
   "text",
   "tools",
@@ -86,7 +88,6 @@ type CodeModeNamespaceCatalogEntry = {
   id?: string;
   source?: string;
   name: string;
-  sourceName?: string;
   description?: string;
   parameters?: unknown;
   mcp?: PluginToolMcpMeta;
@@ -226,7 +227,6 @@ type McpNamespaceModel = {
 
 type McpNamespaceServer = {
   key: string;
-  serverName: string;
   safeServerName: string;
   node?: NonNullable<NonNullable<CodeModeNamespaceCatalogEntry["mcp"]>["node"]>;
 };
@@ -297,7 +297,6 @@ function createMcpNamespacePlan(catalog: readonly CodeModeNamespaceCatalogEntry[
     if (!serversByKey.has(key)) {
       serversByKey.set(key, {
         key,
-        serverName: mcp.serverName,
         safeServerName: mcp.safeServerName,
         ...(mcp.node ? { node: mcp.node } : {}),
       });
@@ -349,7 +348,6 @@ function createMcpNamespaceModel(
       serverDoc = {
         identifier: serverIdentifier,
         serverName: mcp.serverName,
-        ...(mcp.node ? { nodeLabel: mcpNodeLabel(mcp.node) } : {}),
         tools: [],
       };
       serverDocs.set(serverIdentifier, serverDoc);
@@ -444,31 +442,6 @@ declare function log(message: string): void;
 // Schema: const fact = await agents.run<{ answer: string }>("Research", { schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } });
 `;
 
-function describeMcpNamespaceForPrompt(
-  catalog: readonly CodeModeNamespaceCatalogEntry[],
-): string[] {
-  const plan = createMcpNamespacePlan(catalog);
-  if (!plan) {
-    return [];
-  }
-  const servers = [...plan.servers.values()]
-    .toSorted((a, b) => a.identifier.localeCompare(b.identifier))
-    .map((server) => {
-      const nodeLabel = server.node ? mcpNodeLabel(server.node) : undefined;
-      return `${server.identifier}${nodeLabel ? ` (node: ${nodeLabel})` : ""}`;
-    });
-  if (servers.length === 0) {
-    return [];
-  }
-  // Node-backed servers keep the gateway-style name when unique. Collisions
-  // use the existing node-id fragment prefix idiom, then a numeric suffix.
-  return [
-    "- MCP: MCP server tools grouped by server.",
-    `Read API files such as mcp/index.d.ts and mcp/<server>.d.ts for TypeScript-style MCP headers; visible servers: ${servers.join(", ")}. Node-backed name collisions use a sanitized node-id fragment prefix.`,
-    "Search native and MCP tools by task with catalog.search(query). MCP handles expose callableName, apiPath, and describe() for the exact header and schema. Call the handle or MCP.<server>.<tool>({ ...input }) with one object argument matching the header.",
-  ];
-}
-
 /** Builds system-prompt text describing visible code-mode namespace globals. */
 export function describeCodeModeNamespacesForPrompt(
   catalog?: readonly CodeModeNamespaceCatalogEntry[],
@@ -476,13 +449,24 @@ export function describeCodeModeNamespacesForPrompt(
   if (!catalog) {
     return "";
   }
-  const mcpPrompt = describeMcpNamespaceForPrompt(catalog);
-  if (mcpPrompt.length === 0) {
+  const plan = createMcpNamespacePlan(catalog);
+  if (!plan) {
     return "";
   }
-  const lines = ["MCP namespace globals are available in code mode:"];
-  lines.push(...mcpPrompt);
-  return lines.join("\n");
+  const servers = [...plan.servers.values()]
+    .toSorted((a, b) => a.identifier.localeCompare(b.identifier))
+    .map((server) => {
+      const nodeLabel = server.node ? mcpNodeLabel(server.node) : undefined;
+      return `${server.identifier}${nodeLabel ? ` (node: ${nodeLabel})` : ""}`;
+    });
+  // Node-backed servers keep the gateway-style name when unique. Collisions
+  // use the existing node-id fragment prefix idiom, then a numeric suffix.
+  return [
+    "MCP namespace globals are available in code mode:",
+    "- MCP: MCP server tools grouped by server.",
+    `Read API files such as mcp/index.d.ts and mcp/<server>.d.ts for TypeScript-style MCP headers; visible servers: ${servers.join(", ")}. Node-backed name collisions use a sanitized node-id fragment prefix.`,
+    "Search native and MCP tools by task with catalog.search(query). MCP handles expose callableName, apiPath, and describe() for the exact header and schema. Call the handle or MCP.<server>.<tool>({ ...input }) with one object argument matching the header.",
+  ].join("\n");
 }
 
 function assertNamespacePathSegment(segment: string): void {

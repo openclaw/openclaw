@@ -26,12 +26,11 @@ import { parse as parseYaml } from "yaml";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mts";
 import { pnpmLockfileDocuments, resolveSnapshot } from "./lib/pnpm-lockfile-documents.mjs";
-import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
+import { resolveNpmRunner } from "./npm-runner.mts";
 
 type UnknownRecord = Record<string, unknown>;
 type OverrideMap = Record<string, unknown>;
 type ScopedOverrides = Record<string, Record<string, string>>;
-type NpmLockCommandOptions = Omit<NpmRunnerParams, "npmArgs">;
 type NpmLockExecInvocation = UnknownRecord & {
   env?: NodeJS.ProcessEnv;
   shell?: boolean;
@@ -81,10 +80,8 @@ function normalizeOverrideValue(value: unknown): unknown {
       Object.entries(value).map(([key, nestedValue]) => [key, normalizeOverrideValue(nestedValue)]),
     );
   }
-  if (typeof value === "string") {
-    return value;
-  }
   if (
+    typeof value === "string" ||
     typeof value === "number" ||
     typeof value === "boolean" ||
     typeof value === "bigint" ||
@@ -311,7 +308,7 @@ function addNestedOverride(
 ): void {
   const nested = overrides[parentSelector] ?? {};
   const existing = nested[dependencyName];
-  if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(version)) {
+  if (existing !== undefined && existing !== version) {
     const parentConflicts = conflicts.get(parentSelector) ?? new Set();
     parentConflicts.add(dependencyName);
     conflicts.set(parentSelector, parentConflicts);
@@ -517,16 +514,12 @@ function mergeOverrideEntry(merged: OverrideMap, name: string, spec: unknown): v
     typeof spec === "string" &&
     exactOverrideVersionsMatch(current, spec)
   ) {
-    merged[name] = preferredExactOverrideRootSpec(current, spec);
+    merged[name] = spec.startsWith("npm:") ? spec : current;
     return;
   }
   if (JSON.stringify(current) !== JSON.stringify(spec)) {
     throw new Error(`package.json overrides.${name} conflicts with pnpm lock policy for ${name}`);
   }
-}
-
-function preferredExactOverrideRootSpec(current: string, incoming: string) {
-  return incoming.startsWith("npm:") ? incoming : current;
 }
 
 function exactOverrideVersionsMatch(left: string, right: string) {
@@ -924,21 +917,6 @@ function copyLocalFileDependencies(
 }
 
 /**
- * Resolves the npm command invocation used by npm-lock generation.
- * @internal Directly tested script implementation detail.
- */
-export function createNpmLockCommand(args: string[], options: NpmLockCommandOptions = {}) {
-  return resolveNpmRunner({
-    comSpec: options.comSpec,
-    env: options.env,
-    execPath: options.execPath,
-    existsSync: options.existsSync,
-    npmArgs: args,
-    platform: options.platform,
-  });
-}
-
-/**
  * Reads a positive integer env override for npm-lock subprocess limits.
  * @internal Directly tested script implementation detail.
  */
@@ -988,7 +966,7 @@ export function createNpmLockExecOptions(
 }
 
 function runNpm(args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env) {
-  const npm = createNpmLockCommand(args, { env });
+  const npm = resolveNpmRunner({ npmArgs: args, env });
   execFileSync(npm.command, npm.args, createNpmLockExecOptions(npm, cwd, env));
 }
 
@@ -1099,16 +1077,6 @@ function versionRangeFromOverrideSpec(spec: unknown) {
   }
   const versionSpec = spec.startsWith("npm:") ? spec.slice(spec.lastIndexOf("@") + 1) : spec;
   return semver.validRange(versionSpec) ? versionSpec : null;
-}
-
-function exactOverrideRulesFromOverrides(overrides: unknown) {
-  const normalized = normalizeOverrides(overrides);
-  return Object.fromEntries(
-    Object.entries(normalized).flatMap<[string, string]>(([name, spec]) => {
-      const version = exactVersionFromOverrideSpec(spec);
-      return version === null ? [] : [[name, typeof spec === "string" ? spec : version]];
-    }),
-  );
 }
 
 function validationOverrideRulesFromOverrides(overrides: unknown) {
@@ -1543,18 +1511,11 @@ function collectUnallowedOverrideViolations(
         finding.shrinkwrapSources.add(shrinkwrappedAncestor.path);
       }
     }
-    return {
-      actualVersion: finding.violation.actualVersion,
-      actualPackageName: finding.violation.actualPackageName,
-      expectedPackageName: finding.violation.expectedPackageName,
-      expectedSpec: finding.violation.expectedSpec,
-      packageName: finding.violation.packageName,
-      packagePath: finding.violation.packagePath,
-      path: finding.violation.path,
+    return Object.assign({}, finding.violation, {
       shrinkwrapSources: [...finding.shrinkwrapSources].toSorted((left, right) =>
         left.localeCompare(right),
       ),
-    };
+    });
   });
 }
 
@@ -2211,7 +2172,7 @@ export {
   collectOverrideViolations,
   collectPnpmLockViolations,
   disableDependencyShrinkwrapOverrideConflictSources,
-  exactOverrideRulesFromOverrides,
+  validationOverrideRulesFromOverrides,
   mergeOverrides,
   normalizeOverrides,
   applyPackageExtensionPeerMetadata,

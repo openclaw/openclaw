@@ -307,10 +307,7 @@
     justify-self: end;
   }
 
-  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail {
-    display: contents;
-  }
-
+  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail,
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-content {
     display: contents;
   }

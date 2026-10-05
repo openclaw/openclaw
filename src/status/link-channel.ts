@@ -5,7 +5,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveInspectedChannelAccount } from "../channels/account-inspection.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type LinkChannelContext = {

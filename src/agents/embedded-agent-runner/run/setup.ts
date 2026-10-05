@@ -58,12 +58,8 @@ export function resolveAgentHarnessRunAdmissionError(params: {
   if (entry.modelSelectionLocked !== true) {
     return undefined;
   }
-  const durableEntryError = resolveAgentHarnessSessionStoreEntryError(sessionKey, entry);
-  if (durableEntryError) {
-    return durableEntryError;
-  }
   if (!isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
-    return undefined;
+    return resolveAgentHarnessSessionStoreEntryError(sessionKey, entry);
   }
   const requestedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
   const durableHarnessId = resolveSessionPinnedHarnessId(entry);
@@ -193,12 +189,6 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
       ? { ...resolvedCtxInfo, tokens: contextWindowProfile.contextTokens, source: "model" as const }
       : resolvedCtxInfo;
 
-  // Apply contextTokens cap to model so session runtime's auto-compaction
-  // threshold uses the effective limit, not the native context window.
-  const windowedModel =
-    ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity)
-      ? { ...params.runtimeModel, contextWindow: ctxInfo.tokens }
-      : params.runtimeModel;
   const ctxGuard = evaluateContextWindowGuard({ info: ctxInfo });
   const runtimeBaseUrl = params.runtimeModel.baseUrl;
   if (ctxGuard.shouldWarn) {
@@ -236,9 +226,9 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
         }
       : ctxInfo;
   const effectiveModel =
-    contextTokenBudget < (windowedModel.contextWindow ?? Infinity)
-      ? { ...windowedModel, contextWindow: contextTokenBudget }
-      : windowedModel;
+    contextTokenBudget < (params.runtimeModel.contextWindow ?? Infinity)
+      ? { ...params.runtimeModel, contextWindow: contextTokenBudget }
+      : params.runtimeModel;
   return {
     contextWindowInfo,
     contextTokenBudget,

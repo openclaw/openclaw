@@ -1,4 +1,5 @@
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import {
@@ -93,6 +94,12 @@ it("does not rotate providers when SQLite worker capacity is exhausted", async (
   await expectTerminalStop(
     new SqliteWorkerError("SQLite worker store capacity reached", "overloaded"),
   );
+});
+
+it("does not consult provider policy or rotate models for a transcript conflict", async () => {
+  const error = new SqliteTranscriptMutationConflictError("conflicting-session");
+  await expectTerminalStop(error);
+  await expectTerminalStop(new Error("worker operation failed", { cause: error }));
 });
 
 it("retains closed ownership when async disposal also fails", async () => {

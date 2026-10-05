@@ -1,3 +1,4 @@
+import type { RuntimeLogger } from "openclaw/plugin-sdk/core";
 import type { z } from "zod";
 import type { TeamReportsConfig } from "./config.js";
 import type { reportDocumentSchema, summaryDocumentSchema } from "./store-schema.js";
@@ -49,18 +50,11 @@ export type ReportDocument = z.infer<typeof reportDocumentSchema>;
 
 export type SummaryDocument = z.infer<typeof summaryDocumentSchema>;
 
-type SourceLogger = {
-  debug?: (message: string, meta?: Record<string, unknown>) => void;
-  info: (message: string, meta?: Record<string, unknown>) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
-  error: (message: string, meta?: Record<string, unknown>) => void;
-};
-
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 /** Per-run context handed to sources. Sources must honor `signal` and never log credentials. */
 export type SourceRuntime = {
-  logger: SourceLogger;
+  logger: RuntimeLogger;
   signal?: AbortSignal;
   /** Test seam; production uses the SDK guarded fetch. */
   fetchImpl?: FetchLike;
@@ -99,7 +93,6 @@ export interface DiscordSource {
   collect(
     config: DiscordSourceConfig,
     window: ActivityWindow,
-    roster: Roster,
     emit: (entries: ActivityEntry<DiscordMessage>[]) => Promise<void>,
   ): Promise<SourceStatus>;
 }

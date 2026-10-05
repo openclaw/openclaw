@@ -84,6 +84,7 @@ export type UpdateRunnerOptions = {
 );
 
 export type UpdateInstallSurface =
+  | { kind: "immutable"; mode: "unknown"; root: string; packageRoot: string }
   | { kind: "git"; mode: "git"; root: string; packageRoot: string }
   | { kind: "global"; mode: GlobalInstallManager; root: string; packageRoot: string }
   | { kind: "package-root"; mode: "unknown"; root: string; packageRoot: string }

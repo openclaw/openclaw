@@ -2,7 +2,7 @@ import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelPartialDeliveryError,
   formatInboundMediaUnavailableText,
-  resolveChannelInboundRouteEnvelope,
+  createChannelInboundEnvelopeBuilderAsync,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type {
@@ -14,14 +14,11 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
-  createLazyRuntimeModule,
-  createLazyRuntimeNamedExport,
-} from "openclaw/plugin-sdk/lazy-runtime";
-import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { sleepWithAbort, waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveDefaultGroupPolicy,
@@ -51,7 +48,7 @@ import {
   prepareZaloDurableReplyPayload,
   resolveZaloDurableReplyOptions,
 } from "./monitor-durable.js";
-import type { ZaloRuntimeEnv } from "./monitor.types.js";
+import type { ZaloRuntimeEnv, ZaloStatusSink } from "./monitor.types.js";
 import {
   prepareHostedZaloMediaUrl,
   resolveHostedZaloMediaRoutePrefix,
@@ -85,15 +82,6 @@ const ZALO_TYPING_TIMEOUT_MS = 5_000;
 const UNIX_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
-type ZaloStatusSink = (patch: {
-  connected?: boolean;
-  lifecycle?: "ready" | "recovering";
-  terminalDisconnect?: boolean;
-  lastConnectedAt?: number;
-  lastError?: string | null;
-  lastInboundAt?: number;
-  lastOutboundAt?: number;
-}) => void;
 type ZaloProcessingContext = {
   token: string;
   account: ResolvedZaloAccount;
@@ -122,19 +110,6 @@ function resolveZaloTimestampMs(date: number | undefined): number | undefined {
   }
   return date >= UNIX_MILLISECONDS_THRESHOLD ? date : date * 1000;
 }
-
-const loadZaloWebhookRuntime = createLazyRuntimeNamedExport(
-  () => import("./monitor.webhook.js"),
-  "zaloWebhookRuntime",
-);
-const loadZaloWebhookIngressRuntime = createLazyRuntimeNamedExport(
-  () => import("./webhook-spool.js"),
-  "zaloWebhookIngressRuntime",
-);
-const loadZaloWebhookModule = createLazyRuntimeModule(async () => ({
-  ...(await loadZaloWebhookRuntime()),
-  ...(await loadZaloWebhookIngressRuntime()),
-}));
 
 function registerSharedHostedMediaRoute(params: {
   path: string;
@@ -489,7 +464,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   const { isGroup, chatId, senderId, senderName, rawBody } = authorization;
   const agentBody = agentBodyOverride ?? rawBody;
 
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: config,
     channel: "zalo",
     accountId: account.accountId,
@@ -523,6 +498,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
   const timestamp = resolveZaloTimestampMs(date);
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: config, route });
   const body = buildEnvelope({
     channel: "Zalo",
     from: fromLabel,
@@ -843,8 +819,11 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     }
 
     if (useWebhook) {
-      const { createZaloWebhookIngress, registerZaloWebhookTarget, handleZaloWebhookRequest } =
-        await loadZaloWebhookModule();
+      const { registerZaloWebhookTarget, handleZaloWebhookRequest } = (
+        await import("./monitor.webhook.js")
+      ).zaloWebhookRuntime;
+      const { createZaloWebhookIngress } = (await import("./webhook-spool.js"))
+        .zaloWebhookIngressRuntime;
       if (!effectiveWebhookUrl || !webhookSecret) {
         throw new Error("Zalo webhookUrl and webhookSecret are required for webhook mode");
       }

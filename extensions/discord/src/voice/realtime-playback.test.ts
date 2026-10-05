@@ -447,6 +447,38 @@ defineDiscordVoiceTests(
       }
     });
 
+    it.each([-60_000, 0, 60_000])(
+      "keeps the playback watchdog budget after a %i ms wall-clock change",
+      async (wallClockShiftMs) => {
+        vi.useFakeTimers();
+        const wallNow = Date.now;
+        let wallClockOffsetMs = 0;
+        const nowSpy = vi
+          .spyOn(Date, "now")
+          .mockImplementation(() => wallNow() + wallClockOffsetMs);
+        const manager = createAgentProxyManager();
+        try {
+          expect((await manager.join({ guildId: "g1", channelId: "1001" })).ok).toBe(true);
+          const player = getLastAudioPlayer();
+          const bridgeParams = lastRealtimeBridgeParams();
+
+          bridgeParams?.audioSink?.sendAudio(Buffer.alloc(48_000));
+          expect(player.play).toHaveBeenCalledOnce();
+          wallClockOffsetMs = wallClockShiftMs;
+          bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+
+          await vi.advanceTimersByTimeAsync(3_999);
+          expect(player.stop).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+          expect(player.stop).toHaveBeenCalledWith(true);
+        } finally {
+          await manager.destroy();
+          nowSpy.mockRestore();
+          vi.useRealTimers();
+        }
+      },
+    );
+
     it("does not let an old realtime playback watchdog stop a later response", async () => {
       vi.useFakeTimers();
       try {

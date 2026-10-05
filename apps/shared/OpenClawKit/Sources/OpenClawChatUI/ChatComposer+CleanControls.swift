@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 extension OpenClawChatComposer {
     @ViewBuilder
@@ -16,27 +19,50 @@ extension OpenClawChatComposer {
         .accessibilityIdentifier("chat-attachment-picker")
         .disabled(!self.isAttachmentInputEnabled)
         #else
-        OpenClawChatAttachmentMenu(
-            showsPhotoPicker: self.photoPickerPresentation,
-            showsFileImporter: self.fileImporterPresentation,
-            showsCameraPicker: self.cameraPickerPresentation,
-            isAttachmentInputEnabled: self.isAttachmentInputEnabled)
-        {
+        Menu {
+            Button {
+                self.photoPickerPresentation.wrappedValue = true
+            } label: {
+                chatActionLabel(Text("Photo Library"), systemImage: "photo.on.rectangle")
+            }
+            .disabled(!self.isAttachmentInputEnabled)
+
+            #if canImport(UIKit)
+            Button {
+                self.cameraPickerPresentation.wrappedValue = true
+            } label: {
+                chatActionLabel(Text("Camera"), systemImage: "camera")
+            }
+            .disabled(
+                !self.isAttachmentInputEnabled ||
+                    !UIImagePickerController.isSourceTypeAvailable(.camera))
+            #endif
+
+            Button {
+                self.fileImporterPresentation.wrappedValue = true
+            } label: {
+                chatActionLabel(Text("File"), systemImage: "folder")
+            }
+            .disabled(!self.isAttachmentInputEnabled)
+
+            Divider()
             if self.viewModel.sessionBranches.count > 1 {
                 self.branchMenu
             }
             self.verbosityPicker
                 .disabled(!self.viewModel.composerEffortMutationAvailable)
             self.cleanComposerCapabilityItems
+        } label: {
+            CompactChatAttachmentLabel()
         }
+        .help("Composer options")
+        .accessibilityLabel("Composer options")
+        .accessibilityIdentifier("chat-attachment-picker")
+        .buttonStyle(.plain)
         .task(id: self.viewModel.composerCapabilityOwnerID) {
             await self.viewModel.loadComposerCapabilities()
         }
         #endif
-    }
-
-    var sendButtonAccessibilityLabel: String {
-        "Send message"
     }
 
     #if os(iOS)

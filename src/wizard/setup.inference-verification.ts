@@ -70,7 +70,6 @@ export async function completeSetupModelAuth(params: {
       ) !== undefined &&
       ((params.usedImportFlow && params.keepExistingModelConfig) || opts.authChoice !== "skip"))
   ) {
-    const verificationTarget = resolveOnboardingSetupTarget(params.config);
     const verification = await offerLiveModelVerification({
       config: params.config,
       baseConfig,
@@ -80,7 +79,6 @@ export async function completeSetupModelAuth(params: {
       opts,
       prompter: params.prompter,
       runtime: params.runtime,
-      workspaceDir: verificationTarget.workspaceDir,
       configTarget: params.configTarget,
       required: params.usedImportFlow && params.keepExistingModelConfig,
     });
@@ -107,7 +105,6 @@ export async function offerLiveModelVerification(params: {
   opts: OnboardOptions;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
-  workspaceDir: string;
   agentDir?: string;
   stateDir?: string;
   configTarget: SetupInferenceConfigTarget;

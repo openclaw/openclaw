@@ -1,11 +1,11 @@
 // Channels page shared view helpers.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
-import type { ChannelAccountSnapshot } from "../../api/types.ts";
+import type { ChannelAccountSnapshot, ChannelStatus } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsRow, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
@@ -78,14 +78,6 @@ export function resolveChannelDisplayState(
   };
 }
 
-export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
-  return channelSnapshotEntryIsActive(props.channels.channelsSnapshot, key);
-}
-
-export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps): boolean | null {
-  return resolveChannelDisplayState(key, props).configured;
-}
-
 export function formatNullableBoolean(value: boolean | null): string {
   if (value == null) {
     return t("common.na");
@@ -125,11 +117,7 @@ export function renderChannelErrorRow(message: unknown) {
   });
 }
 
-export function renderChannelProbeRow(probe: {
-  ok?: boolean;
-  status?: number | string | null;
-  error?: string | null;
-}) {
+export function renderChannelProbeRow(probe: NonNullable<ChannelStatus["probe"]>) {
   const detail = formatUiExternalText(
     [probe.status ?? "", probe.error ?? ""].filter(Boolean).join(" "),
   );

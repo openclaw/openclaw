@@ -105,6 +105,7 @@ export function createManagedHandoffLeaseStore(
   const {
     row,
     handle,
+    descendants,
     deleteRow,
     updateRow,
     read,
@@ -123,6 +124,7 @@ export function createManagedHandoffLeaseStore(
   const { hasUnsettledChildren, readCommandChildren } = createManagedHandoffChildReader({
     withDatabase,
     handle,
+    descendants,
     processState,
   });
   function reclaimable(lease: ManagedHandoffLease, db?: HandoffDatabase) {
@@ -303,6 +305,7 @@ export function createManagedHandoffLeaseStore(
     canRelease,
     row,
     handle,
+    descendants,
     updateRow,
     deleteRow,
     processState,

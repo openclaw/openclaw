@@ -7,10 +7,8 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import {
-  readAcpSessionMeta,
-  writeAcpSessionMetaForMigration,
-} from "../acp/runtime/session-meta.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
@@ -406,34 +404,29 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
       interrupted = true;
     },
   });
-  let releaseMutation = () => {};
+  const { promise: mutationReleased, resolve: releaseMutation } = createDeferred();
   const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
-  const blocker = runExclusiveSessionLifecycleMutation({
+  const blocker = runExclusiveSessionLifecycleMutation("reset", {
     scope: storePath,
     identities: ["agent:main:main", "sess-main"],
     run: async () => {
       markMutationStarted();
-      await new Promise<void>((resolve) => {
-        releaseMutation = resolve;
-      });
+      await mutationReleased;
     },
   });
-  await mutationStarted;
-  const { performGatewaySessionReset } = await import("./session-reset-service.js");
-  const assertCurrent = vi.fn(() => {
-    throw new Error("stale lifecycle");
-  });
-  const reset = await performGatewaySessionReset({
-    key: "main",
-    reason: "reset",
-    commandSource: "gateway:agent",
-    workerPlacementContext: {},
-    assertCurrent,
-  });
-  releaseMutation();
-
   try {
-    await blocker;
+    await mutationStarted;
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
+    const assertCurrent = vi.fn(() => {
+      throw new Error("stale lifecycle");
+    });
+    const reset = await performGatewaySessionReset({
+      key: "main",
+      reason: "reset",
+      commandSource: "gateway:agent",
+      workerPlacementContext: {},
+      assertCurrent,
+    });
     expect(reset).toMatchObject({
       ok: false,
       error: {
@@ -444,7 +437,9 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
     expect(assertCurrent).not.toHaveBeenCalled();
     expect(interrupted).toBe(false);
   } finally {
+    releaseMutation();
     admissionLease.release();
+    await blocker;
   }
 });
 
@@ -468,7 +463,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
       main: sessionStoreEntry("sess-main"),
     },
   });
-  writeAcpSessionMetaForMigration({
+  seedCanonicalAcpSessionMeta({
     sessionKey: "agent:main:main",
     meta: resolvedAcpMeta({
       recordId: "agent:main:main",
@@ -531,7 +526,7 @@ test("sessions.reset finishes after lifecycle rotation during destructive cleanu
       main: sessionStoreEntry("sess-main"),
     },
   });
-  writeAcpSessionMetaForMigration({
+  seedCanonicalAcpSessionMeta({
     sessionKey: "agent:main:main",
     lifecycleRevision: undefined,
     meta: resolvedAcpMeta({
@@ -632,7 +627,7 @@ test("sessions.patch rejects an archive queued behind a rotated session", async 
     },
   });
   await blockerStarted;
-  const queuedReset = runExclusiveSessionLifecycleMutation({
+  const queuedReset = runExclusiveSessionLifecycleMutation("reset", {
     scope: storePath,
     identities: [sessionKey, initialSessionId],
     run: async () => {
@@ -675,7 +670,7 @@ test("sessions.reset preserves a newer session after lifecycle rotation", async 
       main: sessionStoreEntry("sess-main"),
     },
   });
-  writeAcpSessionMetaForMigration({
+  seedCanonicalAcpSessionMeta({
     sessionKey: "agent:main:main",
     lifecycleRevision: undefined,
     meta: resolvedAcpMeta({
@@ -739,14 +734,14 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
       }),
     },
   });
-  writeAcpSessionMetaForMigration({
+  seedCanonicalAcpSessionMeta({
     sessionKey: "agent:main:main",
     meta: resolvedAcpMeta({
       recordId: "agent:main:main",
       backendSessionId: "backend-session-main",
     }),
   });
-  writeAcpSessionMetaForMigration({
+  seedCanonicalAcpSessionMeta({
     sessionKey: "agent:main:acp-child-1",
     meta: resolvedAcpMeta({
       recordId: "agent:main:acp-child-1",
@@ -756,7 +751,7 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
     }),
   });
   for (const child of ["acp-grandchild", "unrelated-acp-child"]) {
-    writeAcpSessionMetaForMigration({
+    seedCanonicalAcpSessionMeta({
       sessionKey: `agent:main:${child}`,
       meta: resolvedAcpMeta({
         recordId: `agent:main:${child}`,
@@ -794,8 +789,10 @@ test("sessions.reset closes a spawned ACP child that lives in a different agent 
     store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
   };
   testState.agentsConfig = {
-    list: [{ id: "main", default: true }, { id: "codex" }],
+    ownership: "explicit",
+    entries: { main: {}, codex: {} },
   };
+  testState.agentConfig = { systemAgent: { agentId: "main" } };
   const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
   const codexStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
   await writeSessionStore({
@@ -814,7 +811,7 @@ test("sessions.reset closes a spawned ACP child that lives in a different agent 
     },
     storePath: codexStorePath,
   });
-  writeAcpSessionMetaForMigration({
+  seedCanonicalAcpSessionMeta({
     sessionKey: "agent:main:main",
     meta: {
       backend: "acpx",
@@ -825,7 +822,7 @@ test("sessions.reset closes a spawned ACP child that lives in a different agent 
       lastActivityAt: Date.now(),
     },
   });
-  writeAcpSessionMetaForMigration({
+  seedCanonicalAcpSessionMeta({
     sessionKey: "agent:codex:acp:cross-store-child",
     meta: {
       backend: "acpx",
@@ -897,7 +894,7 @@ test("sessions.reset closes child ACP runtimes concurrently so stuck children do
     "agent:main:acp-child-2",
     "agent:main:acp-child-3",
   ]) {
-    writeAcpSessionMetaForMigration({
+    seedCanonicalAcpSessionMeta({
       sessionKey,
       meta: childAcp(sessionKey),
     });

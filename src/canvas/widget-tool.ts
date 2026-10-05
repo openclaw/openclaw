@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
 import { Type } from "typebox";
 import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
 import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
@@ -161,9 +162,7 @@ type ShowWidgetToolOptions = {
   presenterContext?: WidgetPresenterContext;
 };
 
-type WidgetPresentationAttempt =
-  | { ok: true; value: WidgetPresentationSuccess }
-  | { ok: false; error: WidgetPresentationError };
+type WidgetPresentationAttempt = Result<WidgetPresentationSuccess, WidgetPresentationError>;
 
 async function presentWidget(params: {
   presenter?: WidgetPresenter;
@@ -257,11 +256,6 @@ function generatedWidgetIdentity(title: string, preferredName: string) {
     key,
     fallbackName: `${prefix}-${key.slice(0, 8)}`,
   };
-}
-
-function boardWidgetTitle(title: string): string | undefined {
-  const normalized = title.trim();
-  return normalized ? truncateCodePoints(normalized, 80) : undefined;
 }
 
 function resolveRetentionScope(options: ShowWidgetToolOptions): string {
@@ -465,10 +459,10 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         const size = readToolStringParam(params, "size");
         const frame = readToolStringParam(presentation ?? {}, "frame");
         const after = readToolStringParam(params, "after");
-        const pinnedTitle = boardWidgetTitle(title);
+        const pinnedTitle = truncateCodePoints(title, 80);
         if (!registration && !isReport) {
           assertPinnedWidgetDocumentSize(
-            buildWidgetDocument(pinnedTitle ?? name, widgetCode, {
+            buildWidgetDocument(pinnedTitle, widgetCode, {
               connectOrigins: capabilities?.netOrigins,
             }),
           );
@@ -482,7 +476,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           sessionKey: pinSessionKey,
           agentId: options.agentId,
           name,
-          ...(pinnedTitle ? { title: pinnedTitle } : {}),
+          title: pinnedTitle,
           // The Gateway owns the board document shell so agent-authored bytes
           // can never run before its user-activation and bridge bootstrap.
           content: report
@@ -547,9 +541,8 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       const hostDocument = async () =>
         (document ??= await createCanvasDocument(
           {
-            kind: "html_bundle",
             title,
-            entrypoint: { type: "html", value: wrappedDocument },
+            html: wrappedDocument,
             surface: "assistant_message",
             retentionScope: resolveRetentionScope(options),
             // Direct navigation must not run widget script as the Control UI origin.

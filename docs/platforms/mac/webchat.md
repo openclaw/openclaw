@@ -64,6 +64,19 @@ The full native chat window is a split view:
 - **Find in Conversation**: press Cmd-F to search user and assistant text in the loaded conversation. Return or Cmd-G moves to the next matching message; Shift-Cmd-G moves backward. The selected message is outlined and revealed without incoming replies pulling you away. Escape closes Find. Search does not fetch older history or search hidden reasoning and tool payloads.
 - **Voice controls**: the composer can start or stop the existing macOS Talk Mode without replacing its menu-bar overlay. While Talk Mode is active, the composer shows its listening/thinking/speaking state, live audio activity, and an expandable rolling transcript. Right-click the Talk button to choose **System Default** or a connected microphone; this is the same microphone selection used by Voice Wake and push-to-talk. If a selected microphone disconnects, the active Talk session falls back to the system default and tries the selection again the next time Talk Mode starts. A separate microphone action records a voice note when Talk Mode does not own audio capture.
 
+Cmd-click thread rows to select several, or Shift-click to select a range.
+The batch bar shows the selected count and an **Actions** menu for marking
+threads read or unread, moving them between groups, archiving or restoring,
+and deleting eligible threads. Child threads and rows hidden inside collapsed
+groups are excluded from batch actions. Choose **Done** to leave batch mode.
+Failed operations appear beside the affected rows so you can retry them.
+
+Drag a root thread to **Pages** to pin it, or between pinned threads to change
+its position. Drop it onto a group to move it there and unpin it, onto the
+ungrouped section in category grouping to remove its group, or onto the list background to unpin it while keeping its
+group. Drag group headers to change their order. These actions require write
+access on the connected Gateway; pin ordering requires administrator access.
+
 Right-click a custom-group header and choose **Group defaults…** to choose where
 new sessions in that group start. Use **Agent workspace** or browse folders on
 the connected Gateway. **Separate working copy** is available after the Gateway
@@ -89,6 +102,12 @@ clears its snooze. Archived, child, and protected main or sentinel threads
 cannot be snoozed.
 
 The sidebar loads threads in pages; choose **Load more** to reach older threads.
+In **All agents**, conversations with the same short key remain separate and keep
+their owning agent when selected or changed.
+Command-click or Shift-click to select several root threads, then choose
+**Actions → Move to group → New group…** to create a group and move the selection.
+If some moves fail, the group and completed moves remain; affected rows show
+errors so you can retry.
 Typing filters loaded rows immediately, then searches session names, metadata,
 and messages on the Gateway. Results appear in relevance order. Notices explain
 when message indexing is still in progress or archived transcripts are excluded.
@@ -177,6 +196,14 @@ web actions menu, including plugin actions and **Stop cloud worker…** when
 available. Confirmation, progress, and errors stay in the web conversation.
 Older Gateway UIs keep their existing conversation behavior without these extras.
 
+Archiving from the sidebar offers **Undo** for six seconds; hovering or focusing
+the notice pauses that countdown. Undo restores the captured thread and its
+previous pin state, including successful threads from a partial batch archive.
+Restored threads return to the Active list when the Gateway confirms the restore.
+It remains available while you change conversations, filters, or agents, and
+leaves the current conversation selected. Reconnecting retires the action; if a
+thread was replaced before Undo, the failure stays visible.
+
 **Show message preview**, **Show automation sessions**, and **Show system sessions**
 are off by default. Automation sessions are cron conversations; system sessions
 are identified from their recorded creation source. Human-created and named
@@ -224,6 +251,33 @@ children show their own signals. Run indicators pause while disconnected.
 For older threads beyond the all-agent overview, switch to **Selected agent**
 and choose **Load more**, or search through **All sessions**.
 
+## Session catalogs
+
+Plugins can add session catalogs to the native sidebar. **Open in OpenClaw** opens
+the conversation; sending its first message adopts it into OpenClaw. Adopted
+sessions stay in their catalog section without a duplicate in the ordinary thread
+list. Catalogs appear for a selected agent and are hidden in the all-agents and
+archived views. Adopted sessions remain reachable in **Search results**,
+independently of collapsed catalog groups. Adopted rows follow the sidebar status
+filter, including archive and snooze changes. Catalog sources require read access;
+deleting a source session also requires write access.
+
+Right-click a catalog heading to group its sessions by **Project**, **Person**, or
+**None**, filter by owner, or choose **Hide from sidebar**. Restore a hidden catalog
+with its toggle under **View options → Session catalogs**. **Show all owners** in
+the same menu clears an owner filter even when it leaves no catalog rows. Grouping and visibility are
+saved locally for each Gateway profile. This deliberately differs from the web
+sidebar, which restores hidden catalogs through Dashboard settings and stores
+the preference in the browser.
+
+**Session sources…** opens the same Gateway's Dashboard Appearance settings, where
+you can manage session sources. The native handoff opens the page without scrolling
+to the Session sources settings block. **Open in Terminal** is not offered because
+the native sidebar has no catalog terminal action. Catalogs refresh while the
+sidebar is visible and connected; **Load more** and **Retry** operate independently
+for each catalog. Source failures stay visible with **Retry**, including before
+the source returns its first session.
+
 ## Online people
 
 The native sidebar's **Online** section includes your own identity and distinguishes
@@ -232,10 +286,21 @@ running session counts come from the Gateway across agents, independently of the
 loaded thread list; unavailable counts stay unknown and offer retry after a failure.
 
 Hover or focus a person to inspect reported connections, interaction times, and
-visible session links. Recent links stay in place while the card is open and
+visible session links, including threads loaded with **Load more**. Recent links stay in place while the card is open and
 disappear if they become ineligible. **View Activity** opens that person's Activity
 page in the Dashboard for the same Gateway. Thread rows show other viewers,
 combining duplicate connections and excluding your own identity.
+
+The identity card at the bottom of the native sidebar uses your name and avatar
+from **Online**. When healthy, it shows the current Gateway's name and **Primary**
+when applicable; otherwise it shows **Connecting…**. Click it for the Gateway
+list, current and primary indicators, the option to make an eligible profile
+primary, **Manage Gateways…**, **Open Dashboard**, **Settings…**, **Usage**, and
+**About OpenClaw**. **Retry now** appears while disconnected. The adjacent
+attention button counts requests of the same kind as the oldest pending request
+(questions or approvals); click it for details without changing conversations.
+A separate retry button appears if thread groups fail to load. Batch actions
+stay above the footer.
 
 ## Pending questions and approvals
 
@@ -380,6 +445,8 @@ Command-click or Control-click it to open a separate dashboard window. **Set as
 primary…** makes the viewed token-authenticated profile the Mac app's primary
 Gateway after confirmation. The app replaces the primary Gateway's credentials
 and closes its native chat window; independent saved-profile windows stay open.
+Native chat windows stay open while the same Gateway connects at launch or
+reconnects. This includes windows opened with `--chat` or `--no-activate --chat`.
 Dashboard windows displaying **Primary** follow the new connection, including
 windows opened separately. While connected, the sidebar footer also shows the
 current Gateway and marks it when it is primary. Password-only and browser

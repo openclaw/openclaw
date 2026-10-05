@@ -2,6 +2,7 @@
  * Process-local aliases for durable storage keys and non-durable tab rows.
  */
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { browserSessionTabRouteKey, type BrowserSessionTabRoute } from "./session-tab-route.js";
 
 type AliasIdentity = {
@@ -34,13 +35,7 @@ function normalizedAliases<T extends string | undefined>(
   primary: T,
   aliases: Array<string | undefined>,
 ): Set<T | string> {
-  return new Set([
-    primary,
-    ...aliases.flatMap((alias) => {
-      const value = alias?.trim();
-      return value ? [value] : [];
-    }),
-  ]);
+  return new Set([primary, ...normalizeTrimmedStringList(aliases)]);
 }
 
 function durableKeysByInteraction(): Map<string, Set<string>> {

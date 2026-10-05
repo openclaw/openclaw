@@ -1,17 +1,28 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
+import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import { cleanupSessionLifecycleArtifactsCore } from "../config/sessions/session-accessor.sqlite-artifact-cleanup.js";
 import { withSqliteSessionDeletions } from "../config/sessions/session-accessor.sqlite-deletion.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
+import {
+  forkSessionEntryFromParentTargetWithPatch,
+  forkSessionTranscriptFromParent,
+  prepareSessionForkTranscript,
+  resolveSessionParentForkDecision,
+} from "../config/sessions/session-accessor.sqlite-parent-session.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type {
   IncognitoLifecycleEntry,
   IncognitoLifecycleOperations,
 } from "../config/sessions/session-incognito-lifecycle-contract.js";
+import type { ParentForkEntryParams } from "../config/sessions/session-parent-fork.types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -19,16 +30,32 @@ import {
 } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import {
+  onSessionIdentityMutation,
+  type SessionIdentityMutation,
+} from "../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { beginAgentDeletionJournal, removeAgentDeletionJournal } from "./agent-deletion-journal.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
+import { createSessionRepositoryWorkspaceStore } from "./session-repository-workspaces.js";
+
+// Three retained private actors plus shared-state cleanup need four broker slots.
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 32,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
 let lossActor: IncognitoAgentDatabaseExecution;
+let sameAgentActor: IncognitoAgentDatabaseExecution;
 let lossWorker: Worker;
 let env: NodeJS.ProcessEnv;
 
@@ -48,9 +75,16 @@ beforeAll(async () => {
       env,
       authority,
     });
-    assert(opened && loss);
+    const sameAgent = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: tempDirs.make("incognito-lifecycle-peer-") },
+      authority,
+    });
+    assert(opened && loss && sameAgent);
     actor = opened;
     lossActor = loss;
+    sameAgentActor = sameAgent;
     const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "loss", env });
     const index = posted.mock.calls.findIndex(
       ([message]) =>
@@ -64,7 +98,7 @@ beforeAll(async () => {
   }
 });
 afterAll(async () => {
-  await Promise.all([actor?.close(), lossActor?.close()]);
+  await Promise.all([actor?.close(), lossActor?.close(), sameAgentActor?.close()]);
   await closeOpenClawStateDatabaseAsync();
 });
 
@@ -118,23 +152,14 @@ function remove(
   capture?: Parameters<IncognitoAgentDatabaseExecution["sessions"]["lifecycle"]>[3],
 ): Promise<IncognitoLifecycleOperations["session.lifecycle.delete"]["output"]> {
   if (!capture) {
-    return withDeletion([target], (assertCurrent, captured) =>
-      remove(
-        target,
-        reason,
-        owner,
-        {
-          assertCurrent() {
-            assertCurrent();
-            source.assertCurrent();
-          },
-          authorize(stage, facts) {
-            return source.authorize?.(stage, facts);
-          },
-        },
-        captured,
-      ),
-    );
+    return deleteSessionEntryLifecycle({
+      kind: "incognito",
+      actor: owner,
+      authority: source,
+      env,
+      target,
+      reason,
+    });
   }
   return owner.sessions.lifecycle(
     source,
@@ -304,6 +329,42 @@ it("forks the actor's checked transcript and preserves child lineage after delet
   }
 });
 
+it("captures the fork point before deferred composition", async () => {
+  const parent = await create("captured-fork-parent");
+  await append(parent, "completed answer");
+  const pendingUser = await actor.sessions.transcript(authority, {
+    type: "session.message.append",
+    input: {
+      sessionKey: parent.sessionKey,
+      sessionId: parent.entry.sessionId,
+      fence: { expectedLifecycleRevision: parent.entry.lifecycleRevision },
+      message: { role: "user", content: "pending question", timestamp: 10_001 },
+    },
+  });
+  assert(pendingUser.ok && pendingUser.value.append);
+  const input: Parameters<
+    typeof captureOpenClawAgentDatabaseExecution.forkIncognitoSessionFromParent
+  >[0] = {
+    source: actor,
+    destination: actor,
+    sourceAuthority: authority,
+    destinationAuthority: authority,
+    parent,
+    childSessionKey: "agent:main:dashboard:incognito-captured-fork-child",
+    supportsCliSessionFork: () => false,
+    async buildEntry() {
+      return { ...parent.entry, sessionId: "captured-fork-child" };
+    },
+  };
+  const pending = captureOpenClawAgentDatabaseExecution.forkIncognitoSessionFromParent(input);
+  input.forkFrom = "last-completed";
+  const fork = await pending;
+  assert(fork);
+  const next = await append({ sessionKey: input.childSessionKey, entry: fork }, "child answer");
+  assert(next.ok && next.value.append);
+  expect(next.value.append.effectiveParentId).toBe(pendingUser.value.append.messageId);
+});
+
 it("settles source preparation before a cross-agent fork and rechecks source lifetime after callbacks", async () => {
   const parent = await create("cross-parent");
   const last = await append(parent, "cross-agent answer");
@@ -469,6 +530,249 @@ it.each([
   },
 );
 
+it("composes parent fork facades with token decisions, CLI bindings, and no caller-thread SQL", async () => {
+  const parentKey = "agent:main:dashboard:incognito-facade-parent";
+  const created = await actor.sessions.create(authority, {
+    sessionKey: parentKey,
+    entry: {
+      sessionId: "facade-parent",
+      updatedAt: 10_000,
+      incognito: true,
+      cliSessionBindings: {
+        synthetic: {
+          sessionId: "native-parent",
+          resumeCheckpointId: "checkpoint",
+          forceReuse: true,
+        },
+      },
+    },
+  });
+  assert(created.entry);
+  const parent = { sessionKey: parentKey, entry: created.entry };
+  const appended = await append(parent, "inherited facade answer");
+  assert(appended.ok && appended.value.append);
+  const childKey = "agent:main:dashboard:incognito-facade-child";
+  const binding = { source: { actor, authority, sessionKey: parentKey } };
+  const registry = createEmptyPluginRegistry();
+  registry.cliBackends.push({
+    pluginId: "synthetic-fork",
+    source: "test",
+    backend: {
+      id: "synthetic",
+      config: { command: "synthetic", forkArg: "--fork", resumeAtArg: "--resume-at" },
+    },
+  });
+  markPluginRegistryActive(registry);
+  const sql = observeHostDataSql();
+  try {
+    const params = {
+      storePath: actor.path,
+      parentEntry: parent.entry,
+      parentSessionKey: parentKey,
+      sessionKey: childKey,
+    };
+    expect(await resolveSessionParentForkDecision(params, binding)).toMatchObject({
+      status: "fork",
+    });
+    const prepared = await prepareSessionForkTranscript(params, binding);
+    expect(prepared.status).toBe("prepared");
+    const entryParams: ParentForkEntryParams = {
+      storePath: actor.path,
+      parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey, parentKey] },
+      sessionTarget: { canonicalKey: childKey, storeKeys: [childKey, childKey] },
+      fallbackEntry: { sessionId: "placeholder", updatedAt: 10_000, incognito: true },
+    };
+    const fork = await withPluginRuntimeRegistryScope(registry, () =>
+      forkSessionEntryFromParentTargetWithPatch(
+        entryParams,
+        { forked: { label: "Forked child" } },
+        binding,
+      ),
+    );
+    assert(fork.status === "forked");
+    expect(fork.sessionEntry).toMatchObject({
+      label: "Forked child",
+      forkSource: { sessionKey: parentKey, sessionId: parent.entry.sessionId },
+      cliSessionBindings: {
+        synthetic: {
+          sessionId: "native-parent",
+          resumeCheckpointId: "checkpoint",
+          forkNextResume: true,
+        },
+      },
+    });
+    expect(fork.sessionEntry.cliSessionBindings?.synthetic?.forceReuse).toBeUndefined();
+    const appendedChild = await append(
+      { sessionKey: childKey, entry: fork.sessionEntry },
+      "child answer",
+    );
+    assert(appendedChild.ok && appendedChild.value.append);
+    expect(appendedChild.value.append.effectiveParentId).toBe(appended.value.append.messageId);
+    expect(
+      await forkSessionEntryFromParentTargetWithPatch(
+        entryParams,
+        { skipExisting: true, skipped: { label: "Skipped existing" } },
+        binding,
+      ),
+    ).toMatchObject({
+      status: "skipped",
+      reason: "existing-entry",
+      sessionEntry: { sessionId: fork.sessionEntry.sessionId, label: "Skipped existing" },
+    });
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+    markPluginRegistryRetired(registry);
+  }
+});
+
+it.each([false, true])(
+  "composes transcript-only forks with token refusal and commit authority (cross-agent: %s)",
+  async (crossAgent) => {
+    const suffix = crossAgent ? "cross" : "same";
+    const parent = await create(`facade-${suffix}-parent`);
+    const appended = await append(parent, "private answer");
+    assert(appended.ok && appended.value.append);
+    const destination = crossAgent ? lossActor : actor;
+    const childKey = `agent:${destination.agentId}:dashboard:incognito-facade-${suffix}-child`;
+    const params = {
+      storePath: actor.path,
+      targetStorePath: destination.path,
+      parentEntry: parent.entry,
+      parentSessionKey: parent.sessionKey,
+      sessionKey: childKey,
+      targetSessionId: `facade-${suffix}-child`,
+    };
+    const binding = {
+      source: { actor, authority, sessionKey: parent.sessionKey },
+      destination: { actor: destination, authority },
+    };
+    const sql = observeHostDataSql();
+    try {
+      expect(
+        await forkSessionTranscriptFromParent(
+          { ...params, enforceTokenLimit: true, maxTokens: 1 },
+          binding,
+        ),
+      ).toMatchObject({ status: "too-large" });
+      let allowed = true;
+      await expect(
+        forkSessionTranscriptFromParent(params, {
+          source: {
+            ...binding.source,
+            authority: {
+              assertCurrent() {
+                if (!allowed) {
+                  throw new Error("source permission revoked");
+                }
+              },
+            },
+          },
+          destination: {
+            actor: destination,
+            authority: {
+              assertCurrent() {},
+              authorize(stage) {
+                if (stage === "transaction") {
+                  allowed = false;
+                }
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow("source permission revoked");
+      const fork = await forkSessionTranscriptFromParent(params, binding);
+      expect(fork).toMatchObject({
+        status: "created",
+        transcript: { sessionId: params.targetSessionId },
+      });
+      const child = await create(params.targetSessionId, destination, destination.agentId);
+      const next = await append(child, "child continues", destination);
+      assert(next.ok && next.value.append);
+      expect(next.value.append.effectiveParentId).toBe(appended.value.append.messageId);
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  },
+);
+
+it.each(["transaction", "commit"] as const)(
+  "checks the destination %s grant for equal fork keys in separate actor namespaces",
+  async (deniedStage) => {
+    const parent = await create(`same-key-${deniedStage}`);
+    await append(parent, "private parent transcript");
+    const targetSessionId = `${parent.entry.sessionId}-child`;
+    const sql = observeHostDataSql();
+    try {
+      await expect(
+        forkSessionTranscriptFromParent(
+          {
+            storePath: actor.path,
+            targetStorePath: sameAgentActor.path,
+            parentEntry: parent.entry,
+            parentSessionKey: parent.sessionKey,
+            sessionKey: parent.sessionKey,
+            targetSessionId,
+          },
+          {
+            source: { actor, authority, sessionKey: parent.sessionKey },
+            destination: {
+              actor: sameAgentActor,
+              authority: {
+                assertCurrent() {},
+                authorize(stage) {
+                  if (stage === deniedStage) {
+                    throw new Error("destination fork denied");
+                  }
+                },
+              },
+            },
+          },
+        ),
+      ).rejects.toThrow("destination fork denied");
+      const child = await sameAgentActor.sessions.create(authority, {
+        sessionKey: parent.sessionKey,
+        entry: { ...parent.entry, sessionId: targetSessionId },
+      });
+      assert(child.entry);
+      const snapshot = await sameAgentActor.sessions.history(authority, {
+        type: "session.history.hydrate",
+        input: {
+          sessionKey: parent.sessionKey,
+          sessionId: targetSessionId,
+          lifecycleRevision: child.entry.lifecycleRevision,
+        },
+      });
+      assert(snapshot.kind === "full");
+      expect(snapshot.snapshot.events).toHaveLength(1);
+      expect(snapshot.snapshot.events[0]).toMatchObject({ type: "session", id: targetSessionId });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  },
+);
+
+it("cleans repository ownership after actor deletion without reopening its sentinel", async () => {
+  const target = await create("repository-cleanup");
+  const repositories = createSessionRepositoryWorkspaceStore({ env });
+  const workspace = await repositories.create({
+    agentId: actor.agentId,
+    sessionKey: target.sessionKey,
+    url: "https://example.test/synthetic.git",
+    assertCurrent() {},
+  });
+  const sql = observeHostDataSql();
+  try {
+    expect(await remove(target)).toMatchObject({ deleted: true, archivedTranscripts: [] });
+    expect(await repositories.get(workspace.workspaceId)).toBeUndefined();
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+});
+
 it("rechecks reclamation snapshots and preserves sessions outside the selected lifecycle", async () => {
   const target = await create("reclaim-target");
   const sibling = await create("retained-reclaim-sibling");
@@ -486,16 +790,40 @@ it("rechecks reclamation snapshots and preserves sessions outside the selected l
   expect(plan.entries.map(({ sessionKey }) => sessionKey)).toEqual([target.sessionKey]);
   await append(target, "changed after plan");
   await expect(reclaim(plan)).rejects.toThrow("state changed before deletion");
+  const mutations: SessionIdentityMutation[] = [];
+  const unsubscribe = onSessionIdentityMutation((mutation) => mutations.push(mutation));
   const sql = observeHostDataSql();
   try {
     const fresh = await prepare();
     expect(fresh.entries.map(({ sessionKey }) => sessionKey)).toEqual([target.sessionKey]);
-    expect(await reclaim(fresh)).toEqual({ archivedTranscripts: [], removedEntries: 1 });
+    expect(
+      await cleanupSessionLifecycleArtifactsCore({
+        kind: "incognito",
+        actor,
+        authority,
+        env,
+        input: {
+          sessionKeySegmentPrefix: "dashboard:incognito-reclaim-",
+          transcriptContentMarker: "synthetic cleanup",
+          orphanTranscriptMinAgeMs: 0,
+          nowMs: Date.now() + 86_400_000,
+        },
+      }),
+    ).toEqual({ archivedTranscriptArtifacts: 0, removedEntries: 1 });
+    expect(mutations).toEqual([
+      {
+        agentId: actor.agentId,
+        databaseIdentity: actor.identity.incarnation,
+        kind: "delete",
+        previous: { sessionId: target.entry.sessionId, sessionKeys: [target.sessionKey] },
+      },
+    ]);
     expect(
       (await actor.sessions.read(authority, { sessionKey: sibling.sessionKey })).entry?.sessionId,
     ).toBe(sibling.entry.sessionId);
     expect(sql.queries).toEqual([]);
   } finally {
+    unsubscribe();
     sql.restore();
   }
 });
@@ -603,3 +931,39 @@ it.each(["commit", "rollback", "actor loss"] as const)(
     }
   },
 );
+
+it("observes a foreign deletion fence on the retained actor", async () => {
+  const target = await create("foreign-deletion-fence");
+  const root = path.join(path.dirname(actor.path), "foreign-fence");
+  const operationId = "foreign-deletion";
+  beginAgentDeletionJournal(
+    {
+      agentId: "foreign-fence",
+      operationId,
+      agentDir: root,
+      workspaceDir: path.join(root, "workspace"),
+      sessionsDir: path.join(root, "sessions"),
+      deleteFiles: true,
+    },
+    { env },
+  );
+  // A foreign commit has no host publication; the worker must read the current journal row.
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      db.prepare("UPDATE agent_deletion_journal SET agent_id = ? WHERE agent_id = ?").run(
+        actor.agentId,
+        "foreign-fence",
+      );
+    },
+    { env },
+  );
+  try {
+    expect(() => actor.assertCurrent()).not.toThrow();
+    const failure: unknown = await actor.sessions
+      .read(authority, { sessionKey: target.sessionKey })
+      .catch((error: unknown) => error);
+    expect(formatErrorMessage(failure)).toContain("is deleted");
+  } finally {
+    removeAgentDeletionJournal(actor.agentId, operationId, { env });
+  }
+});

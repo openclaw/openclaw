@@ -1,7 +1,6 @@
 // Per-session virtualizer host: scroll anchoring, measurement, and row sync
 // for one transcript. Owned and swapped by ChatTranscriptController.
-import { VirtualizerController } from "@tanstack/lit-virtual";
-import { observeElementRect } from "@tanstack/virtual-core";
+import { Virtualizer } from "@tanstack/virtual-core";
 import {
   nothing,
   type ReactiveController,
@@ -27,7 +26,6 @@ import {
   reconcileInitialTranscriptOffset,
   resolveTranscriptScrollMargin,
   PositionRailGutterController,
-  syncScrollMargin,
 } from "./chat-transcript-geometry.ts";
 import { reconcileTranscriptHeaderMargin } from "./chat-transcript-header.ts";
 import {
@@ -37,13 +35,13 @@ import {
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { renderChatTranscriptLayout, type TranscriptRow } from "./chat-transcript-layout.ts";
 import {
-  createTranscriptOffsetState,
   isTranscriptMaintenanceScroll,
   isTranscriptManualScroll,
   isTranscriptProgrammaticScroll,
   observeTranscriptOffset,
   scrollTranscriptOffset,
   scrollTranscriptToEnd,
+  TranscriptOffsetState,
 } from "./chat-transcript-offset-observer.ts";
 import { activeTranscriptMessageId } from "./chat-transcript-position.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
@@ -62,19 +60,20 @@ import {
   type TranscriptHeader,
   type TranscriptRenderSnapshot,
 } from "./chat-transcript-session.ts";
+import { TranscriptViewportRect } from "./chat-transcript-viewport-rect.ts";
 
 export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscriptSession {
-  private readonly offsetState = createTranscriptOffsetState();
+  private readonly offsetState = new TranscriptOffsetState();
   readonly entryAnimations = new ChatMessageEntryAnimations();
   expandedAssistantMessages = new Map<string, AssistantMessageExpansionState>();
   private readonly controllers = new Set<ReactiveController>();
   private readonly positionRail: PositionRailGutterController;
-  private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
+  private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
+  private readonly updateVirtualizer: () => void;
+  private readonly viewportRect: TranscriptViewportRect;
   private readonly presentation: TranscriptPresentation;
   private threadInnerElement: HTMLDivElement | null = null;
   connected = false;
-  private observedWidth: number | null = null;
-  private observedHeight: number | null = null;
   private contentReady = false;
   // The in-flow history header's fixed height, folded into scrollMargin.
   // appliedHeaderHeight is what the current virtualizer margin already carries.
@@ -86,7 +85,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.endAnchor.recordLayoutCorrection(before, after),
   );
   private readonly followEnd = () => this.scrollToEnd({ source: "auto", behavior: "auto" });
-  private pendingScrollFrame: number | null = null;
   private readonly scrollRestoreHost: TranscriptScrollRestoreHost;
   private readonly messageReveal = new ChatMessageReveal();
   // Lit calls refs before newly rendered nodes are connected. Resolve the
@@ -116,10 +114,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.scrollElementAttachQueued = true;
     queueMicrotask(() => {
       this.scrollElementAttachQueued = false;
-      const instance = this.virtualizerController.getVirtualizer();
+      const instance = this.virtualizer;
       if (this.connected && instance.scrollElement !== this.scrollElement) {
         this.layout.connect(this.scrollElement);
-        this.virtualizerController.hostUpdated();
+        this.updateVirtualizer();
         this.host.requestUpdate();
       }
     });
@@ -141,10 +139,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     // Native input can land after takeover but before its offset observer.
     // Refresh the offset and direction before compensating deferred row growth.
     this.offsetState.syncNativeOffset?.();
-    return measureConnectedTranscriptRows(
-      this.scrollElement,
-      this.virtualizerController.getVirtualizer(),
-    );
+    return measureConnectedTranscriptRows(this.scrollElement, this.virtualizer);
   }
   private readonly handleGeometryCommit = (event: Event) => {
     this.reconcileInteractionResize(event.target);
@@ -157,7 +152,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       return;
     }
     // The viewport observer must not repeat this committed width's row scan.
-    this.observedWidth = Math.round(rect.width);
+    this.viewportRect.recordMeasuredWidth(rect.width);
     this.measureConnectedRows();
   };
   private rowKeys: readonly string[] = [];
@@ -178,8 +173,20 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     private readonly callbacks: TranscriptCallbacks = {},
   ) {
     this.positionRail = new PositionRailGutterController(this, () => this.threadInnerElement);
+    this.viewportRect = new TranscriptViewportRect({
+      getScrollElement: () => this.scrollElement,
+      getHeaderHeight: () => this.appliedHeaderHeight,
+      positionRail: this.positionRail,
+      commitComposerResize: () => this.commitComposerResize(true),
+      measureConnectedRows: () => this.measureConnectedRows(),
+      queueRowMeasure: () => this.presentation.queueRowMeasure(),
+      onViewportResize: () => this.callbacks.onViewportResize?.(),
+      requestUpdate: () => this.host.requestUpdate(),
+    });
     this.implicitEndAnchorPending = initialOffset === null;
-    this.virtualizerController = new VirtualizerController(this, {
+    this.virtualizer = new Virtualizer({
+      // Every geometry notification must commit before paint, including non-sync measurements.
+      onChange: () => this.host.requestUpdate(),
       count: 0,
       getScrollElement: () => this.scrollElement,
       estimateSize: () => CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
@@ -190,41 +197,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       followOnAppend: false,
       scrollToFn: (offset, options, instance) =>
         scrollTranscriptOffset(this.offsetState, offset, options, instance),
-      observeElementRect: (instance, callback) =>
-        observeElementRect(instance, (rect) => {
-          // Hidden tabs and detached faces are not viewport resizes. Keep the
-          // last measurable geometry until this session's scroller returns.
-          if (instance.scrollElement !== this.scrollElement || !rect.width || !rect.height) {
-            return;
-          }
-          const railGeometry = this.positionRail.read();
-          const scrollMargin = resolveTranscriptScrollMargin(
-            instance.scrollElement,
-            this.appliedHeaderHeight,
-          );
-          this.commitComposerResize(true);
-          const widthChanged = this.observedWidth !== null && this.observedWidth !== rect.width;
-          const heightChanged = this.observedHeight !== null && this.observedHeight !== rect.height;
-          this.observedWidth = rect.width;
-          this.observedHeight = rect.height;
-          // appliedHeaderHeight, not headerHeight: only the render paths fold a
-          // header toggle into the margin, because they own its compensation.
-          syncScrollMargin(instance, scrollMargin);
-          callback(rect);
-          if (widthChanged) {
-            // Keep stale offscreen sizes as estimates — a full measure() wipe
-            // has no scroll compensation and teleports the reader. resizeItem
-            // re-seeds connected rows with fold-based compensation, so the
-            // anchor row holds still; offscreen rows correct as they connect.
-            this.measureConnectedRows();
-            this.presentation.queueRowMeasure();
-          }
-          this.positionRail.sync(railGeometry);
-          if (widthChanged || heightChanged) {
-            this.callbacks.onViewportResize?.();
-            this.host.requestUpdate();
-          }
-        }),
+      observeElementRect: this.viewportRect.observe,
       observeElementOffset: (instance, callback) =>
         observeTranscriptOffset(
           {
@@ -264,13 +237,21 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       scrollEndThreshold: -1,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
-    this.presentation = new TranscriptPresentation(
-      this,
-      this.virtualizerController.getVirtualizer(),
-      callbacks,
-      () => this.measureConnectedRows(),
+    // Virtual-core exposes these lifecycle hooks as bound arrow functions.
+    const { _didMount: mountVirtualizer, _willUpdate: updateVirtualizer } = this.virtualizer;
+    this.updateVirtualizer = updateVirtualizer;
+    let cleanupVirtualizer: (() => void) | undefined;
+    this.addController({
+      hostConnected: () => {
+        cleanupVirtualizer = mountVirtualizer();
+      },
+      hostUpdated: this.updateVirtualizer,
+      hostDisconnected: () => cleanupVirtualizer?.(),
+    });
+    this.presentation = new TranscriptPresentation(this, this.virtualizer, callbacks, () =>
+      this.measureConnectedRows(),
     );
-    this.rowRefs = new TranscriptRowRefs(this.virtualizerController.getVirtualizer(), {
+    this.rowRefs = new TranscriptRowRefs(this.virtualizer, {
       isCurrentRow: (element, key) =>
         this.threadInnerElement?.contains(element) === true && this.rowIndexesByKey.has(key),
       onMount: (key) => {
@@ -285,16 +266,12 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     });
     this.scrollRestoreHost = {
       offsetState: this.offsetState,
-      virtualizer: this.virtualizerController.getVirtualizer(),
+      virtualizer: this.virtualizer,
       getScrollElement: () => this.scrollElement,
       isContentReady: () => this.contentReady,
       getRowCount: () => this.rowKeys.length,
       isConnected: () => this.connected,
-      getPendingScrollFrame: () => this.pendingScrollFrame,
-      setPendingScrollFrame: (frame) => {
-        this.pendingScrollFrame = frame;
-      },
-      requestUpdate: this.requestUpdate,
+      pendingScrollFrame: null,
       onReaderScroll: () => this.callbacks.onReaderScroll?.(),
     };
     if (initialOffset !== null) {
@@ -341,6 +318,11 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
   }
 
+  syncViewportGeometry(): void {
+    this.layout.sync();
+    this.viewportRect.sync();
+  }
+
   private commitComposerResize(changed: boolean): void {
     const correction = this.endAnchor.commitComposerResize(
       this.scrollElement,
@@ -367,10 +349,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.reconcileInteractionResize();
     if (
       !this.offsetState.touchActive &&
-      this.prependAnchor.update(
-        this.scrollElement,
-        this.virtualizerController.getVirtualizer(),
-        () => this.measureConnectedRows(),
+      this.prependAnchor.update(this.scrollElement, this.virtualizer, () =>
+        this.measureConnectedRows(),
       )
     ) {
       this.offsetState.syncNativeOffset?.();
@@ -411,9 +391,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.offsetState.touchScrolling = false;
     this.renderPreviousRows = null;
     this.messageReveal.clear();
-    if (this.pendingScrollFrame !== null) {
-      cancelAnimationFrame(this.pendingScrollFrame);
-      this.pendingScrollFrame = null;
+    if (this.scrollRestoreHost.pendingScrollFrame !== null) {
+      cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
+      this.scrollRestoreHost.pendingScrollFrame = null;
     }
     this.threadInnerElement = null;
     if (!this.connected) {
@@ -458,7 +438,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.offsetState.renderedScrollState = this.offsetState.renderState(
       this.scrollElement !== null && this.endAnchor.atEnd,
     );
-    const virtualizer = this.virtualizerController.getVirtualizer();
+    const virtualizer = this.virtualizer;
     // Keep old geometry during the gesture, while still virtualizing that old
     // row model as the reader moves. Only the history insertion is held back.
     if (
@@ -497,7 +477,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       rows.length !== this.rowKeys.length ||
       rows.some((row, index) => row.key !== this.rowKeys[index]);
     const nextKeys = rowModelChanged ? rows.map((row) => row.key) : this.rowKeys;
-    const virtualizer = this.virtualizerController.getVirtualizer();
+    const virtualizer = this.virtualizer;
     const nextRowKeys = rowModelChanged
       ? nextKeys
       : virtualizer.getVirtualItems().flatMap(({ index }) => rows[index]?.key ?? []);
@@ -511,6 +491,12 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           snapshot.entryKeys,
           announce && !this.offsetState.pendingScrollOffset,
         );
+        if (
+          (rowModelChanged || this.messageRowKeysById !== messageRows) &&
+          this.offsetState.scrollCommand?.target === "message"
+        ) {
+          queueMicrotask(() => this.completeMessageReveal());
+        }
         this.messageRowKeysById = messageRows;
         this.prependAnchor.committedMessageRows = renderKeyRows;
         this.renderPreviousRows = () => this.renderCommittedRows(snapshot, false);
@@ -592,7 +578,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   private canAutoFollow(): boolean {
-    return this.callbacks.canFollowEnd?.() ?? true;
+    const command = this.offsetState.scrollCommand;
+    return (!command || command.target === "end") && (this.callbacks.canFollowEnd?.() ?? true);
   }
 
   scrollToEnd({ source = "manual", behavior = "auto" }: ChatScrollToEndOptions = {}): boolean {
@@ -603,7 +590,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
     scrollTranscriptToEnd(
       this.offsetState,
-      this.virtualizerController.getVirtualizer(),
+      this.virtualizer,
       { source, behavior },
       () => this.cancelScroll(),
       () => this.presentation.queueRowMeasure(),
@@ -629,17 +616,15 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
     this.offsetState.scrollCommand = null;
     this.offsetState.pendingScrollOffset = null;
-    if (this.pendingScrollFrame !== null) {
-      cancelAnimationFrame(this.pendingScrollFrame);
-      this.pendingScrollFrame = null;
+    if (this.scrollRestoreHost.pendingScrollFrame !== null) {
+      cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
+      this.scrollRestoreHost.pendingScrollFrame = null;
     }
     const element = this.scrollElement;
     if (element) {
       // Cancellation is one instant target replacement, never the multi-frame
       // restoration API.
-      this.virtualizerController
-        .getVirtualizer()
-        .scrollToOffset(element.scrollTop, { behavior: "instant" });
+      this.virtualizer.scrollToOffset(element.scrollTop, { behavior: "instant" });
     }
   }
 
@@ -656,7 +641,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   activeMessageId(messageIds: readonly string[]): string | null {
     return activeTranscriptMessageId(
       this.scrollElement,
-      this.virtualizerController.getVirtualizer(),
+      this.virtualizer,
       messageIds,
       this.messageRowKeysById,
       this.rowIndexesByKey,
@@ -664,18 +649,22 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   revealMessage(messageId: string): boolean {
-    const rowKey = this.messageRowKeysById.get(messageId);
-    const rowIndex = rowKey ? this.rowIndexesByKey.get(rowKey) : undefined;
-    if (rowIndex === undefined) {
+    const rowKey =
+      this.messageRowKeysById.get(messageId) ?? this.candidateMessageRowKeysById.get(messageId);
+    if (!rowKey) {
       return false;
     }
     this.cancelScroll();
+    // History can be projected while scrolling or MCP teardown still holds the old rows.
     this.offsetState.scrollCommand = {
       behavior: resolveScrollBehavior(),
       target: "message",
       messageId,
     };
-    this.virtualizerController.getVirtualizer().scrollToIndex(rowIndex, { align: "center" });
+    const rowIndex = this.rowIndexesByKey.get(rowKey);
+    if (rowIndex !== undefined) {
+      this.virtualizer.scrollToIndex(rowIndex, { align: "center" });
+    }
     this.host.requestUpdate();
     void this.host.updateComplete.then(() => this.completeMessageReveal());
     return true;
@@ -686,7 +675,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     if (command?.target !== "message") {
       return;
     }
-    const virtualizer = this.virtualizerController.getVirtualizer();
+    const virtualizer = this.virtualizer;
     if (this.messageReveal.reveal(this.threadInnerElement, command, virtualizer)) {
       this.offsetState.scrollCommand = { behavior: command.behavior, target: "index" };
       return;
@@ -725,7 +714,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   private reconcileInteractionResize(sidebarCommitTarget?: EventTarget | null): void {
-    const virtualizer = this.virtualizerController.getVirtualizer();
+    const virtualizer = this.virtualizer;
     if (
       reconcileChatTranscriptInteractionResize(
         this.offsetState.pendingInteractionAnchor,
@@ -739,7 +728,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   private syncRows(nextKeys: readonly string[]): void {
-    const virtualizer = this.virtualizerController.getVirtualizer();
+    const virtualizer = this.virtualizer;
     const typingAdded =
       !this.rowIndexesByKey.has("presence:typing") && nextKeys.includes("presence:typing");
     // Remote typing is presence, not a local request to move the viewport.
@@ -769,10 +758,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     if (!this.implicitEndAnchorPending || !this.connected || !this.contentReady) {
       return;
     }
-    const result = reconcileInitialTranscriptOffset(
-      this.scrollElement,
-      this.virtualizerController.getVirtualizer(),
-    );
+    const result = reconcileInitialTranscriptOffset(this.scrollElement, this.virtualizer);
     this.implicitEndAnchorPending = result === "pending";
     if (result !== "pending" && this.canAutoFollow()) {
       this.endAnchor.capture(this.scrollElement);

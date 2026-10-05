@@ -1,5 +1,7 @@
 // OpenClaw-authored rich block subset plus size accounting and the plain-text
 // projection shared by the emitter, splitter, and fallback paths.
+import type { User } from "grammy/types";
+
 export type TelegramRichBlocksDegradationReason = "list-limit" | "table-ascii" | "nesting-limit";
 
 export type RichText =
@@ -22,6 +24,11 @@ export type RichText =
       type: "url";
       text: RichText;
       url: string;
+    }
+  | {
+      type: "text_mention";
+      text: RichText;
+      user: User;
     }
   | {
       type: "anchor_link";
@@ -123,6 +130,18 @@ export type InputRichBlock =
       height: number;
       caption?: RichBlockCaption;
     };
+
+const TELEGRAM_USER_MENTION_HREF_RE = /^tg:\/\/user\?id=(\d+)$/i;
+
+// Telegram HTML turns tg://user?id= links into mentions server-side; rich
+// blocks are already structured, so the mention has to be explicit here.
+// Only the ID comes from the link; is_bot and first_name fill the wire type.
+export function richTextLink(text: RichText, url: string): RichText {
+  const id = Number(TELEGRAM_USER_MENTION_HREF_RE.exec(url)?.[1]);
+  return Number.isSafeInteger(id)
+    ? { type: "text_mention", text, user: { id, is_bot: false, first_name: "" } }
+    : { type: "url", text, url };
+}
 
 export function normalizeRichText(value: RichText, depth = 0): RichText {
   if (depth >= MAX_RICH_BLOCK_NESTING) {

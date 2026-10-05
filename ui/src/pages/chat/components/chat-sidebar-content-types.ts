@@ -24,6 +24,7 @@ type MarkdownSidebarContent = {
   kind: "markdown";
   content: string;
   rawText?: string | null;
+  fileLinkSessionKey?: string;
 };
 
 type CanvasSidebarContent = {
@@ -101,8 +102,8 @@ type SessionDiffSidebarContent = {
 };
 
 type FileSaveOutcome =
-  | { ok: true; hash: string; updatedAtMs?: number }
-  | { ok: false; code: "conflict"; currentHash?: string }
+  | { ok: true; hash: string }
+  | { ok: false; code: "conflict" }
   | { ok: false; code: "error"; message: string };
 
 type FileSidebarEdit = {
@@ -114,11 +115,14 @@ type FileSidebarEdit = {
 
 export type FileSidebarNavigation = { line: number };
 
+export type SessionFileSource = { sessionKey: string; agentId?: string; path: string };
+
 export type FileSidebarContent = {
   kind: "file";
   path: string;
   name: string;
   content: string;
+  sessionFileSource?: SessionFileSource;
   /** Stable per-session identity used to retain an unsaved in-memory draft. */
   draftKey?: string;
   /** Captured display context; the draft key is opaque and never a UI label. */

@@ -1,4 +1,3 @@
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
@@ -6,6 +5,7 @@ import {
   readSessionTranscriptWatermark,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   SessionTranscriptWriterClaimReboundError,
@@ -21,8 +21,8 @@ import { createEventBus } from "./event-bus.js";
 import { loadExtensionFromFactory } from "./extensions/loader.js";
 import type { ExtensionAPI } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
-import { DefaultResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
+import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import type { ModelChangeEntry, ThinkingLevelChangeEntry } from "./session-manager-types.js";
 import * as writeAdmission from "./session-manager-write-admission.js";
@@ -63,11 +63,11 @@ it("restores prepared session context without waiting for an unrelated database 
       });
     const authStorage = AuthStorage.inMemory();
     const restored = createAgentSession({
+      systemPrompt: "Test session prompt",
       cwd: state.workspaceDir,
-      agentDir: state.agentDir("main"),
       model: testModel,
-      noTools: "all",
-      authStorage,
+      thinkingLevel: "medium" as const,
+      tools: [],
       modelRegistry: ModelRegistry.inMemory(authStorage),
       sessionManager: manager,
       settingsManager: SettingsManager.inMemory(),
@@ -90,7 +90,7 @@ it("restores prepared session context without waiting for an unrelated database 
   });
 });
 
-it.each(["model", "thinking", "resource loading"] as const)(
+it.each(["model", "thinking", "context loading"] as const)(
   "rejects SDK exposure after retargeting during %s initialization",
   async (after) => {
     await withOpenClawTestState({ label: `sdk-metadata-${after}` }, async (state) => {
@@ -114,11 +114,6 @@ it.each(["model", "thinking", "resource loading"] as const)(
       });
       const replacementBefore = await loadTranscriptEvents(replacement);
       const originalBefore = await loadTranscriptEvents(original);
-      const contextPath = path.join(state.workspaceDir, "AGENTS.md");
-      const contextContent = "Synthetic default-loader admission fixture";
-      if (after === "resource loading") {
-        await writeFile(contextPath, contextContent);
-      }
       const manager = SessionManager.open(original, state.workspaceDir);
       const completed: {
         entry?: ModelChangeEntry | ThinkingLevelChangeEntry;
@@ -139,9 +134,7 @@ it.each(["model", "thinking", "resource loading"] as const)(
       };
       const appendModel = manager.appendModelChange.bind(manager);
       const appendThinking = manager.appendThinkingLevelChange.bind(manager);
-      // Preserve the real method and invoke it with each actual loader receiver below.
-      // oxlint-disable-next-line typescript/unbound-method
-      const reload = DefaultResourceLoader.prototype.reload;
+      const readInitialContext = manager[sessionManagerReadInitialContext].bind(manager);
       const intercepted =
         after === "model"
           ? vi
@@ -153,16 +146,11 @@ it.each(["model", "thinking", "resource loading"] as const)(
             ? vi
                 .spyOn(manager, "appendThinkingLevelChange")
                 .mockImplementation((level) => retargetAfterAppend(() => appendThinking(level)))
-            : vi
-                .spyOn(DefaultResourceLoader.prototype, "reload")
-                .mockImplementation(async function (this: DefaultResourceLoader) {
-                  await reload.call(this);
-                  expect(this.getAgentsFiles().agentsFiles).toContainEqual({
-                    path: contextPath,
-                    content: contextContent,
-                  });
-                  manager.setSessionTarget(replacement);
-                });
+            : vi.spyOn(manager, sessionManagerReadInitialContext).mockImplementation(async () => {
+                const context = await readInitialContext();
+                manager.setSessionTarget(replacement);
+                return context;
+              });
       const model = {
         ...testModel,
         id: "sdk-metadata-fixture",
@@ -181,26 +169,25 @@ it.each(["model", "thinking", "resource loading"] as const)(
       expect(getOwnedSessionTranscriptWriterFence()).toBeUndefined();
 
       const outcome = await createAgentSession({
+        systemPrompt: "Test session prompt",
         cwd: state.workspaceDir,
-        agentDir: state.agentDir("main"),
         model,
         thinkingLevel: "high",
-        noTools: "all",
-        authStorage,
+        tools: [],
         modelRegistry,
         sessionManager: manager,
         settingsManager: SettingsManager.inMemory({
           compaction: { enabled: false },
           retry: { enabled: false },
         }),
-        ...(after === "resource loading" ? {} : { resourceLoader: createResourceLoader() }),
+        resourceLoader: createResourceLoader(),
       }).then(
         (value) => ({ status: "fulfilled" as const, value }),
         (error: unknown) => ({ status: "rejected" as const, error }),
       );
       try {
         expect(intercepted).toHaveBeenCalledOnce();
-        if (after === "resource loading") {
+        if (after === "context loading") {
           expect(await loadTranscriptEvents(original)).toEqual(originalBefore);
           expect.soft(await loadTranscriptEvents(replacement)).toEqual(replacementBefore);
           expect.soft(outcome.status).toBe("rejected");
@@ -268,13 +255,13 @@ it.each([
       const select = () => (selection === "branch" ? manager.branch(firstId) : manager.resetLeaf());
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const readContext = SessionManager.openModelContextAsync.bind(SessionManager);
+      const readContext = contextWorker.readSessionTranscriptModelContextInWorker;
       const intercepted =
         timing === "during"
           ? vi
-              .spyOn(SessionManager, "openModelContextAsync")
-              .mockImplementationOnce(async (scope, options) => {
-                const context = await readContext(scope, options);
+              .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+              .mockImplementationOnce(async (...args) => {
+                const context = await readContext(...args);
                 entered.resolve();
                 await release.promise;
                 return context;
@@ -285,12 +272,11 @@ it.each([
       }
       const authStorage = AuthStorage.inMemory();
       const pending = createAgentSession({
+        systemPrompt: "Test session prompt",
         cwd: state.workspaceDir,
-        agentDir: state.agentDir("main"),
         model: testModel,
         thinkingLevel: "off",
-        noTools: "all",
-        authStorage,
+        tools: [],
         modelRegistry: ModelRegistry.inMemory(authStorage),
         sessionManager: manager,
         settingsManager: SettingsManager.inMemory(),
@@ -299,13 +285,17 @@ it.each([
         (value) => ({ status: "fulfilled" as const, value }),
         (error: unknown) => ({ status: "rejected" as const, error }),
       );
-      if (timing === "during") {
-        await entered.promise;
-        select();
-        release.resolve();
-      }
-      const outcome = await pending;
       try {
+        if (timing === "during") {
+          const reachedReader = await Promise.race([
+            entered.promise.then(() => true),
+            pending.then(() => false),
+          ]);
+          expect(reachedReader, "SDK history completed before the reader pause").toBe(true);
+          select();
+          release.resolve();
+        }
+        const outcome = await pending;
         if (timing === "during") {
           expect(outcome.status).toBe("rejected");
           if (outcome.status === "rejected") {
@@ -331,6 +321,7 @@ it.each([
       } finally {
         release.resolve();
         intercepted?.mockRestore();
+        const outcome = await pending;
         if (outcome.status === "fulfilled") {
           outcome.value.session.dispose();
         }
@@ -339,11 +330,7 @@ it.each([
   },
 );
 
-async function createPersistenceExtensionSession(
-  manager: SessionManager,
-  cwd: string,
-  agentDir: string,
-) {
+async function createPersistenceExtensionSession(manager: SessionManager, cwd: string) {
   const resourceLoader = createResourceLoader();
   const extensions = resourceLoader.getExtensions();
   let loadedApi: ExtensionAPI | undefined;
@@ -359,11 +346,11 @@ async function createPersistenceExtensionSession(
   );
   const authStorage = AuthStorage.inMemory();
   const { session } = await createAgentSession({
+    systemPrompt: "Test session prompt",
     cwd,
-    agentDir,
     model: testModel,
-    noTools: "all",
-    authStorage,
+    thinkingLevel: "medium" as const,
+    tools: [],
     modelRegistry: ModelRegistry.inMemory(authStorage),
     sessionManager: manager,
     settingsManager: SettingsManager.inMemory(),
@@ -385,11 +372,7 @@ it("awaits extension entry, name, and label persistence before publishing their 
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target, state.workspaceDir);
-    const { session, api } = await createPersistenceExtensionSession(
-      manager,
-      state.workspaceDir,
-      state.agentDir("main"),
-    );
+    const { session, api } = await createPersistenceExtensionSession(manager, state.workspaceDir);
     try {
       const changes: string[] = [];
       session.subscribe((event) => {
@@ -438,7 +421,6 @@ it.each(["persistent", "detached"] as const)(
       const { session, api, runtime } = await createPersistenceExtensionSession(
         manager,
         state.workspaceDir,
-        state.agentDir("main"),
       );
       const before = manager.getEntries();
       const persistedBefore =
@@ -493,11 +475,7 @@ it("does not publish a committed session name into a manager retargeted before c
     await replacementManager.appendSessionInfoAsync("Replacement name");
     const replacementBefore = await loadTranscriptEvents(replacement);
     const manager = await SessionManager.openAsync(target, state.workspaceDir);
-    const { session } = await createPersistenceExtensionSession(
-      manager,
-      state.workspaceDir,
-      state.agentDir("main"),
-    );
+    const { session } = await createPersistenceExtensionSession(manager, state.workspaceDir);
     const committed = createDeferredCore<string>();
     const release = createDeferredCore();
     const append = manager.appendSessionInfoAsync.bind(manager);

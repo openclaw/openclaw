@@ -284,7 +284,7 @@ export async function prepareVisitorPublicationFixture(f: {
     { createEmptyPluginRegistry },
   ] = await Promise.all([
     import("../plugins/loader.js"),
-    import("../plugins/services.js"),
+    import("../plugins/services.test-support.js"),
     import("../plugins/runtime.js"),
     import("../plugins/registry-empty.js"),
   ]);
@@ -355,6 +355,9 @@ export async function prepareVisitorPublicationFixture(f: {
     },
     async readSessionFacts() {
       throw new Error("Unexpected session facts request");
+    },
+    async withSessionReadScope() {
+      throw new Error("Unexpected session read scope");
     },
     subscribeSessionChanges() {
       throw new Error("Unexpected session changes subscription");

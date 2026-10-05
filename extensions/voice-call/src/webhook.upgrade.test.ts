@@ -3,6 +3,7 @@ import http from "node:http";
 import net from "node:net";
 import type { Duplex } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, validateProviderConfig } from "./config.js";
@@ -48,6 +49,7 @@ function createServer(streaming = false, streamPath = "/voice/stream/realtime") 
   config.serve.port = 0;
   const manager = new CallManager(config);
   const server = new VoiceCallWebhookServer(
+    createTestPluginServiceScheduler(),
     config,
     manager,
     streaming ? new TwilioProvider(twilio) : new MockProvider(),
@@ -230,6 +232,7 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
     );
     const delayedHangup = vi.fn(async () => ({ success: true }));
     const server = new VoiceCallWebhookServer(
+      createTestPluginServiceScheduler(),
       config,
       {
         getCallByProviderCallId: vi.fn(() => ({ callId: "call-1" })),

@@ -634,8 +634,8 @@ function buildGoogleTransportRequestUrl(
     : buildGoogleGenerativeAiRequestUrl(model);
 }
 
-function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
-  const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
+function resolveGoogleGemini3FirstResponseRetryMs(): number {
+  const raw = process.env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
 }
 
@@ -726,24 +726,22 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
   };
 }
 
-function iteratorToAsyncGenerator<T>(
-  iterator: AsyncIterator<T>,
+async function* iterateGoogleSseChunks(
+  iterator: AsyncIterator<GoogleSseChunk>,
   cleanup?: () => void,
-): AsyncGenerator<T> {
-  return (async function* () {
-    try {
-      for (;;) {
-        const next = await iterator.next();
-        if (next.done) {
-          return;
-        }
-        yield next.value;
+): AsyncGenerator<GoogleSseChunk> {
+  try {
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) {
+        return;
       }
-    } finally {
-      cleanup?.();
-      await iterator.return?.();
+      yield next.value;
     }
-  })();
+  } finally {
+    cleanup?.();
+    await iterator.return?.();
+  }
 }
 
 type GoogleSseAttempt =
@@ -817,7 +815,7 @@ async function openGoogleSseAttempt(params: {
   return {
     type: "ready",
     ...(!first.done ? { firstChunk: first.value } : {}),
-    chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
+    chunks: iterateGoogleSseChunks(iterator, attemptSignal?.cleanup),
   };
 }
 

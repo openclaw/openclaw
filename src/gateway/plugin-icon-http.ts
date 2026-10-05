@@ -69,12 +69,7 @@ function normalizeLinkFaviconHostname(value: string): string | null {
   if (!normalized || isIP(normalized) !== 0 || isBlockedHostnameOrIp(normalized)) {
     return null;
   }
-  try {
-    const parsed = new URL(`https://${normalized}/`);
-    return parsed.hostname === normalized ? normalized : null;
-  } catch {
-    return null;
-  }
+  return URL.parse(`https://${normalized}/`)?.hostname === normalized ? normalized : null;
 }
 
 async function validateImageMime(body: Buffer, contentType: string): Promise<boolean> {
@@ -209,13 +204,9 @@ async function loadCatalogIcon(params: {
   retainFailureForMs?: number;
   limitConcurrency?: boolean;
 }): Promise<HttpImageRepresentation | null> {
-  let parsed: URL;
-  try {
-    parsed = new URL(params.iconUrl);
-  } catch {
-    return null;
-  }
+  const parsed = URL.parse(params.iconUrl);
   if (
+    !parsed ||
     parsed.protocol !== "https:" ||
     parsed.username ||
     parsed.password ||

@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import {
@@ -19,7 +20,6 @@ import {
 } from "./chat-question-answer-controls.ts";
 import "./chat-question-resource.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
-import { renderQuestionExternalStep } from "./chat-question-external-step.ts";
 
 type QuestionPanelViewModel = QuestionPanelProps["model"];
 type QuestionPanelQuestion = QuestionPanelViewModel["questions"][number];
@@ -280,28 +280,29 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
       if (!nextOption) {
         return;
       }
-      const questionIndex = this.currentQuestionIndex;
       // Arrow navigation follows radio-group focus without leaving the step.
       // Explicit activation and numeric shortcuts keep the product's auto-advance behavior.
       this.toggleOption(model, question, nextOption.value ?? nextOption.label, false);
-      if (this.currentQuestionIndex === questionIndex) {
-        void this.updateComplete.then(() =>
-          this.querySelector<HTMLButtonElement>(
-            `.chat-question-panel__option[data-option-index="${nextIndex}"]`,
-          )?.focus({ preventScroll: true }),
-        );
-      }
+      void this.updateComplete.then(() =>
+        this.querySelector<HTMLButtonElement>(
+          `.chat-question-panel__option[data-option-index="${nextIndex}"]`,
+        )?.focus({ preventScroll: true }),
+      );
       return;
     }
     const optionIndex = Number(event.key) - 1;
-    const option = question.options[optionIndex];
-    if (optionIndex >= 0 && optionIndex < 4 && option) {
+    const option = this.querySelector<HTMLButtonElement>(
+      `.chat-question-panel__option[data-option-index="${optionIndex}"]`,
+    );
+    if (optionIndex >= 0 && optionIndex < 9 && option) {
       event.preventDefault();
-      this.toggleOption(model, question, option.value ?? option.label);
+      option.click();
       return;
     }
     if (
       question.options.length > 0 &&
+      question.options.length < 9 &&
+      !question.resource &&
       question.isOther &&
       optionIndex === question.options.length
     ) {
@@ -409,7 +410,21 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
           <span class="chat-question-panel__prompt">${question.question}</span>
         </div>
 
-        ${renderQuestionExternalStep(question.url)}
+        ${
+          question.url
+            ? html`<div class="chat-question-panel__external">
+                <a
+                  class="btn btn--sm"
+                  href=${question.url}
+                  target=${EXTERNAL_LINK_TARGET}
+                  rel=${buildExternalLinkRel()}
+                >
+                  ${icons.externalLink} ${t("chat.questions.openLink")}
+                </a>
+                <span class="muted">${t("chat.questions.externalStepHint")}</span>
+              </div>`
+            : nothing
+        }
         ${renderQuestionOptions({
           question,
           selected: draft?.selected ?? new Set(),

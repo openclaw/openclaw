@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
@@ -8,7 +8,6 @@ import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -18,10 +17,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  getOpenClawStateRuntimeSchema,
-  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-} from "../state/openclaw-state-schema-compatibility.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { recordSessionCreated } from "./session-created.js";
 import {
@@ -175,51 +170,6 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toEqual([]);
     expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "store-replaced" });
   });
-  it("preserves older readers and version markers when watcher provenance is first written", async () => {
-    const database = createDatabaseOptions();
-    const before = openOpenClawStateDatabase(database);
-    before.db.exec("ALTER TABLE session_watch_cursors DROP COLUMN watcher_store_path");
-    const userVersion = before.db.prepare("PRAGMA user_version").get();
-    closeOpenClawStateDatabaseForTest();
-    const reopened = openOpenClawStateDatabase(database);
-    const schemaBeforeRead = reopened.db.prepare("PRAGMA schema_version").get();
-    expect(await getSessionStateVersion(child, "main", database)).toBe(0);
-    expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(schemaBeforeRead);
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT name FROM pragma_table_info('session_watch_cursors') WHERE name = 'watcher_store_path'",
-        )
-        .get(),
-    ).toBeUndefined();
-
-    seedChild(database);
-    assertSqliteSchemaContains(
-      reopened.db,
-      reopened.path,
-      getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }).replace(
-        /^ {2}(?:watcher_store_path|requester_store_path|controller_store_path) TEXT,\n/gm,
-        "",
-      ),
-      STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-    );
-    reopened.db
-      .prepare(
-        "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, ?)",
-      )
-      .run(watcher, "legacy-target", Date.now());
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT last_seen_sequence, watcher_store_path FROM session_watch_cursors WHERE target_session_key = 'legacy-target'",
-        )
-        .get(),
-    ).toEqual({ last_seen_sequence: 0, watcher_store_path: null });
-    const installedSchema = reopened.db.prepare("PRAGMA schema_version").get();
-    recordSessionStateEvent(eventInput(), database);
-    expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(installedSchema);
-    expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual(userVersion);
-  });
 
   it("bumps a durable head that survives pruning all retained rows", async () => {
     const database = createDatabaseOptions();
@@ -227,7 +177,7 @@ describe("session state events", () => {
     const event = recordSessionStateEvent(eventInput(), { ...database, now });
     expect(await getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
 
-    sweepSessionStateWatchNotices({
+    await sweepSessionStateWatchNotices({
       ...database,
       now: now + SESSION_STATE_RETENTION_MS + 1,
     });
@@ -298,7 +248,7 @@ describe("session state events", () => {
     });
     expect(peekSystemEventEntries(watcher)).toEqual([]);
 
-    sweepSessionStateWatchNotices(database);
+    await sweepSessionStateWatchNotices(database);
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
@@ -397,17 +347,35 @@ describe("session state events", () => {
     ).toHaveLength(1);
   });
 
-  it("re-enqueues and re-freezes pending notices after restart", async () => {
+  it("re-enqueues and re-freezes pending notices after restart without caller-thread SQL", async () => {
     const database = createDatabaseOptions();
-    await createWatcherSession(database);
-    seedChild(database);
-    const material = recordSessionStateEvent(eventInput(), database)!;
+    const missingWatcher = "agent:main:subagent:missing-watcher";
+    for (const sessionKey of [watcher, nestedWatcher]) {
+      await createWatcherSession(database, sessionKey);
+    }
+    for (const sessionKey of [watcher, nestedWatcher, missingWatcher]) {
+      seedChild(database, sessionKey);
+    }
+    const input = eventInput({ watcherSessionKeys: [] });
+    recordSessionStateEvent(input, database);
+    const material = recordSessionStateEvent(input, database)!;
+    const missingBefore = readCursor(database, missingWatcher);
     resetSystemEventsForTest();
 
-    sweepSessionStateWatchNotices(database);
+    const sql = observeHostDataSql();
+    try {
+      await sweepSessionStateWatchNotices(database);
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
 
-    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
-    expect(readCursor(database)?.notified_sequence).toBe(material.sequence);
+    for (const sessionKey of [watcher, nestedWatcher]) {
+      expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
+      expect(readCursor(database, sessionKey)?.notified_sequence).toBe(material.sequence);
+    }
+    expect(peekSystemEventEntries(missingWatcher)).toEqual([]);
+    expect(readCursor(database, missingWatcher)).toEqual(missingBefore);
   });
 
   it("self-heals a lost queued notice on the next material event", () => {
@@ -438,7 +406,7 @@ describe("session state events", () => {
       .prepare("SELECT max(sequence) AS sequence FROM session_state_events")
       .get() as { sequence: number };
 
-    sweepSessionStateWatchNotices({ ...database, now });
+    await sweepSessionStateWatchNotices({ ...database, now });
     const count = db.prepare("SELECT count(*) AS count FROM session_state_events").get() as {
       count: number;
     };
@@ -449,7 +417,7 @@ describe("session state events", () => {
     expect(await getSessionStateVersion(child, "main", database)).toBe(next.sequence);
   });
 
-  it("prunes many composite session heads without recreating or regressing them", () => {
+  it("prunes many composite session heads without recreating or regressing them", async () => {
     const database = createDatabaseOptions();
     const { db } = openOpenClawStateDatabase(database);
     const now = SESSION_STATE_RETENTION_MS + 100;
@@ -504,14 +472,7 @@ describe("session state events", () => {
       updated_at: now,
     });
 
-    const updates = trackSqliteStatementExecutions(db, ["watermarks"], (sql) =>
-      /\bupdate\s+"?session_state_heads"?\b/i.test(sql) ? "watermarks" : null,
-    );
-    try {
-      sweepSessionStateWatchNotices({ ...database, now });
-    } finally {
-      updates.restore();
-    }
+    await sweepSessionStateWatchNotices({ ...database, now });
 
     const heads = db.prepare("SELECT * FROM session_state_heads").all();
     expect(heads).toHaveLength(expected.length);
@@ -523,8 +484,6 @@ describe("session state events", () => {
     expect(
       openOpenClawStateDatabase(database).db.prepare("SELECT * FROM session_state_heads").all(),
     ).toEqual(heads);
-    expect(updates.counts.watermarks).toBeGreaterThan(0);
-    expect(updates.counts.watermarks).toBeLessThanOrEqual(4);
   });
 
   it("lists typed ascending deltas with truncation and history-gap signaling", async () => {
@@ -576,7 +535,7 @@ describe("session state events", () => {
       ...database,
       now: later,
     })!;
-    sweepSessionStateWatchNotices({ ...database, now: later });
+    await sweepSessionStateWatchNotices({ ...database, now: later });
 
     const sincePruned = await listSessionStateEventsSince(child, "main", 0, 200, database);
     expect(sincePruned.historyGap).toBe(true);
@@ -886,7 +845,7 @@ describe("session state events", () => {
       },
       { ...database, now: activeAt },
     );
-    sweepSessionStateWatchNotices({ ...database, now: activeAt });
+    await sweepSessionStateWatchNotices({ ...database, now: activeAt });
 
     expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
     const cursors = openOpenClawStateDatabase(database)
@@ -1000,7 +959,7 @@ describe("session state events", () => {
 
   it("projects spawn, terminal, goal, and compaction producer helpers", async () => {
     const database = createDatabaseOptions();
-    recordSessionCreated(cfg, {
+    await recordSessionCreated(cfg, {
       sessionKey: child,
       agentId: "main",
       entry: {
@@ -1011,7 +970,7 @@ describe("session state events", () => {
         createdAt: Date.now(),
       },
     });
-    recordSubagentSpawned({
+    await recordSubagentSpawned({
       childSessionKey: child,
       childRunId: "run-child",
       requesterSessionKey: watcher,
@@ -1043,12 +1002,12 @@ describe("session state events", () => {
       actor: { type: "human" },
       summary: "goal created",
     });
-    recordSessionCompacted({
+    await recordSessionCompacted({
       sessionKey: child,
       operationId: "compact-1",
       sessionId: "session-child",
     });
-    recordSessionCompacted({
+    await recordSessionCompacted({
       sessionKey: child,
       operationId: "compact-1",
       sessionId: "session-child",

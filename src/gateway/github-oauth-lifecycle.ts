@@ -51,7 +51,6 @@ import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-devi
 import {
   authorizationStillOwned,
   configuredOAuthIdentities,
-  currentIdentityForRecord,
   defaultGitAuthor,
   identityStillSelected,
   MAINTENANCE_INTERVAL_MS,
@@ -352,7 +351,10 @@ export function createGitHubOAuthLifecycle(params: {
     if (!currentRecord.pendingRefresh && currentRecord.accessExpiresAtMs > now + REFRESH_SKEW_MS) {
       return;
     }
-    const currentIdentity = currentIdentityForRecord(params.getConfig(), currentRecord);
+    const currentIdentity = resolveConfiguredGitHubToolIdentity({
+      config: params.getConfig(),
+      ...currentRecord,
+    });
     if (currentIdentity?.kind !== "oauth" || currentIdentity.profileId !== profileId) {
       return;
     }
@@ -435,7 +437,10 @@ export function createGitHubOAuthLifecycle(params: {
         } catch {
           continue;
         }
-        const persistedIdentity = currentIdentityForRecord(persistedConfig, record);
+        const persistedIdentity = resolveConfiguredGitHubToolIdentity({
+          config: persistedConfig,
+          ...record,
+        });
         const agentBindingMatches =
           record.scope === "system" ||
           (record.pendingInitial.agentLifecycleBinding !== undefined &&
@@ -464,7 +469,10 @@ export function createGitHubOAuthLifecycle(params: {
         ).catch(() => undefined);
         continue;
       }
-      const current = currentIdentityForRecord(params.getConfig(), record);
+      const current = resolveConfiguredGitHubToolIdentity({
+        config: params.getConfig(),
+        ...record,
+      });
       if (current?.profileId !== profileId || current.kind !== "oauth") {
         queueOAuthCleanup(profileId);
         continue;

@@ -265,11 +265,7 @@ public enum ExecApprovalsSQLiteStore {
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(document)
-        guard let rawJSON = String(data: data, encoding: .utf8) else {
-            throw OpenClawNativeStateError("Could not encode exec approvals as UTF-8")
-        }
-        let persisted = rawJSON + "\n"
+        let persisted = try String(bytes: encoder.encode(document), encoding: .utf8)! + "\n"
         _ = try self.decode(persisted)
         return persisted
     }

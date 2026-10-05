@@ -11,6 +11,7 @@ import {
   isGatewaySuspendUnavailableError,
 } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { registerListener } from "../../../src/shared/listeners.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import {
   GatewayBrowserClient,
@@ -691,10 +692,7 @@ export function createApplicationGateway(
         lastErrorAuthReason: null,
       });
     },
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     subscribeEventLog: (listener) => {
       eventLogListeners.add(listener);
       return () => {
@@ -704,10 +702,7 @@ export function createApplicationGateway(
         }
       };
     },
-    subscribeEvents: (listener) => {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
+    subscribeEvents: (listener) => registerListener(eventListeners, listener),
     loadSelfProfile: selfProfile.load,
     updateSelfUser: (patch) => {
       if (!snapshot.selfUser) {

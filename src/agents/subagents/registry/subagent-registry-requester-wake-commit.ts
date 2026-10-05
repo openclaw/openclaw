@@ -23,6 +23,7 @@ import {
 } from "./subagent-requester-settle-identity.js";
 import {
   bindSubagentRunRuntimeKey,
+  currentSubagentRunOrObserved,
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
@@ -39,6 +40,19 @@ type WakeCommitFailureRetention =
   | boolean
   | ((error: unknown, pending: PendingRequesterSettleWakeCommit) => boolean);
 
+/** Release only the fence slots this episode still owns; a newer episode keeps its own. */
+function releasePendingWakeKeys(
+  context: SubagentLifecycleWakeContext,
+  pending: PendingRequesterSettleWakeCommit,
+): void {
+  for (const entry of pending.entries) {
+    const key = getSubagentRunRuntimeKey(entry);
+    if (context.pendingRequesterSettleWakeCommits.get(key) === pending) {
+      context.pendingRequesterSettleWakeCommits.delete(key);
+    }
+  }
+}
+
 function clearPendingWakeCommit(
   context: SubagentLifecycleWakeContext,
   pending: PendingRequesterSettleWakeCommit,
@@ -47,13 +61,7 @@ function clearPendingWakeCommit(
   if (pending.initialTransfer?.blocked) {
     return;
   }
-  for (const entry of pending.entries) {
-    if (
-      context.pendingRequesterSettleWakeCommits.get(getSubagentRunRuntimeKey(entry)) === pending
-    ) {
-      context.pendingRequesterSettleWakeCommits.delete(getSubagentRunRuntimeKey(entry));
-    }
-  }
+  releasePendingWakeKeys(context, pending);
   const suppressed = pending.suppressedFailureLogs ?? 0;
   if (suppressed > 0) {
     // Closing the episode accounts for what it withheld, so a log that went
@@ -190,11 +198,9 @@ export function commitRequesterInitialTransfer(
   let prepared = false;
   let promoted = false;
   let released = !params.release;
-  const currentEntries = () =>
-    entries.map((entry) => {
-      const current = context.options.runs.get(entry.runId);
-      return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-    });
+  const currentOf = (entry: SubagentRunRecord) =>
+    currentSubagentRunOrObserved(context.options.runs, entry);
+  const currentEntries = () => entries.map(currentOf);
   const initialTransfer = {
     kind: params.kind,
     completion: completion.promise,
@@ -213,12 +219,7 @@ export function commitRequesterInitialTransfer(
       const finishRetirement = () => {
         initialTransfer.blocked = retainsOutcome();
         if (!initialTransfer.blocked) {
-          for (const entry of entries) {
-            const key = getSubagentRunRuntimeKey(entry);
-            if (context.pendingRequesterSettleWakeCommits.get(key) === pending) {
-              context.pendingRequesterSettleWakeCommits.delete(key);
-            }
-          }
+          releasePendingWakeKeys(context, pending);
         }
         if (!initialTransfer.completed) {
           const failure = writeFailure;
@@ -300,6 +301,12 @@ export function commitRequesterInitialTransfer(
     mutate: (drafts: SubagentRunRecord[]) => ReadonlySet<string> | void,
     releasing = false,
   ) {
+    const adoptWritten = (drafts: readonly SubagentRunRecord[]) => {
+      if (releasing) {
+        released = true;
+      }
+      adoptPublished(drafts.map(currentOf));
+    };
     try {
       let publicationObserved = false;
       const result = await mutateSubagentRuns(
@@ -336,28 +343,12 @@ export function commitRequesterInitialTransfer(
             for (const runId of value.retiring ?? []) {
               retiredRunIds.add(runId);
             }
-            if (releasing) {
-              released = true;
-            }
-            adoptPublished(
-              value.drafts.map((entry) => {
-                const current = context.options.runs.get(entry.runId);
-                return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-              }),
-            );
+            adoptWritten(value.drafts);
           },
         },
       );
       if (!publicationObserved) {
-        if (releasing) {
-          released = true;
-        }
-        adoptPublished(
-          result.drafts.map((entry) => {
-            const current = context.options.runs.get(entry.runId);
-            return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-          }),
-        );
+        adoptWritten(result.drafts);
       }
       writeFailure = undefined;
     } catch (error) {

@@ -93,7 +93,9 @@ beforeEach(() => {
               ? "1700000000"
               : argv.includes("--porcelain")
                 ? ""
-                : "abc123",
+                : argv.includes("--is-shallow-repository")
+                  ? "false"
+                  : "abc123",
     }));
 });
 afterEach(() => {

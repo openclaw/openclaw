@@ -15,13 +15,16 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { resetLogger, setLoggerOverride } from "../../../logging/logger.js";
+import { loggingState } from "../../../logging/state.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { agentWaitHandler } from "../../server-methods/agent-wait.js";
+import { createGatewayMethodRegistry } from "../../methods/registry.js";
+import { agentHandlers } from "../../server-methods/agent.js";
 import { createLazyCoreHandlers } from "../../server-methods/lazy-core-handlers.js";
 import type { GatewayRequestHandler, RespondFn } from "../../server-methods/types.js";
 import {
@@ -32,6 +35,14 @@ import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
 // Compile the real router before timed cases; family preparation remains controlled below.
 import "../../server-methods.js";
 
+const thread = vi.hoisted(() => ({ isMainThread: true }));
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  get isMainThread() {
+    return thread.isMainThread;
+  },
+}));
+
 const scheduling = vi.hoisted(() => ({ start: vi.fn<() => Promise<void> | null>() }));
 vi.mock("./request-start.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./request-start.js")>()),
@@ -39,6 +50,7 @@ vi.mock("./request-start.js", async (importOriginal) => ({
 }));
 
 beforeEach(() => {
+  thread.isMainThread = true;
   resetDiagnosticEventsForTest();
   scheduling.start.mockReset().mockImplementation(() => Promise.resolve());
 });
@@ -84,14 +96,174 @@ function createRequest(handler: GatewayRequestHandler, method = "health") {
 }
 
 describe("authenticated Gateway RPC diagnostics", () => {
+  it.each([
+    { source: "dashboard", rowMode: "compact", bytes: 204_800, elapsed: 0 },
+    { source: "arbitrary-private-caller", rowMode: undefined, bytes: 100, elapsed: 1_000 },
+  ])("attributes slow or large session lists without private filters ($source)", async (query) => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const output = vi.fn();
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    onTestFinished(() => {
+      setLoggerOverride(null);
+      loggingState.rawConsole = null;
+      resetLogger();
+    });
+    const fixture = createRequest(({ respond }) => {
+      now += query.elapsed;
+      respond(true, {});
+    }, "sessions.list");
+    fixture.send.mockReturnValue({ kind: "sent", bytes: query.bytes });
+    await fixture.dispatcher.dispatch(
+      {
+        type: "req",
+        id: "private-request-id",
+        method: "sessions.list",
+        params: {
+          source: query.source,
+          rowMode: query.rowMode,
+          limit: 60,
+          offset: 120,
+          ownerId: "synthetic-private-owner",
+          search: "synthetic-private-search",
+        },
+      },
+      fixture.client,
+    );
+    await fixture.finished;
+    const log = output.mock.calls.flat().join("\n");
+    expect(log).toContain("sessions.list");
+    expect(log).toContain(`source=${query.rowMode ? "dashboard" : "unspecified"}`);
+    expect(log).toContain(`rowMode=${query.rowMode ?? "full"}`);
+    expect(log).toContain("limit=60 offset=120 filterKind=ownerId+search");
+    expect(log).toContain(`bytes=${query.bytes}`);
+    expect(log).not.toMatch(/synthetic-private|arbitrary-private-caller/);
+  });
+
+  it.each([true, false])(
+    "records frame bytes and logs, sampling heap only on the main thread (main=%s)",
+    async (main) => {
+      thread.isMainThread = main;
+      let heapUsed = 4096;
+      const memory = process.memoryUsage();
+      const sample = vi
+        .spyOn(process, "memoryUsage")
+        .mockImplementation(() => ({ ...memory, heapUsed }));
+      let now = 1000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const output = vi.fn();
+      setLoggerOverride({ level: "silent", consoleLevel: "info" });
+      loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+      onTestFinished(() => {
+        setLoggerOverride(null);
+        loggingState.rawConsole = null;
+        resetLogger();
+      });
+      const completion = createDeferredCore();
+      const fixture = createRequest(async ({ respond }) => {
+        now = 2000;
+        respond(true, { accepted: true });
+        await completion.promise;
+        respond(true, { final: true });
+        heapUsed = 2048;
+        fixture.send.mockReturnValue({ kind: "unavailable" });
+        respond(true);
+      });
+      fixture.send.mockReturnValue({ kind: "sent", bytes: 1234 });
+      const dispatch = fixture.dispatch();
+      await fixture.awaitResponseFrame("private-request-id");
+      fixture.send.mockReturnValue({ kind: "sent", bytes: 8192 });
+      completion.resolve();
+      await dispatch;
+      await fixture.finished;
+      expect(fixture.events.find((event) => event.phase === "handler")).toMatchObject({
+        heapDeltaBytes: main ? -2048 : undefined,
+      });
+      expect(sample).toHaveBeenCalledTimes(main ? 2 : 0);
+      expect(output).toHaveBeenCalledWith(expect.stringMatching(/res.*health.*1000ms.*bytes=1234/));
+      expect(fixture.events.filter((event) => event.phase === "response")).toMatchObject([
+        { responseBytes: 1234, firstResponse: true },
+        { responseBytes: 8192, firstResponse: false },
+        { outcome: "unavailable", firstResponse: undefined, responseBytes: undefined },
+      ]);
+    },
+  );
+
+  it.each(["nested", "crossing", "unobserved"])(
+    "discards entire overlapping handler windows (%s) and resumes after settlement",
+    async (overlap) => {
+      const firstEntered = createDeferredCore();
+      const secondEntered = createDeferredCore();
+      const firstRelease = createDeferredCore();
+      const secondRelease = createDeferredCore();
+      let heapUsed = 1024;
+      const memory = process.memoryUsage();
+      vi.spyOn(process, "memoryUsage").mockImplementation(() => ({ ...memory, heapUsed }));
+      const first = createRequest(async () => {
+        firstEntered.resolve();
+        await firstRelease.promise;
+        heapUsed += 4096;
+      });
+      const second = createRequest(async () => {
+        secondEntered.resolve();
+        await secondRelease.promise;
+        heapUsed += 8192;
+      }, "cron.status");
+      const firstDispatch = first.dispatch();
+      await firstEntered.promise;
+      if (overlap === "unobserved") {
+        setDiagnosticsEnabledForProcess(false);
+      }
+      const secondDispatch = second.dispatch();
+      try {
+        await secondEntered.promise;
+        setDiagnosticsEnabledForProcess(true);
+        if (overlap === "crossing") {
+          firstRelease.resolve();
+          await firstDispatch;
+          secondRelease.resolve();
+        } else {
+          secondRelease.resolve();
+          await secondDispatch;
+          firstRelease.resolve();
+        }
+        await Promise.all([firstDispatch, secondDispatch]);
+        await waitForDiagnosticEventsDrained();
+        const handlers = first.events.filter((event) => event.phase === "handler");
+        expect(handlers).toHaveLength(overlap === "unobserved" ? 1 : 2);
+        expect(
+          first.events.filter(
+            (event) => "heapDeltaBytes" in event && event.heapDeltaBytes !== undefined,
+          ),
+        ).toEqual([]);
+        first.events.length = 0;
+        await first.dispatch();
+        await waitForDiagnosticEventsDrained();
+        expect(first.events.find((event) => event.phase === "handler")).toMatchObject({
+          heapDeltaBytes: 4096,
+        });
+      } finally {
+        setDiagnosticsEnabledForProcess(true);
+        firstRelease.resolve();
+        secondRelease.resolve();
+        await Promise.all([firstDispatch, secondDispatch]);
+      }
+    },
+  );
+
   it.each(["family", "nested family", "family rejection"])(
     "keeps %s preparation separate from actual handler entry",
     async (preparation) => {
       let now = 100;
+      let heapUsed = 1024;
+      const memory = process.memoryUsage();
+      vi.spyOn(process, "memoryUsage").mockImplementation(() => ({ ...memory, heapUsed }));
       vi.spyOn(performance, "now").mockImplementation(() => now);
       const reached = createDeferredCore();
       const release = createDeferredCore();
       const handler: GatewayRequestHandler = ({ respond }) => {
+        heapUsed += 2048;
         now = 240;
         respond(true);
       };
@@ -119,6 +291,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
       );
       try {
         await reached.promise;
+        heapUsed += 8192;
         now = 200;
         release.resolve();
         await observed.finished;
@@ -132,6 +305,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
           admissionMs: 100,
           durationMs: 40,
           outcome: "returned",
+          heapDeltaBytes: 2048,
         });
       } finally {
         release.resolve();
@@ -389,12 +563,17 @@ describe("authenticated Gateway RPC diagnostics", () => {
           kind: "serialization",
           error: new Error("synthetic encoding fault"),
         })
-        .mockReturnValueOnce({ kind: fallback });
+        .mockReturnValueOnce(
+          fallback === "sent" ? { kind: "sent", bytes: 256 } : { kind: "unavailable" },
+        );
       await fixture.dispatch();
       await fixture.finished;
       expect(fixture.send).toHaveBeenCalledTimes(2);
       expect(fixture.events.filter((event) => event.phase === "response")).toMatchObject([
-        { outcome: fallback === "sent" ? "error" : "unavailable" },
+        {
+          outcome: fallback === "sent" ? "error" : "unavailable",
+          responseBytes: fallback === "sent" ? 256 : undefined,
+        },
       ]);
     },
   );
@@ -473,6 +652,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
 
   it("takes no clocks or registry lookups when diagnostics are disabled or uninterested", () => {
     const clock = vi.spyOn(performance, "now");
+    const memory = vi.spyOn(process, "memoryUsage");
     const registry = vi.fn();
     expect(createGatewayRpcDiagnostics("health", registry, {})).toBeUndefined();
     const stopPublic = onDiagnosticEvent(() => {});
@@ -484,19 +664,40 @@ describe("authenticated Gateway RPC diagnostics", () => {
     expect(createGatewayRpcDiagnostics("health", registry, {})).toBeUndefined();
     unsubscribe();
     expect(clock).not.toHaveBeenCalled();
+    expect(memory).not.toHaveBeenCalled();
     expect(registry).not.toHaveBeenCalled();
   });
 
-  it("collapses arbitrary request method names into fixed labels", async () => {
+  it("labels registered methods exactly and folds arbitrary names across registry replacement", async () => {
     const { events } = observeRequests();
-    for (let index = 0; index < 1000; index++) {
-      createGatewayRpcDiagnostics(`private-method-${index}`, undefined, {});
-    }
-    createGatewayRpcDiagnostics("private-plugin-method", undefined, {
-      "private-plugin-method": () => {},
-    });
+    let registry = createGatewayMethodRegistry([
+      {
+        name: "workboard.cards.list",
+        handler: () => {},
+        owner: { kind: "plugin", pluginId: "workboard" },
+        scope: "operator.read",
+      },
+    ]);
+    const getRegistry = () => registry;
+    createGatewayRpcDiagnostics("node.invoke.result", getRegistry, {});
+    createGatewayRpcDiagnostics("workboard.cards.list", getRegistry, {});
+    createGatewayRpcDiagnostics("aux.status", undefined, { "aux.status": () => {} });
     await waitForDiagnosticEventsDrained();
-    expect(new Set(events.map((event) => event.method))).toEqual(new Set(["unknown", "other"]));
+    expect(events.map((event) => event.method)).toEqual([
+      "node.invoke.result",
+      "workboard.cards.list",
+      "aux.status",
+    ]);
+    events.length = 0;
+    registry = createGatewayMethodRegistry([]);
+    createGatewayRpcDiagnostics("workboard.cards.list", getRegistry, {});
+    for (let index = 0; index < 1000; index++) {
+      createGatewayRpcDiagnostics(`private-method-${index}`, getRegistry, {});
+    }
+    createGatewayRpcDiagnostics("constructor", getRegistry, {});
+    createGatewayRpcDiagnostics("__proto__", getRegistry, {});
+    await waitForDiagnosticEventsDrained();
+    expect(new Set(events.map((event) => event.method))).toEqual(new Set(["other"]));
     expect(JSON.stringify(events)).not.toContain("private-");
   });
 });
@@ -505,7 +706,7 @@ describe("Gateway observation response ordering", () => {
   afterEach(() => resetGatewayWorkAdmission());
   it("does not send a second response when shutdown follows a completed observation", async () => {
     const fixture = createDispatchTestHarness({
-      extraHandlers: { "agent.wait": agentWaitHandler },
+      extraHandlers: { "agent.wait": agentHandlers["agent.wait"]! },
       buildRequestContext: () => ({
         dedupe: new Map(),
         chatAbortControllers: new Map(),

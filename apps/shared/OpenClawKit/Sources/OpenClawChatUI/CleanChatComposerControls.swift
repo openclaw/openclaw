@@ -242,66 +242,6 @@ struct OpenClawChatAttachmentsStrip: View {
 }
 
 #if !os(macOS)
-struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
-    @Binding var showsPhotoPicker: Bool
-    @Binding var showsFileImporter: Bool
-    @Binding var showsCameraPicker: Bool
-    let isAttachmentInputEnabled: Bool
-    let extraItems: ExtraItems
-
-    init(
-        showsPhotoPicker: Binding<Bool>,
-        showsFileImporter: Binding<Bool>,
-        showsCameraPicker: Binding<Bool>,
-        isAttachmentInputEnabled: Bool,
-        @ViewBuilder extraItems: () -> ExtraItems)
-    {
-        self._showsPhotoPicker = showsPhotoPicker
-        self._showsFileImporter = showsFileImporter
-        self._showsCameraPicker = showsCameraPicker
-        self.isAttachmentInputEnabled = isAttachmentInputEnabled
-        self.extraItems = extraItems()
-    }
-
-    var body: some View {
-        Menu {
-            Button {
-                self.showsPhotoPicker = true
-            } label: {
-                chatActionLabel(Text("Photo Library"), systemImage: "photo.on.rectangle")
-            }
-            .disabled(!self.isAttachmentInputEnabled)
-
-            #if canImport(UIKit)
-            Button {
-                self.showsCameraPicker = true
-            } label: {
-                chatActionLabel(Text("Camera"), systemImage: "camera")
-            }
-            .disabled(
-                !self.isAttachmentInputEnabled ||
-                    !UIImagePickerController.isSourceTypeAvailable(.camera))
-            #endif
-
-            Button {
-                self.showsFileImporter = true
-            } label: {
-                chatActionLabel(Text("File"), systemImage: "folder")
-            }
-            .disabled(!self.isAttachmentInputEnabled)
-
-            Divider()
-            self.extraItems
-        } label: {
-            CompactChatAttachmentLabel()
-        }
-        .help("Composer options")
-        .accessibilityLabel("Composer options")
-        .accessibilityIdentifier("chat-attachment-picker")
-        .buttonStyle(.plain)
-    }
-}
-
 #if canImport(UIKit)
 struct OpenClawChatCameraPicker: UIViewControllerRepresentable {
     let onImage: @MainActor (UIImage) -> Void

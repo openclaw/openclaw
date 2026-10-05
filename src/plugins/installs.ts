@@ -109,30 +109,34 @@ export function resolveNpmInstallRecordSpec(params: {
   return resolvedSpec;
 }
 
+export function recordPluginInstallInRecords(
+  records: Record<string, PluginInstallRecord> | undefined,
+  update: PluginInstallUpdate,
+): Record<string, PluginInstallRecord> {
+  const { pluginId, ...record } = update;
+  const installs = copyPluginInstallRecordMap(records);
+  setPluginInstallRecordMapEntry(installs, pluginId, {
+    ...record,
+    installedAt: record.installedAt ?? new Date().toISOString(),
+  });
+  return installs;
+}
+
 /** Replaces a plugin install record with the authoritative completed install. */
 export function recordPluginInstall(
   cfg: OpenClawConfig,
   update: PluginInstallUpdate,
 ): OpenClawConfig {
-  const { pluginId, ...record } = update;
-  const nextRecord = {
-    ...record,
-    installedAt: record.installedAt ?? new Date().toISOString(),
-  };
-  const installs = copyPluginInstallRecordMap(cfg.plugins?.installs);
-  setPluginInstallRecordMapEntry(installs, pluginId, nextRecord);
-
   const next = {
     ...cfg,
     plugins: {
-      // cfg.plugins may be absent on first install; spreading undefined is {}.
       ...cfg.plugins,
-      installs,
+      installs: recordPluginInstallInRecords(cfg.plugins?.installs, update),
     },
   };
   return reconcileNpmPluginLoadPath({
     config: next,
-    previousInstall: getPluginInstallRecordMapEntry(cfg.plugins?.installs, pluginId),
-    nextInstall: nextRecord,
+    previousInstall: getPluginInstallRecordMapEntry(cfg.plugins?.installs, update.pluginId),
+    nextInstall: update,
   });
 }

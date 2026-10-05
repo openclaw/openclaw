@@ -2,13 +2,11 @@
 // provider runtime, and a legacy memory runtime keeps its manager calls and result shapes.
 import path from "node:path";
 import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/session-search-visibility-api.js";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   getActiveMemorySearchManager,
   type MemoryCallerContext,
   type MemoryCitation,
   type MemoryReference,
-  type MemorySearchHit,
 } from "openclaw/plugin-sdk/memory-host-search";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -27,7 +25,6 @@ type SharedMemoryResultSource =
   | { corpus: "memory"; path: string; reference?: never; lookup?: never }
   | { corpus: "memory"; path?: never; reference: MemoryReference; lookup: string };
 
-/** One memory-corpus hit in a Wiki search, tagged with the caller's search mode. */
 export type SharedMemorySearchResult<M extends string> = {
   title: string;
   kind: "memory";
@@ -41,7 +38,6 @@ export type SharedMemorySearchResult<M extends string> = {
   citations?: MemoryCitation[];
 } & SharedMemoryResultSource;
 
-/** One memory page read for a Wiki lookup. */
 export type SharedMemoryPage = {
   title: string;
   kind: "memory";
@@ -52,7 +48,6 @@ export type SharedMemoryPage = {
   citations?: MemoryCitation[];
 } & SharedMemoryResultSource;
 
-/** Normalizes a Wiki lookup into a slash-separated relative path. */
 export function normalizeLookupKey(value: string): string {
   const normalized = value.trim().replace(/\\/g, "/");
   return normalized.endsWith(".md") ? normalized : normalized.replace(/\/+$/, "");
@@ -64,7 +59,6 @@ function buildLookupCandidates(lookup: string): string[] {
   return uniqueStrings([normalized, withExtension]);
 }
 
-/** Whether a call is bound to a session or agent whose transcript visibility must be enforced. */
 export function shouldEnforceSessionVisibility(params: {
   agentId?: string;
   agentSessionKey?: string;
@@ -118,48 +112,6 @@ function buildMemorySearchTitle(resultPath: string): string {
   return basename.length > 0 ? basename : resultPath;
 }
 
-function toMemoryWikiSearchResult<M extends string>(
-  result: MemorySearchResult,
-  mode: M,
-): SharedMemorySearchResult<M> {
-  return {
-    corpus: "memory",
-    path: result.path,
-    title: buildMemorySearchTitle(result.path),
-    kind: "memory",
-    score: result.score,
-    snippet: result.snippet,
-    startLine: result.startLine,
-    endLine: result.endLine,
-    memorySource: result.source,
-    searchMode: mode,
-    ...(result.citation ? { citation: result.citation } : {}),
-  };
-}
-
-function toProviderMemoryWikiSearchResult<M extends string>(
-  result: MemorySearchHit,
-  mode: M,
-): SharedMemorySearchResult<M> {
-  const citation = result.citations?.[0];
-  return {
-    corpus: "memory",
-    reference: result.reference,
-    lookup: memoryReferenceLookup(result.reference),
-    title: citation?.label ?? result.reference.id,
-    kind: "memory",
-    score: result.score ?? 0,
-    snippet: result.excerpt,
-    startLine: citation?.startLine,
-    endLine: citation?.endLine,
-    memorySource: result.source,
-    searchMode: mode,
-    ...(citation ? { citation: citation.label } : {}),
-    ...(result.citations ? { citations: result.citations } : {}),
-  };
-}
-
-/** Caller facts a shared memory search or read acts under. */
 export type SharedMemorySearchParams = {
   appConfig?: OpenClawConfig;
   agentId?: string;
@@ -176,34 +128,46 @@ export type SharedMemorySearchOptions<M extends string> = {
   protectedSessionRecall: boolean;
 };
 
-// Native providers apply their own visibility policy to the caller authority they receive.
-async function searchProviderMemory<M extends string>(
+export async function searchSharedMemory<M extends string>(
   params: SharedMemorySearchParams,
   options: SharedMemorySearchOptions<M>,
 ): Promise<SharedMemorySearchResult<M>[]> {
-  return await withActiveMemoryProvider(params, async ({ provider }) => {
-    if (!provider) {
-      return [];
-    }
-    const page = await provider.search({
-      query: params.query,
-      maxResults: options.maxResults,
-      ...(options.protectedSessionRecall ? { sources: ["sessions" as const] } : {}),
+  if (await usesNativeMemoryProvider(params)) {
+    return await withActiveMemoryProvider(params, async ({ provider }) => {
+      if (!provider) {
+        return [];
+      }
+      const page = await provider.search({
+        query: params.query,
+        maxResults: options.maxResults,
+        ...(options.protectedSessionRecall ? { sources: ["sessions" as const] } : {}),
+      });
+      return page.hits.map((result) => {
+        const citation = result.citations?.[0];
+        const hit: SharedMemorySearchResult<M> = {
+          corpus: "memory",
+          reference: result.reference,
+          lookup: memoryReferenceLookup(result.reference),
+          title: citation?.label ?? result.reference.id,
+          kind: "memory",
+          score: result.score ?? 0,
+          snippet: result.excerpt,
+          startLine: citation?.startLine,
+          endLine: citation?.endLine,
+          memorySource: result.source,
+          searchMode: options.mode,
+        };
+        if (citation) {
+          hit.citation = citation.label;
+        }
+        if (result.citations) {
+          hit.citations = result.citations;
+        }
+        return hit;
+      });
     });
-    return page.hits.map((hit) => toProviderMemoryWikiSearchResult(hit, options.mode));
-  });
-}
-
-// Legacy runtimes keep their manager search and the Wiki's session visibility filter.
-async function searchLegacyMemory<M extends string>(
-  params: SharedMemorySearchParams,
-  options: SharedMemorySearchOptions<M>,
-): Promise<SharedMemorySearchResult<M>[]> {
-  const sharedMemoryManager = await resolveActiveMemoryManager({
-    appConfig: params.appConfig,
-    agentId: params.agentId,
-    agentSessionKey: params.agentSessionKey,
-  });
+  }
+  const sharedMemoryManager = await resolveActiveMemoryManager(params);
   if (sharedMemoryManager && typeof sharedMemoryManager.search !== "function") {
     throw buildMemoryManagerContractError("search");
   }
@@ -230,7 +194,24 @@ async function searchLegacyMemory<M extends string>(
       trustedAgentScope: !params.agentSessionKey && Boolean(params.agentId?.trim()),
     });
   }
-  return rawMemoryResults.map((result) => toMemoryWikiSearchResult(result, options.mode));
+  return rawMemoryResults.map((result) => {
+    const hit: SharedMemorySearchResult<M> = {
+      corpus: "memory",
+      path: result.path,
+      title: buildMemorySearchTitle(result.path),
+      kind: "memory",
+      score: result.score,
+      snippet: result.snippet,
+      startLine: result.startLine,
+      endLine: result.endLine,
+      memorySource: result.source,
+      searchMode: options.mode,
+    };
+    if (result.citation) {
+      hit.citation = result.citation;
+    }
+    return hit;
+  });
 }
 
 export type SharedMemoryReadParams = Omit<SharedMemorySearchParams, "query"> & {
@@ -239,48 +220,46 @@ export type SharedMemoryReadParams = Omit<SharedMemorySearchParams, "query"> & {
   lineCount: number;
 };
 
-// Native providers resolve only the stable references they issued.
-async function getProviderMemoryPage(
+/**
+ * Reads one memory page for a Wiki lookup: a native provider resolves only the reference
+ * it issued, and a legacy runtime resolves the lookup as a Markdown path.
+ */
+export async function readSharedMemoryPage(
   params: SharedMemoryReadParams,
-  reference: MemoryReference,
+  reference: MemoryReference | null,
 ): Promise<SharedMemoryPage | null> {
-  return await withActiveMemoryProvider(params, async ({ provider }) => {
-    if (!provider) {
-      return null;
-    }
-    const result = await provider.get({
-      reference,
-      from: params.fromLine,
-      lines: params.lineCount,
+  if (reference) {
+    return await withActiveMemoryProvider(params, async ({ provider }) => {
+      if (!provider) {
+        return null;
+      }
+      const result = await provider.get({
+        reference,
+        from: params.fromLine,
+        lines: params.lineCount,
+      });
+      if (result.status === "not_found") {
+        return null;
+      }
+      return {
+        corpus: "memory" as const,
+        reference: result.reference,
+        lookup: memoryReferenceLookup(result.reference),
+        citations: result.citations,
+        title: result.citations?.[0]?.label ?? result.reference.id,
+        kind: "memory" as const,
+        content: result.text,
+        fromLine: result.from ?? params.fromLine,
+        lineCount: result.lines ?? params.lineCount,
+        truncated: result.truncated,
+      };
     });
-    if (result.status === "not_found") {
-      return null;
-    }
-    return {
-      corpus: "memory" as const,
-      reference: result.reference,
-      lookup: memoryReferenceLookup(result.reference),
-      citations: result.citations,
-      title: result.citations?.[0]?.label ?? result.reference.id,
-      kind: "memory" as const,
-      content: result.text,
-      fromLine: result.from ?? params.fromLine,
-      lineCount: result.lines ?? params.lineCount,
-      truncated: result.truncated,
-    };
-  });
-}
-
-// Legacy runtimes read Markdown paths through their manager after session visibility checks.
-async function getLegacyMemoryPage(
-  params: SharedMemoryReadParams,
-): Promise<SharedMemoryPage | null> {
+  }
+  if (await usesNativeMemoryProvider(params)) {
+    return null;
+  }
   const { fromLine, lineCount } = params;
-  const manager = await resolveActiveMemoryManager({
-    appConfig: params.appConfig,
-    agentId: params.agentId,
-    agentSessionKey: params.agentSessionKey,
-  });
+  const manager = await resolveActiveMemoryManager(params);
   if (!manager) {
     return null;
   }
@@ -346,28 +325,4 @@ async function getLegacyMemoryPage(
   }
 
   return null;
-}
-
-/** Searches the selected memory owner's corpus for a Wiki query. */
-export async function searchSharedMemory<M extends string>(
-  params: SharedMemorySearchParams,
-  options: SharedMemorySearchOptions<M>,
-): Promise<SharedMemorySearchResult<M>[]> {
-  return (await usesNativeMemoryProvider(params))
-    ? await searchProviderMemory(params, options)
-    : await searchLegacyMemory(params, options);
-}
-
-/**
- * Reads one memory page for a Wiki lookup: a native provider resolves only the reference
- * it issued, and a legacy runtime resolves the lookup as a Markdown path.
- */
-export async function readSharedMemoryPage(
-  params: SharedMemoryReadParams,
-  reference: MemoryReference | null,
-): Promise<SharedMemoryPage | null> {
-  if (reference) {
-    return await getProviderMemoryPage(params, reference);
-  }
-  return (await usesNativeMemoryProvider(params)) ? null : await getLegacyMemoryPage(params);
 }

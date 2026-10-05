@@ -38,7 +38,7 @@ import {
 } from "./get-reply-run-helpers.js";
 import {
   REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
-  resolvePreparedReplyQueueState,
+  waitForPreparedReplyQueue,
 } from "./get-reply-run-queue.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
@@ -337,7 +337,12 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
     rebindProvidedReplyOperation(latestSessionId);
-    opts?.onSessionPrepared?.({ sessionKey, sessionId: latestSessionId, storePath });
+    opts?.onSessionPrepared?.({
+      sessionKey,
+      sessionId: latestSessionId,
+      lifecycleRevision: latestSessionEntry?.lifecycleRevision,
+      storePath,
+    });
     // Queued admission uses the scoped key too. A legacy marker for the same
     // transcript would make unchanged tool authority fail the steering check.
     const sessionFile =
@@ -584,8 +589,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resetTriggered: effectiveResetTriggered,
   });
   if (isActive && activeRunQueueAction === "run-now") {
-    const queueState = await resolvePreparedReplyQueueState({
-      activeRunQueueAction,
+    const queueReply = await waitForPreparedReplyQueue({
       activeSessionId: activeSessionId ?? resolveActiveQueueSessionId(),
       queueMode: activeRunQueueMode,
       interruptActiveRun: async () => {
@@ -622,9 +626,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       },
       resolveBusyState: resolveQueueBusyState,
     });
-    if (queueState.kind === "reply") {
+    if (queueReply) {
       typing.cleanup();
-      return { kind: "reply", reply: queueState.reply } as const;
+      return { kind: "reply", reply: queueReply } as const;
     }
   }
   if (activeRunQueueAction !== "drop") {

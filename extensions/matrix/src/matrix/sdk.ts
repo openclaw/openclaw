@@ -26,10 +26,8 @@ import {
 } from "./sdk/client-support.js";
 import { MatrixClientVerification } from "./sdk/client-verification.js";
 import type { MatrixCryptoBootstrapResult } from "./sdk/crypto-bootstrap.js";
-import { ConsoleLogger, LogService } from "./sdk/logger.js";
 import type { MatrixCryptoBootstrapApi } from "./sdk/types.js";
 
-export { ConsoleLogger, LogService };
 export type {
   MatrixDeviceVerificationStatus,
   MatrixOwnDeviceDeleteResult,
@@ -161,16 +159,11 @@ export class MatrixClient extends MatrixClientVerification {
           requireServerBackup: true,
         }) === null;
       const stagedRecoveryKeyUsed = this.recoveryKeyStore.hasStagedRecoveryKeyBeenUsed();
-      const secretStorageStatus =
-        typeof crypto.getSecretStorageStatus === "function"
-          ? await crypto.getSecretStorageStatus().catch(() => null)
-          : null;
-      const stagedRecoveryKeyConfirmedBySecretStorage =
-        Boolean(stagedKeyId) &&
-        secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId ?? ""] === true;
-      const stagedRecoveryKeyRejectedBySecretStorage =
-        Boolean(stagedKeyId) &&
-        secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId ?? ""] === false;
+      const stagedKeyValid = await this.checkSecretStorageKey(stagedKeyId ?? undefined).catch(
+        () => undefined,
+      );
+      const stagedRecoveryKeyConfirmedBySecretStorage = stagedKeyValid === true;
+      const stagedRecoveryKeyRejectedBySecretStorage = stagedKeyValid === false;
       const stagedRecoveryKeyUnlockedBackup =
         stagedRecoveryKeyUsed &&
         !stagedRecoveryKeyRejectedBySecretStorage &&
@@ -236,11 +229,6 @@ export class MatrixClient extends MatrixClientVerification {
         await this.recoveryKeyStore.discardStagedRecoveryKey();
         return await fail(backupError);
       }
-      if (typeof crypto.restoreKeyBackup !== "function") {
-        await this.recoveryKeyStore.discardStagedRecoveryKey();
-        return await fail("Matrix crypto backend does not support full key backup restore");
-      }
-
       const restore = await crypto.restoreKeyBackup();
       if (rawRecoveryKey) {
         await this.recoveryKeyStore.commitStagedRecoveryKey({
@@ -251,8 +239,8 @@ export class MatrixClient extends MatrixClientVerification {
       return {
         success: true,
         backupVersion: backup.serverVersion,
-        imported: typeof restore.imported === "number" ? restore.imported : 0,
-        total: typeof restore.total === "number" ? restore.total : 0,
+        imported: restore.imported,
+        total: restore.total,
         loadedFromSecretStorage,
         restoredAt: new Date().toISOString(),
         backup: finalBackup,

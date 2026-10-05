@@ -14,12 +14,32 @@ afterEach(() => {
 });
 
 describe("Gateway page activation", () => {
+  it("preserves a declined pairing request across page restoration and online signals", async () => {
+    const connect = vi.fn();
+    const refreshed = new Promise<void>((resolve) => {
+      vi.mocked(refreshControlUiServiceWorker).mockImplementationOnce(async () => {
+        resolve();
+        return false;
+      });
+    });
+    const dispose = startGatewayPageActivation(
+      { snapshot: { client: { needsWakeReconnect: false, pairingRetryPaused: true } }, connect },
+      document,
+      window,
+    );
+    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+    window.dispatchEvent(new Event("online"));
+    await refreshed;
+    expect(connect).not.toHaveBeenCalled();
+    dispose();
+  });
+
   it("coalesces foreground signals into one stale-client recovery", async () => {
     const connect = vi.fn();
     const visibility = vi.spyOn(document, "visibilityState", "get");
     visibility.mockReturnValue("hidden");
     const dispose = startGatewayPageActivation(
-      { snapshot: { client: { needsWakeReconnect: true } }, connect },
+      { snapshot: { client: { needsWakeReconnect: true, pairingRetryPaused: false } }, connect },
       document,
       window,
     );
@@ -37,7 +57,7 @@ describe("Gateway page activation", () => {
   it("keeps a healthy client mounted when the browser reports online", async () => {
     const connect = vi.fn();
     const dispose = startGatewayPageActivation(
-      { snapshot: { client: { needsWakeReconnect: false } }, connect },
+      { snapshot: { client: { needsWakeReconnect: false, pairingRetryPaused: false } }, connect },
       document,
       window,
     );
@@ -53,7 +73,7 @@ describe("Gateway page activation", () => {
   it("ignores initial pageshow and removes every listener on dispose", async () => {
     const connect = vi.fn();
     const dispose = startGatewayPageActivation(
-      { snapshot: { client: { needsWakeReconnect: true } }, connect },
+      { snapshot: { client: { needsWakeReconnect: true, pairingRetryPaused: false } }, connect },
       document,
       window,
     );

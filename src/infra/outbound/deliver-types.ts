@@ -20,10 +20,7 @@ export type OutboundDeliveryResult = {
   outcome?: MessageReceiptSourceResult["outcome"];
   channel: ChannelId;
   messageId: string;
-  target?: {
-    kind: "chat" | "channel" | "room" | "conversation";
-    id: string;
-  };
+  target?: NonNullable<MessageReceiptSourceResult["target"]>;
   timestamp?: number;
   toJid?: string;
   pollId?: string;
@@ -91,8 +88,8 @@ export type OutboundPayloadDeliverySuppressionReason =
   | "adapter_returned_no_identity";
 
 /** Delivery phase where a failure occurred. */
-export type OutboundDeliveryFailureStage = "platform_send" | "queue" | "unknown";
-export type OutboundPayloadDeliveryKind = "text" | "media" | "other";
+export type OutboundDeliveryFailureStage = AuditMessageFailureStage;
+export type OutboundPayloadDeliveryKind = AuditMessageDeliveryKind;
 
 const PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE = "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED";
 

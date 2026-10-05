@@ -267,6 +267,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const width = entries.at(-1)?.contentRect.width;
         // Hidden panes (narrow split view) report 0; keep the last real width.
         if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
+          this.transcript.syncViewportGeometry();
           this.paneWidth = width;
         }
       });

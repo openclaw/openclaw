@@ -19,13 +19,8 @@ import {
 } from "../media/input-files.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
-  mergeAssistantText,
-  mergePendingAssistantText,
+  createAssistantTextStream,
   resolveAssistantResultText,
-  resolveAssistantTextCompletion,
-  resolveAssistantTextInput,
-  resolveAssistantTextStreamDelta,
-  type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -53,7 +48,6 @@ import {
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import {
@@ -158,9 +152,6 @@ export async function handleOpenResponsesHttpRequest(
     ...opts,
     pathname: "/v1/responses",
     requiredOperatorMethod: "chat.send",
-    // Compat HTTP uses a different scope model from generic HTTP helpers:
-    // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes,
   });
   if (handled === false) {
@@ -342,8 +333,6 @@ export async function handleOpenResponsesHttpRequest(
       model,
       user,
       sessionPrefix: "openresponses",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: true,
     });
   } catch (err) {
     if (isGatewayRequestContextError(err)) {
@@ -569,9 +558,7 @@ export async function handleOpenResponsesHttpRequest(
 
   setSseHeaders(res);
 
-  let assistantText: AssistantTextSnapshot = { text: "" };
-  let streamedAssistantText = assistantText;
-  let pendingAssistantText: AssistantTextSnapshot | undefined;
+  const textStream = createAssistantTextStream(Boolean(toolChoice.constraint));
   let finalResultText: string | undefined;
   let finalToolCalls: OpenAiCompatiblePendingToolCall[] | undefined;
   let unrepresentableAssistantReplacement = false;
@@ -608,18 +595,15 @@ export async function handleOpenResponsesHttpRequest(
       }
       const usage = finalUsage;
       const status = finalizeRequested.status === "failed" ? "failed" : finalOutputStatus;
-      const finalText = resolveAssistantTextCompletion({
-        assistantText,
-        pending: pendingAssistantText,
-        resultText: finalResultText,
-        streamedText: streamedAssistantText.text,
-        fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
-      });
-      if (!finalText.startsWith(streamedAssistantText.text)) {
+      const finalText = textStream.complete(
+        finalResultText,
+        finalToolCalls ? "" : "No response from OpenClaw.",
+      );
+      if (!finalText.startsWith(textStream.streamedText)) {
         finalizeUnrepresentableAssistantReplacement();
         return;
       }
-      const delta = finalText.slice(streamedAssistantText.text.length);
+      const delta = finalText.slice(textStream.streamedText.length);
       if (delta) {
         writeSseEvent(res, {
           type: "response.output_text.delta",
@@ -784,45 +768,10 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const input = resolveAssistantTextInput(evt.data);
-      if (!input) {
-        return;
+      const { delta: content, replacement } = textStream.update(evt.data);
+      if (replacement) {
+        unrepresentableAssistantReplacement = replacement === "unrepresentable";
       }
-      // Once a provisional replacement begins, even its terminal text echo
-      // stays held until the run result selects the authoritative output.
-      if (input.replaceable || pendingAssistantText) {
-        pendingAssistantText = mergePendingAssistantText(
-          pendingAssistantText ?? assistantText,
-          input,
-        );
-        if (
-          !input.replaceable &&
-          input.replace &&
-          input.text !== undefined &&
-          pendingAssistantText.text.startsWith(streamedAssistantText.text)
-        ) {
-          unrepresentableAssistantReplacement = false;
-        }
-        return;
-      }
-
-      const previous = assistantText;
-      const merged = mergeAssistantText(previous, input, "append-only");
-      assistantText = merged;
-      // Unconfirmed tool-choice prose may still be corrected before it is sent.
-      if (toolChoice.constraint) {
-        return;
-      }
-      // Keep physical wire progress separate from a corrected item snapshot.
-      const content = resolveAssistantTextStreamDelta(previous, merged, streamedAssistantText);
-      if (content === undefined) {
-        unrepresentableAssistantReplacement = true;
-        return;
-      }
-      if (input.replace && input.text !== undefined) {
-        unrepresentableAssistantReplacement = false;
-      }
-      streamedAssistantText = assistantText;
       if (!content) {
         return;
       }

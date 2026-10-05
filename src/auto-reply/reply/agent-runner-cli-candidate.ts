@@ -1,4 +1,3 @@
-import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
@@ -43,10 +42,7 @@ export async function runCliFallbackCandidate(
     cliExecutionProvider: string;
     lifecycleGeneration: string;
   },
-): Promise<{
-  result: Awaited<ReturnType<typeof runCliAgentWithLifecycle>>;
-  bootstrapPromptWarningSignaturesSeen: string[];
-}> {
+): ReturnType<typeof runCliAgentWithLifecycle> {
   const turn = params.turn;
   const onPreparedBlockReply = turn.opts?.onPreparedBlockReply;
   const onNativeBlockReply: NonNullable<typeof turn.opts>["onBlockReply"] =
@@ -110,12 +106,10 @@ export async function runCliFallbackCandidate(
   const cliReplyToMode = cliThreadRequired
     ? cliThreadingContext.replyToMode
     : (turn.followupRun.originatingReplyToMode ?? turn.sessionCtx.ReplyToMode);
-  const isRestartSentinelContinuation =
-    turn.sessionCtx.InputProvenance?.kind === "internal_system" &&
-    turn.sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
-  const cliCurrentMessageId = isRestartSentinelContinuation
-    ? turn.sessionCtx.ReplyToId
-    : (turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid);
+  const cliCurrentMessageId =
+    cliThreadingContext.currentMessageId != null
+      ? String(cliThreadingContext.currentMessageId)
+      : undefined;
   const commandDetailsVisible = turn.resolvedVerboseLevel === "full";
   const cliToolSummaryTracker = createCliToolSummaryTracker({
     detailMode: turn.toolProgressDetail,
@@ -151,7 +145,7 @@ export async function runCliFallbackCandidate(
     (turn.blockStreamingEnabled || turn.opts?.commentaryPayloadsEnabled === true);
   const toolAuthorityRoute = { provider: params.provider, model: params.model };
   const toolAuthorityFingerprint = turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
-  const result = await params.timing.measure("cli_run", () =>
+  return params.timing.measure("cli_run", () =>
     withAdmittedCliCandidate(
       {
         claim: {
@@ -222,12 +216,12 @@ export async function runCliFallbackCandidate(
           turn.followupRun.run.agentId,
         );
         let droppedCliSessionReplacement = false;
+        await params.prepareAgentRunStart();
+        assertSettlementCurrent();
         const candidateResult = await runCliAgentWithLifecycle({
           runId: params.runId,
           lifecycleGeneration: params.lifecycleGeneration,
-          provider: params.cliExecutionProvider,
           startedAt: cliLifecycleStartedAt,
-          emitLifecycleTerminal: false,
           onAgentRunStart: params.notifyAgentRunStart,
           suppressAssistantBridge: turn.followupRun.run.silentExpected,
           onActivity: () => turn.replyOperation?.recordActivity(),
@@ -360,6 +354,7 @@ export async function runCliFallbackCandidate(
                   })
               : undefined,
           runParams: {
+            preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
             preparedRunAdmission: params.preparedRunAdmission,
             messageActionTurnCapability: params.messageActionTurnCapability,
             diagnosticOwner,
@@ -375,6 +370,7 @@ export async function runCliFallbackCandidate(
               turn.followupRun.run.runtimePolicySessionKey ?? turn.runtimePolicySessionKey,
             agentId: turn.followupRun.run.agentId,
             trigger: turn.isHeartbeat ? "heartbeat" : "user",
+            continuesConversation: turn.opts?.continuesConversation,
             sessionFile: turn.followupRun.run.sessionFile,
             workspaceDir: turn.followupRun.run.workspaceDir,
             cwd: turn.followupRun.run.cwd,
@@ -474,6 +470,7 @@ export async function runCliFallbackCandidate(
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
             senderIsOwner: turn.followupRun.run.senderIsOwner,
+            conversationToolPolicy: turn.followupRun.run.conversationToolPolicy,
             approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
             skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
@@ -518,10 +515,4 @@ export async function runCliFallbackCandidate(
       },
     ),
   );
-  return {
-    result,
-    bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
-      result.meta?.systemPromptReport,
-    ),
-  };
 }

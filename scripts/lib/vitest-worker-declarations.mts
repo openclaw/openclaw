@@ -83,6 +83,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/infra/sqlite-worker-store.compile-cache-runtime.test-support.ts",
   "state/native-process-runtime.test-support": "src/state/native-process-runtime.test-support.ts",
   "agents/process-runtime.test-support": "src/agents/process-runtime.test-support.ts",
+  "agents/sandbox/sdk-state-owner-runtime.test-support":
+    "src/agents/sandbox/sdk-state-owner-runtime.test-support.ts",
   "agents/mcp-import-runtime.test-support": "src/agents/mcp-import-runtime.test-support.ts",
   "plugins/process-runtime.test-support": "src/plugins/process-runtime.test-support.ts",
   "plugins/retention-runtime.test-support": "src/plugins/retention-runtime.test-support.ts",
@@ -159,8 +161,6 @@ export const vitestWorkerDeclarationEntries = {
     "src/agents/code-mode-retention-entrypoint.test-support.ts",
   "agents/command/cli-compaction-runtime.test-support":
     "src/agents/command/cli-compaction-runtime.test-support.ts",
-  "agents/sessions/bash-output-spill-entrypoints.test-support":
-    "src/agents/sessions/bash-output-spill-entrypoints.test-support.ts",
   "agents/worktrees/service-gc-runtime.test-support":
     "src/agents/worktrees/service-gc-runtime.test-support.ts",
   "cron/owner-hardening-runtime.test-support": "src/cron/owner-hardening-runtime.test-support.ts",

@@ -35,16 +35,6 @@ export function resolveHeartbeatConfig(
   return defaults || overrides ? { ...defaults, ...overrides } : undefined;
 }
 
-function omitExplicitHeartbeatDestination(heartbeat: HeartbeatConfig | undefined) {
-  if (!heartbeat) {
-    return undefined;
-  }
-  const next = { ...heartbeat };
-  delete next.to;
-  delete next.accountId;
-  return next;
-}
-
 export function resolveHeartbeatForWake(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -57,9 +47,11 @@ export function resolveHeartbeatForWake(params: {
   const heartbeat = params.requestedHeartbeat
     ? { ...configuredHeartbeat, ...params.requestedHeartbeat }
     : configuredHeartbeat;
-  return params.source === "cron" && params.requestedHeartbeat?.target === "last"
-    ? omitExplicitHeartbeatDestination(heartbeat)
-    : heartbeat;
+  if (heartbeat && params.source === "cron" && params.requestedHeartbeat?.target === "last") {
+    delete heartbeat.to;
+    delete heartbeat.accountId;
+  }
+  return heartbeat;
 }
 
 /** Resolve the cadence owned by the effective heartbeat configuration. */
