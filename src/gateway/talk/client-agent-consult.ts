@@ -10,6 +10,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import {
   GatewayDrainingError,
@@ -64,6 +65,19 @@ const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
 });
 
 type TalkRequesterFinalRegistration = ReturnType<typeof registerRequesterFinalAttachment>;
+
+/** Abort stays immediate. A finished consult drains accepted writes before close. */
+export async function settleTalkConsultAdmission(params: {
+  aborted: boolean;
+  operationalRunInstance: OperationalRunInstanceRef;
+  close: () => void;
+}): Promise<void> {
+  if (params.aborted) {
+    params.close();
+    return;
+  }
+  await drainAgentRunTerminalWrites(params.operationalRunInstance).finally(params.close);
+}
 
 function createTalkClientAgentRuntime(params: {
   config: OpenClawConfig;
@@ -141,8 +155,18 @@ function createTalkClientAgentRuntime(params: {
         }),
       });
     } finally {
-      runParams.abortSignal?.removeEventListener("abort", close);
-      close();
+      // Keep abort revocation registered through drain. Removing the listener
+      // before awaiting pending writes left write authority live if cancel
+      // arrived mid-settlement.
+      try {
+        await settleTalkConsultAdmission({
+          aborted: runParams.abortSignal?.aborted === true,
+          operationalRunInstance,
+          close,
+        });
+      } finally {
+        runParams.abortSignal?.removeEventListener("abort", close);
+      }
     }
   };
   Object.defineProperty(agentRuntime, "runEmbeddedAgent", {

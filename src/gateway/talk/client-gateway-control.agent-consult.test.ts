@@ -854,6 +854,30 @@ describe("Talk client agent consult admission", () => {
     expect(mocks.close).toHaveBeenCalledOnce();
   });
 
+  it("revokes admission if abort arrives while accepted terminal writes drain", async () => {
+    const core = deferred<{ payloads: never[] }>();
+    const write = deferred<void>();
+    mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
+      const { captureAgentRunTerminalWriteContext } =
+        await import("../../infra/agent-run-terminal-writes.js");
+      const captured = captureAgentRunTerminalWriteContext("run-talk");
+      captured?.track(write.promise);
+      return await core.promise;
+    });
+    const controller = new AbortController();
+    const run = createRunner().runPrompt({ prompt: "check", signal: controller.signal });
+    await vi.waitFor(() => expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledOnce());
+    core.resolve({ payloads: [] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mocks.close).not.toHaveBeenCalled();
+    controller.abort(new Error("cancelled during drain"));
+    expect(mocks.close).toHaveBeenCalledOnce();
+    write.resolve();
+    await expect(run).resolves.toEqual({ text: "done" });
+    expect(mocks.close).toHaveBeenCalledOnce();
+  });
+
   it("closes admission when abort races with listener registration", async () => {
     const controller = new AbortController();
     mocks.prepareAgentRunAdmission.mockImplementationOnce(() => {
