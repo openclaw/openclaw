@@ -588,6 +588,13 @@ other stores continue recovery. `openclaw status` and `openclaw doctor` show
 outstanding startup recovery failures from the running Gateway; the warning clears
 when the store scan succeeds.
 
+A restart abort preserves the interrupted turn's recovery claim even when command
+cleanup finishes before shutdown marking. On upgrade, startup also repairs an
+internal chat turn left running and aborted with a dead writer, a missing claim,
+and an incorrect terminal marker for that writer. It restores that turn's claim
+only when no live owner or recorded terminal delivery remains, then uses the normal
+transcript replay checks to resume. Earlier completed turns keep their receipts.
+
 If an older Gateway left a dead writer and an unfinished recovery cycle in a
 running, failed, or statusless session, `sessions.recover` reconciles that writer
 and starts a continuation in the same session. A new Control UI message also reconciles this
@@ -885,7 +892,9 @@ channels.start --params '{"channel":"<id>"}'`
   `openclaw_session_recovery_age_seconds`.
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `agents/subagent-registry`
-  subsystems.
+  subsystems. A startup scan that finds interrupted candidates but starts none
+  still logs one summary, including bounded skip counts by reason such as
+  `live_owner`, `work_start_blocked`, or `dispatch_target_unavailable`.
 - **Reply hooks:** resumed turns run currently loaded `before_agent_reply`
   hooks under the normal user-trigger rules. Automatically delivered replies
   also run the normal `reply_payload_sending` hook before channel delivery,
