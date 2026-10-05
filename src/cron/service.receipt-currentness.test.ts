@@ -200,10 +200,10 @@ it.each(["payload", "webhook"] as const)(
       const preload = state.path("receipt-reply-gate.mjs");
       await fs.writeFile(
         preload,
-        `import { parentPort, workerData, isMainThread, threadId } from "node:worker_threads";
+        `import { MessagePort, workerData, isMainThread, threadId } from "node:worker_threads";
          const gate = new Int32Array(workerData.receiptGate);
-         const post = parentPort.postMessage.bind(parentPort);
-         parentPort.postMessage = (message, ...args) => {
+         const post = MessagePort.prototype.postMessage;
+         MessagePort.prototype.postMessage = function (message, ...args) {
            if (message?.status === "ok" && message.value?.ok &&
                message.value.type === "cron.currentReceipt" && Atomics.load(gate, 0) > 0) {
              const count = Atomics.add(gate, 1, 1) + 1;
@@ -216,7 +216,7 @@ it.each(["payload", "webhook"] as const)(
                Atomics.wait(gate, 2, 0);
              }
            }
-           return post(message, ...args);
+           return post.call(this, message, ...args);
          };`,
       );
       const gate = new Int32Array(new SharedArrayBuffer(12));
@@ -228,9 +228,9 @@ it.each(["payload", "webhook"] as const)(
       const create = nativeWorkers.createRetainedNativeWorker;
       const factory = vi
         .spyOn(nativeWorkers, "createRetainedNativeWorker")
-        .mockImplementation((filename, options, source, resource) => {
+        .mockImplementation((filename, options, source, resource, taskPorts) => {
           if (selected || String(filename) !== readUrl) {
-            return create(filename, options, source, resource);
+            return create(filename, options, source, resource, taskPorts);
           }
           selected = true;
           const nativeOptions = options ?? {};
@@ -249,6 +249,7 @@ it.each(["payload", "webhook"] as const)(
             },
             source,
             resource,
+            taskPorts,
           );
         });
       const enqueueSystemEvent = vi.fn();
