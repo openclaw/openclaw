@@ -127,17 +127,12 @@ export async function inspectImmutableInstall(
       layout.current.sha === selected.sha &&
       layout.current.identity === selected.identity
     ) {
-      assertImmutableDescriptorCurrent({
+      const descriptor = {
         ...record.descriptor,
         current: { ...layout.current, buildDigest: selected.buildDigest },
-      });
-      return projectImmutableInstall({
-        ...record,
-        descriptor: {
-          ...record.descriptor,
-          current: { ...layout.current, buildDigest: selected.buildDigest },
-        },
-      });
+      };
+      assertImmutableDescriptorCurrent(descriptor);
+      return projectImmutableInstall({ ...record, descriptor });
     }
   }
   assertImmutableDescriptorCurrent(record.descriptor);

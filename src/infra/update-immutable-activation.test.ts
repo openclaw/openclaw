@@ -71,12 +71,12 @@ vi.mock("./update-immutable-generation.js", () => ({
   verifyImmutableGeneration: mocks.generation,
 }));
 vi.mock("./update-candidate-canary.js", () => ({ validateUpdateCandidateCanary: mocks.canary }));
-vi.mock("./update-immutable-service.js", () => ({
+vi.mock("./update-immutable-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-service.js")>()),
   inspectImmutableActivationService: mocks.inspect,
   assertImmutableServiceProcessCurrent: mocks.current,
   assertImmutableServiceStoppedCurrent: mocks.stopped,
-  stopImmutableService: mocks.stop,
-  startImmutableService: mocks.start,
+  controlImmutableService: (action: "start" | "stop", params: unknown) => mocks[action](params),
 }));
 vi.mock("../cli/update-cli/update-command-service-drain.js", () => ({
   withGatewayMaintenanceDrain: mocks.drain,

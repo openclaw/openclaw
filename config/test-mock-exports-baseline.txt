@@ -9177,7 +9177,6 @@
 ["src/infra/update-immutable-activation.test.ts","./update-immutable-install-record.js","eb509461b62be1d63e0f9cfacabaa337864fa514f18c6fb6f750aad20a221eaf",1]
 ["src/infra/update-immutable-activation.test.ts","./update-immutable-owner.js","20e2014aa7b70ae5d0ace4a5add877f61a7006d7c7e41845e662c8f6d46cf80d",1]
 ["src/infra/update-immutable-activation.test.ts","./update-immutable-protection.js","a5424c71b08c605dab1886b11f4bd1dc9e27d87a760ab176315cf3e489a65a7e",1]
-["src/infra/update-immutable-activation.test.ts","./update-immutable-service.js","60995a8e545df04e632086b1f5a04e1ebe720546b68eabe4557af6d04f3b08d7",1]
 ["src/infra/update-immutable-activation.test.ts","./update-immutable-verification.js","c417add5f59c65605a9d9ca4202609ac5b1dd77753d0275efb24f76e1feb599d",1]
 ["src/infra/update-immutable-install.adoption.test.ts","../daemon/service-operation-lock.js","e2dfab11fb82a5cc919c55a792a8ba5f37cba675e82d2527f4f372191e4f64e7",1]
 ["src/infra/update-immutable-install.adoption.test.ts","./update-immutable-generation.js","d255d6622f22772b9bc7608ec1b4b09ee5e0183fe9a8e17fe91b97dade32f081",1]

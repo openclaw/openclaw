@@ -40,9 +40,8 @@ import {
 import {
   assertImmutableServiceStoppedCurrent,
   assertImmutableServiceProcessCurrent,
+  controlImmutableService,
   inspectImmutableActivationService,
-  startImmutableService,
-  stopImmutableService,
   type ImmutableServiceObservation,
 } from "./update-immutable-service.js";
 import {
@@ -376,7 +375,7 @@ function activationOwner(
             env: service.state.env,
             assertCurrent,
           });
-        await stopImmutableService({
+        await controlImmutableService("stop", {
           descriptor: record.descriptor,
           expected: service,
           assertCurrent,
@@ -401,7 +400,7 @@ function activationOwner(
       servingStartedAtMs: Date.now(),
       ...(!rollback ? { candidateStartedAtMs: Date.now() } : {}),
     });
-    await startImmutableService({
+    await controlImmutableService("start", {
       descriptor: record.descriptor,
       expected: stopped,
       assertCurrent,
@@ -410,6 +409,15 @@ function activationOwner(
       beforeEffect: assertStopped,
     });
     assertCurrent();
+  };
+  const startAndVerifyPredecessor = async (
+    recovering: boolean,
+  ): Promise<ImmutableActivationResult> => {
+    await start(true);
+    const observed = await observe();
+    return observed.outcome === "verified" && observed.service
+      ? complete("rolled-back", observed, recovering)
+      : pending(`${recovering ? "recovery" : "rollback"}-verification-pending`);
   };
   const rollback = async (): Promise<ImmutableActivationResult> => {
     const service = await inspect();
@@ -429,12 +437,7 @@ function activationOwner(
     await stop(service, "rollback-stopping");
     save({ phase: "rollback-publishing" });
     record = publishImmutablePointer(record, "previous", assertStopped);
-    await start(true);
-    const observed = await observe();
-    if (observed.outcome !== "verified" || !observed.service) {
-      return pending("rollback-verification-pending");
-    }
-    return complete("rolled-back", observed, false);
+    return startAndVerifyPredecessor(false);
   };
   const startAndVerifyCandidate = async (): Promise<ImmutableActivationResult> => {
     try {
@@ -518,12 +521,7 @@ function activationOwner(
         if (record.descriptor.current.sha === op.candidate.sha) {
           return startAndVerifyCandidate();
         }
-        await start(true);
-        const after = await observe();
-        if (after.outcome === "verified" && after.service) {
-          return complete("rolled-back", after, true);
-        }
-        return pending("recovery-verification-pending");
+        return startAndVerifyPredecessor(true);
       }
       return record.descriptor.current.sha === op.candidate.sha
         ? rollback()

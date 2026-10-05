@@ -15,8 +15,7 @@ import {
   assertImmutableServiceProcessCurrent,
   assertImmutableServiceStoppedCurrent,
   inspectImmutableActivationService,
-  startImmutableService,
-  stopImmutableService,
+  controlImmutableService,
   verifyImmutableService,
 } from "./update-immutable-service.js";
 
@@ -284,7 +283,7 @@ describe("immutable activation service", () => {
     "reconciles a host that becomes %s after committing shutdown before native dispatch",
     async (outcome) => {
       const expected = await inspect();
-      const stopping = stopImmutableService({
+      const stopping = controlImmutableService("stop", {
         descriptor,
         expected,
         assertCurrent,
@@ -325,7 +324,12 @@ describe("immutable activation service", () => {
       throw failure;
     });
     await expect(
-      stopImmutableService({ descriptor, expected, assertCurrent, stdout: new PassThrough() }),
+      controlImmutableService("stop", {
+        descriptor,
+        expected,
+        assertCurrent,
+        stdout: new PassThrough(),
+      }),
     ).rejects.toBe(failure);
   });
 
@@ -367,9 +371,14 @@ describe("immutable activation service", () => {
       state: { running: false, runtime: { status: "starting" } },
     });
     await expect(inspect(true)).rejects.toThrow("running systemd service");
-    for (const operation of [startImmutableService, stopImmutableService]) {
+    for (const action of ["start", "stop"] as const) {
       await expect(
-        operation({ descriptor, expected: observed, assertCurrent, stdout: new PassThrough() }),
+        controlImmutableService(action, {
+          descriptor,
+          expected: observed,
+          assertCurrent,
+          stdout: new PassThrough(),
+        }),
       ).rejects.toThrow("start requires a stopped service");
     }
     expect(lifecycle.startSystemdService).not.toHaveBeenCalled();
@@ -436,7 +445,7 @@ describe("immutable activation service", () => {
       service.account,
       { managerUid: 0, assertCurrent },
     );
-    await startImmutableService({
+    await controlImmutableService("start", {
       descriptor,
       expected: observed,
       assertCurrent,
@@ -465,7 +474,7 @@ describe("immutable activation service", () => {
         currentPid++;
       }
       await expect(
-        stopImmutableService({
+        controlImmutableService("stop", {
           descriptor,
           expected: observed,
           assertCurrent,
@@ -482,7 +491,7 @@ describe("immutable activation service", () => {
       ticks++;
     };
     await expect(
-      stopImmutableService({
+      controlImmutableService("stop", {
         descriptor,
         expected: observed,
         assertCurrent,
@@ -497,7 +506,7 @@ describe("immutable activation service", () => {
     descriptor.version = 1;
     delete descriptor.activationEnabled;
     await expect(
-      stopImmutableService({
+      controlImmutableService("stop", {
         descriptor,
         expected: observed,
         assertCurrent,
@@ -511,7 +520,7 @@ describe("immutable activation service", () => {
   it("joins the old process and proves the entire service cgroup empty after native stop", async () => {
     const observed = await inspect();
     const initialReads = cgroupReads;
-    await stopImmutableService({
+    await controlImmutableService("stop", {
       descriptor,
       expected: observed,
       assertCurrent,
@@ -524,7 +533,7 @@ describe("immutable activation service", () => {
 
   it("rechecks cgroup descendants synchronously immediately before pointer publication", async () => {
     const observed = await inspect();
-    await stopImmutableService({
+    await controlImmutableService("stop", {
       descriptor,
       expected: observed,
       assertCurrent,
