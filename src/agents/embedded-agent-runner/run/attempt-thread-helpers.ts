@@ -2,13 +2,9 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import type { isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import {
-  hashToolResultProjectionSnapshot,
-  serializeCacheTtlToolResultProjections,
+  persistToolResultProjections,
   type ToolResultPromptProjectionState,
 } from "../session-prompt-state.js";
-
-/** Custom transcript marker used to preserve cache-TTL pruning state across attempts. */
-const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
 /** Combines already-normalized hook sections without rewriting an unchanged prompt. */
 export function composeSystemPromptWithHookContext(params: {
@@ -76,14 +72,10 @@ export async function appendAttemptCacheTtlIfNeeded(params: {
   ) {
     return false;
   }
-  const snapshot = serializeCacheTtlToolResultProjections(params.toolResultPromptProjectionState);
-  const hash = hashToolResultProjectionSnapshot(snapshot);
-  await params.sessionManager.appendCustomEntryAsync(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
-    timestamp: params.now ?? Date.now(),
-    provider: params.provider,
-    modelId: params.modelId,
-    ...(hash !== params.toolResultPromptProjectionState.lastWrittenSnapshotHash ? snapshot : {}),
-  });
-  params.toolResultPromptProjectionState.lastWrittenSnapshotHash = hash;
+  await persistToolResultProjections(
+    params.toolResultPromptProjectionState,
+    (customType, data) => params.sessionManager.appendCustomEntryAsync(customType, data),
+    { timestamp: params.now ?? Date.now(), provider: params.provider, modelId: params.modelId },
+  );
   return true;
 }

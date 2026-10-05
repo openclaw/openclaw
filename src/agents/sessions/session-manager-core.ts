@@ -6,6 +6,7 @@ import type {
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import { bindCacheTtlProjectionPrefixes } from "../../config/sessions/session-cache-ttl-prefix.js";
 import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import {
   resolveOpaqueSessionFirstKeptEntryId,
@@ -59,6 +60,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   protected opaqueFileEntries: PreservedOpaqueFileEntry[] = [];
   protected boundedParentIds = new Map<string, string | null>();
   private boundedFirstKeptById = new Map<string, string>();
+  protected cacheTtlProjectionPrefixes: SessionTranscriptBoundedActiveContext["cacheTtlProjectionPrefixes"];
   protected pendingDeliberateAppend = false;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
@@ -218,12 +220,18 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     entries: readonly unknown[],
     bounded?: Pick<
       SessionTranscriptBoundedActiveContext,
-      "activeLeafEntryId" | "version" | "opaqueParents" | "parents" | "firstKeptRanges"
+      | "activeLeafEntryId"
+      | "version"
+      | "opaqueParents"
+      | "parents"
+      | "firstKeptRanges"
+      | "cacheTtlProjectionPrefixes"
     >,
     version?: SessionTranscriptContextVersion,
   ): void {
     this.assertTranscriptViewAvailable();
     this.transcriptVersion = version ?? bounded?.version;
+    this.cacheTtlProjectionPrefixes = undefined;
     this.boundedFirstKeptById.clear();
     this.boundedParentIds.clear();
     const partitioned = partitionSessionFileEntries(entries);
@@ -268,6 +276,11 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
         }
         this.boundedFirstKeptById.set(boundaryId, firstKeptEntryId);
       }
+      this.cacheTtlProjectionPrefixes = bindCacheTtlProjectionPrefixes(
+        bounded,
+        this.getBranch(),
+        this.byId,
+      );
     }
   }
 
@@ -308,6 +321,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       labelTimestampsById: copy ? new Map(this.labelTimestampsById) : this.labelTimestampsById,
       boundedFirstKeptById: copy ? new Map(this.boundedFirstKeptById) : this.boundedFirstKeptById,
       boundedParentIds: copy ? new Map(this.boundedParentIds) : this.boundedParentIds,
+      cacheTtlProjectionPrefixes: this.cacheTtlProjectionPrefixes,
       boundedContextIncomplete: this.boundedContextIncomplete,
       boundedContextLimits: this.boundedContextLimits,
       persistedBoundaryCount: this.persistedBoundaryCount,
@@ -444,6 +458,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.fileEntries = [header];
     this.opaqueFileEntries = [];
     this.clearNavigation();
+    this.cacheTtlProjectionPrefixes = undefined;
     this.boundedFirstKeptById.clear();
     this.boundedParentIds.clear();
     this.pendingDeliberateAppend = false;

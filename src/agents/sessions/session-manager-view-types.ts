@@ -12,6 +12,7 @@ export type SessionManagerBoundedContext = Pick<
   | "opaqueParents"
   | "parents"
   | "firstKeptRanges"
+  | "cacheTtlProjectionPrefixes"
   | "persistedSuffixStartSeq"
   | "boundaryCount"
   | "transcriptMutationAt"
