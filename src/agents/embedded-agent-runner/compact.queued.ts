@@ -252,14 +252,14 @@ export async function compactEmbeddedAgentSession(
 async function compactEmbeddedAgentSessionImpl(
   params: QueuedCompactionParams,
   expectedEntry: Parameters<typeof acceptCompactionSuccessor>[0]["expectedEntry"],
-  host: QueuedCompactionHostOptions,
+  sourceHost: QueuedCompactionHostOptions,
   contextEngineSessionKey?: string,
 ): Promise<EmbeddedAgentCompactResult> {
   return await runForegroundCompactionWork(async (owner) => {
     if (params.abortSignal?.aborted) {
       return createQueuedCompactionAbortedResult();
     }
-    host.assertActive?.();
+    sourceHost.assertActive?.();
     const runtimeTarget = params.sessionTarget;
     const agentIds = resolveSessionAgentIds({
       sessionKey: runtimeTarget.sessionKey,
@@ -279,12 +279,11 @@ async function compactEmbeddedAgentSessionImpl(
             workspaceDir: resolvedWorkspaceDir,
           })
         : null;
-    const sourceHost = host;
     const assertActive = () => {
       sourceHost.assertActive?.();
       placement?.assertCurrent();
     };
-    host = {
+    const host = {
       ...sourceHost,
       assertActive,
       sourceAuthority: {
