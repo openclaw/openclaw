@@ -1,10 +1,12 @@
 // Gateway lifecycle readiness tests distinguish healthy, still-starting, and failed outcomes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { requireMockCallArg, type RestartParams } from "./lifecycle.test-helpers.js";
 import { createDaemonActionContext } from "./response.js";
 import { formatGatewayRestartFailure } from "./restart-health-diagnostics.js";
+import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "./restart-health.constants.js";
 
 const service = vi.hoisted(() => ({ readCommand: vi.fn(), restart: vi.fn() }));
 const runServiceStart = vi.hoisted(() => vi.fn());
@@ -98,11 +100,17 @@ describe("Gateway service readiness", () => {
     await runDaemonRestart({ json: true });
 
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
+    const { deadlineMs } = resolveGatewayStartupTiming("win32");
+    const attempts = Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS);
     for (const [options] of waitForGatewayHealthyRestart.mock.calls) {
-      expect(options).toMatchObject({ timeoutMs: 5_400_000, attempts: 10_800, delayMs: 500 });
+      expect(options).toMatchObject({
+        timeoutMs: deadlineMs,
+        attempts,
+        delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+      });
     }
     expect(waitForGatewayHttpReadiness).toHaveBeenCalledWith(
-      expect.objectContaining({ attempts: 10_800, delayMs: 500 }),
+      expect.objectContaining({ attempts, delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS }),
     );
   });
 
