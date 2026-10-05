@@ -42,6 +42,22 @@ describeLive("elevenlabs plugin live", () => {
     expect(audioFile.audioBuffer.byteLength).toBeGreaterThan(512);
   }, 60_000);
 
+  it("synthesizes telephony speech with eleven_v4_turbo", async () => {
+    const { speechProviders } = await registerElevenLabsPlugin();
+    const provider = requireRegisteredProvider(speechProviders, "elevenlabs");
+
+    const audio = await provider.synthesizeTelephony?.({
+      text: "OpenClaw ElevenLabs eleven v four turbo dialogue integration test OK.",
+      cfg: { plugins: { enabled: true } } as never,
+      providerConfig: { apiKey: ELEVENLABS_KEY, modelId: "eleven_v4_turbo" },
+      timeoutMs: 45_000,
+    });
+
+    expect(audio?.outputFormat).toBe("pcm_22050");
+    expect(audio?.sampleRate).toBe(22_050);
+    expect(audio?.audioBuffer.byteLength).toBeGreaterThan(512);
+  }, 60_000);
+
   it("transcribes synthesized speech through the media provider", async () => {
     const phrase = "Testing OpenClaw ElevenLabs speech to text integration OK.";
     const audio = await synthesizeElevenLabsLiveSpeech({

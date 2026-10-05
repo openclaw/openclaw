@@ -213,6 +213,44 @@ describe("createTelephonyTtsProvider", () => {
     );
   });
 
+  it("passes the call id and abort signal through to ElevenLabs dialogue", async () => {
+    const textToSpeechTelephony = createSynthesis();
+    const provider = await createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: createRuntime(textToSpeechTelephony, async ({ cfg, text }) => ({
+        cfg,
+        directives: {
+          cleanedText: text,
+          hasDirective: false,
+          overrides: {
+            providerOverrides: {
+              elevenlabs: { voiceId: "pMsXgVXv3BLzUgSXRplE" },
+            },
+          },
+          warnings: [],
+        },
+      })),
+    });
+    const signal = new AbortController().signal;
+
+    await provider.synthesizeForTelephony("hello", { conversationId: " CA-call ", signal });
+
+    expect(textToSpeechTelephony).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "hello",
+        overrides: {
+          providerOverrides: {
+            elevenlabs: {
+              voiceId: "pMsXgVXv3BLzUgSXRplE",
+              conversationId: "CA-call",
+              signal,
+            },
+          },
+        },
+      }),
+    );
+  });
+
   it("clamps oversized configured timeoutMs", async () => {
     const provider = await createTelephonyTtsProvider({
       coreConfig: {
