@@ -6232,15 +6232,6 @@ jobs:
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: *docker_parallelism
         run: pnpm test:docker:all
 
-      - name: Upload Fleet Docker proof
-        if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' fleet-cache ')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: fleet-cache-docker-proof
-          path: .artifacts/docker-tests/**/fleet-cache.log
-          include-hidden-files: true
-          if-no-files-found: warn
-
       - name: Upload sanitized upgrade survivor proof
         if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
