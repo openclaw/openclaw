@@ -221,6 +221,58 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     ).toEqual([]);
   });
 
+  it.each(["none", "forum", "direct-messages"] as const)(
+    "hands off the canonical %s audience rather than only the chat id",
+    async (scope) => {
+      const context = http.createContext();
+      context.threadSpec = scope === "none" ? { scope: "none" } : { scope, id: 77 };
+      const suffix =
+        scope === "forum" ? ":topic:77" : scope === "direct-messages" ? ":direct-topic:77" : "";
+      const expectedTo = "telegram:" + context.chatId + suffix;
+      context.ctxPayload.To = expectedTo;
+      context.ctxPayload.OriginatingTo = expectedTo;
+      let receipt: unknown;
+      await dispatchProgressTurn(
+        async (options) => {
+          await options?.onItemEvent?.({
+            kind: "preamble",
+            itemId: "audience",
+            phase: "end",
+            progressText: "Checking delegated work.",
+          });
+          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "audience" });
+          await waitForBotApiCall((call) => call.method === "sendMessage");
+        },
+        {
+          mode: "progress",
+          toolProgress: true,
+          context,
+          finalReply: setReplyPayloadMetadata(
+            { text: "Waiting for delegated work." },
+            {
+              progressContinuation: {
+                adopt: async (candidate) => {
+                  receipt = candidate;
+                  return true;
+                },
+                close: () => undefined,
+              },
+            },
+          ),
+        },
+      );
+      expect(receipt).toMatchObject({
+        channel: "telegram",
+        accountId: "default",
+        to: expectedTo,
+        ...(scope === "none" ? {} : { threadId: 77 }),
+      });
+      expect(calls.filter((call) => call.fields.text === "Waiting for delegated work.")).toEqual(
+        [],
+      );
+    },
+  );
+
   it.each([true, false])(
     "retains the existing progress card only when continuation custody is accepted (%s)",
     async (accept) => {

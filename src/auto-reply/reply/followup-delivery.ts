@@ -54,7 +54,10 @@ import {
   resolveStrandedReplyRecovery,
 } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
-import { buildWaitingStatusPayload } from "./waiting-status.js";
+import {
+  attachWaitingStatusProgressContinuation,
+  buildWaitingStatusPayload,
+} from "./waiting-status.js";
 
 type FollowupDeliveryDecision =
   | {
@@ -311,6 +314,18 @@ export async function resolveFollowupDeliveryDecision(params: {
       : undefined
     : (waitingStatusPayload ?? buildEmptyInteractiveReplyPayload({ completion }));
   if (!hasTerminalPayload && fallbackPayload) {
+    if (fallbackPayload === waitingStatusPayload) {
+      await attachWaitingStatusProgressContinuation({
+        payload: fallbackPayload,
+        requesterSessionKey: turn.queued.run.sessionKey,
+        requesterAgentId: turn.queued.run.agentId,
+        requesterSessionId: turn.queued.run.sessionId,
+        requesterTurnRunId: execution.runId,
+        requesterContinuationSettled: result.requesterContinuationSettled,
+        acceptedSessionSpawns: result.acceptedSessionSpawns,
+        operation: turn.operation,
+      });
+    }
     payloads.push(...preparePayloads([fallbackPayload]));
   }
   if (accounting.compactionNotice) {

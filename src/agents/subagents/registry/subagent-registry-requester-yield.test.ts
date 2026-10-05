@@ -10,6 +10,10 @@ import {
   registerRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
 import {
+  withActiveSubagentProgressContinuation,
+  promoteSubagentProgressContinuation,
+} from "./subagent-progress-context.js";
+import {
   adoptSubagentRunForRequesterTurnInRuns,
   listUnsettledRequesterChildrenInRuns,
   markRequesterTurnYieldedInRuns,
@@ -105,6 +109,43 @@ beforeAll(async () => {
 afterAll(() => state.cleanup());
 
 afterEach(() => vi.restoreAllMocks());
+
+it("transfers presentation only through the committed native yield cohort", async () => {
+  const entry = makeRun("presentation-handoff", false);
+  const runs = new Map([[entry.runId, entry]]);
+  const promotions: Array<{ runIds: string[]; generation?: number; yielded: boolean }> = [];
+  const owner = {
+    promote: (members: readonly SubagentRunRecord[], generation?: number) => {
+      promotions.push({
+        runIds: members.map((member) => member.runId),
+        generation,
+        yielded: members.every((member) =>
+          generation === undefined
+            ? member.requesterTurnYielded === true
+            : member.requesterSettleWake?.rearmGeneration === generation,
+        ),
+      });
+    },
+  };
+  await withActiveSubagentProgressContinuation(owner, REQUESTER_TURN, async () => {
+    promoteSubagentProgressContinuation("unrelated-child-turn", [entry]);
+    expect(promotions).toHaveLength(0);
+    await markRequesterTurnYieldedInRuns({
+      requesterSessionKey: REQUESTER,
+      requesterTurnRunId: REQUESTER_TURN,
+      runs,
+      preparedAuthority: null,
+      transfer: createRequesterInitialTransferFixture(runs),
+    });
+    await settleRuns([entry], { runs });
+  });
+  expect(promotions).toEqual([
+    { runIds: [entry.runId], generation: undefined, yielded: true },
+    { runIds: [entry.runId], generation: 1, yielded: true },
+  ]);
+  await settleRuns([makeRun("unpresented")]);
+  expect(promotions).toHaveLength(2);
+});
 
 describe("adoptSubagentRunForRequesterTurnInRuns", () => {
   function pendingChild(runId = "steered-child"): SubagentRunRecord {

@@ -83,6 +83,18 @@ Final delivery depends on the channel and transport. OpenClaw either finalizes
 the draft or sends a separate answer and cleans up or stops updating the draft
 (see [Finalization](#finalization)).
 
+## Delegated work after yield
+
+On Telegram, an accepted announcing subagent can retain a confirmed progress
+draft after its parent calls `sessions_yield`. The parent execution ends normally;
+the native subagent completion owner holds only the scoped presentation.
+Opting into `progress.toolProgress` shows prepared child operation names and
+outcomes, without exposing private child commands, results, or reasoning.
+The final answer is delivered separately and the temporary card is cleaned up.
+If the channel cannot confirm or accept the handoff, OpenClaw uses its ordinary
+waiting acknowledgment instead. See [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield)
+for the ownership and cancellation boundaries.
+
 ## Choose a mode
 
 `channels.<channel>.streaming.mode` controls the visible in-progress behavior:

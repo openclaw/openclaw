@@ -8,6 +8,7 @@ import {
   type PreparedRequesterCronAuthority,
 } from "../requester-cron-authority.js";
 import { promoteRequesterFinalAttachment } from "../requester-final-attachment.js";
+import { promoteSubagentProgressContinuation } from "./subagent-progress-context.js";
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
 import {
   mutateSubagentRuns,
@@ -310,7 +311,10 @@ export async function markRequesterTurnYieldedInRuns(params: {
           entry.requesterTurnYielded = true;
         }
       },
-      finish: () => cronAuthority?.commit(),
+      finish: (entries) => {
+        cronAuthority?.commit();
+        promoteSubagentProgressContinuation(requesterTurnRunId, entries);
+      },
     });
     if (preparedAuthority) {
       try {
@@ -625,6 +629,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     },
     finish: (members) => {
       const entries = children(members);
+      promoteSubagentProgressContinuation(requesterTurnRunId, entries, rearmGeneration);
       promoteFollowupYield({ requesterTurnRunId, entries, rearmGeneration });
       promoteRequesterCronAuthority({ requesterTurnRunId, batch: entries, rearmGeneration });
       if (rearmGeneration !== undefined && params.requesterAgentId) {

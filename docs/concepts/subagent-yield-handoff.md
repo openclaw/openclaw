@@ -180,10 +180,24 @@ continuations do not send activity to an external channel. This
 activity signal does not change the configured message queue mode or restore
 individual tool-progress messages.
 
-The former Tasks-backed detached presenter and its notification policies are no
-longer available. A yielded turn does not start a separate task or flow projection
-to keep editing a channel progress message. Ordinary channel streaming still
-follows the channel's settings while its turn is active.
+When Telegram confirms an existing progress message and accepts its handoff,
+the native child cohort retains that message while the requester turn is paused.
+With `streaming.progress.toolProgress: true`, prepared child operation names
+and outcomes can update the same message. Private child prose, reasoning,
+commands, arguments, and results are not copied into that progress draft.
+The final answer remains a separate delivery obligation; confirmed final delivery
+cleans up the temporary progress message without delaying registry settlement.
+An edit failure disables further edits but retains independently authorized
+terminal cleanup. Cancellation also stops edits and cleans up the message while
+its original audience and source remain current.
+
+A missing message receipt or refused handoff keeps the ordinary waiting
+acknowledgment. Streaming opt-outs still apply. Message custody is process-local:
+Gateway replacement, account disablement, requester reset or archive, and source
+revocation cannot revive an old presenter from a stored message ID. This handoff
+covers accepted announcing subagents, not collectors or arbitrary background
+jobs. It does not restore the former Tasks presenter or create a separate task
+or flow projection.
 
 [Progress cards](/tools/progress-card) remain durable session state. The parent
 updates its own card as work advances and when child results return. Inspect

@@ -17,7 +17,6 @@ import {
   getFollowupForCohort,
   withFollowupSuccessor,
 } from "../completion/session-followup-completion.js";
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   matchesSubagentRequesterSession,
   selectConnectedSettledSubagentWave,
@@ -34,7 +33,6 @@ import {
 } from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
-import { withRequesterCronAuthority } from "../requester-cron-authority.js";
 import {
   finalizeRequesterFinalAttachment,
   transferRequesterFinalAttachment,
@@ -604,43 +602,43 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         requesterTurnRunId: directIdempotencyKey,
       });
     }
+    const { withSubagentProgressContinuation } =
+      await import("../registry/subagent-progress-continuation.js");
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
     try {
       const dispatch = () =>
-        subagentRuns.runWithCompletionBatchAuthority(settledBatch, () =>
-          withRequesterCronAuthority(
-            {
+        withSubagentProgressContinuation(
+          {
+            entries: settledBatch,
+            runId: directIdempotencyKey,
+            requesterSessionKey,
+            requesterAgentId,
+            requesterSessionId: requesterIdentity.sessionId,
+            rearmGeneration: state.requesterYieldBatch ? state.rearmGeneration : undefined,
+            isCurrent: isSourceSessionEffectsAllowed,
+          },
+          () =>
+            deliverSubagentAnnouncement({
               requesterSessionKey,
-              requesterSessionId: requesterIdentity.sessionId,
               requesterAgentId,
-              batch: settledBatch,
-              rearmGeneration: state.requesterYieldBatch ? state.rearmGeneration : undefined,
-              runId: directIdempotencyKey,
-              isCurrent: isSourceSessionEffectsAllowed,
-            },
-            () =>
-              deliverSubagentAnnouncement({
-                requesterSessionKey,
-                requesterAgentId,
-                triggerMessage: wakeMessage,
-                requesterSessionOrigin,
-                directOrigin,
-                sourceSessionKey: batchSessionKeys[0],
-                settleWakeSourceSessionKeys: batchSessionKeys,
-                sourceTool: "subagent_settle",
-                targetRequesterSessionKey: requesterSessionKey,
-                requesterIsSubagent: requesterDepth >= 1,
-                expectsCompletionMessage: false,
-                requireDirectDelivery: true,
-                ...privateBinding,
-                ...(!pauseNotice && requireVisibleReply ? { requireVisibleReply } : {}),
-                directIdempotencyKey,
-                signal: params.signal,
-                resolveGatewayContext,
-                isSourceSessionEffectsAllowed,
-                sourceReceiptAdmission,
-              }),
-          ),
+              triggerMessage: wakeMessage,
+              requesterSessionOrigin,
+              directOrigin,
+              sourceSessionKey: batchSessionKeys[0],
+              settleWakeSourceSessionKeys: batchSessionKeys,
+              sourceTool: "subagent_settle",
+              targetRequesterSessionKey: requesterSessionKey,
+              requesterIsSubagent: requesterDepth >= 1,
+              expectsCompletionMessage: false,
+              requireDirectDelivery: true,
+              ...privateBinding,
+              ...(!pauseNotice && requireVisibleReply ? { requireVisibleReply } : {}),
+              directIdempotencyKey,
+              signal: params.signal,
+              resolveGatewayContext,
+              isSourceSessionEffectsAllowed,
+              sourceReceiptAdmission,
+            }),
         );
       delivery = followup
         ? await withFollowupSuccessor(

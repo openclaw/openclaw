@@ -198,6 +198,28 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
   );
 });
 
+it.each(["ordinary", "queued"] as const)(
+  "%s waiting payload offers the real progress handoff and refuses absent child custody",
+  async (lane) => {
+    const context = createContext();
+    const payloads = await prepare(lane, context);
+    const continuation = getReplyPayloadMetadata(payloads[0] ?? {})?.progressContinuation;
+    // The producer, not a fixture-injected adoption callback, must offer custody.
+    // These accepted receipts have no current registry owner, so adoption must refuse.
+    expect(
+      await continuation?.adopt({
+        channel: "discord",
+        accountId: "default",
+        to: "channel:C1",
+        messageId: "progress-message",
+        text: "Checking delegated work",
+        snapshot: { lines: [] },
+      }),
+    ).toBe(false);
+    continuation?.close();
+  },
+);
+
 it.each([true, false])(
   "settles an implicit continuation once after delivery=%s",
   async (delivered) => {

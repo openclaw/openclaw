@@ -66,7 +66,10 @@ import { replyRunRegistry } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
-import { buildWaitingStatusPayload } from "./waiting-status.js";
+import {
+  attachWaitingStatusProgressContinuation,
+  buildWaitingStatusPayload,
+} from "./waiting-status.js";
 export async function prepareReplyAgentPayloads(state: {
   context: FinalizeReplyAgentRunInput;
   accounting: AccountedAgentTurn;
@@ -597,6 +600,22 @@ export async function prepareReplyAgentPayloads(state: {
     hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
       ? appendUnscheduledReminderNote(replyPayloads)
       : replyPayloads;
+
+  const progressStatusPayload = guardedReplyPayloads.find(
+    (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
+  );
+  if (progressStatusPayload) {
+    await attachWaitingStatusProgressContinuation({
+      payload: progressStatusPayload,
+      requesterSessionKey: sessionKey ?? followupRun.run.sessionKey,
+      requesterAgentId: followupRun.run.agentId,
+      requesterSessionId: followupRun.run.sessionId,
+      requesterTurnRunId: runId,
+      requesterContinuationSettled: runResult.requesterContinuationSettled,
+      acceptedSessionSpawns: runResult.acceptedSessionSpawns,
+      operation: replyOperation,
+    });
+  }
 
   if (continuationOwner) {
     const statusPayload = guardedReplyPayloads.find(

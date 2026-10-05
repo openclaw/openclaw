@@ -1030,7 +1030,8 @@ export async function runTelegramTestScenario({
   }
 }
 
-async function drive(args, repoRoot, creds) {
+// Reuse the same run-owned lease for staged source/capture comparisons.
+export async function drive(args, repoRoot, creds) {
   const scope = currentTelegramRun();
   const leaseHealth = scope.health;
   let telegramProxy;

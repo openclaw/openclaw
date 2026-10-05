@@ -47,6 +47,7 @@ import type {
   TelegramDispatchTurn as Turn,
   TelegramReplyStateSlice,
 } from "./bot-message-dispatch.types.js";
+import { buildTelegramInboundOriginTarget } from "./bot/helpers.js";
 import {
   appendTelegramDroppedControlFallback,
   resolveTelegramInlineButtons,
@@ -272,7 +273,7 @@ async function adoptProgressContinuation(
   const adopted = await adopt({
     channel: "telegram",
     accountId: turn.context.route.accountId,
-    to: String(turn.context.chatId),
+    to: buildTelegramInboundOriginTarget(turn.context.chatId, turn.context.threadSpec),
     threadId: turn.context.threadSpec.id,
     messageId: String(messageId),
     text,
