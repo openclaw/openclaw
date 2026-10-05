@@ -59,7 +59,9 @@ function runWithGatewayMocks(
   },
 ) {
   mocks.callGateway.mockImplementation(dependencies.callGateway);
-  mocks.createPrompter.mockImplementation(dependencies.createPrompter ?? createWizardPrompter);
+  mocks.createPrompter.mockImplementation(
+    dependencies.createPrompter ?? (() => createWizardPrompter()),
+  );
   mocks.runGuidedOnboarding.mockImplementation(dependencies.runGuidedOnboarding);
   mocks.runTui.mockReset();
   if (dependencies.runTui) {

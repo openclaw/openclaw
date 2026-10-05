@@ -294,7 +294,7 @@ describe("waitForControlUiDocument", () => {
       status: 503,
     });
 
-    expect(fetch.mock.calls.map(([request]) => request.init.method)).toEqual(["HEAD", "GET"]);
+    expect(fetch.mock.calls.map(([request]) => request.init?.method)).toEqual(["HEAD", "GET"]);
     expect(head.release).toHaveBeenCalledOnce();
     expect(diagnostic.release).toHaveBeenCalledOnce();
   });
@@ -327,7 +327,7 @@ describe("waitForControlUiDocument", () => {
         reason: "Control UI dashboard is unavailable (HTTP 503).",
         status: 503,
       });
-      expect(fetch.mock.calls.map(([request]) => request.init.method)).toEqual(["HEAD", "GET"]);
+      expect(fetch.mock.calls.map(([request]) => request.init?.method)).toEqual(["HEAD", "GET"]);
       expect(head.release).toHaveBeenCalledOnce();
       expect(diagnostic.release).toHaveBeenCalledTimes(failure === "body" ? 1 : 0);
     },
