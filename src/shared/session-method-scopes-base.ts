@@ -4,6 +4,20 @@ import { isIncognitoSessionKey } from "./incognito-session-key.js";
 export type SessionMutationOperatorScope = "operator.write" | "operator.admin";
 export type SessionOperatorScope = "operator.sessions.read" | "operator.sessions.write";
 
+/** Archive and restore retire or recreate workspaces; ordinary own-session writes do not grant them. */
+export function resolveSessionMethodAdditionalScopes(
+  method: string,
+  params?: unknown,
+): "operator.sessions.archive"[] {
+  const patch =
+    method === "sessions.patchMany" && isRecord(params)
+      ? params.patch
+      : method === "sessions.patch"
+        ? params
+        : undefined;
+  return isRecord(patch) && Object.hasOwn(patch, "archived") ? ["operator.sessions.archive"] : [];
+}
+
 const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "agent.identity.get",
   "agents.list",

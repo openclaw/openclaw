@@ -5,6 +5,7 @@ export const READ_SCOPE = "operator.read" as const;
 export const WRITE_SCOPE = "operator.write" as const;
 export const SESSION_READ_SCOPE = "operator.sessions.read" as const;
 export const SESSION_WRITE_SCOPE = "operator.sessions.write" as const;
+export const SESSION_ARCHIVE_SCOPE = "operator.sessions.archive" as const;
 export const APPROVALS_SCOPE = "operator.approvals" as const;
 export const QUESTIONS_SCOPE = "operator.questions" as const;
 export const PAIRING_SCOPE = "operator.pairing" as const;
@@ -17,6 +18,7 @@ const KNOWN_OPERATOR_SCOPE_VALUES = [
   WRITE_SCOPE,
   SESSION_READ_SCOPE,
   SESSION_WRITE_SCOPE,
+  SESSION_ARCHIVE_SCOPE,
   APPROVALS_SCOPE,
   QUESTIONS_SCOPE,
   PAIRING_SCOPE,

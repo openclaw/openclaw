@@ -922,7 +922,7 @@ class SessionsPage extends OpenClawLightDomElement {
     if (current === category) {
       return;
     }
-    if (category) {
+    if (category && !this.knownCategories().includes(category)) {
       void this.rememberCustomGroup(category);
     }
     void this.patchSession(key, { category });
@@ -1024,7 +1024,7 @@ class SessionsPage extends OpenClawLightDomElement {
     if (
       !this.requireMutationAccess(scope, {
         method: "sessions.patch",
-        sessionScope: options.sessionScope,
+        sessionScope: options.sessionScope ?? true,
         session: row,
         params: {
           key,
@@ -1122,7 +1122,14 @@ class SessionsPage extends OpenClawLightDomElement {
       ...(fromLastCompleted ? { forkFrom: "last-completed" as const } : {}),
       ...(agentId ? { agentId } : {}),
     };
-    if (!this.requireMutationAccess(scope, { method: "sessions.create", params: createParams })) {
+    if (
+      !this.requireMutationAccess(scope, {
+        method: "sessions.create",
+        params: createParams,
+        sessionScope: true,
+        session: this.result?.sessions.find((row) => row.key === key),
+      })
+    ) {
       return;
     }
     try {

@@ -1,11 +1,16 @@
 import { expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import {
+  activeRunContext,
+  waitForArchivePhase,
+} from "./server.sessions.archive-lifecycle.test-support.js";
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -15,6 +20,100 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+
+test.each(["sessions.patch", "sessions.patchMany"] as const)(
+  "%s requires an explicit archive grant before cancelling owned work",
+  async (method) => {
+    const { storePath } = await createSessionStoreDir();
+    const key = "agent:main:archive-capability";
+    const client = roleClient("view", "archive-capability");
+    client.connect.scopes = ["operator.sessions.write"];
+    const cfg = { ...rolePolicyConfig(), session: { store: storePath } };
+    await writeSessionStore({
+      entries: {
+        [key]: sessionStoreEntry("archive-capability", {
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: client.authenticatedUserProfile!.profileId,
+          },
+        }),
+      },
+    });
+    const persistence = createDeferredCore();
+    const active = activeRunContext({
+      sessionKey: key,
+      sessionId: "archive-capability",
+      runId: "archive-capability-run",
+      persistence,
+    });
+    try {
+      const context = createDirectChatContext({ ...active.context, getRuntimeConfig: () => cfg });
+      await initializeSessionReadContext(context);
+      for (const archived of [true, false]) {
+        expect(
+          await request(method, client, context, [key], { archived, icon: "book" }),
+        ).toMatchObject([
+          false,
+          undefined,
+          { code: "FORBIDDEN", details: { missingScope: "operator.sessions.archive" } },
+        ]);
+        expect(active.controller.signal.aborted).toBe(false);
+        expectNoSessionQueueCleanup();
+        expect(loadSessionEntry({ sessionKey: key, storePath })?.archivedAt).toBeUndefined();
+      }
+      const organized = await request(method, client, context, [key], { icon: "book" });
+      expect(organized?.[0]).toBe(true);
+      if (method === "sessions.patchMany") {
+        expect(organized?.[1]).toMatchObject({ outcomes: [{ ok: true }] });
+      }
+      expect(loadSessionEntry({ sessionKey: key, storePath })?.icon).toBe("book");
+    } finally {
+      persistence.resolve();
+      active.unsubscribe();
+    }
+  },
+);
+
+test("rechecks the archive capability after an active run drains", async ({ signal }) => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:archive-revocation";
+  const client = roleClient("view", "archive-revocation");
+  client.connect.scopes = ["operator.sessions.write", "operator.sessions.archive"];
+  const cfg = { ...rolePolicyConfig(), session: { store: storePath } };
+  await writeSessionStore({
+    entries: {
+      [key]: sessionStoreEntry("archive-revocation", {
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: client.authenticatedUserProfile!.profileId,
+        },
+      }),
+    },
+  });
+  const persistence = createDeferredCore();
+  const active = activeRunContext({
+    sessionKey: key,
+    sessionId: "archive-revocation",
+    runId: "archive-revocation-run",
+    persistence,
+  });
+  const context = createDirectChatContext({ ...active.context, getRuntimeConfig: () => cfg });
+  await initializeSessionReadContext(context);
+  const pending = request("sessions.patch", client, context, [key], { archived: true });
+  try {
+    await waitForArchivePhase(active.terminalStarted, pending, signal);
+    cfg.gateway!.roles!.definitions.view!.scopes = ["operator.sessions.write"];
+    persistence.resolve();
+    expect(await pending).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
+    expect(loadSessionEntry({ sessionKey: key, storePath })?.archivedAt).toBeUndefined();
+  } finally {
+    persistence.resolve();
+    await Promise.allSettled([pending]);
+    active.unsubscribe();
+  }
+});
 
 async function request(
   method: "sessions.patch" | "sessions.patchMany",

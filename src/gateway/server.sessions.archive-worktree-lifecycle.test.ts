@@ -31,10 +31,15 @@ import { recordSessionParticipant } from "../config/sessions/session-accessor.sq
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { handleGatewayRequest } from "./server-methods.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { worktreesHandlers } from "./server-methods/worktrees.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { embeddedRunMock } from "./test-helpers.runtime-state.js";
 import {
   directSessionReq,
@@ -45,6 +50,70 @@ import { setupGatewaySessionsWorktreeTestHarness } from "./test/server-sessions.
 
 const { createArchiveWorktreeFixture } = setupGatewaySessionsWorktreeTestHarness();
 const execFileAsync = promisify(execFile);
+
+test("revoking archive access while restore waits preserves the archived checkout", async () => {
+  const { key, sessionId, storePath, worktree, workspace, client } =
+    await createArchiveWorktreeFixture(() => {
+      const creator = roleClient("view", "restore-capability");
+      setUserProfileRole(creator.authenticatedUserProfile!.profileId, "admin");
+      creator.connect.scopes = ["operator.admin"];
+      return creator;
+    });
+  expect(loadSessionEntry({ storePath, sessionKey: key })?.createdActor).toMatchObject({
+    type: "human",
+    source: "profile",
+    id: client.authenticatedUserProfile!.profileId,
+  });
+  expect(
+    await directSessionReq("sessions.patch", { key, expectedSessionId: sessionId, archived: true }),
+  ).toMatchObject({ ok: true });
+  setUserProfileRole(client.authenticatedUserProfile!.profileId, "view");
+  client.connect.scopes = ["operator.sessions.write", "operator.sessions.archive"];
+  const cfg = {
+    ...rolePolicyConfig(),
+    agents: { defaults: { workspace } },
+    session: { store: storePath },
+  };
+  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+  await initializeSessionReadContext(context);
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const original = managedWorktrees.restore.bind(managedWorktrees);
+  const restore = vi.spyOn(managedWorktrees, "restore").mockImplementationOnce(async (params) => {
+    entered.resolve();
+    await release.promise;
+    return original(params);
+  });
+  const respond = vi.fn();
+  const pending = handleGatewayRequest({
+    req: {
+      type: "req",
+      id: "restore-capability",
+      method: "sessions.patch",
+      params: { key, expectedSessionId: sessionId, archived: false },
+    },
+    client,
+    context,
+    respond,
+    isWebchatConnect: () => false,
+  });
+  try {
+    await Promise.race([entered.promise, pending]);
+    expect(restore).toHaveBeenCalledOnce();
+    cfg.gateway!.roles!.definitions.view!.scopes = ["operator.sessions.write"];
+    release.resolve();
+    await pending;
+    expect(respond.mock.calls[0]).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toEqual(
+      expect.any(Number),
+    );
+    await expect(fs.access(worktree.path)).rejects.toThrow();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([pending]);
+    restore.mockRestore();
+  }
+});
 
 test.each([
   ["sessions.patch", true],

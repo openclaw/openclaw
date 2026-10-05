@@ -80,7 +80,7 @@ export async function patchSession(
     !requireSessionMutationAccess(host, scope, {
       method: "sessions.patch",
       params: requestParams,
-      sessionScope: refresh.sessionScope,
+      sessionScope: refresh.sessionScope ?? true,
       session,
     })
   ) {
@@ -572,7 +572,12 @@ export async function forkSession(
     agentId,
   };
   if (
-    !requireSessionMutationAccess(host, scope, { method: "sessions.create", params: createParams })
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.create",
+      params: createParams,
+      sessionScope: true,
+      session,
+    })
   ) {
     return;
   }

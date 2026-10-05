@@ -143,7 +143,7 @@ export async function patchSessionRows(
     const access = readSessionMethodAccess(scope.gateway.snapshot, {
       method: "sessions.patchMany",
       params,
-      sessionScope: options.sessionScope,
+      sessionScope: options.sessionScope ?? true,
       session: sessionAccessRowForBatch(chunkRows),
     });
     if (!access.allowed) {

@@ -21,6 +21,9 @@ describe("roleScopesAllow", () => {
     ["operator.sessions.write", "operator.write", false],
     ["operator.sessions.write", "operator.admin", false],
     ["operator.sessions.write", "operator.approvals", false],
+    ["operator.sessions.write", "operator.sessions.archive", false],
+    ["operator.sessions.archive", "operator.sessions.write", false],
+    ["operator.write", "operator.sessions.archive", true],
   ])(
     "checks grant %s against %s without broadening session authority",
     (grant, requested, allowed) => {
@@ -173,6 +176,12 @@ describe("intersectOperatorScopes", () => {
     { grant: ["operator.admin"], ceiling: ["operator.write"], expected: ["operator.write"] },
     { grant: ["operator.read"], ceiling: ["operator.write"], expected: ["operator.read"] },
     { grant: ["operator.write"], ceiling: ["operator.talk"], expected: ["operator.talk"] },
+    {
+      grant: ["operator.write"],
+      ceiling: ["operator.sessions.write", "operator.sessions.archive"],
+      expected: ["operator.sessions.write", "operator.sessions.archive"],
+    },
+    { grant: ["operator.sessions.write"], ceiling: ["operator.sessions.archive"], expected: [] },
     { grant: [], ceiling: ["operator.admin"], expected: [] },
     { grant: ["operator.admin"], ceiling: [], expected: [] },
     {

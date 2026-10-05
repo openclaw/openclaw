@@ -30,6 +30,67 @@ function snapshot(params: {
 }
 
 describe("readSessionMethodAccess", () => {
+  it.each(["sessions.patch", "sessions.patchMany"])(
+    "requires archive in addition to own-write for %s",
+    (method) => {
+      const params =
+        method === "sessions.patch"
+          ? { key: "agent:main:notes", archived: true, icon: "note" }
+          : { patch: { archived: false, icon: "note" } };
+      const request = {
+        method,
+        params,
+        sessionScope: true,
+        session: { sharingRole: "owner" as const },
+      };
+      expect(
+        readSessionMethodAccess(
+          snapshot({ methods: [method], scopes: ["operator.sessions.write"] }),
+          request,
+        ),
+      ).toMatchObject({
+        allowed: false,
+        requiredScope: "operator.sessions.archive",
+        cause: "missing-scope",
+      });
+      expect(
+        readSessionMethodAccess(
+          snapshot({ methods: [method], scopes: ["operator.sessions.archive"] }),
+          request,
+        ),
+      ).toMatchObject({ allowed: false, requiredScope: "operator.sessions.write" });
+      expect(
+        readSessionMethodAccess(
+          snapshot({
+            methods: [method],
+            scopes: ["operator.sessions.write", "operator.sessions.archive"],
+          }),
+          request,
+        ),
+      ).toMatchObject({ allowed: true });
+    },
+  );
+
+  it.each(["sessions.create"])("keeps scoped %s on the creator's session", (method) => {
+    const gateway = snapshot({ methods: [method], scopes: ["operator.sessions.write"] });
+    const request = {
+      method,
+      params: { parentSessionKey: "agent:main:notes", fork: true },
+      requiredScope: "operator.write" as const,
+      sessionScope: true,
+    };
+    expect(
+      readSessionMethodAccess(gateway, { ...request, session: { sharingRole: "owner" } }),
+    ).toMatchObject({ allowed: true });
+    expect(
+      readSessionMethodAccess(gateway, { ...request, session: { sharingRole: "viewer" } }),
+    ).toMatchObject({ allowed: false, cause: "session-not-owned" });
+    expect(readSessionMethodAccess(gateway, request)).toMatchObject({
+      allowed: false,
+      cause: "session-not-owned",
+    });
+  });
+
   it("allows a write-scoped operator to create ordinary sessions", () => {
     expect(
       readSessionMethodAccess(snapshot({}), {
