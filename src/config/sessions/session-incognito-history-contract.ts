@@ -1,6 +1,11 @@
 import type { SessionEntrySnapshot } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { SessionResetRecallCutoff } from "../../../packages/memory-host-sdk/src/host/session-reset-recall.js";
 import type {
+  SessionTranscriptCorpusEntry,
+  SessionTranscriptCorpusOptions,
+  SessionTranscriptCorpusScope,
+} from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
+import type {
   SessionTranscriptProjectionSelection,
   SessionTranscriptProjectionSelectionResults,
 } from "../../gateway/session-transcript-read.types.js";
@@ -129,7 +134,23 @@ type Reads = {
     output: PendingInputHistorySnapshot;
   };
   stats: { input: Record<never, never>; output: SessionTranscriptStats };
-  "memory-entry": { input: Record<never, never>; output: SessionEntrySnapshot };
+  "message-presence": { input: Record<never, never>; output: boolean };
+  "visitor-source": {
+    input: { offset?: number };
+    output: {
+      messages: Array<{ message: unknown; seq: number }>;
+      nextOffset?: number;
+    };
+  };
+  "memory-entry": { input: { includeMessages?: boolean }; output: SessionEntrySnapshot };
+  "memory-corpus": {
+    input: {
+      scope: SessionTranscriptCorpusScope;
+      options: SessionTranscriptCorpusOptions;
+      sessionKeys: string[];
+    };
+    output: SessionTranscriptCorpusEntry[];
+  };
   "memory-reset-recall": { input: Record<never, never>; output: SessionResetRecallCutoff };
   "native-context": {
     input: Record<never, never>;
@@ -152,4 +173,17 @@ export function isIncognitoHistoryCommand(command: {
   type: string;
 }): command is SqliteWorkerCommand<IncognitoHistoryOperations> {
   return command.type.startsWith("session.history.");
+}
+
+export function incognitoHistoryKeys(
+  command: SqliteWorkerCommand<IncognitoHistoryOperations>,
+): string[] {
+  if (command.type !== "session.history.memory-corpus") {
+    return [command.input.sessionKey];
+  }
+  const keys = command.input.sessionKeys;
+  if (!keys.includes(command.input.sessionKey) || new Set(keys).size !== keys.length) {
+    throw new Error("Incognito Memory corpus must retain its selected sessions");
+  }
+  return keys;
 }

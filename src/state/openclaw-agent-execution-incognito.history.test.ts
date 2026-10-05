@@ -23,6 +23,7 @@ import {
 } from "../gateway/session-transcript-readers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import { registerIncognitoHistoryWiringTests } from "./openclaw-agent-execution-incognito.history-wiring.test-support.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
@@ -788,6 +789,19 @@ it("composes matching RPC and HTTP pages while rechecking disclosure after displ
   await expect(reader.rpc(request)).rejects.toThrow("display caller revoked");
   current = true;
   await expect(reader.http({ target, limit: 1 })).rejects.toThrow("display caller revoked");
+});
+
+registerIncognitoHistoryWiringTests({
+  authority,
+  get actor() {
+    return actor;
+  },
+  get env() {
+    return env;
+  },
+  create,
+  append,
+  targetInput,
 });
 
 it("ends queued history reads with the typed error when their actor is lost", async () => {

@@ -579,6 +579,25 @@ extraction bridge together; the connection-bound framing kernel remains inside
 the actor. This prerequisite removes no native routes or T1 sites and changes no
 schema, retention, durability, session expiry, or update behavior.
 
+### Incognito history and Memory wiring (P7j, inactive)
+
+History acquisition and Memory entry, observer, reset-recall, and corpus facades
+accept an explicitly captured actor source. Ordinary production calls retain
+the host owner until atomic activation. The actor uses the existing history
+commands and synchronous snapshot kernels; it never extracts Memory source
+bytes through a native caller-thread bridge. Memory observers receive the
+original messages, while ordinary indexing retains its reduced projection.
+Corpus reads retain the actor's captured session claims and return metadata
+from that same memory database without scanning archive directories.
+
+The complete read, asynchronous projection or consumer, final validation, and
+cleanup retain their original owner. Actor snapshots and current grants fence
+Memory callbacks and reject disclosure after mutation, release, or revocation.
+History uses the existing FIFO acceptance boundary; synchronous native SDK writers
+remain covered by its native mutation witness. No new worker service, schema,
+retention, durability, environment switch, or update behavior is introduced.
+Native routes and T1 counts remain unchanged until the atomic P7 cutover.
+
 ### Incognito shared binding and SDK preflight (P7h1, inactive)
 
 SessionManager and Codex history consume one captured actor binding. The binding
@@ -1209,6 +1228,21 @@ durability, or update migration changes.
 
 ## Carry facts, publish after commit
 
+The system-agent logbook awaits transcript turns, reset markers, and tail reads
+through the existing shared-state workers. Each request captures its original
+store before waiting for the serialized turn. Reset persists before discarding
+the live engine, and accepted history writes settle before replies and shutdown
+release their owner. Greeting audit scans retain their source across pagination
+in one worker request and return only the existing sequence and edit facts;
+cache updates and delivery acknowledgments compare the current payload inside
+the worker transaction. Only definite comparison conflicts retry, at most four
+times; failed reads never advance the audit cursor and uncertain writes never
+replay. Config observation captures its audit writer before filesystem reads and
+rechecks its health owner at transaction and commit admission. Cold synchronous
+config loading retains native audit registration; Doctor and update inspection
+retain native tail reads. Schemas, audit collection and retention, stored payloads,
+prompt bytes, and update behavior are unchanged.
+
 Reply dispatch prepares the machine-owned TTS preference path through the existing
 shared-state reader and carries it through eligibility checks, delivery callbacks,
 and prompt assembly. Missing state is a prepared fact, so later consumers do not
@@ -1314,8 +1348,11 @@ that transaction while the Gateway rechecks the original connections, operation,
 and live role policy. Control-plane replies contain only account summaries and
 links, with disclosure authority rechecked after reads. Accepted persistence
 settles before the close prelude releases workers, independently of provider I/O
-cancellation. Lost replies never replay writes. The separate live account-pin
-guard, OAuth refresh, and Doctor/merge kernels keep their existing owners.
+cancellation. Lost replies never replay writes. Live account-pin preparation reads
+current ownership through that worker, anchored to the profile owner's identity
+revision before the read. Final checks consume current owner-held authority
+without SQL. Default-link changes preserve explicit pins; identity transfer and
+store retirement revoke them. Doctor/merge kernels keep their existing owners.
 Schemas, credential bytes, retention, RPC envelopes, and update behavior are unchanged.
 The synchronous `modelAccountConnectService.listLinks`, `link`, `unlink`, `list`,
 `select`, `status`, and `cancel` methods shipped through the 2026.9.8 Gateway
@@ -1913,6 +1950,23 @@ through synchronous prompt publication and core entry. Current run ownership,
 permission generation, cancellation, and one-time replay consumption remain live
 checks after waits. The core run settles outside reader custody. This changes no
 schema, stored bytes, retention, durability, or update behavior.
+
+CLI harness history preparation reads the session owner, current input, and
+transcript watermark through the existing anchor reader. Its metadata patch
+rechecks the exact input identity and watermark in the existing writer's
+synchronous transaction; host grants retain current run and writer authority.
+Planning retains the original physical reader, and the accepted patch settles
+through the writer after reader custody ends.
+
+Skill Workshop reflection prepares and completes its source context through the
+same anchor reader. Later appends remain valid; reset, rewrite, replacement,
+permission changes, and revocation refuse stale evidence. The retained effect
+guard still reads natively: `@openclaw/fs-safe` requires a synchronous callback
+after awaited file preparation and immediately before mutation. The existing
+native mutation witness does not observe foreign commits, so it cannot replace
+that final guard. Removing this retained path requires an equivalent final-effect
+authority contract. These changes add no schema, cache, configuration, migration,
+or update requirements.
 
 Awaited full-transcript event reads use the same history worker's hydration stream.
 Compaction preflight, reset hooks, BTW context, exports, and the asynchronous SDK

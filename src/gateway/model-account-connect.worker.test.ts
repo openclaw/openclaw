@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { resolveProfileOverride } from "../auto-reply/reply/directive-handling.auth-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
@@ -14,9 +15,11 @@ import {
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import type { ProviderAuthMethod } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
   connectUserModelAccountAsync,
+  clearUserProfileAuthLinkAsync,
   listUserModelAccountsAsync,
   listUserProfileAuthLinksAsync,
   setUserProfileAuthLinkAsync,
@@ -26,7 +29,7 @@ import {
   setUserProfileAuthLink as setLinkSync,
   updateUserModelAuthProfile,
 } from "../state/user-model-accounts.js";
-import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { WizardSession } from "../wizard/session.js";
@@ -34,7 +37,10 @@ import { ModelAccountConnectAuthorityError } from "./model-account-connect-error
 import { createModelAccountConnectService } from "./model-account-connect.js";
 import type { RespondFn } from "./server-methods/types.js";
 import { usersAuthConnectHandlers } from "./server-methods/users-auth-connect.js";
-import { prepareUserModelAccountAction } from "./server-methods/users-model-account-access.js";
+import {
+  preparePersonalModelAccountSelection,
+  prepareUserModelAccountAction,
+} from "./server-methods/users-model-account-access.js";
 import {
   createContext,
   createOperatorClient,
@@ -60,6 +66,136 @@ const credential: AuthProfileCredential = {
   token: "synthetic-private-account-token",
 };
 const authority = { assertCurrent() {} };
+
+it("prepares personal account ownership from the next foreign commit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const owner = ensureProfileForEmail("pin-freshness@example.test").id;
+    const { authProfileId } = await connectUserModelAccountAsync({
+      ownerProfileId: owner,
+      credential,
+      ...authority,
+    });
+    const input = {
+      rawProfile: authProfileId,
+      provider: credential.provider,
+      requesterProfileId: owner,
+    };
+    expect((await resolveProfileOverride(input)).profileId).toBe(authProfileId);
+    const foreign = new DatabaseSync(resolveOpenClawStateSqlitePath());
+    try {
+      foreign
+        .prepare(
+          "DELETE FROM secret_store_entries WHERE scope_kind = 'identity' AND scope_id = ? AND name = ?",
+        )
+        .run(owner, `model-account:${authProfileId}`);
+      expect(await resolveProfileOverride(input)).toMatchObject({
+        error: expect.stringContaining("signed-in profile"),
+      });
+    } finally {
+      foreign.close();
+    }
+  });
+});
+
+it("prepares and validates personal pins without caller SQL, retaining identity authority", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const owner = ensureProfileForEmail("pin-owner@example.test").id;
+    const successor = ensureProfileForEmail("pin-successor@example.test").id;
+    const { authProfileId } = await connectUserModelAccountAsync({
+      ownerProfileId: owner,
+      credential,
+      ...authority,
+    });
+    const sql = observeHostDataSql();
+    let selected: Awaited<ReturnType<typeof resolveProfileOverride>>;
+    try {
+      selected = await resolveProfileOverride({
+        rawProfile: authProfileId,
+        provider: credential.provider,
+        requesterProfileId: owner,
+      });
+      expect(selected.profileId).toBe(authProfileId);
+      expect(selected.validateSelection?.()).toBeUndefined();
+      expect(
+        await resolveProfileOverride({
+          rawProfile: authProfileId,
+          provider: credential.provider,
+          requesterProfileId: successor,
+        }),
+      ).toMatchObject({ error: expect.stringContaining("signed-in profile") });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    await clearUserProfileAuthLinkAsync({
+      profileId: owner,
+      provider: credential.provider,
+      ...authority,
+    });
+    expect(selected.validateSelection?.()).toBeUndefined();
+    linkEmail("pin-owner@example.test", successor);
+    const finalSql = observeHostDataSql();
+    try {
+      expect(selected.validateSelection?.()).toContain("signed-in profile");
+      expect(finalSql.queries).toEqual([]);
+    } finally {
+      finalSql.restore();
+    }
+  });
+});
+
+it("rejects a pin whose identity changed before an awaited account read was accepted", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const owner = ensureProfileForEmail("pin-read-owner@example.test").id;
+    const successor = ensureProfileForEmail("pin-read-successor@example.test").id;
+    const { authProfileId } = await connectUserModelAccountAsync({
+      ownerProfileId: owner,
+      credential,
+      ...authority,
+    });
+    const client = createOperatorClient({
+      profileId: owner,
+      scopes: ["operator.read", "operator.write", "operator.admin"],
+    });
+    const context = createContext();
+    context.getClientConnIds = () => new Set(client.connId ? [client.connId] : []);
+    const scanned = createDeferredCore();
+    const consume = createDeferredCore();
+    const runWorker = stateWorker.runOpenClawStateWorkerOperation;
+    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+      (workerContext, operation, options) =>
+        runWorker(
+          workerContext,
+          (scope) =>
+            operation({
+              execute: async (command, executeOptions) => {
+                const result = await scope.execute(command, executeOptions);
+                if (command.type === "userProfiles.modelAccount.summary") {
+                  scanned.resolve();
+                  await consume.promise;
+                }
+                return result;
+              },
+            }),
+          options,
+        ),
+    );
+    const pending = preparePersonalModelAccountSelection({ client, context }, authProfileId);
+    const refused = expect(pending).rejects.toBeInstanceOf(ModelAccountConnectAuthorityError);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(scanned.promise, pending, "Pin settled before its account read"),
+        signal,
+      );
+      linkEmail("pin-read-owner@example.test", successor);
+    } finally {
+      consume.resolve();
+    }
+    await refused;
+  });
+});
 
 function observeAccountAdmission(observer: (stage: "transaction" | "commit") => void) {
   const create = workerAdmission.createSqliteWorkerOperationAdmission;

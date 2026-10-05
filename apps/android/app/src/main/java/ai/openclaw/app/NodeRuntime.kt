@@ -3,7 +3,6 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.AndroidClientDatabases
 import ai.openclaw.app.chat.ChatAgentSessionSelectionOwner
 import ai.openclaw.app.chat.ChatCacheScope
-import ai.openclaw.app.chat.ChatCommandOutbox
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatReactionAccess
@@ -754,13 +753,6 @@ internal fun gatewayConnectionDisplay(
   }
 }
 
-private data class AndroidChatStores(
-  val transcriptCache: ChatTranscriptCache,
-  val commandOutbox: ChatCommandOutbox,
-  val clientDatabases: AndroidClientDatabases,
-  val externalTranscriptCache: ChatTranscriptCache? = null,
-)
-
 internal enum class NodeRuntimeMode {
   Live,
   ScreenshotFixture,
@@ -795,45 +787,6 @@ internal class SessionObserverVisibility(
   }
 }
 
-private fun openAndroidChatStores(
-  context: Context,
-  prefs: SecurePrefs,
-  mode: NodeRuntimeMode = NodeRuntimeMode.Live,
-): AndroidChatStores {
-  val databases =
-    when (mode) {
-      NodeRuntimeMode.Live -> {
-        AndroidClientDatabases.start(
-          context.applicationContext,
-          registeredGatewayIds =
-            prefs.gatewayRegistry.entries.value
-              .map { it.stableId }
-              .toSet(),
-        )
-      }
-
-      // Fixture recovery must never read, migrate, or retire the operator's durable input.
-      NodeRuntimeMode.ScreenshotFixture -> {
-        AndroidClientDatabases.inMemory(context)
-      }
-    }
-  return AndroidChatStores(
-    transcriptCache = databases.transcriptCache(),
-    commandOutbox = databases.commandOutbox(),
-    clientDatabases = databases,
-  )
-}
-
-private fun openAndroidChatStores(
-  context: Context,
-  prefs: SecurePrefs,
-  transcriptCache: ChatTranscriptCache,
-): AndroidChatStores =
-  openAndroidChatStores(context, prefs).copy(
-    transcriptCache = transcriptCache,
-    externalTranscriptCache = transcriptCache,
-  )
-
 /** Presentation of the connection owner's handoff, not saved intent or network health. */
 internal data class GatewayConnectionHandoff(
   val focusedStableId: String? = null,
@@ -852,19 +805,34 @@ internal sealed interface GatewayTargetSelection {
   data object Retired : GatewayTargetSelection
 }
 
-class NodeRuntime private constructor(
+class NodeRuntime internal constructor(
   context: Context,
-  val prefs: SecurePrefs,
-  private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult,
-  chatStores: AndroidChatStores,
-  internal val mode: NodeRuntimeMode,
-  initialForeground: Boolean,
-  initialReconnectSuppressed: Boolean,
+  val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
+  internal val mode: NodeRuntimeMode = NodeRuntimeMode.Live,
+  tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
+  initialForeground: Boolean = true,
+  initialReconnectSuppressed: Boolean = false,
+  private val externalTranscriptCache: ChatTranscriptCache? = null,
 ) {
-  private val chatTranscriptCache = chatStores.transcriptCache
-  private val chatCommandOutbox = chatStores.commandOutbox
-  private val clientDatabases = chatStores.clientDatabases
-  private val externalTranscriptCache = chatStores.externalTranscriptCache
+  private val clientDatabases =
+    when (mode) {
+      NodeRuntimeMode.Live -> {
+        AndroidClientDatabases.start(
+          context.applicationContext,
+          registeredGatewayIds =
+            prefs.gatewayRegistry.entries.value
+              .map { it.stableId }
+              .toSet(),
+        )
+      }
+
+      // Fixture recovery must never read, migrate, or retire the operator's durable input.
+      NodeRuntimeMode.ScreenshotFixture -> {
+        AndroidClientDatabases.inMemory(context)
+      }
+    }
+  private val chatTranscriptCache = externalTranscriptCache ?: clientDatabases.transcriptCache()
+  private val chatCommandOutbox = clientDatabases.commandOutbox()
 
   // Reentry retains this runtime, so requester data and both capability paths must share its original mode.
   private val screenshotBranchesEnabled = mode == NodeRuntimeMode.ScreenshotFixture && AndroidScreenshotFixture.branchesEnabled
@@ -983,76 +951,17 @@ class NodeRuntime private constructor(
     val deleted: Boolean = false,
   )
 
-  constructor(
-    context: Context,
-    prefs: SecurePrefs = SecurePrefs(context.applicationContext),
-    tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
-  ) : this(
-    context = context,
-    prefs = prefs,
-    tlsFingerprintProbe = tlsFingerprintProbe,
-    chatStores = openAndroidChatStores(context, prefs),
-    mode = NodeRuntimeMode.Live,
-    initialForeground = true,
-    initialReconnectSuppressed = false,
-  )
-
-  internal constructor(
-    context: Context,
-    prefs: SecurePrefs,
-    initialForeground: Boolean,
-  ) : this(
-    context = context,
-    prefs = prefs,
-    tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
-    chatStores = openAndroidChatStores(context, prefs),
-    mode = NodeRuntimeMode.Live,
-    initialForeground = initialForeground,
-    initialReconnectSuppressed = false,
-  )
-
-  internal constructor(
-    context: Context,
-    prefs: SecurePrefs,
-    mode: NodeRuntimeMode,
-  ) : this(
-    context = context,
-    prefs = prefs,
-    tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
-    chatStores = openAndroidChatStores(context, prefs, mode),
-    mode = mode,
-    initialForeground = true,
-    initialReconnectSuppressed = false,
-  )
-
   internal constructor(
     context: Context,
     prefs: SecurePrefs,
     chatTranscriptCache: ChatTranscriptCache,
-  ) : this(
-    context = context,
-    prefs = prefs,
-    tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
-    chatStores = openAndroidChatStores(context, prefs, chatTranscriptCache),
-    mode = NodeRuntimeMode.Live,
-    initialForeground = true,
-    initialReconnectSuppressed = false,
-  )
+  ) : this(context, prefs, externalTranscriptCache = chatTranscriptCache)
 
   companion object {
     internal fun forGatewayAuthReset(
       context: Context,
       prefs: SecurePrefs,
-    ): NodeRuntime =
-      NodeRuntime(
-        context = context,
-        prefs = prefs,
-        tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
-        chatStores = openAndroidChatStores(context, prefs),
-        mode = NodeRuntimeMode.Live,
-        initialForeground = true,
-        initialReconnectSuppressed = true,
-      )
+    ): NodeRuntime = NodeRuntime(context, prefs, initialReconnectSuppressed = true)
   }
 
   /**
@@ -1175,7 +1084,6 @@ class NodeRuntime private constructor(
           appContext = appContext,
           camera = camera,
           setCameraAudioCaptureActive = ::setCameraAudioCaptureActive,
-          invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
         ),
       debugHandler = DebugHandler(appContext = appContext, identityStore = identityStore),
       locationHandler =
@@ -3493,17 +3401,14 @@ class NodeRuntime private constructor(
       }
     }
 
-  private fun resolveRegistryEndpoint(
-    entry: GatewayRegistryEntry,
-    discovered: List<GatewayEndpoint> = gateways.value,
-  ): GatewayEndpoint? {
+  private fun resolveRegistryEndpoint(entry: GatewayRegistryEntry): GatewayEndpoint? {
     return when (entry.kind) {
       GatewayRegistryEntryKind.MANUAL -> {
         manualGatewayEndpoint(entry)
       }
 
       GatewayRegistryEntryKind.DISCOVERED -> {
-        val endpoint = discovered.firstOrNull { it.stableId == entry.stableId } ?: return null
+        val endpoint = gateways.value.firstOrNull { it.stableId == entry.stableId } ?: return null
         val storedFingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim().orEmpty()
         endpoint.takeIf { storedFingerprint.isNotEmpty() }
       }
