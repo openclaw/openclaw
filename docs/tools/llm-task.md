@@ -135,10 +135,7 @@ pattern is **not currently reliable**:
 openclaw.invoke --tool llm-task --action json --args-json '{ ... }'
 ```
 
-Until embedded Lobster has a supported bridge for this flow, prefer either:
-
-- direct `llm-task` tool calls outside Lobster, or
-- Lobster steps that do not rely on nested `openclaw.invoke` calls.
+For embedded Lobster, use the plugin’s native `llm.invoke --provider embedded` stage. It runs a tool-free completion as the calling agent through the host’s `api.runtime.subagent.complete` API and does not invoke this separate optional `llm-task` tool. Without a model it uses that agent’s configured models; an explicit model override needs a request allowed to override models (an `operator.admin` caller), or, for a request without an operator client, `plugins.entries.lobster.subagent.allowModelOverride` and `subagent.allowedModels`. As with this tool, `isolated-agent-runtime` may retain built-in helpers, so it is not a literal zero-tool guarantee for every harness. See [Lobster](/tools/lobster) for the embedded workflow syntax.
 
 Standalone Lobster CLI example:
 

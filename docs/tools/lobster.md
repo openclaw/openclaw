@@ -226,13 +226,17 @@ openclaw.invoke --tool llm-task --action json --args-json '{
 }'
 ```
 
-If you are using the embedded Lobster plugin today, prefer either:
+For model-backed steps in the embedded OpenClaw runner, use Lobster’s native `llm.invoke --provider embedded` stage. The plugin supplies an in-process adapter through `ctx.llmAdapters` that calls the host’s `api.runtime.subagent.complete` API as the agent whose session invoked the tool, in `isolated-agent-runtime` mode with no tools. It needs a Gateway request and that calling agent, and refuses to run without either rather than falling back to another agent. With no `--model`, the calling agent’s configured primary and fallback models apply, under the calling request’s operator authority and that agent’s model policy. A `--model` is an override, pinned with no fallback: the host accepts it only from a request allowed to override models (an `operator.admin` caller), or, for a request without an operator client, when `plugins.entries.lobster.subagent.allowModelOverride` and `subagent.allowedModels` permit it. See [api.runtime.subagent](/plugins/sdk-runtime/background-work#api-runtime-subagent). The adapter does not add Gateway URL or token values to `ctx.env`. Embedded answers are never cached or saved as run state. When an approval or input checkpoint holds output from an LLM stage, a resume re-checks the caller before Lobster consumes the checkpoint: the Gateway request must still carry current authority, and output from an embedded stage resumes only for the same agent and a caller that still holds every operator scope the producing call held. A refused resume leaves the checkpoint in place. Workflows that omit `--provider` keep the route Lobster auto-detects from their environment (`LOBSTER_PI_LLM_ADAPTER_URL`, then `OPENCLAW_URL`/`CLAWD_URL`, then `LOBSTER_LLM_ADAPTER_URL`), so an existing Gateway HTTP step is unchanged on upgrade; `--provider embedded` is the explicit opt-in for host-owned inference.
 
-- a direct `llm-task` tool call outside Lobster, or
-- non-`openclaw.invoke` steps inside the Lobster pipeline until a supported
-  embedded bridge is added.
+Malformed JSON fails the stage without being cached or silently converted to `null`. Valid JSON that fails the output schema follows Lobster’s configured schema-validation retry policy. The adapter adds no separate inference retries.
 
-See [LLM Task](/tools/llm-task) for details and configuration options.
+Example workflow step:
+
+```lobster
+llm.invoke --provider embedded --prompt 'Classify this item' --output-schema '{"type":"object","properties":{"category":{"type":"string"}},"required":["category"],"additionalProperties":false}'
+```
+
+The isolated runtime may retain built-in helpers, so this is not a literal zero-tool guarantee for every harness. Use another runtime if the workflow requires that guarantee. Nested `openclaw.invoke` still does not inherit Gateway URL/auth context; do not put credentials in workflow files or arguments. See [LLM Task](/tools/llm-task) for the separate `llm-task` tool.
 
 ## Workflow files (.lobster)
 
