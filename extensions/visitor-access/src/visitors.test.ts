@@ -81,6 +81,11 @@ describe("VisitorAccessService", () => {
       expected: "GitHub login visitor was not found. Check the login and retry.",
     },
     {
+      statusCode: 400,
+      credentialConfigured: true,
+      expected: "visitor is not a valid GitHub login. Check the login and retry.",
+    },
+    {
       statusCode: 429,
       credentialConfigured: true,
       expected:

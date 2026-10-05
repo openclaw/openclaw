@@ -330,6 +330,11 @@ export class VisitorAccessService {
           `GitHub login ${input.github} was not found. Check the login and retry.`,
         );
       }
+      if (statusCode === 400) {
+        throw new VisitorAccessError(
+          `${input.github} is not a valid GitHub login. Check the login and retry.`,
+        );
+      }
       if (statusCode === 429) {
         const retry =
           retryAtMs === undefined
