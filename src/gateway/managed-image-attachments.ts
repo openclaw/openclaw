@@ -821,7 +821,7 @@ async function recordMatchesTranscriptMessage(
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
   for await (const { messages } of pages) {
     for (const message of messages) {
-      const messageId = asOptionalRecord(asOptionalRecord(message)?.__openclaw)?.id;
+      const messageId = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;
       if (typeof messageId !== "string" || !messageId) {
         continue;
       }

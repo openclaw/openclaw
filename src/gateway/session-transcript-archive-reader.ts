@@ -214,13 +214,15 @@ export class ArchivedTranscriptReader {
     const index = prepared?.index;
     let end = start;
     let bytes = 0;
-    while (index && end < index.entries.length && end - start < SOURCE_PAGE_MAX_MESSAGES) {
-      const size = index.entries[end]!.length;
-      if (bytes + size > SOURCE_PAGE_MAX_BYTES) {
-        break;
+    if (index) {
+      while (end < index.entries.length && end - start < SOURCE_PAGE_MAX_MESSAGES) {
+        const size = index.entries[end]!.length;
+        if (bytes + size > SOURCE_PAGE_MAX_BYTES) {
+          break;
+        }
+        bytes += size;
+        end++;
       }
-      bytes += size;
-      end++;
     }
     return {
       messages: index

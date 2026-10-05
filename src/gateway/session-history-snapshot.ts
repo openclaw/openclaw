@@ -53,7 +53,7 @@ export async function readSessionHistorySnapshotKernel(
   if (typeof params.limit !== "number") {
     rawMessages = [];
     for await (const page of iterateSessionTranscriptSourcePages(
-      options.readers.readSessionMessagesWithSourceAsync,
+      options.readers.readSessionMessagesWithSourceAsync.bind(options.readers),
       params.target,
       {
         allowResetArchiveFallback: true,

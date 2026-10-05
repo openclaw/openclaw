@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   SOURCE_PAGE_MAX_BYTES,
   SOURCE_PAGE_MAX_MESSAGES,
@@ -186,7 +187,7 @@ export function readSessionTranscriptSourcePageFromProjection(
         : last
           ? last.position + (kind === "off-path" ? 0 : 1)
           : cursor.position;
-    cursor = { ...cursor, position, messageSeq };
+    cursor = { kind, position, messageSeq, snapshot };
     if (admitted < rows.length) {
       break;
     }
@@ -221,4 +222,3 @@ export function readSessionTranscriptSourcePageFromProjection(
     ...(cursor ? { nextCursor: cursor } : {}),
   };
 }
-import { isRecord } from "@openclaw/normalization-core/record-coerce";

@@ -272,8 +272,8 @@ test("rejects an oversized source line before decoding while retaining ordinary 
 test("source preparation does not wait for an ordinary archive index scan", async ({ signal }) => {
   const file = await fixture(message("first", "prompt"));
   const reader = new ArchivedTranscriptReader({ sessionId: "test", exactArchivePath: file });
-  const started = createDeferred<void>();
-  const release = createDeferred<void>();
+  const started = createDeferred();
+  const release = createDeferred();
   const actual = fileReads.readFileWindowFully;
   vi.spyOn(fileReads, "readFileWindowFully").mockImplementationOnce(async (...args) => {
     started.resolve();
