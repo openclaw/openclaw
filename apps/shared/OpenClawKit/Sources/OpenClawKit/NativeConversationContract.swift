@@ -65,23 +65,6 @@ public struct NativeConversationCommand: Codable, Equatable, Sendable {
         case openSessionActions = "open-session-actions"
     }
 
-    private struct Empty: Codable {
-        init() {}
-
-        init(from decoder: any Decoder) throws {
-            let fields = try [String: String](from: decoder)
-            guard fields.isEmpty else {
-                throw DecodingError.dataCorrupted(.init(
-                    codingPath: decoder.codingPath,
-                    debugDescription: "Expected empty payload"))
-            }
-        }
-
-        func encode(to encoder: any Encoder) throws {
-            try [String: String]().encode(to: encoder)
-        }
-    }
-
     public let documentId: String
     public let requestId: String
     public let action: Action
@@ -101,7 +84,10 @@ public struct NativeConversationCommand: Codable, Equatable, Sendable {
         case .presentation:
             self.action = try .presentation(container.decode(NativeConversationPresentation.self, forKey: .payload))
         case .focusComposer:
-            _ = try container.decode(Empty.self, forKey: .payload)
+            guard try container.decode([String: String].self, forKey: .payload).isEmpty else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .payload, in: container, debugDescription: "Expected empty payload")
+            }
             self.action = .focusComposer
         case .openSessionActions:
             self.action = try .openSessionActions(container.decode(NativeConversationContext.self, forKey: .payload))
@@ -123,7 +109,7 @@ public struct NativeConversationCommand: Codable, Equatable, Sendable {
             try container.encode(payload, forKey: .payload)
         case .focusComposer:
             kind = .focusComposer
-            try container.encode(Empty(), forKey: .payload)
+            try container.encode([String: String](), forKey: .payload)
         case let .openSessionActions(payload):
             kind = .openSessionActions
             try container.encode(payload, forKey: .payload)

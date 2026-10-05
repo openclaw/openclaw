@@ -105,7 +105,7 @@ struct DashboardNotificationsBridgeTests {
         let url = try #require(URL(string: "about:blank"))
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "DashboardNotificationDocument-\(UUID().uuidString)",
             requestBrowserProfileImportOffer: { _ in false })

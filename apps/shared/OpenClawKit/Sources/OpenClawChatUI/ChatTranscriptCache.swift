@@ -144,12 +144,6 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
                     // corruption in one roster must not erase another agent.
                     try db.execute(
                         sql: """
-                        DELETE FROM cached_agent_sessions
-                        WHERE gateway_id = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, normalizedAgentID])
-                    try db.execute(
-                        sql: """
                         DELETE FROM cached_session_rosters
                         WHERE gateway_id = ? AND agent_id = ?
                         """,
@@ -257,29 +251,17 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
                             pair.1,
                         ])
                 }
-                let staleOwners = try String.fetchAll(
-                    db,
+                try db.execute(
                     sql: """
-                    SELECT agent_id FROM cached_session_rosters
-                    WHERE gateway_id = ?
-                    ORDER BY last_used_at DESC, agent_id
-                    LIMIT -1 OFFSET ?
+                    DELETE FROM cached_session_rosters
+                    WHERE rowid IN (
+                        SELECT rowid FROM cached_session_rosters
+                        WHERE gateway_id = ?
+                        ORDER BY last_used_at DESC, agent_id
+                        LIMIT -1 OFFSET ?
+                    )
                     """,
                     arguments: [gatewayID, Self.maxCachedSessionOwners])
-                for staleOwner in staleOwners {
-                    try db.execute(
-                        sql: """
-                        DELETE FROM cached_agent_sessions
-                        WHERE gateway_id = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, staleOwner])
-                    try db.execute(
-                        sql: """
-                        DELETE FROM cached_session_rosters
-                        WHERE gateway_id = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, staleOwner])
-                }
             }
         } catch {
             cacheLogger.error("gateway session cache write failed: \(error.localizedDescription, privacy: .public)")
@@ -456,25 +438,17 @@ extension OpenClawChatSQLiteTranscriptCache {
                     pair.1,
                 ])
         }
-        let stale = try Row.fetchAll(
-            db,
+        try db.execute(
             sql: """
-            SELECT session_key, agent_id FROM cached_transcripts
-            WHERE gateway_id = ?
-            ORDER BY updated_at DESC, rowid DESC
-            LIMIT -1 OFFSET \(self.maxCachedTranscripts)
+            DELETE FROM cached_transcripts
+            WHERE rowid IN (
+                SELECT rowid FROM cached_transcripts
+                WHERE gateway_id = ?
+                ORDER BY updated_at DESC, rowid DESC
+                LIMIT -1 OFFSET ?
+            )
             """,
-            arguments: [gatewayID])
-        for row in stale {
-            let staleSessionKey: String = row["session_key"]
-            let staleAgentID: String = row["agent_id"]
-            try db.execute(
-                sql: """
-                DELETE FROM cached_transcripts
-                WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
-                """,
-                arguments: [gatewayID, staleSessionKey, staleAgentID])
-        }
+            arguments: [gatewayID, self.maxCachedTranscripts])
     }
 }
 
@@ -770,8 +744,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                 let hadUnacknowledgedSend: Int = row["had_unacknowledged_send"]
                 let wasPossiblyAccepted = wasBranchParked &&
                     (parkedWasAccepted != 0 || hadUnacknowledgedSend != 0)
-                let normalizedReplacementID = replacementID?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let nextID = normalizedReplacementID?.isEmpty == false ? normalizedReplacementID! : UUID().uuidString
+                let nextID = replacementID?.trimmedNonEmpty ?? UUID().uuidString
                 let updateID = wasPossiblyAccepted ? nextID : id
                 try db.execute(
                     sql: """
@@ -1535,10 +1508,6 @@ extension OpenClawChatSQLiteTranscriptCache {
     private static func encodeJSON(_ value: some Encodable) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(value)
-        guard let result = String(data: data, encoding: .utf8) else {
-            throw CocoaError(.fileWriteInapplicableStringEncoding)
-        }
-        return result
+        return try String(decoding: encoder.encode(value), as: UTF8.self)
     }
 }

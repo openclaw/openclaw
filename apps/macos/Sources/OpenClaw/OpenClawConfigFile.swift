@@ -136,8 +136,8 @@ enum OpenClawConfigFile {
                 if preservedGatewayAuth {
                     suspicious.append("gateway-auth-preserved")
                 }
-                let blocking = self.configWriteBlockingReasons(suspicious).filter {
-                    !(allowGatewayModeRemoval && $0 == "gateway-mode-removed")
+                let blocking = suspicious.filter {
+                    $0.hasPrefix("size-drop:") || ($0 == "gateway-mode-removed" && !allowGatewayModeRemoval)
                 }
                 var auditFields: [String: Any] = [
                     "configPath": url.path,
@@ -404,18 +404,6 @@ extension OpenClawConfigFile {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private static func gatewayAuth(_ root: [String: Any]?) -> [String: Any]? {
-        guard let root,
-              let gateway = root["gateway"] as? [String: Any]
-        else { return nil }
-        return gateway["auth"] as? [String: Any]
-    }
-
-    private static func configDictionariesEqual(_ left: [String: Any]?, _ right: [String: Any]) -> Bool {
-        guard let left else { return false }
-        return NSDictionary(dictionary: left).isEqual(NSDictionary(dictionary: right))
-    }
-
     private static func mergeExistingConfig(
         _ existing: [String: Any],
         overridingWith next: [String: Any]) -> [String: Any]
@@ -439,12 +427,15 @@ extension OpenClawConfigFile {
         allowGatewayAuthMutation: Bool) -> Bool
     {
         guard !allowGatewayAuthMutation,
-              let previousAuth = gatewayAuth(previousRoot)
+              let previousGateway = previousRoot?["gateway"] as? [String: Any],
+              let previousAuth = previousGateway["auth"] as? [String: Any]
         else {
             return false
         }
         var gateway = output["gateway"] as? [String: Any] ?? [:]
-        let changed = !self.configDictionariesEqual(gateway["auth"] as? [String: Any], previousAuth)
+        let changed = (gateway["auth"] as? [String: Any]).map {
+            !NSDictionary(dictionary: $0).isEqual(NSDictionary(dictionary: previousAuth))
+        } ?? true
         gateway["auth"] = previousAuth
         output["gateway"] = gateway
         return changed
@@ -472,12 +463,6 @@ extension OpenClawConfigFile {
             reasons.append("gateway-mode-removed")
         }
         return reasons
-    }
-
-    private static func configWriteBlockingReasons(_ suspicious: [String]) -> [String] {
-        suspicious.filter { reason in
-            reason.hasPrefix("size-drop:") || reason == "gateway-mode-removed"
-        }
     }
 
     private static func configAuditLogURL() -> URL {
@@ -631,7 +616,7 @@ extension OpenClawConfigFile {
         let lastKnownGood = entry?.lastKnownGood
         let suspicious = self.observeSuspiciousReasons(
             root: root,
-            bytes: current["bytes"] as? Int ?? 0,
+            bytes: data.count,
             lastKnownGood: lastKnownGood)
 
         if suspicious.isEmpty {
@@ -652,26 +637,15 @@ extension OpenClawConfigFile {
             configURL: configURL,
             observedAt: observedAt)
         self.logger.warning("config observe anomaly (\(suspicious.joined(separator: ", "))) at \(configURL.path)")
-        var fields: [String: Any] = [
+        var fields = current.filter { $0.key != "observedAt" }
+        fields.merge([
             "phase": "read",
             "configPath": configURL.path,
             "exists": true,
             "valid": valid,
-            "hash": current["hash"] ?? NSNull(),
-            "bytes": current["bytes"] ?? NSNull(),
-            "mtimeMs": current["mtimeMs"] ?? NSNull(),
-            "ctimeMs": current["ctimeMs"] ?? NSNull(),
-            "dev": current["dev"] ?? NSNull(),
-            "ino": current["ino"] ?? NSNull(),
-            "mode": current["mode"] ?? NSNull(),
-            "nlink": current["nlink"] ?? NSNull(),
-            "uid": current["uid"] ?? NSNull(),
-            "gid": current["gid"] ?? NSNull(),
-            "hasMeta": current["hasMeta"] ?? false,
-            "gatewayMode": current["gatewayMode"] ?? NSNull(),
             "suspicious": suspicious,
             "clobberedPath": clobberedPath ?? NSNull(),
-        ]
+        ], uniquingKeysWith: { _, new in new })
         for (prefix, fingerprint) in [("lastKnownGood", lastKnownGood), ("backup", backup)] {
             for key in [
                 "hash", "bytes", "mtimeMs", "ctimeMs", "dev", "ino", "mode", "nlink", "uid", "gid", "gatewayMode",

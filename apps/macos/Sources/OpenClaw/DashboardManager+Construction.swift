@@ -183,7 +183,7 @@ extension DashboardManager.WindowConfiguration {
         }
         try self.init(
             url: GatewayEndpointStore.dashboardURL(for: (profile.url, nil, nil), mode: .remote),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: .unauthenticated,
             tlsParams: nil,
             mode: .remote,
             displayName: profile.name,
@@ -207,9 +207,7 @@ extension DashboardManager {
             "\(self.mainWindowAutosaveName)-\(profileID)"
         }
     }
-}
 
-extension DashboardManager {
     func dashboardConfiguration(
         endpoint: GatewayConnection.EndpointSnapshot,
         mode: AppState.ConnectionMode,
@@ -286,9 +284,7 @@ extension DashboardManager {
             nativeAuthProvider: auth.usesNativeDevice ? self
                 .nativeAuthProvider(target: target, endpoint: endpoint) : nil), endpoint)
     }
-}
 
-extension DashboardManager {
     func nativeAuthProvider(
         target: DashboardGatewayTarget,
         endpoint: GatewayConnection.EndpointSnapshot) -> DashboardNativeGatewayAuth.Provider
@@ -299,9 +295,7 @@ extension DashboardManager {
             return try await connection.controlUiNativeAuth(endpoint: endpoint, nonce: nonce, signedAt: signedAt)
         }
     }
-}
 
-extension DashboardManager {
     static func requiresIsolatedDashboardDocument(
         _ controller: DashboardWindowController,
         configuration: WindowConfiguration,
@@ -319,9 +313,7 @@ extension DashboardManager {
             (comparePrimaryRoute && (endpoint.routeAuthority != displayedRoute?.authority ||
                     endpoint.revision.map { $0 != displayedRoute?.revision } == true))
     }
-}
 
-extension DashboardManager {
     func localWindowConfiguration() async throws
         -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)
     {
@@ -337,9 +329,7 @@ extension DashboardManager {
               state.gatewayConfigIsCurrentForRouting else { throw CancellationError() }
         return resolved
     }
-}
 
-extension DashboardManager {
     func windowConfiguration(
         for target: DashboardGatewayTarget, userGesture: Bool = false) async throws
         -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)

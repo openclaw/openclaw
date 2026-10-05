@@ -337,10 +337,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool {
         await withCheckedContinuation { continuation in
             self.queue.async {
-                guard Self.routeUpdateIsCurrent(
-                    candidateGeneration: authorityGeneration,
-                    currentGeneration: self.routeAuthorityGeneration)
-                else {
+                guard authorityGeneration >= self.routeAuthorityGeneration else {
                     continuation.resume(returning: false)
                     return
                 }
@@ -366,13 +363,6 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 continuation.resume(returning: true)
             }
         }
-    }
-
-    nonisolated static func routeUpdateIsCurrent(
-        candidateGeneration: UInt64,
-        currentGeneration: UInt64) -> Bool
-    {
-        candidateGeneration >= currentGeneration
     }
 
     func gatewayConnected(ifCurrentRoute route: GatewayNodeSessionRoute) async {

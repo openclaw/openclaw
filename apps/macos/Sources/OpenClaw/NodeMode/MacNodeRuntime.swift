@@ -580,8 +580,7 @@ extension MacNodeRuntime {
                 facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
                 durationMs: params.durationMs,
                 includeAudio: params.includeAudio ?? true,
-                deviceId: params.deviceId,
-                outPath: nil)
+                deviceId: params.deviceId)
             defer { try? FileManager().removeItem(atPath: res.path) }
             let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
             struct ClipPayload: Encodable {
@@ -763,8 +762,7 @@ extension MacNodeRuntime {
             screenIndex: params.screenIndex,
             durationMs: params.durationMs,
             fps: params.fps,
-            includeAudio: params.includeAudio,
-            outPath: nil)
+            includeAudio: params.includeAudio)
         defer { try? FileManager().removeItem(atPath: res.path) }
         let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
         struct ScreenPayload: Encodable {

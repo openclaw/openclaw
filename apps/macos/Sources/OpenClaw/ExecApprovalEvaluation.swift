@@ -93,9 +93,9 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
 
     init(portable: OpenClawSystemRunApprovalPolicySnapshot) {
         self.init(
-            security: ExecSecurity(rawValue: portable.security.rawValue)!,
-            ask: ExecAsk(rawValue: portable.ask.rawValue)!,
-            askFallback: ExecSecurity(rawValue: portable.askFallback.rawValue)!,
+            security: portable.security,
+            ask: portable.ask,
+            askFallback: portable.askFallback,
             autoAllowSkills: portable.autoAllowSkills,
             allowlist: portable.allowlistRules.map { rule in
                 ExecAllowlistEntry(

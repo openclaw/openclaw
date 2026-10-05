@@ -622,9 +622,7 @@ struct MacNodeModeCoordinatorTests {
         do {
             try await gateway.connect(
                 url: #require(URL(string: "ws://first.example.invalid")),
-                token: nil,
-                bootstrapToken: nil,
-                password: nil,
+                credentials: .init(),
                 connectOptions: options,
                 sessionBox: WebSocketSessionBox(session: webSocketSession),
                 onConnected: {},
@@ -688,9 +686,7 @@ struct MacNodeModeCoordinatorTests {
                     onPendingSnapshot: { await drainSnapshot.recordCapture() })
                 try await gateway.connect(
                     url: successorURL,
-                    token: nil,
-                    bootstrapToken: nil,
-                    password: nil,
+                    credentials: .init(),
                     connectOptions: options,
                     sessionBox: WebSocketSessionBox(session: webSocketSession),
                     onConnected: { await lifecycle.recordSuccessorConnected() },

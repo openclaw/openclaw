@@ -638,7 +638,7 @@ struct GatewayCertificateRenewalTests {
                     })
                 let original = DashboardWindowController(
                     url: initial.url(),
-                    auth: DashboardWindowAuth(
+                    auth: DashboardWindowAuth.nativeDevice(
                         gatewayUrl: initial.websocketURL().absoluteString,
                         token: "initial",
                         password: nil),

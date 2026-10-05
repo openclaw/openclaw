@@ -135,10 +135,10 @@ enum ApplicationRelocator {
         let requirementData: Data
     }
 
-    private struct ReplacementEvaluation: Sendable {
-        let action: ReplacementAction
-        let launchReference: BundleFileReference?
-        let launchCodeDirectoryHash: Data?
+    enum ReplacementEvaluation: Sendable {
+        case unchanged
+        case waitForTrustedReplacement
+        case relaunch(BundleFileReference, Data)
     }
 
     private enum ReplacementScheduleResult {
@@ -662,7 +662,7 @@ extension ApplicationRelocator {
                 let evaluation = await Task.detached(priority: .utility) {
                     self.replacementEvaluationOnDisk(for: snapshot)
                 }.value
-                switch evaluation.action {
+                switch evaluation {
                 case .unchanged:
                     self.bundleReplacementHandoffAttempt = 0
                     self.bundleReplacementHandoffTargetHash = nil
@@ -679,13 +679,7 @@ extension ApplicationRelocator {
                     attempt += 1
                     try? await Task.sleep(for: retryDelay)
                     guard !Task.isCancelled else { return }
-                case .relaunch:
-                    guard let launchReference = evaluation.launchReference,
-                          let launchCodeDirectoryHash = evaluation.launchCodeDirectoryHash
-                    else {
-                        try? await Task.sleep(for: .milliseconds(250))
-                        continue
-                    }
+                case let .relaunch(launchReference, launchCodeDirectoryHash):
                     if self.bundleReplacementHandoffTargetHash != launchCodeDirectoryHash {
                         self.bundleReplacementHandoffTargetHash = launchCodeDirectoryHash
                         self.bundleReplacementHandoffAttempt = 0
@@ -720,21 +714,11 @@ extension ApplicationRelocator {
     private nonisolated static func replacementEvaluationOnDisk(
         for snapshot: BundleReplacementSnapshot) -> ReplacementEvaluation
     {
-        guard let installedApp = applicationOnDisk(at: snapshot.bundleURL) else {
-            return ReplacementEvaluation(
-                action: .waitForTrustedReplacement,
-                launchReference: nil,
-                launchCodeDirectoryHash: nil)
-        }
-        guard let launchReference = bundleFileReference(
-            bundleURL: snapshot.bundleURL,
-            executableURL: installedApp.executableURL)
-        else {
-            return ReplacementEvaluation(
-                action: .waitForTrustedReplacement,
-                launchReference: nil,
-                launchCodeDirectoryHash: nil)
-        }
+        guard let installedApp = applicationOnDisk(at: snapshot.bundleURL),
+              let launchReference = bundleFileReference(
+                  bundleURL: snapshot.bundleURL,
+                  executableURL: installedApp.executableURL)
+        else { return .waitForTrustedReplacement }
         let sameBundleIdentifier = installedApp.bundleIdentifier == snapshot.bundleIdentifier
         let installedCodeDirectoryHash = self.trustedCodeDirectoryHash(
             at: snapshot.bundleURL,
@@ -744,22 +728,19 @@ extension ApplicationRelocator {
         // afterward so the launch reference can only name that validated bundle.
         guard self.bundleFileReference(
             bundleURL: snapshot.bundleURL,
-            executableURL: installedApp.executableURL) == launchReference
-        else {
-            return ReplacementEvaluation(
-                action: .waitForTrustedReplacement,
-                launchReference: nil,
-                launchCodeDirectoryHash: nil)
-        }
-        let action = self.replacementAction(
+            executableURL: installedApp.executableURL) == launchReference,
+            let installedCodeDirectoryHash
+        else { return .waitForTrustedReplacement }
+        switch self.replacementAction(
             launchedCodeDirectoryHash: snapshot.codeDirectoryHash,
             installedCodeDirectoryHash: installedCodeDirectoryHash,
             sameBundleIdentifier: sameBundleIdentifier,
-            trusted: installedCodeDirectoryHash != nil)
-        return ReplacementEvaluation(
-            action: action,
-            launchReference: action == .relaunch ? launchReference : nil,
-            launchCodeDirectoryHash: action == .relaunch ? installedCodeDirectoryHash : nil)
+            trusted: true)
+        {
+        case .unchanged: return .unchanged
+        case .waitForTrustedReplacement: return .waitForTrustedReplacement
+        case .relaunch: return .relaunch(launchReference, installedCodeDirectoryHash)
+        }
     }
 
     nonisolated static func bundleFileReference(
@@ -1161,20 +1142,18 @@ extension ApplicationRelocator {
         if self.bundleReplacementCheckPending { return true }
         return self.shouldContinueReplacementRecovery(
             afterFailedTarget: failedTargetHash,
-            latestAction: evaluation.action,
-            latestTargetHash: evaluation.launchCodeDirectoryHash)
+            latestEvaluation: evaluation)
     }
 
     nonisolated static func shouldContinueReplacementRecovery(
         afterFailedTarget failedTargetHash: Data,
-        latestAction: ReplacementAction,
-        latestTargetHash: Data?) -> Bool
+        latestEvaluation: ReplacementEvaluation) -> Bool
     {
-        switch latestAction {
+        switch latestEvaluation {
         case .unchanged, .waitForTrustedReplacement:
             true
-        case .relaunch:
-            latestTargetHash != failedTargetHash
+        case let .relaunch(_, hash):
+            hash != failedTargetHash
         }
     }
 

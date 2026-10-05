@@ -34,7 +34,7 @@ enum TailscaleServeGatewayDiscovery {
     {
         guard timeoutSeconds > 0 else { return [] }
         guard let statusJson = await context.tailscaleStatus(),
-              let status = parseStatus(statusJson)
+              let status = try? JSONDecoder().decode(TailscaleStatus.self, from: Data(statusJson.utf8))
         else {
             return []
         }
@@ -45,7 +45,7 @@ enum TailscaleServeGatewayDiscovery {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         let perProbeTimeout = min(self.defaultProbeTimeoutSeconds, max(0.5, timeoutSeconds * 0.45))
 
-        var byHost: [String: TailscaleServeGatewayBeacon] = [:]
+        var beacons: [TailscaleServeGatewayBeacon] = []
         await withTaskGroup(of: TailscaleServeGatewayBeacon?.self) { group in
             var index = 0
             let workerCount = min(self.probeConcurrency, candidates.count)
@@ -58,12 +58,7 @@ enum TailscaleServeGatewayDiscovery {
                     let remaining = deadline.timeIntervalSinceNow
                     guard remaining > 0 else { return nil }
                     let timeout = min(perProbeTimeout, remaining)
-                    guard await context.probeHost(candidate.dnsName, timeout) else { return nil }
-                    return TailscaleServeGatewayBeacon(
-                        displayName: candidate.displayName,
-                        tailnetDns: candidate.dnsName,
-                        host: candidate.dnsName,
-                        port: 443)
+                    return await context.probeHost(candidate.host, timeout) ? candidate : nil
                 }
             }
 
@@ -73,25 +68,20 @@ enum TailscaleServeGatewayDiscovery {
 
             while let beacon = await group.next() {
                 if let beacon {
-                    byHost[beacon.host.lowercased()] = beacon
+                    beacons.append(beacon)
                 }
                 submitOne()
             }
         }
 
-        return byHost.values.sorted {
+        return beacons.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
         }
     }
 
-    private struct Candidate {
-        var dnsName: String
-        var displayName: String
-    }
-
-    private static func collectCandidates(status: TailscaleStatus) -> [Candidate] {
+    private static func collectCandidates(status: TailscaleStatus) -> [TailscaleServeGatewayBeacon] {
         let selfDns = self.normalizeDnsName(status.selfNode?.dnsName)
-        var out: [Candidate] = []
+        var out: [TailscaleServeGatewayBeacon] = []
         var seen = Set<String>()
 
         for node in status.peer.values {
@@ -101,9 +91,11 @@ enum TailscaleServeGatewayDiscovery {
                   seen.insert(dnsName).inserted
             else { continue }
 
-            out.append(Candidate(
-                dnsName: dnsName,
-                displayName: self.displayName(hostName: node.hostName, dnsName: dnsName)))
+            out.append(TailscaleServeGatewayBeacon(
+                displayName: self.displayName(hostName: node.hostName, dnsName: dnsName),
+                tailnetDns: dnsName,
+                host: dnsName,
+                port: 443))
 
             if out.count >= self.maxCandidates {
                 break
@@ -186,10 +178,6 @@ enum TailscaleServeGatewayDiscovery {
             env["TERM"] = "dumb"
         }
         return env
-    }
-
-    private static func parseStatus(_ raw: String) -> TailscaleStatus? {
-        try? JSONDecoder().decode(TailscaleStatus.self, from: Data(raw.utf8))
     }
 }
 

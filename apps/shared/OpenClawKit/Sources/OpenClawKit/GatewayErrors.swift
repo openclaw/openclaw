@@ -88,47 +88,6 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
 
     public init(
         message: String,
-        detailCodeRaw: String?,
-        canRetryWithDeviceToken: Bool,
-        recommendedNextStepRaw: String? = nil,
-        requestId: String? = nil,
-        detailsReason: String? = nil,
-        ownerRaw: String? = nil,
-        titleOverride: String? = nil,
-        userMessageOverride: String? = nil,
-        actionLabel: String? = nil,
-        actionCommand: String? = nil,
-        docsURLString: String? = nil,
-        retryableOverride: Bool? = nil,
-        pauseReconnectOverride: Bool? = nil,
-        clientMinProtocol: Int? = nil,
-        clientMaxProtocol: Int? = nil,
-        expectedProtocol: Int? = nil,
-        minimumProbeProtocol: Int? = nil)
-    {
-        let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.message = trimmedMessage.isEmpty ? "gateway connect failed" : trimmedMessage
-        self.detailCodeRaw = detailCodeRaw?.trimmedNonEmpty
-        self.canRetryWithDeviceToken = canRetryWithDeviceToken
-        self.recommendedNextStepRaw = recommendedNextStepRaw?.trimmedNonEmpty
-        self.requestId = requestId?.trimmedNonEmpty
-        self.detailsReason = detailsReason?.trimmedNonEmpty
-        self.ownerRaw = ownerRaw?.trimmedNonEmpty
-        self.titleOverride = titleOverride?.trimmedNonEmpty
-        self.userMessageOverride = userMessageOverride?.trimmedNonEmpty
-        self.actionLabel = actionLabel?.trimmedNonEmpty
-        self.actionCommand = actionCommand?.trimmedNonEmpty
-        self.docsURLString = docsURLString?.trimmedNonEmpty
-        self.retryableOverride = retryableOverride
-        self.pauseReconnectOverride = pauseReconnectOverride
-        self.clientMinProtocol = clientMinProtocol
-        self.clientMaxProtocol = clientMaxProtocol
-        self.expectedProtocol = expectedProtocol
-        self.minimumProbeProtocol = minimumProbeProtocol
-    }
-
-    public init(
-        message: String,
         detailCode: String?,
         canRetryWithDeviceToken: Bool,
         recommendedNextStep: String? = nil,
@@ -147,25 +106,25 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         expectedProtocol: Int? = nil,
         minimumProbeProtocol: Int? = nil)
     {
-        self.init(
-            message: message,
-            detailCodeRaw: detailCode,
-            canRetryWithDeviceToken: canRetryWithDeviceToken,
-            recommendedNextStepRaw: recommendedNextStep,
-            requestId: requestId,
-            detailsReason: detailsReason,
-            ownerRaw: ownerRaw,
-            titleOverride: titleOverride,
-            userMessageOverride: userMessageOverride,
-            actionLabel: actionLabel,
-            actionCommand: actionCommand,
-            docsURLString: docsURLString,
-            retryableOverride: retryableOverride,
-            pauseReconnectOverride: pauseReconnectOverride,
-            clientMinProtocol: clientMinProtocol,
-            clientMaxProtocol: clientMaxProtocol,
-            expectedProtocol: expectedProtocol,
-            minimumProbeProtocol: minimumProbeProtocol)
+        let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.message = trimmedMessage.isEmpty ? "gateway connect failed" : trimmedMessage
+        self.detailCodeRaw = detailCode?.trimmedNonEmpty
+        self.canRetryWithDeviceToken = canRetryWithDeviceToken
+        self.recommendedNextStepRaw = recommendedNextStep?.trimmedNonEmpty
+        self.requestId = requestId?.trimmedNonEmpty
+        self.detailsReason = detailsReason?.trimmedNonEmpty
+        self.ownerRaw = ownerRaw?.trimmedNonEmpty
+        self.titleOverride = titleOverride?.trimmedNonEmpty
+        self.userMessageOverride = userMessageOverride?.trimmedNonEmpty
+        self.actionLabel = actionLabel?.trimmedNonEmpty
+        self.actionCommand = actionCommand?.trimmedNonEmpty
+        self.docsURLString = docsURLString?.trimmedNonEmpty
+        self.retryableOverride = retryableOverride
+        self.pauseReconnectOverride = pauseReconnectOverride
+        self.clientMinProtocol = clientMinProtocol
+        self.clientMaxProtocol = clientMaxProtocol
+        self.expectedProtocol = expectedProtocol
+        self.minimumProbeProtocol = minimumProbeProtocol
     }
 
     public var detailCode: String? {

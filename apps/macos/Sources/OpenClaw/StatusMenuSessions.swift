@@ -2,12 +2,17 @@ import AppKit
 import Foundation
 import Observation
 import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 @MainActor
 @Observable
 final class StatusMenuSessions: NSObject {
     static let shared = StatusMenuSessions()
+
+    private final class SessionMenu: NSMenu {
+        var source: GatewayConnection.ServerLease?
+    }
 
     private struct Cache {
         let revision: UInt64?
@@ -88,7 +93,7 @@ final class StatusMenuSessions: NSObject {
         item.isEnabled = true
         StatusMenuRenderer.configureHostedView(item, rootView: StatusSessionCard(row: row), highlights: true)
 
-        if let submenu = item.submenu {
+        if let submenu = item.submenu as? SessionMenu, submenu.source == self.currentCache?.lease {
             self.updateSessionSubmenu(submenu, row: row)
         } else {
             item.submenu = self.buildSessionSubmenu(for: row)
@@ -135,7 +140,8 @@ final class StatusMenuSessions: NSObject {
 
 extension StatusMenuSessions {
     private func buildSessionSubmenu(for row: SessionRow) -> NSMenu {
-        let menu = NSMenu()
+        let menu = SessionMenu()
+        menu.source = self.currentCache?.lease
         menu.autoenablesItems = false
         menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
@@ -401,17 +407,19 @@ extension StatusMenuSessions {
               let key = payload["key"],
               let value = payload["value"]
         else { return }
-        self.performSessionAction(errorTitle: String(localized: "Update color failed")) {
-            let request = OpenClawChatGatewayRequests.patchSession(
-                sessionKey: key,
-                agentID: nil,
-                label: nil,
-                category: nil,
-                color: .some(value.isEmpty ? nil : value),
-                pinned: nil,
-                archived: nil,
-                unreadPatch: nil)
-            _ = try await ControlChannel.shared.request(request)
+        Task {
+            await self.performSessionAction(
+                sender,
+                request: OpenClawChatGatewayRequests.patchSession(
+                    sessionKey: key,
+                    agentID: nil,
+                    label: nil,
+                    category: nil,
+                    color: .some(value.isEmpty ? nil : value),
+                    pinned: nil,
+                    archived: nil,
+                    unreadPatch: nil),
+                errorTitle: String(localized: "Update color failed"))
         }
     }
 
@@ -421,8 +429,12 @@ extension StatusMenuSessions {
               let value = payload["value"]
         else { return }
 
-        self.performSessionAction(errorTitle: String(localized: "Update thinking failed")) {
-            try await SessionActions.patchSession(key: key, thinking: .some(value))
+        Task {
+            await self.performSessionAction(
+                sender,
+                request: OpenClawChatGatewayRequests.patchSessionSettings(
+                    sessionKey: key, agentID: nil, thinkingLevel: .some(value), verboseLevel: nil),
+                errorTitle: String(localized: "Update thinking failed"))
         }
     }
 
@@ -432,8 +444,12 @@ extension StatusMenuSessions {
               let value = payload["value"]
         else { return }
 
-        self.performSessionAction(errorTitle: String(localized: "Update verbose failed")) {
-            try await SessionActions.patchSession(key: key, verbose: .some(value))
+        Task {
+            await self.performSessionAction(
+                sender,
+                request: OpenClawChatGatewayRequests.patchSessionSettings(
+                    sessionKey: key, agentID: nil, thinkingLevel: nil, verboseLevel: .some(value)),
+                errorTitle: String(localized: "Update verbose failed"))
         }
     }
 
@@ -446,32 +462,34 @@ extension StatusMenuSessions {
 
     @objc private func resetSession(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
-        self.performSessionAction(
-            errorTitle: String(localized: "Reset failed"),
-            confirm: {
+        Task {
+            await self.performSessionAction(
+                sender,
+                request: OpenClawChatGatewayRequests.resetSession(sessionKey: key, agentID: nil),
+                errorTitle: String(localized: "Reset failed"))
+            {
                 await SessionActions.confirmDestructiveAction(
                     title: String(localized: "Reset session?"),
                     message: String(format: String(localized: "Starts a new session ID for “%@”."), key),
                     action: String(localized: "Reset"))
-            },
-            action: {
-                try await SessionActions.resetSession(key: key)
-            })
+            }
+        }
     }
 
     @objc private func compactSession(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
-        self.performSessionAction(
-            errorTitle: String(localized: "Compact failed"),
-            confirm: {
+        Task {
+            await self.performSessionAction(
+                sender,
+                request: OpenClawChatGatewayRequests.compactSession(sessionKey: key, agentID: nil, maxLines: 400),
+                errorTitle: String(localized: "Compact failed"))
+            {
                 await SessionActions.confirmDestructiveAction(
                     title: String(localized: "Compact session log?"),
                     message: String(localized: "Keeps the last 400 lines and archives the old file."),
                     action: String(localized: "Compact"))
-            },
-            action: {
-                try await SessionActions.compactSession(key: key, maxLines: 400)
-            })
+            }
+        }
     }
 
     @objc private func deleteSession(_ sender: NSMenuItem) {
@@ -480,34 +498,47 @@ extension StatusMenuSessions {
               key != "global"
         else { return }
 
-        self.performSessionAction(
-            errorTitle: String(localized: "Delete failed"),
-            confirm: {
+        Task {
+            await self.performSessionAction(
+                sender,
+                request: OpenClawChatGatewayRequests.deleteSession(sessionKey: key, agentID: nil),
+                errorTitle: String(localized: "Delete failed"))
+            {
                 await SessionActions.confirmDestructiveAction(
                     title: String(localized: "Delete session?"),
                     message: String(
                         format: String(localized: "Deletes the “%@” entry and archives its transcript."),
                         key),
                     action: String(localized: "Delete"))
-            },
-            action: {
-                try await SessionActions.deleteSession(key: key)
-            })
+            }
+        }
     }
 
-    private func performSessionAction(
+    func performSessionAction(
+        _ sender: NSMenuItem,
+        request: OpenClawChatGatewayRequest,
         errorTitle: String,
-        confirm: @escaping @MainActor () async -> Bool = { true },
-        action: @escaping @MainActor () async throws -> Void)
+        confirm: @MainActor () async -> Bool = { true }) async
     {
-        Task {
-            guard await confirm() else { return }
-            do {
-                try await action()
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: errorTitle, error: error)
+        var menu = sender.menu
+        while let current = menu, !(current is SessionMenu) {
+            menu = current.supermenu
+        }
+        // Retain the rendered row's owner across nested menus and confirmation dialogs.
+        guard let source = (menu as? SessionMenu)?.source,
+              self.control.gateway.serverLeaseMatchesCurrentRoute(source), !Task.isCancelled,
+              await confirm(), !Task.isCancelled,
+              self.control.gateway.serverLeaseMatchesCurrentRoute(source) else { return }
+        do {
+            let response = try await self.control.gateway.request(request, ifCurrentRoute: source.route)
+            if request.method == "sessions.compact" {
+                try OpenClawSessionsCompactResponse.requireSuccess(from: response)
             }
+            await self.refresh(force: true)
+        } catch {
+            guard !Task.isCancelled, !(error is CancellationError),
+                  self.control.gateway.serverLeaseMatchesCurrentRoute(source) else { return }
+            SessionActions.presentError(title: errorTitle, error: error)
         }
     }
 }

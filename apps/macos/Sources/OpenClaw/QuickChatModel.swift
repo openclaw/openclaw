@@ -326,9 +326,9 @@ final class QuickChatModel {
                 throw OpenClawChatTransportSendError.notDispatched
             }
             return try await lease.patchSessionSettings(
-                sessionKey: target.sessionKey,
-                agentID: target.agentID,
-                patch: settings)
+                target.sessionKey,
+                target.agentID,
+                settings)
         })
     {
         self.sessionKeyProvider = sessionKeyProvider

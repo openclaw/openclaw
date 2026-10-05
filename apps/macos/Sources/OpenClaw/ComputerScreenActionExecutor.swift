@@ -122,7 +122,7 @@ final class ComputerScreenActionExecutor {
                 try await self.automation.click(
                     target: .coordinates(point), clickType: params.action.peekabooClickType, snapshotId: nil)
             } else {
-                let button: ComputerMouseButton = params.action == .middleClick ? .middle :
+                let button: CGMouseButton = params.action == .middleClick ? .center :
                     params.action == .rightClick ? .right : .left
                 let count = params.action == .tripleClick ? 3 : params.action == .doubleClick ? 2 : 1
                 try self.rawClick(at: point, button: button, count: count, flags: modifiers)
@@ -520,21 +520,24 @@ final class ComputerScreenActionExecutor {
 
     // MARK: - Raw CoreGraphics primitives
 
-    private func rawClick(at point: CGPoint, button: ComputerMouseButton, count: Int, flags: CGEventFlags) throws {
+    private func rawClick(at point: CGPoint, button: CGMouseButton, count: Int, flags: CGEventFlags) throws {
+        let downType: CGEventType = button == .center ? .otherMouseDown : button == .right ? .rightMouseDown :
+            .leftMouseDown
+        let upType: CGEventType = button == .center ? .otherMouseUp : button == .right ? .rightMouseUp : .leftMouseUp
         // Build every down/up pair before posting the first down. Event creation
         // failure can then never strand a button between a successfully created
         // down and a missing up.
         let pairs = try (1...max(1, count)).map { click in
             let down = try self.mouseEventFactory(
-                button.downType,
+                downType,
                 point,
-                button.cgButton,
+                button,
                 click,
                 flags)
             let up = try self.mouseEventFactory(
-                button.upType,
+                upType,
                 point,
-                button.cgButton,
+                button,
                 click,
                 flags)
             return (down: down, up: up)
@@ -695,37 +698,6 @@ extension OpenClawComputerScrollDirection {
         case .down: .down
         case .left: .left
         case .right: .right
-        }
-    }
-}
-
-/// Mouse button plus the CoreGraphics event types for the raw click path.
-private enum ComputerMouseButton {
-    case left
-    case right
-    case middle
-
-    var cgButton: CGMouseButton {
-        switch self {
-        case .left: .left
-        case .right: .right
-        case .middle: .center
-        }
-    }
-
-    var downType: CGEventType {
-        switch self {
-        case .left: .leftMouseDown
-        case .right: .rightMouseDown
-        case .middle: .otherMouseDown
-        }
-    }
-
-    var upType: CGEventType {
-        switch self {
-        case .left: .leftMouseUp
-        case .right: .rightMouseUp
-        case .middle: .otherMouseUp
         }
     }
 }

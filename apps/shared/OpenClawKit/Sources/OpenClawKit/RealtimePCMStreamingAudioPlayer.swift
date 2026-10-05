@@ -2,16 +2,9 @@
 import AVFAudio
 import Foundation
 
-/// Synchronous registration lets the relay retire a generation before any delayed task runs.
-protocol RealtimePCMPlayback: Sendable {
-    func beginPlayback(stream: AsyncThrowingStream<Data, Error>, sampleRate: Double)
-        -> Task<StreamingPlaybackResult, Never>
-    func stop() -> Double?
-}
-
 /// The lock guards playback/generation state; backend closures run on backendQueue without it.
 /// Completion callbacks are queued, including callbacks invoked synchronously by node.stop.
-public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying, RealtimePCMPlayback,
+public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying,
     @unchecked Sendable
 {
     private let lock = NSLock()
@@ -125,6 +118,7 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
         await self.beginPlayback(stream: stream, sampleRate: sampleRate).value
     }
 
+    /// Register synchronously so relay controls can retire playback before its task runs.
     func beginPlayback(
         stream: AsyncThrowingStream<Data, Error>,
         sampleRate: Double) -> Task<StreamingPlaybackResult, Never>

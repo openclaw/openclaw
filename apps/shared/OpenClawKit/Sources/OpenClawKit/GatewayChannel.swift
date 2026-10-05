@@ -31,10 +31,10 @@ public actor GatewayChannelActor {
     private var disconnectError: Error?
     private var automaticReconnectRequested = false
     var connectWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
-    private var url: URL
-    private var token: String?
-    private var bootstrapToken: String?
-    private var password: String?
+    private let url: URL
+    private let token: String?
+    private let bootstrapToken: String?
+    private let password: String?
     private let authBindingKey: SymmetricKey?
     private let session: WebSocketSessioning
     private var backoffMs: Double = 500
@@ -560,7 +560,7 @@ public actor GatewayChannelActor {
                 self.backoffMs = min(self.backoffMs, 250)
             } else if selectedAuth.authDeviceToken != nil,
                       let identity,
-                      self.shouldClearStoredDeviceTokenAfterRetry(error)
+                      (error as? GatewayConnectAuthError)?.detail == .authDeviceTokenMismatch
             {
                 // Retry failed with an explicit device-token mismatch; clear stale local token.
                 DeviceAuthStore.clearToken(
@@ -700,9 +700,6 @@ extension GatewayChannelActor {
         storedScopes: [String]) -> Bool
     {
         let requested = Set(requestedScopes.compactMap(\.trimmedNonEmpty))
-        if requested.isEmpty {
-            return true
-        }
         let allowedSet = Set(storedScopes.compactMap(\.trimmedNonEmpty))
         let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines)
         if normalizedRole != "operator" {
@@ -825,9 +822,9 @@ extension GatewayChannelActor {
             let details = gatewayErrorDetails(res.error)
             throw GatewayConnectAuthError(
                 message: res.error?.message ?? "gateway connect failed",
-                detailCodeRaw: details["code"]?.value as? String,
+                detailCode: details["code"]?.value as? String,
                 canRetryWithDeviceToken: details["canRetryWithDeviceToken"]?.value as? Bool ?? false,
-                recommendedNextStepRaw: details["recommendedNextStep"]?.value as? String,
+                recommendedNextStep: details["recommendedNextStep"]?.value as? String,
                 requestId: details["requestId"]?.value as? String,
                 detailsReason: details["reason"]?.value as? String,
                 ownerRaw: details["owner"]?.value as? String,
@@ -1217,18 +1214,11 @@ extension GatewayChannelActor {
         storedToken: String?,
         attemptedDeviceTokenRetry: Bool) -> Bool
     {
-        if self.deviceTokenRetryBudgetUsed || attemptedDeviceTokenRetry {
-            return false
-        }
-        guard explicitGatewayToken != nil, storedToken != nil else {
-            return false
-        }
-        guard self.isTrustedDeviceRetryEndpoint() else {
-            return false
-        }
-        guard let authError = error as? GatewayConnectAuthError else {
-            return false
-        }
+        guard !self.deviceTokenRetryBudgetUsed, !attemptedDeviceTokenRetry,
+              explicitGatewayToken != nil, storedToken != nil,
+              self.isTrustedDeviceRetryEndpoint(),
+              let authError = error as? GatewayConnectAuthError
+        else { return false }
         return authError.canRetryWithDeviceToken
     }
 
@@ -1236,22 +1226,9 @@ extension GatewayChannelActor {
         guard let authError = error as? GatewayConnectAuthError else {
             return false
         }
-        if authError.isNonRecoverable {
-            return true
-        }
-        if authError.detail == .authTokenMismatch,
-           self.deviceTokenRetryBudgetUsed, !self.pendingDeviceTokenRetry
-        {
-            return true
-        }
-        return false
-    }
-
-    private func shouldClearStoredDeviceTokenAfterRetry(_ error: Error) -> Bool {
-        guard let authError = error as? GatewayConnectAuthError else {
-            return false
-        }
-        return authError.detail == .authDeviceTokenMismatch
+        return authError.isNonRecoverable ||
+            (authError.detail == .authTokenMismatch &&
+                self.deviceTokenRetryBudgetUsed && !self.pendingDeviceTokenRetry)
     }
 
     private func isTrustedDeviceRetryEndpoint() -> Bool {

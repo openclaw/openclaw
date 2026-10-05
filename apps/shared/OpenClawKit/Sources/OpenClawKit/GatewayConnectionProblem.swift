@@ -431,7 +431,7 @@ extension GatewayConnectionProblemMapper {
         if code == "NOT_PAIRED" || responseError.detailsReason == "not-paired" {
             let authError = GatewayConnectAuthError(
                 message: responseError.message,
-                detailCodeRaw: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+                detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
                 canRetryWithDeviceToken: false,
                 requestId: responseError.details["requestId"]?.stringValue?.trimmedNonEmpty,
                 detailsReason: responseError.detailsReason)

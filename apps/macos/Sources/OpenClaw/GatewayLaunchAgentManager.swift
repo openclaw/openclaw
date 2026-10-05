@@ -542,17 +542,7 @@ enum GatewayLaunchAgentManager {
 
     static func launchdGatewayLogPath() -> String {
         let snapshot = self.launchdConfigSnapshot()
-        if let stdout = snapshot?.stdoutPath?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !stdout.isEmpty
-        {
-            return stdout
-        }
-        if let stderr = snapshot?.stderrPath?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !stderr.isEmpty
-        {
-            return stderr
-        }
-        return LogLocator.launchdGatewayLogPath
+        return snapshot?.stdoutPath?.nonEmpty ?? snapshot?.stderrPath?.nonEmpty ?? LogLocator.launchdGatewayLogPath
     }
 }
 

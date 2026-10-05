@@ -724,17 +724,8 @@ extension RealtimeTalkRelaySession {
             self.hasReceivedReady = true
             self.finishStartupWait(.ready)
             self.onStatus("Listening (Realtime)")
-        case "audio":
-            self.output.withLock { $0.handleOutputAudio(payload) }
-            self.drainOutputEffects()
-        case "audioDone":
-            self.output.withLock { $0.handleOutputAudioDone(payload) }
-            self.drainOutputEffects()
-        case "clear":
-            self.output.withLock { $0.handleOutputClear(payload) }
-            self.drainOutputEffects()
-        case "mark":
-            self.output.withLock { $0.handlePlaybackMark(payload) }
+        case "audio", "audioDone", "clear", "mark":
+            self.output.withLock { _ = $0.handleAudioEvent(event) }
             self.drainOutputEffects()
         case "transcript":
             self.handleTranscriptEvent(payload)

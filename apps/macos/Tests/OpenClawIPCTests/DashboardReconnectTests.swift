@@ -253,7 +253,7 @@ struct DashboardReconnectTests {
         let identityURL = try #require(URL(string: "https://team.example/dashboard/"))
         let controller = DashboardWindowController(
             url: server.url("/"),
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "shared-owner-token",
                 password: nil),
@@ -300,7 +300,7 @@ struct DashboardReconnectTests {
         let url = server.url("/#token=route-a-device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "route-a-device-token",
                 password: nil),

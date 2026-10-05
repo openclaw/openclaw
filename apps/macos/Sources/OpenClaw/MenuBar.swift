@@ -171,7 +171,6 @@ struct OpenClawApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var state: AppState?
     private var statusMenuController: StatusMenuController?
     private lazy var dockMenu = AppDockMenu(
         openDashboard: { [weak self] in self?.openDashboardAction() },
@@ -320,45 +319,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         GatewayEndpointStore.admitPrimaryAppLaunch()
         ChromeExtensionSetup.shared.start(plan: launchPlan)
         GatewayConnectivityCoordinator.shared.start()
-        self.state = AppStateStore.shared
-        if let state {
-            MacNodeModeCoordinator.prepareNodeIdentityProfile(
-                isExistingInstallation: state.onboardingSeen || state.connectionMode != .unconfigured)
-        }
+        let state = AppStateStore.shared
+        MacNodeModeCoordinator.prepareNodeIdentityProfile(
+            isExistingInstallation: state.onboardingSeen || state.connectionMode != .unconfigured)
         DockIconManager.shared.updateDockVisibility()
-        if launchPlan.allowsInteractiveServices, let state {
+        if launchPlan.allowsInteractiveServices {
             BundledRuntime.refreshOwnedMacCLILink(
                 allowsPersistentIntegration: ApplicationRelocator.currentBundleAllowsPersistentIntegration())
             let controller = StatusMenuController(state: state, updater: self.updaterController)
             controller.start()
             self.statusMenuController = controller
         }
-        if let state {
-            let shouldWaitForConnection = state.connectionMode != .unconfigured
-            if !shouldWaitForConnection, launchPlan.allowsAutomaticPresentation {
-                Task { @MainActor in
-                    await self.scheduleFirstRunOnboardingIfNeeded()
-                }
-            }
+        let shouldWaitForConnection = state.connectionMode != .unconfigured
+        if !shouldWaitForConnection, launchPlan.allowsAutomaticPresentation {
             Task { @MainActor in
-                // Validate PATH selection before local startup. Existing installs may not
-                // have the validation cache yet, and a stale external CLI must not win.
-                if state.connectionMode == .local ||
-                    (state.connectionMode == .remote && state.hostsLocalGatewayWithRemotePrimary)
-                {
-                    _ = await CLIInstaller.status()
-                }
-                await ConnectionModeCoordinator.shared.apply(
-                    mode: state.connectionMode,
-                    paused: state.isPaused)
-                guard launchPlan.allowsAutomaticPresentation else { return }
-                if shouldWaitForConnection {
-                    await self.scheduleFirstRunOnboardingIfNeeded()
-                }
-                // Attachment must settle before deciding whether this app needs to install a CLI.
-                if !PostUpdateController.shared.startIfNeeded() {
-                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
-                }
+                await self.scheduleFirstRunOnboardingIfNeeded()
+            }
+        }
+        Task { @MainActor in
+            // Validate PATH selection before local startup. Existing installs may not
+            // have the validation cache yet, and a stale external CLI must not win.
+            if state.connectionMode == .local ||
+                (state.connectionMode == .remote && state.hostsLocalGatewayWithRemotePrimary)
+            {
+                _ = await CLIInstaller.status()
+            }
+            await ConnectionModeCoordinator.shared.apply(
+                mode: state.connectionMode,
+                paused: state.isPaused)
+            guard launchPlan.allowsAutomaticPresentation else { return }
+            if shouldWaitForConnection {
+                await self.scheduleFirstRunOnboardingIfNeeded()
+            }
+            // Attachment must settle before deciding whether this app needs to install a CLI.
+            if !PostUpdateController.shared.startIfNeeded() {
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
             }
         }
         TerminationSignalWatcher.shared.start()
@@ -372,9 +367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ExecApprovalsPromptServer.shared.start()
             MacControlServer.shared.start()
             ExecApprovalsGatewayPrompter.shared.start()
-            if let state {
-                CookieSyncManager.shared.start(state: state)
-            }
+            CookieSyncManager.shared.start(state: state)
             VoiceWakeGlobalSettingsSync.shared.start()
             QuickChatController.shared.start()
         }

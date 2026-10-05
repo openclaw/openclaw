@@ -270,7 +270,7 @@ extension OpenClawChatViewModel {
         // sessions.groups.put, so memberships survive. Accepted tradeoff until the
         // gateway grows a revisioned groups API.
         let current = try await self.fetchSessionGroups(using: routeLease)
-        let response = try await routeLease.putGroups(names: current.map(\.name) + [name])
+        let response = try await routeLease.putGroups(current.map(\.name) + [name])
         self.sessionGroupsRevision += 1
         return response.groups
     }
@@ -283,7 +283,7 @@ extension OpenClawChatViewModel {
     {
         let nextName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextName.isEmpty else { return try await self.fetchSessionGroups(using: routeLease) }
-        let response = try await routeLease.renameGroup(name: name, to: nextName)
+        let response = try await routeLease.renameGroup(name, nextName)
         self.sessionGroupsRevision += 1
         self.refreshSessions(limit: Self.sessionListFetchLimit)
         return response.groups
@@ -294,7 +294,7 @@ extension OpenClawChatViewModel {
         _ name: String,
         using routeLease: OpenClawChatSessionGroupsRouteLease) async throws -> [OpenClawChatSessionGroup]
     {
-        let response = try await routeLease.deleteGroup(name: name)
+        let response = try await routeLease.deleteGroup(name)
         self.sessionGroupsRevision += 1
         self.refreshSessions(limit: Self.sessionListFetchLimit)
         return response.groups
