@@ -102,6 +102,8 @@ function useImmediateOAuthDeadline() {
 }
 
 function loginWithFetch(fetchFn: typeof fetch, signal?: AbortSignal) {
+  vi.stubGlobal("fetch", fetchFn);
+  let state = "";
   return loginChutes({
     app: {
       clientId: "cid_test",
@@ -109,10 +111,10 @@ function loginWithFetch(fetchFn: typeof fetch, signal?: AbortSignal) {
       scopes: ["openid"],
     },
     manual: true,
-    createState: () => "state_test",
-    onAuth: vi.fn(async () => {}),
-    onPrompt: vi.fn(async () => `${REDIRECT_URI}?code=code_test&state=state_test`),
-    fetchFn,
+    onAuth: async ({ url }) => {
+      state = new URL(url).searchParams.get("state") ?? "";
+    },
+    onPrompt: async () => `${REDIRECT_URI}?code=code_test&state=${state}`,
     signal,
   });
 }
@@ -137,6 +139,7 @@ afterEach(() => {
   waitForLocalOAuthCallbackMock.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("chutes plugin OAuth", () => {
@@ -144,16 +147,15 @@ describe("chutes plugin OAuth", () => {
     const redirectUri = "http://[::1]:1456/oauth-callback";
     waitForLocalOAuthCallbackMock.mockResolvedValue({ code: "code_test", state: "state_test" });
     const fetchFn = oauthFetch({});
+    vi.stubGlobal("fetch", fetchFn);
 
     await expect(
       loginChutes({
         app: { clientId: "cid_test", redirectUri, scopes: ["openid"] },
-        createState: () => "state_test",
         onAuth: vi.fn(async () => {}),
         onPrompt: vi.fn(async () => {
           throw new Error("IPv6 callback must not require manual fallback");
         }),
-        fetchFn,
       }),
     ).resolves.toMatchObject({ access: "at_123", refresh: "rt_123" });
     expect(waitForLocalOAuthCallbackMock).toHaveBeenCalledWith(
@@ -331,7 +333,9 @@ describe("chutes plugin OAuth", () => {
     const credential = createStoredCredential();
     const now = 2_000_000;
 
-    await expect(refreshChutesOAuthCredential(credential, { fetchFn, now })).resolves.toEqual({
+    vi.stubGlobal("fetch", fetchFn);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    await expect(refreshChutesOAuthCredential(credential)).resolves.toEqual({
       ...credential,
       access: "at_new",
       refresh: "rt_new",
@@ -352,9 +356,9 @@ describe("chutes plugin OAuth", () => {
       return jsonResponse({ access_token: "at_new", expires_in: 1800 });
     });
 
+    vi.stubGlobal("fetch", fetchFn);
     const refreshed = await refreshChutesOAuthCredential(
       createStoredCredential({ clientId: undefined }),
-      { fetchFn, now: 3_000_000 },
     );
 
     expect(refreshed.clientId).toBe("cid_env");
@@ -363,10 +367,8 @@ describe("chutes plugin OAuth", () => {
   it("preserves the old refresh token when the replacement is omitted", async () => {
     const fetchFn = vi.fn(async () => jsonResponse({ access_token: "at_new", expires_in: 1800 }));
 
-    const refreshed = await refreshChutesOAuthCredential(createStoredCredential(), {
-      fetchFn,
-      now: 4_000_000,
-    });
+    vi.stubGlobal("fetch", fetchFn);
+    const refreshed = await refreshChutesOAuthCredential(createStoredCredential());
 
     expect(refreshed.refresh).toBe("rt_old");
   });
@@ -390,8 +392,9 @@ describe("chutes plugin OAuth", () => {
   it("rejects missing access tokens", async () => {
     const fetchFn = vi.fn(async () => jsonResponse({ expires_in: 1800 }));
 
-    await expect(
-      refreshChutesOAuthCredential(createStoredCredential(), { fetchFn, now: 5_000_000 }),
-    ).rejects.toThrow("Chutes token refresh returned no access_token");
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(refreshChutesOAuthCredential(createStoredCredential())).rejects.toThrow(
+      "Chutes token refresh returned no access_token",
+    );
   });
 });

@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
 import { generateOAuthState } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { registerGoogleMeetArtifactCommands } from "./cli-artifact-commands.js";
@@ -95,9 +94,7 @@ export function registerGoogleMeetCli(params: {
   program: Command;
   config: GoogleMeetConfig;
   ensureRuntime: () => Promise<GoogleMeetRuntime>;
-  callGatewayFromCli?: typeof callGatewayFromCli;
 }): void {
-  const callGateway = params.callGatewayFromCli ?? callGatewayFromCli;
   const operationTimeoutMs = resolveGoogleMeetGatewayOperationTimeoutMs(params.config);
   const root = params.program
     .command("googlemeet")
@@ -168,7 +165,6 @@ export function registerGoogleMeetCli(params: {
     root,
     config: params.config,
     ensureRuntime: params.ensureRuntime,
-    callGateway,
     operationTimeoutMs,
     resolveMeetingInput,
     resolveCliParams,

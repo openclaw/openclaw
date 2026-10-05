@@ -9,7 +9,7 @@ extensions/acpx/src/runtime.ts	2
 extensions/active-memory/config.ts	2
 extensions/active-memory/index.ts	3
 extensions/active-memory/transcript-result.ts	2
-extensions/amazon-bedrock-mantle/discovery.ts	2
+extensions/amazon-bedrock-mantle/discovery.ts	1
 extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.ts	3
 extensions/amazon-bedrock-mantle/register.sync.runtime.ts	2
 extensions/amazon-bedrock/config-compat.ts	5
@@ -1252,7 +1252,6 @@ src/agents/auth-profiles/persisted.ts	2
 src/agents/auth-profiles/policy.ts	1
 src/agents/auth-profiles/portability.ts	1
 src/agents/auth-profiles/profiles.ts	1
-src/agents/auth-profiles/store.ts	1
 src/agents/auth-profiles/usage.ts	1
 src/agents/bash-process-registry.ts	1
 src/agents/bash-tools.exec-approval-followup.ts	5
@@ -1760,7 +1759,7 @@ src/cli/gateway-cli/suspend-cli.ts	2
 src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
 src/cli/models-cli.ts	1
-src/cli/native-hook-relay-cli.ts	2
+src/cli/native-hook-relay-cli.ts	1
 src/cli/nodes-cli/register.pairing.ts	4
 src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	2

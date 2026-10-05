@@ -1,4 +1,8 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+
+const getTokenProviderMock = vi.hoisted(() => vi.fn());
+vi.mock("@aws/bedrock-token-generator", () => ({ getTokenProvider: getTokenProviderMock }));
 
 const discoveryDebugSpy = vi.hoisted(() => vi.fn());
 const discoveryLoggerState = vi.hoisted(() => ({ debugEnabled: true }));
@@ -23,12 +27,59 @@ vi.mock("openclaw/plugin-sdk/core", async (importOriginal) => {
 const {
   discoverMantleModels,
   generateBearerTokenFromIam,
-  getCachedIamToken,
   MANTLE_IAM_TOKEN_MARKER,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
   resolveMantleRuntimeBearerToken,
 } = await import("./api.js");
+
+type TokenProviderFactory = typeof import("@aws/bedrock-token-generator").getTokenProvider;
+
+function useDiscoveryDependencies(params: {
+  fetchFn?: typeof fetch;
+  now?: () => number;
+  tokenProviderFactory?: TokenProviderFactory;
+}) {
+  if (params.fetchFn) {
+    vi.stubGlobal("fetch", params.fetchFn);
+  }
+  if (params.now) {
+    vi.spyOn(Date, "now").mockImplementation(params.now);
+  }
+  if (params.tokenProviderFactory) {
+    getTokenProviderMock.mockImplementation(params.tokenProviderFactory);
+  }
+}
+
+function discoverWithDependencies(
+  params: Parameters<typeof discoverMantleModels>[0] & {
+    fetchFn?: typeof fetch;
+    now?: () => number;
+  },
+) {
+  useDiscoveryDependencies(params);
+  return discoverMantleModels(params);
+}
+
+function resolveImplicitWithDependencies(
+  params: Parameters<typeof resolveImplicitMantleProvider>[0] & {
+    fetchFn?: typeof fetch;
+    tokenProviderFactory?: TokenProviderFactory;
+  },
+) {
+  useDiscoveryDependencies(params);
+  return resolveImplicitMantleProvider(params);
+}
+
+function resolveRuntimeWithDependencies(
+  params: Parameters<typeof resolveMantleRuntimeBearerToken>[0] & {
+    now?: () => number;
+    tokenProviderFactory?: TokenProviderFactory;
+  },
+) {
+  useDiscoveryDependencies(params);
+  return resolveMantleRuntimeBearerToken(params);
+}
 
 function createTokenProviderFactory(tokenProvider: () => Promise<string>) {
   return vi.fn(() => tokenProvider);
@@ -47,24 +98,22 @@ describe("bedrock mantle discovery", () => {
   let testRegion = "";
 
   function generateToken(
-    tokenProviderFactory: NonNullable<
-      Parameters<typeof generateBearerTokenFromIam>[0]["tokenProviderFactory"]
-    >,
+    tokenProviderFactory: TokenProviderFactory,
     now?: number,
     region = testRegion,
   ) {
-    return generateBearerTokenFromIam({
-      region,
+    useDiscoveryDependencies({
       tokenProviderFactory,
       ...(now === undefined ? {} : { now: () => now }),
     });
+    return generateBearerTokenFromIam({ region });
   }
 
   function discover(
     fetchFn: typeof fetch,
-    overrides: Partial<Parameters<typeof discoverMantleModels>[0]> = {},
+    overrides: Partial<Parameters<typeof discoverWithDependencies>[0]> = {},
   ) {
-    return discoverMantleModels({
+    return discoverWithDependencies({
       region: testRegion,
       bearerToken: "test-token",
       fetchFn,
@@ -74,12 +123,14 @@ describe("bedrock mantle discovery", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    getTokenProviderMock.mockReset();
     discoveryDebugSpy.mockClear();
     discoveryLoggerState.debugEnabled = true;
     testRegion = `test-region-${++testRegionIndex}`;
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -163,38 +214,51 @@ describe("bedrock mantle discovery", () => {
   it.each(["older", "newer"] as const)(
     "ignores the %s failure that started before an IAM token succeeds",
     async (failureOrder) => {
-      let rejectFailure!: (error: Error) => void;
-      const failure = new Promise<string>((_resolve, reject) => {
-        rejectFailure = reject;
-      });
-      let resolveSuccess!: (token: string) => void;
-      const success = new Promise<string>((resolve) => {
-        resolveSuccess = resolve;
-      });
-      const tokenProviderFactory = vi
-        .fn()
-        .mockImplementationOnce(() => () => (failureOrder === "older" ? failure : success))
-        .mockImplementationOnce(() => () => (failureOrder === "older" ? success : failure))
+      const failure = createDeferred<string>();
+      const success = createDeferred<string>();
+      const firstStarted = createDeferred<void>();
+      const secondStarted = createDeferred<void>();
+      getTokenProviderMock
+        .mockReturnValueOnce(() => {
+          firstStarted.resolve();
+          return failureOrder === "older" ? failure.promise : success.promise;
+        })
+        .mockReturnValueOnce(() => {
+          secondStarted.resolve();
+          return failureOrder === "older" ? success.promise : failure.promise;
+        })
         .mockImplementationOnce(() => {
           throw new Error("same failure");
         });
-      const first = generateToken(tokenProviderFactory, 0);
-      const second = generateToken(tokenProviderFactory, 1);
+      let now = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const first = generateBearerTokenFromIam({ region: testRegion });
+      await firstStarted.promise;
+      now = 1;
+      const second = generateBearerTokenFromIam({ region: testRegion });
+      await secondStarted.promise;
       const [pendingFailure, pendingSuccess] =
         failureOrder === "older" ? [first, second] : [second, first];
 
-      resolveSuccess("recovered-token");
-      await expect(pendingSuccess).resolves.toBe("recovered-token");
-      rejectFailure(new Error("same failure"));
-      await expect(pendingFailure).resolves.toBeUndefined();
-      expect(discoveryDebugSpy).not.toHaveBeenCalled();
+      try {
+        success.resolve("recovered-token");
+        await expect(pendingSuccess).resolves.toBe("recovered-token");
+        failure.reject(new Error("same failure"));
+        await expect(pendingFailure).resolves.toBeUndefined();
+        expect(discoveryDebugSpy).not.toHaveBeenCalled();
 
-      await generateToken(tokenProviderFactory, 7_200_001);
-      expect(discoveryDebugSpy).toHaveBeenCalledOnce();
-      expect(discoveryDebugSpy).toHaveBeenCalledWith("Mantle IAM token generation unavailable", {
-        region: testRegion,
-        error: "same failure",
-      });
+        now = 7_200_001;
+        await generateBearerTokenFromIam({ region: testRegion });
+        expect(discoveryDebugSpy).toHaveBeenCalledOnce();
+        expect(discoveryDebugSpy).toHaveBeenCalledWith("Mantle IAM token generation unavailable", {
+          region: testRegion,
+          error: "same failure",
+        });
+      } finally {
+        success.resolve("recovered-token");
+        failure.reject(new Error("same failure"));
+        await Promise.allSettled([first, second]);
+      }
     },
   );
 
@@ -254,7 +318,7 @@ describe("bedrock mantle discovery", () => {
     });
 
     await expect(
-      resolveImplicitMantleProvider({
+      resolveImplicitWithDependencies({
         env: { AWS_REGION: "us-east-1" },
         pluginConfig: { discovery: { enabled: false } },
         tokenProviderFactory,
@@ -262,23 +326,6 @@ describe("bedrock mantle discovery", () => {
     ).resolves.toBeNull();
 
     expect(tokenProviderFactory).not.toHaveBeenCalled();
-  });
-
-  it("getCachedIamToken returns cached token when valid", async () => {
-    const tokenProvider = vi.fn(async () => "bedrock-cached-token"); // pragma: allowlist secret
-    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
-
-    await generateToken(tokenProviderFactory);
-
-    expect(getCachedIamToken(testRegion)).toBe("bedrock-cached-token");
-  });
-
-  it("getCachedIamToken returns undefined when cache is expired", async () => {
-    const tokenProvider = vi.fn(async () => "bedrock-expired-token"); // pragma: allowlist secret
-    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
-
-    await generateToken(tokenProviderFactory, 1000);
-    expect(getCachedIamToken(testRegion)).toBeUndefined();
   });
 
   it("does not cache generated IAM tokens when ttl expiry overflows", async () => {
@@ -291,7 +338,6 @@ describe("bedrock mantle discovery", () => {
     await expect(generateToken(tokenProviderFactory, 8_640_000_000_000_000)).resolves.toBe(
       "bedrock-overflow-token-1",
     );
-    expect(getCachedIamToken(testRegion)).toBeUndefined();
 
     await expect(generateToken(tokenProviderFactory, 8_640_000_000_000_000)).resolves.toBe(
       "bedrock-overflow-token-2",
@@ -485,10 +531,10 @@ describe("bedrock mantle discovery", () => {
         fetchFn: mockFetch,
         now: () => now,
       };
-      await expect(discoverMantleModels(params)).rejects.toThrow(
+      await expect(discoverWithDependencies(params)).rejects.toThrow(
         failure === "network" ? "ECONNREFUSED" : undefined,
       );
-      await expect(discoverMantleModels(params)).resolves.toMatchObject([
+      await expect(discoverWithDependencies(params)).resolves.toMatchObject([
         { id: "openai.gpt-oss-120b" },
       ]);
       expect(mockFetch).toHaveBeenCalledTimes(3);
@@ -507,7 +553,7 @@ describe("bedrock mantle discovery", () => {
       [`${testRegion}-other`, "second-token", "second-region"],
     ] as const) {
       await expect(
-        discoverMantleModels({ region, bearerToken, fetchFn: mockFetch }),
+        discoverWithDependencies({ region, bearerToken, fetchFn: mockFetch }),
       ).resolves.toMatchObject([{ id }]);
     }
     expect(mockFetch).toHaveBeenCalledTimes(3);
@@ -529,8 +575,8 @@ describe("bedrock mantle discovery", () => {
         fetchFn,
         tokenProviderFactory,
       };
-      const first = await resolveImplicitMantleProvider(params);
-      const second = await resolveImplicitMantleProvider(params);
+      const first = await resolveImplicitWithDependencies(params);
+      const second = await resolveImplicitWithDependencies(params);
       if (discoveryMode === "strict") {
         expect(first).toMatchObject({ models: [] });
         expect(second).toMatchObject({ models: [] });
@@ -549,16 +595,18 @@ describe("bedrock mantle discovery", () => {
       .mockResolvedValueOnce(modelDiscoveryResponse({ data: [{ id: "public-model" }] }))
       .mockRejectedValue(new Error("offline"));
     const params = { region: testRegion, bearerToken: "first", fetchFn };
-    const first = await discoverMantleModels({ ...params, now: () => 1000 });
-    await expect(discoverMantleModels({ ...params, now: () => 7201000 })).resolves.toEqual(first);
+    const first = await discoverWithDependencies({ ...params, now: () => 1000 });
+    await expect(discoverWithDependencies({ ...params, now: () => 7201000 })).resolves.toEqual(
+      first,
+    );
     await expect(
-      discoverMantleModels({ ...params, discoveryMode: "strict", now: () => 7201000 }),
+      discoverWithDependencies({ ...params, discoveryMode: "strict", now: () => 7201000 }),
     ).rejects.toThrow("offline");
     await expect(
-      discoverMantleModels({ ...params, bearerToken: "second", now: () => 7201000 }),
+      discoverWithDependencies({ ...params, bearerToken: "second", now: () => 7201000 }),
     ).resolves.toEqual([]);
     await expect(
-      resolveImplicitMantleProvider({
+      resolveImplicitWithDependencies({
         env: { AWS_REGION: "us-east-2", AWS_BEARER_TOKEN_BEDROCK: "public-implicit-failure" },
         fetchFn,
       }),
@@ -575,7 +623,7 @@ describe("bedrock mantle discovery", () => {
       }),
     );
 
-    const provider = await resolveImplicitMantleProvider({
+    const provider = await resolveImplicitWithDependencies({
       env: {
         AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
         AWS_REGION: "ap-northeast-1",
@@ -645,7 +693,7 @@ describe("bedrock mantle discovery", () => {
           data: [{ id: "anthropic.claude-sonnet-5", object: "model" }],
         }),
       );
-      const provider = await resolveImplicitMantleProvider({
+      const provider = await resolveImplicitWithDependencies({
         env: {
           AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
           AWS_REGION: "ap-south-1",
@@ -668,7 +716,7 @@ describe("bedrock mantle discovery", () => {
 
     for (const region of ["us-east-1", "us-east-1", "us-west-2"]) {
       await expect(
-        resolveImplicitMantleProvider({
+        resolveImplicitWithDependencies({
           env: { AWS_REGION: region },
           tokenProviderFactory,
         }),
@@ -691,7 +739,7 @@ describe("bedrock mantle discovery", () => {
       }),
     );
 
-    const provider = await resolveImplicitMantleProvider({
+    const provider = await resolveImplicitWithDependencies({
       env: {
         AWS_PROFILE: "default",
         AWS_REGION: "ap-southeast-3",
@@ -717,7 +765,7 @@ describe("bedrock mantle discovery", () => {
 
     await generateToken(tokenProviderFactory, 1000);
 
-    const resolved = await resolveMantleRuntimeBearerToken({
+    const resolved = await resolveRuntimeWithDependencies({
       apiKey: MANTLE_IAM_TOKEN_MARKER,
       env: {
         AWS_REGION: testRegion,
@@ -734,7 +782,7 @@ describe("bedrock mantle discovery", () => {
     const tokenProvider = vi.fn(async () => "bedrock-api-key-fresh"); // pragma: allowlist secret
     const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
 
-    const resolved = await resolveMantleRuntimeBearerToken({
+    const resolved = await resolveRuntimeWithDependencies({
       apiKey: MANTLE_IAM_TOKEN_MARKER,
       env: {
         AWS_REGION: testRegion,
@@ -751,7 +799,7 @@ describe("bedrock mantle discovery", () => {
     const tokenProvider = vi.fn(async () => "bedrock-api-key-invalid-clock"); // pragma: allowlist secret
     const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
 
-    const resolved = await resolveMantleRuntimeBearerToken({
+    const resolved = await resolveRuntimeWithDependencies({
       apiKey: MANTLE_IAM_TOKEN_MARKER,
       env: {
         AWS_REGION: testRegion,
@@ -766,7 +814,7 @@ describe("bedrock mantle discovery", () => {
   });
 
   it("returns null for unsupported regions", async () => {
-    const provider = await resolveImplicitMantleProvider({
+    const provider = await resolveImplicitWithDependencies({
       env: {
         AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
         AWS_REGION: "af-south-1",
@@ -783,7 +831,7 @@ describe("bedrock mantle discovery", () => {
         modelDiscoveryResponse({ data: [{ id: "openai.gpt-oss-120b", object: "model" }] }),
       );
 
-    const provider = await resolveImplicitMantleProvider({
+    const provider = await resolveImplicitWithDependencies({
       env: {
         AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
       },
@@ -811,7 +859,7 @@ describe("bedrock mantle discovery", () => {
         modelDiscoveryResponse({ data: [{ id: "openai.gpt-oss-120b", object: "model" }] }),
       );
 
-    const provider = await resolveImplicitMantleProvider({
+    const provider = await resolveImplicitWithDependencies({
       env: {
         AWS_BEARER_TOKEN_BEDROCK: MANTLE_IAM_TOKEN_MARKER,
         ...env,

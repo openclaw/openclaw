@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
@@ -78,15 +78,17 @@ function serveProfile(
   res: ReturnType<typeof response>,
   fetchImpl: typeof fetch,
 ) {
+  vi.stubGlobal("fetch", fetchImpl);
   return handleUserProfileAvatarHttpRequest(
     request("/ignored-by-handler"),
     res.response,
     `/api/users/${profileId}/avatar`,
-    { auth: {} as never, fetchImpl },
+    { auth: {} as never },
   );
 }
 
 describe("profile avatar HTTP endpoint", () => {
+  afterEach(() => vi.unstubAllGlobals());
   beforeEach(() => {
     authorizeControlUiReadRequestOrReply.mockReset();
     avatarFixture.mockReset();
@@ -260,10 +262,10 @@ describe("profile avatar HTTP endpoint", () => {
     resolveHostAccountAvatar.mockResolvedValue(hostAvatar);
     const pathname = "/api/users/gateway-owner/avatar";
     const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetchImpl);
     const before = response();
     await handleUserProfileAvatarHttpRequest(request(pathname), before.response, pathname, {
       auth: {} as never,
-      fetchImpl,
     });
     expect(before.response.statusCode).toBe(404);
     expect(resolveHostAccountAvatar).not.toHaveBeenCalled();
@@ -272,7 +274,6 @@ describe("profile avatar HTTP endpoint", () => {
     const after = response();
     await handleUserProfileAvatarHttpRequest(request(pathname), after.response, pathname, {
       auth: {} as never,
-      fetchImpl,
     });
     expect(after.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
     expect(after.end).toHaveBeenCalledWith(hostAvatar.bytes);
