@@ -367,7 +367,7 @@ export function createOpenClawTools(
             : createComputerTool({
                 ...options,
                 transport: options?.computerTransport,
-                // Run ids expire before later assistant runs can reuse a provider call id.
+                // The tool combines this run scope with the assistant turn and provider call id.
                 idempotencyScope: options?.runId,
                 contextEpoch: options?.computerContextEpoch,
               }),

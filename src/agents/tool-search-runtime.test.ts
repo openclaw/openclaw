@@ -21,6 +21,7 @@ import {
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import {
@@ -441,6 +442,29 @@ describe("Tool Search dispatcher argument preparation", () => {
       });
       expect(findToolExecutionEnd(events)?.errorKind).toBeUndefined();
     });
+  });
+});
+
+describe("Tool Search invocation identity", () => {
+  it("preserves replay ids across runtimes while separating assistant responses", async () => {
+    const target = fakeTool("read_record");
+    const { catalogRef, config, runtime: unscoped } = createRuntime([target]);
+    const ctx = { catalogRef, runId: "run-1", sessionId: "session-1" };
+    const parentToolCallId = "exec_0";
+    const code = "return await read_record({});";
+    for (const responseId of ["response-1", "response-1", "response-2"]) {
+      const replayId = codeModeReplayIdForToolCall(ctx, parentToolCallId, code, responseId);
+      const runtime = new ToolSearchRuntime(ctx, resolveToolSearchConfig(config), {
+        callIdScope: replayId.replace(/^cm_replay_/, ""),
+      });
+      await runtime.call("read_record", {}, { parentToolCallId });
+    }
+    await unscoped.call("read_record", {}, { parentToolCallId });
+    const [first, replay, next, legacy] = vi.mocked(target.execute).mock.calls.map(([id]) => id);
+    expect(first).toMatch(/^tool_call:exec_0:[a-f0-9]{24}:read_record:1$/);
+    expect(replay).toBe(first);
+    expect(next).not.toBe(first);
+    expect(legacy).toBe("tool_call:exec_0:read_record:1");
   });
 });
 

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   ComputerActParams,
@@ -84,19 +85,24 @@ function computerActIdempotencyKey(params: {
     // scope and provider/fallback id, avoid collapsing unrelated actions.
     return crypto.randomUUID();
   }
-  const parts = [stableScope, stableCallId, COMPUTER_ACT_COMMAND];
+  const parts = [
+    stableScope,
+    getAgentToolAssistantTurnId() ?? "",
+    stableCallId,
+    COMPUTER_ACT_COMMAND,
+  ];
   if (params.purpose) {
     parts.push(params.purpose);
   }
   const digest = sha256Hex(JSON.stringify(parts));
   // The automatic read shares a tool-call id with input, but must never replay its result.
   if (params.purpose) {
-    return `computer.observation:v1:${digest}`;
+    return `computer.observation:v2:${digest}`;
   }
-  // `v1` versions this key's composition (scope + call id + command), not the
+  // `v2` versions this key's composition (scope + assistant turn + call id + command), not the
   // `computer.act` wire contract. Changing what goes into the digest needs a
   // new prefix so in-flight keys from an older node cannot collide.
-  return `computer.act:v1:${digest}`;
+  return `computer.act:v2:${digest}`;
 }
 
 function gatewayRequestDetails(err: unknown): Record<string, unknown> | undefined {
