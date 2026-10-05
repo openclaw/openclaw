@@ -420,6 +420,15 @@ when the current process cannot decide environment-dependent eligibility. Omit
 the field only when the contract is not implemented. The host owns
 prior-operation detection, pin creation, and completion; the normalizer returns
 eligibility without opening listeners or creating implicit endpoints.
+
+Retained host config Doctor artifacts also expose `normalizeHistoricalWebhookConfig`.
+It reuses the listener-only migration and returns its config changes, warnings,
+and `historicalWebhookAccountIds`, without applying unrelated compatibility repairs.
+During an update rehearsal, the host can use this operation for a missing plugin
+whose installation is deferred. Selected installed or custom owners still shadow
+the host artifact, and this operation does not complete deferred plugin inspection.
+External plugins are not required to implement this host fallback.
+
 Automatic pins belong to existing accounts, including `accounts.default`, so
 accounts added later do not inherit them. Doctor backs up the config before
 persisting pins with `meta.migrations.webhookListeners`. The marker records exact

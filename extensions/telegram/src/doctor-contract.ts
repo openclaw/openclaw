@@ -132,7 +132,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   },
 ];
 
-export function normalizeCompatibilityConfig({
+export function normalizeHistoricalWebhookConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
@@ -153,7 +153,19 @@ export function normalizeCompatibilityConfig({
             resolveTelegramWebhookPathConflict(path) !== undefined
           );
         });
-  const webhook = webhookListenerMigration.normalizeCompatibilityConfig({ cfg });
+  return {
+    ...webhookListenerMigration.normalizeCompatibilityConfig({ cfg }),
+    historicalWebhookAccountIds,
+  };
+}
+
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const webhook = normalizeHistoricalWebhookConfig({ cfg });
+  const { historicalWebhookAccountIds } = webhook;
   const changes = [...webhook.changes];
   const rawEntry = asObjectRecord(
     (webhook.config.channels as Record<string, unknown> | undefined)?.telegram,
