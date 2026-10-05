@@ -126,9 +126,11 @@ import type {
   SessionTranscriptInventoryWorkerValues,
   SessionTranscriptInventoryReaders,
 } from "./session-transcript-inventory.types.js";
+import type { TranscriptPageReadResult } from "./session-transcript-page-read.types.js";
 import type { SessionTranscriptSearchResult } from "./session-transcript-search.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
+  SessionTranscriptPageReadWorkerInput,
   SessionTranscriptMatchWorkerInput,
   SessionTranscriptSearchWorkerInput,
   SessionTranscriptAnchorsWorkerInput,
@@ -346,6 +348,7 @@ type SessionArchivedEvictionCandidatesWorkerInput = Omit<
 > & { archived: ArchivedSessionEvictionQuery };
 
 export type SessionHistoryWorkerInput =
+  | SessionTranscriptPageReadWorkerInput
   | SessionStoreProjectionWorkerInput
   | { kind: "cli-process-history"; request: ChatHistoryDisplayRequest }
   | LifecycleArtifactCleanupRequest
@@ -415,6 +418,7 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
+  "transcript-page-read": { kind: "transcript-page-read"; result: TranscriptPageReadResult };
   "cli-process-history": ChatHistoryDisplayResult;
   "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
   "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
@@ -549,6 +553,10 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
+  readTranscriptPage: CancellableSessionHistoryReader<
+    SessionTranscriptPageReadWorkerInput,
+    TranscriptPageReadResult
+  >;
   readMessagePresence: CancellableSessionHistoryReader<
     SessionTranscriptMessagePresenceWorkerInput,
     boolean

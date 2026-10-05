@@ -13,8 +13,16 @@ import type {
 } from "./session-accessor.types.js";
 import type { SessionModelContextLimits } from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
+import type { TranscriptPageReadRequest } from "./session-transcript-page-read.types.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+
+export type SessionTranscriptPageReadWorkerInput = {
+  kind: "transcript-page-read";
+  database: { agentId: string; path: string };
+  request: TranscriptPageReadRequest;
+  expectedIdentity: DatabaseFileIdentity;
+};
 
 export type SessionTranscriptEventMatchRequest = {
   target: ResolvedTranscriptReadScope;

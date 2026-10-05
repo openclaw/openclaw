@@ -1,0 +1,142 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+
+const limits = { limit: 2, maxScannedEntries: 1000, maxMaterializedBytes: 16 * 1024 * 1024 };
+
+it("preserves absent coordination files through the actual read-only worker", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const writer = openOpenClawAgentDatabase({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:preservation",
+      sessionId: "preservation",
+      path: writer.path,
+      env,
+    };
+    writeSessionEntry(writer, scope.sessionKey, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "original",
+    });
+    await replaceTranscriptEvents({ ...scope, storePath: scope.path }, [
+      { type: "session", id: scope.sessionId, version: 3 },
+    ]);
+    await closeOpenClawAgentDatabaseByPathAsync(writer.path);
+    const before = await fs.readdir(path.dirname(scope.path));
+    expect(before).not.toContain(path.basename(scope.path) + "-wal");
+    expect(before).not.toContain(path.basename(scope.path) + "-shm");
+    const originalBytes = await fs.readFile(scope.path);
+    const result = await withSessionHistoryWorkerDatabase(
+      { agentId: "main", path: scope.path, env },
+      (owner) =>
+        owner.readTranscriptPage({
+          request: { scope, expectedLifecycleRevision: "original", limits },
+          expectedIdentity: readDatabasePathIdentitySync(scope.path),
+        }),
+    );
+    expect(result.ok).toBe(true);
+    expect(await fs.readFile(scope.path)).toEqual(originalBytes);
+    expect(await fs.readdir(path.dirname(scope.path))).toEqual(before);
+  });
+});
+
+it("pages through the built read-only worker and retains the original frontier across an append", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const writer = openOpenClawAgentDatabase({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:page-worker",
+      sessionId: "worker-session",
+      path: writer.path,
+      env,
+    };
+    writeSessionEntry(writer, scope.sessionKey, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "original",
+    });
+    await replaceTranscriptEvents({ ...scope, storePath: scope.path }, [
+      { type: "session", id: scope.sessionId, version: 3 },
+      { type: "message", id: "one", message: { role: "user", content: "one" } },
+      { type: "message", id: "two", message: { role: "assistant", content: "two" } },
+    ]);
+    await closeOpenClawAgentDatabaseByPathAsync(writer.path);
+    const input = {
+      request: { scope, expectedLifecycleRevision: "original", limits },
+      expectedIdentity: readDatabasePathIdentitySync(scope.path),
+    };
+    await withSessionHistoryWorkerDatabase(
+      { agentId: "main", path: scope.path, env },
+      async (owner) => {
+        const observed = observeHostDataSql();
+        const first = await owner.readTranscriptPage(input).finally(() => observed.restore());
+        expect(observed.queries).toEqual([]);
+        expect(first.ok).toBe(true);
+        if (!first.ok) {
+          throw new Error(first.error);
+        }
+        expect(first.value.records.map((entry) => entry.storedEntryId)).toEqual([
+          "worker-session",
+          "one",
+        ]);
+        const peer = new (requireNodeSqlite().DatabaseSync)(scope.path);
+        try {
+          peer
+            .prepare(
+              "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 3, ?, 1)",
+            )
+            .run(
+              scope.sessionId,
+              JSON.stringify({
+                type: "message",
+                id: "later",
+                message: { role: "user", content: "later" },
+              }),
+            );
+          const second = await owner.readTranscriptPage({
+            ...input,
+            request: { ...input.request, position: first.value.nextPosition },
+          });
+          expect(second.ok).toBe(true);
+          if (!second.ok) {
+            throw new Error(second.error);
+          }
+          expect(second.value.records.map((entry) => entry.storedEntryId)).toEqual(["two"]);
+          expect(second.value.records[0].beforePosition).toEqual(
+            first.value.records[1].afterPosition,
+          );
+          expect(second.value.nextPosition).toBeUndefined();
+          const fresh = await owner.readTranscriptPage({
+            ...input,
+            request: { ...input.request, limits: { ...limits, limit: 50 } },
+          });
+          expect(fresh.ok && fresh.value.records.map((entry) => entry.storedEntryId)).toEqual([
+            "worker-session",
+            "one",
+            "two",
+            "later",
+          ]);
+          peer.exec("UPDATE transcript_rewrite_watermarks SET generation = 'rewritten'");
+          await expect(
+            owner.readTranscriptPage({
+              ...input,
+              request: { ...input.request, position: first.value.nextPosition },
+            }),
+          ).resolves.toMatchObject({ ok: false, error: "stale_session" });
+        } finally {
+          peer.close();
+        }
+      },
+    );
+  });
+});

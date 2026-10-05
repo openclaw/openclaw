@@ -5,6 +5,11 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
+  assertTranscriptPageIdentity,
+  TranscriptPageIdentityError,
+} from "./session-transcript-page-read-identity.js";
+import type { TranscriptReadAccounting } from "./session-transcript-page-read.types.js";
+import {
   MAX_SESSION_ROW_FACTS_KEYS,
   type SessionHistoryWorkerDatabase,
   type SessionHistoryWorkerInput,
@@ -55,6 +60,51 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readTranscriptPage: async (input, signal) => {
+      const captured = {
+        request: {
+          ...input.request,
+          scope: {
+            ...input.request.scope,
+            env: captureSessionTranscriptStorageEnvironment(input.request.scope.env ?? process.env),
+          },
+          limits: { ...input.request.limits },
+          position: input.request.position && { ...input.request.position },
+        },
+        expectedIdentity: { ...input.expectedIdentity },
+      };
+      let budget: TranscriptReadAccounting = {
+        scannedEntries: 0,
+        materializedBytes: 0,
+        exhausted: false,
+        final: false,
+      };
+      const assertIdentity = () =>
+        assertTranscriptPageIdentity(captured.request.scope.path, captured.expectedIdentity);
+      try {
+        assertIdentity();
+        return await runRequest(
+          () => {
+            assertIdentity();
+            return { kind: "transcript-page-read", ...captured };
+          },
+          JSON.stringify(captured).length * 2,
+          (value) => {
+            assertResultKind(value, "transcript-page-read", "a transcript source page");
+            budget = value.result.budget;
+            assertIdentity();
+            return value.result;
+          },
+          signal,
+        );
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof TranscriptPageIdentityError ? error.reason : "read_failed",
+          budget,
+        };
+      }
+    },
     readMessagePresence: reader(
       "transcript-message-presence",
       "message presence",

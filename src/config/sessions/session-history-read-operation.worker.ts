@@ -1,6 +1,10 @@
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
+import {
+  assertTranscriptPageIdentity,
+  TranscriptPageIdentityError,
+} from "./session-transcript-page-read-identity.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionTranscriptWorkerInput,
@@ -11,6 +15,7 @@ type DurableHistoryReadOperationRequest = Extract<
   SessionTranscriptWorkerInput,
   {
     kind:
+      | "transcript-page-read"
       | "transcript-match"
       | "transcript-search"
       | "branch-summaries"
@@ -41,6 +46,7 @@ export function isSessionHistoryReadOperation(
   request: SessionTranscriptWorkerInput,
 ): request is DurableHistoryReadOperationRequest {
   switch (request.kind) {
+    case "transcript-page-read":
     case "transcript-match":
     case "transcript-search":
     case "branch-summaries":
@@ -76,6 +82,7 @@ export async function prepareSessionHistoryReadOperation(
     if (
       "expectedIdentity" in request &&
       request.expectedIdentity &&
+      request.kind !== "transcript-page-read" &&
       request.kind !== "transcript-anchors" &&
       request.kind !== "context-messages"
     ) {
@@ -94,6 +101,44 @@ async function prepareHistoryRead(
   retainedDatabase?: OpenClawAgentReadOnlyDatabase,
 ): Promise<() => SessionTranscriptWorkerValues[SessionHistoryReadOperationRequest["kind"]]> {
   switch (request.kind) {
+    case "transcript-page-read": {
+      const [
+        { withOpenClawAgentDatabaseReadOnly },
+        { createTranscriptReadMeter, readTranscriptPageInDatabase },
+      ] = await Promise.all([
+        import("../../state/openclaw-agent-db-readonly.js"),
+        import("./session-transcript-page-read.kernel.js"),
+      ]);
+      const meter = createTranscriptReadMeter(request.request.limits);
+      return () => {
+        const fail = (error: "missing" | "unsupported" | "stale_session" | "forbidden") => ({
+          kind: request.kind,
+          result: { ok: false as const, error, budget: meter.snapshot(true) },
+        });
+        if (
+          request.request.scope.agentId !== request.database.agentId ||
+          request.request.scope.path !== request.database.path
+        ) {
+          return fail("forbidden");
+        }
+        try {
+          assertTranscriptPageIdentity(request.database.path, request.expectedIdentity);
+          const read = withOpenClawAgentDatabaseReadOnly(
+            (database) => readTranscriptPageInDatabase(database, request.request, meter),
+            { ...request.database, env: request.request.scope.env },
+          );
+          assertTranscriptPageIdentity(request.database.path, request.expectedIdentity);
+          return read.found
+            ? { kind: request.kind, result: read.value }
+            : fail(read.reason === "database-missing" ? "missing" : "unsupported");
+        } catch (error) {
+          if (error instanceof TranscriptPageIdentityError) {
+            return fail(error.reason);
+          }
+          throw error;
+        }
+      };
+    }
     case "transcript-anchors": {
       const [
         { withOpenClawAgentDatabaseReadOnly },
