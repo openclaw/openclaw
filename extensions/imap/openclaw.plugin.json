@@ -25,6 +25,9 @@
       "help": "Email addresses or @domain entries permitted to trigger the reader agent."
     },
     "accounts.*.agentId": { "label": "Restricted reader agent" },
+    "accounts.*.delivery.channel": { "label": "Delivery channel", "advanced": true },
+    "accounts.*.delivery.to": { "label": "Delivery target", "advanced": true },
+    "accounts.*.delivery.accountId": { "label": "Delivery account", "advanced": true },
     "accounts.*.senderAuth.min": { "label": "Minimum sender authentication", "advanced": true }
   },
   "configGroups": [
@@ -78,6 +81,16 @@
           "pollSeconds": { "type": "integer", "minimum": 15, "default": 60 }
         }
       },
+      "delivery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "channel": { "type": "string", "minLength": 1, "pattern": ".*\\S.*" },
+          "to": { "type": "string", "minLength": 1, "pattern": ".*\\S.*" },
+          "accountId": { "type": "string", "minLength": 1, "pattern": ".*\\S.*" }
+        },
+        "required": ["channel", "to"]
+      },
       "account": {
         "type": "object",
         "additionalProperties": false,
@@ -94,6 +107,7 @@
           "addressTokens": { "type": "array", "items": { "$ref": "#/$defs/addressToken" } },
           "agentId": { "type": "string", "minLength": 1 },
           "deliver": { "type": "boolean", "default": false },
+          "delivery": { "$ref": "#/$defs/delivery" },
           "includeBody": { "type": "boolean", "default": true },
           "maxBytes": { "type": "integer", "minimum": 256, "maximum": 1048576, "default": 20000 },
           "model": { "type": "string", "minLength": 1 },

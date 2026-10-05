@@ -61,3 +61,84 @@ it("accepts all SDK authentication strengths and rejects an unknown config minim
     }
   }
 });
+
+it.each([
+  { deliver: true, delivery: { channel: "telegram", to: "chat-123" }, valid: true },
+  { deliver: true, delivery: { channel: "telegram" }, valid: false },
+  { deliver: true, delivery: { to: "chat-123" }, valid: false },
+  { deliver: true, delivery: { channel: " ", to: "chat-123" }, valid: false },
+  { deliver: true, delivery: undefined, valid: true },
+  { deliver: false, delivery: undefined, valid: true },
+])("validates delivery route requirements: $delivery", ({ deliver, delivery, valid }) => {
+  const manifest = JSON.parse(
+    fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  ) as { configSchema: Record<string, unknown> };
+  const value = {
+    accounts: {
+      inbox: {
+        host: "imap.example.com",
+        user: "reader@example.com",
+        password: "fixture-password",
+        agentId: "mail_reader",
+        deliver,
+        ...(delivery ? { delivery } : {}),
+      },
+    },
+  };
+
+  expect(
+    validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "imap.manifest.config-schema.delivery",
+      value,
+    }).ok,
+  ).toBe(valid);
+  if (valid) {
+    expect(resolveImapConfig(value).accounts.inbox?.delivery).toEqual(delivery);
+  }
+});
+
+it("preserves shipped deliver:true accounts without an explicit route", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  ) as { configSchema: Record<string, unknown> };
+  const value = {
+    accounts: {
+      inbox: {
+        host: "imap.example.com",
+        user: "reader@example.com",
+        password: "fixture-password",
+        agentId: "mail_reader",
+        deliver: true,
+      },
+    },
+  };
+
+  expect(
+    validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "imap.manifest.config-schema.legacy-deliver",
+      value,
+    }).ok,
+  ).toBe(true);
+  const resolved = resolveImapConfig(value).accounts.inbox;
+  expect(resolved?.deliver).toBe(true);
+  expect(resolved?.delivery).toBeUndefined();
+});
+
+it("rejects a partial delivery route when delivery is set", () => {
+  expect(() =>
+    resolveImapConfig({
+      accounts: {
+        inbox: {
+          host: "imap.example.com",
+          user: "reader@example.com",
+          password: "fixture-password",
+          agentId: "mail_reader",
+          deliver: true,
+          delivery: { channel: " ", to: "chat-123" },
+        },
+      },
+    }),
+  ).toThrow("requires both delivery.channel and delivery.to when delivery is set");
+});
