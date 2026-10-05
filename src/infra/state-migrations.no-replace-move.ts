@@ -11,6 +11,10 @@ import {
 } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
 
+// fs-safe's NATIVE_NOREPLACE_UNSUPPORTED (not exported): Linux renameat2 rejects
+// RENAME_NOREPLACE with this native status instead of the raw errno.
+const NATIVE_NOREPLACE_UNSUPPORTED = "FS_SAFE_INTERNAL_RENAME_NOREPLACE_UNSUPPORTED";
+
 type MigrationMoveRoot = Pick<
   Root,
   "rootReal" | "defaults" | "move" | "resolve" | "stat" | "open" | "remove" | "exists"
@@ -96,7 +100,7 @@ export async function moveLegacyMigrationFileNoReplace(
       (error.cause !== undefined &&
         // fs-safe reports loader failures before native admission or dispatch.
         error.message !== "native fs-safe helper is unavailable" &&
-        !["EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"].some((code) =>
+        ![NATIVE_NOREPLACE_UNSUPPORTED, "EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"].some((code) =>
           hasErrnoCode(error.cause, code),
         ))
     ) {

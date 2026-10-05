@@ -51,7 +51,8 @@ async function auditMoveFault(audit: AuditMigrationFixture, code = "EINVAL") {
 }
 
 describe("legacy core audit log migration", () => {
-  it.each(["EINVAL", "ENOSYS", "EOPNOTSUPP"])(
+  // Linux native renameat2 reports unsupported flags as the dedicated status, never a raw errno.
+  it.each(["EINVAL", "ENOSYS", "EOPNOTSUPP", "FS_SAFE_INTERNAL_RENAME_NOREPLACE_UNSUPPORTED"])(
     "preserves open-descriptor appends when native no-replace rename returns %s",
     async (code) => {
       await withAuditMigrationFixture(async (audit) => {
