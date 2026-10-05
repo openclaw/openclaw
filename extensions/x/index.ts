@@ -2,7 +2,7 @@ import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
-import type { registerXAllowlistMethods } from "./src/admin.js";
+import type { registerXAllowlistMethods } from "./admin-api.js";
 
 export default defineBundledChannelEntry({
   id: "x",
