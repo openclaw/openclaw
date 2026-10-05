@@ -206,9 +206,7 @@ describe("automations output contract", () => {
       jobs: [freezeJsonSnapshot(structuredClone(compactSourceJob))],
       snapshotRevision: "inventory-revision",
     };
-    const list = JSON.parse(
-      JSON.stringify({ ...source, jobs: projectCronListJobs(cron, source, true) }),
-    );
+    const list = { ...source, jobs: projectCronListJobs(cron, source, true) };
     const h = createCodeModeHarness();
     const replies: Record<string, unknown> = {
       "cron.list": list,

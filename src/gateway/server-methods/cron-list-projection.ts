@@ -45,7 +45,7 @@ function prepareJobs(jobs: CronJob[], defaultAgentId: string | undefined, compac
 }
 
 function compactCronListJob(job: CronJob): CronCompactJob {
-  return {
+  const compact: CronCompactJob = {
     id: job.id,
     name: job.name,
     agentId: job.agentId,
@@ -77,4 +77,11 @@ function compactCronListJob(job: CronJob): CronCompactJob {
     lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
     lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
   };
+  // Direct RPC consumers need the same optional-key omission as serialized responses.
+  for (const [key, value] of Object.entries(compact)) {
+    if (value === undefined) {
+      Reflect.deleteProperty(compact, key);
+    }
+  }
+  return compact;
 }
