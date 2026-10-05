@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "../infra/plugin-approvals.js";
+import { resolveApnsRelayConfigFromEnv } from "../infra/push-apns.relay.js";
 /**
  * Tests iOS push notification dispatch for exec approval requests.
  */
@@ -383,6 +384,41 @@ describe("createExecApprovalIosPushDelivery", () => {
     expect(listDevicePairingMock).not.toHaveBeenCalled();
     expect(loadApnsRegistrationsMock).toHaveBeenCalledWith(["ios-device-1"]);
     expect(sendApnsExecApprovalResolvedWakeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends requests and cleanup to devices on both hosted relay origins", async () => {
+    const productionUrl = "https://ios-push-relay.openclaw.ai";
+    const sandboxUrl = "https://ios-push-relay-sandbox.openclaw.ai";
+    mockPairedIosOperators(
+      pairedIosOperator({
+        deviceId: "ios-production",
+        scopes: ["operator.approvals", "operator.read"],
+      }),
+      pairedIosOperator({
+        deviceId: "ios-sandbox",
+        scopes: ["operator.approvals", "operator.read"],
+      }),
+    );
+    loadApnsRegistrationMock.mockImplementation(async (nodeId: string) => ({
+      ...relayApnsRegistration(nodeId),
+      relayOrigin: nodeId === "ios-production" ? productionUrl : sandboxUrl,
+      environment: nodeId === "ios-production" ? "production" : "sandbox",
+    }));
+    resolveApnsRelayConfigFromEnvMock.mockImplementation(
+      (_env: unknown, _gateway: unknown, options: { registrationRelayOrigin: string }) =>
+        resolveApnsRelayConfigFromEnv({}, {}, options),
+    );
+
+    const delivery = createExecApprovalIosPushDelivery({ log: {} });
+    expect(await delivery.handleRequested(approvalRequest("approval-mixed-relays"))).toBe(true);
+    await delivery.handleResolved(approvalResolved("approval-mixed-relays"));
+
+    for (const send of [sendApnsExecApprovalAlertMock, sendApnsExecApprovalResolvedWakeMock]) {
+      expect(send.mock.calls.map(([push]) => [push.nodeId, push.relayConfig?.baseUrl])).toEqual([
+        ["ios-production", productionUrl],
+        ["ios-sandbox", sandboxUrl],
+      ]);
+    }
   });
 
   describe("createPluginApprovalIosPushDelivery", () => {

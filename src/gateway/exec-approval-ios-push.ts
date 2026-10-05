@@ -45,12 +45,12 @@ type ApprovalPushTarget = {
 type DeliveryTarget = {
   nodeId: string;
   registration: ApnsRegistration;
+  relayConfig?: ApnsRelayConfig;
 };
 
 type DeliveryPlan = {
   targets: DeliveryTarget[];
   directAuth?: ApnsAuthConfig;
-  relayConfig?: ApnsRelayConfig;
 };
 
 type ApprovalDeliveryState = {
@@ -84,7 +84,11 @@ function isIosPlatform(platform: string | undefined): boolean {
 function approvalPushTransport(target: DeliveryTarget, plan: DeliveryPlan) {
   return target.registration.transport === "direct"
     ? { nodeId: target.nodeId, registration: target.registration, auth: plan.directAuth! }
-    : { nodeId: target.nodeId, registration: target.registration, relayConfig: plan.relayConfig! };
+    : {
+        nodeId: target.nodeId,
+        registration: target.registration,
+        relayConfig: target.relayConfig!,
+      };
 }
 
 async function resolvePairedTargets(
@@ -130,8 +134,6 @@ async function resolveDeliveryPlan(params: {
   }
 
   const needsDirect = targets.some((target) => target.registration.transport === "direct");
-  const needsRelay = targets.some((target) => target.registration.transport === "relay");
-
   let directAuth: ApnsAuthConfig | undefined;
   if (needsDirect) {
     const auth = await resolveApnsAuthConfigFromEnv(process.env);
@@ -144,37 +146,28 @@ async function resolveDeliveryPlan(params: {
     }
   }
 
-  const relayConfigByNodeId = new Map<string, ApnsRelayConfig>();
-  if (needsRelay) {
-    for (const target of targets) {
-      if (target.registration.transport !== "relay") {
-        continue;
+  const eligibleTargets: DeliveryTarget[] = [];
+  for (const target of targets) {
+    if (target.registration.transport === "direct") {
+      if (directAuth) {
+        eligibleTargets.push(target);
       }
-      const relay = resolveApnsRelayConfigFromEnv(process.env, getRuntimeConfig().gateway, {
-        registrationRelayOrigin: target.registration.relayOrigin,
-      });
-      if (relay.ok) {
-        relayConfigByNodeId.set(target.nodeId, relay.value);
-      } else {
-        params.log.warn?.(
-          `${params.approvalKind} approvals: iOS relay APNs config unavailable: ${relay.error}`,
-        );
-      }
+      continue;
+    }
+    const relay = resolveApnsRelayConfigFromEnv(process.env, getRuntimeConfig().gateway, {
+      registrationRelayOrigin: target.registration.relayOrigin,
+    });
+    if (relay.ok) {
+      eligibleTargets.push({ ...target, relayConfig: relay.value });
+    } else {
+      params.log.warn?.(
+        `${params.approvalKind} approvals: iOS relay APNs config unavailable: ${relay.error}`,
+      );
     }
   }
-  const relayConfig = relayConfigByNodeId.values().next().value;
-
-  // Relay sends are grouped by one base URL because the wake helpers accept a
-  // single relay config; targets on other relay origins are skipped this round.
   return {
-    targets: targets.filter((target) =>
-      target.registration.transport === "direct"
-        ? Boolean(directAuth)
-        : relayConfigByNodeId.has(target.nodeId) &&
-          relayConfigByNodeId.get(target.nodeId)?.baseUrl === relayConfig?.baseUrl,
-    ),
+    targets: eligibleTargets,
     directAuth,
-    relayConfig,
   };
 }
 
