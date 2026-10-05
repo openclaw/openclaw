@@ -1849,6 +1849,57 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
   };
 }
 
+function failedUpdateContext(text, label) {
+  if (label !== "update.json" && label !== "recovery-update.json") {
+    return "";
+  }
+  try {
+    // Match the warning-prefixed updater JSON accepted by assertions.readUpdateJson.
+    const result = JSON.parse(text.slice(text.indexOf("{")));
+    if (result?.status !== "error" || !Array.isArray(result.steps)) {
+      return "";
+    }
+    const index = result.steps.findIndex(
+      (step) =>
+        step &&
+        typeof step.name === "string" &&
+        !step.advisory &&
+        // Serialized UpdateStepResult follows infra/update-run-step.isFailedUpdateStep:
+        // physical process success does not erase a failed inspection.
+        (step.exitCode !== 0 ||
+          Boolean(step.failureFacts?.length || step.killed || step.outputLimitExceeded) ||
+          (step.termination !== undefined && step.termination !== "exit")),
+    );
+    if (index < 0) {
+      return "";
+    }
+    const step = result.steps[index];
+    return [
+      `Reported failing update step ${index + 1} of ${result.steps.length}: ${JSON.stringify(step.name)}`,
+      JSON.stringify(
+        {
+          exitCode: step.exitCode,
+          signal: step.signal,
+          termination: step.termination,
+          killed: step.killed,
+          outputLimitExceeded: step.outputLimitExceeded,
+          durationMs: step.durationMs,
+          failureFacts: step.failureFacts,
+        },
+        null,
+        2,
+      ),
+      typeof step.stderrTail === "string" ? `stderrTail:\n${step.stderrTail}` : "",
+      typeof step.stdoutTail === "string" ? `stdoutTail:\n${step.stdoutTail}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  } catch {
+    // Incomplete or non-JSON output keeps the existing bounded log representation.
+    return "";
+  }
+}
+
 export function publishDiagnostics(
   artifactRoot,
   destination,
@@ -1920,7 +1971,14 @@ export function publishDiagnostics(
     if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
       throw new Error();
     }
-    const redacted = redactSensitiveText(text, { mode: "tools" });
+    let redacted = redactSensitiveText(text, { mode: "tools" });
+    if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
+      const context = failedUpdateContext(text, label);
+      if (context) {
+        // Keep execution order explicit; this is a diagnostic prelude, not reordered steps.
+        redacted = `${redactSensitiveText(context, { mode: "tools" })}\n\nCaptured update output (original order):\n${redacted}`;
+      }
+    }
     // Keep the latest startup/native events after redacting the whole input.
     const tail =
       label === "missing-load-path/baseline-gateway.log" ||
