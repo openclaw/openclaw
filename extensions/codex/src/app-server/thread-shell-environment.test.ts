@@ -2,11 +2,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
-import { buildThreadStartParams, buildThreadResumeParams } from "./thread-lifecycle.js";
 import {
   createThreadRequestAppServerOptions as createAppServerOptions,
   createThreadRequestAttemptParams as createAttemptParams,
 } from "./thread-lifecycle.test-fixtures.js";
+import { buildThreadStartParams, buildThreadResumeParams } from "./thread-requests.js";
 import {
   applyCodexManagedShellEnvironment,
   mergeCodexNativeShellEnvironment,

@@ -27,6 +27,7 @@ import type { OpenClawStateReadOutcome } from "../state/openclaw-state-read.type
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   classifyGatewayOwnerProcessNamespace,
+  describeGatewayLockHolder,
   GATEWAY_OWNER_HEARTBEAT_MS,
   GatewayLockNamespaceError,
   readGatewayLockProcessNamespace,
@@ -69,12 +70,14 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
     return previous;
   }
   if (namespace === "unknown") {
-    throw new GatewayLockNamespaceError();
+    throw new GatewayLockNamespaceError(previous);
   }
   if (previous.expired && previous.state !== "live") {
     return previous;
   }
-  throw new Error("Another Gateway owner lease is still active for this state directory");
+  throw new Error(
+    `Another Gateway owner lease is still active for this state directory: ${describeGatewayLockHolder(previous, undefined, previous.state === "live" ? "live" : "unknown")}`,
+  );
 }
 
 /** Physical custody alone must not bypass a fresh, unverifiable lease during maintenance. */

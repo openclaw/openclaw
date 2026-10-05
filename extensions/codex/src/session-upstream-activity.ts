@@ -57,7 +57,6 @@ function upstreamConnectionFingerprint(probe: SessionUpstreamProbe): string | un
 function classifyCodexUpstreamTurns(params: {
   probe: SessionUpstreamProbe;
   turns: CodexTurn[];
-  now?: number;
 }): SessionUpstreamActivity | undefined {
   const marker = readMarker(params.probe);
   if (!marker) {
@@ -99,7 +98,7 @@ function classifyCodexUpstreamTurns(params: {
         occurredAt =
           typeof timestampSeconds === "number" && Number.isFinite(timestampSeconds)
             ? timestampSeconds * 1000
-            : (params.now ?? Date.now());
+            : Date.now();
       }
     }
   }
@@ -109,9 +108,7 @@ function classifyCodexUpstreamTurns(params: {
     sessionKey: params.probe.sessionKey,
     humanTurns,
     nextMarker: { turnId: newest.id, userMessageCount: newestUserMessageCount },
-    ...(humanTurns > 0
-      ? { occurredAt: occurredAt ?? params.now ?? Date.now(), dedupeId: activityId }
-      : {}),
+    ...(humanTurns > 0 ? { occurredAt: occurredAt ?? Date.now(), dedupeId: activityId } : {}),
   };
 }
 
@@ -130,7 +127,7 @@ function normalizeUserMessageTexts(item: CodexTurn["items"][number]): string[] {
 async function checkCodexUpstreamActivity(
   probes: SessionUpstreamProbe[],
   control: CodexUpstreamControl,
-  resolveThreadId: (probe: SessionUpstreamProbe) => string = (probe) => probe.threadId,
+  resolveThreadId: (probe: SessionUpstreamProbe) => string,
 ): Promise<SessionUpstreamActivity[]> {
   return await control.withPinnedConnection(async (pinned) => {
     const activities: SessionUpstreamActivity[] = [];

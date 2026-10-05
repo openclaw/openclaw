@@ -279,7 +279,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
     content:
       attention.kind === "none"
         ? html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`
-        : renderSessionAttentionIcon(attention, true),
+        : renderSessionAttentionIcon(attention),
     running,
     queued,
     runningLabel: activeRunLabel,

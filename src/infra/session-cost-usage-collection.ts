@@ -37,6 +37,10 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveRealpathOrAbsolute } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
+import {
+  readIncognitoUsageTranscript,
+  type UsageCostIncognitoBinding,
+} from "./session-cost-usage-incognito.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
@@ -354,17 +358,31 @@ export async function resolveUsageCostTranscriptFiles(
 
 export async function* readTranscriptRecords(
   filePath: string,
+  incognito?: UsageCostIncognitoBinding,
 ): AsyncGenerator<Record<string, unknown>> {
   const marker = parseSqliteSessionFileMarker(filePath);
+  if (incognito && !marker) {
+    throw new Error("Usage actor transcript requires its captured SQLite marker");
+  }
   if (marker) {
-    const { restoreSessionColdTranscript } =
-      await import("../config/sessions/session-cold-storage.js");
-    await restoreSessionColdTranscript(marker);
-    for (const event of selectVisibleTranscriptEvents(loadTranscriptEventsSync(marker))) {
+    let events: unknown[];
+    if (incognito) {
+      events = await readIncognitoUsageTranscript(incognito, marker);
+    } else {
+      const { restoreSessionColdTranscript } =
+        await import("../config/sessions/session-cold-storage.js");
+      await restoreSessionColdTranscript(marker);
+      events = loadTranscriptEventsSync(marker);
+    }
+    for (const event of selectVisibleTranscriptEvents(events)) {
+      incognito?.actor.assertCurrent();
+      incognito?.authority.assertCurrent();
       if (isRecord(event)) {
         yield event;
       }
     }
+    incognito?.actor.assertCurrent();
+    incognito?.authority.assertCurrent();
     return;
   }
   // Durable byte-offset scans own their checkpoint reader. Diagnostic history
@@ -384,9 +402,10 @@ export async function* readTranscriptRecords(
 
 export async function* readTranscriptRecordsBestEffort(
   filePath: string,
+  incognito?: UsageCostIncognitoBinding,
 ): AsyncGenerator<Record<string, unknown>> {
   try {
-    yield* readTranscriptRecords(filePath);
+    yield* readTranscriptRecords(filePath, incognito);
   } catch (error) {
     if (parseSqliteSessionFileMarker(filePath)) {
       throw error;
@@ -400,6 +419,7 @@ export async function resolveUsageSessionSource(params: {
   sessionId?: string;
   sessionFile?: string;
   agentId: string;
+  incognito?: UsageCostIncognitoBinding;
   sessionTarget?: {
     agentId: string;
     sessionId: string;
@@ -427,6 +447,31 @@ export async function resolveUsageSessionSource(params: {
       (targetKeyAgentId && targetKeyAgentId !== agentId)
     ) {
       return undefined;
+    }
+    if (params.incognito) {
+      const { actor, authority } = params.incognito;
+      const selected = params.incognito.target;
+      if (
+        actor.agentId !== agentId ||
+        actor.path !== path.resolve(storePath) ||
+        (selected && (selected.sessionKey !== sessionKey || selected.sessionId !== targetSessionId))
+      ) {
+        throw new Error("Usage session source belongs to another actor");
+      }
+      params.incognito.retainSource?.(sessionKey);
+      const read = await actor.sessions.read(authority, { sessionKey }, signal);
+      if (read.entry && read.entry.sessionId !== targetSessionId) {
+        return undefined;
+      }
+      read.claim.assertCurrent();
+      return {
+        entry: read.entry,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId,
+          sessionId: targetSessionId,
+          storePath: actor.path,
+        }),
+      };
     }
     return withSessionEntryReadOnlyInWorker(
       { agentId, sessionKey, storePath, projection: "list" },

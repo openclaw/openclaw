@@ -139,7 +139,10 @@ export function createQueue<T>(
   return queue;
 }
 
-export function createKeyedState(onRegister?: (namespace: string, value: unknown) => void) {
+export function createKeyedState(
+  onRegister?: (namespace: string, value: unknown) => void,
+  beforeWrite?: () => Promise<void>,
+) {
   const namespaces = new Map<string, Map<string, string>>();
   return <T>({ namespace }: { namespace: string }): PluginStateKeyedStore<T> => {
     let data = namespaces.get(namespace);
@@ -153,41 +156,107 @@ export function createKeyedState(onRegister?: (namespace: string, value: unknown
       // The host store's JSON boundary is represented without sharing mutable fixture objects.
       return serialized === undefined ? undefined : (JSON.parse(serialized) as T);
     };
-    return {
-      async register(key, value, options) {
-        options?.assertCurrent?.();
-        rows.set(key, JSON.stringify(value));
-        onRegister?.(namespace, value);
-      },
-      async registerIfAbsent(key, value) {
-        if (rows.has(key)) {
-          return false;
+    const observe = (key: string) => ({
+      value: read(key),
+      comparison: JSON.stringify([namespace, key, rows.get(key)]),
+    });
+    const entries = () =>
+      [...rows].map(([key, value]) => ({ key, value: JSON.parse(value) as T, createdAt: 0 }));
+    const bind = (assertCurrent = () => {}): PluginStateKeyedStore<T, 2> => {
+      const mutate = async <Result>(write: () => Result, assertWriteCurrent?: () => void) => {
+        if (beforeWrite) {
+          await beforeWrite();
         }
-        rows.set(key, JSON.stringify(value));
-        return true;
-      },
-      async lookup(key) {
-        return read(key);
-      },
-      async consume(key) {
-        const value = read(key);
-        rows.delete(key);
-        return value;
-      },
-      async delete(key, options) {
-        options?.assertCurrent?.();
-        return rows.delete(key);
-      },
-      async entries() {
-        return [...rows].map(([key, value]) => ({
-          key,
-          value: JSON.parse(value) as T,
-          createdAt: 0,
-        }));
-      },
-      async clear() {
-        rows.clear();
-      },
+        assertCurrent();
+        assertWriteCurrent?.();
+        return write();
+      };
+      return {
+        async observe(key) {
+          assertCurrent();
+          return observe(key);
+        },
+        async compareAndApply(key, comparison, intent) {
+          return mutate(() => {
+            const current = observe(key);
+            if (comparison !== current.comparison) {
+              return { status: "conflict" as const, current };
+            }
+            if (intent.action === "keep") {
+              return { status: "unchanged" as const };
+            }
+            if (intent.action === "delete") {
+              return { status: rows.delete(key) ? ("applied" as const) : ("unchanged" as const) };
+            }
+            rows.set(key, JSON.stringify(intent.value));
+            onRegister?.(namespace, intent.value);
+            return { status: "applied" as const };
+          });
+        },
+        async register(key, value, options) {
+          await mutate(() => {
+            rows.set(key, JSON.stringify(value));
+            onRegister?.(namespace, value);
+          }, options?.assertCurrent);
+        },
+        async registerIfAbsent(key, value) {
+          return mutate(() => {
+            if (rows.has(key)) {
+              return false;
+            }
+            rows.set(key, JSON.stringify(value));
+            return true;
+          });
+        },
+        async lookup(key) {
+          assertCurrent();
+          return read(key);
+        },
+        async lookupMany(keys) {
+          assertCurrent();
+          return keys.map((key) => ({ ok: true, value: read(key) }));
+        },
+        async consume(key) {
+          return mutate(() => {
+            const value = read(key);
+            rows.delete(key);
+            return value;
+          });
+        },
+        async delete(key, options) {
+          return mutate(() => rows.delete(key), options?.assertCurrent);
+        },
+        async deleteIfEqual(key, expected) {
+          return mutate(() => read(key) === expected && rows.delete(key));
+        },
+        async entries() {
+          assertCurrent();
+          return entries();
+        },
+        async entriesInKeyRange(range) {
+          assertCurrent();
+          return entries()
+            .filter(
+              (entry) => entry.key >= range.keyStartInclusive && entry.key < range.keyEndExclusive,
+            )
+            .toSorted((a, b) => {
+              const order = a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+              return range.order === "desc" ? -order : order;
+            })
+            .slice(0, range.limit);
+        },
+        async count() {
+          assertCurrent();
+          return rows.size;
+        },
+        async moveEntriesFrom() {
+          throw new Error("Unexpected keyed-state move in X fixture");
+        },
+        async clear() {
+          await mutate(() => rows.clear());
+        },
+      };
     };
+    return { ...bind(), withCurrent: ({ assertCurrent }) => bind(assertCurrent) };
   };
 }

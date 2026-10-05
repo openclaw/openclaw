@@ -72,7 +72,7 @@ export function registerModelsCli(program: Command) {
           {
             ...opts,
             json: hasJsonOutput(opts),
-            agent: resolveModelAgentOption(command, opts),
+            agent: resolveModelAgentOption(command),
           },
           defaultRuntime,
         );
@@ -106,7 +106,7 @@ export function registerModelsCli(program: Command) {
     .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
     .action(async (opts: ModelsStatusOptions, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-        const agent = resolveModelAgentOption(command, opts);
+        const agent = resolveModelAgentOption(command);
         const { modelsStatusCommand } = await import("../commands/models/list.status-command.js");
         await modelsStatusCommand(
           {
@@ -317,7 +317,7 @@ export function registerModelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts: { provider?: string; agent?: string; json?: boolean }, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-        const agent = resolveModelAgentOption(command, opts);
+        const agent = resolveModelAgentOption(command);
         const { modelsAuthListCommand } = await import("../commands/models/auth-list.js");
         await modelsAuthListCommand({ ...opts, agent, json: hasJsonOutput(opts) }, defaultRuntime);
       });
@@ -327,9 +327,9 @@ export function registerModelsCli(program: Command) {
     .command("add")
     .description("Interactive auth helper (provider auth or paste token)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
-    .action(async (opts, command) => {
+    .action(async (_opts, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-        const agent = resolveModelAgentOption(command, opts);
+        const agent = resolveModelAgentOption(command);
         const { modelsAuthAddCommand } = await import("../commands/models/auth.js");
         await modelsAuthAddCommand({ agent }, defaultRuntime);
       });
@@ -340,9 +340,9 @@ export function registerModelsCli(program: Command) {
     .description("Test a saved sign-in and use it for this agent")
     .argument("<profileId>", "Saved sign-in id from models auth list")
     .option("--agent <id>", "Agent id (default: the only configured agent)")
-    .action(async (profileId: string, opts, command) => {
+    .action(async (profileId: string, _opts, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-        const agent = resolveModelAgentOption(command, opts);
+        const agent = resolveModelAgentOption(command);
         const { modelsAuthActivateCommand } = await import("../commands/models/auth-activate.js");
         await modelsAuthActivateCommand({ profileId, agent }, defaultRuntime);
       });
@@ -356,7 +356,7 @@ export function registerModelsCli(program: Command) {
     .option("--yes", "Skip the confirmation prompt", false)
     .action(async (profileId: string, opts: { agent?: string; yes?: boolean }, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-        const agent = resolveModelAgentOption(command, opts);
+        const agent = resolveModelAgentOption(command);
         const { modelsAuthLogoutCommand } = await import("../commands/models/auth-logout.js");
         await modelsAuthLogoutCommand({ ...opts, profileId, agent }, defaultRuntime);
       });
@@ -468,7 +468,7 @@ export function registerModelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts: ModelsAuthOrderOptions, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-        const agent = resolveModelAgentOption(command, opts);
+        const agent = resolveModelAgentOption(command);
         const { modelsAuthOrderGetCommand } = await import("../commands/models/auth-order.js");
         await modelsAuthOrderGetCommand(
           { ...opts, agent, json: hasJsonOutput(opts) },
@@ -485,7 +485,7 @@ export function registerModelsCli(program: Command) {
     .argument("<profileIds...>", "Auth profile ids (e.g. anthropic:default)")
     .action(async (profileIds: string[], opts: ModelsAuthOrderOptions, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-        const agent = resolveModelAgentOption(command, opts);
+        const agent = resolveModelAgentOption(command);
         const { modelsAuthOrderSetCommand } = await import("../commands/models/auth-order.js");
         await modelsAuthOrderSetCommand({ ...opts, agent, order: profileIds }, defaultRuntime);
       });
@@ -498,7 +498,7 @@ export function registerModelsCli(program: Command) {
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .action(async (opts: ModelsAuthOrderOptions, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-        const agent = resolveModelAgentOption(command, opts);
+        const agent = resolveModelAgentOption(command);
         const { modelsAuthOrderClearCommand } = await import("../commands/models/auth-order.js");
         await modelsAuthOrderClearCommand({ ...opts, agent }, defaultRuntime);
       });

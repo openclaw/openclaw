@@ -89,7 +89,9 @@ export function prepareEmbeddedRunTerminal(input: {
     assistant: attributionAssistant,
   });
   const responseModel = attributionAssistant?.responseModel?.trim() || reportedModelRef.model;
-  const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
+  // The turn's answer: an earlier completed answer the terminal message kept, else the terminal.
+  const answerAssistant = attempt.keptAnswer?.assistant ?? terminalAssistant;
+  const finalAssistantStopReason = (answerAssistant?.stopReason ?? "").trim().toLowerCase();
   const terminalAssistantCanOwnFinalText =
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
   const costUsd = estimateAggregateUsageCost({
@@ -147,10 +149,10 @@ export function prepareEmbeddedRunTerminal(input: {
     .findLast((text) => text.trim().length > 0)
     ?.trim();
   const finalAssistantVisibleText = terminalAssistantCanOwnFinalText
-    ? (resolveFinalAssistantVisibleText(terminalAssistant) ?? attemptFinalText)
+    ? (resolveFinalAssistantVisibleText(answerAssistant) ?? attemptFinalText)
     : undefined;
   const finalAssistantRawText = terminalAssistantCanOwnFinalText
-    ? (resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText)
+    ? (resolveFinalAssistantRawText(answerAssistant) ?? attemptFinalText)
     : undefined;
   const terminalTurnId = (attempt as { terminalTurnId?: string }).terminalTurnId;
   Object.assign(agentMeta, {

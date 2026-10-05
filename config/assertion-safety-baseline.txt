@@ -156,7 +156,6 @@ extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
 extensions/codex/src/app-server/tool-progress-normalization.ts	1
 extensions/codex/src/app-server/transcript-mirror.ts	1
 extensions/codex/src/app-server/transport-stdio.ts	1
-extensions/codex/src/app-server/upstream-fork-boundary.ts	1
 extensions/codex/src/command-handlers.ts	3
 extensions/codex/src/command-rpc.ts	1
 extensions/codex/src/conversation-control.ts	1
@@ -384,7 +383,7 @@ extensions/github-copilot/usage.ts	1
 extensions/google-meet/index.ts	1
 extensions/google-meet/src/calendar.ts	1
 extensions/google-meet/src/cli-runtime-commands.ts	1
-extensions/google-meet/src/cli-space-commands.ts	3
+extensions/google-meet/src/cli-space-commands.ts	2
 extensions/google-meet/src/meet-api.ts	1
 extensions/google-meet/src/transports/chrome-create.ts	1
 extensions/google/cli-backend-auth.runtime.ts	1
@@ -1864,8 +1863,7 @@ src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
 src/commands/doctor/shared/empty-allowlist-policy.ts	12
 src/commands/doctor/shared/empty-allowlist-scan.ts	4
-src/commands/doctor/shared/legacy-config-core-migrate.ts	1
-src/commands/doctor/shared/legacy-config-core-normalizers.ts	11
+src/commands/doctor/shared/legacy-config-core-normalizers.ts	1
 src/commands/doctor/shared/legacy-config-issues.ts	1
 src/commands/doctor/shared/legacy-config-migrate.ts	2
 src/commands/doctor/shared/legacy-config-migrations.audio.ts	1
@@ -2201,7 +2199,7 @@ src/hooks/gmail-setup-utils.ts	4
 src/hooks/internal-hook-types.ts	2
 src/hooks/loader.ts	1
 src/hooks/message-hook-mappers.ts	2
-src/hooks/module-loader.ts	2
+src/hooks/module-loader.ts	1
 src/hooks/policy.ts	1
 src/infra/advertised-lan-host.ts	1
 src/infra/agent-event-lifecycle.ts	1

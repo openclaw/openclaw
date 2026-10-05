@@ -2,7 +2,7 @@
 import type { ApprovalScope } from "./approval-scope.js";
 import type { ApprovalRequestInput, ChannelApprovalKind } from "./approval-types.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
-import type { ExecApprovalActionDescriptor } from "./exec-approval-reply.js";
+import type { ExecApprovalActionDescriptor } from "./exec-approval-action.types.js";
 import type { ExecApprovalDecision, ExecApprovalResolved } from "./exec-approvals-core.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
 import type {

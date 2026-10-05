@@ -13,7 +13,7 @@ import {
   type SkillsSourceScope,
 } from "./refresh-state.js";
 import { isIgnoredSkillsWatchPath } from "./refresh-watch-path.js";
-import type { SkillsWatchTargetCacheEntry, WatchTarget } from "./refresh-watch-targets.js";
+import type { SkillsWatchTargetCacheEntry, WatchTarget } from "./refresh-watch-targets.types.js";
 
 export type SkillsWatchChange = "skills" | "supporting";
 export type SkillsPathWatchState = {

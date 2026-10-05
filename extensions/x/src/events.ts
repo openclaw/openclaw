@@ -1,5 +1,5 @@
 import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { XApiError, parseXPost, type XApiClient, type XPostEnvelope } from "./api.js";
+import { XApiError, parseXPostEnvelope, type XApiClient, type XPostEnvelope } from "./api.js";
 import { resolveXRecipient } from "./recipient.js";
 
 export type XEventStatus = {
@@ -80,13 +80,11 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function eventEnvelope(value: unknown): XPostEnvelope | undefined {
-  const event = asRecord(value);
-  if (typeof event.event_type === "string" && event.event_type !== "post.mention.create") {
+  const event = asRecord(asRecord(value).data);
+  if (event.event_type !== "post.mention.create") {
     return undefined;
   }
-  const data = asRecord(event.data);
-  const post = parseXPost(event.post ?? data.post ?? event.data);
-  return post ? { post, users: [] } : undefined;
+  return parseXPostEnvelope({ post: event.payload, users: asRecord(event.includes).users });
 }
 
 async function receiveStream(options: XReceiveOptions): Promise<void> {
@@ -185,13 +183,13 @@ export async function runXEvents(
 ): Promise<void> {
   let stream = options.mode !== "poll" && options.bearerConfigured;
   let backoffMs = 1_000;
-  const fallback = () => {
+  const fallback = (error: unknown) => {
     stream = false;
     options.onStatus?.({
       eventMode: "poll",
       streamConnected: false,
       streamBackoffMs: 0,
-      message: "activity API unavailable for this app; polling",
+      message: `${error instanceof Error ? error.message : "X Activity API request failed"}; polling`,
     });
   };
   if (stream) {
@@ -200,7 +198,7 @@ export async function runXEvents(
     } catch (error) {
       options.signal.throwIfAborted();
       if (options.mode !== "stream" || (error instanceof XApiError && error.status === 403)) {
-        fallback();
+        fallback(error);
       } else {
         throw error;
       }
@@ -223,8 +221,8 @@ export async function runXEvents(
         await receiveStream(options);
       } catch (error) {
         options.signal.throwIfAborted();
-        if (error instanceof XApiError && error.status === 403) {
-          fallback();
+        if (error instanceof XApiError && (error.status === 401 || error.status === 403)) {
+          fallback(error);
           continue;
         }
         options.onStatus?.({

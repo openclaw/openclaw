@@ -81,7 +81,7 @@ describe("X event transport", () => {
     }
   });
 
-  it("filters app-wide recipients before advancing the cursor and backfills after an idle reconnect", async () => {
+  it("receives documented mentions after subscription creation and backfills after an idle reconnect", async () => {
     vi.useFakeTimers();
     const abort = new AbortController();
     const firstConnected = Promise.withResolvers<void>();
@@ -102,15 +102,17 @@ describe("X event transport", () => {
       refreshToken: "refresh",
       bearerToken: "bearer",
       saveRefreshToken: async () => {},
-      fetch: async (input) => {
+      fetch: async (input, init) => {
         const url = new URL(input);
         if (url.pathname.endsWith("/oauth2/token")) {
           return Response.json({ access_token: "access" });
         }
         if (url.pathname.endsWith("/subscriptions")) {
-          return Response.json({
-            data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
-          });
+          if (init?.method === "POST") {
+            expect(new Headers(init.headers).get("authorization")).toBe("Bearer access");
+            return Response.json({ data: [{ subscription_id: "1" }] });
+          }
+          return Response.json({ data: [] });
         }
         if (url.pathname.endsWith("/stream")) {
           return new Response(
@@ -166,11 +168,20 @@ describe("X event transport", () => {
     try {
       await firstConnected.promise;
       streams[0]!.enqueue(
-        encoder.encode(`${JSON.stringify({ data: { ...post("50"), entities: undefined } })}\n`),
+        encoder.encode(
+          `${JSON.stringify({ data: { event_type: "post.create", payload: post("49") } })}\n`,
+        ),
+      );
+      streams[0]!.enqueue(
+        encoder.encode(
+          `${JSON.stringify({ data: { event_type: "post.mention.create", payload: { ...post("50"), entities: undefined } } })}\n`,
+        ),
       );
       const event = JSON.stringify({
-        event_type: "post.mention.create",
-        data: { ...post("20"), entities: undefined },
+        data: {
+          event_type: "post.mention.create",
+          payload: { ...post("20"), entities: undefined },
+        },
       });
       streams[0]!.enqueue(encoder.encode(`\n${event.slice(0, 15)}`));
       streams[0]!.enqueue(encoder.encode(`${event.slice(15)}\n\n`));
@@ -225,7 +236,9 @@ describe("X event transport", () => {
           });
         }
         if (url.pathname.endsWith("/stream")) {
-          return new Response(`${JSON.stringify({ data: { ...post("20"), entities } })}\n`);
+          return new Response(
+            `${JSON.stringify({ data: { event_type: "post.mention.create", payload: { ...post("20"), entities } } })}\n`,
+          );
         }
         if (url.pathname === "/2/tweets") {
           lookups.push(url.searchParams.get("ids")!);
@@ -270,6 +283,9 @@ describe("X event transport", () => {
   it.each([
     { endpoint: "subscriptions", failure: 403, mode: "stream", shouldPoll: true },
     { endpoint: "stream", failure: 403, mode: "stream", shouldPoll: true },
+    { endpoint: "stream", failure: 401, mode: "auto", shouldPoll: true },
+    { endpoint: "stream", failure: 401, mode: "stream", shouldPoll: true },
+    { endpoint: "create", failure: 400, mode: "auto", shouldPoll: true },
     { endpoint: "subscriptions", failure: 401, mode: "auto", shouldPoll: true },
     { endpoint: "subscriptions", failure: "network", mode: "auto", shouldPoll: true },
     { endpoint: "subscriptions", failure: 401, mode: "stream", shouldPoll: false },
@@ -277,29 +293,47 @@ describe("X event transport", () => {
   ] as const)(
     "handles Activity $endpoint $failure in $mode mode",
     async ({ endpoint, failure, mode, shouldPoll }) => {
+      vi.useFakeTimers();
       const abort = new AbortController();
       const polled = Promise.withResolvers<void>();
       const statuses: XEventStatus[] = [];
       const api = createXApiClient({
         clientId: "client",
-        clientSecret: "secret",
-        refreshToken: "refresh",
-        bearerToken: "bearer",
+        clientSecret: "test-client-secret",
+        refreshToken: "test-refresh-token",
+        bearerToken: "test-app-bearer",
         saveRefreshToken: async () => {},
-        fetch: async (input) => {
-          if (input.endsWith(`/${endpoint}`)) {
+        fetch: async (input, init) => {
+          if (
+            input.endsWith(`/${endpoint}`) ||
+            (endpoint === "create" && input.endsWith("/subscriptions") && init?.method === "POST")
+          ) {
             if (failure === "network") {
               throw new Error("Synthetic Activity transport failure");
             }
-            return new Response(null, { status: failure });
+            return Response.json(
+              {
+                errors: [
+                  {
+                    message:
+                      "OauthAccessTokenRequired: OAuth user access token is required for this event type",
+                  },
+                  { message: "Do not expose subsequent errors" },
+                ],
+              },
+              { status: failure },
+            );
           }
           if (input.endsWith("/subscriptions")) {
             return Response.json({
-              data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
+              data:
+                endpoint === "create"
+                  ? []
+                  : [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
             });
           }
           if (input.endsWith("/oauth2/token")) {
-            return Response.json({ access_token: "access" });
+            return Response.json({ access_token: "test-user-access" });
           }
           polled.resolve();
           return Response.json({ data: [] });
@@ -333,7 +367,10 @@ describe("X event transport", () => {
       expect(statuses).toContainEqual(
         expect.objectContaining({
           eventMode: "poll",
-          message: "activity API unavailable for this app; polling",
+          message:
+            failure === "network"
+              ? "X API network request failed; polling"
+              : `X API /2/activity/${endpoint === "create" ? "subscriptions" : endpoint} failed (HTTP ${failure}): OauthAccessTokenRequired: OAuth user access token is required for this event type; polling`,
         }),
       );
     },

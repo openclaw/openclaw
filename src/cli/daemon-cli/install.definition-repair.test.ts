@@ -8,6 +8,10 @@ import { maybeRepairGatewayServiceConfig } from "../../commands/doctor-gateway-s
 import { restoreDoctorGatewayService } from "../../commands/doctor-maintenance-restoration.js";
 import { createDoctorPrompter } from "../../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { buildLaunchAgentPlist } from "../../daemon/launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-support.js";
+import { resolveLaunchAgentPlistPath } from "../../daemon/launchd-service-files.js";
+import { resolveGatewaySupervisorLogPaths } from "../../daemon/restart-logs.js";
 import {
   GatewayServiceDefinitionBackupReceiptSchema,
   type GatewayServiceDefinitionBackupReceipt,
@@ -23,6 +27,7 @@ import {
 } from "../../daemon/systemd-unit.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import * as exec from "../../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { firstWrittenJsonArg } from "../test-runtime-capture.js";
 import { stubNodeRuntime } from "../update-cli/update-command-runtime-recovery.test-support.js";
@@ -34,6 +39,7 @@ const native = vi.hoisted(() => ({
   source: "",
   command: vi.fn<() => Promise<GatewayServiceCommandConfig>>(),
   systemctl: vi.fn<typeof import("../../daemon/systemd-exec.js").execSystemctlUser>(),
+  launchctl: vi.fn<typeof import("../../daemon/launchd-exec.js").execLaunchctl>(),
   serviceRuntime:
     vi.fn<typeof import("../../daemon/systemd-runtime.js").readSystemdServiceRuntime>(),
   note: vi.fn<(message: string, title?: string) => void>(),
@@ -81,6 +87,22 @@ vi.mock("../../daemon/runtime-paths.js", async (original) => ({
 vi.mock("../../daemon/systemd-service-files.js", async (original) => ({
   ...(await original<typeof import("../../daemon/systemd-service-files.js")>()),
   readSystemdServiceExecStart: native.command,
+}));
+vi.mock("../../daemon/launchd-exec.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/launchd-exec.js")>()),
+  execLaunchctl: native.launchctl,
+}));
+vi.mock("../../daemon/launchd-runtime.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/launchd-runtime.js")>()),
+  readLaunchAgentRuntime: native.serviceRuntime,
+}));
+vi.mock("../../daemon/launchd-current-service.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/launchd-current-service.js")>()),
+  isCurrentProcessInsideLaunchdService: async () => false,
+}));
+vi.mock("../../daemon/launchd-system.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/launchd-system.js")>()),
+  assertNoSystemLaunchDaemonOwnership: async () => {},
 }));
 vi.mock("../../daemon/systemd-exec.js", async (original) => ({
   ...(await original<typeof import("../../daemon/systemd-exec.js")>()),
@@ -358,6 +380,7 @@ async function runStandaloneDoctor(
   mode: "direct" | "maintenance" = "direct",
   running = true,
   config: OpenClawConfig = native.config,
+  approveConfigRepair = false,
 ) {
   delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
   delete process.env.OPENCLAW_UPDATE_RUN_ID;
@@ -410,6 +433,9 @@ async function runStandaloneDoctor(
     runtime: native.runtime,
     options: { repair: true, yes: true, nonInteractive: true },
   });
+  if (approveConfigRepair) {
+    prompter.confirmRuntimeRepair = async () => true;
+  }
   await maybeRepairGatewayServiceConfig(config, "local", native.runtime, prompter, {
     writeConfig: native.writeConfig,
   });
@@ -634,6 +660,107 @@ it.skipIf(process.platform === "win32")(
     expect(native.systemctl.mock.calls.filter(([, args]) => args[0] === "restart")).toHaveLength(1);
     expect(native.note.mock.calls.map(([message]) => message)).toContainEqual(
       expect.stringContaining("Reconciled Gateway service definition:"),
+    );
+  },
+);
+
+it.skipIf(process.platform === "win32").each([
+  { seconds: 20, throttle: 10, migrated: true },
+  { seconds: 20, throttle: 45, migrated: false },
+  { seconds: 20, throttle: 45, migrated: true, portDrift: true },
+  { seconds: 20, throttle: 45, migrated: true, updater: true },
+  { seconds: 600, throttle: 10, migrated: false },
+  { seconds: 30, throttle: 10, migrated: false },
+  { seconds: 600, throttle: 1, migrated: true },
+  { seconds: 600, throttle: 10, migrated: true, portDrift: true },
+  { seconds: 30, throttle: 10, migrated: true, portDrift: true },
+  { seconds: 20, throttle: 10, migrated: true, updater: true },
+])(
+  "migrates only the retired LaunchAgent timeout ($seconds, throttle=$throttle, portDrift=$portDrift, updater=$updater)",
+  async ({ seconds, throttle, migrated, portDrift, updater }) => {
+    await fixture();
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.spyOn(exec, "runExec").mockImplementation(async (file, args, options) => {
+      if (file !== "/usr/bin/plutil" || typeof options !== "object" || !options.input) {
+        throw new Error(`Unexpected fixture subprocess: ${file}`);
+      }
+      return decodeLaunchAgentPlistFixture(options.input, args[1]);
+    });
+    native.launchctl.mockImplementation(async (args) => ({
+      code: 0,
+      stdout: args[0] === "print" ? `${args[1]} = {\n\tstate = running\n\tpid = 4242\n}\n` : "",
+      stderr: "",
+      termination: "exit",
+    }));
+    const plan = await installPlans.buildGatewayInstallPlan({
+      env: process.env,
+      port: 19137,
+      runtime: "node",
+      runtimePath: process.execPath,
+      config: native.config,
+    });
+    const source = resolveLaunchAgentPlistPath(process.env);
+    const { stdoutPath } = resolveGatewaySupervisorLogPaths(process.env);
+    const original = buildLaunchAgentPlist({
+      ...plan,
+      label: "ai.openclaw.gateway",
+      comment: "OpenClaw Gateway",
+      stdoutPath,
+      stderrPath: stdoutPath,
+    })
+      .replace(/(<key>ExitTimeOut<\/key>\s*<integer>)\d+/u, `$1${seconds}`)
+      .replace(/(<key>ThrottleInterval<\/key>\s*<integer>)\d+/u, `$1${throttle}`);
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, original, { mode: 0o600 });
+
+    if (updater) {
+      // Published drivers invoke the candidate installer with this existing marker.
+      await runDaemonInstall({ force: true, json: true });
+      expect(response().ok).toBe(true);
+    } else {
+      const config = portDrift
+        ? { ...native.config, gateway: { ...native.config.gateway, port: 19138 } }
+        : native.config;
+      await runStandaloneDoctor("direct", true, config, portDrift);
+    }
+
+    expect(native.runtime.error).not.toHaveBeenCalled();
+    const changed = await fs.readFile(source, "utf8");
+    if (portDrift) {
+      expect(changed).toContain("<string>19138</string>");
+    }
+    expect(changed).toMatch(
+      new RegExp(
+        `<key>ExitTimeOut</key>\\s*<integer>${seconds === 20 && throttle !== 45 ? 330 : seconds}</integer>`,
+      ),
+    );
+    if (migrated) {
+      expect(changed).toMatch(
+        new RegExp(
+          `<key>ThrottleInterval</key>\\s*<integer>${throttle === 45 ? 45 : 10}</integer>`,
+        ),
+      );
+      await expectDefinitionBackups({ source, original });
+      expect(native.launchctl.mock.calls.filter(([args]) => args[0] === "bootstrap")).toHaveLength(
+        1,
+      );
+    } else {
+      expect(changed).toBe(original);
+      expect(
+        native.launchctl.mock.calls.some(([args]) => ["bootout", "bootstrap"].includes(args[0]!)),
+      ).toBe(false);
+    }
+    const diagnostics = updater
+      ? response().warnings?.join("\n")
+      : native.note.mock.calls.map(([message]) => message).join("\n");
+    expect(diagnostics).toContain(
+      throttle === 45
+        ? "not changed because the definition is customized"
+        : updater
+          ? "Reconciled Gateway service definition: ExitTimeOut."
+          : seconds === 20
+            ? "ExitTimeOut=330"
+            : "Custom ExitTimeOut; not changed.",
     );
   },
 );

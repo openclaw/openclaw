@@ -235,7 +235,7 @@ export function createSqliteReadOnlyWorkerSession(
         value = reply.value;
       } else {
         value = readSqliteReadOnlyWorkerValue(
-          { stdout: JSON.stringify(message.result), stderr },
+          { kind: "launched", stdout: JSON.stringify(message.result), stderr, status: 0 },
           pending.mode,
         );
       }

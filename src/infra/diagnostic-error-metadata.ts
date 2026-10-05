@@ -12,7 +12,6 @@ const PROVIDER_REQUEST_ID_KEYS = [
 const PROVIDER_REQUEST_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/u;
 const PROVIDER_REQUEST_ID_TEXT_PATTERNS = [
   /\b(?:x-request-id|request-id|request_id|requestId|trace-id|trace_id)\b["'\s:=([]+([A-Za-z0-9._:-]{1,128})/i,
-  /\((?:request_id|trace_id)\s*:\s*([A-Za-z0-9._:-]{1,128})\)/i,
 ] as const;
 
 type DiagnosticErrorFailureKind =

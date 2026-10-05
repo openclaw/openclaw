@@ -515,13 +515,33 @@ adds no schema, cache, retention, durability, permission, configuration, or upda
 change, and retires no T1 sites. Queued-input withdrawal retains its existing
 incognito refusal.
 
-### Incognito history and manager reads (P7f1, inactive)
+<a id="incognito-history-and-manager-reads-p7f1-inactive" />
+
+### Incognito history, compute, and manager reads (P7f, inactive)
 
 Transcript-anchor, accounting, and bounded-tail facades accept an explicit
 captured actor and session generation. Their existing selectors execute on its
 retained connection. Anchor publication consumes the acknowledged facts
 synchronously inside the original FIFO turn; later writes cannot overtake it.
 Read grants and disclosure retain current caller authority.
+
+Usage and reconciliation can select the complete actor store, including retained
+transcript windows. Inventory, refresh locks, cache publication, projection
+preflight, framing, and orphan cleanup stay on the actor. Each command releases
+its FIFO turn before compute calls back for another command. The enclosing
+operation retains actor lifetime through dependent frames and exact cleanup.
+Deferred reconciliation retains that same incarnation through coalesced passes,
+failure handoffs, and projection waits. Each resumed planning pass refreshes its
+pending inventory and framing sources. Readiness commands only inspect projection
+status; they never sweep or rebuild it. Usage summaries, logs, and time series use
+actor extraction while preserving the selected cache's physical owner, including
+a durable cache paired with an incognito transcript. Acknowledged refresh results
+publish through the existing usage owner. Accepted work settles independently of
+scheduler cancellation; new work refuses closed admission.
+
+Fork facades use the existing parent-fork kernels, preserving token decisions,
+skip patches, CLI bindings, same-store atomicity, and cross-agent source-first
+sequencing without holding one actor's FIFO while awaiting another.
 
 `SessionManager.readSessionContextAsync` supports awaited consumption of a
 full-fidelity detached context, then validates its original source before
@@ -535,10 +555,11 @@ borrow must remain live. Release or loss refuses further database work on that
 target, even when a successor actor exists. Accepted context consumers retain
 cleanup outside the actor FIFO.
 
-Production still supplies no actor bindings. This prerequisite removes no native
-routes or T1 sites and changes no schema, retention, durability, session expiry,
-or update behavior. Compute, fork, and deferred projection composition remain
-separate prerequisites for atomic activation.
+Production still supplies no actor bindings. Atomic activation must replace the
+remaining native facade selection and remove host calls to the memory-source
+extraction bridge together; the connection-bound framing kernel remains inside
+the actor. This prerequisite removes no native routes or T1 sites and changes no
+schema, retention, durability, session expiry, or update behavior.
 
 ### Existing worker flows
 
@@ -1178,6 +1199,16 @@ the 30-day and 50,000-row bounds. Adopted-event/native-binding producers retain 
 existing synchronous recorder, with periodic pruning delegated to the same worker.
 Schemas, stored bytes, retention, and update behavior are unchanged.
 
+Post-ready notice recovery reads pending watches through the shared-state reader
+and captures each watcher's physical source through the session reader.
+The transaction rereads cursor watermarks and store bindings; transaction and
+commit grants recheck the original watcher identities and host authority. Only
+acknowledged rows return to the system-event queue. The existing startup tail joins
+accepted recovery before database teardown, and uncertain writes never replay.
+The sweep retains its pruning policy and requires no update migration. Recovery
+also accepts older stores without the first-use watcher-store column and leaves
+that column absent until a feature write needs it.
+
 Watched-session prompt preparation reads ambient targets through the shared-state
 reader and exact title entries through the session reader. It captures both stores
 before yielding, retains the session reader through disclosure revalidation, and
@@ -1805,6 +1836,16 @@ Activity recap settlement rechecks its current owner after reading the final
 watermark. These facts select transcript boundaries, never writer or turn authority.
 Released synchronous SDK callbacks and process-held incognito retain their existing
 contracts. Schemas, stored bytes, retention, durability, and update behavior are unchanged.
+
+Persisted-turn replay admission validates the exact session writer row and the
+prepared transcript version in the anchor reader's single snapshot. Each scan
+retains its physical source through validation and cleanup; later preparation
+phases must select that same physical file and obtain fresh reader authority.
+Final consumption retains writer FIFO custody and the native mutation witness
+through synchronous prompt publication and core entry. Current run ownership,
+permission generation, cancellation, and one-time replay consumption remain live
+checks after waits. The core run settles outside reader custody. This changes no
+schema, stored bytes, retention, durability, or update behavior.
 
 Awaited full-transcript event reads use the same history worker's hydration stream.
 Compaction preflight, reset hooks, BTW context, exports, and the asynchronous SDK
