@@ -484,11 +484,11 @@ final class NodePairingApprovalPrompter {
 
         let ok = await Self.probeSSH(user: user, host: target.host, port: target.port)
         guard self.owns(source) else {
-            self.logger.info("silent pairing probe result ignored after the Gateway connection changed")
+            self.logger.info("silent pairing check result ignored after the Gateway connection changed")
             return false
         }
         if !ok {
-            self.logger.info("silent pairing probe failed requestId=\(req.requestId, privacy: .public)")
+            self.logger.info("silent pairing check failed requestId=\(req.requestId, privacy: .public)")
             return false
         }
 
