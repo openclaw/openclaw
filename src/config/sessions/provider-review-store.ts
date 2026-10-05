@@ -96,7 +96,11 @@ export async function readSessionProviderReview(
     assertCurrent,
     async (options, sessionKey, assertHeld) => {
       const result = await withSessionHistoryWorkerDatabase(options, (owner) =>
-        owner.readExactEntries({ sessionKeys: [sessionKey], env: options.env ?? {} }),
+        owner.readExactEntries({
+          sessionKeys: [sessionKey],
+          snapshotFields: [],
+          env: options.env ?? {},
+        }),
       );
       assertHeld();
       const entry = result.entries.find((row) => row.sessionKey === sessionKey)?.entry;

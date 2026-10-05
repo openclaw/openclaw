@@ -17,6 +17,7 @@ import * as requesterAuthority from "../../infra/update-requester-authority.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
+  finishUpdateRun,
   getUpdateRun,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
@@ -102,6 +103,7 @@ import * as executorOwner from "./update-command-executor.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import * as postCore from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
+import { withUpdateEnv } from "./update-command-service-env.js";
 
 const pluginUpdate: PostCorePluginUpdateResult = {
   status: "ok",
@@ -546,6 +548,55 @@ describe("unproved Doctor authority callers", () => {
     },
   );
 
+  it.each([
+    { owner: "parent", selected: "deferred", ambient: "missing" },
+    { owner: "parent", selected: "deferred", ambient: "foreign" },
+    { owner: "parent", selected: "clear", ambient: "foreign" },
+    { owner: "parent", selected: "terminal", ambient: "foreign" },
+    { owner: "standalone", selected: "deferred", ambient: "missing" },
+  ] as const)(
+    "completes only the selected retirement ($owner, $selected, ambient=$ambient)",
+    async ({ owner, selected, ambient }) => {
+      const env = { ...process.env };
+      const run = createUpdateRun({ trigger: "cli" }, { env });
+      const deferred = { step: "finalize:doctor:model-retirement", status: "skipped" as const };
+      if (selected !== "clear") {
+        recordUpdateRunStep(run.runId, deferred, { env });
+      }
+      if (selected === "terminal") {
+        finishUpdateRun(run.runId, { status: "succeeded" }, { env });
+      }
+      const unrelated = createUpdateRun({ trigger: "cli" }, { env });
+      recordUpdateRunStep(unrelated.runId, deferred, { env });
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", ambient === "foreign" ? unrelated.runId : undefined);
+      vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, undefined);
+
+      await completePostCorePluginUpdate({
+        root: state.root,
+        ...(owner === "parent"
+          ? {
+              opts: { run: { runId: run.runId, env, executorFence: firstRefusal() } },
+              // A caller's admitted run takes precedence over the standalone hint too.
+              runId: unrelated.runId,
+            }
+          : { runId: run.runId }),
+        pluginUpdate,
+        yes: true,
+        json: true,
+        timeoutMs: 5_000,
+      });
+
+      const repairs = mocks.runExec.mock.calls.filter(([, args]) => args.includes("--repair"));
+      expect(repairs).toHaveLength(selected === "deferred" ? 1 : 0);
+      if (repairs.length) {
+        expect(repairs[0]?.[2].env.OPENCLAW_UPDATE_RUN_ID).toBe(run.runId);
+      }
+      expect(getUpdateRun(unrelated.runId, { env })?.steps).toContainEqual(
+        expect.objectContaining(deferred),
+      );
+    },
+  );
+
   it.each(["live", "first-refusal"] as const)(
     "forwards original authority through resumed production and parent completion: %s",
     async (boundary) => {
@@ -555,7 +606,6 @@ describe("unproved Doctor authority callers", () => {
         step: "finalize:doctor:model-retirement",
         status: "skipped",
       });
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
       // The modern child publishes plugin work without starting Doctor. Exercise
       // deferred retirement through the real parent that consumes that result.
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", state.statePath("post-core-result.json"));
@@ -572,7 +622,10 @@ describe("unproved Doctor authority callers", () => {
       const handoff = vi
         .spyOn(postCore, "continuePostCoreUpdateInFreshProcess")
         .mockImplementationOnce(async (params) => {
-          await resumePostCoreUpdate(params);
+          // The transport correlates its child; the admitted parent keeps its run in opts.
+          await withUpdateEnv({ OPENCLAW_UPDATE_RUN_ID: run.runId }, () =>
+            resumePostCoreUpdate(params),
+          );
           expect(dispatched).toEqual([]);
           expect(defaultRuntime.exit).not.toHaveBeenCalled();
           const published = publication.mock.lastCall?.[1];

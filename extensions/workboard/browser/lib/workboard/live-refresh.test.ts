@@ -31,6 +31,9 @@ describe("Workboard live refresh", () => {
     expect(normalizeWorkboardChange({ epoch: "epoch-a", revision: 0 })).toBeNull();
     expect(normalizeWorkboardChange({ epoch: "epoch-a", revision: Number.NaN })).toBeNull();
     expect(normalizeWorkboardChange({ epoch: "epoch-a", revision: 1, cards: [] })).toBeNull();
+    expect(
+      normalizeWorkboardChange({ epoch: "epoch-a", revision: 1, sessionsRevision: -1 }),
+    ).toBeNull();
   });
 
   it("rereads canonical cards and ignores stale revisions", async () => {
