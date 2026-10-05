@@ -31,7 +31,7 @@ import {
 } from "../model-catalog.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
-import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES } from "./prepare-claude.js";
+import { resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import type { RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -206,8 +206,8 @@ function resolveRoutedModelVisionCapability(params: {
   const trimmedModelId = params.modelId.trim();
   const candidates = [trimmedModelId];
   if (isClaudeCliBackendId(params.executionProvider)) {
-    const contextAlias = CLAUDE_CLI_CONTEXT_MODEL_ALIASES[trimmedModelId.toLowerCase()];
-    if (contextAlias && !candidates.includes(contextAlias)) {
+    const contextAlias = resolveClaudeCliContextModelId(trimmedModelId);
+    if (contextAlias !== trimmedModelId && !candidates.includes(contextAlias)) {
       candidates.push(contextAlias);
     }
   }
