@@ -16,7 +16,6 @@ import type {
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import {
   createConfigReadError,
-  formatInvalidConfigDetails,
   isConfigReadFailure,
   isDoctorRecoverableInvalidConfigError,
   isInvalidConfigError,
@@ -174,7 +173,7 @@ async function readGatewayStartupConfig(params: {
   );
   const { snapshot } = snapshotRead;
   if (!snapshot.valid && isConfigReadFailure(snapshot)) {
-    throw createConfigReadError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+    throw createConfigReadError(snapshot);
   }
   return {
     cfg: snapshot.config,

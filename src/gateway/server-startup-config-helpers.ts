@@ -69,7 +69,7 @@ function assertValidGatewayStartupConfigSnapshot(
       : "Unknown validation issue.";
   if (isConfigReadFailure(snapshot)) {
     throw createConfigReadError(
-      snapshot.path,
+      snapshot,
       `${issues}\nResolve the read error shown above, then retry.`,
     );
   }
