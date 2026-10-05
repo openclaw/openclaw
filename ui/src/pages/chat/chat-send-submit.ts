@@ -395,18 +395,33 @@ export async function handleSendChat(
         });
         return undefined;
       }
+      const isRunCommand = parsed.command.key === "steer" || parsed.command.key === "redirect";
       const waitsForPicker = parsed.command.key === "redirect";
       const dispatchLocalCommand = async () => {
         if (waitsForPicker && !(await waitForSubmittedRoute(host, submittedSessionKey))) {
           return;
         }
+        if (
+          isRunCommand &&
+          (!submitGuardOptions.isCurrent() ||
+            !visibleSessionMatches(
+              host,
+              submitGuardOptions.scope.sessionKey,
+              submitGuardOptions.scope.agentId,
+            ) ||
+            rejectOversizedAttachments())
+        ) {
+          return;
+        }
         let prevDraft = messageOverride == null ? previousDraft : undefined;
         let recoveryComposer: PendingComposerSnapshot | undefined;
-        const recoveryScope = resolveUiConversationIdentity(host, submittedSessionKey);
+        const recoveryScope = isRunCommand
+          ? submitGuardOptions.scope
+          : resolveUiConversationIdentity(host, submittedSessionKey);
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, userMessage);
           if (parsed.command.key !== "export-session") {
-            const cleared = clearComposer();
+            const cleared = clearComposer(isRunCommand ? "annotations" : "none");
             prevDraft = cleared.previousDraft;
             recoveryComposer = cleared;
           }
@@ -420,6 +435,7 @@ export async function handleSendChat(
           parsed.command.key,
           parsed.args,
           {
+            attachments: isRunCommand ? deliveredAttachments : undefined,
             previousDraft: prevDraft,
             restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
             sendResetMessage: (resetMessage, resetOpts) =>
