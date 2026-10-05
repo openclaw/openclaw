@@ -29,10 +29,13 @@ import {
   taskRecovery,
 } from "./update-command-post-update.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
-import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
+
+const { revalidateManagedGatewayServiceAfterUpdate } = await vi.importActual<
+  typeof import("./update-command-service-revalidation.js")
+>("./update-command-service-revalidation.js");
 
 const mocks = vi.hoisted(() => ({
   repair: vi.fn<typeof import("../../infra/update-repair-agent.js").runUpdateRepairLoop>(),
@@ -103,11 +106,14 @@ vi.mock("./update-command-supervisor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-supervisor.js")>()),
   hasLoadedLaunchdKeepAliveSupervisor: async () => false,
 }));
+vi.mock("./update-command-service-revalidation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-revalidation.js")>()),
+  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidate,
+}));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restart,
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stop,
-  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidate,
   resolveUpdatedGatewayRestartPort: async () => 19101,
   tryInstallShellCompletion: async () => {},
 }));

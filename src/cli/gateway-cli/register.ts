@@ -14,6 +14,7 @@ import type {
 } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output.js";
@@ -33,6 +34,12 @@ import { addGatewayRunCommand } from "./run-command.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
+
+const loadWideAreaDnsModule = createLazyPromise(() => import("../../infra/widearea-dns.js"));
+const loadUsageFormatModule = createLazyPromise(() => import("../../utils/usage-format.js"));
+const loadStabilityBundleModule = createLazyPromise(
+  () => import("../../logging/diagnostic-stability-bundle.js"),
+);
 
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 const SETUP_INFERENCE_DETECT_RPC_TIMEOUT_MS = 40_000;
@@ -115,8 +122,7 @@ async function renderCostUsageSummaryAsync(
   rich: boolean,
 ): Promise<string[]> {
   const { formatMissingCostEntries } = await import("../../infra/session-cost-usage-totals.js");
-  const { formatCostUsageCachePrefix, formatTokenCount, formatUsd } =
-    await import("../../utils/usage-format.js");
+  const { formatCostUsageCachePrefix, formatTokenCount, formatUsd } = await loadUsageFormatModule();
   const totalCost = formatUsd(summary.totals.totalCost) ?? "$0.00";
   const totalTokens = formatTokenCount(summary.totals.totalTokens) ?? "0";
   const cachePrefix = formatCostUsageCachePrefix(summary.cacheStatus);
@@ -624,7 +630,7 @@ export function registerGatewayCli(program: Command) {
             const {
               readDiagnosticStabilityBundleFileSync,
               readLatestDiagnosticStabilityBundleSync,
-            } = await import("../../logging/diagnostic-stability-bundle.js");
+            } = await loadStabilityBundleModule();
             const result =
               bundleTarget === "latest"
                 ? readLatestDiagnosticStabilityBundleSync()
@@ -755,7 +761,7 @@ export function registerGatewayCli(program: Command) {
         ] = await Promise.all([
           import("../../config/read-best-effort-config.runtime.js"),
           import("../../infra/bonjour-discovery.js"),
-          import("../../infra/widearea-dns.js"),
+          loadWideAreaDnsModule(),
           import("./discover.js"),
           import("../progress.js"),
         ]);
