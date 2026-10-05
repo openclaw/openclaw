@@ -44,7 +44,7 @@ const matchLevelDirective = (
   const start = match.index;
   const directiveEnd = match.index + match[0].length;
   const prefixEnd = directiveEnd + skipDirectiveArgPrefix(body.slice(directiveEnd));
-  const argument = (options?.strict ? /^\s*(\S+)/ : /^\s*([A-Za-z-]+)/).exec(body.slice(prefixEnd));
+  const argument = (options?.strict ? /^\s*(\S+)/ : /^\s*([\w-]+)/).exec(body.slice(prefixEnd));
   const end = prefixEnd + (argument?.[0].length ?? 0);
   const candidate = argument?.[1];
   if (
