@@ -129,6 +129,13 @@ type WakeMediaGenerationTaskCompletionParams = Omit<
   "eventSource" | "announceType" | "toolName" | "completionLabel"
 >;
 
+class MediaGenerationCompletionHandoffPendingTimeoutError extends Error {
+  constructor() {
+    super("completion handoff was still pending when the handoff deadline expired");
+    this.name = "MediaGenerationCompletionHandoffPendingTimeoutError";
+  }
+}
+
 async function wakeMediaGenerationTaskCompletionWithRetry(params: {
   wake: () => Promise<MediaGenerationCompletionWakeOutcome>;
   beforeRetry?: () => void;
@@ -139,6 +146,16 @@ async function wakeMediaGenerationTaskCompletionWithRetry(params: {
   while (outcome.status === "pending") {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
+      if (outcome.queueOwned === true) {
+        // The durable session-delivery queue positively accepted the handoff,
+        // so delivery survives this caller. Surface a distinguishable outcome
+        // instead of a generic error so the scheduler does not record a false
+        // delivery failure.
+        throw new MediaGenerationCompletionHandoffPendingTimeoutError();
+      }
+      // Any other pending handoff (refused admission, transient read failure,
+      // unconfirmed settling) owns nothing durable: fail closed so blocked
+      // retention and failure recording still run.
       throw new Error("media completion did not settle before the handoff deadline");
     }
     // Queue admission and an owned continuation can both be transient. Keep the
@@ -471,17 +488,30 @@ export function scheduleMediaGenerationTaskCompletion<
         });
       }
     } catch (error) {
-      terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
-        formatErrorMessage(error),
-      );
-      params.onWakeFailure(
-        `${params.toolName} completion wake failed after successful generation`,
-        {
-          taskId: params.handle?.taskId,
-          runId: params.handle?.runId,
-          error,
-        },
-      );
+      if (error instanceof MediaGenerationCompletionHandoffPendingTimeoutError) {
+        // The durable session-delivery queue owns a pending handoff; it drains
+        // when the requester's active run ends. Complete as deferred-pending
+        // instead of recording a delivery failure that will never happen.
+        log.info(
+          `${params.toolName} completion handoff is queued behind the requester's active run; delivery completes when that run ends`,
+          {
+            taskId: params.handle?.taskId,
+            runId: params.handle?.runId,
+          },
+        );
+      } else {
+        terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
+          formatErrorMessage(error),
+        );
+        params.onWakeFailure(
+          `${params.toolName} completion wake failed after successful generation`,
+          {
+            taskId: params.handle?.taskId,
+            runId: params.handle?.runId,
+            error,
+          },
+        );
+      }
     }
     terminalResult = retainBlockedMediaReferences(terminalResult, executed.attachments);
     try {
