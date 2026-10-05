@@ -10,6 +10,10 @@ export type ManagedMarkdownBlockParams = {
   startMarker: string;
   endMarker: string;
   heading?: string;
+  /** Enable trailing inline-end recovery only when the caller can identify unowned content. */
+  recoverInlineOrphanEnds?: boolean;
+  /** Original ranges excluded from inline orphan-end recovery (for example human Notes). */
+  protectedRanges?: ReadonlyArray<{ start: number; end: number }>;
 };
 
 function isLineWhitespace(value: string): boolean {
@@ -85,6 +89,32 @@ export function replaceManagedMarkdownBlock(params: ManagedMarkdownBlockParams):
   }
 
   if (matches.length > 0) {
+    if (params.recoverInlineOrphanEnds) {
+      // An inline end cannot close a block or claim prose. Recover only trailing
+      // tokens concatenated to prose outside balanced blocks; preserve code and protected content.
+      const inlineEndPattern = new RegExp(
+        `${escapeRegExp(params.endMarker)}(?=[\\t ]*\\r?$)`,
+        "gm",
+      );
+      for (const marker of params.original.matchAll(inlineEndPattern)) {
+        const markerStart = marker.index;
+        const lineStart = params.original.lastIndexOf("\n", markerStart - 1) + 1;
+        const prefix = params.original.slice(lineStart, markerStart);
+        if (
+          isLineWhitespace(prefix) ||
+          /\s|\\/.test(prefix.slice(-1)) ||
+          prefix.includes(params.startMarker) ||
+          originalCode.isInside(markerStart) ||
+          matches.some((match) => markerStart >= match.start && markerStart < match.end) ||
+          params.protectedRanges?.some(
+            (range) => markerStart >= range.start && markerStart < range.end,
+          )
+        ) {
+          continue;
+        }
+        orphanEnds.push({ start: markerStart, end: markerStart + params.endMarker.length });
+      }
+    }
     let updated = "";
     let lastEnd = 0;
     let inserted = false;

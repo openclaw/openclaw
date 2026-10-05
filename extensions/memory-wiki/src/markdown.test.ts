@@ -7,6 +7,7 @@ import {
   extractHumanNotesBlock,
   parseWikiMarkdown,
   preserveHumanNotesBlock,
+  replaceWikiManagedMarkdownBlock,
   renderWikiMarkdown,
   scanWikiPageSummary,
   slugifyWikiSegment,
@@ -91,6 +92,80 @@ describe("human Notes blocks", () => {
     expect(extractHumanNotesBlock(existing)).toBeNull();
     expect(preserveHumanNotesBlock(rendered, existing)).toBe(rendered);
     expect(preserveHumanNotesBlock(existing, rendered)).toBe(existing);
+  });
+
+  it("updates a managed block beside an ordinary unmarked Notes section", () => {
+    const original = [
+      "# Source",
+      "",
+      "## Generated",
+      "<!-- openclaw:wiki:generated:start -->",
+      "old summary",
+      "<!-- openclaw:wiki:generated:end -->",
+      "",
+      "## Notes",
+      "Ordinary hand-written note<!-- openclaw:wiki:generated:end -->",
+      "",
+    ].join("\n");
+    expect(
+      replaceWikiManagedMarkdownBlock({
+        original,
+        heading: "## Generated",
+        startMarker: "<!-- openclaw:wiki:generated:start -->",
+        endMarker: "<!-- openclaw:wiki:generated:end -->",
+        body: "current summary",
+      }),
+    ).toBe(
+      [
+        "# Source",
+        "",
+        "## Generated",
+        "<!-- openclaw:wiki:generated:start -->",
+        "current summary",
+        "<!-- openclaw:wiki:generated:end -->",
+        "",
+        "## Notes",
+        "Ordinary hand-written note<!-- openclaw:wiki:generated:end -->",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it.each(["\n", "\r\n"])("protects Notes while recovering history markers (%j)", (newline) => {
+    const start = "<!-- openclaw:wiki:generated:start -->";
+    const end = "<!-- openclaw:wiki:generated:end -->";
+    const original = [
+      "# Source",
+      "## Notes",
+      `Ordinary note${end}`,
+      "```md",
+      "## Summary",
+      `Code example ${end}`,
+      "```",
+      "## Summary",
+      start,
+      "old summary",
+      end,
+      "## History",
+      `Retained rationale${end}`,
+      "",
+    ].join(newline);
+
+    const updated = replaceWikiManagedMarkdownBlock({
+      original,
+      heading: "## Summary",
+      startMarker: start,
+      endMarker: end,
+      body: "current summary",
+    });
+
+    expect(updated).toContain(
+      ["## Notes", `Ordinary note${end}`, "```md", "## Summary", `Code example ${end}`, "```"].join(
+        newline,
+      ),
+    );
+    expect(updated).toContain(`## History${newline}Retained rationale${newline}`);
+    expect(updated).not.toContain(`Retained rationale${end}`);
   });
 
   it.each([

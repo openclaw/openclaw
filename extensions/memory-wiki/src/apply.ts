@@ -1,8 +1,5 @@
 import path from "node:path";
-import {
-  replaceManagedMarkdownBlock,
-  withTrailingNewline,
-} from "openclaw/plugin-sdk/memory-host-markdown";
+import { withTrailingNewline } from "openclaw/plugin-sdk/memory-host-markdown";
 import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -16,6 +13,7 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
   parseWikiMarkdown,
   renderWikiMarkdown,
+  replaceWikiManagedMarkdownBlock,
   slugifyWikiPageStem,
   slugifyWikiSegment,
   normalizeWikiClaims,
@@ -171,7 +169,7 @@ function buildSynthesisBody(params: {
   const base = params.originalBody?.trim().length
     ? params.originalBody
     : `# ${params.title}\n\n## Notes\n${HUMAN_START}\n${HUMAN_END}\n`;
-  const withGenerated = replaceManagedMarkdownBlock({
+  const withGenerated = replaceWikiManagedMarkdownBlock({
     original: base,
     heading: "## Summary",
     startMarker: GENERATED_START,

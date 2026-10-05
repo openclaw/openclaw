@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
+  replaceManagedMarkdownBlock,
+  withTrailingNewline,
+  type ManagedMarkdownBlockParams,
+} from "openclaw/plugin-sdk/memory-host-markdown";
+import {
   asFiniteNumber,
   asNullableRecord,
   normalizeLowercaseStringOrEmpty,
@@ -407,6 +412,36 @@ function findNotesHumanBlock(page: string): { start: number; end: number } | nul
   return { start, end: endMarker + HUMAN_END_MARKER.length };
 }
 
+function findNotesSectionRange(page: string): { start: number; end: number } | null {
+  const searchFrom = afterSourceContentFence(page);
+  const heading = /(?:^|\r?\n)(## Notes[\t ]*(?:\r?\n|$))/u.exec(page.slice(searchFrom));
+  if (!heading) {
+    return null;
+  }
+  const linePrefixLength = heading[0].startsWith("\r\n") ? 2 : heading[0].startsWith("\n") ? 1 : 0;
+  const start = searchFrom + heading.index + linePrefixLength;
+  let lineStart = searchFrom + heading.index + heading[0].length;
+  let fence: { marker: "\x60" | "~"; length: number } | undefined;
+  while (lineStart < page.length) {
+    const newline = page.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? page.length : newline;
+    const line = page.slice(lineStart, lineEnd).replace(/\r$/u, "");
+    const fenceMarker = /^ {0,3}(\x60{3,}|~{3,})/u.exec(line)?.[1];
+    if (fence) {
+      const closeMarker = /^ {0,3}(\x60+|~+)[\t ]*$/u.exec(line)?.[1];
+      if (closeMarker?.startsWith(fence.marker) && closeMarker.length >= fence.length) {
+        fence = undefined;
+      }
+    } else if (fenceMarker) {
+      fence = { marker: fenceMarker[0] as "\x60" | "~", length: fenceMarker.length };
+    } else if (/^ {0,3}##[\t ]+/u.test(line)) {
+      return { start, end: lineStart };
+    }
+    lineStart = newline === -1 ? page.length : newline + 1;
+  }
+  return { start, end: page.length };
+}
+
 export function extractHumanNotesBlock(page: string): string | null {
   const block = findNotesHumanBlock(page);
   if (!block) {
@@ -417,6 +452,33 @@ export function extractHumanNotesBlock(page: string): string | null {
     block.end - HUMAN_END_MARKER.length,
   );
   return notes.trim() ? page.slice(block.start, block.end) : null;
+}
+
+export function replaceWikiManagedMarkdownBlock(params: ManagedMarkdownBlockParams): string {
+  const hasHumanMarkers =
+    params.original.includes(HUMAN_START_MARKER) || params.original.includes(HUMAN_END_MARKER);
+  const notes = hasHumanMarkers ? findNotesHumanBlock(params.original) : null;
+  const notesSection = findNotesSectionRange(params.original);
+  const updated = withTrailingNewline(
+    replaceManagedMarkdownBlock({
+      ...params,
+      recoverInlineOrphanEnds: true,
+      protectedRanges: [
+        ...(params.protectedRanges ?? []),
+        ...(notesSection ? [notesSection] : []),
+        ...(notes ? [notes] : []),
+      ],
+    }),
+  );
+  if (
+    hasHumanMarkers &&
+    extractHumanNotesBlock(params.original) !== extractHumanNotesBlock(updated)
+  ) {
+    throw new Error(
+      "Updating managed wiki content would replace human Notes; restore human Notes outside managed markers before updating this page",
+    );
+  }
+  return updated;
 }
 
 export function preserveHumanNotesBlock(rendered: string, existing: string): string {

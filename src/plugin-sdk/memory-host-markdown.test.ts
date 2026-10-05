@@ -121,6 +121,59 @@ describe("replaceManagedMarkdownBlock", () => {
     expect(updated.split("<!-- end -->")).toHaveLength(2);
   });
 
+  it.each(["\n", "\r\n"])(
+    "recovers a trailing inline orphan without changing history (%j)",
+    (newline) => {
+      const params = {
+        startMarker: "<!-- start -->",
+        endMarker: "<!-- end -->",
+        body: "current",
+        recoverInlineOrphanEnds: true,
+      };
+      const history = `## History — 2026-10-03${newline}Retained dated event [Event 9f55].`;
+      const examples = [
+        "Use <!-- start --> and <!-- end -->",
+        "Literal <!-- end -->",
+        "Escaped \\<!-- end -->",
+        "Use <!-- end --> within prose.",
+        "`code <!-- end -->`",
+        "```md",
+        "code <!-- end -->",
+        "```",
+      ].join(newline);
+      const prefix = `<!-- start -->${newline}stale${newline}<!-- end -->${newline}`;
+      const original = `${prefix}${history}<!-- end -->  ${newline}${history}${newline}${examples}${newline}`;
+      const updated = replaceManagedMarkdownBlock({ original, ...params });
+      expect(updated).toBe(
+        `<!-- start -->\ncurrent\n<!-- end -->${newline}${history}  ${newline}${history}${newline}${examples}${newline}`,
+      );
+      expect(replaceManagedMarkdownBlock({ original: updated, ...params })).toBe(updated);
+    },
+  );
+
+  it("does not use an inline end as a closing boundary or as an unanchored repair", () => {
+    const params = { startMarker: "<!-- start -->", endMarker: "<!-- end -->", body: "current" };
+    expect(() =>
+      replaceManagedMarkdownBlock({ original: "<!-- start -->\nprose<!-- end -->", ...params }),
+    ).toThrow("restore the missing end marker");
+    const original = "Unowned prose<!-- end -->\n";
+    expect(replaceManagedMarkdownBlock({ original, ...params })).toBe(
+      `${original}\n<!-- start -->\ncurrent\n<!-- end -->\n`,
+    );
+  });
+
+  it("preserves inline marker-like prose unless the caller opts into recovery", () => {
+    const original = "<!-- start -->\nold\n<!-- end -->\n## Notes\nkeep<!-- end -->\n";
+    expect(
+      replaceManagedMarkdownBlock({
+        original,
+        startMarker: "<!-- start -->",
+        endMarker: "<!-- end -->",
+        body: "current",
+      }),
+    ).toBe("<!-- start -->\ncurrent\n<!-- end -->\n## Notes\nkeep<!-- end -->\n");
+  });
+
   it("rejects orphan-only and unclosed marker sequences", () => {
     const params = {
       startMarker: "<!-- start -->",

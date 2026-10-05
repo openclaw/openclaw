@@ -379,6 +379,55 @@ keep this note
     ).resolves.toContain("[Alpha](alpha.md)");
   });
 
+  it("recovers a trailing orphan marker without changing human Notes, history, or source IDs", async () => {
+    const { rootDir, config } = await createVault({ initialize: true });
+    const target = path.join(rootDir, "syntheses", "ac-shared.md");
+    const end = "<!-- openclaw:wiki:generated:end -->";
+    const summary = "Current reviewed Shared summary.";
+    const history = "## History — 2026-10-03\nRetained dated rationale [Event 9f55].";
+    const notes = `<!-- openclaw:human:start -->\nPatrickDecisionNote: keep this literal${end}\n<!-- openclaw:human:end -->`;
+    const code = ["```md", `Code example ${end}`, "```", "Inline example `code " + end + "`"].join(
+      "\n",
+    );
+    const sourceIds = ["source.shared-original", "source.shared-revision", "source.shared-latest"];
+    await fs.writeFile(
+      target,
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.ac-shared",
+          title: "AC shared",
+          sourceIds,
+          custom: "keep",
+        },
+        body: `# AC shared\n\n## Notes\n${notes}\n\n## Summary\n<!-- openclaw:wiki:generated:start -->\n${summary}\n${end}\n\n${history}${end}\n${history}\n${code}\n`,
+      }),
+    );
+    let firstBody: string | undefined;
+    for (const attempt of [1, 2]) {
+      const result = await applyMemoryWikiMutation({
+        config,
+        mutation: { op: "create_synthesis", title: "AC shared", body: summary, sourceIds },
+      });
+      expect(result.pageId).toBe("synthesis.ac-shared");
+      const parsed = parseWikiMarkdown(await fs.readFile(target, "utf8"));
+      expect(parsed.frontmatter).toMatchObject({
+        id: "synthesis.ac-shared",
+        sourceIds,
+        custom: "keep",
+      });
+      expect(parsed.body).toContain(notes);
+      expect(parsed.body).toContain(`${history}\n${history}\n${code}\n`);
+      expect(parsed.body).not.toContain(`${history}${end}`);
+      expect(parsed.body.split("<!-- openclaw:wiki:generated:start -->")).toHaveLength(2);
+      if (attempt === 1) {
+        firstBody = parsed.body;
+      } else {
+        expect(parsed.body).toBe(firstBody);
+      }
+    }
+  });
+
   it("preserves disjoint metadata updates from concurrent agent turns", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-apply-concurrent-",
