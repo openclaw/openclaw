@@ -39,6 +39,7 @@ import type {
   SessionEntryProvenance,
   SessionOwnerAssignment,
   SessionParticipant,
+  RequiredSessionWorkspace,
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 import type { SessionSkillSnapshot } from "./session-prompt-types.js";
@@ -359,12 +360,16 @@ type SessionEntryCore = SessionRestartRecoveryState &
     parentSessionKey?: string;
     /** Exact parent incarnation captured when this child was created. */
     parentSessionId?: string;
+    /** Exact parent generation for a hidden child borrowing its required workspace. */
+    parentLifecycleRevision?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
     createdActor?: SessionCreatedActor;
     /** Creation-only sandbox requirement; existing unstamped sessions always remain unstamped. */
     sandbox?: "required";
+    /** Immutable selected-project/worktree requirement, retained across role changes and resets. */
+    requiredWorkspace?: RequiredSessionWorkspace;
     /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
     owner?: SessionOwnerAssignment;
     /** Retained identities, projected from the participant table before display truncation. */
@@ -743,6 +748,23 @@ function normalizeMergedUpdatedAt(value: number | undefined, now: number): numbe
   return normalized === undefined ? undefined : Math.min(normalized, now);
 }
 
+/** Preserve the concrete checkout and borrowed lineage of a required thread. */
+export function projectRequiredSessionWorkspaceBinding(entry: SessionEntry) {
+  return {
+    worktree: entry.worktree,
+    sessionRoot: entry.sessionRoot,
+    spawnedCwd: entry.spawnedCwd,
+    spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
+    execNode: entry.execNode,
+    execCwd: entry.execCwd,
+    execHost: entry.execHost,
+    parentSessionKey: entry.parentSessionKey,
+    parentSessionId: entry.parentSessionId,
+    parentLifecycleRevision: entry.parentLifecycleRevision,
+    repositoryWorkspaceId: entry.repositoryWorkspaceId,
+  };
+}
+
 function mergeSessionEntryWithPolicy(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
@@ -778,6 +800,10 @@ function mergeSessionEntryWithPolicy(
     next.createdActor = existing.createdActor;
   }
   next.inheritedGitContributorProfileIds = existing.inheritedGitContributorProfileIds;
+  next.requiredWorkspace = existing.requiredWorkspace;
+  if (existing.requiredWorkspace) {
+    Object.assign(next, projectRequiredSessionWorkspaceBinding(existing));
+  }
   if (existing.sandbox === "required") {
     next.sandbox = existing.sandbox;
   } else {

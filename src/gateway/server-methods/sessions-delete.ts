@@ -326,6 +326,7 @@ export async function deleteGatewaySession({
               id: deletedWorktreeId,
               sessionKey: deletedSessionKey,
               reason: "session-delete",
+              entry: postCleanupEntry,
             });
           }
           return result;

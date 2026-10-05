@@ -28,6 +28,7 @@ import {
   loadGatewaySessionEntryReadOnly,
   resolveGatewaySessionStoreTarget,
 } from "../session-utils.js";
+import { validateRequiredWorkspaceSelectors } from "../session-workspace-policy.js";
 import {
   prepareSessionWorktreeCreation,
   resolveSessionProjectRoot,
@@ -138,6 +139,29 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const { personalModelSelection, personalAccountDefaults } = personalAccounts;
     const cfg = getCurrentConfig();
+    const explicitlyRequestedKey = normalizeOptionalString(p.key);
+    const explicitlyRequestedAgent = resolveRequestedGlobalAgentId(
+      cfg,
+      explicitlyRequestedKey ?? (p.agentId === undefined ? "main" : undefined),
+      p.agentId ?? parseAgentSessionKey(explicitlyRequestedKey)?.agentId,
+    );
+    if (!explicitlyRequestedAgent.ok) {
+      respond(false, undefined, explicitlyRequestedAgent.error);
+      return;
+    }
+    const existingTargetEntry = explicitlyRequestedKey
+      ? loadGatewaySessionEntryReadOnly(explicitlyRequestedKey, {
+          agentId: explicitlyRequestedAgent.agentId,
+        }).entry
+      : undefined;
+    const workspacePolicy = existingTargetEntry?.requiredWorkspace;
+    if (workspacePolicy) {
+      const selectionError = validateRequiredWorkspaceSelectors(p, workspacePolicy);
+      if (selectionError) {
+        respond(false, undefined, selectionError);
+        return;
+      }
+    }
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
     // Both uncommitted selections must remain authorized after awaited preparation.
     const commitGuard = () => {
@@ -165,16 +189,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const catalogError = resolveSessionCreateCatalogSelectionError(p);
     if (catalogError) {
       respond(false, undefined, catalogError);
-      return;
-    }
-    const explicitlyRequestedKey = normalizeOptionalString(p.key);
-    const explicitlyRequestedAgent = resolveRequestedGlobalAgentId(
-      cfg,
-      explicitlyRequestedKey ?? (p.agentId === undefined ? "main" : undefined),
-      p.agentId ?? parseAgentSessionKey(explicitlyRequestedKey)?.agentId,
-    );
-    if (!explicitlyRequestedAgent.ok) {
-      respond(false, undefined, explicitlyRequestedAgent.error);
       return;
     }
     const catalogRequestedKey = explicitlyRequestedKey ?? "global";
@@ -325,10 +339,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const requestedWorktreeName = normalizeOptionalString(p.worktreeName);
     const explicitSessionLabel = normalizeOptionalString(p.label);
     const preparedDisplayName = normalizeOptionalString(p.displayName);
-    const titleAgentId = explicitlyRequestedAgent.agentId;
-    const existingTargetEntry = explicitlyRequestedKey
-      ? loadGatewaySessionEntryReadOnly(explicitlyRequestedKey, { agentId: titleAgentId }).entry
-      : undefined;
     if (existingTargetEntry?.repositoryWorkspaceId && !repository) {
       respond(
         false,
@@ -343,7 +353,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const deferWorktree =
       p.worktree === true && !emptyWorkspace && hasInitialTurn && !existingTargetEntry;
     let projectRoot: string | undefined;
-    if (requestedProjectId) {
+    if (requestedProjectId && !workspacePolicy) {
       const project = await resolveSessionProjectRoot(cfg, requestedProjectId, p.worktree === true);
       if (!project.ok) {
         respond(false, undefined, project.error);
@@ -360,7 +370,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
     let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
     const preparedRoot =
-      repository || emptyWorkspace
+      repository || emptyWorkspace || workspacePolicy
         ? undefined
         : prepareSessionCreateFilesystemRoot({
             cfg,
@@ -384,7 +394,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         assertCurrent: commitGuard,
       });
     }
-    if (p.worktree === true) {
+    if (p.worktree === true && !workspacePolicy) {
       // Raw cwd authorization and project-registry selection have already been checked.
       const agentId = explicitlyRequestedAgent.agentId;
       let targetKey = sessionKey;

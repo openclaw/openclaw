@@ -40,6 +40,9 @@ export function readSessionCreateTarget(
     const requestedExecCwd = normalizeOptionalString(params.execCwd);
     const changesFilesystemBinding =
       params.prepareLifecycle !== undefined ||
+      (currentTargetEntry.requiredWorkspace !== undefined &&
+        params.projectId !== undefined &&
+        params.projectId !== currentTargetEntry.projectId) ||
       (requestedCwd !== undefined && requestedCwd !== currentTargetEntry.spawnedCwd) ||
       (requestedRoot !== undefined && requestedRoot !== currentTargetEntry.sessionRoot) ||
       (requestedNode !== undefined &&
@@ -47,6 +50,15 @@ export function readSessionCreateTarget(
           requestedNode !== currentTargetEntry.execNode ||
           (requestedExecCwd !== undefined && requestedExecCwd !== currentTargetEntry.execCwd)));
     if (changesFilesystemBinding) {
+      if (currentTargetEntry.requiredWorkspace) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.FORBIDDEN,
+            "This thread must retain its original managed workspace. Select a workspace in a new thread.",
+          ),
+        };
+      }
       // The fence queues new work; it cannot move a checkout underneath an admitted turn.
       // Preparation can allocate before returning, so reject before invoking it.
       if (currentTargetEntry.sessionId !== expectedSessionId) {

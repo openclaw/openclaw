@@ -684,12 +684,16 @@ export async function createGatewaySession(
     preparedLifecycle = preparationResult?.value;
     const pendingWorktree = preparedLifecycle?.pendingWorktree ?? params.pendingWorktree;
     const spawnedCwd = normalizeOptionalString(
-      preparedLifecycle?.spawnedCwd ?? params.spawnedCwd ?? inheritedWorkspace?.spawnedCwd,
+      preparedLifecycle?.spawnedCwd ??
+        params.spawnedCwd ??
+        inheritedWorkspace?.spawnedCwd ??
+        (currentTargetEntry?.requiredWorkspace ? currentTargetEntry.spawnedCwd : undefined),
     );
     const sessionRoot = normalizeOptionalString(
       preparedLifecycle?.sessionRoot ??
         params.sessionRoot ??
         inheritedWorkspace?.sessionRoot ??
+        (currentTargetEntry?.requiredWorkspace ? currentTargetEntry.sessionRoot : undefined) ??
         params.defaultSessionRoot,
     );
     const runtimeCwd = spawnedCwd ?? sessionRoot;

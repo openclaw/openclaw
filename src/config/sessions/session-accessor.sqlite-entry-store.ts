@@ -74,7 +74,10 @@ import {
   normalizeStoreSessionKey,
   resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
-import type { InternalSessionEntry as SessionEntry } from "./types.js";
+import {
+  projectRequiredSessionWorkspaceBinding,
+  type InternalSessionEntry as SessionEntry,
+} from "./types.js";
 export {
   parseReadableSqliteSessionEntryRow,
   parseReadableSqliteSessionEntryRows,
@@ -491,8 +494,23 @@ export function writeSessionEntry(
   // Doctor/import owners validate and select a whole creator stamp across aliases.
   // Preserve their selection unless this canonical node already owns required isolation;
   // ordinary writes cannot restamp a logical node's creator.
-  if (!options.allowStoredAliases || canonicalPreviousEntry?.sandbox === "required") {
+  if (
+    !options.allowStoredAliases ||
+    canonicalPreviousEntry?.sandbox === "required" ||
+    canonicalPreviousEntry?.requiredWorkspace
+  ) {
     normalizedEntry = preserveCreationStamp(normalizedEntry, canonicalPreviousEntry);
+  }
+  if (canonicalPreviousEntry?.requiredWorkspace) {
+    // The logical thread keeps its admitted checkout even when a later writer
+    // has broader authority. Reset and stale snapshots cannot detach it.
+    normalizedEntry = {
+      ...normalizedEntry,
+      projectId: canonicalPreviousEntry.projectId,
+      ...projectRequiredSessionWorkspaceBinding(canonicalPreviousEntry),
+      pendingWorktree: canonicalPreviousEntry.pendingWorktree,
+      pendingProjectGitUrl: canonicalPreviousEntry.pendingProjectGitUrl,
+    };
   }
   if (isIncognitoSessionKey(sessionKey) && normalizedEntry.createdAt === undefined) {
     // Pin timestamp-less creation once at the writer, never independently in

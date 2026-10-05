@@ -640,6 +640,21 @@ export async function performGatewaySessionReset(params: {
     params.workerPlacementContext ??
     (await import("./session-worker-placement-context.js")).resolveSessionWorkerPlacementContext();
   const resolveResetEntryStateError = (entry: SessionEntry | undefined, canonicalKey: string) => {
+    if (
+      entry?.requiredWorkspace &&
+      (params.prepareLifecycle ||
+        params.clearSpawnedCwd ||
+        params.clearExecBinding ||
+        (params.spawnedCwd !== undefined && params.spawnedCwd !== entry.spawnedCwd) ||
+        (params.sessionRoot !== undefined && params.sessionRoot !== entry.sessionRoot) ||
+        params.execNode ||
+        params.execCwd)
+    ) {
+      return errorShape(
+        ErrorCodes.FORBIDDEN,
+        "Reset must retain this thread's managed workspace. Select a workspace in a new thread to change it.",
+      );
+    }
     const placementError = resolveSessionWorkerPlacementMutationError({
       action: "reset",
       context: workerPlacementContext,

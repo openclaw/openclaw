@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
@@ -11,11 +13,11 @@ import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
 import { readRegistryWorktree } from "./registry-read.js";
 import {
   claimWorktreeRemovalRow,
-  getRegistryWorktree,
   hasLiveWorktreeRunLeaseRow,
   listRegistryWorktrees,
   releaseWorktreeRunLeaseRow,
 } from "./registry.js";
+import { assertRequiredSessionWorktree } from "./required-session-binding.js";
 import type { RunLeaseOwnerChecks } from "./run-lease-owner.js";
 import {
   admitWorktreeRunLeaseRowAsync,
@@ -141,18 +143,32 @@ async function realpathOrSelf(candidate: string): Promise<string> {
 }
 
 export async function resolveWorktreeIdForPath(params: {
-  sessionEntry?: { worktree?: { id: string } };
+  sessionEntry?: { worktree?: { id: string } } & Partial<Omit<SessionEntry, "worktree">>;
+  sessionKey?: string;
+  cfg?: OpenClawConfig;
+  assertCurrent?: () => void;
   candidatePaths: Array<string | undefined>;
   env?: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
   const env = params.env ?? process.env;
   const boundId = params.sessionEntry?.worktree?.id;
+  const boundRecord =
+    boundId === undefined
+      ? undefined
+      : await readRegistryWorktree(captureOpenClawStateWorkerContext({ env }), boundId);
+  if (params.sessionEntry?.requiredWorkspace) {
+    await assertRequiredSessionWorktree({
+      ...params,
+      // SAFETY: The validator reads custody fields only and rejects missing bindings.
+      entry: params.sessionEntry as SessionEntry,
+      record: boundRecord,
+      env,
+    });
+  }
   if (boundId !== undefined) {
-    // The session's stored binding is authoritative: if that worktree is gone the
-    // run must fail closed rather than silently continue as an unmanaged directory.
-    const record = getRegistryWorktree(env, boundId);
-    if (!record || record.removedAt !== undefined) {
-      throw new Error(`managed worktree was removed: ${record?.path ?? boundId}`);
+    // The stored binding is authoritative; removal must not select an unmanaged directory.
+    if (!boundRecord || boundRecord.removedAt !== undefined) {
+      throw new Error(`managed worktree was removed: ${boundRecord?.path ?? boundId}`);
     }
     return boundId;
   }
@@ -246,7 +262,11 @@ function ensureExitCleanupRegistered(): void {
 
 export async function acquireWorktreeRunLease(
   id: string,
-  opts: { env?: NodeJS.ProcessEnv; exclusive?: true } = {},
+  opts: {
+    env?: NodeJS.ProcessEnv;
+    exclusive?: true;
+    validateCheckout?: (record: ManagedWorktreeRecord, assertCurrent: () => void) => Promise<void>;
+  } = {},
 ): Promise<WorktreeRunLease> {
   const env = opts.env ?? process.env;
   ensureExitCleanupRegistered();
@@ -288,6 +308,13 @@ export async function acquireWorktreeRunLease(
     cleanup.gitRetained = true;
     cleanup.refcountReleased = false;
     context.admission.assertCurrent();
+    if (opts.validateCheckout) {
+      const record = await readRegistryWorktree(context, id);
+      if (!record || record.removedAt !== undefined) {
+        throw new Error("Managed worktree changed during run admission");
+      }
+      await opts.validateCheckout(record, () => context.admission.assertCurrent());
+    }
   } catch (error) {
     if (!(await runLeaseCleanup(cleanup))) {
       pendingLeaseCleanups.add(cleanup);

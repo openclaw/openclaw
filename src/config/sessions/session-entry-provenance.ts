@@ -17,6 +17,12 @@ export type SessionActor = {
 export type SessionCreatedActor = SessionActor &
   ({ type: "human"; source: "profile" | "channel" | "unknown" } | { type: "agent" | "system" });
 
+/** Creation policy; the session's existing managed-worktree binding owns its concrete checkout. */
+export type RequiredSessionWorkspace = {
+  projectId: string;
+  worktreeBaseRef: string;
+};
+
 export function sessionCreatorProfileId(
   actor: (SessionActor & { source?: unknown }) | undefined,
 ): string | undefined {
@@ -130,6 +136,7 @@ export function buildSessionCreationStamp(params: {
   actor?: SessionCreatedActor;
   now?: number;
   sandbox?: "required";
+  requiredWorkspace?: RequiredSessionWorkspace;
   incognito?: boolean;
   skillLibrarySelections?: SkillLibrarySelection[];
   inheritedGitContributorProfileIds?: string[];
@@ -139,6 +146,7 @@ export function buildSessionCreationStamp(params: {
   createdActor?: SessionCreatedActor;
   createdAt: number;
   sandbox?: "required";
+  requiredWorkspace?: RequiredSessionWorkspace;
   skillLibrarySelections?: SkillLibrarySelection[];
   inheritedGitContributorProfileIds?: string[];
   conversationLink?: SessionConversationLink;
@@ -149,6 +157,7 @@ export function buildSessionCreationStamp(params: {
     createdAt: params.now ?? Date.now(),
     ...(params.conversationLink ? { conversationLink: params.conversationLink } : {}),
     ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
+    ...(params.requiredWorkspace ? { requiredWorkspace: { ...params.requiredWorkspace } } : {}),
     ...(params.via === "spawn" && !params.incognito && params.inheritedGitContributorProfileIds
       ? { inheritedGitContributorProfileIds: [...params.inheritedGitContributorProfileIds] }
       : {}),
@@ -175,6 +184,7 @@ export function preserveCreationStamp<
         // A logical session keeps its launch conversation even when delivery moves or resets.
         conversationLink: authoritative.conversationLink ?? entry.conversationLink,
         inheritedGitContributorProfileIds: authoritative.inheritedGitContributorProfileIds,
+        requiredWorkspace: authoritative.requiredWorkspace,
         ...(authoritative.sandbox === "required" ? { sandbox: authoritative.sandbox } : {}),
       }
     : entry;

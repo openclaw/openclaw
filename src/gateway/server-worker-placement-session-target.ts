@@ -1,3 +1,7 @@
+import {
+  assertRequiredSessionWorktreeCheckout,
+  matchesRequiredSessionWorkspace,
+} from "../agents/worktrees/required-session-binding.js";
 import type { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { createSessionEntryRevisionGuard } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
@@ -219,7 +223,11 @@ type SessionEntryShape = {
   sessionId?: string;
   lifecycleRevision?: string;
   archivedAt?: number;
-  worktree?: { id?: string };
+  worktree?: { id?: string; repoRoot?: string; branch?: string };
+  requiredWorkspace?: { projectId: string; worktreeBaseRef: string };
+  projectId?: string;
+  sessionRoot?: string;
+  spawnedWorkspaceDir?: string;
   repositoryWorkspaceId?: string;
 };
 
@@ -236,7 +244,14 @@ export async function resolveWorkerPlacementSessionTarget<
   Entry extends SessionEntryShape,
   Store extends Record<string, Entry>,
   Target extends SessionTargetShape<Store>,
-  Worktree extends { id: string; ownerId?: string; path: string },
+  Worktree extends {
+    id: string;
+    ownerId?: string;
+    path: string;
+    repoRoot?: string;
+    baseRef?: string;
+    branch?: string;
+  },
 >(params: {
   sessionRuntime: {
     resolveGatewaySessionStoreTargetWithStore: (input: {
@@ -328,6 +343,9 @@ export async function resolveWorkerPlacementSessionTarget<
       throw targetChangedError();
     }
     if (entry.repositoryWorkspaceId) {
+      if (entry.requiredWorkspace) {
+        throw targetChangedError();
+      }
       prepared?.assertSourceCurrent();
       const repository = prepared?.workspace;
       if (
@@ -359,6 +377,9 @@ export async function resolveWorkerPlacementSessionTarget<
     ) {
       throw targetChangedError();
     }
+    if (entry.requiredWorkspace && !matchesRequiredSessionWorkspace(entry, worktree)) {
+      throw targetChangedError();
+    }
     return {
       config,
       target,
@@ -377,8 +398,23 @@ export async function resolveWorkerPlacementSessionTarget<
     }
     return selected;
   };
+  const selected = resolveCurrent();
+  if (selected.entry.requiredWorkspace) {
+    const worktree = selected.worktree;
+    if (!worktree?.repoRoot || !worktree.branch) {
+      throw targetChangedError();
+    }
+    // Worker snapshot/recovery bypasses local command preparation. Validate the
+    // same checkout identity within its existing session lifecycle fence.
+    await assertRequiredSessionWorktreeCheckout(
+      { path: worktree.path, repoRoot: worktree.repoRoot, branch: worktree.branch },
+      () => {
+        resolveCurrent();
+      },
+    );
+  }
   return {
-    ...resolveCurrent(),
+    ...selected,
     assertBindingCurrent: (config?: OpenClawConfig) => {
       resolveBinding(config);
     },
