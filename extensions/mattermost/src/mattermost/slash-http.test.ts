@@ -513,8 +513,11 @@ describe("slash-http", () => {
     { code: "", expectedText: "Unauthorized." },
   ])("answers a DM pairing slash command with code=$code", async ({ code, expectedText }) => {
     const runtime = createPluginRuntimeMock();
-    runtime.channel.pairing.upsertPairingRequest.mockResolvedValue({ code, created: false });
-    runtime.channel.pairing.buildPairingReply.mockImplementation(
+    vi.mocked(runtime.channel.pairing.upsertPairingRequest).mockResolvedValue({
+      code,
+      created: false,
+    });
+    vi.mocked(runtime.channel.pairing.buildPairingReply).mockImplementation(
       ({ code: replyCode }) => `Pairing code: ${replyCode}`,
     );
     setMattermostRuntime(runtime);
