@@ -203,7 +203,3 @@ export function notifyPreparedModelRuntimePublication(
     log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
   });
 }
-
-export function resetPreparedModelRuntimePublicationListenersForTest(): void {
-  publicationListeners.clear();
-}

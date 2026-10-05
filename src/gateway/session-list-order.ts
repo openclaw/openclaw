@@ -15,8 +15,10 @@ export function compareSessionEntryPairs(
   sortBy: SessionsListParams["sortBy"] = "updatedAt",
 ): number {
   if (sortBy === "updatedAt") {
-    const aPinnedAt = isPinnableSessionEntry(a[0], a[1]) ? (a[1].pinnedAt ?? 0) : 0;
-    const bPinnedAt = isPinnableSessionEntry(b[0], b[1]) ? (b[1].pinnedAt ?? 0) : 0;
+    const aPinnedAt =
+      a[1]?.pinnedAt !== undefined && isPinnableSessionEntry(a[0], a[1]) ? (a[1].pinnedAt ?? 0) : 0;
+    const bPinnedAt =
+      b[1]?.pinnedAt !== undefined && isPinnableSessionEntry(b[0], b[1]) ? (b[1].pinnedAt ?? 0) : 0;
     if (aPinnedAt !== bPinnedAt) {
       return bPinnedAt - aPinnedAt;
     }
