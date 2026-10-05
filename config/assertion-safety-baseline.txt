@@ -1766,7 +1766,6 @@ src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
 src/cli/models-cli.ts	17
 src/cli/native-hook-relay-cli.ts	2
-src/cli/nodes-cli/format.ts	1
 src/cli/nodes-cli/register.pairing.ts	4
 src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	2

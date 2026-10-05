@@ -9,6 +9,7 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import { WebSocket, type RawData } from "../../packages/gateway-client/src/websocket.js";
 import {
   type HelloOk,
@@ -38,7 +39,6 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
-import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";

@@ -2,6 +2,7 @@ import { formatByteSize } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
@@ -17,7 +18,6 @@ import { formatPairingApproveCommand } from "../pairing-command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { formatVersionLabel } from "../version-format.js";
 import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { formatPermissions } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
   callNodesGatewayCli,
@@ -29,6 +29,22 @@ import type { NodesRpcOpts } from "./types.js";
 
 type PairedNodeListRow = PairedNode & Partial<NodeListNode>;
 type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
+
+/** Format node permission maps as a stable `[permission=yes|no]` label. */
+function formatPermissions(raw: unknown) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const entries = Object.entries(raw)
+    .map(([key, value]) => [normalizeStringifiedOptionalString(key) ?? "", value === true] as const)
+    .filter(([key]) => key.length > 0)
+    .toSorted((a, b) => a[0].localeCompare(b[0]));
+  if (entries.length === 0) {
+    return null;
+  }
+  const parts = entries.map(([key, granted]) => `${key}=${granted ? "yes" : "no"}`);
+  return `[${parts.join(", ")}]`;
+}
 
 function formatNodeStatsBytes(bytes: number): string {
   return formatByteSize(bytes, {

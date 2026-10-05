@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -27,7 +28,6 @@ import { resetLogger, setLoggerOverride } from "../logging.js";
 import { loggingState } from "../logging/state.js";
 import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { useAuthIdentityFixture } from "./server.auth.identity-fixture.test-support.js";
 import { CONTROL_UI_CLIENT, NODE_CLIENT } from "./server.auth.test-helpers.js";
 import {

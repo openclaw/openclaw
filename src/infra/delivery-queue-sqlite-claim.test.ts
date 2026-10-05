@@ -4,8 +4,8 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { createInitialDeliveryProducerClaim } from "./delivery-queue-sqlite-claim.js";
 import {
+  createInitialDeliveryProducerClaim,
   dispatchDeliveryQueueEntryPlatformSendInDatabase,
   promoteDeliveryQueueEntryPlatformSendInDatabase,
   transitionOwnedDeliveryQueueEntryInDatabase,

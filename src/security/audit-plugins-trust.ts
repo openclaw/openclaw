@@ -8,8 +8,8 @@ import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/type
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { InstallRecordBase } from "../config/types.installs.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import type { InstallRecordBase } from "../config/zod-schema.installs.js";
 import { readHookInstalls } from "../hooks/installs.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";

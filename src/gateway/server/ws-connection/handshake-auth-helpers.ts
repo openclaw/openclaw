@@ -1,6 +1,10 @@
 // Handshake auth helpers classify browser security context, pairing locality, and connect auth details.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
+  buildDeviceAuthPayload,
+  buildDeviceAuthPayloadV3,
+} from "../../../../packages/gateway-client/src/device-auth.js";
+import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
@@ -8,7 +12,6 @@ import type { ConnectParams } from "../../../../packages/gateway-protocol/src/in
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
-import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
 import {
   isLoopbackAddress,
   isLoopbackHost,

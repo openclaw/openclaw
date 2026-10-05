@@ -1,4 +1,8 @@
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeUniqueStringEntries,
   normalizeUniqueTrimmedStringList,
@@ -18,8 +22,12 @@ import {
 } from "../infra/node-commands.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime-state.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
-import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
-import { MOBILE_NODE_COMMANDS } from "./node-command-policy-mobile.js";
+
+const MOBILE_NODE_COMMANDS = {
+  location: ["location.get"],
+  androidNotification: ["notifications.list", "notifications.actions"],
+  device: ["device.info", "device.status"],
+};
 
 const CAMERA_COMMANDS = ["camera.list"];
 const MAC_CAMERA_COMMANDS = ["camera.ptz.status"];
@@ -202,6 +210,16 @@ const PLATFORM_RULES: ReadonlyArray<{
   { id: "windows", tokens: ["windows"] },
   { id: "linux", tokens: ["linux"] },
 ];
+
+function normalizeDeviceMetadataForPolicy(value?: string | null): string {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return "";
+  }
+  // Policy classification should collapse Unicode confusables to stable ASCII-ish
+  // tokens where possible before matching platform/family rules.
+  return normalizeLowercaseStringOrEmpty(trimmed.normalize("NFKD").replace(/\p{M}/gu, ""));
+}
 
 function normalizePlatformId(platform?: string, deviceFamily?: string): PlatformId {
   const raw = normalizeDeviceMetadataForPolicy(platform);
