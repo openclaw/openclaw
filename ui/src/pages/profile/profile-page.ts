@@ -11,8 +11,9 @@ import {
   GIT_COAUTHOR_PREFERENCE_KEY,
   isGitCoauthorCreditEnabled,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { isNavigationRouteVisible, subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -374,6 +375,12 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private renderConnectionAccess() {
     const scopes = this.connectionScopes;
+    const grants = [
+      ["sessionActions", ["operator.sessions.write"]],
+      ["archive", ["operator.sessions.write", "operator.sessions.archive"]],
+      ["review", ["operator.sessions.read"]],
+      ["serverSettings", ["operator.admin"]],
+    ] as const;
     const summary =
       scopes === null
         ? "unknown"
@@ -396,6 +403,38 @@ export class ProfilePage extends OpenClawLightDomElement {
             title: t(`profilePage.access.${summary}`),
             description: t("profilePage.access.limits"),
           })}
+          ${
+            this.ownProfile?.role
+              ? renderSettingsRow({
+                  title: t("profilePage.access.role"),
+                  description: t("profilePage.access.roleDescription"),
+                  control: renderSettingsValue(this.ownProfile.role),
+                })
+              : nothing
+          }
+          ${
+            scopes === null
+              ? nothing
+              : grants.map(
+                  ([action, requestedScopes]) =>
+                    html`<div data-access-action=${action}>
+                      ${renderSettingsRow({
+                        title: t(`profilePage.access.${action}`),
+                        control: renderSettingsValue(
+                          t(
+                            roleScopesAllow({
+                              role: this.context.gateway.snapshot.hello?.auth?.role ?? "operator",
+                              requestedScopes,
+                              allowedScopes: scopes,
+                            })
+                              ? "profilePage.access.granted"
+                              : "profilePage.access.notGranted",
+                          ),
+                        ),
+                      })}
+                    </div>`,
+                )
+          }
           ${renderSettingsRow({
             title: t("profilePage.access.help"),
             description: t("profilePage.access.nextStep"),
@@ -491,13 +530,17 @@ export class ProfilePage extends OpenClawLightDomElement {
           ? html`
               ${this.renderModelAccounts()}
               <openclaw-github-connections></openclaw-github-connections>
-              ${renderSettingsGroup(
-                renderSettingsNavRow({
-                  title: t("profilePage.usageStatistics"),
-                  description: t("profilePage.usageStatisticsDescription"),
-                  onClick: () => this.context.navigate("usage"),
-                }),
-              )}
+              ${
+                isNavigationRouteVisible("usage", this.connectionScopes ?? [])
+                  ? renderSettingsGroup(
+                      renderSettingsNavRow({
+                        title: t("profilePage.usageStatistics"),
+                        description: t("profilePage.usageStatisticsDescription"),
+                        onClick: () => this.context.navigate("usage"),
+                      }),
+                    )
+                  : nothing
+              }
             `
           : nothing
       }

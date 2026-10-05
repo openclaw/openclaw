@@ -341,6 +341,24 @@ suite.define(() => {
               ]
             : [],
         );
+        await page.evaluate((url) => {
+          history.pushState(null, "", url);
+          dispatchEvent(new PopStateEvent("popstate"));
+        }, `${suite.server.baseUrl}settings/appearance`);
+        await waitForControlUiRoute(page, {
+          pathname: "/settings/appearance",
+          routeId: "appearance",
+        });
+        const settings = page.locator(".settings-sidebar");
+        await settings.locator('a[href="/settings/profile"]').waitFor();
+        expect(
+          await settings
+            .locator(
+              'a[href="/settings/security"], a[href="/settings/channels"], a[href="/settings/model-providers"]',
+            )
+            .count(),
+        ).toBe(0);
+        await captureUiProof(suite, page, `${name}-personal-settings.png`, settings);
       } catch (error) {
         await captureControlUiE2eFailureDiagnostics(page, {
           error: error instanceof Error ? error : new Error(String(error)),

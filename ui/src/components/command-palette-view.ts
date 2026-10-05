@@ -7,6 +7,7 @@ import {
   type RouteId,
 } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { t } from "../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
@@ -62,6 +63,8 @@ type CommandPaletteProps = {
   defaultAgentId: string;
   sessionItems: readonly CommandPaletteItem[];
   catalogItems: readonly CommandPaletteItem[];
+  operatorScopes?: readonly string[];
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   primaryModelSearch: boolean;
   modelSearchError: string | null;
   sessionSearchPending: boolean;

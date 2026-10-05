@@ -8,11 +8,13 @@ import type {
 } from "../api/types.ts";
 import {
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
+  isNavigationRouteVisible,
+  isSettingsNavigationRouteVisible,
   settingsNavigationLabelForRoute,
   subtitleForRoute,
   visibleSettingsNavigationGroups,
 } from "../app-navigation.ts";
-import type { RouteId } from "../app-route-paths.ts";
+import { isRouteId, type RouteId } from "../app-route-paths.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { t } from "../i18n/index.ts";
 import { registerAppsEnglish } from "../i18n/locales/en-apps.ts";
@@ -150,11 +152,21 @@ export function filterCommandPaletteItems(params: {
   desktopAvailable: boolean;
   custodianAvailable: boolean;
   primaryModelSearch?: boolean;
+  operatorScopes?: readonly string[];
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
 }): CommandPaletteItem[] {
+  const visible = (item: CommandPaletteItem) => {
+    const route = item.action.startsWith("nav:") ? item.action.slice(4) : undefined;
+    return (
+      !route ||
+      !isRouteId(route) ||
+      isNavigationRouteVisible(route, params.operatorScopes ?? [], params.nativeDeviceSettings)
+    );
+  };
   const baseItems = getCommandPaletteBaseItems(
     params.desktopAvailable,
     params.custodianAvailable,
-  ).filter((item) => params.includeSlashCommands || item.category !== "search");
+  ).filter((item) => visible(item) && (params.includeSlashCommands || item.category !== "search"));
   if (!params.query) {
     return baseItems;
   }
@@ -177,6 +189,7 @@ export function filterCommandPaletteItems(params: {
   };
   const baseMatches = baseItems.filter((item) => matchRank(item) > 0);
   const catalogMatches = params.catalogItems
+    .filter(visible)
     .map((item) => ({ item, rank: matchRank(item) }))
     .filter(({ rank }) => rank > 0)
     .toSorted(
@@ -200,12 +213,16 @@ const APP_CARDS = [
 ] as const;
 
 export function getStaticCommandPaletteCatalogItems(
-  canAdmin: boolean,
+  operatorScopes: readonly string[],
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): CommandPaletteItem[] {
-  const settings = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings)
+  const settings = visibleSettingsNavigationGroups(operatorScopes, nativeDeviceSettings)
     .flatMap((group) => group.routes)
-    .concat(SETTINGS_SEARCHABLE_SUBPAGE_ROUTES)
+    .concat(
+      SETTINGS_SEARCHABLE_SUBPAGE_ROUTES.filter((routeId) =>
+        isSettingsNavigationRouteVisible(routeId, operatorScopes, nativeDeviceSettings),
+      ),
+    )
     .map((routeId) => ({
       id: `settings-${routeId}`,
       label: settingsNavigationLabelForRoute(routeId),
@@ -227,7 +244,7 @@ export function getStaticCommandPaletteCatalogItems(
   const capture = SETTINGS_SEARCH_TARGETS.meetingCapture;
   return [
     ...settings,
-    ...(canAdmin
+    ...(isSettingsNavigationRouteVisible(capture.routeId, operatorScopes, nativeDeviceSettings)
       ? [
           {
             id: "settings-meeting-capture",

@@ -17,6 +17,7 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import type { CommandPalette } from "./command-palette.ts";
 
 type GatewayHarness = {
@@ -46,7 +47,7 @@ export function createGateway(
     phase: connected ? "connected" : "reconnecting",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: options.methods ? ({ features: { methods: options.methods } } as never) : null,
+    hello: gatewayHelloForMethods(options.methods ?? [], ["operator.read"]),
     assistantAgentId: "main",
     sessionKey: "main",
     lastError: null,

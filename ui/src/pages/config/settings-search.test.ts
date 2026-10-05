@@ -10,7 +10,13 @@ afterEach(async () => {
 describe("findSettingsSearchBlocks", () => {
   it("finds the meeting library separately from its Communications capture settings", () => {
     const search = (query: string) =>
-      findSettingsSearchBlocks({ query, schema: null, value: {}, uiHints: {} });
+      findSettingsSearchBlocks({
+        operatorScopes: ["operator.admin"],
+        query,
+        schema: null,
+        value: {},
+        uiHints: {},
+      });
     expect(search("meeting notes")).toContainEqual(
       expect.objectContaining({ routeId: "meetings" }),
     );
@@ -22,6 +28,7 @@ describe("findSettingsSearchBlocks", () => {
       }),
     );
     const matches = findSettingsSearchBlocks({
+      operatorScopes: ["operator.admin"],
       query: "autoStart",
       schema: {
         type: "object",
@@ -72,7 +79,14 @@ describe("findSettingsSearchBlocks", () => {
         expect(runtime.t(key), key).toBe(key);
       }
       const { findSettingsSearchBlocks: search } = await import("./settings-search.ts");
-      const find = (query: string) => search({ query, schema: null, value: null, uiHints: {} });
+      const find = (query: string) =>
+        search({
+          operatorScopes: ["operator.admin"],
+          query,
+          schema: null,
+          value: null,
+          uiHints: {},
+        });
 
       expect(find("check for updates")).toEqual([
         expect.objectContaining({ routeId: "updates", label: "Updates" }),
@@ -124,6 +138,7 @@ describe("findSettingsSearchBlocks", () => {
 
   it("uses word prefixes instead of arbitrary substrings for short queries", () => {
     const matches = findSettingsSearchBlocks({
+      operatorScopes: ["operator.admin"],
       query: "cp",
       schema: {
         type: "object",
@@ -148,6 +163,7 @@ describe("findSettingsSearchBlocks", () => {
   it("routes setup consent to Advanced with its disclosure open", () => {
     expect(
       findSettingsSearchBlocks({
+        operatorScopes: ["operator.admin"],
         query: "discovery access",
         schema: {
           type: "object",
@@ -176,6 +192,7 @@ describe("findSettingsSearchBlocks", () => {
   it.each(["securityAcknowledgedAt"])("does not offer machine-owned %s in search", (key) => {
     expect(
       findSettingsSearchBlocks({
+        operatorScopes: ["operator.admin"],
         query: "internal bookkeeping",
         schema: {
           type: "object",
@@ -216,6 +233,7 @@ describe("findSettingsSearchBlocks", () => {
     };
 
     const searchOnly = findSettingsSearchBlocks({
+      operatorScopes: ["operator.admin"],
       query: "embedding model",
       schema: memorySchema,
       value: {},
@@ -229,6 +247,7 @@ describe("findSettingsSearchBlocks", () => {
     ]);
 
     const sectionWide = findSettingsSearchBlocks({
+      operatorScopes: ["operator.admin"],
       query: "memory",
       schema: memorySchema,
       value: {},
@@ -263,6 +282,7 @@ describe("findSettingsSearchBlocks", () => {
     };
     const servers: Record<string, { command: string }> = {};
     const params = {
+      operatorScopes: ["operator.admin"],
       query: "zephyr",
       schema,
       value: { mcp: { servers } },
@@ -277,7 +297,7 @@ describe("findSettingsSearchBlocks", () => {
       hash: "#config-section-mcp",
     };
     expect(findSettingsSearchBlocks(params)).toEqual([common]);
-    expect(findSettingsSearchBlocks({ ...params, canAdmin: false })).toEqual([]);
+    expect(findSettingsSearchBlocks({ ...params, operatorScopes: ["operator.read"] })).toEqual([]);
     expect(findSettingsSearchBlocks(params)).toEqual([common]);
     expect(findSettingsSearchBlocks({ ...params, uiHints: {} })).toEqual([
       { ...common, search: "?section=mcp&advanced=1" },
@@ -317,6 +337,7 @@ describe("findSettingsSearchBlocks", () => {
 
     expect(
       findSettingsSearchBlocks({
+        operatorScopes: ["operator.admin"],
         query: "check on start",
         schema: updateSchema,
         value: {},
@@ -325,6 +346,7 @@ describe("findSettingsSearchBlocks", () => {
     ).toEqual([expect.objectContaining({ routeId: "updates", hash: "#config-section-update" })]);
     expect(
       findSettingsSearchBlocks({
+        operatorScopes: ["operator.admin"],
         query: "check for updates",
         schema: null,
         value: null,
@@ -333,6 +355,7 @@ describe("findSettingsSearchBlocks", () => {
     ).toEqual([expect.objectContaining({ routeId: "updates", hash: "#config-section-update" })]);
     expect(
       findSettingsSearchBlocks({
+        operatorScopes: ["operator.admin"],
         query: "update channel",
         schema: updateSchema,
         value: {},
@@ -356,13 +379,14 @@ describe("findSettingsSearchBlocks", () => {
         },
         value: {},
         uiHints: {},
-        canAdmin: false,
+        operatorScopes: ["operator.read"],
       }),
     ).toEqual([]);
   });
 
   it("routes uncurated schema sections to the Advanced page", () => {
     const matches = findSettingsSearchBlocks({
+      operatorScopes: ["operator.admin"],
       query: "secrets",
       schema: {
         type: "object",
@@ -404,18 +428,31 @@ describe("findSettingsSearchBlocks", () => {
       uiHints: {},
     };
 
-    expect(findSettingsSearchBlocks({ query: "Enable plugins", ...common })).toEqual([
+    expect(
+      findSettingsSearchBlocks({
+        operatorScopes: ["operator.admin"],
+        query: "Enable plugins",
+        ...common,
+      }),
+    ).toEqual([
       expect.objectContaining({
         routeId: "plugin-settings",
         search: "?tab=advanced",
         hash: "#plugin-settings-advanced",
       }),
     ]);
-    expect(findSettingsSearchBlocks({ query: "Plugin entries", ...common })).toEqual([]);
+    expect(
+      findSettingsSearchBlocks({
+        operatorScopes: ["operator.admin"],
+        query: "Plugin entries",
+        ...common,
+      }),
+    ).toEqual([]);
   });
 
   it("preserves nested schema matches for short prefix queries", () => {
     const matches = findSettingsSearchBlocks({
+      operatorScopes: ["operator.admin"],
       query: "sa",
       schema: {
         type: "object",
@@ -462,6 +499,7 @@ describe("findSettingsSearchBlocks", () => {
     await i18n.setLocale("es");
 
     const matches = findSettingsSearchBlocks({
+      operatorScopes: ["operator.admin"],
       query: "modelo",
       schema: null,
       value: null,
@@ -493,6 +531,7 @@ describe("findSettingsSearchBlocks", () => {
     ["show task progress cards", "Chat", "#settings-appearance-chat"],
   ])("finds the appearance control for %s", (query, label, hash) => {
     const matches = findSettingsSearchBlocks({
+      operatorScopes: ["operator.admin"],
       query,
       schema: null,
       value: null,
@@ -513,6 +552,7 @@ describe("findSettingsSearchBlocks", () => {
     await i18n.setLocale("es");
 
     const matches = findSettingsSearchBlocks({
+      operatorScopes: ["operator.admin"],
       query: "archivada",
       schema: null,
       value: null,
@@ -530,6 +570,7 @@ describe("findSettingsSearchBlocks", () => {
   it("does not create block results for an empty query", () => {
     expect(
       findSettingsSearchBlocks({
+        operatorScopes: ["operator.admin"],
         query: "  ",
         schema: null,
         value: null,
@@ -541,6 +582,7 @@ describe("findSettingsSearchBlocks", () => {
   it("only exposes the identity block when the connection has an identity", () => {
     const search = (identityAvailable: boolean) =>
       findSettingsSearchBlocks({
+        operatorScopes: ["operator.admin"],
         query: "avatar",
         schema: null,
         value: null,
@@ -561,6 +603,7 @@ describe("findSettingsSearchBlocks", () => {
 it("only offers personal instructions search on a multi-user Gateway", () => {
   const search = (multipleProfiles: boolean) =>
     findSettingsSearchBlocks({
+      operatorScopes: ["operator.admin"],
       query: "personal instructions",
       schema: null,
       value: null,

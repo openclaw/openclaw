@@ -7,6 +7,15 @@ const enProfile = {
   profilePage: {
     access: {
       title: "Your access",
+      role: "Assigned role",
+      roleDescription:
+        "Your server configures this role. Its name does not grant additional permissions.",
+      sessionActions: "Edit and organize your own sessions",
+      archive: "Archive and restore your own sessions",
+      review: "Review your own isolated workspace",
+      serverSettings: "Manage server settings",
+      granted: "Granted",
+      notGranted: "Not granted",
       admin: "You have permission to manage this server.",
       write: "You have permission to send messages and make changes.",
       read: "You have permission to view server information.",

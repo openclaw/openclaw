@@ -7,9 +7,50 @@ import {
 } from "./command-palette-catalog-search.ts";
 
 describe("command palette catalog search", () => {
+  it("keeps restricted navigation and settings personal while retaining own sessions", () => {
+    const scopes = ["operator.sessions.write"];
+    const items = filterCommandPaletteItems({
+      query: "",
+      includeSlashCommands: false,
+      operatorScopes: scopes,
+      sessionItems: [],
+      catalogItems: [],
+      desktopAvailable: false,
+      custodianAvailable: false,
+    });
+    expect(items.map((item) => item.action)).toEqual([
+      "nav:new-session",
+      "nav:sessions",
+      "nav:apps",
+      "nav:appearance",
+    ]);
+    const settings = getStaticCommandPaletteCatalogItems(scopes).filter(
+      (item) => item.category === "settings",
+    );
+    expect(settings.map((item) => item.action)).toEqual([
+      "nav:profile",
+      "nav:appearance",
+      "nav:notifications",
+      "nav:connection",
+      "nav:about",
+    ]);
+    expect(
+      filterCommandPaletteItems({
+        query: "security",
+        includeSlashCommands: false,
+        operatorScopes: scopes,
+        sessionItems: [],
+        catalogItems: getStaticCommandPaletteCatalogItems(["operator.admin"]),
+        desktopAvailable: false,
+        custodianAvailable: false,
+      }),
+    ).toEqual([]);
+  });
+
   it("opens meeting transcripts from search without querying agent chat history", () => {
     const items = filterCommandPaletteItems({
       query: "meeting",
+      operatorScopes: ["operator.read"],
       includeSlashCommands: false,
       sessionItems: [],
       catalogItems: [],
@@ -21,8 +62,8 @@ describe("command palette catalog search", () => {
     );
   });
   it("exposes app cards and permission-filtered settings sections without RPCs", () => {
-    const regular = getStaticCommandPaletteCatalogItems(false);
-    const admin = getStaticCommandPaletteCatalogItems(true);
+    const regular = getStaticCommandPaletteCatalogItems(["operator.read"]);
+    const admin = getStaticCommandPaletteCatalogItems(["operator.admin"]);
 
     expect(regular).toEqual(
       expect.arrayContaining([

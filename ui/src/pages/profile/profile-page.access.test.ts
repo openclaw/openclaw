@@ -111,7 +111,7 @@ it("retires displayed grants on disconnect and uses the newly negotiated scopes"
   harness.emitHello(gatewayHelloForMethods([], ["operator.admin"]));
   const page = mountProfilePage(harness.context);
   await page.updateComplete;
-  expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.admin");
+  expect(page.querySelector("details .settings-row__value")?.textContent).toBe("operator.admin");
 
   harness.emitConnected(false);
   await page.updateComplete;
@@ -122,12 +122,14 @@ it("retires displayed grants on disconnect and uses the newly negotiated scopes"
   harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));
   harness.emitConnected(true);
   await page.updateComplete;
-  expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.read");
+  expect(page.querySelector("details .settings-row__value")?.textContent).toBe("operator.read");
 
   // Narrow-grant updates do not change the profile editor's broad write permission.
   harness.emitHello(gatewayHelloForMethods([], ["operator.sessions.read"]));
   await page.updateComplete;
-  expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.sessions.read");
+  expect(page.querySelector("details .settings-row__value")?.textContent).toBe(
+    "operator.sessions.read",
+  );
 });
 
 it("reconnects through the existing connection owner without requesting broader access", async () => {
@@ -149,4 +151,35 @@ it("reconnects through the existing connection owner without requesting broader 
   expect(page.querySelector("#settings-profile-access")).toBeNull();
   expect(page.querySelector('[role="status"]')?.textContent).toContain("Connecting…");
   expect(page.querySelector("openclaw-personal-instructions")).toBe(personalEditor);
+});
+
+it("explains action grants independently of the assigned role name", async () => {
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile: { ...modelAccountProfile, role: "contributor" } };
+    }
+    return {};
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: modelAccountProfile.id,
+    identity: { type: "profile", id: modelAccountProfile.id },
+  });
+  const scopes = ["operator.sessions.read", "operator.sessions.write"];
+  harness.emitHello(gatewayHelloForMethods([], scopes));
+  const page = mountProfilePage(harness.context);
+  await page.updateComplete;
+  await vi.waitFor(() => expect(page.textContent).toContain("contributor"));
+  const action = (name: string) =>
+    page.querySelector(`[data-access-action="${name}"] .settings-row__value`)?.textContent;
+  expect(action("sessionActions")).toBe("Granted");
+  expect(action("review")).toBe("Granted");
+  for (const name of ["archive", "serverSettings"]) {
+    expect(action(name)).toBe("Not granted");
+  }
+  expect(page.textContent).not.toContain("Usage statistics");
+
+  harness.emitHello(gatewayHelloForMethods([], [...scopes, "operator.sessions.archive"]));
+  await page.updateComplete;
+  expect(action("archive")).toBe("Granted");
+  expect(request.mock.calls.every(([method]) => method === "users.self")).toBe(true);
 });

@@ -104,6 +104,12 @@ before returning changes. It does not fall back to a shared agent checkout or
 expose the host workspace path. A session without its own checkout shows an
 explanation directing the person to create a session with a worktree.
 
+Control UI navigation shows personal preferences and the destinations permitted
+by the negotiated scopes. Server configuration, diagnostics, automation, and
+device administration require their respective broader grants. This applies to
+the sidebar, settings search, and command palette; Gateway APIs enforce the same
+scope requirements independently.
+
 Own-work methods, including message sending, ordinary session creation,
 recovery, and forks, accept `operator.sessions.write` where their parameters
 do not require administrator access. Session ownership, current authority,
