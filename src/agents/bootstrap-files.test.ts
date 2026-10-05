@@ -39,7 +39,6 @@ import {
 } from "./bootstrap-files.js";
 import { resolveWorkspaceBootstrapRouting } from "./bootstrap-routing.js";
 import { resolveAttemptBootstrapContext } from "./embedded-agent-runner/run/attempt-context-engine-helpers.js";
-import { shouldPersistCompletedBootstrapTurn } from "./embedded-agent-runner/run/attempt-thread-helpers.js";
 import { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./sandbox/remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
@@ -726,15 +725,7 @@ describe("hasCompletedBootstrapTurn", () => {
     const firstTurn = await resolveAttemptBootstrapContext(turnParams);
     expect(firstTurn.isContinuationTurn).toBe(false);
     expect(firstTurn.contextFiles).toEqual(contextFiles);
-    expect(
-      shouldPersistCompletedBootstrapTurn({
-        shouldRecordCompletedBootstrapTurn: firstTurn.shouldRecordCompletedBootstrapTurn,
-        promptError: undefined,
-        aborted: false,
-        timedOutDuringCompaction: false,
-        compactionOccurredThisAttempt: false,
-      }),
-    ).toBe(true);
+    expect(firstTurn.shouldRecordCompletedBootstrapTurn).toBe(true);
 
     // attempt-finalize.ts writes exactly this entry for an eligible clean turn.
     sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
