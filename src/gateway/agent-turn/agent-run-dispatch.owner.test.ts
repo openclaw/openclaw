@@ -112,10 +112,10 @@ describe("Gateway dispatch run ownership", () => {
         mocks.agentCommand.mockImplementationOnce(failStartup);
       }
       const { emitFinal } = params.io;
-      const completion = dispatchAgentRunFromGateway(
-        params,
-        startup === "commentary-media" ? failStartup : undefined,
-      );
+      const completion = dispatchAgentRunFromGateway({
+        ...params,
+        loadCommentaryMedia: startup === "commentary-media" ? failStartup : undefined,
+      });
       try {
         const producer = entry.resolveTerminalProducer?.();
         expect(

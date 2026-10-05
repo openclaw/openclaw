@@ -1,3 +1,4 @@
+import type { WebchatReplyMediaRequesterContext } from "../server-methods/chat-reply-media.js";
 import { resolveChatSendCallerContext } from "../server-methods/gateway-client-identity.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
@@ -12,12 +13,12 @@ export function dispatchAgentRunWithCommentaryMedia(
   if (!sessionKey) {
     return dispatchAgentRunFromGateway(dispatch);
   }
-  const caller = params.client ? resolveChatSendCallerContext(params.client) : undefined;
+  const caller: WebchatReplyMediaRequesterContext | undefined = params.client
+    ? resolveChatSendCallerContext(params.client)
+    : undefined;
   const runContext = ingressOpts.runContext;
-  const messageChannel = runContext?.messageChannel ?? ingressOpts.messageChannel;
-  const groupChannel = runContext?.groupChannel ?? ingressOpts.groupChannel;
-  const groupSpace = runContext?.groupSpace ?? ingressOpts.groupSpace;
-  return dispatchAgentRunFromGateway(dispatch, async () => {
+  // Preserve the dispatch object's execution-identity binding.
+  dispatch.loadCommentaryMedia = async () => {
     const { createAssistantCommentaryMediaCustody } =
       await import("../server-methods/chat-send-commentary-media.js");
     return createAssistantCommentaryMediaCustody({
@@ -27,17 +28,14 @@ export function dispatchAgentRunWithCommentaryMedia(
         sessionKey,
         sessionLoadOptions: { agentId: params.activeSessionAgentId },
       },
-      requesterContext:
-        caller || runContext?.senderId || messageChannel || groupChannel || groupSpace
-          ? {
-              ...caller,
-              SenderId: runContext?.senderId ?? caller?.SenderId,
-              GroupChannel: groupChannel ?? undefined,
-              GroupSpace: groupSpace ?? undefined,
-              Provider: messageChannel ?? caller?.Provider,
-              Surface: messageChannel ?? caller?.Surface,
-            }
-          : undefined,
+      requesterContext: {
+        ...caller,
+        SenderId: runContext?.senderId ?? caller?.SenderId,
+        GroupChannel: runContext?.groupChannel ?? ingressOpts.groupChannel ?? caller?.GroupChannel,
+        GroupSpace: runContext?.groupSpace ?? ingressOpts.groupSpace ?? caller?.GroupSpace,
+        Provider: runContext?.messageChannel ?? ingressOpts.messageChannel ?? caller?.Provider,
+        Surface: runContext?.messageChannel ?? ingressOpts.messageChannel ?? caller?.Surface,
+      },
       accountId: ingressOpts.accountId,
       getRunId: () => dispatch.runId,
       isCurrent: () => {
@@ -58,5 +56,6 @@ export function dispatchAgentRunWithCommentaryMedia(
       logGateway: dispatch.context.logGateway,
       prepareAssistantTranscriptMessage: ingressOpts.prepareAssistantTranscriptMessage,
     });
-  });
+  };
+  return dispatchAgentRunFromGateway(dispatch);
 }

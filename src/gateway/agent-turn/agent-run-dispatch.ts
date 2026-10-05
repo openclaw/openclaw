@@ -48,37 +48,35 @@ import {
 import { bindGatewayAgentTerminalProducer } from "./agent-run-terminal-producer.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
-export function dispatchAgentRunFromGateway(
-  params: {
-    assertCurrent?: () => void;
-    assertSettlementCurrent?: () => void;
-    followupCompletion?: FollowupCompletionOwner;
-    admittedRunEntry: ChatAbortControllerEntry | undefined;
-    ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
-    runId: string;
-    cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
-    dedupeKeys: readonly string[];
-    /**
-     * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
-     * completion to drop the matching `chatAbortControllers` entry without
-     * touching a same-runId entry owned by a concurrent chat.send.
-     */
-    abortController: AbortController;
-    cleanupAbortController: () => void | Promise<void>;
-    io: AgentTurnIo;
-    context: AgentTurnContext;
-    canonicalSkillWorkspaceDir?: string;
-    restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
-    commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
-    /** Privacy classification carried from the resolved session entry. */
-    isIncognito?: boolean;
-    onSettled?: (outcome: {
-      terminalOutcome: AgentRunTerminalOutcome;
-      onRecovered?: () => void;
-    }) => Promise<boolean> | boolean;
-  },
-  loadCommentaryMedia?: () => Promise<ReturnType<typeof createAssistantCommentaryMediaCustody>>,
-) {
+export function dispatchAgentRunFromGateway(params: {
+  assertCurrent?: () => void;
+  assertSettlementCurrent?: () => void;
+  followupCompletion?: FollowupCompletionOwner;
+  admittedRunEntry: ChatAbortControllerEntry | undefined;
+  ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
+  loadCommentaryMedia?: () => Promise<ReturnType<typeof createAssistantCommentaryMediaCustody>>;
+  runId: string;
+  cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
+  dedupeKeys: readonly string[];
+  /**
+   * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
+   * completion to drop the matching `chatAbortControllers` entry without
+   * touching a same-runId entry owned by a concurrent chat.send.
+   */
+  abortController: AbortController;
+  cleanupAbortController: () => void | Promise<void>;
+  io: AgentTurnIo;
+  context: AgentTurnContext;
+  canonicalSkillWorkspaceDir?: string;
+  restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
+  commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
+  /** Privacy classification carried from the resolved session entry. */
+  isIncognito?: boolean;
+  onSettled?: (outcome: {
+    terminalOutcome: AgentRunTerminalOutcome;
+    onRecovered?: () => void;
+  }) => Promise<boolean> | boolean;
+}) {
   const diagnostics = createAgentRunDiagnostics(
     params.ingressOpts.sessionKey,
     params.isIncognito,
@@ -239,7 +237,9 @@ export function dispatchAgentRunFromGateway(
   const runAgent = () => {
     try {
       assertCurrent();
-      return loadCommentaryMedia ? loadCommentaryMedia().then(activateAgent) : activateAgent();
+      return params.loadCommentaryMedia
+        ? params.loadCommentaryMedia().then(activateAgent)
+        : activateAgent();
     } catch (error) {
       const failure = toErrorObject(error, formatErrorMessage(error));
       if (!(error instanceof Error)) {

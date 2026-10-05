@@ -7,7 +7,7 @@ import { makeRunAgentAttemptParams } from "../../agents/command/attempt-executio
 import { runAgentAttempt } from "../../agents/command/attempt-execution.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -15,11 +15,14 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import * as hookRunnerGlobal from "../../plugins/hook-runner-global.js";
-import { createHookRunner } from "../../plugins/hooks.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { createHookRunnerWithRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { resolveManagedImageOriginalPath } from "../managed-image-attachments.custody.js";
 import { resolveManagedOutgoingMediaArtifactDownload } from "../managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../managed-image-record-store.js";
@@ -38,148 +41,135 @@ vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.embed
 
 afterEach(() => vi.restoreAllMocks());
 
+async function runCommentaryTurn(state: OpenClawTestState, authoredMessage: AssistantMessage) {
+  const { runId, sessionKey, entry, context } = createTrackedDispatch();
+  const sessionId = entry.sessionId;
+  const cfg = {
+    agents: { entries: { main: { workspace: state.workspaceDir } } },
+    plugins: { enabled: false },
+  };
+  await state.writeConfig(cfg);
+  const scope = {
+    agentId: "main",
+    sessionId,
+    sessionKey,
+    storePath: loadSessionEntry(sessionKey, { agentId: "main" }).storePath,
+  };
+  const sessionEntry = { sessionId, lifecycleRevision: "initial", updatedAt: 1 };
+  await replaceSessionEntry(scope, sessionEntry);
+  // Admit the shared media store before entering the run-owned transcript context.
+  expect(await listManagedImageRecordEntries({ sessionKey })).toEqual([]);
+  const lifecycle = createEmbeddedAttemptTranscriptLifecycle({ runId, sessionId });
+  mocks.command.mockImplementationOnce(async (options) => {
+    const result = await runAgentAttempt(
+      makeRunAgentAttemptParams({
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
+        cfg,
+        sessionEntry,
+        sessionKey,
+        sessionTarget: scope,
+        storePath: scope.storePath,
+        runId,
+        agentHarnessRuntimeOverride: "openclaw",
+        pluginsEnabled: false,
+        opts: options,
+      }),
+    );
+    return { payloads: [], meta: result.meta };
+  });
+  mocks.embedded.mockImplementationOnce(async (options) => {
+    try {
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: scope,
+          assertCommitAllowed: () => entry.controller.signal.throwIfAborted(),
+          withTranscriptWrite: (operation) => lifecycle.withTranscriptWrite(operation),
+        },
+        async () => {
+          const message = runAgentHarnessBeforeMessageWriteHook({
+            message: attachSessionTranscriptRunId(authoredMessage, runId),
+            prepareAssistantTranscriptMessage: options.prepareAssistantTranscriptMessage,
+          });
+          if (!message) {
+            throw new Error("Expected a commentary message");
+          }
+          const append = appendTranscriptMessageSync(scope, { eventId: "progress", message });
+          expect(append).toMatchObject({ ok: true });
+          await publishTranscriptUpdate(scope, { message, messageId: "progress", runId });
+        },
+      );
+    } finally {
+      await lifecycle.dispose();
+    }
+    return { payloads: [], meta: { durationMs: 0 } };
+  });
+  const result = await dispatchAgentRunWithCommentaryMedia(
+    {
+      admittedRunEntry: entry,
+      ingressOpts: {
+        message: "Show progress",
+        sessionKey,
+        sessionId,
+        abortSignal: entry.controller.signal,
+        allowModelOverride: false,
+      },
+      runId,
+      dedupeKeys: [],
+      abortController: entry.controller,
+      cleanupAbortController: () => {
+        context.chatAbortControllers.delete(runId);
+      },
+      io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
+      context,
+    },
+    { cfg, client: null, activeSessionAgentId: "main" },
+  );
+  const event = loadTranscriptEventsSync(scope)
+    .map(asOptionalRecord)
+    .find((candidate) => candidate?.type === "message" && candidate.id === "progress");
+  return { result, context, sessionKey, message: asOptionalRecord(event?.message) };
+}
+
 it("preserves agent-run commentary attachments after their source files are removed", async () => {
   await withOpenClawTestState({ label: "agent-commentary-media" }, async (state) => {
-    const run = createTrackedDispatch();
-    const cfg = {
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
-      plugins: { enabled: false },
-    };
-    await state.writeConfig(cfg);
-    const scope = {
-      agentId: "main",
-      sessionId: run.entry.sessionId,
-      sessionKey: run.sessionKey,
-      storePath: loadSessionEntry(run.sessionKey, { agentId: "main" }).storePath,
-    };
-    const sessionEntry = {
-      sessionId: scope.sessionId,
-      lifecycleRevision: "initial",
-      updatedAt: 1,
-    };
-    await replaceSessionEntry(scope, sessionEntry);
-    // Admit the shared media store before entering the run-owned transcript context.
-    expect(await listManagedImageRecordEntries({ sessionKey: run.sessionKey })).toEqual([]);
     const imagePath = path.join(state.workspaceDir, "before.png");
     const hookImagePath = path.join(state.workspaceDir, "hook-added.png");
     const png = createSolidPngBuffer(1, 1, { r: 24, g: 64, b: 128 });
     await fs.mkdir(state.workspaceDir, { recursive: true });
     await Promise.all([imagePath, hookImagePath].map((file) => fs.writeFile(file, png)));
     vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(
-      createHookRunner(
-        createMockPluginRegistry([
-          {
-            hookName: "before_message_write",
-            handler: (event: unknown) => {
-              const message = asOptionalRecord(asOptionalRecord(event)?.message);
-              const first = Array.isArray(message?.content)
-                ? asOptionalRecord(message.content[0])
-                : undefined;
-              if (first?.type === "text" && typeof first.text === "string") {
-                first.text += `\nMEDIA:${hookImagePath}`;
-              }
-            },
-          },
-        ]),
-      ),
-    );
-    const lifecycle = createEmbeddedAttemptTranscriptLifecycle({
-      runId: run.runId,
-      sessionId: scope.sessionId,
-    });
-    mocks.command.mockImplementationOnce(async (options) => {
-      const result = await runAgentAttempt(
-        makeRunAgentAttemptParams({
-          agentDir: state.agentDir(),
-          workspaceDir: state.workspaceDir,
-          cfg,
-          sessionEntry,
-          sessionKey: run.sessionKey,
-          sessionTarget: scope,
-          storePath: scope.storePath,
-          runId: run.runId,
-          agentHarnessRuntimeOverride: "openclaw",
-          pluginsEnabled: false,
-          opts: options,
-        }),
-      );
-      return { payloads: [], meta: result.meta };
-    });
-    mocks.embedded.mockImplementationOnce(async (options) => {
-      try {
-        await withOwnedSessionTranscriptWrites(
-          {
-            sessionTarget: scope,
-            assertCommitAllowed: () => run.entry.controller.signal.throwIfAborted(),
-            withTranscriptWrite: (operation) => lifecycle.withTranscriptWrite(operation),
-          },
-          async () => {
-            const message = runAgentHarnessBeforeMessageWriteHook({
-              message: attachSessionTranscriptRunId(
-                buildAssistantMessage({
-                  model: { api: "openai-responses", provider: "openai", id: "gpt-5.6-luna" },
-                  content: [
-                    {
-                      type: "text",
-                      text: `Before\nMEDIA:${imagePath}`,
-                      textSignature: JSON.stringify({ v: 1, id: "progress", phase: "commentary" }),
-                    },
-                    { type: "toolCall", id: "next", name: "read", arguments: { path: "next.ts" } },
-                  ],
-                  stopReason: "toolUse",
-                  usage: buildUsageWithNoCost({}),
-                }),
-                run.runId,
-              ),
-              prepareAssistantTranscriptMessage: options.prepareAssistantTranscriptMessage,
-            });
-            if (!message) {
-              throw new Error("Expected a commentary message");
+      createHookRunnerWithRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (event: unknown) => {
+            const message = asOptionalRecord(asOptionalRecord(event)?.message);
+            const first = Array.isArray(message?.content)
+              ? asOptionalRecord(message.content[0])
+              : undefined;
+            if (first?.type === "text" && typeof first.text === "string") {
+              first.text += `\nMEDIA:${hookImagePath}`;
             }
-            expect(
-              appendTranscriptMessageSync(scope, { eventId: "progress", message }),
-            ).toMatchObject({
-              ok: true,
-            });
-            await publishTranscriptUpdate(scope, {
-              message,
-              messageId: "progress",
-              runId: run.runId,
-            });
           },
-        );
-      } finally {
-        await lifecycle.dispose();
-      }
-      return { payloads: [], meta: { durationMs: 0 } };
-    });
-    const result = await dispatchAgentRunWithCommentaryMedia(
-      {
-        admittedRunEntry: run.entry,
-        ingressOpts: {
-          message: "Show progress",
-          sessionKey: run.sessionKey,
-          sessionId: scope.sessionId,
-          abortSignal: run.entry.controller.signal,
-          allowModelOverride: false,
         },
-        runId: run.runId,
-        dedupeKeys: [],
-        abortController: run.entry.controller,
-        cleanupAbortController: () => {
-          run.context.chatAbortControllers.delete(run.runId);
-        },
-        io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
-        context: run.context,
-      },
-      { cfg, client: null, activeSessionAgentId: "main" },
+      ]).runner,
+    );
+    const { result, context, sessionKey, message } = await runCommentaryTurn(
+      state,
+      makeAgentAssistantMessage({
+        content: [
+          {
+            type: "text",
+            text: `Before\nMEDIA:${imagePath}`,
+            textSignature: JSON.stringify({ v: 1, id: "progress", phase: "commentary" }),
+          },
+          { type: "toolCall", id: "next", name: "read", arguments: { path: "next.ts" } },
+        ],
+        stopReason: "toolUse",
+      }),
     );
     expect(result.terminalOutcome.status).toBe("ok");
-    expect(run.context.logGateway.warn).not.toHaveBeenCalled();
-    const event = loadTranscriptEventsSync(scope)
-      .map(asOptionalRecord)
-      .find((entry) => entry?.type === "message" && entry.id === "progress");
-    const message = asOptionalRecord(event?.message);
+    expect(context.logGateway.warn).not.toHaveBeenCalled();
     expect(message).toMatchObject({
       stopReason: "toolUse",
       openclawDelivery: { mediaUrls: [imagePath] },
@@ -202,7 +192,7 @@ it("preserves agent-run commentary attachments after their source files are remo
     await Promise.all([imagePath, hookImagePath].map((file) => fs.unlink(file)));
     await expect(
       resolveManagedOutgoingMediaArtifactDownload({
-        sessionKey: run.sessionKey,
+        sessionKey,
         agentId: "main",
         artifactId: image.artifactId,
       }),
@@ -211,7 +201,7 @@ it("preserves agent-run commentary attachments after their source files are remo
       mimeType: "image/png",
       sizeBytes: png.length,
     });
-    const records = await listManagedImageRecordEntries({ sessionKey: run.sessionKey });
+    const records = await listManagedImageRecordEntries({ sessionKey });
     expect(records).toHaveLength(1);
     expect(await fs.readFile(resolveManagedImageOriginalPath(records[0]!.record))).toEqual(png);
   });
