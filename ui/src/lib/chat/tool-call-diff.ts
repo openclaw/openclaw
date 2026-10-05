@@ -53,6 +53,7 @@ type LineDiffResult =
 
 /** Bound diff rendering work; oversized inputs degrade to a truncation marker. */
 const MAX_DIFF_INPUT_LINES = 600;
+const MAX_WRITE_DIFF_LINES = 80;
 export const MAX_DIFF_RENDER_LINES = 400;
 
 function diffStat(lines: readonly DiffLine[]): DiffStat {
@@ -246,13 +247,13 @@ export function computeLineDiff(oldText: string, newText: string): LineDiffResul
 }
 
 /** All-added preview for freshly written files, numbered from line 1. */
-export function buildWriteDiffLines(content: string, maxLines = 80): DiffLine[] {
+export function buildWriteDiffLines(content: string): DiffLine[] {
   const sourceLines = splitDiffLines(content);
   const lines: DiffLine[] = [];
-  for (const [index, text] of sourceLines.slice(0, maxLines).entries()) {
+  for (const [index, text] of sourceLines.slice(0, MAX_WRITE_DIFF_LINES).entries()) {
     lines.push({ kind: "add", lineNo: index + 1, text });
   }
-  if (sourceLines.length > maxLines) {
+  if (sourceLines.length > MAX_WRITE_DIFF_LINES) {
     lines.push({ kind: "skip", text: "" });
   }
   return lines;

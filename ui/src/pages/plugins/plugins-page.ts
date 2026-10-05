@@ -351,7 +351,7 @@ class PluginsPage extends OpenClawLightDomElement {
     this.ensureInitialData();
   }
 
-  private invalidateRequests(invalidateCatalog = true) {
+  private invalidateRequests(invalidateCatalog: boolean) {
     this.mcpLogin.reset();
     if (invalidateCatalog) {
       void this.catalogTask.run([null]);
@@ -609,7 +609,7 @@ class PluginsPage extends OpenClawLightDomElement {
     await this.consentController.runMutation(
       rowKey,
       (client) => uninstallPlugin(client, pluginId),
-      async (result, refreshError, client, _isCurrent, isLatest) => {
+      async (result, refreshError, client, isLatest) => {
         if (this.detail?.pluginId === pluginId) {
           this.detail = null;
         }

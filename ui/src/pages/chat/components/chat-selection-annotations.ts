@@ -54,7 +54,6 @@ export function renderChatSelectionAnnotations(props: ChatAttachmentControlsProp
           )}
         </ol>`,
         undefined,
-        true,
         {
           onRemove: (event) => request(event, undefined, "delete-all"),
           disabled: Boolean(props.disabled || props.readSignal?.aborted),

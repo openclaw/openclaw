@@ -23,6 +23,16 @@ describe("runtime-postbuild-stamp script", () => {
       gitStatus: " M extensions/demo/openclaw.plugin.json\0",
       inputsClean: false,
     },
+    {
+      name: "dirty CLI diagnostic preload",
+      gitStatus: " M src/cli/cli-process-diagnostics.test-support.cjs\0",
+      inputsClean: false,
+    },
+    {
+      name: "dirty CLI process observer",
+      gitStatus: " M src/cli/cli-process-tree.test-support.cjs\0",
+      inputsClean: false,
+    },
     { name: "source-only change", gitStatus: " M src/index.ts\0", inputsClean: true },
     { name: "unknown", gitStatus: null, inputsClean: null },
   ])(

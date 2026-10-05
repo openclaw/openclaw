@@ -84,11 +84,14 @@ it.each([
     await withStartupGateway(
       "startup-orphan-race-",
       async () => {
-        const scope = { agentId: "main", sessionKey: "agent:main:subagent:race" };
+        const scope = { agentId: "main", sessionKey: "agent:main:dashboard:race" };
         await accessor.replaceSessionEntry(scope, {
           sessionId: "predecessor",
           lifecycleRevision: "generation-1",
           lifecycleRunId: "run-1",
+          spawnDepth: 1,
+          abortedLastRun: true,
+          restartRecoveryForceSafeTools: true,
           status: "running",
           startedAt: Math.floor(performance.timeOrigin) - 100,
           updatedAt: Math.floor(performance.timeOrigin) - 100,

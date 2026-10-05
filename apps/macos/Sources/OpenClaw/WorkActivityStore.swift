@@ -65,7 +65,8 @@ final class WorkActivityStore {
         meta: String?,
         args: [String: OpenClawProtocol.AnyCodable]?)
     {
-        let toolKind = Self.mapToolKind(name)
+        let displayCall = ToolDisplayRegistry.displayCall(name: name, args: args.map { AnyCodable($0) })
+        let toolKind = Self.mapToolKind(displayCall.name)
         let label = Self.buildLabel(name: name, meta: meta, args: args)
         if phase.lowercased() == "start" {
             self.lastToolUpdatedAt = Date()

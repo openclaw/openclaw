@@ -117,7 +117,7 @@ export function resolveSessionToolContext(opts?: {
   const cfg = opts?.config ?? getRuntimeConfig();
   return {
     cfg,
-    a2aPolicy: createAgentToAgentPolicy(cfg),
+    a2aPolicy: createAgentToAgentPolicy(cfg, { sandboxed: opts?.sandboxed }),
     // Only read-tool constructors accept this host-bound scope. The temporary
     // auxiliary run keeps its execution identity but can read just the observed session.
     sessionVisibility: opts?.sessionReadScopeKey

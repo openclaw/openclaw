@@ -544,7 +544,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const scope = service.runtime?.systemd?.scope === "system" ? "--system" : "--user";
       printError(`Logs: journalctl ${scope} -u ${quoteCliArg(unit)} -n 200 --no-pager`);
     } else if (process.platform === "darwin") {
-      const logs = resolveGatewaySupervisorLogPaths(serviceEnv, { platform: "darwin" });
+      const logs = resolveGatewaySupervisorLogPaths(serviceEnv);
       // The plist points both launchd handles at this file, so startup crashes that
       // never reached the logger land here too; do not advertise a separate stderr.
       defaultRuntime.error(

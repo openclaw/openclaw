@@ -6,6 +6,7 @@ import {
   captureUpdateCommandExecutorAuthority,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
+import { hasErrnoCode } from "./errno.js";
 import { resolveExecutablePath } from "./executable-path.js";
 import { supersedePackageActivationCustody } from "./package-update-activation-custody.js";
 import {
@@ -33,6 +34,8 @@ import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import {
   assertManagedUpdateLeaseDatabaseIdentity,
   captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+  type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import { supportsPostCoreExecutor } from "./update-post-core-capability.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
@@ -162,7 +165,11 @@ export function readPackageActivationReceipt(installKey: string):
   }
   const record = openPackageActivationJournal(anchor).read();
   const receipt = status(record);
-  if (receipt.phase !== "complete" || record.intent?.kind !== "recovery-lease-identity-changed") {
+  if (
+    receipt.phase !== "complete" ||
+    (record.intent?.kind !== "recovery-lease-identity-changed" &&
+      record.intent?.kind !== "recovery-lease-missing")
+  ) {
     assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
   }
   return receipt.phase === "complete" || record.phase === "superseded"
@@ -183,14 +190,37 @@ export async function settlePendingPackageActivation(installKey: string) {
     return undefined;
   }
   const originalAuthority = initial.descriptor.authority;
-  const currentDatabase = captureManagedUpdateLeaseDatabaseIdentity(originalAuthority.databasePath);
+  let currentDatabase: ManagedUpdateLeaseDatabaseIdentity;
+  // A recreated file can reuse the lost inode. Keep the recorded loss when
+  // resuming an interrupted custody transfer.
+  let leaseWasMissing =
+    initial.phase === "superseded" && initial.intent?.kind === "recovery-lease-missing";
+  try {
+    currentDatabase = captureManagedUpdateLeaseDatabaseIdentity(originalAuthority.databasePath);
+  } catch (error) {
+    if (
+      !hasErrnoCode(error, "ENOENT") ||
+      fs.lstatSync(originalAuthority.databasePath, { throwIfNoEntry: false })
+    ) {
+      throw error;
+    }
+    // A reboot can remove the temporary store. Its owner provisions it; the
+    // fresh executor below still fences every change to retained package custody.
+    currentDatabase = createManagedHandoffLeaseDatabase(originalAuthority.databasePath)(true, () =>
+      captureManagedUpdateLeaseDatabaseIdentity(originalAuthority.databasePath),
+    );
+    leaseWasMissing = true;
+  }
   const leaseIdentityChanged =
+    leaseWasMissing ||
     currentDatabase.databasePath !== originalAuthority.databasePath ||
     currentDatabase.databaseIdentity !== originalAuthority.databaseIdentity ||
     currentDatabase.parentIdentity !== originalAuthority.parentIdentity;
-  const reason = leaseIdentityChanged
-    ? "recovery-lease-identity-changed"
-    : "superseded-by-manual-install";
+  const reason = leaseWasMissing
+    ? "recovery-lease-missing"
+    : leaseIdentityChanged
+      ? "recovery-lease-identity-changed"
+      : "superseded-by-manual-install";
   const replacementIdentity = packageActivationIdentity(installKey, true);
   const publicationNotStarted =
     !leaseIdentityChanged &&

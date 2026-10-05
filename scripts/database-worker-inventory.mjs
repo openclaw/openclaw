@@ -1035,14 +1035,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: [
-          "conflictingSubagentRunVersions",
-          "upsertSubagentRunRowInDatabase",
-          "deleteSubagentRunRowInDatabase",
-          "writeSubagentRunValuesInDatabase",
-        ],
+        operations: ["conflictingSubagentRunVersions", "writeSubagentRunValuesInDatabase"],
         evidence:
-          "Only subagent-registry.store.worker.ts:46,62 and completion/subagent-completion-admission.worker.ts:90,126,182 invoke the conflict/upsert/write kernels. Delete/upsert in completion/subagent-completion-mutation.kernel.ts:235,237 is reached only by admission.worker.ts:188; no native writer caller remains.",
+          "Registry persistence and completion admission workers invoke the conflict and batch write kernels. Completion mutation writes are reached only through the admission worker; no native writer caller remains.",
       },
     ],
   ],

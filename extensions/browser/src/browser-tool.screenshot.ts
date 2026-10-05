@@ -6,18 +6,15 @@ import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   browserScreenshotAction,
-  describeImageFile,
   getRuntimeConfig,
   imageResultFromFile,
   jsonResult,
   readStringParam,
   readStringValue,
   resolveRuntimeImageSanitization,
-  saveMediaBuffer,
   stageBrowserScreenshotForSharing,
 } from "./browser-tool.runtime.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
-import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
 
 export type BrowserScreenshotOptions = {
@@ -122,23 +119,16 @@ export async function executeScreenshotAction({
   };
   let extraText = shareHint;
   try {
-    const described = await describeBrowserScreenshot(
-      {
-        cfg: screenshotCfg,
-        filePath: screenshotPath,
-        agentDir: opts?.agentDir,
-        agentId: opts?.agentId,
-        workspaceDir: opts?.workspaceDir,
-        activeModel: opts?.activeModel,
-        mediaScope: opts?.mediaScope,
-        imageSanitization,
-      },
-      {
-        describeImageFile,
-        normalizeBrowserScreenshot,
-        saveMediaBuffer,
-      },
-    );
+    const described = await describeBrowserScreenshot({
+      cfg: screenshotCfg,
+      filePath: screenshotPath,
+      agentDir: opts?.agentDir,
+      agentId: opts?.agentId,
+      workspaceDir: opts?.workspaceDir,
+      activeModel: opts?.activeModel,
+      mediaScope: opts?.mediaScope,
+      imageSanitization,
+    });
     if (described) {
       const analyzedBy =
         described.provider && described.model

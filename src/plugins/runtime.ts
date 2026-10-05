@@ -41,9 +41,8 @@ import {
   markPluginRegistryRetired,
   preparePluginRegistryCacheShutdown,
   quiescePluginRegistry,
-  type PluginRegistryGatewayOwner,
 } from "./registry-lifecycle.js";
-import type { PluginRegistry } from "./registry-types.js";
+import type { PluginRegistry, PluginRegistryGatewayOwner } from "./registry-types.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "./runtime-channel-state.js";
 import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 import { PLUGIN_REGISTRY_STATE, type RegistryState } from "./runtime-state.js";

@@ -759,7 +759,7 @@ describe("createCliToolSummaryTracker", () => {
       });
 
       expect(deliver).toHaveBeenCalledWith({
-        text: fullOutput ? "🗺️ Progress Card\n```txt\nwrite failed\n```" : "🗺️ Progress Card",
+        text: fullOutput ? "Progress Card\n```txt\nwrite failed\n```" : "Progress Card",
         isError: true,
       });
     },

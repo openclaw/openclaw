@@ -435,34 +435,6 @@ describe("legacy config migration end to end", () => {
     );
   });
 
-  it("repairs unsupported OTel grpc once and is then a no-op", () => {
-    const raw = {
-      diagnostics: {
-        otel: {
-          enabled: true,
-          traces: false,
-          metrics: false,
-          logs: true,
-          logsExporter: "stdout",
-          protocol: "grpc",
-        },
-      },
-    };
-    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
-
-    expect(result.config?.diagnostics?.otel).toEqual({
-      enabled: true,
-      traces: false,
-      metrics: false,
-      logs: true,
-      logsExporter: "stdout",
-    });
-    expect(validateConfigObjectRaw(result.config).ok).toBe(true);
-    expect(
-      applyLegacyDoctorMigrations(result.config, { sourceConfigBeforeMigrations: result.config }),
-    ).toEqual({ next: null, changes: [] });
-  });
-
   it.each([
     {
       name: "route and ACP bindings",

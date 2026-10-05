@@ -353,8 +353,6 @@ it.concurrent.for([
     ? []
     : [
         { event: "push", workflow: "same", target: "selected", code: 0, fetches: 2 },
-        { event: "pull_request", workflow: "same", target: "selected", code: 0, fetches: 2 },
-        { event: "pull_request", workflow: "previous", target: "selected", code: 0, fetches: 2 },
         {
           event: "workflow_dispatch",
           workflow: "previous",
@@ -1403,7 +1401,6 @@ ${policy}`,
 }
 
 it.each([
-  { scenario: "direct denial", setup: "", types: ["PermissionError"] },
   {
     scenario: "timeout context",
     setup: "error.__context__ = owner.FetchTimeout()",

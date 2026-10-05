@@ -17,6 +17,10 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import {
+  prepareIncognitoSessionHistoryRead,
+  type IncognitoSessionHistoryBinding,
+} from "./session-incognito-history-read.js";
+import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
 } from "./session-store-read-candidates.js";
@@ -39,7 +43,21 @@ export async function readSessionTranscriptAnchorsAsync(
   signal?: AbortSignal,
   /** Consume only a current snapshot, while its original writer FIFO and reader remain retained. */
   onRead?: (facts: SessionTranscriptAnchorFacts) => void,
+  incognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTranscriptAnchorFacts> {
+  if (incognito) {
+    const { actor, authority, target } = prepareIncognitoSessionHistoryRead(
+      incognito,
+      scope,
+      signal,
+    );
+    return actor.sessions.history(
+      authority,
+      { type: "session.history.anchors", input: { ...selection, ...target } },
+      signal,
+      onRead,
+    );
+  }
   const captured = {
     agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
     sessionId: scope.sessionId,
@@ -160,11 +178,14 @@ export async function readSessionTranscriptAnchorsAsync(
 export async function readActiveTranscriptEntryAnchorAsync(
   scope: AnchorScope & { entryId: string },
   signal?: AbortSignal,
+  incognito?: IncognitoSessionHistoryBinding,
 ) {
   const result = await readSessionTranscriptAnchorsAsync(
     scope,
     { entryIds: [scope.entryId] },
     signal,
+    undefined,
+    incognito,
   );
   return result.anchors[0];
 }

@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
@@ -17,18 +21,21 @@ import {
 import * as followupCustody from "../agents/tools/sessions-send-followup-custody.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { createReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.tool-authority.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import {
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import type { PreparedAgentRunDispatch } from "./agent-turn/agent-run-admission-types.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import * as gatewayDispatch from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
@@ -376,6 +383,202 @@ describe("spawn input ownership transfer", () => {
         stage.mockRestore();
         admission.close();
         operator.release();
+      }
+    },
+  );
+
+  it.for(["before staging", "after acceptance", "before acknowledgement"] as const)(
+    "rechecks directed send policy at Gateway input admission (%s)",
+    async (boundary, { signal }) => {
+      const context = kernel.gatewayRequestContext;
+      const previousConfig = context.getRuntimeConfig();
+      const config: OpenClawConfig = {
+        ...previousConfig,
+        agents: {
+          ...previousConfig.agents,
+          ownership: "explicit",
+          entries: {
+            ...previousConfig.agents?.entries,
+            main: { tools: { agentToAgent: { send: ["worker"] } } },
+            worker: {},
+          },
+        },
+        tools: {
+          ...previousConfig.tools,
+          sessions: { visibility: "self" },
+          agentToAgent: { enabled: true, allow: ["main", "worker"] },
+        },
+      };
+      const runId = randomUUID();
+      // A subagent sender has no peer reply loop; the unrelated target still needs its send edge.
+      const requesterKey = `agent:main:subagent:send-policy-${runId}`;
+      const targetKey = `agent:worker:dashboard:send-policy-${runId}`;
+      const sessionId = `send-policy-target-${runId}`;
+      const message = "synthetic cross-agent input governed by current send policy";
+      const staged = createDeferred();
+      const releaseWriter = createDeferred();
+      const releaseExecution = createDeferred();
+      const executionEntered = createDeferred<PreparedAgentRunDispatch>();
+      const unblock = () => {
+        releaseWriter.resolve();
+        releaseExecution.resolve();
+      };
+      signal.addEventListener("abort", unblock, { once: true });
+      let writer: Promise<unknown> | undefined;
+      let sending: Promise<unknown> | undefined;
+      let execution: Promise<void> | undefined;
+      let admission: ReturnType<typeof prepareAgentRunAdmission> | undefined;
+      let restoreStage: (() => void) | undefined;
+      let restoreExecution: (() => void) | undefined;
+      let restoreDispatch: (() => void) | undefined;
+      const withdraw = () =>
+        setRuntimeConfigSnapshot({
+          ...config,
+          agents: {
+            ...config.agents,
+            entries: { ...config.agents?.entries, main: { tools: { agentToAgent: { send: [] } } } },
+          },
+        });
+      try {
+        setRuntimeConfigSnapshot(config);
+        await prepareGatewayReplyRuntimeForTest({ force: true, config });
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId: "main", sessionKey: requesterKey },
+          { sessionId: requesterKey, updatedAt: 1, spawnDepth: 1 },
+        );
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId: "worker", sessionKey: targetKey },
+          { sessionId, updatedAt: 1 },
+        );
+        const scope = {
+          agentId: "worker",
+          sessionKey: targetKey,
+          sessionId,
+          storePath: loadSessionEntry(targetKey, { agentId: "worker" }).storePath,
+        };
+        const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
+        admission = prepareAgentRunAdmission({
+          cfg: config,
+          operationalRunInstance: createOperationalRunInstanceRef(`send-policy-source-${runId}`),
+          facts: {
+            runId: `send-policy-source-${runId}`,
+            agentId: "main",
+            ingress: { kind: "system", boundary: "send-policy-proof", state: "present" },
+          },
+        });
+        const admitted = await admission.admit("embedded");
+        const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
+        const execute = executionModule.startAgentRunExecution;
+        const executionSpy = vi
+          .spyOn(executionModule, "startAgentRunExecution")
+          .mockImplementationOnce((params) => {
+            executionEntered.resolve(params.prepared);
+            execution = releaseExecution.promise.then(() => execute(params));
+            return execution;
+          });
+        restoreExecution = () => executionSpy.mockRestore();
+        const stage = sessionAccessor.stageSessionPendingInput;
+        const stageSpy = vi
+          .spyOn(sessionAccessor, "stageSessionPendingInput")
+          .mockImplementationOnce(async (...args) => {
+            if (boundary === "before staging") {
+              const entered = createDeferred();
+              writer = runExclusiveSqliteSessionWrite(
+                resolveSqliteStoreScope(scope.storePath, { agentId: "worker" }),
+                async () => {
+                  entered.resolve();
+                  await releaseWriter.promise;
+                },
+                "session.transcript.batch",
+              );
+              await entered.promise;
+            }
+            const pending = stage(...args);
+            staged.resolve();
+            return await pending;
+          });
+        restoreStage = () => stageSpy.mockRestore();
+        if (boundary === "before acknowledgement") {
+          const dispatch = gatewayDispatch.dispatchGatewayMethodInProcess;
+          const spy = vi
+            .spyOn(gatewayDispatch, "dispatchGatewayMethodInProcess")
+            .mockImplementation(async <T>(...args: Parameters<typeof dispatch>): Promise<T> => {
+              const response = await dispatch<T>(...args);
+              if (args[0] === "agent") {
+                withdraw();
+              }
+              return response;
+            });
+          restoreDispatch = () => spy.mockRestore();
+        }
+        const pending = withPluginRuntimeGatewayRequestScope(
+          { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+          () =>
+            withGatewayToolCallerIdentity(
+              createAdmittedGatewayToolCallerIdentity({
+                admittedRunContext: admitted,
+                agentId: "main",
+                sessionKey: requesterKey,
+              }),
+              () =>
+                createSessionsSendTool({
+                  agentSessionKey: requesterKey,
+                  config,
+                  idempotencyKey: runId,
+                }).execute("send-policy", {
+                  sessionKey: targetKey,
+                  mode: "followup",
+                  message,
+                  timeoutSeconds: 0,
+                }),
+            ),
+        );
+        sending = pending;
+        await withinTest(
+          awaitGateBeforeSettlement(staged.promise, pending, "Send ended before input staging"),
+          signal,
+        );
+        if (boundary !== "before staging") {
+          expect((await withinTest(pending, signal)).details).toMatchObject({ status: "accepted" });
+          await withinTest(executionEntered.promise, signal);
+          expect((await listSessionPendingInputs(scope)).total).toBe(1);
+        }
+        withdraw();
+        // Only the destination permission changed; the admitting caller is still live.
+        expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
+        releaseWriter.resolve();
+        if (boundary === "before staging") {
+          const result = await withinTest(pending, signal);
+          expect(result.details).toMatchObject({
+            status: "error",
+            error: expect.stringContaining("tools.agentToAgent.send"),
+          });
+          expect(result.details).not.toHaveProperty("sentBeforeError");
+          expect(executionSpy).not.toHaveBeenCalled();
+          expect(agentCommandMock).not.toHaveBeenCalled();
+          expect((await listSessionPendingInputs(scope)).total).toBe(0);
+          expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(transcript);
+        } else {
+          const prepared = await executionEntered.promise;
+          const recorder = expectDefined(prepared.userTurn.recorder, "accepted input recorder");
+          const persisted = await recorder.withPendingInput!(() => recorder.persistApproved());
+          expect(persisted?.appended).toBe(true);
+          expect(persisted?.message.content).toContain(message);
+          expect((await listSessionPendingInputs(scope)).total).toBe(0);
+          releaseExecution.resolve();
+          await withinTest(execution!, signal);
+          expect(agentCommandMock).toHaveBeenCalledOnce();
+          expect(agentCommandMock.mock.calls[0]?.[0]).toMatchObject({ sessionKey: targetKey });
+        }
+      } finally {
+        unblock();
+        await Promise.allSettled([writer, sending, execution]);
+        restoreStage?.();
+        restoreExecution?.();
+        restoreDispatch?.();
+        admission?.close();
+        setRuntimeConfigSnapshot(previousConfig);
+        signal.removeEventListener("abort", unblock);
       }
     },
   );

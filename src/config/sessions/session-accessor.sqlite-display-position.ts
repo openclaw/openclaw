@@ -36,6 +36,7 @@ export function positionTranscriptDisplayEvents<
   projection: CurrentTranscriptProjection,
   source: string | undefined,
   events: T[],
+  indexedSeq = projection.state.indexedSeq,
 ): Array<T & { displayPosition?: TranscriptDisplayPosition }> {
   if (!source || events.length === 0) {
     return events;
@@ -49,10 +50,7 @@ export function positionTranscriptDisplayEvents<
     database: projection.database,
     ...projection.resolved,
   })?.beforeRawSeq;
-  const maxSeq = Math.min(
-    projection.state.indexedSeq,
-    beforeRawSeq === undefined ? Infinity : beforeRawSeq - 1,
-  );
+  const maxSeq = Math.min(indexedSeq, beforeRawSeq === undefined ? Infinity : beforeRawSeq - 1);
   if (anchors.length > 0) {
     const rows = executeSqliteQuerySync(
       projection.database.db,

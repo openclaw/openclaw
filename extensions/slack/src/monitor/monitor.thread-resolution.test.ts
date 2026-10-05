@@ -50,8 +50,6 @@ describe("createSlackThreadTsResolver", () => {
     });
     const resolver = createSlackThreadTsResolver({
       client: createThreadClient(historyMock),
-      cacheTtlMs: 60_000,
-      maxSize: 5,
     });
 
     const message = makeThreadReplyMessage("1");
@@ -70,8 +68,6 @@ describe("createSlackThreadTsResolver", () => {
     });
     const resolver = createSlackThreadTsResolver({
       client: createThreadClient(historyMock),
-      cacheTtlMs: 60_000,
-      maxSize: 5,
     });
 
     const message = makeThreadReplyMessage("1");
@@ -174,8 +170,6 @@ describe("createSlackThreadTsResolver", () => {
       .mockResolvedValueOnce({ messages: [{ ts: "1", thread_ts: "9" }] });
     const resolver = createSlackThreadTsResolver({
       client: createThreadClient(historyMock),
-      cacheTtlMs: 60_000,
-      maxSize: 5,
     });
     const message = makeThreadReplyMessage("1");
     const turnAdoptionLifecycle = createDurableTurnLifecycle();
@@ -197,8 +191,6 @@ describe("createSlackThreadTsResolver", () => {
       .mockResolvedValueOnce({ messages: [{ ts: "1", thread_ts: "9" }] });
     const resolver = createSlackThreadTsResolver({
       client: createThreadClient(historyMock),
-      cacheTtlMs: 60_000,
-      maxSize: 5,
     });
     const message = makeThreadReplyMessage("1");
 
@@ -225,8 +217,6 @@ describe("createSlackThreadTsResolver", () => {
       .mockResolvedValueOnce({ messages: [{ ts: "1", thread_ts: "9" }] });
     const resolver = createSlackThreadTsResolver({
       client: createThreadClient(historyMock),
-      cacheTtlMs: 60_000,
-      maxSize: 5,
     });
     const message = makeThreadReplyMessage("1");
     const firstLifecycle = createDurableTurnLifecycle();
@@ -288,8 +278,6 @@ describe("createSlackThreadTsResolver", () => {
     const historyMock = vi.fn().mockRejectedValue(error);
     const resolver = createSlackThreadTsResolver({
       client: createThreadClient(historyMock),
-      cacheTtlMs: 60_000,
-      maxSize: 5,
     });
     const message = makeThreadReplyMessage("1");
     const turnAdoptionLifecycle = createDurableTurnLifecycle();
@@ -303,39 +291,13 @@ describe("createSlackThreadTsResolver", () => {
     expect(historyMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retain a durable transient failure forever with a non-expiring cache", async () => {
-    const historyMock = vi
-      .fn()
-      .mockRejectedValueOnce(new WebAPIHTTPError(503, "Service Unavailable", {}, "outage"))
-      .mockResolvedValueOnce({ messages: [{ ts: "1", thread_ts: "9" }] });
-    const resolver = createSlackThreadTsResolver({
-      client: createThreadClient(historyMock),
-      cacheTtlMs: 0,
-      maxSize: 5,
-    });
-    const message = makeThreadReplyMessage("1");
-    const turnAdoptionLifecycle = createDurableTurnLifecycle();
-
-    await expect(
-      resolver.resolve({ message, source: "message", turnAdoptionLifecycle }),
-    ).rejects.toBeInstanceOf(WebAPIHTTPError);
-    await expect(
-      resolver.resolve({ message, source: "app_mention", turnAdoptionLifecycle }),
-    ).resolves.toMatchObject({ thread_ts: "9" });
-    await resolver.resolve({ message, source: "message", turnAdoptionLifecycle });
-
-    expect(historyMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("falls back to the default ttl when cacheTtlMs is non-finite", async () => {
+  it("expires cached lookups after one minute", async () => {
     vi.useFakeTimers();
     const historyMock = vi.fn().mockResolvedValue({
       messages: [{ ts: "1", thread_ts: "9" }],
     });
     const resolver = createSlackThreadTsResolver({
       client: { conversations: { history: historyMock } } as never,
-      cacheTtlMs: Number.NaN,
-      maxSize: 5,
     });
     const message = makeThreadReplyMessage("1");
 
@@ -353,8 +315,6 @@ describe("createSlackThreadTsResolver", () => {
     });
     const resolver = createSlackThreadTsResolver({
       client: { conversations: { history: historyMock } } as never,
-      cacheTtlMs: 60_000,
-      maxSize: 5,
     });
     const message = makeThreadReplyMessage("1");
 
@@ -372,8 +332,6 @@ describe("createSlackThreadTsResolver", () => {
     });
     const resolver = createSlackThreadTsResolver({
       client: { conversations: { history: historyMock } } as never,
-      cacheTtlMs: 60_000,
-      maxSize: 5,
     });
     const message = makeThreadReplyMessage("1");
 
@@ -383,31 +341,12 @@ describe("createSlackThreadTsResolver", () => {
     expect(historyMock).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves cacheTtlMs zero as a non-expiring cache entry", async () => {
-    const historyMock = vi.fn().mockResolvedValue({
-      messages: [{ ts: "1", thread_ts: "9" }],
-    });
-    const resolver = createSlackThreadTsResolver({
-      client: { conversations: { history: historyMock } } as never,
-      cacheTtlMs: 0,
-      maxSize: 5,
-    });
-    const message = makeThreadReplyMessage("1");
-
-    await resolver.resolve({ message, source: "message" });
-    await resolver.resolve({ message, source: "message" });
-
-    expect(historyMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to the default max size when maxSize is non-finite", async () => {
+  it("evicts the oldest lookup after 500 cached entries", async () => {
     const historyMock = vi.fn(async ({ latest }: { latest: string }) => ({
       messages: [{ ts: latest, thread_ts: `thread-${latest}` }],
     }));
     const resolver = createSlackThreadTsResolver({
       client: { conversations: { history: historyMock } } as never,
-      cacheTtlMs: 60_000,
-      maxSize: Number.NaN,
     });
 
     for (let i = 0; i <= 500; i++) {

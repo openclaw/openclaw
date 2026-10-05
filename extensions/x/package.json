@@ -1,0 +1,32 @@
+{
+  "name": "@openclaw/x",
+  "version": "2026.9.8",
+  "description": "OpenClaw X mentions and public reply channel plugin",
+  "type": "module",
+  "dependencies": {
+    "linkify-it": "6.1.0",
+    "lit": "3.3.3",
+    "tlds": "1.261.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": { "@openclaw/plugin-sdk": "workspace:*", "openclaw": "workspace:*" },
+  "peerDependencies": { "openclaw": ">=2026.9.8" },
+  "peerDependenciesMeta": { "openclaw": { "optional": true } },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "controlUi": "./src/control-ui.ts",
+    "channel": {
+      "id": "x", "label": "X (Twitter)", "selectionLabel": "X (Twitter mentions)",
+      "docsPath": "/channels/x", "docsLabel": "x",
+      "blurb": "Allowlisted mentions with thread context and public replies.", "order": 85
+    },
+    "install": { "localPath": "extensions/x", "defaultChoice": "local", "minHostVersion": ">=2026.9.8" },
+    "compat": { "pluginApi": ">=2026.9.8" },
+    "build": { "bundledDist": true },
+    "assetScripts": {
+      "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/x",
+      "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/x --copy",
+      "buildOutputs": ["openclaw.plugin.json"]
+    }
+  }
+}

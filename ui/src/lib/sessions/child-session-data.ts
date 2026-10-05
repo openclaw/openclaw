@@ -20,11 +20,9 @@ export async function fetchChildSessionRows(params: {
   sessions: Pick<SessionCapability, "refreshList" | "listSnapshot">;
   parentKey: string;
   isCurrent: () => boolean;
-  pageSize?: number;
   initialResult?: SessionsListResult;
 }): Promise<GatewaySessionRow[] | null> {
-  const pageSize = params.pageSize ?? CHILD_SESSION_LIST_PAGE_SIZE;
-  const query = childSessionListQuery(params.parentKey, pageSize);
+  const query = childSessionListQuery(params.parentKey);
   const readResult = () => {
     const snapshot = params.sessions.listSnapshot(query);
     if (snapshot.error) {

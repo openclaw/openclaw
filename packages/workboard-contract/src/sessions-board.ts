@@ -1,7 +1,7 @@
 import type { SchemaContract } from "../../gateway-protocol/src/schema-contract.js";
 import type { SessionPerson } from "../../gateway-protocol/src/schema/session-participant.js";
 import type { SessionsListParams } from "../../gateway-protocol/src/schema/sessions-list.js";
-import type { WorkboardBoardMetadata } from "./index.js";
+import type { WorkboardBoardMetadata, WorkboardChange } from "./index.js";
 
 const OBSERVER_HEALTH = [
   "on-track",
@@ -69,7 +69,9 @@ export type WorkboardSessionsBoardView = Pick<
   SessionsListParams,
   "involvingMe" | "involvingProfileId" | "includePeople"
 >;
+export type WorkboardSessionsBoardRevision = WorkboardChange & { boardId: string; scope: string };
 export type WorkboardSessionsBoardRead = {
+  revision?: WorkboardSessionsBoardRevision;
   board: WorkboardSessionsBoard;
   columns: WorkboardSessionsColumn[];
   sessions: Array<

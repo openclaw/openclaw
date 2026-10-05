@@ -2,10 +2,9 @@
 // not consume per-client seqs (which would fire every client's gap detector and
 // cause a synchronized reconnect storm) and must leave a server-side record.
 import { once } from "node:events";
-import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import {
@@ -20,6 +19,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { makeClient as makePresenceClient } from "./server-broadcast.test-helpers.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -542,23 +542,110 @@ describe("presence recipient projection", () => {
       expect(project(pending)).toEqual(presence);
     });
   });
+});
 
-  it("omits obsolete watches without creating missing agent stores or omission metadata", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const person = { text: "watcher", ts: 1 };
-      const params = {
-        cfg: { agents: { entries: { uncreated: {} } } },
-        presence: [
-          { ...person, watchedSessions: ["agent:uncreated:missing"] },
-          { ...person, watchedSessions: [] },
-          person,
-        ],
-      };
-      const project = createPresenceRecipientProjection(params);
-      const admin = makeClient("admin").client;
-      admin.connect.scopes = ["operator.admin"];
-      expect(project(admin)).toEqual([person, person, person]);
-      expect(existsSync(state.agentDir("uncreated"))).toBe(false);
+describe("presence payload encoding", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("encodes each presence audience once while retaining current authority and recipient stamps", () => {
+    const peers = ["first", "second", "revoked", "pending"].map((id) =>
+      makePresenceClient(id, "operator", ["operator.read"]),
+    );
+    const visible = [{ text: "watcher", ts: 1, watchedSessions: ["agent:main:shared"] }];
+    const hidden = [{ text: "watcher", ts: 1 }];
+    let revoked = false;
+    const project = vi.fn((client: GatewayWsClient) =>
+      client.connId === "pending" || (client.connId === "revoked" && revoked) ? hidden : visible,
+    );
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+      preparePresenceProjection: () => project,
     });
+    peers.forEach(({ client }) => {
+      client.preparedRecipientProfileId = client.connId;
+    });
+    broadcastToConnIds("tick", {}, new Set(["second"]));
+    peers[0]!.socket.send.mockImplementationOnce(() => {
+      revoked = true;
+    });
+    const stringify = vi.spyOn(JSON, "stringify");
+    const stateVersion = { presence: 3 };
+    broadcast("presence", { presence: visible }, { stateVersion });
+    const encodings = stringify.mock.calls.filter(
+      ([value]) => value?.payload?.presence === visible || value?.payload?.presence === hidden,
+    );
+    stringify.mockRestore();
+
+    expect(encodings).toHaveLength(2);
+    expect(project).toHaveBeenCalledTimes(4);
+    for (const [index, peer] of peers.entries()) {
+      expect(peer.socket.send.mock.lastCall![0]).toBe(
+        JSON.stringify({
+          type: "event",
+          event: "presence",
+          payload: { presence: index < 2 ? visible : hidden },
+          seq: index === 1 ? 2 : 1,
+          stateVersion,
+          recipientProfileId: peer.client.connId,
+        }),
+      );
+    }
+
+    visible[0]!.ts = 2;
+    broadcast("presence", { presence: visible });
+    expect(JSON.parse(peers[0]!.socket.send.mock.lastCall![0]).payload.presence[0].ts).toBe(2);
   });
+
+  it.each(["getter", "toJSON", "added field"])(
+    "preserves presence payload %s changes between recipients",
+    (publisher) => {
+      const peers = [
+        makePresenceClient("first", "operator", ["operator.read"]),
+        makePresenceClient("second", "operator", ["operator.read"]),
+      ];
+      const presence = [{ text: "watcher", ts: 1 }];
+      const hidden: SystemPresence[] = [];
+      let authorized = true;
+      let revision = 1;
+      const reads: number[] = [];
+      const source = { presence };
+      if (publisher === "getter") {
+        Object.defineProperty(source, "revision", {
+          enumerable: true,
+          get: () => {
+            authorized = false;
+            reads.push(revision);
+            return revision;
+          },
+        });
+      } else if (publisher === "toJSON") {
+        Object.assign(source, {
+          toJSON(key: string) {
+            expect(key).toBe("payload");
+            reads.push(revision);
+            return { presence, revision };
+          },
+        });
+      }
+      peers[0]!.socket.send.mockImplementationOnce(() => {
+        revision = 2;
+        if (publisher === "added field") {
+          Object.assign(source, { revision });
+        }
+      });
+      const { broadcast } = createGatewayBroadcaster({
+        clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+        preparePresenceProjection: () => () => (authorized ? presence : hidden),
+      });
+      broadcast("presence", source);
+
+      for (const [index, peer] of peers.entries()) {
+        const expected =
+          publisher === "added field" && index === 0
+            ? { presence }
+            : { presence: publisher === "getter" ? hidden : presence, revision: index + 1 };
+        expect(JSON.parse(peer.socket.send.mock.lastCall![0]).payload).toEqual(expected);
+      }
+      expect(reads).toEqual(publisher === "added field" ? [] : [1, 2]);
+    },
+  );
 });

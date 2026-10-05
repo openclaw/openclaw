@@ -212,7 +212,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates).toContain(
-      "Reading the gateway config and restarting agents.\n\n🛠️ Exec: running",
+      "Reading the gateway config and restarting agents.\n\n• Exec: running",
     );
     expectFinalAnswerText("done");
   });
@@ -284,7 +284,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(draftStream.update).toHaveBeenCalledWith("Working\n\n🛠️ Exec: running\n• exec done", {
+    expect(draftStream.update).toHaveBeenCalledWith("Working\n\n• Exec: running\n• exec done", {
       complete: true,
     });
     expect(deliverDiscordReply).not.toHaveBeenCalled();
@@ -707,9 +707,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     await runProgressScenario({ toolProgress: true, label: "Investigating", commandText: "raw" });
 
     expect(draftStream.retarget).toHaveBeenCalledWith("thread-1");
-    expect(draftStream.update).toHaveBeenLastCalledWith(
-      "Investigating\n\n🛠️ Checked the pipeline.",
-    );
+    expect(draftStream.update).toHaveBeenLastCalledWith("Investigating\n\n• Checked the pipeline.");
     expect(draftStream.messageId()).toBeDefined();
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
@@ -864,7 +862,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     await runProgressScenario({ toolProgress: true, label: "Clawing..." });
 
-    expect(draftStream.update).toHaveBeenCalledExactlyOnceWith("Clawing...\n\n🩹 Apply Patch", {
+    expect(draftStream.update).toHaveBeenCalledExactlyOnceWith("Clawing...\n\n• Apply Patch", {
       complete: true,
     });
   });
@@ -886,7 +884,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     await runProgressScenario({ toolProgress: true, label: "Clawing..." });
 
-    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🛠️ Exec: running\n• done", {
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n• Exec: running\n• done", {
       complete: true,
     });
     expect(draftStream.update.mock.calls.map((call) => call[0]).join("\n")).not.toContain(

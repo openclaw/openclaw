@@ -123,13 +123,10 @@ async function validateTemplate(
   );
 }
 
-/** The caller holds allocation before projection custody, matching removal's lock order. */
-export async function cloneLocalWorkspaceTemplate(params: {
+type LocalWorkspaceTemplateParams = {
   source: string;
   repoRoot: string;
   baseCommit: string;
-  branch: string;
-  destination: string;
   temporaryRoot: string;
   templateRoot: string;
   env: NodeJS.ProcessEnv;
@@ -137,11 +134,14 @@ export async function cloneLocalWorkspaceTemplate(params: {
   guard: Pick<WorktreeAllocationGuard, "commitGuard" | "rollbackGuard" | "requireDiskSpace"> & {
     signal: AbortSignal;
   };
-}): Promise<boolean> {
+};
+
+/** Preparation and first use share allocation custody and the same persisted generation. */
+export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTemplateParams) {
   const { guard } = params;
-  const backend = await detectWorktreeFilesystemBackend(path.dirname(params.destination), guard);
+  const backend = await detectWorktreeFilesystemBackend(params.temporaryRoot, guard);
   if (!backend) {
-    return false;
+    return undefined;
   }
   const gitOptions = { signal: guard.signal, beforeRun: guard.commitGuard, killProcessTree: true };
   const lockfile = await runGit(
@@ -153,7 +153,7 @@ export async function cloneLocalWorkspaceTemplate(params: {
     log.debug(
       "sandbox dependency template skipped: no complete pnpm lockfile at the selected commit",
     );
-    return false;
+    return undefined;
   }
   const identity = await resolveSandboxDependencyTemplateIdentity(params.sandbox, {
     signal: guard.signal,
@@ -161,7 +161,7 @@ export async function cloneLocalWorkspaceTemplate(params: {
   });
   if (!identity) {
     log.debug("sandbox dependency template skipped: local image identity unavailable");
-    return false;
+    return undefined;
   }
   const commonDir = path.resolve(
     params.source,
@@ -229,9 +229,19 @@ export async function cloneLocalWorkspaceTemplate(params: {
       await prepareSource(preparing.path);
     },
   });
-  if (!record) {
+  return record ? { record, backend } : undefined;
+}
+
+/** The caller holds allocation before projection custody, matching removal's lock order. */
+export async function cloneLocalWorkspaceTemplate(
+  params: LocalWorkspaceTemplateParams & { branch: string; destination: string },
+): Promise<boolean> {
+  const prepared = await prepareLocalWorkspaceTemplate(params);
+  if (!prepared) {
     return false;
   }
+  const { record, backend } = prepared;
+  const { guard } = params;
   guard.commitGuard();
   await guard.requireDiskSpace(
     [
@@ -253,6 +263,10 @@ export async function cloneLocalWorkspaceTemplate(params: {
   }
   // This .git was host-created and read-only throughout installation; guests only
   // receive the independent cloned metadata after its session branch is selected.
-  await requireGit(params.destination, ["branch", "-m", params.branch], gitOptions);
+  await requireGit(params.destination, ["branch", "-m", params.branch], {
+    signal: guard.signal,
+    beforeRun: guard.commitGuard,
+    killProcessTree: true,
+  });
   return true;
 }

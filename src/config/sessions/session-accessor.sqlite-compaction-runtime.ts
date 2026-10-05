@@ -1,5 +1,5 @@
 import type { CommittedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.js";
-import { captureSessionManagerIncognitoActor } from "../../agents/sessions/session-manager-incognito-scope.js";
+import { captureSessionManagerIncognitoBinding } from "../../agents/sessions/session-manager-incognito-scope.js";
 import {
   receiveSessionManagerCommit,
   SessionEntryCommittedError,
@@ -66,7 +66,7 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
     initialWriter?.assertActive();
   };
   const options = toDatabaseOptions(resolveSqliteTranscriptScope(captured));
-  const actor = captureSessionManagerIncognitoActor(captured);
+  const actor = captureSessionManagerIncognitoBinding(captured)?.actor;
   const transcriptByteCompactionLatch = { ...params.transcriptByteCompactionLatch };
   return await trackAsyncWork(() =>
     runOpenClawAgentWriteAdmission(

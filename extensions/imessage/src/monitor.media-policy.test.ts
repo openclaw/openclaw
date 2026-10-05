@@ -187,7 +187,6 @@ describe("iMessage monitor attachment policy", () => {
 
     await monitorIMessageProvider({
       scheduler: createTestPluginServiceScheduler(),
-      includeAttachments: true,
       config: {
         channels: {
           imessage: {
@@ -294,7 +293,6 @@ describe("iMessage monitor attachment policy", () => {
 
       await monitorIMessageProvider({
         scheduler: createTestPluginServiceScheduler(),
-        includeAttachments: true,
         config: {
           channels: {
             imessage: {

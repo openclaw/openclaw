@@ -23,6 +23,24 @@ function validateBinding(agentId: string, entries: Record<string, unknown>) {
 }
 
 describe("config schema regressions", () => {
+  it.each([["ops"], ["ops-*"], [], ["*"]].map((send) => ({ send })))(
+    "accepts per-agent send destinations $send",
+    ({ send }) => {
+      const result = validateConfigObject(agentTools({ agentToAgent: { send } }));
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.config.agents?.entries?.main?.tools?.agentToAgent?.send).toEqual(send);
+      }
+    },
+  );
+
+  it.each(["ops", [1], { target: "ops" }].map((send) => ({ send })))(
+    "rejects malformed send destinations $send",
+    ({ send }) => {
+      expect(validateConfigObject(agentTools({ agentToAgent: { send } })).ok).toBe(false);
+    },
+  );
+
   it("rejects a string gateway.uploads.enabled value", () => {
     expect(validateConfigObject({ gateway: { uploads: { enabled: "false" } } }).ok).toBe(false);
   });

@@ -234,7 +234,7 @@ suite.define(() => {
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-agent-menu")
-        .getByRole("menuitemradio", { name: "Reviewer" })
+        .getByRole("menuitem", { name: "Reviewer" })
         .click();
       await waitForRequest(gateway, "skills.status", (params) => params.agentId === "reviewer");
       expect(new URL(page.url()).pathname).toBe("/skills");

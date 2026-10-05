@@ -422,7 +422,7 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
         );
         await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "first" });
         await waitForBotApiCall(
-          (call) => call.method === "sendMessage" && String(call.fields.text).includes("🛠️ Exec"),
+          (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
         );
         // An unphased provider can continue with a tool-only assistant message.
         // Its start clears progress suppression without replacing the old preview.

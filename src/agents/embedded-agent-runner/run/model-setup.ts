@@ -139,6 +139,7 @@ async function prepareNativeSessionRuntime(
             lifecycleSessionKey: admission.sessionKey,
             storePath: admission.storePath,
             includeAuthorization: true,
+            snapshotFields: [],
           },
         ],
         ([read]) =>

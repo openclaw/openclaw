@@ -355,7 +355,7 @@ export function readExactSessionEntriesWithLifecycle(
             const entry = readExactSessionEntryRow(
               database,
               sessionKey,
-              "full",
+              request.snapshotFields ?? "full",
               "canonical",
             )?.entry;
             return entry ? [{ sessionKey, entry }] : [];
@@ -459,7 +459,9 @@ export function readExactSessionEntriesWithLifecycle(
                     readExactSessionEntryCandidatesInDatabase(
                       database,
                       [request.sessionKeys],
-                      request.projection === "sharing" ? "list" : "full",
+                      request.projection === "sharing"
+                        ? "list"
+                        : (request.snapshotFields ?? "full"),
                     )[0],
                     "exact session read result",
                   );
@@ -476,7 +478,11 @@ export function readExactSessionEntriesWithLifecycle(
                   !selected.value.some(({ sessionKey }) => sessionKey === parentKey)
                 ) {
                   const related = expectDefined(
-                    readExactSessionEntryCandidatesInDatabase(database, [[parentKey]], "full")[0],
+                    readExactSessionEntryCandidatesInDatabase(
+                      database,
+                      [[parentKey]],
+                      request.snapshotFields ?? "full",
+                    )[0],
                     "reply initialization parent read result",
                   );
                   if (!related.ok) {

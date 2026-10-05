@@ -1,7 +1,34 @@
 import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
-import { expect, test } from "vitest";
-import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
+import { expect, test, vi } from "vitest";
+import {
+  createChatMetadataHarness,
+  createChatMetadataOwner,
+} from "./chat-metadata-runtime.test-support.js";
+
+test("rejects a retired owner instead of retrying compact metadata indefinitely", async () => {
+  const config = { agents: { entries: { main: {} } } };
+  const harness = createChatMetadataHarness(config);
+  const isCurrent = vi.fn(() => true);
+  harness.setOwner({ ...createChatMetadataOwner(config, "retired"), isCurrent });
+  try {
+    await harness.runtime.refresh();
+    await harness.runtime.read({ agentId: "main", includeModels: false });
+    // Bound the regression's microtask loop without a real timer.
+    isCurrent
+      .mockClear()
+      .mockReturnValueOnce(false)
+      .mockImplementation(() => {
+        throw new Error("Compact metadata repeatedly read a retired owner");
+      });
+    await expect(harness.runtime.read({ agentId: "main", includeModels: false })).rejects.toThrow(
+      'prepared chat metadata owner retired for agent "main"',
+    );
+    expect(isCurrent).toHaveBeenCalledOnce();
+  } finally {
+    await harness.runtime.stop();
+  }
+});
 
 test.each(["metadata", "startup"] as const)(
   "projects each session's account provenance when %s reuses its catalog",

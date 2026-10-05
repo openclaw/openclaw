@@ -2,7 +2,7 @@ import Foundation
 
 public struct ToolDisplaySummary: Sendable, Equatable {
     public let name: String
-    public let emoji: String
+    public let icon: String
     public let title: String
     public let label: String
     public let verb: String?
@@ -24,7 +24,7 @@ public enum ToolDisplayRegistry {
     }
 
     private struct ToolDisplaySpec: Decodable {
-        let emoji: String?
+        let icon: String?
         let title: String?
         let label: String?
         let detailKeys: [String]?
@@ -39,13 +39,30 @@ public enum ToolDisplayRegistry {
 
     private static let config: ToolDisplayConfig = loadConfig()
 
+    /// Presentation only; invocation identity and stored tool names stay raw.
+    public static func displayCall(name: String?, args: AnyCodable?) -> (name: String?, args: AnyCodable?) {
+        guard name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "tool_call",
+              let arguments = args?.dictionaryValue,
+              let id = arguments["id"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !id.isEmpty
+        else { return (name, args) }
+
+        let displayName = id.replacingOccurrences(
+            of: #"^(?:openclaw|mcp|client):[^:]+:(.+)$"#,
+            with: "$1",
+            options: .regularExpression)
+        return (displayName, AnyCodable(arguments["args"]?.dictionaryValue ?? [:]))
+    }
+
     public static func resolve(name: String?, args: AnyCodable?, meta: String? = nil) -> ToolDisplaySummary {
-        let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "tool"
+        let call = self.displayCall(name: name, args: args)
+        let args = call.args
+        let trimmedName = call.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "tool"
         let key = trimmedName.lowercased()
         let spec = self.config.tools?[key]
         let fallback = self.config.fallback
 
-        let emoji = spec?.emoji ?? fallback?.emoji ?? "🧩"
+        let icon = spec?.icon ?? fallback?.icon ?? "puzzle"
         let title = spec?.title ?? self.titleFromName(trimmedName)
         let label = spec?.label ?? trimmedName
 
@@ -66,7 +83,7 @@ public enum ToolDisplayRegistry {
 
         return ToolDisplaySummary(
             name: trimmedName,
-            emoji: emoji,
+            icon: icon,
             title: title,
             label: label,
             verb: verb,
@@ -127,7 +144,7 @@ public enum ToolDisplayRegistry {
         ToolDisplayConfig(
             version: 1,
             fallback: ToolDisplaySpec(
-                emoji: "🧩",
+                icon: "puzzle",
                 title: nil,
                 label: nil,
                 detailKeys: [

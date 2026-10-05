@@ -170,7 +170,7 @@ export class ToolExecutionComponent extends Container {
 
   setArgs(args: unknown) {
     const display = resolveToolDisplay({ name: this.toolName, args });
-    this.title = `${display.emoji} ${display.label}`;
+    this.title = display.label;
     this.refreshTitle();
     const argLine = formatArgs(formatToolDetail(display), args);
     this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));

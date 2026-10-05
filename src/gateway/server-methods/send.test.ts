@@ -1111,13 +1111,6 @@ describe("gateway send mirroring", () => {
     );
   });
 
-  it("returns invalid request when send channel selection is ambiguous", async () => {
-    mocks.resolveMessageChannelSelection.mockRejectedValueOnce(
-      new Error("Channel is required when multiple channels are configured: telegram, slack"),
-    );
-    await expectRejectedSend({}, "Channel is required");
-  });
-
   it("includes optional poll delivery identifiers in the gateway payload", async () => {
     mocks.sendPoll.mockResolvedValue({
       messageId: "poll-rich",

@@ -243,7 +243,11 @@ export class ToolSearchRuntime {
   constructor(
     private readonly ctx: ToolSearchToolContext,
     private readonly config: ToolSearchConfig,
-    private readonly options: { prepareInput?: boolean; validateInput?: boolean } = {},
+    private readonly options: {
+      prepareInput?: boolean;
+      validateInput?: boolean;
+      callIdScope?: string;
+    } = {},
   ) {}
 
   search = async (
@@ -421,7 +425,10 @@ export class ToolSearchRuntime {
     catalog.callCount += 1;
     const normalizedInput = input ?? {};
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
-    const toolCallId = `tool_call:${parentId}:${entry.name}:${++this.callSequence}`;
+    const scope = this.options.callIdScope
+      ? `${sanitizeToolCallIdPart(this.options.callIdScope)}:`
+      : "";
+    const toolCallId = `tool_call:${parentId}:${scope}${entry.name}:${++this.callSequence}`;
     bindJoinedCollectorInvocation(entry.tool, toolCallId);
     await assertCatalogOutputSchemaIsValid(entry);
     const outputVariants =

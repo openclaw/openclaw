@@ -404,7 +404,7 @@ async function validateNonInteractiveDiscovery(
   modelId: string;
   resetEndpoint: boolean;
   persistence: AuthPersistence<NonNullable<Awaited<ReturnType<typeof ctx.resolveApiKey>>>>;
-} | null> {
+}> {
   const configuredProvider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const baseUrl =
     normalizeOptionalSecretInput(ctx.opts.customBaseUrl) ??
@@ -451,21 +451,17 @@ async function validateNonInteractiveDiscovery(
   }
   const discovery = await discoverLlamaServer({ baseUrl, apiKey, headers, cacheTtlMs: 0 });
   if (discovery.kind !== "success") {
-    ctx.runtime.error(describeDiscoveryFailure(discovery));
-    ctx.runtime.exit(1);
-    return null;
+    throw new Error(describeDiscoveryFailure(discovery));
   }
   const requestedModelId = normalizeOptionalSecretInput(ctx.opts.customModelId);
   const modelId = requestedModelId ?? selectSetupModelId(discovery);
   if (!modelId || !discovery.models.some((model) => model.config.id === modelId)) {
     const available = discovery.models.map((model) => model.config.id).join(", ");
-    ctx.runtime.error(
+    throw new Error(
       requestedModelId
         ? `llama-server model ${requestedModelId} was not found. Available models: ${available}`
         : `No llama-server text models were found at ${discovery.endpoint.origin}.`,
     );
-    ctx.runtime.exit(1);
-    return null;
   }
   return {
     discovery,
@@ -478,7 +474,8 @@ async function validateNonInteractiveDiscovery(
 export async function validateLlamaServerNonInteractive(
   ctx: Omit<ProviderAuthMethodNonInteractiveContext, "toApiKeyCredential">,
 ): Promise<boolean> {
-  return Boolean(await validateNonInteractiveDiscovery(ctx));
+  await validateNonInteractiveDiscovery(ctx);
+  return true;
 }
 
 /** Non-interactive setup with optional API-key persistence. */
@@ -486,9 +483,6 @@ export async function configureLlamaServerNonInteractive(
   ctx: ProviderAuthMethodNonInteractiveContext,
 ): Promise<OpenClawConfig | null> {
   const validated = await validateNonInteractiveDiscovery(ctx);
-  if (!validated) {
-    return null;
-  }
   const providerConfig = buildExistingProviderConfig({
     config: ctx.config,
     ...validated,

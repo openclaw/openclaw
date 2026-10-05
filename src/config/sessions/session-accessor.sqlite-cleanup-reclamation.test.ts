@@ -340,7 +340,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
           orphanPlanningMs: 40,
           markerScanMs: 1200,
           nodeRows: 1,
-          windowRows: 2,
+          windowRows: 1,
           referenceIds: 1,
           selectedEntries: 0,
           markerWindows: 1,
