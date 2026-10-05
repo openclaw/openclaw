@@ -29,12 +29,14 @@ enum SignificantLocationMonitor {
                 lon: location.coordinate.longitude,
                 accuracyMeters: location.horizontalAccuracy,
                 source: "ios-significant-location")
-            guard let data = try? JSONEncoder().encode(payload) else { return }
+            guard let data = try? JSONEncoder().encode(payload),
+                  let json = String(data: data, encoding: .utf8)
+            else { return }
             Task { @MainActor in
                 if let beforeSend {
                     await beforeSend()
                 }
-                await gateway.sendEvent(event: "location.update", payloadJSON: String(decoding: data, as: UTF8.self))
+                await gateway.sendEvent(event: "location.update", payloadJSON: json)
             }
         }
     }

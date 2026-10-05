@@ -143,9 +143,9 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
 
     static func originGatedScript(_ script: String, url: URL) -> String? {
         guard let authority = GatewayTLSAuthority(url: url),
-              let data = try? JSONEncoder().encode(authority.serialized)
+              let data = try? JSONEncoder().encode(authority.serialized),
+              let origin = String(data: data, encoding: .utf8)
         else { return nil }
-        let origin = String(decoding: data, as: UTF8.self)
         return "(() => { if (location.origin !== \(origin)) return; \(script) })();"
     }
 

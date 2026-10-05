@@ -449,7 +449,10 @@ final class WatchRealtimeCallController {
     }
 
     private static func encode(_ value: some Encodable) throws -> String {
-        try String(decoding: JSONEncoder().encode(value), as: UTF8.self)
+        guard let json = try String(data: JSONEncoder().encode(value), encoding: .utf8) else {
+            throw self.unavailable(String(localized: "Voice could not encode its Gateway request."))
+        }
+        return json
     }
 
     private static func makeURLSession() -> URLSession {

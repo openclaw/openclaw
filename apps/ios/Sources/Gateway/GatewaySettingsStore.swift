@@ -305,9 +305,9 @@ enum GatewaySettingsStore {
         }
         let account = self.customHeadersAccount(stableID: stableID)
         guard let data = try? JSONEncoder().encode(sanitized),
-              GenericPasswordKeychainStore.saveString(
-                  String(decoding: data, as: UTF8.self), service: service, account: account)
+              let json = String(data: data, encoding: .utf8)
         else { return false }
+        guard GenericPasswordKeychainStore.saveString(json, service: service, account: account) else { return false }
         if self.canSafelyReadLegacyRawStorageKey(stableID) {
             _ = GenericPasswordKeychainStore.delete(
                 service: service,
@@ -756,8 +756,8 @@ enum GatewaySettingsStore {
             password: decoded.password?.trimmedNonEmpty)
         if canonicalJSON == nil,
            let migratedData = try? JSONEncoder().encode(bundle),
-           GenericPasswordKeychainStore.saveString(
-               String(decoding: migratedData, as: UTF8.self), service: self.gatewayService, account: account)
+           let migratedJSON = String(data: migratedData, encoding: .utf8),
+           GenericPasswordKeychainStore.saveString(migratedJSON, service: self.gatewayService, account: account)
         {
             _ = GenericPasswordKeychainStore.delete(service: self.gatewayService, account: legacyAccount)
         }
@@ -881,9 +881,11 @@ extension GatewaySettingsStore {
         let normalized = self.normalizedGatewayRegistry(registry)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(normalized) else { return false }
+        guard let data = try? encoder.encode(normalized),
+              let json = String(data: data, encoding: .utf8)
+        else { return false }
         guard GenericPasswordKeychainStore.saveString(
-            String(decoding: data, as: UTF8.self),
+            json,
             service: self.gatewayService,
             account: self.gatewayRegistryAccount)
         else { return false }
@@ -996,12 +998,14 @@ extension GatewaySettingsStore {
         _ bundle: GatewayCredentialBundle,
         account: String) throws
     {
-        guard let data = try? JSONEncoder().encode(bundle) else {
+        guard let data = try? JSONEncoder().encode(bundle),
+              let json = String(data: data, encoding: .utf8)
+        else {
             throw GatewayCredentialPersistenceError.encodingFailed
         }
         do {
             try GenericPasswordKeychainStore.saveStringResult(
-                String(decoding: data, as: UTF8.self),
+                json,
                 service: self.gatewayService,
                 account: account).get()
         } catch {

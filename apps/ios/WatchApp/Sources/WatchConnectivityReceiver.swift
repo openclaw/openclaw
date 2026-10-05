@@ -628,38 +628,45 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         self.consumeIncomingPayload(applicationContext, transport: "applicationContext")
     }
 
+    private func consumeChatDeliveryReceipt(
+        _ payload: [String: Any],
+        acknowledgment: WatchMessageAcknowledgment?)
+    {
+        let receipt: OpenClawWatchChatDeliveryReceipt
+        do {
+            receipt = try OpenClawWatchChatDeliveryCodec.decodeReceipt(payload)
+        } catch {
+            acknowledgment?.reject(reason: "invalid_payload")
+            return
+        }
+        Task { @MainActor in
+            do {
+                let receiptAck = try await self.store.recordChatDeliveryReceipt(receipt)
+                if case let .rejected(code, _) = receipt.state,
+                   code == OpenClawWatchChatDeliveryCodec.staleRouteCode
+                {
+                    self.cancelClearedChatTransfers(context: receipt.context)
+                }
+                acknowledgment?.accept()
+                if let receiptAck {
+                    let payload = try OpenClawWatchChatDeliveryCodec.encode(receiptAck)
+                    let session = try await self.activatedSession()
+                    _ = await self.sendPayload(payload, session: session)
+                }
+            } catch {
+                acknowledgment?
+                    .reject(reason: (error as? OpenClawWatchChatDeliveryError)?.code ?? "storage_unavailable")
+            }
+        }
+    }
+
     private func consumeIncomingPayload(
         _ payload: [String: Any],
         transport: String,
         acknowledgment: WatchMessageAcknowledgment? = nil)
     {
         if (payload["type"] as? String) == WatchPayloadType.chatDeliveryReceipt.rawValue {
-            let receipt: OpenClawWatchChatDeliveryReceipt
-            do {
-                receipt = try OpenClawWatchChatDeliveryCodec.decodeReceipt(payload)
-            } catch {
-                acknowledgment?.reject(reason: "invalid_payload")
-                return
-            }
-            Task { @MainActor in
-                do {
-                    let receiptAck = try await self.store.recordChatDeliveryReceipt(receipt)
-                    if case let .rejected(code, _) = receipt.state,
-                       code == OpenClawWatchChatDeliveryCodec.staleRouteCode
-                    {
-                        self.cancelClearedChatTransfers(context: receipt.context)
-                    }
-                    acknowledgment?.accept()
-                    if let receiptAck {
-                        let payload = try OpenClawWatchChatDeliveryCodec.encode(receiptAck)
-                        let session = try await self.activatedSession()
-                        _ = await self.sendPayload(payload, session: session)
-                    }
-                } catch {
-                    acknowledgment?
-                        .reject(reason: (error as? OpenClawWatchChatDeliveryError)?.code ?? "storage_unavailable")
-                }
-            }
+            self.consumeChatDeliveryReceipt(payload, acknowledgment: acknowledgment)
             return
         }
         if let type = payload["type"] as? String,

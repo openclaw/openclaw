@@ -82,6 +82,8 @@ private final class TranscriptStreamingOwner {
         text: String,
         phase: TalkPhase,
         watchPresentation: TalkWatchPresentation)?
+    /// Subscribed before chat.send so a fast terminal cannot outrun its owner.
+    var completionEvents: AsyncStream<EventFrame>?
 }
 
 private enum PushToTalkGatewayContext {
@@ -1841,6 +1843,7 @@ final class TalkModeManager {
             let completionEvents = completionSubscription.events
             guard await gateway.currentRoute() == gatewayRoute else { return }
             guard self.isCurrentTranscriptProcessing(generation) else { return }
+            streamingOwner.completionEvents = completionEvents
             self.logger.info(
                 "chat.send start sessionKey=\(sessionKey, privacy: .public) chars=\(prompt.count, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send start sessionKey=\(sessionKey) chars=\(prompt.count)")
@@ -1885,7 +1888,6 @@ final class TalkModeManager {
                 gatewayRoute: gatewayRoute,
                 sessionKey: sessionKey,
                 generation: generation,
-                completionEvents: completionEvents,
                 streamingOwner: streamingOwner)
             else { return }
             guard self.isCurrentTranscriptProcessing(generation) else { return }
@@ -1912,7 +1914,6 @@ final class TalkModeManager {
         gatewayRoute: GatewayNodeSessionRoute,
         sessionKey: String,
         generation: UInt64,
-        completionEvents: AsyncStream<EventFrame>,
         streamingOwner: TranscriptStreamingOwner) async throws -> Bool?
     {
         let runId = acknowledgement.runId
@@ -1938,6 +1939,7 @@ final class TalkModeManager {
                         transcriptProcessingGeneration: generation)
                 }
             }
+            guard let completionEvents = streamingOwner.completionEvents else { return nil }
             completion = await self.waitForChatCompletion(
                 runId: runId,
                 gateway: gateway,
@@ -2374,7 +2376,7 @@ final class TalkModeManager {
                 let data = try JSONEncoder().encode(params)
                 let response = try await gateway.request(
                     method: "talk.voice.complete",
-                    paramsJSON: String(decoding: data, as: UTF8.self),
+                    paramsJSON: String(bytes: data, encoding: .utf8),
                     timeoutSeconds: 70,
                     ifCurrentRoute: route)
                 guard try JSONDecoder().decode(TalkClientMutationResult.self, from: response).ok else {
@@ -2610,7 +2612,7 @@ final class TalkModeManager {
             voice: voice,
             capabilities: supportsVoiceSelection ? ["voice-transcript", "voice-selection"] : ["voice-transcript"])
         let data = try JSONEncoder().encode(params)
-        let json = String(decoding: data, as: UTF8.self)
+        let json = String(data: data, encoding: .utf8)
         let res = try await gateway.request(
             method: "talk.client.create",
             paramsJSON: json,
@@ -2749,7 +2751,7 @@ final class TalkModeManager {
             let params = TalkClientCloseParams(
                 sessionkey: sessionKey,
                 voicesessionid: voiceSessionId)
-            let json = try String(decoding: JSONEncoder().encode(params), as: UTF8.self)
+            let json = try String(bytes: JSONEncoder().encode(params), encoding: .utf8)!
             #if DEBUG
             if let testRealtimeVoiceSessionCloseRequest = self.testRealtimeVoiceSessionCloseRequest {
                 try await testRealtimeVoiceSessionCloseRequest("talk.client.close", json)

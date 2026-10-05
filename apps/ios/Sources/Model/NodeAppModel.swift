@@ -2165,76 +2165,7 @@ final class NodeAppModel {
         }
 
         do {
-            switch command {
-            case OpenClawLocationCommand.get.rawValue:
-                return try await self.handleLocationInvoke(req)
-            case OpenClawCameraCommand.list.rawValue,
-                 OpenClawCameraCommand.snap.rawValue,
-                 OpenClawCameraCommand.clip.rawValue:
-                return try await self.handleCameraInvoke(req)
-            case OpenClawScreenCommand.record.rawValue:
-                return try await self.handleScreenRecordInvoke(req)
-            case OpenClawSystemCommand.notify.rawValue:
-                return try await self.handleSystemNotify(req)
-            case OpenClawChatCommand.push.rawValue:
-                return try await self.handleChatPushInvoke(req)
-            case OpenClawDeviceCommand.status.rawValue:
-                return try await Self.successfulInvokeResponse(req, payload: self.deviceStatusService.status())
-            case OpenClawDeviceCommand.info.rawValue:
-                return try Self.successfulInvokeResponse(req, payload: self.deviceStatusService.info())
-            case OpenClawWatchCommand.status.rawValue, OpenClawWatchCommand.notify.rawValue:
-                return try await self.handleWatchInvoke(req, gatewayStableID: gatewayStableID)
-            case OpenClawPhotosCommand.latest.rawValue:
-                let params = (try? Self.decodeParams(OpenClawPhotosLatestParams.self, from: req.paramsJSON)) ??
-                    OpenClawPhotosLatestParams()
-                return try await Self.successfulInvokeResponse(req, payload: self.photosService.latest(params: params))
-            case OpenClawContactsCommand.search.rawValue:
-                let params = (try? Self.decodeParams(OpenClawContactsSearchParams.self, from: req.paramsJSON)) ??
-                    OpenClawContactsSearchParams()
-                return try await Self.successfulInvokeResponse(
-                    req,
-                    payload: self.contactsService.search(params: params))
-            case OpenClawContactsCommand.add.rawValue:
-                let params = try Self.decodeParams(OpenClawContactsAddParams.self, from: req.paramsJSON)
-                return try await Self.successfulInvokeResponse(req, payload: self.contactsService.add(params: params))
-            case OpenClawCalendarCommand.events.rawValue:
-                let params = (try? Self.decodeParams(OpenClawCalendarEventsParams.self, from: req.paramsJSON)) ??
-                    OpenClawCalendarEventsParams()
-                return try await Self.successfulInvokeResponse(
-                    req,
-                    payload: self.calendarService.events(params: params))
-            case OpenClawCalendarCommand.add.rawValue:
-                let params = try Self.decodeParams(OpenClawCalendarAddParams.self, from: req.paramsJSON)
-                return try await Self.successfulInvokeResponse(req, payload: self.calendarService.add(params: params))
-            case OpenClawRemindersCommand.list.rawValue:
-                let params = (try? Self.decodeParams(OpenClawRemindersListParams.self, from: req.paramsJSON)) ??
-                    OpenClawRemindersListParams()
-                return try await Self.successfulInvokeResponse(req, payload: self.remindersService.list(params: params))
-            case OpenClawRemindersCommand.add.rawValue:
-                let params = try Self.decodeParams(OpenClawRemindersAddParams.self, from: req.paramsJSON)
-                return try await Self.successfulInvokeResponse(req, payload: self.remindersService.add(params: params))
-            case OpenClawMotionCommand.activity.rawValue:
-                let params = (try? Self.decodeParams(OpenClawMotionActivityParams.self, from: req.paramsJSON)) ??
-                    OpenClawMotionActivityParams()
-                return try await Self.successfulInvokeResponse(
-                    req,
-                    payload: self.motionService.activities(params: params))
-            case OpenClawMotionCommand.pedometer.rawValue:
-                let params = (try? Self.decodeParams(OpenClawPedometerParams.self, from: req.paramsJSON)) ??
-                    OpenClawPedometerParams()
-                return try await Self.successfulInvokeResponse(
-                    req,
-                    payload: self.motionService.pedometer(params: params))
-            case OpenClawHealthCommand.summary.rawValue:
-                return try await self.handleHealthInvoke(req)
-            case OpenClawTalkCommand.pttStart.rawValue,
-                 OpenClawTalkCommand.pttStop.rawValue,
-                 OpenClawTalkCommand.pttCancel.rawValue,
-                 OpenClawTalkCommand.pttOnce.rawValue:
-                return try await self.handleTalkInvoke(req)
-            default:
-                return Self.unknownInvokeResponse(req)
-            }
+            return try await self.performServiceInvoke(req, gatewayStableID: gatewayStableID)
         } catch is CancellationError {
             if command.hasPrefix("camera.") {
                 self.clearCameraHUD(ownerID: req.id)
@@ -2246,6 +2177,82 @@ final class NodeAppModel {
                 self.updateCameraHUD(ownerID: req.id, text: text, kind: .error, autoHideSeconds: 2.2)
             }
             return Self.failedInvokeResponse(req, code: .unavailable, message: error.localizedDescription)
+        }
+    }
+
+    private func performServiceInvoke(
+        _ req: BridgeInvokeRequest,
+        gatewayStableID: String?) async throws -> BridgeInvokeResponse
+    {
+        switch req.command {
+        case OpenClawLocationCommand.get.rawValue:
+            return try await self.handleLocationInvoke(req)
+        case OpenClawCameraCommand.list.rawValue,
+             OpenClawCameraCommand.snap.rawValue,
+             OpenClawCameraCommand.clip.rawValue:
+            return try await self.handleCameraInvoke(req)
+        case OpenClawScreenCommand.record.rawValue:
+            return try await self.handleScreenRecordInvoke(req)
+        case OpenClawSystemCommand.notify.rawValue:
+            return try await self.handleSystemNotify(req)
+        case OpenClawChatCommand.push.rawValue:
+            return try await self.handleChatPushInvoke(req)
+        case OpenClawDeviceCommand.status.rawValue:
+            return try await Self.successfulInvokeResponse(req, payload: self.deviceStatusService.status())
+        case OpenClawDeviceCommand.info.rawValue:
+            return try Self.successfulInvokeResponse(req, payload: self.deviceStatusService.info())
+        case OpenClawWatchCommand.status.rawValue, OpenClawWatchCommand.notify.rawValue:
+            return try await self.handleWatchInvoke(req, gatewayStableID: gatewayStableID)
+        case OpenClawPhotosCommand.latest.rawValue:
+            let params = (try? Self.decodeParams(OpenClawPhotosLatestParams.self, from: req.paramsJSON)) ??
+                OpenClawPhotosLatestParams()
+            return try await Self.successfulInvokeResponse(req, payload: self.photosService.latest(params: params))
+        case OpenClawContactsCommand.search.rawValue:
+            let params = (try? Self.decodeParams(OpenClawContactsSearchParams.self, from: req.paramsJSON)) ??
+                OpenClawContactsSearchParams()
+            return try await Self.successfulInvokeResponse(
+                req,
+                payload: self.contactsService.search(params: params))
+        case OpenClawContactsCommand.add.rawValue:
+            let params = try Self.decodeParams(OpenClawContactsAddParams.self, from: req.paramsJSON)
+            return try await Self.successfulInvokeResponse(req, payload: self.contactsService.add(params: params))
+        case OpenClawCalendarCommand.events.rawValue:
+            let params = (try? Self.decodeParams(OpenClawCalendarEventsParams.self, from: req.paramsJSON)) ??
+                OpenClawCalendarEventsParams()
+            return try await Self.successfulInvokeResponse(
+                req,
+                payload: self.calendarService.events(params: params))
+        case OpenClawCalendarCommand.add.rawValue:
+            let params = try Self.decodeParams(OpenClawCalendarAddParams.self, from: req.paramsJSON)
+            return try await Self.successfulInvokeResponse(req, payload: self.calendarService.add(params: params))
+        case OpenClawRemindersCommand.list.rawValue:
+            let params = (try? Self.decodeParams(OpenClawRemindersListParams.self, from: req.paramsJSON)) ??
+                OpenClawRemindersListParams()
+            return try await Self.successfulInvokeResponse(req, payload: self.remindersService.list(params: params))
+        case OpenClawRemindersCommand.add.rawValue:
+            let params = try Self.decodeParams(OpenClawRemindersAddParams.self, from: req.paramsJSON)
+            return try await Self.successfulInvokeResponse(req, payload: self.remindersService.add(params: params))
+        case OpenClawMotionCommand.activity.rawValue:
+            let params = (try? Self.decodeParams(OpenClawMotionActivityParams.self, from: req.paramsJSON)) ??
+                OpenClawMotionActivityParams()
+            return try await Self.successfulInvokeResponse(
+                req,
+                payload: self.motionService.activities(params: params))
+        case OpenClawMotionCommand.pedometer.rawValue:
+            let params = (try? Self.decodeParams(OpenClawPedometerParams.self, from: req.paramsJSON)) ??
+                OpenClawPedometerParams()
+            return try await Self.successfulInvokeResponse(
+                req,
+                payload: self.motionService.pedometer(params: params))
+        case OpenClawHealthCommand.summary.rawValue:
+            return try await self.handleHealthInvoke(req)
+        case OpenClawTalkCommand.pttStart.rawValue,
+             OpenClawTalkCommand.pttStop.rawValue,
+             OpenClawTalkCommand.pttCancel.rawValue,
+             OpenClawTalkCommand.pttOnce.rawValue:
+            return try await self.handleTalkInvoke(req)
+        default:
+            return Self.unknownInvokeResponse(req)
         }
     }
 
@@ -3080,7 +3087,8 @@ extension NodeAppModel {
     }
 
     fileprivate static func encodePayload(_ obj: some Encodable) throws -> String {
-        try String(decoding: JSONEncoder().encode(obj), as: UTF8.self)
+        // JSONEncoder guarantees UTF-8 output.
+        try String(bytes: JSONEncoder().encode(obj), encoding: .utf8)!
     }
 
     private func isCameraEnabled() -> Bool {

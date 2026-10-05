@@ -441,7 +441,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
             text: trimmed,
             timestamp: Date().timeIntervalSince1970 * 1000,
             persist: { [gateway, gatewayRoute] params in
-                let json = try String(decoding: JSONEncoder().encode(params), as: UTF8.self)
+                let json = try String(bytes: JSONEncoder().encode(params), encoding: .utf8)!
                 _ = try await gateway.request(
                     method: "talk.client.transcript",
                     paramsJSON: json,
@@ -1172,7 +1172,8 @@ extension TalkRealtimeWebRTCSession {
             voice: voice,
             voiceChangeId: voiceChangeID,
             capabilities: supportsVoiceSelection ? ["voice-transcript", "voice-selection"] : ["voice-transcript"])
-        let json = try String(decoding: JSONEncoder().encode(params), as: UTF8.self)
+        let data = try JSONEncoder().encode(params)
+        let json = String(data: data, encoding: .utf8)
         let res = try await gateway.request(
             method: "talk.client.create",
             paramsJSON: json,
