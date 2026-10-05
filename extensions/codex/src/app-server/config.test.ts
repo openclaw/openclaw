@@ -641,6 +641,115 @@ describe("Codex app-server config", () => {
     ).toBe(false);
   });
 
+  it.each([
+    "https://api.openai.com/v1",
+    "https://chatgpt.com/backend-api",
+    "https://chatgpt.com/backend-api/codex",
+  ])("keeps model-backed review for a configured native OpenAI route: %s", (baseUrl) => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT",
+      reasoning: true,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8_192,
+    };
+    for (const openai of [
+      { baseUrl, models: [model] },
+      { baseUrl: "https://api.openai.com/v1", models: [{ ...model, baseUrl }] },
+    ]) {
+      const config = { models: { providers: { openai } } };
+      expect(
+        canUseCodexModelBackedApprovalsReviewerForModel({
+          modelProvider: "openai",
+          model: "openai/gpt-5.5@openai:default",
+          config,
+          env: {},
+          codexConfigToml: null,
+        }),
+      ).toBe(true);
+      expectRuntimePolicy(
+        resolveRuntimeForTest({
+          execMode: "auto",
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          config,
+          codexConfigToml: null,
+        }),
+        autoReviewPolicy,
+      );
+    }
+  });
+
+  it.each([
+    "http://chatgpt.com/backend-api",
+    "https://chatgpt.com.example.com/backend-api",
+    "https://chatgpt.com@proxy.example.com/backend-api",
+    "https://proxy.example.com/backend-api",
+    "not a URL",
+  ])("rejects configured non-native reviewer routes: %s", (baseUrl) => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT",
+      reasoning: true,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8_192,
+    };
+    for (const openai of [
+      { baseUrl, models: [model] },
+      { baseUrl: "https://chatgpt.com/backend-api/codex", models: [{ ...model, baseUrl }] },
+    ]) {
+      expect(
+        canUseCodexModelBackedApprovalsReviewerForModel({
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          config: { models: { providers: { openai } } },
+          env: {},
+          codexConfigToml: null,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("does not let a trusted ChatGPT route bypass request or native endpoint overrides", () => {
+    const baseUrl = "https://chatgpt.com/backend-api/codex";
+    const config = { models: { providers: { openai: { baseUrl, models: [] } } } };
+    const context = {
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      config,
+      env: {},
+      codexConfigToml: null,
+    };
+    for (const override of [
+      { headers: { "x-reviewer-proxy": "custom" } },
+      { request: { proxy: { mode: "explicit-proxy" as const, url: "http://localhost:8080" } } },
+      { authHeader: false },
+      { localService: {} },
+    ]) {
+      expect(
+        canUseCodexModelBackedApprovalsReviewerForModel({
+          ...context,
+          config: { models: { providers: { openai: { baseUrl, models: [], ...override } } } },
+        }),
+      ).toBe(false);
+    }
+    for (const override of [
+      { env: { OPENAI_BASE_URL: baseUrl } },
+      { env: { OPENAI_API_BASE: "http://localhost:8080/v1" } },
+      { codexConfigToml: `openai_base_url = "${baseUrl}"` },
+      { codexArgs: ["-c", `model_providers.openai.base_url="${baseUrl}"`] },
+      { codexConfigToml: 'chatgpt_base_url = "https://proxy.example.com/backend-api"' },
+    ]) {
+      expect(canUseCodexModelBackedApprovalsReviewerForModel({ ...context, ...override })).toBe(
+        false,
+      );
+    }
+  });
+
   it("forces prompting when explicit no-prompt config cannot use model-backed review", () => {
     const runtime = resolveAppServer(
       {
