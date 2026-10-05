@@ -20,6 +20,10 @@ function createSessionManager(version: 3 | 4) {
     getLeafEntry: () => undefined,
     getSessionTarget: () => undefined,
     getSessionId: () => "runtime-context-compat",
+    // prepareEmbeddedAttemptSessionBoundary reloads the persisted transcript
+    // before orphan repair. This fixture projects a static view, so the
+    // reload is a no-op that preserves the cached leaf.
+    reloadPersistedTranscriptAsync: async () => {},
   } as unknown as ReturnType<typeof guardSessionManager>;
 }
 
