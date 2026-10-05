@@ -1483,8 +1483,7 @@ src/agents/sessions/session-manager-entries.ts	2
 src/agents/sessions/session-manager.ts	2
 src/agents/sessions/settings-manager.ts	8
 src/agents/sessions/steering-message-identity.ts	2
-src/agents/sessions/tools/bash.ts	2
-src/agents/sessions/tools/edit.ts	10
+src/agents/sessions/tools/edit.ts	3
 src/agents/sessions/tools/tool-definition-wrapper.ts	1
 src/agents/sessions/tools/write.ts	3
 src/agents/shell-snapshot.ts	1
