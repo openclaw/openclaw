@@ -29,7 +29,7 @@ type GatewayStatusSummary = {
   windowsFirewall?: WindowsGatewayFirewallDiagnostic;
 };
 
-export type PortStatusSummary = Pick<PortUsage, "port" | "status" | "listeners" | "hints">;
+type PortStatusSummary = Pick<PortUsage, "port" | "status" | "listeners" | "hints">;
 
 type ResolvedGatewayStatus = {
   gateway: GatewayStatusSummary;

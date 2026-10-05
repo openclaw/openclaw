@@ -20,17 +20,17 @@ import { formatCliJsonFailure } from "./failure-output.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 import { formatCliRequirements } from "./skills-hooks-cli.format.js";
 
-export type SkillsListOptions = {
+type SkillsListOptions = {
   json?: boolean;
   eligible?: boolean;
   verbose?: boolean;
 };
 
-export type SkillInfoOptions = {
+type SkillInfoOptions = {
   json?: boolean;
 };
 
-export type SkillsCheckOptions = {
+type SkillsCheckOptions = {
   json?: boolean;
   agent?: string;
 };

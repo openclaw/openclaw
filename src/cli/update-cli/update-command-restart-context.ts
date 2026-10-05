@@ -2,6 +2,7 @@ import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import type { UpdateRestartParams } from "./update-command-service-context-types.js";
 import {
   resolveServiceRefreshEnv,
@@ -12,13 +13,9 @@ import {
   isGatewayServiceManagementAllowedForUpdate,
   readGatewayServiceStateForUpdate,
   resolveGatewayServiceManagementBlockMessageForUpdate,
-} from "./update-command-service-plan.js";
-import {
-  revalidateManagedGatewayServiceAfterUpdate,
-  resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
-  shouldPrepareUpdatedInstallRestart,
-} from "./update-command-service.js";
+} from "./update-command-service-plan.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 
 export async function prepareUpdateRestart(
   params: UpdateRestartParams & { assertCurrent: () => void },
@@ -30,12 +27,11 @@ export async function prepareUpdateRestart(
   let serviceManagerUid = params.preManagedServiceStop?.serviceManagerUid;
   let serviceUpdateVerdict = params.preManagedServiceStop?.serviceUpdateVerdict;
   let skipLegacyServiceRestart = serviceUpdateVerdict?.kind === "absent";
+  const packageUpdate = isPackageManagerUpdateMode(params.result.mode);
   const serviceStateReadEnv = resolveServiceRefreshEnv(
-    resolvePostUpdateServiceStateReadEnv({
-      updateMode: params.result.mode,
-      processEnv: process.env,
-      preManagedServiceEnv: params.preManagedServiceStop?.serviceEnv,
-    }),
+    params.result.mode === "git" || packageUpdate
+      ? (params.preManagedServiceStop?.serviceEnv ?? process.env)
+      : process.env,
     params.invocationCwd,
   );
   let serviceMutationAllowed =
@@ -68,6 +64,11 @@ export async function prepareUpdateRestart(
       });
       gatewayServiceEnv = serviceState.env;
       serviceManagerUid ??= serviceState.runtime?.systemd?.managerUid;
+      const useInstalledState =
+        (serviceUpdateVerdict.kind === "owned" &&
+          serviceUpdateVerdict.requiresInstallRootRefresh) ||
+        packageUpdate ||
+        (params.result.mode === "git" && params.preManagedServiceStop?.stopped);
       skipLegacyServiceRestart =
         serviceUpdateVerdict.kind === "foreign" || serviceUpdateVerdict.kind === "absent";
       if (serviceUpdateVerdict.kind === "unavailable") {
@@ -79,16 +80,10 @@ export async function prepareUpdateRestart(
           "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched.";
       } else if (
         !skipLegacyServiceRestart &&
-        shouldPrepareUpdatedInstallRestart({
-          updateMode: params.result.mode,
-          serviceInstalled: serviceState.installed,
-          serviceLoaded: serviceState.loadState.status === "loaded",
-          serviceStoppedForUpdate: params.preManagedServiceStop?.stopped,
-          serviceMatchesUpdateRoot: serviceUpdateVerdict.kind === "owned",
-          requiresInstallRootRefresh:
-            serviceUpdateVerdict.kind === "owned" &&
-            serviceUpdateVerdict.requiresInstallRootRefresh,
-        })
+        (useInstalledState
+          ? serviceState.installed
+          : serviceState.loadState.status === "loaded" &&
+            (params.result.mode !== "git" || serviceUpdateVerdict.kind === "owned"))
       ) {
         gatewayServiceInstallEnv = resolveManagedGatewayServiceProcessEnv(
           serviceState.command,

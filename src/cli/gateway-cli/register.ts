@@ -14,7 +14,6 @@ import type {
 } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
-import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output.js";
@@ -35,17 +34,11 @@ import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
-const loadWideAreaDnsModule = createLazyPromise(() => import("../../infra/widearea-dns.js"));
-const loadUsageFormatModule = createLazyPromise(() => import("../../utils/usage-format.js"));
-const loadStabilityBundleModule = createLazyPromise(
-  () => import("../../logging/diagnostic-stability-bundle.js"),
-);
-
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 const SETUP_INFERENCE_DETECT_RPC_TIMEOUT_MS = 40_000;
 
-function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TIMEOUT_MS): Command {
-  return addGatewayClientOptions(cmd, { timeoutMs: defaultTimeoutMs }).option(
+function gatewayCallOpts(cmd: Command): Command {
+  return addGatewayClientOptions(cmd, { timeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS }).option(
     "--json",
     "Output JSON",
     false,
@@ -99,7 +92,7 @@ function gatewayAction(action: Parameters<Command["action"]>[0], label?: string)
   };
 }
 
-function parseDaysOption(raw: unknown, fallback = 30): number {
+function parseDaysOption(raw: unknown): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(1, Math.floor(raw));
   }
@@ -113,7 +106,7 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
     // way instead of silently defaulting.
     throw new Error(`Invalid --days. Use a positive integer, e.g. --days 30. Received: "${raw}".`);
   }
-  return fallback;
+  return 30;
 }
 
 async function renderCostUsageSummaryAsync(
@@ -122,7 +115,8 @@ async function renderCostUsageSummaryAsync(
   rich: boolean,
 ): Promise<string[]> {
   const { formatMissingCostEntries } = await import("../../infra/session-cost-usage-totals.js");
-  const { formatCostUsageCachePrefix, formatTokenCount, formatUsd } = await loadUsageFormatModule();
+  const { formatCostUsageCachePrefix, formatTokenCount, formatUsd } =
+    await import("../../utils/usage-format.js");
   const totalCost = formatUsd(summary.totals.totalCost) ?? "$0.00";
   const totalTokens = formatTokenCount(summary.totals.totalTokens) ?? "0";
   const cachePrefix = formatCostUsageCachePrefix(summary.cacheStatus);
@@ -630,7 +624,7 @@ export function registerGatewayCli(program: Command) {
             const {
               readDiagnosticStabilityBundleFileSync,
               readLatestDiagnosticStabilityBundleSync,
-            } = await loadStabilityBundleModule();
+            } = await import("../../logging/diagnostic-stability-bundle.js");
             const result =
               bundleTarget === "latest"
                 ? readLatestDiagnosticStabilityBundleSync()
@@ -761,7 +755,7 @@ export function registerGatewayCli(program: Command) {
         ] = await Promise.all([
           import("../../config/read-best-effort-config.runtime.js"),
           import("../../infra/bonjour-discovery.js"),
-          loadWideAreaDnsModule(),
+          import("../../infra/widearea-dns.js"),
           import("./discover.js"),
           import("../progress.js"),
         ]);
