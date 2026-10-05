@@ -18,7 +18,7 @@ import {
   normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../tool-policy.js";
-import { resolveSandboxConfigForAgent } from "./config.js";
+import { resolveSandboxBrowserDockerCreateConfig, resolveSandboxConfigForAgent } from "./config.js";
 import { findWritableSandboxBindSourceOutsideRoot } from "./fs-paths.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import type { SandboxToolPolicy } from "./types.js";
@@ -142,7 +142,13 @@ export function resolveSandboxWorkspaceAuthority(params: {
   sessionKey: string;
   sessionEntry?: Pick<
     SessionEntry,
-    "execHost" | "execNode" | "model" | "modelProvider" | "modelOverride" | "providerOverride"
+    | "execHost"
+    | "execNode"
+    | "model"
+    | "modelProvider"
+    | "modelOverride"
+    | "providerOverride"
+    | "worktree"
   >;
   confinedToolNames?: readonly string[];
   requiredToolNames?: readonly string[];
@@ -173,12 +179,19 @@ export function resolveSandboxWorkspaceAuthority(params: {
   } else {
     // The rw agent workspace is the only host-writable surface a confined worker may have;
     // with ro/none the agent workspace is never mounted writable, so any writable bind is external.
-    const externalWritableBind = findWritableSandboxBindSourceOutsideRoot(
-      sandbox.docker.binds,
-      sandbox.workspaceAccess === "rw"
+    // A session bound to a managed worktree mounts that checkout's projection instead, so a bind
+    // under the agent workspace would write the checkout the projection isolates.
+    // An enabled browser container mounts its own bind set, so its writes count too.
+    const writableRoot =
+      sandbox.workspaceAccess === "rw" && !params.sessionEntry?.worktree
         ? resolveAgentWorkspaceDir(params.config, runtime.agentId)
-        : undefined,
-    );
+        : undefined;
+    const browserBinds = sandbox.browser.enabled
+      ? resolveSandboxBrowserDockerCreateConfig(sandbox).binds
+      : undefined;
+    const externalWritableBind =
+      findWritableSandboxBindSourceOutsideRoot(sandbox.docker.binds, writableRoot) ??
+      findWritableSandboxBindSourceOutsideRoot(browserBinds, writableRoot);
     if (externalWritableBind) {
       confinementError = `target sandbox has writable bind source outside its writable workspace: ${externalWritableBind}.`;
     }

@@ -11,6 +11,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
+import { resolveSandboxDockerUser } from "./docker-user.js";
 import { ensureSandboxContainer } from "./docker.js";
 import type { SandboxConfig } from "./types.js";
 
@@ -49,7 +50,6 @@ async function dockerReady(): Promise<boolean> {
   return image.code === 0;
 }
 
-let dockerAvailable = false;
 let root = "";
 let stateDir = "";
 let envSnapshot: { restore: () => void } | undefined;
@@ -58,13 +58,12 @@ const containerNames: string[] = [];
 type Member = {
   id: string;
   workspaceDir: string;
-  agentWorkspaceDir: string;
   privateFile: string;
 };
 
 const members: Record<"one" | "two", Member> = {
-  one: { id: "member-one", workspaceDir: "", agentWorkspaceDir: "", privateFile: "ONE.md" },
-  two: { id: "member-two", workspaceDir: "", agentWorkspaceDir: "", privateFile: "TWO.md" },
+  one: { id: "member-one", workspaceDir: "", privateFile: "ONE.md" },
+  two: { id: "member-two", workspaceDir: "", privateFile: "TWO.md" },
 };
 
 let sharedDir = "";
@@ -113,23 +112,45 @@ function buildSandboxConfig(): SandboxConfig {
   };
 }
 
-async function startMember(member: Member): Promise<string> {
-  const { containerName: name } = await ensureSandboxContainer({
-    scopeKey: member.id,
+// Resolves docker.user from workspace ownership as resolveProvisionedSandboxContext does. Without
+// it the container runs as the image's uid 1000 and cannot write a runner-owned shared directory
+// on a Linux host.
+async function memberSandboxConfig(member: Member): Promise<SandboxConfig> {
+  const cfg = buildSandboxConfig();
+  const docker = await resolveSandboxDockerUser({
+    backend: cfg.backend,
+    docker: cfg.docker,
     workspaceDir: member.workspaceDir,
-    agentWorkspaceDir: member.agentWorkspaceDir,
-    cfg: buildSandboxConfig(),
   });
-  containerNames.push(name);
-  return name;
+  return { ...cfg, docker };
 }
+
+function memberParams(member: Member) {
+  // Agent scope keys start with `agent:<id>`, so the refusal's recreate hint names the agent.
+  // With workspaceAccess "rw" the mounted workspace is the agent workspace, as in production.
+  return {
+    scopeKey: `agent:${member.id}`,
+    workspaceDir: member.workspaceDir,
+    agentWorkspaceDir: member.workspaceDir,
+  };
+}
+
+async function startMember(member: Member) {
+  const runtime = await ensureSandboxContainer({
+    ...memberParams(member),
+    cfg: await memberSandboxConfig(member),
+  });
+  containerNames.push(runtime.containerName);
+  return runtime;
+}
+
+let started: Record<"one" | "two", { containerName: string; containerId: string }> | undefined;
 
 async function containerShell(name: string, script: string) {
   return await execFileAsync("docker", ["exec", "-i", name, "/bin/sh", "-lc", script]);
 }
 
 beforeAll(async () => {
-  dockerAvailable = await dockerReady();
   // macOS os.tmpdir() is a /var -> /private/var symlink; sandbox mount policy compares
   // canonical paths, so the fixture root must already be canonical.
   root = await fs.realpath(tempDirs.make("openclaw-bindproof-"));
@@ -143,12 +164,14 @@ beforeAll(async () => {
   await fs.writeFile(path.join(sharedDir, "SHARED.md"), "shared notes\n");
   for (const member of Object.values(members)) {
     member.workspaceDir = path.join(root, "private", member.id);
-    member.agentWorkspaceDir = path.join(root, "agents", member.id);
     await fs.mkdir(member.workspaceDir, { recursive: true });
-    await fs.mkdir(member.agentWorkspaceDir, { recursive: true });
     await fs.writeFile(path.join(member.workspaceDir, member.privateFile), `${member.id}\n`);
   }
-}, 60_000);
+  if (await dockerReady()) {
+    // Both cases share these two containers so the suite boots each agent runtime once.
+    started = { one: await startMember(members.one), two: await startMember(members.two) };
+  }
+}, 300_000);
 
 afterAll(async () => {
   for (const name of containerNames) {
@@ -159,12 +182,12 @@ afterAll(async () => {
 
 describe("sandbox allowed bind sources", () => {
   it("gives each agent a private workspace and one shared directory", async (ctx) => {
-    if (!dockerAvailable) {
+    if (!started) {
       ctx.skip(`docker daemon or ${IMAGE} unavailable`);
       return;
     }
-    const nameOne = await startMember(members.one);
-    const nameTwo = await startMember(members.two);
+    const nameOne = started.one.containerName;
+    const nameTwo = started.two.containerName;
     expect(nameOne).not.toBe(nameTwo);
 
     // Private: each agent sees only its own file at /workspace.
@@ -219,22 +242,14 @@ describe("sandbox allowed bind sources", () => {
   }, 300_000);
 
   it("refuses a hot container once its root is revoked, keeps it, and reuses it when the root returns", async (ctx) => {
-    if (!dockerAvailable) {
+    if (!started) {
       ctx.skip(`docker daemon or ${IMAGE} unavailable`);
       return;
     }
-    // Agent-scoped runtimes carry an `agent:<id>` scope key; the refusal's recreate hint names it.
-    const params = {
-      scopeKey: `agent:${members.one.id}`,
-      workspaceDir: members.one.workspaceDir,
-      agentWorkspaceDir: members.one.agentWorkspaceDir,
-    };
-    const granted = await ensureSandboxContainer({ ...params, cfg: buildSandboxConfig() });
-    if (!containerNames.includes(granted.containerName)) {
-      containerNames.push(granted.containerName);
-    }
-    const revoked = buildSandboxConfig();
-    revoked.docker.allowedBindSources = [];
+    const params = memberParams(members.one);
+    const granted = started.one;
+    const grantedCfg = await memberSandboxConfig(members.one);
+    const revoked = { ...grantedCfg, docker: { ...grantedCfg.docker, allowedBindSources: [] } };
 
     await expect(ensureSandboxContainer({ ...params, cfg: revoked })).rejects.toThrow(
       /^Sandbox config changed for .+; the existing container was preserved .* is outside allowed roots/,
@@ -249,8 +264,6 @@ describe("sandbox allowed bind sources", () => {
     const retained = await containerShell(granted.containerName, `cat ${SHARED_MOUNT}/SHARED.md`);
     expect(retained.stdout).toContain("shared notes");
 
-    await expect(ensureSandboxContainer({ ...params, cfg: buildSandboxConfig() })).resolves.toEqual(
-      granted,
-    );
+    await expect(ensureSandboxContainer({ ...params, cfg: grantedCfg })).resolves.toEqual(granted);
   }, 300_000);
 });

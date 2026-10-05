@@ -126,6 +126,40 @@ describe("resolveSandboxWorkspaceAuthority", () => {
     });
     expect(externalWritable.confinementError).toContain("writable bind source outside");
 
+    // A managed-worktree session mounts its projection writable, not the agent workspace.
+    const projected = resolveSandboxWorkspaceAuthority({
+      config: configWithSandbox({
+        mode: "all",
+        workspaceAccess: "rw",
+        docker: { binds: ["/workspace/notes:/notes:rw"] },
+      }),
+      agentId: "main",
+      sessionKey: "agent:main:subagent:workboard-card",
+      sessionEntry: { worktree: { id: "wt-1", branch: "card", repoRoot: "/workspace" } },
+    });
+    expect(projected.confinementError).toBe(
+      "target sandbox has writable bind source outside its writable workspace: /workspace/notes.",
+    );
+
+    // The browser container mounts browser.binds in place of docker.binds.
+    for (const enabled of [true, false]) {
+      const browser = resolveSandboxWorkspaceAuthority({
+        config: configWithSandbox({
+          mode: "all",
+          workspaceAccess: "rw",
+          docker: { allowedBindSources: ["/srv/shared"] },
+          browser: { enabled, binds: ["/srv/shared:/shared:rw"] },
+        }),
+        agentId: "main",
+        sessionKey: "agent:main:subagent:workboard-card",
+      });
+      expect(browser.confinementError).toBe(
+        enabled
+          ? "target sandbox has writable bind source outside its writable workspace: /srv/shared."
+          : undefined,
+      );
+    }
+
     for (const workspaceAccess of ["ro", "none"] as const) {
       const noWritableWorkspace = resolveSandboxWorkspaceAuthority({
         config: configWithSandbox({

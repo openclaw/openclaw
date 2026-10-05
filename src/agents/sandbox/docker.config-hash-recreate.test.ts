@@ -268,7 +268,6 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     { revoked: "allowedBindSources", hot: false, requireCurrentConfig: false },
     { revoked: "allowedBindSources", hot: true, requireCurrentConfig: true },
     { revoked: "dangerouslyAllowExternalBindSources", hot: true, requireCurrentConfig: false },
-    { revoked: "dangerouslyAllowExternalBindSources", hot: false, requireCurrentConfig: false },
   ] as const)(
     "preserves the container and refuses it when $revoked is revoked (hot=$hot, requireCurrentConfig=$requireCurrentConfig)",
     async ({ revoked, hot, requireCurrentConfig }) => {

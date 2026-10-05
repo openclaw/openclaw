@@ -96,7 +96,7 @@ Use it when several agents need one shared directory while each keeps a private 
 }
 ```
 
-Each container mounts only its own workspace plus `/team`, so one agent's workspace is absent from another agent's mount namespace.
+Each container mounts only its own workspace plus `/team`, so one agent's workspace is absent from another agent's mount namespace. Unless `docker.user` is set, each Docker container runs as the UID and GID that own its mounted workspace directory, without the host user's supplementary groups, so `/srv/shared/team` must be writable through that UID or GID (owner or group bits, or an ACL) for every agent. On rootless Podman, container writes land on the host as the user that runs the Podman engine, so that user needs the write access instead.
 
 Removing a root from `allowedBindSources`, or turning off `dangerouslyAllowExternalBindSources`, while the bind stays configured stops OpenClaw from using an existing agent or browser container that still holds that mount. The next turn fails with a message naming the container, and the container and its data are kept. Restore the root, or remove the bind and recreate the sandbox.
 
