@@ -52,6 +52,7 @@ import type {
   SessionStoreWorkerReadScope,
   SessionEntryReadSourcePreparation,
 } from "./session-entry-read-runtime.types.js";
+import type { SessionEntryListWorkerInput } from "./session-entry-read.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   assertSessionStoreReadCandidate,
@@ -66,10 +67,7 @@ import {
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-import type {
-  SessionHistoryWorkerDatabase,
-  SessionEntryListWorkerInput,
-} from "./session-transcript-worker.types.js";
+import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export function captureSessionEntryReadScope(input: SessionEntryReadScope) {

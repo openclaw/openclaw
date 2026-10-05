@@ -1,5 +1,6 @@
 // Codex tests cover run attempt thread cleanup plugin behavior.
 import path from "node:path";
+import { setImmediate as yieldEventLoop } from "node:timers/promises";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -734,8 +735,11 @@ describe("Codex app-server main thread cleanup", () => {
           ? { id: interrupt.id, error: { code: -32_000, message: "startup interrupt failed" } }
           : { id: interrupt.id, result: {} },
       );
-      // Cancellation revokes native row admission, so cleanup retires the exact
-      // client rather than sending an unsubscribe under the canceled owner.
+      if (!interruptFails) {
+        const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
+        expect(unsubscribe.params).toEqual({ threadId: "thread-1" });
+        harness.send({ id: unsubscribe.id, result: {} });
+      }
       await expect(failure).resolves.toMatchObject({
         message: "turn/start aborted: cancelled",
         cause: "cancelled",
@@ -750,8 +754,9 @@ describe("Codex app-server main thread cleanup", () => {
         "thread/start",
         "turn/start",
         "turn/interrupt",
+        ...(!interruptFails ? ["thread/unsubscribe"] : []),
       ]);
-      expect(harness.stdinDestroyed).toBe(true);
+      expect(harness.stdinDestroyed).toBe(interruptFails);
     },
   );
 
@@ -838,9 +843,7 @@ describe("Codex app-server main thread cleanup", () => {
       harness.send({ id: threadStart.id, result: threadStartResult() });
       const turnStart = await waitForHarnessRequest(harness, "turn/start");
       harness.send({ id: turnStart.id, result: turnStartResult() });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldEventLoop();
 
       abort.abort("cancelled");
       const interrupt = await waitForHarnessRequest(harness, "turn/interrupt");
@@ -849,9 +852,7 @@ describe("Codex app-server main thread cleanup", () => {
         params: { threadId: "thread-1", turnId: "turn-1" },
       });
       harness.send({ id: interrupt.id, result: {} });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldEventLoop();
       expect(settled).toBe(false);
       expect(harness.writes.map((entry) => JSON.parse(entry).method)).not.toContain(
         "thread/unsubscribe",
@@ -909,16 +910,22 @@ describe("Codex app-server main thread cleanup", () => {
         );
         harness.send({ id: confirmation.id, result: { data: [], nextCursor: null } });
       }
+      const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
+      expect(unsubscribe.params).toEqual({ threadId: "thread-1" });
+      expect(settled).toBe(false);
+      harness.send({ id: unsubscribe.id, result: {} });
       if (rejected) {
         await rejected;
       } else {
         expect(readAttemptTerminal(await run)).toMatchObject({ aborted: true, timedOut: false });
       }
-      expect(harness.writes.map((entry) => JSON.parse(entry).method)).not.toContain(
-        "thread/unsubscribe",
-      );
-      expect(close).toHaveBeenCalledOnce();
-      expect(harness.stdinDestroyed).toBe(true);
+      expect(
+        harness.writes
+          .map((entry) => JSON.parse(entry).method)
+          .filter((method) => method === "thread/unsubscribe"),
+      ).toEqual(["thread/unsubscribe"]);
+      expect(close).not.toHaveBeenCalled();
+      expect(harness.stdinDestroyed).toBe(false);
     },
   );
 

@@ -705,7 +705,7 @@ internal class WearViewModel(
     viewModelScope.launch {
       if (!isCurrentSessionAction(session, routeGeneration) || !sendAttemptTracker.isCurrent(attempt)) return@launch
       try {
-        val controlCompleted = repository.send(attempt, requirePreferredPhone = true)
+        val controlCompleted = repository.send(attempt)
         if (!sendAttemptTracker.isCurrent(attempt) || !isCurrentSessionAction(session, routeGeneration)) return@launch
         if (controlCompleted) {
           sendAttemptTracker.retire(session.key, session.phoneNodeId, attempt.idempotencyKey)
@@ -959,16 +959,11 @@ internal class WearViewModel(
         mutableState.update { it.copy(loading = true, failure = null) }
         try {
           val status = repository.status(expectedNodeId)
-          val agentList =
+          val agents =
             if (status.connected && WearProxyCapability.AgentControls in status.capabilities) {
               repository.agents(status.phoneNodeId, status.capabilities)
             } else {
-              WearAgentList(
-                agents = emptyList(),
-                eventStreamId = status.eventStreamId,
-                eventSequence = status.eventSequence,
-                phoneNodeId = status.phoneNodeId,
-              )
+              emptyList()
             }
           val previousSession = mutableState.value.selectedSession
           val sessionList =
@@ -1075,11 +1070,11 @@ internal class WearViewModel(
               connected = status.connected,
               failure = status.failure,
               phoneNodeId = status.phoneNodeId,
-              agents = agentList.agents,
+              agents = agents,
               activeAgentId =
                 sessionList.activeAgentId
                   ?: status.activeAgentId
-                  ?: agentList.agents.firstOrNull(WearAgent::selected)?.id,
+                  ?: agents.firstOrNull(WearAgent::selected)?.id,
               selectedModelRef = selectedModelRef,
               models = modelList.models,
               modelCatalogRefreshFailed = modelList.refreshFailed,

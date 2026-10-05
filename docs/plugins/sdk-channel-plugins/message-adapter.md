@@ -39,8 +39,16 @@ A logical result's receipt takes precedence over its legacy message IDs.
 The result carries a receipt, `messageIds` (including an empty array), and
 `visibleReplySent: true`; routing fields stay in the receipt. Optional `content`
 is passed through, and `kind` and `replyToId` use the receipt builder's rules.
-Keep acceptance side effects, content joining,
-suppression, and whether an identityless outcome needs a receipt in the adapter.
+For batches that join accepted text with newlines, use
+`createChannelDeliveryAccumulator({ kind?, replyToId? })` from
+`openclaw/plugin-sdk/channel-outbound`.
+Call `add(source, acceptedText?)` only after each physical send succeeds. `size`
+counts accepted sends, and `result()` returns their combined receipt and nonempty
+text, or a `no_visible_result` suppression for an empty batch. On failure, throw
+`partialError(error)` to retain earlier sends and a nested partial-delivery
+error's accepted subset; failures before any acceptance pass through unchanged.
+Keep transport acceptance side effects, other content-joining rules, and whether
+an identityless outcome needs a receipt in the adapter.
 
 Channel actions and adapter capabilities come from the selected plugin
 registration. An omitted `actions`, `message`, or `outbound` surface is not

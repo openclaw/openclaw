@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeEach, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createGatewayMethodDescriptorsFromHandlers } from "../src/gateway/methods/registry.js";
 import { createLazyCoreHandlers } from "../src/gateway/server-methods/lazy-core-handlers.js";
 import {
   connectOk,
@@ -105,6 +106,11 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
               },
             };
           },
+        });
+        registry.gatewayMethodDescriptors = createGatewayMethodDescriptorsFromHandlers({
+          handlers: registry.gatewayHandlers,
+          owner: { kind: "plugin", pluginId: "synthetic-rpc-proof" },
+          defaultScope: "operator.admin",
         });
         const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
         prometheusPlugin.register(

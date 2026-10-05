@@ -2,6 +2,7 @@ import {
   isSystemEventStoreCurrent,
   recordSystemEventStoreReplaced,
 } from "../../../infra/system-event-ownership.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { defaultRuntime } from "../../../runtime.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
@@ -24,6 +25,8 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const pendingStoreRetirements = new Map<object, Promise<void>>();
+const reportedOwnerlessStoreRetirements = new WeakSet<object>();
+const log = createSubsystemLogger("agents/subagent-registry");
 
 export async function suspendPendingFinalDelivery(
   context: SubagentLifecycleCleanupContext & SubagentLifecycleWakeContext,
@@ -156,9 +159,13 @@ export function suspendReplacedStoreNotifications(
           storeReplaced: true,
         }))
       ) {
-        options.warn("subagent notification store retirement has no current native owner", {
-          runId: entry.runId,
-        });
+        const owner = getSubagentRunRuntimeKey(entry);
+        if (!reportedOwnerlessStoreRetirements.has(owner)) {
+          reportedOwnerlessStoreRetirements.add(owner);
+          log.info("subagent notification store retirement has no current native owner", {
+            runId: entry.runId,
+          });
+        }
         continue;
       }
       current = getCurrentSubagentRunOwner(options.runs, entry);

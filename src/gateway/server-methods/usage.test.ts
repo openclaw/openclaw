@@ -15,9 +15,11 @@ vi.mock("../../infra/session-cost-usage.js", async () => ({
   loadCostUsageSummaryFromCache: vi.fn(async () => costSummary(1, 0)),
   discoverAllSessions: vi.fn(async () => []),
 }));
-vi.mock("../session-utils.js", async () => ({
-  ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-  loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
+vi.mock("../../config/sessions/combined-store-gateway-read.js", async () => ({
+  ...(await vi.importActual<typeof import("../../config/sessions/combined-store-gateway-read.js")>(
+    "../../config/sessions/combined-store-gateway-read.js",
+  )),
+  loadCombinedSessionStoreForGatewayCoreAsync: vi.fn(() => ({
     targetsBySessionKey: new Map(),
     durableTargets: [],
     storePath: "(multiple)",

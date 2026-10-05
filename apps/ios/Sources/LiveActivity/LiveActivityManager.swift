@@ -388,10 +388,7 @@ final class LiveActivityManager {
         self.currentStaleDate = staleDate
         self.pendingActivityUpdate = PendingActivityUpdate(state: state, staleDate: staleDate)
         guard self.activityUpdateTask == nil else { return }
-        self.startUpdateWorker(activity: activity, generation: self.activityGeneration)
-    }
-
-    private func startUpdateWorker(activity: Activity<OpenClawActivityAttributes>, generation: UInt64) {
+        let generation = self.activityGeneration
         self.activityUpdateTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self,
@@ -405,11 +402,6 @@ final class LiveActivityManager {
 
             guard let self, generation == self.activityGeneration else { return }
             self.activityUpdateTask = nil
-            if self.pendingActivityUpdate != nil,
-               self.currentActivity?.id == activity.id
-            {
-                self.startUpdateWorker(activity: activity, generation: generation)
-            }
         }
     }
 

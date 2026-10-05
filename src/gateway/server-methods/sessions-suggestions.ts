@@ -33,7 +33,7 @@ import {
   getSessionRowProjection,
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
-import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
+import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
   authorizeIncognitoSessionTarget,
   canManageSessionSharing,
@@ -97,13 +97,36 @@ function respondSuggestionDispatchError(respond: RespondFn, error: unknown): voi
   );
 }
 
+function readCollaborationTarget(
+  projection: ReturnType<typeof requireSessionRowProjection>,
+  query: { key: string; agentId: string },
+  read: Pick<SessionRowReadView, "describe"> = projection,
+) {
+  if (isIncognitoSessionKey(query.key)) {
+    const row = read.describe(query);
+    return (
+      row && {
+        agentId: row.agentId,
+        canonicalKey: row.key,
+        storeKey: row.key,
+        storeKeys: [row.key],
+        storePath: row.storeTarget.storePath,
+        entry: row.entry,
+        generation: row.generation,
+      }
+    );
+  }
+  const current = projection.sharingTargetState(query);
+  return current.status === "ready" ? current.target : null;
+}
+
 export const sessionSuggestionHandlers: GatewayRequestHandlers = {
   "session.suggestions.add": defineValidatedGatewayHandler(
     "session.suggestions.add",
     validateSessionSuggestionsAddParams,
     async ({ params, respond, client, context, signal, sessionMutationAuthorization }) => {
       const cfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
-      const target = requireSuggestionTarget({ client, context, ...params, respond });
+      const target = requireSuggestionTarget({ context, ...params, respond });
       const author = gatewayClientSessionCreator(client);
       if (
         !target ||
@@ -201,64 +224,65 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         return;
       }
       const identity = gatewayClientSessionCreator(client);
-      const facts = await prepareSessionMutationFacts({
-        cfg,
-        sessionKey: params.sessionKey,
-        agentId: requested.agentId,
-        allowMissing: true,
-      });
-      try {
-        const readCurrent = () => {
-          if (
-            signal?.aborted ||
-            client?.invalidated ||
-            client?.connectionSignal?.aborted ||
-            hasCurrentClientAuthority?.() === false ||
-            gatewayClientSessionCreator(client)?.id !== identity?.id
-          ) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.FORBIDDEN, "suggestion reader authority changed"),
-            );
-            return null;
-          }
-          const current = facts.readCurrent(context.getRuntimeConfig());
-          const policy = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
-          const sharing = prepareProjectedSessionSharing({
-            cfg: policy,
-            client,
-            isMember: (_target, id) => current.membership.has(id),
-          });
-          const target = current.target;
-          if (
-            !target ||
-            (hasOperatorBoundary(client, policy) &&
-              sharing.entryFilter?.(target.storeKey, target.entry) === false)
-          ) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.sessionKey}`),
-            );
-            return null;
-          }
-          const role = requireVisibleSuggestionRole({
-            client,
-            cfg: policy,
-            sessionKey: params.sessionKey,
-            target,
-            respond,
-            sharing,
-          });
-          return role === null ? null : { target, role };
-        };
-        const initial = readCurrent();
-        if (!initial) {
-          return;
+      const projection = requireSessionRowProjection(context);
+      const query = { key: params.sessionKey, agentId: requested.agentId };
+      while (projection.needsMembershipPreparation()) {
+        await projection.prepareMembership();
+      }
+      let selected: ReturnType<typeof readCollaborationTarget> = undefined;
+      const readCurrent = (read: Pick<SessionRowReadView, "describe"> = projection) => {
+        if (
+          signal?.aborted ||
+          client?.invalidated ||
+          client?.connectionSignal?.aborted ||
+          hasCurrentClientAuthority?.() === false ||
+          gatewayClientSessionCreator(client)?.id !== identity?.id
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.FORBIDDEN, "suggestion reader authority changed"),
+          );
+          return null;
         }
-        const stored = await listSessionSuggestions(suggestionScope(initial.target));
-        const current = readCurrent();
+        const target = readCollaborationTarget(projection, query, read);
+        if (
+          getSessionRowProjection(context) !== projection ||
+          (selected &&
+            (!target ||
+              target.generation !== selected.generation ||
+              target.storePath !== selected.storePath ||
+              target.entry.sessionId !== selected.entry.sessionId ||
+              target.entry.lifecycleRevision !== selected.entry.lifecycleRevision))
+        ) {
+          throw new SessionMutationFactsUnavailableError();
+        }
+        const policy = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
+        const sharing = prepareProjectedSessionSharing({
+          cfg: policy,
+          client,
+          isMember: (value, id) => projection.hasMembership(value.storePath, value.storeKey, id),
+        });
+        const role = requireVisibleSuggestionRole({
+          client,
+          cfg: policy,
+          sessionKey: params.sessionKey,
+          target: target ?? null,
+          respond,
+          sharing,
+        });
+        return role === null || !target ? null : { target, role };
+      };
+      const initial = isIncognitoSessionKey(query.key)
+        ? await withReadySessionRows(projection, () => [query], readCurrent)
+        : readCurrent();
+      if (!initial) {
+        return;
+      }
+      selected = initial.target;
+      const stored = await listSessionSuggestions(suggestionScope(initial.target));
+      const reply = (read?: Pick<SessionRowReadView, "describe">) => {
+        const current = readCurrent(read);
         if (!current) {
           return;
         }
@@ -271,8 +295,11 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           role: current.role,
           suggestions: visible.map((suggestion) => protocolSuggestion(current.target, suggestion)),
         });
-      } finally {
-        facts.release();
+      };
+      if (isIncognitoSessionKey(query.key)) {
+        await withReadySessionRows(projection, () => [query], reply);
+      } else {
+        reply();
       }
     },
   ),
@@ -291,7 +318,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       sessionMutationAuthorization,
     }) => {
       const cfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
-      const target = requireSuggestionTarget({ client, context, ...params, respond });
+      const target = requireSuggestionTarget({ context, ...params, respond });
       if (!target) {
         return;
       }
@@ -518,24 +545,8 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       return;
     }
     const query = { key: params.sessionKey, agentId: requestedAgent.agentId };
-    const readTarget = (read: Pick<SessionRowReadView, "describe"> = projection) => {
-      if (isIncognitoSessionKey(query.key)) {
-        const row = read.describe(query);
-        return (
-          row && {
-            agentId: row.agentId,
-            canonicalKey: row.key,
-            storeKey: row.key,
-            storeKeys: [row.key],
-            storePath: row.storeTarget.storePath,
-            entry: row.entry,
-            generation: row.generation,
-          }
-        );
-      }
-      const current = projection.sharingTargetState(query);
-      return current.status === "ready" ? current.target : null;
-    };
+    const readTarget = (read?: Pick<SessionRowReadView, "describe">) =>
+      readCollaborationTarget(projection, query, read);
     const incognitoError = authorizeIncognitoSessionTarget({
       client,
       sessionKey: query.key,

@@ -198,13 +198,12 @@ export function registerYieldFollowupAdoptionTests({
         completion: { required: true },
         taskRunId: kickoff.taskRunId ?? kickoff.runId,
         task: "the remote job finished",
-        requesterSettleWake: { batchRunIds: [FOLLOW_UP_RUN_ID] },
       });
       expect(adopted.execution).toEqual(successor.execution);
       expect(adopted.generation).toBeGreaterThan(
         expectDefined(successor.generation, "admitted follow-up generation"),
       );
-      expect(adopted.requesterSettleWake?.pauseNotice).toBeUndefined();
+      expect(adopted.requesterSettleWake).toBeUndefined();
       expect(wakeRequester).not.toHaveBeenCalled();
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
       expect(mocks.dispatchRecoveryAgent).not.toHaveBeenCalled();
