@@ -221,7 +221,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           callback,
         ),
       measureElement: (element, entry, instance) => {
-        const size = measureTranscriptRow(element, entry, instance);
+        const size = measureTranscriptRow(element, entry, instance, this.offsetState.resizeAnchor);
         if (
           element.dataset.virtualRowKey === "presence:typing" &&
           instance.itemSizeCache.get("presence:typing") !== size
@@ -349,12 +349,17 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     for (const controller of this.controllers) {
       controller.hostUpdated?.();
     }
+    // The grown range has committed; replay a correction its old end clamped.
+    this.offsetState.resizeAnchor.reconcile(this.virtualizer);
     const interactionResizePending = this.offsetState.pendingInteractionAnchor !== null;
     this.reconcileInteractionResize();
     if (
       !this.offsetState.touchActive &&
-      this.prependAnchor.update(this.scrollElement, this.virtualizer, () =>
-        this.measureConnectedRows(),
+      this.prependAnchor.update(
+        this.scrollElement,
+        this.virtualizer,
+        () => this.measureConnectedRows(),
+        (scrollTop) => this.offsetState.resizeAnchor.readerOffset(scrollTop),
       )
     ) {
       this.offsetState.syncNativeOffset?.();
