@@ -254,6 +254,12 @@ export type CliBackendExecuteContext = {
   abortSignal?: AbortSignal;
   /** Revalidate the host-owned run and caller before deferred credential use or dispatch. */
   assertCurrent?: () => void;
+  /**
+   * Cheaper revalidation for output events after the prompt was delivered. Hosts that bind
+   * the run to an account set it; runtimes use it for per-event checks and fall back to
+   * assertCurrent. Spawn and send boundaries must keep calling assertCurrent.
+   */
+  assertStreamCurrent?: () => void;
   timeoutMs: number;
   executionMode?: CliBackendExecutionMode;
   toolAvailability?: CliBackendToolAvailability;

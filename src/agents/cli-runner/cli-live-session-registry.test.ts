@@ -158,6 +158,26 @@ describe("generic plugin-owned live session registry", () => {
     );
   });
 
+  it("does not reuse a warm process across a native login owner change", () => {
+    const withOwner = (authFingerprint: string | undefined) => {
+      const context = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
+      if (authFingerprint) {
+        context.cliHistoryWriter = {
+          authFingerprint,
+          bindsNativeLogin: true,
+        } as NonNullable<typeof context.cliHistoryWriter>;
+      }
+      return buildCliLiveSessionFingerprint({
+        context,
+        argv: ["claude", "-p", "--resume", "native-session"],
+        env: { PATH: "/usr/bin:/bin", CLAUDE_CONFIG_DIR: "/fixture/claude" },
+      });
+    };
+    expect(withOwner("a".repeat(64))).toBe(withOwner("a".repeat(64)));
+    expect(withOwner("b".repeat(64))).not.toBe(withOwner("a".repeat(64)));
+    expect(withOwner(undefined)).not.toBe(withOwner("a".repeat(64)));
+  });
+
   it("keeps fresh and resumed process fingerprints identical without hiding prompt changes", () => {
     const fresh = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
     const resumed = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });

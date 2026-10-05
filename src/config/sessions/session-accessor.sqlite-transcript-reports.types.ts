@@ -66,11 +66,15 @@ export type TranscriptReportCommit = {
   sessionEntryChanged?: boolean;
 };
 
+/** Set by the host on each write, right before it is sent: the CLI history owner still holds. */
+type TranscriptReportCoverageGate = { cliHistoryOwnerConfirmed?: boolean };
+
 export type TranscriptReportWorkerOperations = {
   abortedPartial: {
-    input: AbortedSessionTranscriptPartial & {
-      preparedMessage: PreparedTranscriptMessageAppend<Record<string, unknown>>;
-    };
+    input: AbortedSessionTranscriptPartial &
+      TranscriptReportCoverageGate & {
+        preparedMessage: PreparedTranscriptMessageAppend<Record<string, unknown>>;
+      };
     output: Result<TranscriptReportCommit, TranscriptAppendRefusal>;
   };
   prepare: {
@@ -78,15 +82,16 @@ export type TranscriptReportWorkerOperations = {
     output: Result<PreparedTranscriptReport, TranscriptAppendRefusal>;
   };
   append: {
-    input: Extract<SelectedTranscriptReport, { kind: "custom" }>;
+    input: Extract<SelectedTranscriptReport, { kind: "custom" }> & TranscriptReportCoverageGate;
     output: Result<TranscriptReportCommit, TranscriptAppendRefusal>;
   };
   assistant: {
-    input: Extract<TranscriptReport, { kind: "assistant" }> & {
-      preparedMessage: PreparedTranscriptMessageAppend<
-        Extract<TranscriptReport, { kind: "assistant" }>["message"]
-      >;
-    };
+    input: Extract<TranscriptReport, { kind: "assistant" }> &
+      TranscriptReportCoverageGate & {
+        preparedMessage: PreparedTranscriptMessageAppend<
+          Extract<TranscriptReport, { kind: "assistant" }>["message"]
+        >;
+      };
     output: Result<TranscriptReportCommit, TranscriptAppendRefusal>;
   };
 };

@@ -416,6 +416,8 @@ async function closePluginIterator(
 /** Runs a prepared plugin transport while keeping cancellation and approvals host-owned. */
 export async function executePluginOwnedProcess(params: {
   context: PreparedCliRunContext;
+  /** Fresh check added to the plugin's spawn and send boundaries, not to output events. */
+  assertBoundary?: () => void;
   execute: CliBackendExecute;
   executionCommand: string;
   executionArgv0?: string;
@@ -475,6 +477,13 @@ export async function executePluginOwnedProcess(params: {
     : controller.signal;
   const assertCurrent = createCliRunCurrentAssertion(run, signal);
   const assertRunCurrent = createCliRunCurrentAssertion(run);
+  const assertBoundary = params.assertBoundary;
+  const assertBoundaryCurrent = assertBoundary
+    ? () => {
+        assertCurrent();
+        assertBoundary();
+      }
+    : assertCurrent;
   const termination: { reason: TerminationReason } = { reason: "exit" };
   // Normal cleanup closes native callbacks; MCP results retain their admitted
   // caller through the capture drain. Cancellation and timeouts still close both.
@@ -586,7 +595,8 @@ export async function executePluginOwnedProcess(params: {
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       useResume: params.useResume,
       abortSignal: signal,
-      assertCurrent,
+      assertCurrent: assertBoundaryCurrent,
+      ...(assertBoundary ? { assertStreamCurrent: assertCurrent } : {}),
       timeoutMs: run.timeoutMs,
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),

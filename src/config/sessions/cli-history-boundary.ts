@@ -8,12 +8,55 @@ export type CliHistoryWriter = {
   lifecycleRevision?: string;
   assertCurrent: () => void;
   assertReadable: () => void;
+  /**
+   * Fresh owner check, asked once per coverage commit. False keeps the commit's rows but
+   * does not advance coverage. Absent means the owner cannot change during the run.
+   */
+  confirmsOwner?: () => boolean;
+};
+
+/** The writer as the executing run holds it; workers only ever see the base capability. */
+export type CliExecutionHistoryWriter = CliHistoryWriter & {
+  /** True when ownership comes from a native login resolved from the child environment. */
+  bindsNativeLogin: boolean;
+  /**
+   * Fresh native login check for a spawn or prompt send. A changed or unresolvable login
+   * refuses a recovery turn and stops coverage for any other turn.
+   */
+  checkNativeLoginBoundary: (recovering: boolean) => void;
+  /** Resolve the native login owner from the environment execution actually spawns with. */
+  bindExecutionEnv: (env: NodeJS.ProcessEnv, recovering: boolean) => void;
+  /** False when this turn must run without saved history; coverage still applies. */
+  replaysHistory: boolean;
+  /**
+   * After the child exits and before its rows commit: attest any credential the run
+   * rotated to. Never rejects; a login it cannot attest to the owner stops coverage.
+   */
+  settleNativeLogin: () => Promise<void>;
 };
 
 const cliHistoryWriter = new AsyncLocalStorage<CliHistoryWriter>();
 
 export function runWithCliHistoryWriter<T>(writer: CliHistoryWriter | undefined, run: () => T): T {
   return writer ? cliHistoryWriter.run(writer, run) : cliHistoryWriter.exit(run);
+}
+
+/** The serializable account facts a worker needs to advance coverage for this writer. */
+export function cliHistoryWriterFacts(
+  writer: CliHistoryWriter,
+): Pick<CliHistoryWriter, "runId" | "authFingerprint" | "lifecycleRevision"> {
+  return {
+    runId: writer.runId,
+    authFingerprint: writer.authFingerprint,
+    lifecycleRevision: writer.lifecycleRevision,
+  };
+}
+
+/** Hosts dispatching a worker commit hand it account facts only while the owner still holds. */
+export function resolveCliHistoryCoverageWriter(
+  writer: CliHistoryWriter | undefined,
+): Pick<CliHistoryWriter, "runId" | "authFingerprint" | "lifecycleRevision"> | undefined {
+  return writer && writer.confirmsOwner?.() !== false ? cliHistoryWriterFacts(writer) : undefined;
 }
 
 export function getCliHistoryWriter(

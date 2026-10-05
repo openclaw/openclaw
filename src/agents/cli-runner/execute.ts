@@ -3,7 +3,6 @@ import { parse as parseSemver } from "semver";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
-import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import {
   getInstallationTarget,
   installationTargetEnv,
@@ -37,16 +36,14 @@ import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import {
   buildCliExecLogLine,
-  CLAUDE_SELECTED_AUTH_ENV_KEYS,
-  CLI_BACKEND_PRESERVE_ENV,
   logCliInvocation,
   NODE_CLAUDE_FORWARD_ENV_KEYS,
-  parseCliBackendPreserveEnv,
   resolveNodeClaudeAuthEnv,
 } from "./execute-logging.js";
 import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
+import { resolveCliChildEnv } from "./execution-env.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import {
   buildCliArgs,
@@ -123,18 +120,24 @@ export async function executePreparedCliRun(
 ): Promise<CliOutput> {
   // Fresh recovery retains its exact account/read authority across every await
   // and through the process/plugin execution callbacks, not just preparation.
+  const historyWriter = inputContext.cliHistoryWriter;
+  const recoversHistory = Boolean(
+    !cliSessionIdToUse && inputContext.openClawHistoryPrompt && historyWriter,
+  );
   const context =
-    !cliSessionIdToUse && inputContext.openClawHistoryPrompt && inputContext.cliHistoryWriter
+    recoversHistory && historyWriter
       ? {
           ...inputContext,
-          params: {
-            ...inputContext.params,
-            assertCurrent: inputContext.cliHistoryWriter.assertReadable,
-          },
+          params: { ...inputContext.params, assertCurrent: historyWriter.assertReadable },
         }
       : inputContext;
   const params = context.params as PreparedCliRunInternalParams;
   const assertCurrent = createCliRunCurrentAssertion(params);
+  // A native login owner is looked up fresh at each spawn and prompt send, never per
+  // liveness check or output event.
+  const assertBoundary = historyWriter?.bindsNativeLogin
+    ? () => historyWriter.checkNativeLoginBoundary(recoversHistory)
+    : undefined;
   assertCurrent();
   const backend = context.preparedBackend.backend;
   const executionTarget = context.executionTarget;
@@ -350,16 +353,7 @@ export async function executePreparedCliRun(
           });
       cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
       const preparedBackendEnv = context.preparedBackend.env ?? {};
-      const hasSelectedClaudeAuth =
-        Boolean(context.preparedBackend.secretInput) ||
-        [...CLAUDE_SELECTED_AUTH_ENV_KEYS].some((key) => Object.hasOwn(preparedBackendEnv, key));
-      const selectedClaudeClearEnv = hasSelectedClaudeAuth
-        ? new Set(backend.clearEnv ?? [])
-        : undefined;
-      const configuredBackendEnv = Object.fromEntries(
-        Object.entries(backend.env ?? {}).filter(([key]) => !selectedClaudeClearEnv?.has(key)),
-      );
-      const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
+      const { env, selectedClaudeClearEnv } = resolveCliChildEnv(context.preparedBackend);
       const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
         NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
       );
@@ -375,27 +369,12 @@ export async function executePreparedCliRun(
       const nodeClearEnv = [
         ...new Set([...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv]),
       ];
-      const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
-      const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
-      for (const key of backend.clearEnv ?? []) {
-        if (!preservedEnv.has(key) || selectedClaudeClearEnv?.has(key)) {
-          delete env[key];
-        }
-      }
-      if (Object.keys(backendEnv).length > 0) {
-        Object.assign(
-          env,
-          sanitizeHostExecEnv({
-            baseEnv: {},
-            overrides: backendEnv,
-            blockPathOverrides: true,
-          }),
-        );
-      }
       Object.assign(env, mcpCaptureAttempt.env, localProcessEnv);
       // Never mark Claude CLI as host-managed. That marker routes runs into
       // Anthropic's separate host-managed usage tier instead of normal CLI use.
       delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
+      // The history writer's native owner must be the one this final environment selects.
+      context.cliHistoryWriter?.bindExecutionEnv(env, recoversHistory);
 
       let executionCommand = backend.command;
       let executionArgv0: string | undefined;
@@ -554,6 +533,7 @@ export async function executePreparedCliRun(
       runOutput = await executeCliProcess({
         context,
         assertCurrent,
+        ...(assertBoundary ? { assertBoundary } : {}),
         backend,
         deps: executeDeps,
         events,
@@ -587,6 +567,8 @@ export async function executePreparedCliRun(
     } catch (error) {
       recordRunError(error);
     } finally {
+      // Attest a token the CLI rotated during the run before any of its rows commit.
+      await context.cliHistoryWriter?.settleNativeLogin();
       await toolTracking.finishDeliveryTracking({
         useManagedClaudeLiveSession,
         recordRunError,

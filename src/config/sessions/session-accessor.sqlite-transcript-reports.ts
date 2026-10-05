@@ -23,7 +23,7 @@ import {
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
-import { getCliHistoryWriter } from "./cli-history-boundary.js";
+import { cliHistoryWriterFacts, getCliHistoryWriter } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
@@ -391,28 +391,21 @@ async function withReportWorker<T>(
         cliWriter?.assertCurrent();
       };
       const { env: _env, ...workerResolved } = resolved;
-      const target: TranscriptReportWorkerTarget = {
-        resolved: workerResolved,
-        sessionEntryCurrentSource: sessionEntryCurrent?.source,
-        ...(cliWriter
-          ? {
-              cliWriter: {
-                runId: cliWriter.runId,
-                authFingerprint: cliWriter.authFingerprint,
-                lifecycleRevision: cliWriter.lifecycleRevision,
-              },
-            }
-          : {}),
-        fence: {
-          expectedLifecycleRevision: fenced.expectedLifecycleRevision,
-          expectedWriterRunId: fenced.expectedWriterRunId,
-        },
-      };
       try {
         const result = await settleReportOperation(
           async () => {
             await prepareSessionEntryReplacementDatabase(options, assertCurrent, execution);
             assertCurrent();
+            const target: TranscriptReportWorkerTarget = {
+              resolved: workerResolved,
+              sessionEntryCurrentSource: sessionEntryCurrent?.source,
+              // Account facts only: each write confirms the owner as it is sent, below.
+              ...(cliWriter ? { cliWriter: cliHistoryWriterFacts(cliWriter) } : {}),
+              fence: {
+                expectedLifecycleRevision: fenced.expectedLifecycleRevision,
+                expectedWriterRunId: fenced.expectedWriterRunId,
+              },
+            };
             const databaseIdentity = execution.fileIdentity?.physicalIdentity;
             if (!databaseIdentity) {
               throw new Error("Transcript report has no prepared native database identity");
@@ -436,22 +429,44 @@ async function withReportWorker<T>(
               () =>
                 worker.run(
                   (operation) =>
-                    run(operation, assertCurrent, (publication) => {
-                      if (publication.cliHistoryChanged || publication.sessionEntryChanged) {
-                        publishSessionEntryWorkerMetadataInvalidation({
-                          agentId: resolved.agentId,
-                          storePath: execution.path,
-                          databaseIdentity,
-                          sessionKey: resolved.sessionKey,
-                        });
-                      }
-                      if (publication.projectionNeedsReconcile) {
-                        startSessionTranscriptIndexReconcile({
-                          ...options,
-                          preferredSessionId: resolved.sessionId,
-                        });
-                      }
-                    }),
+                    run(
+                      cliWriter
+                        ? {
+                            // Confirm the owner as the last host step before each write.
+                            execute: (command, executeOptions) =>
+                              operation.execute(
+                                command.type === "prepare"
+                                  ? command
+                                  : {
+                                      ...command,
+                                      input: {
+                                        ...command.input,
+                                        cliHistoryOwnerConfirmed:
+                                          cliWriter.confirmsOwner?.() !== false,
+                                      },
+                                    },
+                                executeOptions,
+                              ),
+                          }
+                        : operation,
+                      assertCurrent,
+                      (publication) => {
+                        if (publication.cliHistoryChanged || publication.sessionEntryChanged) {
+                          publishSessionEntryWorkerMetadataInvalidation({
+                            agentId: resolved.agentId,
+                            storePath: execution.path,
+                            databaseIdentity,
+                            sessionKey: resolved.sessionKey,
+                          });
+                        }
+                        if (publication.projectionNeedsReconcile) {
+                          startSessionTranscriptIndexReconcile({
+                            ...options,
+                            preferredSessionId: resolved.sessionId,
+                          });
+                        }
+                      },
+                    ),
                   assertCurrent,
                 ),
               () => worker.close(),

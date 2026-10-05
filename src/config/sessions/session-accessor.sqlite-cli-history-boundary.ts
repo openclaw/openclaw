@@ -28,6 +28,7 @@ export function advanceCliHistoryBoundaryInTransaction(
       { first: seq, last: seq },
       writer,
       writer.assertCurrent,
+      writer.confirmsOwner,
     );
   }
 }
@@ -39,6 +40,7 @@ export function advanceCliHistoryBoundaryRangeInTransaction(
   range: { first: number; last: number },
   writer: CliHistoryWriterFacts,
   assertCurrent: () => void,
+  confirmsOwner?: () => boolean,
 ): boolean {
   if (range.last < range.first) {
     return false;
@@ -65,6 +67,9 @@ export function advanceCliHistoryBoundaryRangeInTransaction(
     return false;
   }
   assertCurrent();
+  if (confirmsOwner?.() === false) {
+    return false;
+  }
   writeSessionEntry(
     database,
     scope.sessionKey,
