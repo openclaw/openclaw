@@ -212,16 +212,23 @@ export default definePluginEntry({
     const activateRuntimeGeneration = (generation: VoiceCallRuntimeGeneration) =>
       activateVoiceCallRuntimeGeneration(runtimeCoordinator, runtimeRegistration, generation);
 
-    const ensureRuntimeForGeneration = async (
-      runtimeGeneration: VoiceCallRuntimeGeneration,
-    ): Promise<VoiceCallRuntime> => {
-      activateRuntimeGeneration(runtimeGeneration);
+    // The current registration's policy, asserted before any runtime (including a predecessor's
+    // still-running one) is handed out: a registration that disabled voice calling or carries
+    // invalid provider config must never reach another runtime's call authority.
+    const assertRuntimePolicy = (): void => {
       if (!config.enabled) {
         throw new Error("Voice call disabled in plugin config");
       }
       if (!validation.valid) {
         throw new Error(validation.errors.join("; "));
       }
+    };
+
+    const ensureRuntimeForGeneration = async (
+      runtimeGeneration: VoiceCallRuntimeGeneration,
+    ): Promise<VoiceCallRuntime> => {
+      activateRuntimeGeneration(runtimeGeneration);
+      assertRuntimePolicy();
 
       while (true) {
         activateRuntimeGeneration(runtimeGeneration);
@@ -305,7 +312,39 @@ export default definePluginEntry({
       }
     };
 
-    const commands = createVoiceCallCommandService(ensureRuntime);
+    const assertCurrentRuntimeRegistration = (): void => {
+      if (runtimeCoordinator.current !== runtimeRegistration) {
+        throw new VoiceCallRuntimeLifecycleError(
+          "Voice call runtime generation was superseded; use the current plugin registration",
+        );
+      }
+      if (runtimeRegistration.generation.retired) {
+        throw new VoiceCallRuntimeLifecycleError(
+          "Voice call runtime generation is retired; use the current plugin registration",
+        );
+      }
+    };
+    const ensureRuntimeForExistingCall = async () => {
+      // The current registration's enabled/validation policy applies before any runtime is
+      // selected, so a disabled or misconfigured reload cannot borrow predecessor authority.
+      assertRuntimePolicy();
+      // Existing-call control stays on the live runtime that owns the call instead of starting a
+      // second webhook listener. New calls use the current registration selector below.
+      const liveSlot = runtimeCoordinator.slot;
+      if (liveSlot && liveSlot.state === "running") {
+        activateRuntimeGeneration(runtimeRegistration.generation);
+        return liveSlot.runtime;
+      }
+      return await ensureRuntime();
+    };
+    const ensureRuntimeForNewCall = async () => {
+      return await ensureRuntime();
+    };
+    const commands = createVoiceCallCommandService({
+      ensureRuntimeForExistingCall,
+      ensureRuntimeForNewCall,
+      assertCurrentRegistration: assertCurrentRuntimeRegistration,
+    });
     const registerGatewayCommand = (
       method: string,
       handler: (options: GatewayRequestHandlerOptions) => unknown,

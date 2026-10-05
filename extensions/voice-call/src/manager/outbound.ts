@@ -42,7 +42,21 @@ type EndCallContext = Pick<
 
 type ConnectedCallContext = Pick<CallManagerContext, "activeCalls" | "provider">;
 
-function lookupConnectedCall(ctx: ConnectedCallContext, callId: CallId) {
+type ConnectedCallLookup =
+  | { kind: "error"; error: string }
+  | { kind: "ended"; call: CallRecord }
+  | {
+      kind: "ok";
+      call: CallRecord;
+      providerCallId: string;
+      provider: NonNullable<ConnectedCallContext["provider"]>;
+    };
+
+export type InitiateCallAdmission = {
+  isCurrent?: () => boolean;
+};
+
+function lookupConnectedCall(ctx: ConnectedCallContext, callId: CallId): ConnectedCallLookup {
   const call = ctx.activeCalls.get(callId);
   if (!call) {
     return { kind: "error" as const, error: "Call not found" };
@@ -76,6 +90,7 @@ export async function initiateCall(
   to: string,
   sessionKey?: string,
   opts: OutboundCallOptions = {},
+  admission?: InitiateCallAdmission,
 ): Promise<{ callId: CallId; success: boolean; error?: string }> {
   const initialMessage = opts.message;
   const mode = opts.mode ?? ctx.config.outbound.defaultMode;
@@ -153,6 +168,21 @@ export async function initiateCall(
     ctx.pendingCallAdmissions.delete(callId);
   }
 
+  const rejectSupersededAdmission = async () => {
+    ctx.pendingCallAdmissions.delete(callId);
+    await ctx.mutationQueue.enqueue("state", () =>
+      finalizeCall({
+        ctx,
+        call: callRecord,
+        endReason: "failed",
+      }),
+    );
+    return { callId: "", success: false, error: "Call command superseded" } as const;
+  };
+  if (admission?.isCurrent?.() === false) {
+    return await rejectSupersededAdmission();
+  }
+
   try {
     if (ctx.isStopping()) {
       throw new Error("Voice Call manager is stopping");
@@ -170,6 +200,9 @@ export async function initiateCall(
       );
     }
 
+    if (admission?.isCurrent?.() === false) {
+      return await rejectSupersededAdmission();
+    }
     const streamSession =
       ctx.config.realtime?.enabled && ctx.provider.name === "telnyx" && ctx.streamSessionIssuer
         ? ctx.streamSessionIssuer({
@@ -181,6 +214,9 @@ export async function initiateCall(
           })
         : undefined;
 
+    if (admission?.isCurrent?.() === false) {
+      return await rejectSupersededAdmission();
+    }
     const result = await ctx.provider.initiateCall({
       callId,
       from,
@@ -462,6 +498,7 @@ export async function continueCall(
   ctx: CallManagerContext,
   callId: CallId,
   prompt: string,
+  options?: Pick<SpeakOptions, "isCurrent">,
 ): Promise<{ success: boolean; transcript?: string; error?: string }> {
   const connected = requireConnectedCall(ctx, callId);
   if (connected.kind === "error") {
@@ -478,16 +515,25 @@ export async function continueCall(
   const turnToken = provider.name === "twilio" ? crypto.randomUUID() : undefined;
 
   try {
-    const speakResult = await speak(ctx, callId, prompt);
+    const speakResult = await speak(ctx, callId, prompt, options);
     if (!speakResult.success) {
       return speakResult;
     }
 
     if (
-      !(await updateCall(ctx, call, (next) => transitionState(next, "listening"))) ||
+      !(await updateCall(
+        ctx,
+        call,
+        (next) => transitionState(next, "listening"),
+        options?.isCurrent,
+      )) ||
+      options?.isCurrent?.() === false ||
       !isCurrentCall(ctx, call)
     ) {
-      return { success: false, error: "Call has ended" };
+      return {
+        success: false,
+        error: options?.isCurrent?.() === false ? "Call command superseded" : "Call has ended",
+      };
     }
 
     if (ctx.isStopping()) {
@@ -505,28 +551,42 @@ export async function continueCall(
     if (!isCurrentCall(ctx, call)) {
       return { success: false, error: "Call has ended" };
     }
+    if (options?.isCurrent?.() === false) {
+      return { success: false, error: "Call command superseded" };
+    }
 
     const transcript = await waitForFinalTranscript(ctx, callId, turnToken);
     const transcriptReceivedAt = Date.now();
 
+    if (options?.isCurrent?.() === false) {
+      return { success: false, error: "Call command superseded" };
+    }
     await provider.stopListening({ callId, providerCallId });
 
     const lastTurnLatencyMs = transcriptReceivedAt - turnStartedAt;
     const lastTurnListenWaitMs = transcriptReceivedAt - listenStartedAt;
     if (
-      !(await updateCall(ctx, call, (next) => {
-        const turnCount =
-          typeof next.metadata?.turnCount === "number" ? next.metadata.turnCount + 1 : 1;
-        next.metadata = {
-          ...next.metadata,
-          turnCount,
-          lastTurnLatencyMs,
-          lastTurnListenWaitMs,
-          lastTurnCompletedAt: transcriptReceivedAt,
-        };
-      }))
+      !(await updateCall(
+        ctx,
+        call,
+        (next) => {
+          const turnCount =
+            typeof next.metadata?.turnCount === "number" ? next.metadata.turnCount + 1 : 1;
+          next.metadata = {
+            ...next.metadata,
+            turnCount,
+            lastTurnLatencyMs,
+            lastTurnListenWaitMs,
+            lastTurnCompletedAt: transcriptReceivedAt,
+          };
+        },
+        options?.isCurrent,
+      ))
     ) {
-      return { success: false, error: "Call has ended" };
+      return {
+        success: false,
+        error: options?.isCurrent?.() === false ? "Call command superseded" : "Call has ended",
+      };
     }
 
     console.log(

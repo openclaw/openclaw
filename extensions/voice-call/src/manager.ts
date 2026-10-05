@@ -14,6 +14,7 @@ import {
   sendDtmf as sendDtmfWithContext,
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
+  type InitiateCallAdmission,
   type SpeakOptions,
 } from "./manager/outbound.js";
 import {
@@ -369,9 +370,10 @@ export class CallManager {
     to: string,
     sessionKey?: string,
     options?: OutboundCallOptions,
+    admission?: InitiateCallAdmission,
   ): Promise<{ callId: CallId; success: boolean; error?: string }> {
     return this.runOperation(() =>
-      initiateCallWithContext(this.getContext(), to, sessionKey, options),
+      initiateCallWithContext(this.getContext(), to, sessionKey, options, admission),
     );
   }
 
@@ -396,8 +398,11 @@ export class CallManager {
   async continueCall(
     callId: CallId,
     prompt: string,
+    options?: Pick<SpeakOptions, "isCurrent">,
   ): Promise<{ success: boolean; transcript?: string; error?: string }> {
-    return this.runOperation(() => continueCallWithContext(this.getContext(), callId, prompt));
+    return this.runOperation(() =>
+      continueCallWithContext(this.getContext(), callId, prompt, options),
+    );
   }
 
   endCall(callId: CallId, options?: { reason?: EndReason }): Promise<CallEndResult> {
