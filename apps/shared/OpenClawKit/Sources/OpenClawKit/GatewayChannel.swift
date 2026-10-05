@@ -130,6 +130,21 @@ public actor GatewayChannelActor {
         return self.acceptedHTTPBearer?.token
     }
 
+    func dashboardAuthContext(
+        ifCurrentConnectionGeneration expectedGeneration: UInt64) -> GatewayChannelDashboardAuthContext?
+    {
+        guard let binding = self.authBinding(ifCurrentConnectionGeneration: expectedGeneration),
+              let options = self.connectOptions
+        else { return nil }
+        return GatewayChannelDashboardAuthContext(
+            binding: binding,
+            options: options,
+            encoder: self.encoder,
+            token: self.token,
+            password: self.password,
+            httpResourceBearer: self.httpResourceBearer(ifCurrentConnectionGeneration: expectedGeneration))
+    }
+
     nonisolated func retireSocketAdmission() {
         self.socketAdmission.withLock { $0 = false }
     }
@@ -331,7 +346,14 @@ public actor GatewayChannelActor {
 
         // External authorization can suspend. A canceled route must never create a socket
         // with a grant returned after its disconnect or replacement.
-        let request = try await self.makeUpgradeRequest()
+        let request: URLRequest
+        do {
+            request = try await self.makeUpgradeRequest()
+        } catch let error as GatewayExternalAuthorizationError {
+            // No physical socket exists yet; pause the watchdog at this admission boundary.
+            self.reconnectPausedForAuthFailure = true
+            throw error
+        }
         try Task.checkCancellation()
         guard self.shouldReconnect else { throw CancellationError() }
         if let disconnectError { throw disconnectError }
@@ -364,6 +386,10 @@ public actor GatewayChannelActor {
             try self.ensureCurrentConnectAttempt(attemptID, task: connectTask)
             try self.requireCurrentConnection(connectionGeneration)
         } catch {
+            if let response = connectTask.response as? HTTPURLResponse {
+                self.logger.error(
+                    "gateway connection failed; upgrade HTTP status=\(response.statusCode, privacy: .public)")
+            }
             let wrapped: Error = if let authError = error as? GatewayConnectAuthError {
                 authError
             } else {
@@ -1233,6 +1259,7 @@ extension GatewayChannelActor {
     }
 
     private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {
+        if error is GatewayExternalAuthorizationError { return true }
         guard let authError = error as? GatewayConnectAuthError else {
             return false
         }
@@ -1493,6 +1520,7 @@ extension GatewayChannelActor {
     private func wrap(_ error: Error, context: String) -> Error {
         if error is CancellationError ||
             error is GatewayConnectAuthError ||
+            error is GatewayExternalAuthorizationError ||
             error is GatewayResponseError ||
             error is GatewayDecodingError ||
             error is GatewayTLSValidationError

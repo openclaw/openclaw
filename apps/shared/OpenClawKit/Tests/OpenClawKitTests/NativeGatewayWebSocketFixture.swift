@@ -2,6 +2,7 @@
 import CryptoKit
 import Foundation
 import Network
+import Security
 @testable import OpenClawKit
 
 @MainActor
@@ -23,9 +24,33 @@ final class NativeGatewayWebSocketFixture {
             requestId: "native-pairing-request")
     }
 
+    struct Request: Sendable {
+        let method: String
+        let target: String
+        let headers: [String: String]
+
+        var isWebSocket: Bool {
+            self.headers["upgrade"]?.lowercased() == "websocket"
+        }
+    }
+
+    struct HTTPResponse: Sendable {
+        var status = 200
+        var headers: [String: String] = [:]
+        var body = Data()
+        var holdBody = false
+        var holdHeaders = false
+    }
+
+    var httpResponse: ((Request) -> HTTPResponse)?
+    private(set) var requests: [Request] = []
+    private(set) var roles: [String] = []
+    private var pendingHTTP: [Int: (Request, HTTPResponse)] = [:]
+
     private struct Client {
         enum Phase {
             case handshake
+            case http
             case connect
             case open
         }
@@ -44,15 +69,18 @@ final class NativeGatewayWebSocketFixture {
     private var nextConnectionIndex = 0
     private var stopped = false
     nonisolated let port: UInt16
+    nonisolated let fingerprint: String?
 
     private init(
         listener: NWListener,
         port: UInt16,
+        fingerprint: String?,
         issuedDeviceTokens: [String?],
         connectFailures: [Int: ConnectFailure])
     {
         self.listener = listener
         self.port = port
+        self.fingerprint = fingerprint
         self.issuedDeviceTokens = issuedDeviceTokens
         self.connectFailures = connectFailures
         self.listener.newConnectionHandler = { [weak self] connection in
@@ -70,9 +98,30 @@ final class NativeGatewayWebSocketFixture {
     @concurrent
     nonisolated static func start(
         issuedDeviceTokens: [String?],
-        connectFailures: [Int: ConnectFailure] = [:]) async throws -> NativeGatewayWebSocketFixture
+        connectFailures: [Int: ConnectFailure] = [:],
+        tls: Bool = false) async throws -> NativeGatewayWebSocketFixture
     {
-        let parameters = NWParameters.tcp
+        let parameters: NWParameters
+        let fingerprint: String?
+        if tls {
+            let certificateData = Data(base64Encoded: Self.certificateDER, options: .ignoreUnknownCharacters)!
+            let keyData = Data(base64Encoded: Self.privateKeyDER, options: .ignoreUnknownCharacters)!
+            guard let certificate = SecCertificateCreateWithData(nil, certificateData as CFData),
+                  let key = SecKeyCreateWithData(
+                      keyData as CFData,
+                      [kSecAttrKeyType: kSecAttrKeyTypeRSA, kSecAttrKeyClass: kSecAttrKeyClassPrivate] as CFDictionary,
+                      nil),
+                  let identity = SecIdentityCreate(nil, certificate, key),
+                  let localIdentity = sec_identity_create(identity)
+            else { throw URLError(.clientCertificateRejected) }
+            let options = NWProtocolTLS.Options()
+            sec_protocol_options_set_local_identity(options.securityProtocolOptions, localIdentity)
+            parameters = NWParameters(tls: options)
+            fingerprint = SHA256.hash(data: certificateData).map { String(format: "%02x", $0) }.joined()
+        } else {
+            parameters = .tcp
+            fingerprint = nil
+        }
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters, on: .any)
         listener.newConnectionHandler = { $0.cancel() }
@@ -89,6 +138,7 @@ final class NativeGatewayWebSocketFixture {
                     let fixture = await NativeGatewayWebSocketFixture(
                         listener: listener,
                         port: port.rawValue,
+                        fingerprint: fingerprint,
                         issuedDeviceTokens: issuedDeviceTokens,
                         connectFailures: connectFailures)
                     try Task.checkCancellation()
@@ -100,7 +150,8 @@ final class NativeGatewayWebSocketFixture {
                 default:
                     guard ContinuousClock.now < deadline else {
                         throw URLError(.timedOut, userInfo: [
-                            NSLocalizedDescriptionKey: "Native gateway WebSocket fixture listener timed out: \(listener.state)",
+                            NSLocalizedDescriptionKey: "Native gateway WebSocket fixture listener timed out: " +
+                                "\(listener.state)",
                         ])
                     }
                     try await Task.sleep(for: .milliseconds(10))
@@ -113,7 +164,7 @@ final class NativeGatewayWebSocketFixture {
     }
 
     nonisolated func url() -> URL {
-        URL(string: "ws://127.0.0.1:\(self.port)")!
+        URL(string: "\(self.fingerprint == nil ? "ws" : "wss")://127.0.0.1:\(self.port)")!
     }
 
     var activeConnectionCount: Int {
@@ -156,7 +207,7 @@ final class NativeGatewayWebSocketFixture {
                 case .ready:
                     self.receive(index)
                 case .cancelled, .failed:
-                    self.clients[index] = nil
+                    self.close(index)
                 default:
                     break
                 }
@@ -194,6 +245,8 @@ final class NativeGatewayWebSocketFixture {
             self.processHandshake(index)
         case .connect, .open:
             self.processFrames(index)
+        case .http:
+            break
         }
     }
 
@@ -203,15 +256,31 @@ final class NativeGatewayWebSocketFixture {
         else { return }
         let headerData = client.buffer[..<headerEnd.upperBound]
         client.buffer.removeSubrange(..<headerEnd.upperBound)
-        guard let headers = String(data: headerData, encoding: .utf8),
-              let key = headers
-                  .components(separatedBy: "\r\n")
-                  .first(where: { $0.lowercased().hasPrefix("sec-websocket-key:") })?
-                  .split(separator: ":", maxSplits: 1)
-                  .last?
-                  .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !key.isEmpty
-        else {
+        guard let text = String(data: headerData, encoding: .utf8) else {
+            self.close(index)
+            return
+        }
+        let lines = text.components(separatedBy: "\r\n")
+        let first = lines[0].split(separator: " ")
+        guard first.count >= 2 else { self.close(index)
+            return
+        }
+        var headers: [String: String] = [:]
+        for line in lines.dropFirst() {
+            let parts = line.split(separator: ":", maxSplits: 1)
+            if parts.count == 2 {
+                headers[String(parts[0]).lowercased()] = parts[1].trimmingCharacters(in: .whitespaces)
+            }
+        }
+        let request = Request(method: String(first[0]), target: String(first[1]), headers: headers)
+        self.requests.append(request)
+        if !request.isWebSocket {
+            client.phase = .http
+            self.clients[index] = client
+            self.respondHTTP(request, index: index)
+            return
+        }
+        guard let key = headers["sec-websocket-key"], !key.isEmpty else {
             self.close(index)
             return
         }
@@ -237,6 +306,41 @@ final class NativeGatewayWebSocketFixture {
                 }
                 self.sendChallenge(index)
                 self.processFrames(index)
+            }
+        })
+    }
+
+    func releaseHTTPResponses() {
+        let pending = self.pendingHTTP
+        self.pendingHTTP.removeAll()
+        for (index, response) in pending {
+            self.sendHTTP(response.1, request: response.0, index: index)
+        }
+    }
+
+    private func respondHTTP(_ request: Request, index: Int) {
+        let response = self.httpResponse?(request) ?? HTTPResponse(status: 404)
+        if response.holdHeaders {
+            // The verdict belongs to request arrival, even if credentials change before release.
+            self.pendingHTTP[index] = (request, response)
+            return
+        }
+        self.sendHTTP(response, request: request, index: index)
+    }
+
+    private func sendHTTP(_ response: HTTPResponse, request: Request, index: Int) {
+        guard let client = self.clients[index] else { return }
+        var headers = response.headers
+        headers["Content-Length"] = String(response.body.count)
+        headers["Connection"] = "close"
+        let head = (["HTTP/1.1 \(response.status) Fixture"] +
+            headers.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" } + ["", ""])
+            .joined(separator: "\r\n")
+        var data = Data(head.utf8)
+        if request.method != "HEAD", !response.holdBody { data.append(response.body) }
+        client.connection.send(content: data, completion: .contentProcessed { [weak self] error in
+            MainActor.assumeIsolated {
+                if error != nil || !response.holdBody { self?.close(index) }
             }
         })
     }
@@ -270,6 +374,7 @@ final class NativeGatewayWebSocketFixture {
 
         let params = request["params"] as? [String: Any]
         let auth = params?["auth"] as? [String: Any]
+        self.roles.append(params?["role"] as? String ?? "")
         self.connectAuth.append(ConnectAuth(
             token: auth?["token"] as? String,
             bootstrapToken: auth?["bootstrapToken"] as? String,
@@ -390,6 +495,7 @@ final class NativeGatewayWebSocketFixture {
     }
 
     private func close(_ index: Int) {
+        self.pendingHTTP.removeValue(forKey: index)
         self.clients.removeValue(forKey: index)?.connection.cancel()
     }
 
@@ -432,5 +538,37 @@ final class NativeGatewayWebSocketFixture {
         buffer.removeSubrange(..<(cursor + payloadLength))
         return (first & 0x0F, payload)
     }
+
+    /// Synthetic loopback-only identity. Tests pin its leaf certificate; it is never installed as trust.
+    private nonisolated static let certificateDER = """
+    MIIC2DCCAcCgAwIBAgIBATANBgkqhkiG9w0BAQsFADAkMSIwIAYDVQQDDBlPcGVuQ2xhdyBsb29wYmFjayBmaXh0dXJlMCAXDTIw
+    MDEwMTAwMDAwMFoYDzIwNTAwMTAxMDAwMDAwWjAkMSIwIAYDVQQDDBlPcGVuQ2xhdyBsb29wYmFjayBmaXh0dXJlMIIBIjANBgkq
+    hkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwUOmv0sqisJscPhALYnxtc9H3IqOJM7LDzRGq9FgjoD5Cbj9dE344mqQ5ZQQ3Rt173tn
+    nqKWd9CKOYSe4ywMAGsHs0FDg/Nzx4OkiMYJzx+egnf77h154FeS116Yoyrt5cmNgm63Blvca+1L4YgQ43LwmEVTKyP0junxq9JY
+    2n9DUohmTVcBbaX8XToOMgaH4ahQv8520dAfperWAvLsWgPAMDT7/Q9ZZPgZXJ/tUKwdPKI8+RfeCOC9iOetpc9eS1phw5graFEo
+    O+bIeEsSX5athV7yf9XwnTv+NFtGs/fdeHHJzhbC8CcZAlbzv1ftzN5ijcIxoQmZylGnMep/rwIDAQABoxMwETAPBgNVHREECDAG
+    hwR/AAABMA0GCSqGSIb3DQEBCwUAA4IBAQAAgmUep9sC2UA7U7VjacQ8TBSNOqtA2Lwmi05V3YWfPt8G3Urq3VwNKvoFADLdfZoQ
+    IMdK+NPklcGAPSeow5uwc95O4Or/SNso/zkNl/HSHRLhgQe0U5NMbBtVxsZi2UywcSBy/1rlmHxq+QT8EpqyXCmBkbNoHG0CHCqj
+    sk56ZWBu8o386YUFbEfUEaTZ9n4yMSSULFNyGbcjlsWzx4wQpRxEzJ6kMfB53YaR+NTsCYNxV+AF8SDQvZ4EczrRGgco+n3Atzna
+    40YUUj5vJhEoc2O+GGgNBWTeycPDVY60wUKb75/glJXLkNwJM/wEx43jhptQQMEKxFuPUlyozdz3
+    """
+    private nonisolated static let privateKeyDER = """
+    MIIEowIBAAKCAQEAwUOmv0sqisJscPhALYnxtc9H3IqOJM7LDzRGq9FgjoD5Cbj9dE344mqQ5ZQQ3Rt173tnnqKWd9CKOYSe4ywM
+    AGsHs0FDg/Nzx4OkiMYJzx+egnf77h154FeS116Yoyrt5cmNgm63Blvca+1L4YgQ43LwmEVTKyP0junxq9JY2n9DUohmTVcBbaX8
+    XToOMgaH4ahQv8520dAfperWAvLsWgPAMDT7/Q9ZZPgZXJ/tUKwdPKI8+RfeCOC9iOetpc9eS1phw5graFEoO+bIeEsSX5athV7y
+    f9XwnTv+NFtGs/fdeHHJzhbC8CcZAlbzv1ftzN5ijcIxoQmZylGnMep/rwIDAQABAoIBAB+2fCwzp11xnd3DvrQ6SIFu6/nSepSr
+    okJyb45OIyv/Gd5wjpaBHO/6UKB7dXDyyp1rgItVXp92htf9XR0l4ypGZdMSSIPkdQEuJteSt5VXOOlrytk92PvpIt1YVm+f4b2t
+    Hx1iEYJnnHnRTHxLmYnZGIXECmuv0LeKx+9L6uyfYGJM1e2JsTfNFC36TYcb1J040hTEgs2OZI6cZKqa2o1dtXpAals48I7fgv0N
+    KbZoPnYIKmrUSqCeViuonIuN1qGI7rrVKK6YFmWOYed5/viKDFc4lagQQpJWzEz5lLQQmulySMJXFKFw0tqG9SH+3YXOP5UUSz7f
+    T20oDWzm5RECgYEA5VG6mBlYZjCdqKbZ3f/N/6cPbEsrC9dCthwtMHLeEtiE3SiYP7QQVjHS/S0pkDrwBCqoilcusU3i8PRDxT2G
+    17O5J+N4qYn9WV04SmtqYD6GJa8VnJsj/Qj68XrQkUxUX4ucTArc0C8/0KlESVX3hgjX+Barbam++6L/bYOtVQUCgYEA18AGaJgU
+    iWWKryV8hzGqLyw7f2/EnMcCe6dU6+gr9eyEY7iU9ebvl46+zJFYZgu81spOn6jwtcdMq6JtuPvRcsD3QFsmhH4vH+kvVqHmZfzb
+    SA6KKOLjTuGWitl9t/v1+iOOpHRvcGJpA2yAmw73AgG7uuUSSEtny7SX0UveYCMCgYAkY/PYby04Cj76pH+uWwm1qC0qYkNSfbZ4
+    b8A8D/5tvy5Wajq+4TQ2eXGh+6i82p18C8jzKyKdwF5jHmAizMC5OiwHyHE9dkheBg0IwkL/QuzGziH/2B696M7pwzOV2ycIgn8r
+    Eg44e0cFNddATAQboQuksvRBUs6b4CHonxzCgQKBgQDD328yCFgkwU5eYs8iwmE6gJLnyKYcm8TSVIGRx3AZzggHrO14Lph45Tyt
+    5or14lQoQPWOmEcpEW63KDkrR1vJLg2LnPVkNlc8Rm0W3teY4i6GxcSDCDHMTJxrJLexkIup9BwtjBQcWQvz8s7zd2ujo8U3EX8+
+    qU7rruJiPtn+NwKBgCHwFmtxBoq0wLKIbL3sBm4H0ZItLmR/+82UyI+ntKKA6ZMT8gRuPaHhW+QROxluhQdRMY2aHE8Iv4qngfvs
+    /WUOQqa/2h2AV28IFimef/+F3aWmO6nHSDEkONZIBOMy/vcjrTQf5/A0mpwzwUxMrNg8uwW3gUyQtbOzbZ9129rl
+    """
 }
 #endif

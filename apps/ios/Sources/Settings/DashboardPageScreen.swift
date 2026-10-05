@@ -59,7 +59,8 @@ struct DashboardPageScreen: View {
                     if let route = SettingsHubScreen.route(for: panel) {
                         self.navigationPath.append(route)
                     }
-                })
+                },
+                openGateway: { self.navigationPath.append(.gateway) })
                 .navigationTitle(self.title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {

@@ -1,6 +1,6 @@
 name: OpenClaw
 options:
-  preGenCommand: node ../../scripts/prepare-apple-mermaid.mjs
+  preGenCommand: bash ../../scripts/ios-generate-test-tls-identity.sh && node ../../scripts/prepare-apple-mermaid.mjs
   bundleIdPrefix: ai.openclawfoundation
   deploymentTarget:
     iOS: "18.0"
@@ -426,6 +426,14 @@ targets:
       - path: Tests
         excludes:
           - Logic
+      - path: ../macos/Tests/OpenClawIPCTests/AsyncTestGate.swift
+        group: Tests
+      - path: ../macos/Tests/OpenClawIPCTests/DashboardHTTPFixture.swift
+        group: Tests
+      - path: ../macos/Tests/OpenClawIPCTests/TestWait.swift
+        group: Tests
+      - path: build/TestTLS/GatewayIngressIdentity.p12
+        buildPhase: resources
       - path: ../macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift
         group: Tests
       - path: ../macos/Tests/OpenClawIPCTests/AsyncTestGate.swift
@@ -458,6 +466,7 @@ targets:
         SWIFT_STRICT_CONCURRENCY: complete
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OpenClaw.app/OpenClaw"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) OPENCLAW_APP_TESTS"
       configs:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_DEBUG_APP_BUNDLE_ID).tests"

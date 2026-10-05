@@ -741,6 +741,44 @@ public actor GatewayNodeSession {
         self.currentRouteValue(self.operatorScopes, ifCurrentRoute: route)
     }
 
+    /// The released Control UI accepts only shared startup credentials. Return
+    /// them only when this exact live operator route selected them.
+    public func controlUIDashboardLegacyCredentials(
+        ifCurrentRoute route: GatewayNodeSessionRoute) async -> [String: String]?
+    {
+        guard self.isCurrentRoute(route),
+              let channel = self.channel,
+              self.connectOptions?.role == "operator",
+              self.connectOptions?.clientMode == "ui"
+        else { return nil }
+        let credentials = await channel.controlUIDashboardLegacyCredentials(
+            ifCurrentConnectionGeneration: route.socketGeneration)
+        guard self.isCurrentRoute(route), self.channel === channel else { return nil }
+        return credentials
+    }
+
+    /// Builds a native Dashboard challenge response from the current operator
+    /// socket. Route and scope checks bracket the channel's signing operation.
+    public func controlUIDashboardAuthorization(
+        ifCurrentRoute route: GatewayNodeSessionRoute,
+        nonce: String,
+        signedAtMs: Int64) async throws -> Data
+    {
+        guard self.isCurrentRoute(route),
+              let channel = self.channel,
+              self.connectOptions?.role == "operator",
+              self.connectOptions?.clientMode == "ui",
+              let scopes = self.currentOperatorScopes(ifCurrentRoute: route)
+        else { throw CancellationError() }
+        let data = try await channel.controlUIDashboardAuthorization(
+            ifCurrentConnectionGeneration: route.socketGeneration,
+            scopes: scopes.sorted(),
+            nonce: nonce,
+            signedAtMs: signedAtMs)
+        guard self.isCurrentRoute(route), self.channel === channel else { throw CancellationError() }
+        return data
+    }
+
     public func currentAttachmentLimits(ifCurrentRoute route: GatewayNodeSessionRoute) -> GatewayAttachmentLimits? {
         self.currentRouteValue(self.attachmentLimits, ifCurrentRoute: route)
     }
