@@ -142,6 +142,12 @@ Transcription-only Talk emits the same Talk event envelope as realtime and STT/T
 
 Transcription providers can advertise their model choices in `talk.catalog.transcription.providers[].models`. Pass `model` to `talk.session.create` to override the configured transcription model for that session. Omitting it keeps the provider configuration, then the matching `agents.defaults.voiceModel`, then the provider's own default.
 
+[Azure Speech](/providers/azure-speech#dashboard-dictation) supports dashboard
+dictation through this transcription-only relay, reusing the existing Speech
+resource key and region. It uses standard Azure recognition without a model
+override and is the last automatic choice when other transcription providers
+are not configured. It does not provide a realtime spoken-assistant call.
+
 Browser Video Talk is available for OpenAI Realtime WebRTC and Google Live
 provider-WebSocket sessions. OpenAI gets a single bounded JPEG when
 `describe_view` asks for visual context; it does not receive a continuous

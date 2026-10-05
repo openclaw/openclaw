@@ -25,6 +25,53 @@ const registerAzureSpeechPlugin = () =>
   });
 
 describeLive("azure speech plugin live", () => {
+  it("dictates synthetic speech through the registered provider, including final words after Stop", async () => {
+    const { speechProviders, realtimeTranscriptionProviders } = await registerAzureSpeechPlugin();
+    const speech = requireRegisteredProvider(speechProviders, "azure-speech");
+    const transcription = requireRegisteredProvider(realtimeTranscriptionProviders, "azure-speech");
+    const providerConfig = { apiKey: AZURE_SPEECH_KEY, region: AZURE_SPEECH_REGION };
+    const audio = await speech.synthesizeTelephony?.({
+      cfg: {},
+      providerConfig,
+      text: "The quick brown fox jumps over the lazy dog.",
+      timeoutMs: 60_000,
+    });
+    if (!audio) {
+      throw new Error("Azure Speech did not return synthetic test audio");
+    }
+    const result = Promise.withResolvers<string>();
+    const transcripts: string[] = [];
+    const errors: Error[] = [];
+    const session = transcription.createSession({
+      providerConfig,
+      onTranscript: (text) => {
+        transcripts.push(text);
+        const combined = transcripts.join(" ").toLowerCase();
+        if (combined.includes("lazy dog")) {
+          result.resolve(combined);
+        }
+      },
+      onError: (error) => {
+        errors.push(error);
+        result.reject(error);
+      },
+    });
+    try {
+      const [, transcript] = await Promise.all([
+        (async () => {
+          await session.connect();
+          session.sendAudio(audio.audioBuffer);
+          session.close();
+        })(),
+        result.promise,
+      ]);
+      expect(transcript).toContain("quick brown fox");
+      expect(errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 120_000);
+
   it("lists voices through the registered speech provider", async () => {
     const { speechProviders } = await registerAzureSpeechPlugin();
     const provider = requireRegisteredProvider(speechProviders, "azure-speech");

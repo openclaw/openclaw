@@ -1,12 +1,14 @@
 ---
-summary: "Azure AI Speech text-to-speech for OpenClaw replies"
+summary: "Azure AI Speech dashboard dictation and text-to-speech for OpenClaw"
 read_when:
   - You want Azure Speech synthesis for outbound replies
   - You need native Ogg Opus voice-note output from Azure Speech
+  - You want to dictate dashboard chat drafts using Azure Speech
 title: "Azure Speech"
 ---
 
-Azure Speech is a bundled Azure AI Speech text-to-speech provider. OpenClaw
+Azure Speech is a bundled Azure AI Speech provider for dashboard dictation and
+text-to-speech. For spoken replies, OpenClaw
 calls the Azure Speech REST API directly with SSML, synthesizing MP3 for
 standard replies, native Ogg/Opus for voice notes, and 8 kHz mulaw for
 telephony channels such as Voice Call. The request sends the provider-owned
@@ -59,9 +61,77 @@ output format through the `X-Microsoft-OutputFormat` header.
   </Step>
 </Steps>
 
-## Configuration options
+## Dashboard dictation
 
-All options live under `tts.providers["azure-speech"]`.
+The dashboard composer can stream microphone audio to Azure Speech and insert
+the recognized words into your draft. This is speech-to-text, separate from
+spoken replies and realtime Talk conversations.
+
+Provide the same Speech resource key and region used for synthesis:
+
+```text
+AZURE_SPEECH_KEY=<speech-resource-key>
+AZURE_SPEECH_REGION=eastus
+```
+
+Existing `tts.providers["azure-speech"].apiKey` and `.region` settings are also
+reused, including resolved secret references. You do not need to enable
+`tts.auto`. Azure becomes the automatic transcription provider only when no
+earlier-priority provider is configured; an explicit transcription selection
+always takes precedence.
+
+Open the dashboard over HTTPS or `http://localhost`, allow microphone access,
+and use the composer's dictation control. Partial text appears in the draft.
+**Stop and keep text** waits briefly for final words; canceling dictation
+discards its text. Dictation does not send the message for you.
+
+Recognition inherits `tts.providers["azure-speech"].lang`, with `en-US` as the
+default. To explicitly select Azure or override recognition settings, use the
+existing transcription configuration:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          streaming: {
+            provider: "azure-speech",
+            providers: {
+              "azure-speech": {
+                language: "en-GB",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+This shared configuration path is used by dashboard transcription; it does not
+start a phone call. Transcription-specific `apiKey`, `region`, and `language`
+settings take precedence over inherited TTS settings and environment fallbacks.
+The initial integration uses Azure's standard recognition model; do not set a
+transcription `model` override. Custom recognition endpoints and model
+deployments are not supported. TTS `endpoint` and `baseUrl` overrides are not
+reused for recognition: an endpoint-only TTS setup also needs a Speech region
+for dictation.
+
+The Gateway converts its existing 8 kHz mu-law microphone stream to PCM for
+Microsoft's Speech SDK. Your key stays on the Gateway; microphone audio is sent
+to your Azure Speech resource and normal service usage charges apply.
+OpenClaw does not save a raw audio recording for this dictation path.
+Connection, authentication, quota, and finalization failures are reported rather
+than silently switching to another provider.
+
+This does not add transcription of uploaded recordings or incoming voice notes.
+
+## Text-to-speech configuration options
+
+The synthesis options below live under `tts.providers["azure-speech"]`.
+Dictation also inherits `apiKey`, `region`, and `lang`.
 
 | Option                  | Description                                                                                           |
 | ----------------------- | ----------------------------------------------------------------------------------------------------- |

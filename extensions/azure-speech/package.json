@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw Azure Speech plugin",
   "type": "module",
+  "dependencies": {
+    "microsoft-cognitiveservices-speech-sdk": "1.51.0"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

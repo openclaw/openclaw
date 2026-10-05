@@ -7,7 +7,7 @@
   },
   "enabledByDefault": true,
   "name": "Azure Speech",
-  "description": "Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony).",
+  "description": "Azure AI Speech dashboard dictation and text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony).",
   "setup": {
     "providers": [
       {
@@ -21,7 +21,8 @@
     ]
   },
   "contracts": {
-    "speechProviders": ["azure-speech", "azure"]
+    "speechProviders": ["azure-speech", "azure"],
+    "realtimeTranscriptionProviders": ["azure-speech", "azure"]
   },
   "configGroups": [
     {
@@ -69,7 +70,7 @@
       },
       "lang": {
         "type": "string",
-        "description": "SSML language code (default en-US)."
+        "description": "Speech synthesis and dictation language code (default en-US)."
       },
       "outputFormat": {
         "type": "string",

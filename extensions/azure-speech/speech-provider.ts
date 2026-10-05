@@ -8,10 +8,14 @@ import type {
 import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
 import {
   asFiniteNumber,
-  asOptionalRecord,
   filterStringRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  readAzureSpeechEnvApiKey,
+  readAzureSpeechEnvRegion,
+  resolveAzureSpeechConfigRecord,
+} from "./config.js";
 import {
   azureSpeechTTS,
   DEFAULT_AZURE_SPEECH_AUDIO_FORMAT,
@@ -24,32 +28,6 @@ import {
   listAzureSpeechVoices,
   normalizeAzureSpeechBaseUrl,
 } from "./tts.js";
-
-function readAzureSpeechEnvApiKey(): string | undefined {
-  return (
-    trimToUndefined(process.env.AZURE_SPEECH_KEY) ??
-    trimToUndefined(process.env.AZURE_SPEECH_API_KEY) ??
-    trimToUndefined(process.env.SPEECH_KEY)
-  );
-}
-
-function readAzureSpeechEnvRegion(): string | undefined {
-  return (
-    trimToUndefined(process.env.AZURE_SPEECH_REGION) ?? trimToUndefined(process.env.SPEECH_REGION)
-  );
-}
-
-function resolveAzureSpeechConfigRecord(
-  rawConfig: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  const providers = asOptionalRecord(rawConfig.providers);
-  return (
-    asOptionalRecord(providers?.["azure-speech"]) ??
-    asOptionalRecord(providers?.azure) ??
-    asOptionalRecord(rawConfig["azure-speech"]) ??
-    asOptionalRecord(rawConfig.azure)
-  );
-}
 
 function normalizeAzureSpeechProviderConfig(rawConfig: Record<string, unknown>) {
   const raw = resolveAzureSpeechConfigRecord(rawConfig);
