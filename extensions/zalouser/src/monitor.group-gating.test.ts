@@ -108,6 +108,7 @@ function installRuntime(params: {
     useAccessGroups: boolean;
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
   }) => boolean;
+  saveRemoteMedia?: PluginRuntime["channel"]["media"]["saveRemoteMedia"];
 }) {
   const deliveryErrors: unknown[] = [];
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions, ctx }) => {
@@ -149,7 +150,7 @@ function installRuntime(params: {
       };
     },
   );
-  const readAllowFromStore = vi.fn(async () => []);
+  const readAllowFromStore = vi.fn(async (): Promise<string[]> => []);
   type TurnPlan = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
   const recordInboundSession = vi.fn(async (_params: unknown) => {});
   const dispatch = vi.fn(async (plan: TurnPlan) => {
@@ -230,11 +231,20 @@ function installRuntime(params: {
         ...paramsLocal.extra,
       }) as Awaited<ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>>,
   );
+  const saveRemoteMedia = vi.fn(
+    params.saveRemoteMedia ??
+      (async () => {
+        throw new Error("unexpected media download");
+      }),
+  );
   setZalouserRuntime({
     logging: {
       shouldLogVerbose: () => false,
     },
     channel: {
+      media: {
+        saveRemoteMedia,
+      },
       pairing: {
         readAllowFromStore,
         upsertPairingRequest: vi.fn(async () => ({ code: "PAIR", created: true })),
@@ -298,8 +308,10 @@ function installRuntime(params: {
   } as unknown as PluginRuntime);
 
   return {
+    buildContext,
     deliveryErrors,
     dispatchReplyWithBufferedBlockDispatcher,
+    saveRemoteMedia,
     resolveAgentRoute,
     resolveCommandAuthorizedFromAuthorizers,
     readAllowFromStore,
@@ -1041,5 +1053,152 @@ describe("zalouser monitor group mention gating", () => {
 
     const secondDispatch = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher, 1);
     expect(secondDispatch?.ctx?.InboundHistory).toStrictEqual([]);
+  });
+});
+
+describe("zalouser monitor inbound attachments", () => {
+  const fileAttachment = {
+    kind: "document" as const,
+    url: "https://file-stal-19.dlfl.vn/gr/abc/Contract-2026.pdf",
+    fileName: "Contract-2026.pdf",
+  };
+
+  beforeEach(() => {
+    sendMessageZalouserMock.mockClear();
+    startZaloListenerMock.mockReset();
+    startZaloListenerMock.mockResolvedValue({ stop: vi.fn() });
+    listZaloFriendsMock.mockResolvedValue([]);
+    listZaloGroupsMock.mockResolvedValue([]);
+  });
+
+  function buildContextArg(mock: unknown) {
+    return mockCallArg(mock, "build context") as Parameters<
+      PluginRuntime["channel"]["inbound"]["buildContext"]
+    >[0];
+  }
+
+  it("downloads a shared file and passes it to the agent as inbound media", async () => {
+    const { buildContext, saveRemoteMedia } = installRuntime({
+      saveRemoteMedia: async () => ({
+        id: "saved-1",
+        path: "/state/media/inbound/Contract-2026---saved-1.pdf",
+        size: 12_345,
+        contentType: "application/pdf",
+        fileName: "Contract-2026.pdf",
+      }),
+    });
+    const account = { ...createAccount(), mediaMaxBytes: 5 * 1024 * 1024 };
+
+    await processMessageThroughMonitor({
+      message: createDmMessage({
+        content: `Contract-2026.pdf\n${fileAttachment.url}`,
+        attachment: fileAttachment,
+      }),
+      account,
+      config: createConfig(),
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(saveRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(saveRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: fileAttachment.url,
+        maxBytes: 5 * 1024 * 1024,
+        requireHttps: true,
+        originalFilename: "Contract-2026.pdf",
+      }),
+    );
+    const context = buildContextArg(buildContext);
+    expect(context.media).toEqual([
+      {
+        path: "/state/media/inbound/Contract-2026---saved-1.pdf",
+        url: "/state/media/inbound/Contract-2026---saved-1.pdf",
+        contentType: "application/pdf",
+        fileName: "Contract-2026.pdf",
+        sizeBytes: 12_345,
+        kind: "document",
+      },
+    ]);
+    expect(context.message.bodyForAgent).toBe(`Contract-2026.pdf\n${fileAttachment.url}`);
+  });
+
+  it("keeps the turn and tells the agent when the download fails", async () => {
+    const { buildContext, dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      saveRemoteMedia: async () => {
+        throw new Error("max_bytes");
+      },
+    });
+    const runtime = { ...createRuntimeEnv(), error: vi.fn() };
+
+    await processMessageThroughMonitor({
+      message: createDmMessage({ content: "Contract-2026.pdf", attachment: fileAttachment }),
+      account: createAccount(),
+      config: createConfig(),
+      runtime,
+    });
+
+    const context = buildContextArg(buildContext);
+    expect(context.media).toBeUndefined();
+    expect(context.message.bodyForAgent).toBe(
+      "Contract-2026.pdf\n\n[zalouser document attachment unavailable]",
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to download Zalo document attachment"),
+    );
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { revoke: false, dispatches: 1 },
+    { revoke: true, dispatches: 0 },
+  ])(
+    "re-checks pairing access after the download (revoked during download: $revoke)",
+    async ({ revoke, dispatches }) => {
+      let allowFrom = ["321"];
+      const { dispatchReplyWithBufferedBlockDispatcher, readAllowFromStore, saveRemoteMedia } =
+        installRuntime({
+          saveRemoteMedia: async () => {
+            if (revoke) {
+              allowFrom = [];
+            }
+            return {
+              id: "saved-2",
+              path: "/state/media/inbound/Contract-2026---saved-2.pdf",
+              size: 10,
+              contentType: "application/pdf",
+            };
+          },
+        });
+      readAllowFromStore.mockImplementation(async () => allowFrom);
+      const account = createAccount();
+      account.config = { ...account.config, dmPolicy: "pairing", allowFrom: [] };
+
+      await processMessageThroughMonitor({
+        message: createDmMessage({ content: "Contract-2026.pdf", attachment: fileAttachment }),
+        account,
+        config: createConfig(),
+        runtime: createRuntimeEnv(),
+      });
+
+      expect(saveRemoteMedia).toHaveBeenCalledTimes(1);
+      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(dispatches);
+      expect(sendMessageZalouserMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not download attachments from group messages dropped by mention gating", async () => {
+    const { saveRemoteMedia, dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      commandAuthorized: false,
+    });
+
+    await processMessageThroughMonitor({
+      message: createGroupMessage({ content: "Contract-2026.pdf", attachment: fileAttachment }),
+      account: createAccount(),
+      config: createConfig(),
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 });
