@@ -1031,7 +1031,6 @@
 ["extensions/matrix/src/matrix/monitor/mentions.test.ts","../../runtime.js","f0c2043fd2d6d00a9d6bee47e06947c9e5159dad30fe289daac4775f7b57364f",1]
 ["extensions/matrix/src/matrix/monitor/reaction-events.test.ts","../send.js","c3fa7df4dc85525d87b520ec3d1c72a760afa015e7358a845e475a0b7fa73b04",1]
 ["extensions/matrix/src/matrix/monitor/reaction-events.test.ts","openclaw/plugin-sdk/approval-gateway-runtime","0f09bc80bd788e199dd5e13163a9331d57989e8cc5df6d27cc26920659025fef",1]
-["extensions/matrix/src/matrix/monitor/replies.presentation.test.ts","../send.js","cef854658ba4a4d9b85739a05cd37853d5beaebd7bcd3298d839056aed46958f",1]
 ["extensions/matrix/src/matrix/monitor/replies.test.ts","../send.js","cef854658ba4a4d9b85739a05cd37853d5beaebd7bcd3298d839056aed46958f",1]
 ["extensions/matrix/src/matrix/probe.test.ts","./client.js","d8765956b5ca09545a098c10ce87507d9f3a429144790f46b25ffaf15910a3b0",1]
 ["extensions/matrix/src/matrix/read-policy.test.ts","openclaw/plugin-sdk/plugin-state-store-runtime","ecced7a73e092f7cf0a5f4f2171997ad37164913ed0354ef96a243b5b9c92ad3",1]
