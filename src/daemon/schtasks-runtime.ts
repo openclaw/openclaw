@@ -545,12 +545,17 @@ export async function stopStartupEntry(
 export async function terminateInstalledStartupRuntime(
   env: GatewayServiceEnv,
   assertCurrent?: () => void,
+  beforeMutation?: () => Promise<void>,
 ): Promise<void> {
   if (!(await isStartupEntryInstalled(env))) {
     return;
   }
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
+    if (beforeMutation) {
+      await beforeMutation();
+      assertCurrent?.();
+    }
     await terminateGatewayProcessTree(runtime.pid, assertCurrent);
   }
 }

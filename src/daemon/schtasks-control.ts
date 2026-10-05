@@ -468,10 +468,10 @@ export async function stopRegisteredScheduledTask({
     onProcessStopped?.();
   }
   if (!manageGatewayPort) {
-    if ((await terminateScheduledTaskNodeHost(env, assertCurrent)).length) {
+    if ((await terminateScheduledTaskNodeHost(env, assertCurrent, beforeMutation)).length) {
       onProcessStopped?.();
     }
-    await terminateInstalledStartupRuntime(env, assertCurrent);
+    await terminateInstalledStartupRuntime(env, assertCurrent, beforeMutation);
   }
   if (terminated !== null && stopPort) {
     const probeHosts = stopContext?.probeHosts ?? [];

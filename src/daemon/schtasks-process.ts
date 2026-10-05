@@ -456,10 +456,15 @@ export async function resolveListenerBackedScheduledTaskRuntime(
 export async function terminateScheduledTaskNodeHost(
   env: GatewayServiceEnv,
   assertCurrent?: () => void,
+  beforeMutation?: () => Promise<void>,
 ): Promise<number[]> {
   const matched = await resolveScheduledTaskNodeHostProcess(env);
   if (!matched) {
     return [];
+  }
+  if (beforeMutation) {
+    await beforeMutation();
+    assertCurrent?.();
   }
   await terminateGatewayProcessTree(matched.pid, assertCurrent);
   return [matched.pid];
