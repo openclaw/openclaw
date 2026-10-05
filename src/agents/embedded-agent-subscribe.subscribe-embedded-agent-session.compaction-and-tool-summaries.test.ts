@@ -59,14 +59,14 @@ describe("compaction accounting", () => {
           },
         }),
       ],
-      expected: [{ kind: "model", contextTokens: undefined, successful: false }],
+      expected: [{ kind: "model", contextTokens: undefined, successful: false, admitted: false }],
     },
     {
       name: "failed zero-usage retry without old assistant backfill",
       events: [assistant(90_000), completed(true, 90_000, 12_000), assistant(0, "error")],
       expected: [
-        { kind: "model", contextTokens: 90_000, successful: false },
-        { kind: "model", contextTokens: undefined, successful: false },
+        { kind: "model", contextTokens: 90_000, successful: false, admitted: false },
+        { kind: "model", contextTokens: undefined, successful: false, admitted: false },
       ],
     },
   ])("records $name in producer order", ({ events, expected }) => {
@@ -118,8 +118,8 @@ describe("compaction accounting", () => {
       },
     });
     const expected: EmbeddedContextAccountingEvent[] = [
-      { kind: "model", contextTokens: 90_000, successful: false },
-      { kind: "model", contextTokens: 20_000, successful: false },
+      { kind: "model", contextTokens: 90_000, successful: false, admitted: false },
+      { kind: "model", contextTokens: 20_000, successful: false, admitted: false },
     ];
     try {
       message(emit, assistant(90_000));

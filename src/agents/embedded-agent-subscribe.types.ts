@@ -120,6 +120,16 @@ export type SubscribeEmbeddedAgentSessionParams = {
   providerOwner?: PreparedProviderFailoverOwner;
   compactionCountOwner?: EmbeddedRunAttemptInternalParams["compactionCountOwner"];
   onContextAccountingEvent?: EmbeddedRunAttemptInternalParams["onContextAccountingEvent"];
+  /**
+   * Context window of the model serving this attempt.
+   *
+   * Only used to classify silent overflow through the shared `isContextOverflow`
+   * owner: some providers report a successful-looking turn whose usage already
+   * exceeds the window, so accounting must not treat it as real progress. Absent
+   * when the window is unknown, in which case silent overflow cannot be detected
+   * and the turn is judged by its stop reason and usage alone.
+   */
+  contextWindowTokens?: number;
   sessionPersistence?: EmbeddedRunAttemptParams["sessionPersistence"];
   sessionKey?: string;
   /** Current transport channel resolved for this run. */

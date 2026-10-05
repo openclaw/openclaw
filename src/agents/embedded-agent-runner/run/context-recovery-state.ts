@@ -26,8 +26,14 @@ export function createEmbeddedRunContextRecoveryState() {
       if (event.kind === "compaction") {
         state.autoCompactionCount += 1;
         state.lastCompactionTokensAfter = tokens;
-      } else if (event.successful) {
+        return;
+      }
+      // Model event: split gates. Budget reset uses narrow admission signal;
+      // truncation reset uses broad telemetry signal. Both can fire independently.
+      if (event.admitted === true) {
         state.overflowCompactionAttempts = 0;
+      }
+      if (event.successful) {
         state.toolResultTruncationAttempted = false;
       }
     },

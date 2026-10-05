@@ -35,6 +35,7 @@ import {
 } from "./compaction-runtime.js";
 import { createRunRecoveryDiagId } from "./helpers.js";
 import {
+  isNonReducingCompaction,
   isNoRealConversationCompactionNoop,
   resetNoRealConversationTokenSnapshot,
 } from "./session-bootstrap.js";
@@ -338,15 +339,18 @@ export async function recoverEmbeddedRunOverflow(
     if (compactResult.compacted) {
       const tokensBefore = compactResult.result?.tokensBefore;
       const tokensAfter = compactResult.result?.tokensAfter;
-      const noReduction =
-        typeof tokensBefore === "number" &&
-        Number.isFinite(tokensBefore) &&
-        typeof tokensAfter === "number" &&
-        Number.isFinite(tokensAfter) &&
-        tokensAfter >= tokensBefore;
+      const noReduction = isNonReducingCompaction(compactResult);
       const compactionOutcome = noReduction
         ? "auto-compaction removed nothing"
         : "auto-compaction succeeded";
+      if (noReduction) {
+        log.warn(
+          `auto-compaction removed no context for ${input.modelSelection.provider}/${input.modelSelection.model} ` +
+            `(tokensBefore=${tokensBefore ?? "unknown"} ` +
+            `tokensAfter=${tokensAfter ?? "unknown"}); ` +
+            `attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS} stays charged)`,
+        );
+      }
       if (preflightRecovery?.route === "compact_then_truncate") {
         const truncResult = await truncateToolResults();
         if (truncResult.truncated) {

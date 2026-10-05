@@ -466,9 +466,9 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       expect(subscription.getCurrentAttemptAssistant()).toEqual(completed);
       expect(subscription.hasSuccessfulModelResponse()).toBe(completed?.stopReason === "stop");
       expect(onContextAccountingEvent.mock.calls).toEqual([
-        [{ kind: "model", contextTokens, successful: false }],
+        [{ kind: "model", contextTokens, successful: false, admitted: false }],
         ...(completed?.stopReason === "stop"
-          ? [[{ kind: "model", contextTokens, successful: true }]]
+          ? [[{ kind: "model", contextTokens, successful: true, admitted: true }]]
           : []),
       ]);
       expect(
@@ -578,5 +578,74 @@ describe("subscribeEmbeddedAgentSession model state", () => {
     expect(subscription.getUsageTotals()).toMatchObject(
       retryUsage ? { input: 340, output: 50, total: 390 } : { input: 100, output: 20, total: 120 },
     );
+  });
+
+  it("retains explicitly unknown context and owns its completion snapshot", async () => {
+    const onAgentEvent = vi.fn();
+    const onContextAccountingEvent = vi.fn();
+    const harness = createSubscribedSessionHarness({
+      runId: "run-unknown-usage",
+      lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
+      onAgentEvent,
+      onContextAccountingEvent,
+    });
+    const { subscription } = harness;
+    let terminal: AssistantMessage | undefined;
+    await runUsageCalls(
+      harness,
+      [
+        {
+          usage: makeUsage({ contextUsage: { state: "unavailable" } }),
+        },
+      ],
+      (event) => {
+        if (event.type === "message_end" && event.message.role === "assistant") {
+          terminal = event.message;
+        }
+      },
+    );
+    expect(onContextAccountingEvent.mock.calls).toEqual([
+      [{ kind: "model", contextTokens: undefined, successful: false, admitted: false }],
+      [{ kind: "model", contextTokens: undefined, successful: true, admitted: true }],
+    ]);
+    const usageEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "usage");
+    expect(subscription.getLastAssistantUsage()?.contextUsage).toEqual({ state: "unavailable" });
+    expect(usageEvents).toEqual([]);
+    expectDefined(terminal, "Expected assistant completion").usage.input = 999;
+    const snapshot = expectDefined(
+      subscription.getCurrentAttemptAssistant(),
+      "Expected the owned assistant snapshot",
+    );
+    expect(snapshot.usage.input).toBe(0);
+    snapshot.usage.input = 500;
+    expect(subscription.getCurrentAttemptAssistant()?.usage.input).toBe(0);
+  });
+
+  it("admits a completed stop with zero/absent usage when not overflowing (Rev 8 compat)", async () => {
+    // A provider/proxy can finish a non-refusal stop without reporting counters.
+    // main renews the budget on any completed turn; silent overflow is the only
+    // thing excluded, via isContextOverflow--not via nonzero usage.
+    const onContextAccountingEvent = vi.fn();
+    const harness = createSubscribedSessionHarness({
+      runId: "run-zero-usage-compat",
+      lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
+      onContextAccountingEvent,
+    });
+    await runUsageCalls(
+      harness,
+      // Pure-zero usage snapshot: no input/output, no contextUsage.
+      [{ usage: makeUsage() }],
+      () => {},
+    );
+    const observed = onContextAccountingEvent.mock.calls.map(([e]) => ({
+      successful: e.successful,
+      admitted: e.admitted,
+    }));
+    expect(observed).toEqual([
+      { successful: false, admitted: false },
+      { successful: true, admitted: true },
+    ]);
   });
 });

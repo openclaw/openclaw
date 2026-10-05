@@ -1,3 +1,4 @@
+import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import {
@@ -185,6 +186,19 @@ export function createEmbeddedModelState(
                 lastCallUsage: normalizeUsage(message.usage),
               }),
               successful: true,
+              // Admitted: provider accepted the prompt and completed a usable
+              // non-refusal turn. We deliberately do NOT require nonzero usage:
+              // a provider/proxy can complete a stop/toolUse while omitting
+              // counters, and main renews the budget on any completed turn.
+              // The only false-positive this guards against is silent overflow,
+              // which `isContextOverflow` excludes on its own.
+              // turn_end only reaches here for stop/toolUse (the gate above);
+              // a `length` truncated reply emits no successful accounting event,
+              // matching main--it is not treated as budget-renewing progress.
+              admitted: !isContextOverflow(
+                message,
+                params.contextWindowTokens ?? params.session.model?.contextWindow,
+              ),
             });
           }
           return;
@@ -220,6 +234,9 @@ export function createEmbeddedModelState(
               lastCallUsage: normalizeUsage(message.usage),
             }),
             successful: false,
+            // Admitted is computed at the successful emit point above; at this
+            // fallback emit (every message_end) it defaults to undefined/false.
+            admitted: false,
           });
       }
     },
