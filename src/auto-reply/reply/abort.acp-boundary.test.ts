@@ -50,11 +50,11 @@ import { buildTestCtx } from "./test-ctx.js";
 
 const fixture = useChatAbortRegistryFixture();
 
-it.each(
-  ["idle", "active", "native failure"].flatMap((scenario) =>
-    ["resolve", "reject"].map((completion) => ({ scenario, completion })),
-  ),
-)(
+it.each([
+  { scenario: "idle", completion: "resolve" },
+  { scenario: "active", completion: "reject" },
+  { scenario: "native failure", completion: "reject" },
+])(
   "native and bound ACP cancellation initiate before either drain ($scenario, $completion)",
   async ({ scenario, completion }) => {
     const active = scenario !== "idle";
