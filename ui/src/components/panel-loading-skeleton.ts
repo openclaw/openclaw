@@ -317,9 +317,9 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     return html`<div class="skeleton line ${width}"></div>`;
   }
 
-  private rows(count: number) {
+  private rows() {
     return Array.from(
-      { length: count },
+      { length: 5 },
       (_, index) => html`
         <div class="row">
           <div class="skeleton icon"></div>
@@ -391,7 +391,7 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
           </div>
         `;
       case "file-list":
-        return html`<div class="rows">${this.rows(5)}</div>`;
+        return html`<div class="rows">${this.rows()}</div>`;
       case "document":
         return html`
           <div class="skeleton file-heading medium"></div>
@@ -428,7 +428,7 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
             <div class="skeleton address"></div>
             <div class="skeleton button"></div>
           </div>
-          <div class="rows">${this.rows(5)}</div>
+          <div class="rows">${this.rows()}</div>
         `;
     }
   }

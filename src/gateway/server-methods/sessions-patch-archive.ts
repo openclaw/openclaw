@@ -7,15 +7,13 @@ import {
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
+import { SessionWorktreeLifecycleError } from "../../agents/worktrees/errors.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionAccessScope } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
-import {
-  SessionWorktreeLifecycleError,
-  synchronizeSessionWorktreeArchive,
-} from "../../sessions/session-worktree-lifecycle.js";
+import { restoreSessionWorktree } from "../../sessions/session-worktree-lifecycle.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
@@ -323,7 +321,7 @@ export function validateSessionPatchArchiveProjection(params: {
   );
 }
 
-/** Restore before opening admission; remove only after archive metadata is durable. */
+/** Restore before opening admission; durable archive metadata delegates removal to GC. */
 export async function prepareSessionPatchArchiveTransition(params: {
   archived: boolean;
   entry: SessionEntry;
@@ -333,7 +331,6 @@ export async function prepareSessionPatchArchiveTransition(params: {
   preparation?: SessionPatchArchivePreparation;
 }): Promise<{
   assertCommitAllowed: () => void;
-  afterCommit?: (entry: SessionEntry) => Promise<void>;
 }> {
   const placementTarget = {
     context: params.context,
@@ -355,35 +352,17 @@ export async function prepareSessionPatchArchiveTransition(params: {
       );
     }
   };
-  const synchronize = (entry: SessionEntry) =>
-    synchronizeSessionWorktreeArchive({
-      archived: params.archived,
-      entry,
-      scope: params.scope,
-      commitGuard,
-      assertRestoreAllowed: () => {
-        assertWorktreeMutationAllowed = prepareSessionWorkerPlacementMutationCheck(placementTarget);
-      },
-    });
-  // Carry the exact restored binding through the later metadata commit.
-  const assertCommitAllowed = params.archived ? commitGuard : await synchronize(params.entry);
   return {
-    assertCommitAllowed,
-    afterCommit:
-      params.archived && params.entry.worktree && !placement.cleanupPending
-        ? async (entry) => {
-            try {
-              // The durable archive row hands failed cleanup to GC. Keep the lifecycle
-              // fence and compare the exact committed projection, never a fresh successor.
-              assertWorktreeMutationAllowed =
-                prepareSessionWorkerPlacementMutationCheck(placementTarget);
-              await synchronize(entry);
-            } catch (error) {
-              sessionLog.warn(
-                `sessions.patch: archived worktree cleanup deferred for ${params.scope.sessionKey}: ${formatErrorMessage(error)}`,
-              );
-            }
-          }
-        : undefined,
+    assertCommitAllowed: params.archived
+      ? commitGuard
+      : await restoreSessionWorktree({
+          entry: params.entry,
+          scope: params.scope,
+          commitGuard,
+          assertRestoreAllowed: () => {
+            assertWorktreeMutationAllowed =
+              prepareSessionWorkerPlacementMutationCheck(placementTarget);
+          },
+        }),
   };
 }

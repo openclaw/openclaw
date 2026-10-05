@@ -150,14 +150,14 @@ suite.define(() => {
           const runId = (send.params as { idempotencyKey: string }).idempotencyKey;
           await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
           expect(await trigger.textContent()).not.toContain(activeModel.name);
-          expect(await trigger.getAttribute("aria-busy")).toBe("true");
-          expect(await trigger.locator(".btn__spinner").count()).toBe(1);
+          expect(await trigger.getAttribute("aria-busy")).toBe("false");
+          expect(await trigger.locator(".btn__spinner").count()).toBe(0);
           await page.screenshot({ path: `${artifactDir}/send-admission-model.png` });
           await gateway.resolveDeferred("chat.send");
           await page.getByRole("button", { name: "Stop generating" }).waitFor();
           await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
           expect(await trigger.textContent()).not.toContain("Model pending");
-          expect(await trigger.getAttribute("aria-busy")).toBe("true");
+          expect(await trigger.getAttribute("aria-busy")).toBe("false");
           await page.screenshot({ path: `${artifactDir}/pending-executing-model.png` });
           const startedAt = Date.now();
           for (const [index, model] of [selectedModel, activeModel].entries()) {

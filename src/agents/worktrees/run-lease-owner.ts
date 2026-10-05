@@ -3,6 +3,7 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { isLockOwnerDefinitelyStale } from "../../infra/stale-lock-file.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { WorktreeRemovalContentionError } from "./errors.js";
 
 type WorktreeLeaseDatabase = Pick<DB, "worktrees" | "state_leases">;
 export const WORKTREE_REMOVING_LEASE_KEY = "__removing__";
@@ -120,17 +121,6 @@ export function reapWorktreeRunLeasesInDatabase(db: DatabaseSync, scopes: string
   for (const scope of scopes) {
     // Recheck current owners under the transaction; the sweep grants no delete authority.
     collectLiveRunLeases(db, k, scope);
-  }
-}
-
-export class WorktreeRemovalContentionError extends Error {
-  constructor(
-    readonly kind: "busy" | "finalized",
-    message: string,
-    readonly blockedByRun?: { worktreeId: string; pid: number },
-  ) {
-    super(message);
-    this.name = "WorktreeRemovalContentionError";
   }
 }
 

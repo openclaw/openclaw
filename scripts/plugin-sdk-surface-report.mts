@@ -153,7 +153,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
   // deprecated while external harnesses migrate to required-capability V2 contracts.
   // +1: bounded structured-input compiler/executor for native harness protocol adapters.
-  "agent-harness": 2,
+  // +1: owner-approved async tool construction retains the deprecated synchronous factory.
+  "agent-harness": 3,
   // +1: owner-approved synchronous watched-session compatibility during async migration.
   // +1: owner-approved synchronous agent-end compatibility during async migration.
   "agent-harness-runtime": 12,
@@ -193,7 +194,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
       // +1: owner-approved async agent-end preparation with retained sync compatibility.
       // +1: process-keyed auth-profile store fingerprint for Codex pre-write identity checks.
-      3647,
+      // +1: owner-approved async coding-tool construction with retained sync compatibility.
+      // +4: executor controller, binding, context, and resolver.
+      // +1: required session cleanup failure preserves native ownership before host reset.
+      3653,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -205,7 +209,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
       // +1: owner-approved async agent-end preparation with retained sync compatibility.
       // +1: process-keyed auth-profile store fingerprint for Codex pre-write identity checks.
-      2112,
+      // +1: owner-approved async coding-tool construction with retained sync compatibility.
+      // +1: resolve the controller from the current invocation registry.
+      2114,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

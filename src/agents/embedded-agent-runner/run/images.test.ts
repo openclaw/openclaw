@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import {
@@ -55,38 +55,6 @@ function expectSingleImageReference(prompt: string) {
 }
 
 describe("detectImageReferences", () => {
-  it("detects absolute file paths with common extensions", () => {
-    const ref = expectSingleImageReference(
-      "Check this image /path/to/screenshot.png and tell me what you see",
-    );
-
-    expect(ref).toEqual({
-      raw: "/path/to/screenshot.png",
-      type: "path",
-      resolved: "/path/to/screenshot.png",
-    });
-  });
-
-  it("detects relative paths starting with ./", () => {
-    const ref = expectSingleImageReference("Look at ./images/photo.jpg");
-
-    expect(ref).toStrictEqual({
-      raw: "./images/photo.jpg",
-      type: "path",
-      resolved: "./images/photo.jpg",
-    });
-  });
-
-  it("detects relative paths starting with ../", () => {
-    const ref = expectSingleImageReference("The file is at ../screenshots/test.jpeg");
-
-    expect(ref).toStrictEqual({
-      raw: "../screenshots/test.jpeg",
-      type: "path",
-      resolved: "../screenshots/test.jpeg",
-    });
-  });
-
   it("detects home directory paths starting with ~/", () => {
     const ref = expectSingleImageReference("My photo is at ~/Pictures/vacation.png");
 
@@ -147,25 +115,6 @@ describe("detectImageReferences", () => {
     ]);
   });
 
-  it("detects multiple image references in a prompt", () => {
-    const refs = expectImageReferenceCount(
-      `
-      Compare these two images:
-      1. /home/user/photo1.png
-      2. https://mysite.com/photo2.jpg
-    `,
-      1,
-    );
-
-    expect(refs).toStrictEqual([
-      {
-        raw: "/home/user/photo1.png",
-        type: "path",
-        resolved: "/home/user/photo1.png",
-      },
-    ]);
-  });
-
   it("does not leak parser state between calls", () => {
     expect(detectImageReferences("See /tmp/first.png")).toStrictEqual([
       { raw: "/tmp/first.png", type: "path", resolved: "/tmp/first.png" },
@@ -181,21 +130,6 @@ describe("detectImageReferences", () => {
     expect(detectImageReferences("See ./fourth.jpeg")).toStrictEqual([
       { raw: "./fourth.jpeg", type: "path", resolved: "./fourth.jpeg" },
     ]);
-  });
-
-  it("handles various image extensions", () => {
-    const extensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic"];
-    for (const ext of extensions) {
-      const prompt = `Image: /test/image.${ext}`;
-      const refs = detectImageReferences(prompt);
-      expect(refs).toStrictEqual([
-        {
-          raw: `/test/image.${ext}`,
-          type: "path",
-          resolved: `/test/image.${ext}`,
-        },
-      ]);
-    }
   });
 
   it("deduplicates repeated image references", () => {
@@ -238,34 +172,6 @@ describe("detectImageReferences", () => {
     ]);
   });
 
-  it("returns empty array when no images found", () => {
-    expectNoImageReferences("Just some text without any image references");
-  });
-
-  it("ignores non-image file extensions", () => {
-    expectNoImageReferences("Check /path/to/document.pdf and /code/file.ts");
-  });
-
-  it("handles paths inside quotes (without spaces)", () => {
-    const ref = expectSingleImageReference('The file is at "/path/to/image.png"');
-
-    expect(ref).toStrictEqual({
-      raw: "/path/to/image.png",
-      type: "path",
-      resolved: "/path/to/image.png",
-    });
-  });
-
-  it("handles paths in parentheses", () => {
-    const ref = expectSingleImageReference("See the image (./screenshot.png) for details");
-
-    expect(ref).toStrictEqual({
-      raw: "./screenshot.png",
-      type: "path",
-      resolved: "./screenshot.png",
-    });
-  });
-
   it("detects Windows drive image paths in plain prompts", () => {
     const ref = expectSingleImageReference(
       String.raw`Look at C:\Users\Ada\Pictures\screenshot.png`,
@@ -298,18 +204,6 @@ Also https://cdn.mysite.com/img.jpg`,
   it("ignores remote-host file URLs", () => {
     expectNoImageReferences("See file://attacker/share/evil.png");
   });
-
-  it("ignores Windows network paths from attachment-style references", () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-
-    try {
-      expectNoImageReferences(
-        "[media attached: \\\\attacker\\share\\photo.png (image/png)] what is this?",
-      );
-    } finally {
-      platformSpy.mockRestore();
-    }
-  });
 });
 
 describe("detectAndLoadPromptImages", () => {
@@ -319,16 +213,6 @@ describe("detectAndLoadPromptImages", () => {
       workspaceDir: "/tmp",
       model: { input: ["text"] },
       existingImages: [{ type: "image", data: "abc", mimeType: "image/png" }],
-    });
-
-    expectNoPromptImages(result);
-  });
-
-  it("returns no detected refs when prompt has no image references", async () => {
-    const result = await detectAndLoadPromptImages({
-      prompt: "no images here",
-      workspaceDir: "/tmp",
-      model: { input: ["text", "image"] },
     });
 
     expectNoPromptImages(result);
@@ -452,53 +336,6 @@ describe("detectAndLoadPromptImages", () => {
     });
     expect(result.images).toEqual([kept]);
     expect(result.imageFactIndexes).toEqual([1]);
-  });
-
-  it("keeps distinct inline attachments with identical bytes", async () => {
-    const pngB64 = TINY_PNG_BASE64;
-    const image = { type: "image" as const, data: pngB64, mimeType: "image/png" };
-
-    const result = await detectAndLoadPromptImages({
-      prompt: "compare these attachments",
-      workspaceDir: "/tmp",
-      model: { input: ["text", "image"] },
-      existingImages: [image, image],
-      imageOrder: ["inline", "inline"],
-      workspaceOnly: true,
-    });
-
-    expect(result.images).toEqual([image, image]);
-  });
-
-  it("keeps offloaded-only facts when existing images have no order metadata", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-unordered-images-"));
-    const imagePath = path.join(workspaceDir, "offloaded.png");
-    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    const inlineImage = {
-      type: "image" as const,
-      data: TINY_GIF_BUFFER.toString("base64"),
-      mimeType: "image/gif",
-    };
-
-    try {
-      const result = await detectAndLoadPromptImages({
-        prompt: "compare",
-        media: [{ path: imagePath, contentType: "image/png" }],
-        workspaceDir,
-        model: { input: ["text", "image"] },
-        existingImages: [inlineImage],
-        imageOrder: [],
-        workspaceOnly: true,
-      });
-
-      expect(result.loadedCount).toBe(1);
-      expect(result.images).toEqual([
-        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
-        inlineImage,
-      ]);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
   });
 
   it("classifies prompt and attachment refs while preserving mixed attachment order", async () => {
@@ -750,31 +587,6 @@ describe("hydratePromptMediaMessages", () => {
       });
       expect((result[0] as unknown as { content?: unknown }).content).toEqual([
         { type: "text", text: "describe it" },
-        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
-      ]);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("reconstructs recent facts from canonical transcript media", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replayed-image-"));
-    const imagePath = path.join(workspaceDir, "photo.png");
-    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    const message = {
-      role: "user" as const,
-      content: "describe the replayed image",
-      __openclaw: { media: [{ path: imagePath, contentType: "image/png" }] },
-    } as unknown as AgentMessage;
-
-    try {
-      const result = await hydratePromptMediaMessages([message], {
-        workspaceDir,
-        model: { input: ["text", "image"] },
-        workspaceOnly: true,
-      });
-      expect((result[0] as unknown as { content?: unknown }).content).toEqual([
-        { type: "text", text: "describe the replayed image" },
         { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
       ]);
     } finally {

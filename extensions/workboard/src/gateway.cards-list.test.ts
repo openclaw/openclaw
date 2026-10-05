@@ -53,10 +53,31 @@ describe("workboard card list revisions", () => {
     expect((await list("default")).cards).toEqual([]);
     expect((await list()).cards).toEqual(first.cards);
 
+    store.announceChangeEpoch();
+    const announcement = changes.mock.calls[0]?.[0];
+    expect(announcement).toMatchObject({
+      epoch: first.revision.epoch,
+      cardsRevision: first.revision.revision,
+    });
+    expect(await list("ops")).toBe(first);
+    const unchanged = await listCards({ boardId: "ops", sinceRevision: first.revision });
+    expect(unchanged.mock.calls[0]?.[1]).toEqual({ unchanged: true, revision: first.revision });
+    const otherScope = await listCards({ sinceRevision: first.revision });
+    expect(otherScope.mock.calls[0]?.[1].cards).toEqual(first.cards);
+    changes.mockClear();
+
     await store.update(card.id, { title: "After" });
     expect(changes).toHaveBeenCalledOnce();
     const next = await list("ops");
     expect(next).not.toBe(first);
+    expect(next.revision.revision).toBeGreaterThan(first.revision.revision);
+    const changed = await listCards({ boardId: "ops", sinceRevision: first.revision });
+    expect(changed.mock.calls[0]?.[1]).toBe(next);
+    const previousEpoch = await listCards({
+      boardId: "ops",
+      sinceRevision: { ...next.revision, epoch: "retired" },
+    });
+    expect(previousEpoch.mock.calls[0]?.[1]).toBe(next);
     expect(next.cards[0].title).toBe("After");
     expect(first.cards[0].title).toBe("Before");
     expect(await list("ops")).toBe(next);

@@ -327,6 +327,10 @@ serveOwnedWorkerTasks(
           entries: readSessionEntryList(request),
         };
       }
+      if (request.kind === "session-store-projection") {
+        const { readSessionStoreProjection } = await import("./session-entry-read.worker.js");
+        return readSessionStoreProjection(request);
+      }
       if (request.kind === "session-store-summary") {
         const { readSessionStoreSummaryReadOnly } =
           await import("./session-accessor.sqlite-summary.js");

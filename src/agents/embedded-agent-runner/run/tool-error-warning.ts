@@ -10,8 +10,7 @@ function formatWarningToolLabel(
   metas: string[] | undefined,
   markdown: boolean,
 ): string {
-  // Progress prefixes are reserved internal traces. User warnings use the label
-  // and the same escaped details so every text-only display can retain them.
+  // Keep the tool label even for compact shell details so warnings name the failed tool.
   const { label } = resolveToolDisplay({ name: toolName });
   const { detail } = formatToolAggregateParts(toolName, metas, { markdown });
   return detail ? `${label}: ${detail}` : label;

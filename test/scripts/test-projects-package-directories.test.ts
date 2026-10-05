@@ -33,11 +33,14 @@ function selectedFiles(plans: ReturnType<typeof buildVitestRunPlans>): string[] 
 }
 
 describe("package directory targets", () => {
-  it("routes mixed package owners once beside an explicit boundary", () => {
+  it("routes mixed package owners once beside explicit boundary and E2E leaves", () => {
     const ordinary = "packages/example/src/value.test.ts";
     const e2e = "packages/gateway-client/src/example.e2e.test.ts";
     const files = [ordinary, fast, worker, markdown, gateway, protocol, boundary, e2e];
     const cwd = fixture(files);
+    expect(selectedFiles(buildVitestRunPlans(["packages", boundary], cwd))).toEqual(
+      files.filter((file) => file !== e2e).toSorted(),
+    );
     const plans = buildVitestRunPlans(["packages", gateway, boundary, e2e], cwd);
 
     expect(selectedFiles(plans)).toEqual(files.toSorted());

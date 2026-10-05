@@ -30,99 +30,48 @@ describe("chat transcript scroll ownership", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("does not follow a captured end anchor while end anchoring is suspended", () => {
+  it.each([
+    { name: "suspended following", suspended: true, steps: [[1200, 600, true]] },
+    { name: "same-range native movement", steps: [[1000, 592]] },
+    { name: "native movement after growth", steps: [[1100, 592, false]] },
+    { name: "cancelled reader anchor", cancelled: true, steps: [[1200, 600]] },
+    {
+      name: "native end clamp",
+      steps: [
+        [1000, 400],
+        [750, 350, false],
+        [950, 350],
+      ],
+    },
+  ] satisfies {
+    name: string;
+    suspended?: boolean;
+    cancelled?: boolean;
+    steps: [height: number, offset: number, resizeAnchor?: boolean][];
+  }[])("does not reacquire following after $name", ({ suspended, cancelled, steps }) => {
     const element = document.createElement("div");
+    let scrollHeight = 1000;
     Object.defineProperties(element, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { value: 400 },
+      scrollHeight: { get: () => scrollHeight },
     });
     element.scrollTop = 600;
     const anchor = new TranscriptEndAnchor();
     anchor.capture(element);
-    Object.defineProperty(element, "scrollHeight", { configurable: true, value: 1200 });
-    expect(anchor.isResizeAnchor(element)).toBe(true);
+    if (cancelled) {
+      anchor.clear();
+    }
     const follow = vi.fn();
-
-    anchor.reconcile(element, true, true, follow);
-
-    expect(follow).not.toHaveBeenCalled();
-  });
-
-  it("does not override native movement with an unchanged scroll range", () => {
-    const element = document.createElement("div");
-    Object.defineProperties(element, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1000 },
-    });
-    element.scrollTop = 600;
-    const anchor = new TranscriptEndAnchor();
-    anchor.capture(element);
-    element.scrollTop -= 8;
-    const follow = vi.fn();
-
-    anchor.reconcile(element, true, false, follow);
-
-    expect(follow).not.toHaveBeenCalled();
-    expect(element.scrollTop).toBe(592);
-  });
-
-  it("preserves native movement after row growth changes the scroll range", () => {
-    const element = document.createElement("div");
-    Object.defineProperties(element, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1000 },
-    });
-    element.scrollTop = 600;
-    const anchor = new TranscriptEndAnchor();
-    anchor.capture(element);
-    Object.defineProperty(element, "scrollHeight", { configurable: true, value: 1100 });
-    element.scrollTop -= 8;
-    const movedPosition = element.scrollTop;
-    const follow = vi.fn();
-
-    expect(anchor.isResizeAnchor(element)).toBe(false);
-    anchor.reconcile(element, true, false, follow);
-
-    expect(follow).not.toHaveBeenCalled();
-    expect(element.scrollTop).toBe(movedPosition);
-  });
-
-  it("does not reacquire following from a cancelled reader anchor", () => {
-    const element = document.createElement("div");
-    Object.defineProperties(element, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1000 },
-    });
-    element.scrollTop = 600;
-    const anchor = new TranscriptEndAnchor();
-    anchor.capture(element);
-    // Wheel/keyboard input can precede its native offset change and the Lit update.
-    anchor.clear();
-    Object.defineProperty(element, "scrollHeight", { configurable: true, value: 1200 });
-    const follow = vi.fn();
-    anchor.reconcile(element, true, false, follow);
-    expect(follow).not.toHaveBeenCalled();
-    expect(element.scrollTop).toBe(600);
-  });
-
-  it("does not treat a native end clamp as an observed follower", () => {
-    const element = document.createElement("div");
-    Object.defineProperties(element, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1000 },
-    });
-    element.scrollTop = 600;
-    const anchor = new TranscriptEndAnchor();
-    anchor.capture(element);
-    element.scrollTop = 400;
-    anchor.reconcile(element, true, false, vi.fn());
-    Object.defineProperty(element, "scrollHeight", { configurable: true, value: 750 });
-    element.scrollTop = 350;
-    expect(anchor.isResizeAnchor(element)).toBe(false);
-    Object.defineProperty(element, "scrollHeight", { configurable: true, value: 950 });
-    const follow = vi.fn();
-    anchor.reconcile(element, true, false, follow);
-    expect(follow).not.toHaveBeenCalled();
+    for (const [height, offset, resizeAnchor] of steps) {
+      scrollHeight = height;
+      element.scrollTop = offset;
+      if (resizeAnchor !== undefined) {
+        expect(anchor.isResizeAnchor(element)).toBe(resizeAnchor);
+      }
+      anchor.reconcile(element, true, suspended ?? false, follow);
+      expect(follow).not.toHaveBeenCalled();
+      expect(element.scrollTop).toBe(offset);
+    }
   });
 
   it.each(["resize clamp", "native return"] as const)(

@@ -389,7 +389,7 @@ describe("Workshop draft-only review through the real provider and tool owners",
             if (failedReview) {
               await expect(run).rejects.toThrow(
                 scenario === "failed"
-                  ? "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI."
+                  ? "LLM request rejected: Controlled provider rejection"
                   : "Tool Call failed",
               );
             } else {

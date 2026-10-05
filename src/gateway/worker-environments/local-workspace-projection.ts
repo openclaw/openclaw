@@ -9,7 +9,10 @@ import {
   getRegistryWorktree,
   findLiveRegistryWorktreeByPath,
 } from "../../agents/worktrees/registry.js";
-import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import type {
+  ManagedWorktreeRecord,
+  WorktreeWorkerAuthority,
+} from "../../agents/worktrees/types.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveStateDir } from "../../config/state-dir.js";
@@ -51,6 +54,7 @@ type LocalWorkspaceCustody = {
   prepareArchive: (snapshot: string) => Promise<void>;
   canonicalPaths: () => Promise<Set<string>>;
   assertCurrent: () => void;
+  workerAuthority: WorktreeWorkerAuthority;
 };
 
 /** Publication and lifecycle callers retain their own authority while joining local settlement. */
@@ -59,14 +63,14 @@ export async function withSettledLocalWorkspace<T>(
     worktree: ManagedWorktreeRecord;
     env?: NodeJS.ProcessEnv;
     assertCurrent?: () => void;
+    workerAuthority?: WorktreeWorkerAuthority;
     retireRuntime?: boolean;
     restoreSnapshot?: boolean;
     finishRestore?: boolean;
   },
   operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
 ): Promise<T> {
-  const store = localWorkspaceStore(params.env);
-  const row = store.get(params.worktree.id);
+  const row = localWorkspaceStore(params.env).get(params.worktree.id);
   if (!row) {
     return await operation();
   }
@@ -78,6 +82,22 @@ export async function withSettledLocalWorkspace<T>(
     sessionKey: row.session_key,
     sessionId: row.session_id,
     lifecycleRevision: row.lifecycle_revision,
+    workerAuthority: {
+      ...params.workerAuthority,
+      assertCurrent: params.workerAuthority
+        ? params.workerAuthority.assertCurrent
+        : params.assertCurrent,
+      predicates: [
+        ...(params.workerAuthority?.predicates ?? []),
+        {
+          kind: "projection",
+          id: worktree.id,
+          ownerId: row.session_key,
+          path: worktree.path,
+          repoRoot: worktree.repoRoot,
+        },
+      ],
+    },
     assertCurrent: () => {
       params.assertCurrent?.();
       const current = getRegistryWorktree(params.env ?? process.env, worktree.id);
@@ -114,6 +134,7 @@ export async function withSettledLocalWorkspace<T>(
             prepareArchive: state.prepareArchive,
             canonicalPaths: state.canonicalPaths,
             assertCurrent: state.current,
+            workerAuthority: state.workerAuthority,
           }
         : undefined,
     );
@@ -218,7 +239,23 @@ export async function withLocalWorkspaceProjection<T>(
           assertCurrent,
         );
       }
-      const operations = projectionOperations({ ...owner, assertCurrent }, lease.signal);
+      const operations = projectionOperations(
+        {
+          ...owner,
+          assertCurrent,
+          workerAuthority: {
+            ...owner.workerAuthority,
+            assertCurrent: () => {
+              lease.assertOwned();
+              (owner.workerAuthority
+                ? owner.workerAuthority.assertCurrent
+                : owner.assertCurrent)?.();
+            },
+          },
+        },
+        lease.signal,
+        previous,
+      );
       const { quiesceLocalWorkspace, parseLocalWorkspacePausedRuntimes } =
         await import("../../agents/sandbox/local-workspace-quiescence.js");
       const quiescence =
@@ -245,14 +282,18 @@ export async function withLocalWorkspaceProjection<T>(
   );
 }
 
-function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
+function projectionOperations(
+  owner: LocalWorkspaceOwner,
+  signal: AbortSignal,
+  initialRow: LocalWorkspaceProjection | undefined,
+) {
   const store = localWorkspaceStore(owner.env);
-  let row = store.get(owner.worktree.id);
-  const current = () => {
+  let row = initialRow;
+  const selectCurrent = (authority: LocalWorkspaceOwner) => {
     if (!row) {
       throw new Error("Local workspace binding is missing");
     }
-    assertBinding(row, owner);
+    assertBinding(row, authority);
     if (
       row.projection_path !== projectionPath(owner) ||
       store.revision(row.worktree_id) !== row.revision
@@ -261,9 +302,14 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
     }
     return row;
   };
+  const current = () => selectCurrent(owner);
+  const workerAuthority: WorktreeWorkerAuthority = {
+    ...owner.workerAuthority,
+    assertCurrent: () =>
+      selectCurrent({ ...owner, assertCurrent: () => owner.workerAuthority?.assertCurrent?.() }),
+  };
   const update = (patch: Parameters<typeof store.update>[1]) => {
     row = store.update(current(), patch, current);
-    return row;
   };
   const sourcePath = (target: Direction) =>
     target === "canonical" ? current().projection_path : owner.worktree.path;
@@ -551,6 +597,7 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
   };
   return {
     current,
+    workerAuthority,
     canonicalPaths,
     prepare,
     reuse: async () => (row?.baseline_ref ? await prepare() : undefined),

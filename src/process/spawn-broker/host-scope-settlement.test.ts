@@ -281,4 +281,58 @@ describe("broker host scope settlement", () => {
     expect(child.notStarted).toBe(true);
     expect(native.lostChildCleanup).not.toHaveBeenCalled();
   });
+
+  it("retires undelivered guarded preparations and refuses a late orphan", async () => {
+    const fixture = brokerFixture();
+    let orphanId: number | undefined;
+    let initiations = 0;
+    // Exceed the broker's request capacity without delivering any preparation to its peer.
+    for (let attempt = 0; attempt < 257; attempt++) {
+      fixture.send.mockImplementationOnce((message, ...args) => {
+        if (
+          message &&
+          typeof message === "object" &&
+          "type" in message &&
+          message.type === "prepare-spawn" &&
+          "id" in message &&
+          typeof message.id === "number"
+        ) {
+          orphanId ??= message.id;
+        }
+        args.find((arg) => typeof arg === "function")?.(new Error("synthetic delivery refusal"));
+        return false;
+      });
+      const child = fixture.host.spawn("synthetic-command", [], { stdio: "ignore" }, (launch) => {
+        initiations++;
+        return launch();
+      });
+      await expect(child.ready(), `preparation ${attempt}`).rejects.toThrow(
+        "Spawn broker request delivery failed",
+      );
+      await child.waitForClose();
+    }
+    if (orphanId === undefined) {
+      throw new Error("Expected a transmitted preparation identity");
+    }
+    const refusal = createDeferredCore<unknown>();
+    fixture.send.mockImplementationOnce((message, ...args) => {
+      refusal.resolve(message);
+      args.find((arg) => typeof arg === "function")?.(null);
+      return true;
+    });
+    fixture.receive({ type: "prepared", id: orphanId });
+    await expect(refusal.promise).resolves.toEqual({
+      type: "launch",
+      id: orphanId,
+      allowed: false,
+    });
+
+    const recovered = fixture.host.spawn("synthetic-command", [], { stdio: "ignore" });
+    const result = expect(recovered.ready()).rejects.toThrow("synthetic native refusal");
+    const id = await fixture.requestSent;
+    fixture.receive({ type: "error", id, error: { message: "synthetic native refusal" } });
+    await result;
+    await recovered.waitForClose();
+    expect(initiations).toBe(0);
+  });
 });

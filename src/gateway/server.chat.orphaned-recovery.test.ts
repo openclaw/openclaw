@@ -133,12 +133,14 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         ],
         restartRecoveryDeliveryRunId: sourceRunId,
         restartRecoveryDeliverySourceRunId: sourceRunId,
-        restartRecoveryDeliveryRequestFingerprint: createRestartSafeChatRequest({
-          cfg,
-          eligible: true,
-          message: priorMessage,
-          senderIsOwner: true,
-        })?.fingerprint,
+        restartRecoveryDeliveryRequestFingerprint: (
+          await createRestartSafeChatRequest({
+            cfg,
+            eligible: true,
+            message: priorMessage,
+            senderIsOwner: true,
+          })
+        )?.fingerprint,
         restartRecoverySourceIngress: "control-ui",
       });
       await appendTranscriptMessage(

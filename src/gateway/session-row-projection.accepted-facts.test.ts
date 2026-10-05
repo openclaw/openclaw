@@ -23,6 +23,7 @@ import {
   readSessionTranscriptWatermark,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
 import * as canonical from "../config/sessions/session-canonical-key.js";
 import {
   addSessionMember,
@@ -147,6 +148,8 @@ async function withAcceptedSuffix(
     let reading: Promise<void> | undefined;
     try {
       await projection.ensureMaterialized();
+      // Cold projection admission is worker-owned; explicitly admit the native continuation fixture.
+      listSessionEntriesReadOnly({ agentId: "main" });
       const query = { agentId: "main", key: keys[1]! };
       const previous = await withReadySessionRows(
         projection,

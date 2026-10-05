@@ -338,7 +338,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.input.includeRunId === "string")) ||
       input.command.type === "fleet.list" ||
       ((input.command.type === "operatorApprovals.history" ||
-        input.command.type === "operatorApprovals.listCronGrants") &&
+        input.command.type === "operatorApprovals.listCronGrants" ||
+        input.command.type === "operatorApprovals.validateCronGrant") &&
         isRecord(input.command.input)) ||
       isTuiLastSessionReadCommand(input.command) ||
       input.command.type === "nodeHost.config" ||
@@ -360,6 +361,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.profileIds === undefined || isStringArray(input.command.profileIds))) ||
       isWorkspaceJournalReadCommand(input.command) ||
       input.command.type === "workers.placementRecoveryCandidates" ||
+      input.command.type === "workers.placementPreservation" ||
       (input.command.type === "workers.placementPendingResults" &&
         (input.command.sessionId === undefined || typeof input.command.sessionId === "string")) ||
       (input.command.type === "workers.placementProjection" &&

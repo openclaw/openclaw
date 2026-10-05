@@ -466,11 +466,13 @@ async function createWorkerSessionToolTestFixture(
       prepare: async () => ({
         policy: prepareCoreToolPolicy({}),
         presentation: createToolSurfacePresentationForTest(),
-        tools: createWorkerGatewayTools({
-          ...executorParams,
-          ...runtimeOptions,
-          identity: workerIdentity,
-        }).filter((tool) => placements.isWorkerTurnToolAuthorized(claim, tool.name)),
+        tools: (
+          await createWorkerGatewayTools({
+            ...executorParams,
+            ...runtimeOptions,
+            identity: workerIdentity,
+          })
+        ).filter((tool) => placements.isWorkerTurnToolAuthorized(claim, tool.name)),
       }),
     });
     bindWorkerTurnCapabilities(placements, claim, { toolSurface: runtime });

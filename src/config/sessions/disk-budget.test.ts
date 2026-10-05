@@ -179,7 +179,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: {
           maxDiskBytes: 150,
           highWaterBytes: 100,
@@ -479,7 +478,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: {
           maxDiskBytes: 1,
           highWaterBytes: 1,
@@ -514,7 +512,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: "agent:main:active",
         maintenance: {
           maxDiskBytes: 1,
           highWaterBytes: 1,
@@ -548,7 +545,6 @@ describe("enforceSessionDiskBudget", () => {
         const result = await enforceSessionDiskBudget({
           store,
           storePath,
-          activeSessionKey: "agent:main:active",
           maintenance: {
             maxDiskBytes: 1,
             highWaterBytes: 1,
@@ -612,7 +608,7 @@ describe("enforceSessionDiskBudget", () => {
       );
       const referencedCheckpointPath = path.join(
         dir,
-        "keep.checkpoint.22222222-2222-4222-8222-222222222222.jsonl",
+        "..keep.checkpoint.22222222-2222-4222-8222-222222222222.jsonl",
       );
       const referencedPostCompactionPath = path.join(dir, "keep-compacted.jsonl");
       // Historical metadata is deliberately outside the current session model.
@@ -641,6 +637,7 @@ describe("enforceSessionDiskBudget", () => {
       await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
       await fs.writeFile(checkpointPath, "c".repeat(5000), "utf-8");
       await fs.writeFile(referencedCheckpointPath, "r".repeat(260), "utf-8");
+      await fs.utimes(referencedCheckpointPath, new Date(0), new Date(0));
       await fs.writeFile(referencedPostCompactionPath, "p".repeat(260), "utf-8");
 
       const result = await enforceSessionDiskBudget({
@@ -752,7 +749,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: {
           maxDiskBytes: 1000,
           highWaterBytes: 500,
@@ -795,7 +791,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
         warnOnly: false,
         commitEvictedIndex: async () => {
@@ -847,7 +842,6 @@ describe("enforceSessionDiskBudget", () => {
         enforceSessionDiskBudget({
           store,
           storePath,
-          activeSessionKey: activeKey,
           maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
           warnOnly: false,
           commitEvictedIndex: async () => {
@@ -881,7 +875,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
         warnOnly: false,
       });

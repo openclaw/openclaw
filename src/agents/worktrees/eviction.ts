@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import { setImmediate as yieldTurn } from "node:timers/promises";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import type { WorktreeAllocationGuard } from "./allocation.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
+import { WorktreeRemovalContentionError } from "./errors.js";
 import type { WorktreeEvictionReason } from "./git-worktree-operations.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 import {
@@ -14,14 +16,18 @@ import {
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
 } from "./registry.js";
-import { WorktreeRemovalContentionError } from "./run-lease-owner.js";
+import { withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import {
   abortWorktreeRemoval,
   claimWorktreeRemoval,
   finalizeWorktreeRemoval,
 } from "./run-lease.js";
 import { captureManagedWorktreeSnapshot } from "./snapshot-host.js";
-import type { ManagedWorktreeRecord } from "./types.js";
+import type {
+  ManagedWorktreeRecord,
+  WorktreeRegistryPredicate,
+  WorktreeWorkerAuthority,
+} from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -34,9 +40,28 @@ export async function evictManagedWorktree(params: {
   getConfig: () => OpenClawConfig;
   now: () => number;
 }): Promise<WorktreeEvictionReason | "dirty-purged"> {
+  return withWorktreeRunEnd(params.env, () => evictAcceptedWorktree(params));
+}
+
+async function evictAcceptedWorktree(
+  params: Parameters<typeof evictManagedWorktree>[0],
+): Promise<WorktreeEvictionReason | "dirty-purged"> {
   const { env, record, guard } = params;
+  const authority = guard.workerAuthority;
+  if (!authority?.leaseSet) {
+    throw new Error("Worktree eviction requires the allocation lease's worker authority");
+  }
   const token = randomUUID();
   const dependencies: string[] = [];
+  const claimsPredicate = (): WorktreeRegistryPredicate => ({
+    kind: "removal-claims",
+    ids: [record.id, ...dependencies],
+    token,
+  });
+  const workerAuthority: WorktreeWorkerAuthority = {
+    ...authority,
+    predicates: [...(authority.predicates ?? []), { kind: "binding", record }],
+  };
   let assertClaims = createWorktreeRemovalClaimsGuard(env, [record.id], token);
   const assertCurrent = () => {
     guard.commitGuard();
@@ -53,7 +78,12 @@ export async function evictManagedWorktree(params: {
     }
     assertClaims();
   };
-  claimWorktreeRemoval(env, { worktreeId: record.id, token, assertCurrent: guard.commitGuard });
+  await claimWorktreeRemoval(env, {
+    worktreeId: record.id,
+    token,
+    assertCurrent: guard.commitGuard,
+    workerAuthority,
+  });
   let outcome:
     | { ok: true; value: WorktreeEvictionReason | "dirty-purged" }
     | { ok: false; error: unknown };
@@ -62,8 +92,13 @@ export async function evictManagedWorktree(params: {
     const { withSettledLocalWorkspace } =
       await import("../../gateway/worker-environments/local-workspace-projection.js");
     const value = await withSettledLocalWorkspace<WorktreeEvictionReason | "dirty-purged">(
-      { worktree: record, env, assertCurrent, retireRuntime: true },
+      { worktree: record, env, assertCurrent, workerAuthority, retireRuntime: true },
       async (accepted) => {
+        const ownerAuthority = accepted?.workerAuthority ?? workerAuthority;
+        const heldClaimsAuthority = (): WorktreeWorkerAuthority => ({
+          ...ownerAuthority,
+          predicates: [...(ownerAuthority.predicates ?? []), claimsPredicate()],
+        });
         const beforeRun = () => {
           assertCurrent();
           accepted?.assertCurrent();
@@ -91,6 +126,8 @@ export async function evictManagedWorktree(params: {
                 git,
                 signal,
                 assertCurrent: beforeRun,
+                workerAuthority: heldClaimsAuthority(),
+                requireDiskSpace: guard.requireDiskSpace,
               });
               snapshotRef = snapshot.snapshotRef;
               beforeRun();
@@ -125,6 +162,9 @@ export async function evictManagedWorktree(params: {
             },
           );
         } catch (error) {
+          if (hasSqliteWorkerOutcomeUnknown(error)) {
+            throw error;
+          }
           beforeRun();
           snapshotError = String(error);
         }
@@ -137,13 +177,25 @@ export async function evictManagedWorktree(params: {
           guard.rollbackGuard();
           assertClaims();
         };
+        let deletionAdmitted = false;
+        const assertEffectCurrent = () => (deletionAdmitted ? settleGuard() : beforeRun());
         const fenceDependencies = async (ids: string[]) => {
           for (const id of ids) {
             if (id === record.id || !liveIds.has(id)) {
               throw new Error("Worktree dependency is outside the admitted inventory");
             }
             try {
-              claimWorktreeRemoval(env, { worktreeId: id, token, assertCurrent: beforeRun });
+              await claimWorktreeRemoval(env, {
+                worktreeId: id,
+                token,
+                assertCurrent: assertEffectCurrent,
+                workerAuthority: deletionAdmitted
+                  ? {
+                      leaseSet: authority.leaseSet,
+                      predicates: [{ kind: "binding", record }, claimsPredicate()],
+                    }
+                  : heldClaimsAuthority(),
+              });
             } catch (error) {
               if (error instanceof WorktreeRemovalContentionError && error.blockedByRun) {
                 log.warn(
@@ -153,21 +205,24 @@ export async function evictManagedWorktree(params: {
               throw error;
             }
             dependencies.push(id);
+            assertClaims = createWorktreeRemovalClaimsGuard(
+              env,
+              [record.id, ...dependencies],
+              token,
+            );
             if (dependencies.length % 8 === 0) {
               await yieldTurn();
             }
           }
-          assertClaims = createWorktreeRemovalClaimsGuard(env, [record.id, ...dependencies], token);
-          beforeRun();
+          assertEffectCurrent();
         };
-        let deletionAdmitted = false;
         await runOutsideCommandProcessScope(() =>
           runGitWorkerOperation(
             { type: "worktree.eviction-purge", input: { record, live } },
             {
-              assertCurrent: () => (deletionAdmitted ? settleGuard() : beforeRun()),
+              assertCurrent: assertEffectCurrent,
               onEffect: async (effect) => {
-                beforeRun();
+                assertEffectCurrent();
                 if (effect.type === "worktree.eviction-fence") {
                   await fenceDependencies(effect.input.worktreeIds);
                 } else if (effect.type === "worktree.eviction-admit") {
@@ -178,13 +233,19 @@ export async function evictManagedWorktree(params: {
           ),
         );
         settleGuard();
+        const removedAt = params.now();
         updateRegistryWorktree(
           env,
           record.id,
-          { removedAt: params.now(), snapshotRef },
+          { removedAt, snapshotRef },
           { assertCurrent: settleGuard },
         );
-        finalizeWorktreeRemoval(env, record.id);
+        await finalizeWorktreeRemoval(
+          env,
+          { worktreeId: record.id, lastActiveAt: record.lastActiveAt, removedAt, token },
+          // Deletion already holds custody; caller cancellation cannot abandon its settlement.
+          { leaseSet: authority.leaseSet, predicates: [claimsPredicate()] },
+        );
         const reason = dirty || snapshotError ? "dirty-purged" : params.reason;
         log.warn(
           `Worktree evicted: ${record.id}; reason ${reason}; selected ${params.reason}; ${snapshotRef ? `snapshot ${snapshotRef}` : "no recovery snapshot"}${snapshotError ? `; snapshot failed: ${snapshotError}` : ""}`,
@@ -194,14 +255,20 @@ export async function evictManagedWorktree(params: {
     );
     outcome = { ok: true, value };
   } catch (error) {
+    if (hasSqliteWorkerOutcomeUnknown(error)) {
+      throw error;
+    }
     outcome = { ok: false, error };
   }
   const errors: unknown[] = outcome.ok ? [] : [outcome.error];
   for (const [index, id] of [...dependencies, record.id].entries()) {
     try {
-      abortWorktreeRemoval(env, id, token);
+      await abortWorktreeRemoval(env, id, token);
     } catch (error) {
       errors.push(error);
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        break;
+      }
     }
     if ((index + 1) % 8 === 0) {
       await yieldTurn();

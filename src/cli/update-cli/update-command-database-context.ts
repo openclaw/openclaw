@@ -40,6 +40,7 @@ type UpdateManagedServiceInspectionParams = {
   managedServiceRoot?: string;
   expectedServices?: ReadonlyMap<string, PreManagedServiceStop>;
   expectedForeground?: true;
+  assertCurrent?: () => void;
   handoffFromGateway?: Parameters<
     typeof maybeStopManagedServiceBeforeMutableUpdate
   >[0]["handoffFromGateway"];
@@ -68,6 +69,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       timeoutMs: params.timeoutMs,
       phase: "inspect",
       expectedService: params.expectedServices?.get(root),
+      assertCurrent: params.assertCurrent,
       handoffFromGateway: params.handoffFromGateway,
     }).catch((error: unknown) => {
       if (hasCommandProcessCleanupError(error)) {

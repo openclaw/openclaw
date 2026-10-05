@@ -235,22 +235,18 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
   tools?: Record<string, unknown> | null;
   inheritedTools?: Record<string, unknown> | null;
   pathLabel: string;
-  inheritedPathLabel?: string;
-  includeInheritedSections?: boolean;
-  inheritedProfile?: string;
-  inheritedAlsoAllow?: string[];
 }): string[] {
   const tools = params.tools;
   const profile =
-    (typeof tools?.profile === "string" ? tools.profile : undefined) ?? params.inheritedProfile;
-  if (!profile) {
+    typeof tools?.profile === "string" ? tools.profile : params.inheritedTools?.profile;
+  if (typeof profile !== "string" || !profile) {
     return [];
   }
   const configuredEntries = [
-    ...(params.includeInheritedSections && params.inheritedTools && params.inheritedPathLabel
+    ...(tools !== undefined && typeof tools?.profile !== "string" && params.inheritedTools
       ? collectConfiguredToolSectionGrantEntries({
           tools: params.inheritedTools,
-          pathLabel: params.inheritedPathLabel,
+          pathLabel: "tools",
         })
       : []),
     ...collectConfiguredToolSectionGrantEntries({ tools, pathLabel: params.pathLabel }),
@@ -258,7 +254,9 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
   if (configuredEntries.length === 0) {
     return [];
   }
-  const alsoAllow = readPreviewStringList(tools?.alsoAllow) ?? params.inheritedAlsoAllow;
+  const alsoAllow =
+    readPreviewStringList(tools?.alsoAllow) ??
+    readPreviewStringList(params.inheritedTools?.alsoAllow);
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
   return collectProfileConfiguredSectionWarnings({
     configuredEntries,
@@ -331,7 +329,6 @@ function resolveInheritedProviderPolicyForPreview(
 
 function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
   inheritedTools?: Record<string, unknown> | null;
-  inheritedPathLabel: string;
   overridingTools?: Record<string, unknown> | null;
   overridingPathLabel: string;
   configuredEntries: ConfiguredToolSectionGrantEntry[];
@@ -386,7 +383,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
       configuredEntries: params.configuredEntries,
       profilePolicy,
       profile,
-      profilePath: `${params.inheritedPathLabel}.byProvider.${providerKey}`,
+      profilePath: `tools.byProvider.${providerKey}`,
       advicePath: `${params.overridingPathLabel}.byProvider.${overridingEntry?.key ?? providerKey}`,
       profileKind: "inherited provider",
       hasAllow: hasNonEmptyStringList(overridingPolicy?.allow),
@@ -398,8 +395,6 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
 function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
-  const globalAlsoAllow = readPreviewStringList(globalTools?.alsoAllow);
-  const globalProfile = typeof globalTools?.profile === "string" ? globalTools.profile : undefined;
   const globalConfiguredEntries = collectConfiguredToolSectionGrantEntries({
     tools: globalTools,
     pathLabel: "tools",
@@ -423,8 +418,6 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
     const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
     const modelRef = resolveDoctorPrimaryModelRef(cfg, agentConfig?.model);
     const agentPath = `agents.${source.kind === "entries" ? `entries.${source.key}` : `list[${source.index}]`}.tools`;
-    const includeInheritedSections =
-      agentTools !== undefined && typeof agentTools.profile !== "string";
     const ownAgentConfiguredEntries = collectConfiguredToolSectionGrantEntries({
       tools: agentTools,
       pathLabel: agentPath,
@@ -435,10 +428,6 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
         tools: agentTools,
         inheritedTools: globalTools,
         pathLabel: agentPath,
-        inheritedPathLabel: "tools",
-        includeInheritedSections,
-        inheritedProfile: globalProfile,
-        inheritedAlsoAllow: globalAlsoAllow,
       }),
       ...collectByProviderConfiguredToolSectionWarnings({
         tools: agentTools,
@@ -448,7 +437,6 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
       }),
       ...collectInheritedByProviderConfiguredToolSectionWarnings({
         inheritedTools: globalTools,
-        inheritedPathLabel: "tools",
         overridingTools: agentTools,
         overridingPathLabel: agentPath,
         configuredEntries: ownAgentConfiguredEntries,

@@ -64,6 +64,7 @@ it.each([
     sampler.sample(42);
   }
   if (scenario === "exit-race") {
+    expect(read).toHaveBeenCalledTimes(5);
     expect(sampler.result()).toMatchObject({
       cpuMs: 150,
       peakRssBytes: 1048576,
@@ -71,6 +72,7 @@ it.each([
       accuracy: "sampled-lower-bound",
     });
   } else if (scenario === "missing-rss") {
+    expect(read).toHaveBeenCalledTimes(2);
     expect(sampler.result()).toMatchObject({
       cpuMs: 150,
       peakRssBytes: null,
@@ -191,6 +193,7 @@ describe("managed compiler evidence", () => {
         expect(onSignal).toHaveBeenCalledWith(signal);
         expect(evidence().outcome).toMatchObject({
           exitCode,
+          errorCode: null,
           exitSignal: signal,
           forwardedSignal: signal,
         });
@@ -198,7 +201,7 @@ describe("managed compiler evidence", () => {
       }
       expect(onReady).toHaveBeenCalledOnce();
       expect(evidence()).toMatchObject({
-        outcome: { exitCode: 2, errorCode: null },
+        outcome: { exitCode: 2, errorCode: null, exitSignal: null, forwardedSignal: null },
         command: { args: command.args },
         pprofDir: "profiles",
         graph: { totalFiles: 2, rootFiles: 1, transitiveFiles: 1 },

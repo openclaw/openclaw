@@ -359,17 +359,13 @@ describe("buildLineMessageContext", () => {
 
   it("keeps inbound log previews UTF-16 well-formed at the limit", async () => {
     const timestamp = 1_700_000_000_000;
-    const logCfg: OpenClawConfig = {
-      ...cfg,
-      agents: { defaults: { envelopeTimestamp: "off" } },
-    };
     await buildMessageContext(
       createMessageEvent({ type: "user", userId: "user-1" }, {
         timestamp,
         message: { id: "baseline", type: "text", text: "BODY_MARKER" },
       } as Partial<MessageEvent>),
       {
-        cfg: logCfg,
+        cfg,
       },
     );
     // Identity lookups log their own misses, so select the preview line by shape
@@ -390,7 +386,7 @@ describe("buildLineMessageContext", () => {
         message: { id: "1", type: "text", text: rawBody },
       } as Partial<MessageEvent>),
       {
-        cfg: logCfg,
+        cfg,
       },
     );
     const expectedPreview = `${baselinePreview.slice(0, markerIndex)}${"x".repeat(199 - markerIndex)}`;

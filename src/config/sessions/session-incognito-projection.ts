@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
+import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import type { IncognitoComputeTarget } from "./session-incognito-compute-contract.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type { TranscriptProjectionPublicationOperations } from "./session-transcript-projection-publication.worker.js";
@@ -9,7 +9,7 @@ import type { ProjectionPublisher } from "./session-transcript-projection-writer
 import type { MemoryTranscriptProjectionFrame } from "./session-transcript-reconcile-memory.js";
 
 export type IncognitoProjectionBinding = {
-  actor: IncognitoAgentDatabaseExecution;
+  actor: IncognitoSessionActor;
   authority: IncognitoSessionAuthority;
   target: IncognitoComputeTarget;
 };

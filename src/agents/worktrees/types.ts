@@ -1,3 +1,6 @@
+import type { OpenClawStateAsyncLeaseContext } from "../../state/openclaw-state-lease-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+
 export type ManagedWorktreeOwnerKind = "manual" | "workboard" | "session";
 
 export type ManagedWorktreeRunEndCleanupOutcome =
@@ -39,8 +42,51 @@ export type ManagedWorktreeRecord = {
   gcProtection?: string;
 };
 
+export type WorktreeRegistryPredicate =
+  | { kind: "activity"; id: string; lastActiveAt: number }
+  | { kind: "session-owner"; id: string; sessionKey: string }
+  | { kind: "record" | "binding" | "exact-snapshot"; record: ManagedWorktreeRecord }
+  | {
+      kind: "exact-owner";
+      record: Pick<
+        ManagedWorktreeRecord,
+        | "id"
+        | "ownerKind"
+        | "ownerId"
+        | "createdAt"
+        | "lastActiveAt"
+        | "path"
+        | "branch"
+        | "repoRoot"
+      >;
+    }
+  | { kind: "removal-claim"; id: string; token: string }
+  | { kind: "removal-claims"; ids: readonly string[]; token: string }
+  | { kind: "projection"; id: string; ownerId: string; path: string; repoRoot: string }
+  | { kind: "source-owner"; ownerId: string; id: string; path: string; repoRoot: string }
+  | {
+      kind: "source-record";
+      id: string;
+      ownerId?: string;
+      repoRoot: string;
+      repoFingerprint: string;
+    };
+
+export type WorktreeLeaseSet = {
+  context: OpenClawStateWorkerContext;
+  leases: readonly OpenClawStateAsyncLeaseContext[];
+};
+
+/** Explicit worker authority replaces the native guard, including predicate-only authority. */
+export type WorktreeWorkerAuthority = {
+  leaseSet?: WorktreeLeaseSet;
+  assertCurrent?: () => void;
+  predicates?: readonly WorktreeRegistryPredicate[];
+};
+
 type WorktreeSourceCurrent = {
   assertCurrent: () => void;
+  workerAuthority?: Omit<WorktreeWorkerAuthority, "leaseSet">;
   /** Checkout custody for rollback within this callback, independent of caller/source freshness. */
   assertCheckoutCurrent?: () => void;
   signal?: AbortSignal;

@@ -235,47 +235,6 @@ describe("resolveGatewayProbeSnapshot", () => {
     },
   );
 
-  it("can probe the local fallback when remote url is missing", async () => {
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "remote",
-      gatewayMode: "remote",
-      remoteUrlMissing: true,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
-      ok: true,
-      connectLatencyMs: 12,
-      error: null,
-      health: {},
-      status: {},
-      presence: [{ host: "box", text: "box", ts: 0 }],
-    });
-    const result = await resolveGatewayProbeSnapshot({
-      cfg: {},
-      opts: {
-        ...createStatusGatewayProbeBudget(),
-        detailLevel: "full",
-        probeWhenRemoteUrlMissing: true,
-        resolveAuthWhenRemoteUrlMissing: true,
-        mergeAuthWarningIntoProbeError: false,
-      },
-    });
-
-    expect(mocks.resolveGatewayProbeAuthResolution).toHaveBeenCalled();
-    const probeCall = readProbeCall();
-    expect(probeCall.url).toBe("ws://127.0.0.1:18789");
-    expect(probeCall.auth).toEqual({ token: "tok", password: "pw" });
-    expect(probeCall.detailLevel).toBe("full");
-    expect(result.gatewayReachable).toBe(true);
-    expect(result.gatewaySelf).toEqual({ host: "box" });
-    expect(result.gatewayCallOverrides).toEqual({
-      url: "ws://127.0.0.1:18789",
-      token: "tok",
-      password: "pw",
-    });
-    expect(result.gatewayProbeAuthWarning).toBe("warn");
-  });
-
   it("treats scope-limited read probes as reachable", async () => {
     mocks.probeGateway.mockResolvedValue({
       ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),

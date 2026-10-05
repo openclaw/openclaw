@@ -125,7 +125,8 @@ export function isPackageActivationComplete(
   if (record.phase === "superseded") {
     if (
       record.intent?.kind !== "superseded-by-manual-install" &&
-      record.intent?.kind !== "recovery-lease-identity-changed"
+      record.intent?.kind !== "recovery-lease-identity-changed" &&
+      record.intent?.kind !== "recovery-lease-missing"
     ) {
       throw new Error("Package supersession fact is missing.");
     }

@@ -160,7 +160,6 @@ extensions/signal/src/core.test.ts
 extensions/signal/src/monitor/event-handler.inbound-context.test.ts
 extensions/signal/src/monitor/event-handler.ts
 extensions/slack/src/action-runtime.ts
-extensions/slack/src/approval-native.test.ts
 extensions/slack/src/channel.test.ts
 extensions/slack/src/channel.ts
 extensions/slack/src/message-action-dispatch.test.ts
@@ -258,7 +257,6 @@ src/agents/embedded-agent-runner/context-engine-maintenance.test.ts
 src/agents/embedded-agent-runner/extra-params.ts
 src/agents/embedded-agent-runner/model.provider-runtime.test-support.ts
 src/agents/embedded-agent-runner/model.test.ts
-src/agents/embedded-agent-runner/replay-history.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
 src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
@@ -371,7 +369,6 @@ src/commands/backup-verify.test.ts
 src/commands/channels.add.test.ts
 src/commands/configure.wizard.ts
 src/commands/daemon-install-helpers.test.ts
-src/commands/daemon-install-helpers.ts
 src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
 src/commands/doctor-gateway-services.test.ts

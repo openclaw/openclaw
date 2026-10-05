@@ -3,6 +3,7 @@ import type { SessionTranscriptProjectionSelection } from "../../gateway/session
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
+import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "./session-accessor.sqlite-active-events-read.js";
 import {
   readLatestSessionTranscriptMessageEvent,
   readRecentSessionTranscriptActiveEvents,
@@ -25,6 +26,8 @@ import type {
 } from "./session-incognito-contract.js";
 import type { IncognitoHistoryOperations } from "./session-incognito-history-contract.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
+import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
+import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
@@ -93,6 +96,30 @@ export function createIncognitoHistoryWorker(
     }
     let request: SessionHistoryReadOperationRequest;
     switch (command.type) {
+      case "session.history.anchors":
+        prepared = prepareHistoryRead(command.type, () =>
+          readSessionTranscriptAnchorFactsInDatabase(database, resolvedScope, command.input),
+        );
+        return;
+      case "session.history.accounting":
+      case "session.history.bounded-tail":
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () => {
+            const snapshot = readCurrentProjectionSnapshot(database, resolvedScope, (projection) =>
+              command.type === "session.history.accounting"
+                ? readSessionTranscriptAccountingFromProjection(projection, command.input.options)
+                : readSessionTranscriptBoundedMessageTailPageFromProjection(
+                    projection,
+                    command.input.options,
+                  ),
+            );
+            if (snapshot.kind === "unavailable") {
+              throw new SessionTranscriptProjectionUnavailableError(sessionId);
+            }
+            return snapshot.value;
+          }),
+        );
+        return;
       case "session.history.pending-inputs":
         prepared = prepareHistoryRead(command.type, () =>
           readPendingInputHistoryInDatabase(database, {
@@ -269,6 +296,7 @@ export function createIncognitoHistoryWorker(
         const {
           readSessionTranscriptContextMessages,
           validateSessionTranscriptContextAdmission,
+          validateSessionTranscriptContextAnchor,
           validateSessionTranscriptContextVersion,
         } = await import("./session-accessor.sqlite-model-context.js");
         prepared = prepareHistoryRead(command.type, () =>
@@ -277,8 +305,11 @@ export function createIncognitoHistoryWorker(
               if (command.type === "session.history.native-context-current") {
                 if (admission) {
                   validateSessionTranscriptContextAdmission(target, admission);
-                } else {
+                } else if (!command.input.through) {
                   validateSessionTranscriptContextVersion(target, command.input.version);
+                }
+                if (command.input.through) {
+                  validateSessionTranscriptContextAnchor(target, command.input.through);
                 }
                 return { ok: true, value: undefined };
               }

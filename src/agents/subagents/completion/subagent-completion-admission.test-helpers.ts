@@ -18,7 +18,7 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
@@ -32,7 +32,7 @@ export function seedSubagentCompletionDelivery(params: {
   databaseOptions?: OpenClawStateDatabaseOptions;
 }): void {
   runOpenClawStateWriteTransaction((database) => {
-    upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(params.subagent));
+    writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(params.subagent)], []);
   }, params.databaseOptions);
 }
 

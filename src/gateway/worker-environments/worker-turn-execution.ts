@@ -6,7 +6,7 @@ import {
   copyAgentToolMetadata,
   getAgentToolExecutionLocation,
 } from "../../agents/agent-tool-metadata.js";
-import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
 import type { EmbeddedAttemptSteeringLease } from "../../agents/embedded-agent-runner/run/attempt-prompt-build.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
@@ -261,13 +261,14 @@ export async function executeWorkerTurn(
   });
   const { browser, computer, preparedComputer } = desktop;
   const {
+    authProfileStoreSource,
     capabilityProfile,
     policy: toolPolicy,
     exec,
     execUnavailable,
     presentation,
     installedSkills,
-  } = resolveWorkerToolAuthority({
+  } = await resolveWorkerToolAuthority({
     modelRef,
     model,
     placement,
@@ -377,10 +378,11 @@ export async function executeWorkerTurn(
             identity,
             skillWorkshop,
             portalAvailable,
-            prepareTools: (adapters) => {
-              const prepared = createOpenClawCodingToolsInternal(
+            prepareTools: async (adapters) => {
+              const prepared = await createOpenClawCodingToolsInternalAsync(
                 {
                   ...turn,
+                  authProfileStoreSource,
                   agentId: placement.agentId,
                   conversationCapabilityProfile: capabilityProfile,
                   preparedModelRuntime: preparedRuntime.snapshot,
@@ -404,6 +406,7 @@ export async function executeWorkerTurn(
                 undefined,
                 undefined,
                 { tools: [...placementTools, ...adapters], policy: toolPolicy },
+                { assertCurrent: assertToolSurfaceCurrent, signal },
               );
               if (turn.disableTools || turn.modelRun || turn.promptMode === "none") {
                 return [];

@@ -217,7 +217,7 @@ patchedDependencies:
   '@awesome.me/webawesome@3.13.0': 9b35bfc2e23b45e47ac3e6a669b8bf7df0c4ca89423e8a78d6fb921faa686208
   '@novnc/novnc@1.7.0': bfde0e1bda172da3525f9f5014d85ad28073325b74f09609084598a65d2f412d
   '@openclaw/proxyline@0.3.12': 9e0969d2dc0abb32610053fba342756afb56f4996c90adfdc34f21ad090fbb0f
-  baileys@7.0.0-rc14: 03ae85550381d1bda7d014c9aa9f544ad421d35d745d1167fd5d33f7f715dafb
+  baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
   chrome-devtools-mcp@1.10.1: d31d6e7e187ea9fd4dad87ed3ad08073c77ffcfddd52bc4761b39a2dfce0ac1e
   ghostty-web@0.4.0: eb0a0b91bbf843ba8dceeade968072a6c7a6be402fdd1e80d466e54241b62fa6
   matrix-js-sdk@42.4.0: 12d9bb9bdc53b7b96d8d887d0bea6b3072d1fef488b51102caec19fb651c8e92
@@ -512,7 +512,7 @@ importers:
         version: 21.2.0
       baileys:
         specifier: 7.0.0-rc14
-        version: 7.0.0-rc14(patch_hash=03ae85550381d1bda7d014c9aa9f544ad421d35d745d1167fd5d33f7f715dafb)(audio-decode@3.12.0)(supports-color@10.2.2)
+        version: 7.0.0-rc14(patch_hash=c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded)(audio-decode@3.12.0)(supports-color@10.2.2)
       htmlparser2:
         specifier: 12.0.0
         version: 12.0.0
@@ -2447,7 +2447,7 @@ importers:
         version: 3.12.0
       baileys:
         specifier: 7.0.0-rc14
-        version: 7.0.0-rc14(patch_hash=03ae85550381d1bda7d014c9aa9f544ad421d35d745d1167fd5d33f7f715dafb)(audio-decode@3.12.0)(supports-color@10.2.2)
+        version: 7.0.0-rc14(patch_hash=c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded)(audio-decode@3.12.0)(supports-color@10.2.2)
       typebox:
         specifier: 1.3.34
         version: 1.3.34
@@ -2483,6 +2483,28 @@ importers:
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../../packages/normalization-core
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/x:
+    dependencies:
+      linkify-it:
+        specifier: 6.1.0
+        version: 6.1.0
+      lit:
+        specifier: 3.3.3
+        version: 3.3.3
+      tlds:
+        specifier: 1.261.0
+        version: 1.261.0
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -14145,7 +14167,7 @@ snapshots:
 
   bail@2.0.2: {}
 
-  baileys@7.0.0-rc14(patch_hash=03ae85550381d1bda7d014c9aa9f544ad421d35d745d1167fd5d33f7f715dafb)(audio-decode@3.12.0)(supports-color@10.2.2):
+  baileys@7.0.0-rc14(patch_hash=c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded)(audio-decode@3.12.0)(supports-color@10.2.2):
     dependencies:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4

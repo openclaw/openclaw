@@ -34,6 +34,13 @@ initialization warning and the `update.status` RPC reports
 Status reads reuse that result; an explicit Dev checkout refresh can recover it.
 Package directories without Git metadata skip the Git discovery subprocess.
 
+Reconnecting Control UI clients share one preparation of the Gateway's restart
+notification snapshot. Update producers and the update-run watcher refresh that
+snapshot when an update changes; ordinary status reads do not reread or finalize
+the notification. The watcher also waits for a detached updater's late terminal
+notification for up to 30 minutes, then logs a warning if it remains pending.
+Run history continues to report the recorded outcome independently.
+
 For a clean source checkout configured with `update.channel: "stable"` or `"beta"`, `update status --json` can include `update.git.preferredTarget` with `channel`, `tag`, and the exact commit `sha`.
 This uses the updater's release selector and fetches into a temporary private Git repository, preserving the installed refs and checkout.
 The selected tag must still resolve to that commit at the release remote; retained local-only tags do not count as fresh targets.

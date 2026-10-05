@@ -361,18 +361,22 @@ it.each([false, true])(
       const releaseB = createDeferredCore();
       const pending: Promise<unknown>[] = [];
       let sql: ReturnType<typeof observeHostDataSql> | undefined;
-      let authority: Awaited<ReturnType<typeof prepareGatewaySessionAccessAuthority>> | undefined;
+      let authority:
+        | Awaited<ReturnType<typeof prepareGatewaySessionAccessAuthority>>["authority"]
+        | undefined;
       let resource: ReturnType<NonNullable<typeof authority>["retainSession"]> | undefined;
       try {
         await projection.ensureMaterialized();
         const context = bindSessionRowProjection(requestContext(cfg), () => projection);
-        authority = await prepareGatewaySessionAccessAuthority({
-          policy: { mode: "write" },
-          requestParams: { agentId: b.agentId, sessionKey: b.key },
-          client: identifiedClient(owner.id),
-          context,
-          ownSessionOnly: true,
-        });
+        authority = (
+          await prepareGatewaySessionAccessAuthority({
+            policy: { mode: "write" },
+            requestParams: { agentId: b.agentId, sessionKey: b.key },
+            client: identifiedClient(owner.id),
+            context,
+            ownSessionOnly: true,
+          })
+        ).authority;
         resource = authority.retainSession();
         const generation = projection.capture(b)?.generation;
         expect(generation).toBeDefined();

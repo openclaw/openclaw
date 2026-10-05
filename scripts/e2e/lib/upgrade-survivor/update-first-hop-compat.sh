@@ -200,7 +200,9 @@ setup_lane() {
   first_hop_timing "$lane install" "$install_started"
   openclaw --version >"$ARTIFACT_DIR/$lane-source-version.txt"
   assert_installed_build "$source_package" "$ARTIFACT_DIR/$lane-source-build-info.json"
-  install_update_restart_systemctl_shim
+  # This lane owns a synthetic service outside a delegated unit cgroup. Keep
+  # process-group custody here; the survivor membership lanes cover cgroup stops.
+  install_update_restart_systemctl_shim absent
   openclaw config set gateway.mode local >"$ARTIFACT_DIR/$lane-config.log" 2>&1
   openclaw config set gateway.port "$port" >>"$ARTIFACT_DIR/$lane-config.log" 2>&1
   openclaw config set gateway.reload.mode off >>"$ARTIFACT_DIR/$lane-config.log" 2>&1

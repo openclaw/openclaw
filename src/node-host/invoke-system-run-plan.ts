@@ -83,7 +83,6 @@ export function hardenApprovedExecutionPaths(params: {
   | {
       ok: true;
       argv: string[];
-      argvChanged: boolean;
       cwd: string | undefined;
       approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
     }
@@ -92,7 +91,6 @@ export function hardenApprovedExecutionPaths(params: {
     return {
       ok: true,
       argv: params.argv,
-      argvChanged: false,
       cwd: params.cwd,
       approvedCwdSnapshot: undefined,
     };
@@ -107,7 +105,6 @@ export function hardenApprovedExecutionPaths(params: {
   const hardened = {
     ok: true as const,
     argv: params.argv,
-    argvChanged: false,
     cwd: canonicalCwd.snapshot.cwd,
     approvedCwdSnapshot: canonicalCwd.snapshot,
   };
@@ -136,7 +133,7 @@ export function hardenApprovedExecutionPaths(params: {
   }
   const argv = [...params.argv];
   argv[0] = pinnedExecutable;
-  return { ...hardened, argv, argvChanged: true };
+  return { ...hardened, argv };
 }
 
 export function buildSystemRunApprovalPlan(

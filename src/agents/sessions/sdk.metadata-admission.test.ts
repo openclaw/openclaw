@@ -5,6 +5,7 @@ import {
   readSessionTranscriptWatermark,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   SessionTranscriptWriterClaimReboundError,
@@ -254,13 +255,13 @@ it.each([
       const select = () => (selection === "branch" ? manager.branch(firstId) : manager.resetLeaf());
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const readContext = SessionManager.openModelContextAsync.bind(SessionManager);
+      const readContext = contextWorker.readSessionTranscriptModelContextInWorker;
       const intercepted =
         timing === "during"
           ? vi
-              .spyOn(SessionManager, "openModelContextAsync")
-              .mockImplementationOnce(async (scope, options) => {
-                const context = await readContext(scope, options);
+              .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+              .mockImplementationOnce(async (...args) => {
+                const context = await readContext(...args);
                 entered.resolve();
                 await release.promise;
                 return context;
@@ -284,13 +285,17 @@ it.each([
         (value) => ({ status: "fulfilled" as const, value }),
         (error: unknown) => ({ status: "rejected" as const, error }),
       );
-      if (timing === "during") {
-        await entered.promise;
-        select();
-        release.resolve();
-      }
-      const outcome = await pending;
       try {
+        if (timing === "during") {
+          const reachedReader = await Promise.race([
+            entered.promise.then(() => true),
+            pending.then(() => false),
+          ]);
+          expect(reachedReader, "SDK history completed before the reader pause").toBe(true);
+          select();
+          release.resolve();
+        }
+        const outcome = await pending;
         if (timing === "during") {
           expect(outcome.status).toBe("rejected");
           if (outcome.status === "rejected") {
@@ -316,6 +321,7 @@ it.each([
       } finally {
         release.resolve();
         intercepted?.mockRestore();
+        const outcome = await pending;
         if (outcome.status === "fulfilled") {
           outcome.value.session.dispose();
         }

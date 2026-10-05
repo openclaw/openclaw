@@ -52,6 +52,8 @@ import {
 } from "./sidebar-attention-dismissals.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 
+export { focusActiveAgentMenuItem } from "./app-sidebar-agent-menu.ts";
+export { renderSidebarPluginNavigationMenuForController } from "./app-sidebar-plugin-navigation-menu.ts";
 export { renderSidebarPeopleFilterMenuForController } from "./app-sidebar-people-filter-menu.ts";
 
 export function renderSidebarCustomizeMenuForController(controller: SidebarMenusController) {
@@ -131,7 +133,13 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
     onPointerEnter: () => controller.handleAgentMenuPointerEnter(),
     onPointerLeave: () => controller.handleAgentMenuPointerLeave(),
     onAfterShow: () => controller.restoreFocusAfterAgentMenuHoverOpen(),
-    onSwitchAgent: (agentId) => host.switchChipAgent(agentId),
+    onSwitchAgent: (agentId) => {
+      if (host.sidebarAgentsMode === "roster") {
+        host.sidebarAgentsMode = "chip";
+        patchSettings({ sidebarAgentsMode: "chip" });
+      }
+      host.switchChipAgent(agentId);
+    },
     onAskCapabilities: (agentId) => host.askAgentCapabilities(agentId),
     onTabAway: () => trigger?.focus(),
     onClose: (restoreFocus) => {

@@ -10,6 +10,8 @@ sidebarTitle: "Feature and RPC reference"
 
 Control UI capabilities grouped by area, each with the Gateway RPC methods behind it.
 
+Workboard sidebar entries offer pin/unpin and, with write access, confirmed board deletion (`workboard.boards.delete`) through right-click, **Shift+F10**, or the context-menu key.
+
 ## Feature and RPC reference
 
 <AccordionGroup>

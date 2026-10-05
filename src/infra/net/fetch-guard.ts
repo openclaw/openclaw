@@ -3,6 +3,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
+import { captureEffectAuthority } from "../../shared/effect-authority.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import {
   normalizeHeadersInitForFetch,
@@ -415,6 +416,7 @@ async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
   const assertCurrent = captureGuardedFetchRequestAuthority();
+  const effect = captureEffectAuthority();
   if (
     params.allowCrossOriginUnsafeRedirectReplay === true &&
     params.rejectCrossOriginUnsafeRedirectReplay === true
@@ -637,12 +639,6 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
-      const beforeRequestResult: unknown = params.beforeRequest?.();
-      if (isPromiseLike(beforeRequestResult)) {
-        void Promise.resolve(beforeRequestResult).catch(() => undefined);
-        throw new TypeError("beforeRequest must be synchronous.");
-      }
-      assertCurrent?.();
       const captureParams = {
         url: parsedUrl.toString(),
         method: currentInit?.method ?? "GET",
@@ -661,12 +657,24 @@ async function fetchWithSsrFGuardInternal(
         },
       };
       // Only transport rejection belongs here, not policy or capture failures.
+      let initiated = false;
       try {
-        response = shouldUseRuntimeFetch
-          ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-          : await captureAdmission.fetchImpl(parsedUrl.toString(), init);
+        response = await effect.initiate(() => {
+          const beforeRequestResult: unknown = params.beforeRequest?.();
+          if (isPromiseLike(beforeRequestResult)) {
+            void Promise.resolve(beforeRequestResult).catch(() => undefined);
+            throw new TypeError("beforeRequest must be synchronous.");
+          }
+          assertCurrent?.();
+          initiated = true;
+          return shouldUseRuntimeFetch
+            ? fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+            : captureAdmission.fetchImpl(parsedUrl.toString(), init);
+        });
       } catch (error) {
-        void captureAdmission.capture?.({ ...captureParams, error });
+        if (initiated) {
+          void captureAdmission.capture?.({ ...captureParams, error });
+        }
         throw error;
       }
       params.onResponse?.(response.status);

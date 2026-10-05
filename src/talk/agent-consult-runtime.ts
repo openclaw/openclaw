@@ -296,13 +296,11 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
         sessionId: "",
         updatedAt: now,
       },
-      skipForkWhen: (entry) => Boolean(entry.sessionId?.trim()),
-      skipPatch: () => ({ ...deliveryFields, updatedAt: now }),
-      patch: () => ({
-        ...deliveryFields,
-        ...spawnLineage,
-        updatedAt: now,
-      }),
+      entryPatch: {
+        skipExisting: true,
+        skipped: { ...deliveryFields, updatedAt: now },
+        forked: { ...deliveryFields, ...spawnLineage, updatedAt: now },
+      },
     });
     if (forked.status === "forked" || forked.status === "skipped") {
       if (forked.status === "skipped" && forked.decision?.status === "skip") {

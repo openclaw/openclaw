@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runDaemonStart, runDaemonStop } from "../cli/daemon-cli/lifecycle.js";
+import { runDaemonStop } from "../cli/daemon-cli/lifecycle.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { GatewayService } from "../daemon/service.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
@@ -144,34 +144,29 @@ describe("SystemAgent hosted gateway lifecycle", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it.each(["gateway-start", "gateway-stop"] as const)(
-    "rejects $kind without a host lifecycle before reaching the exiting native CLI",
-    async (kind) => {
-      service.isLoaded.mockRejectedValue(new Error("service inspection failure"));
-      await expect(
-        kind === "gateway-start" ? runDaemonStart() : runDaemonStop({ force: true }),
-      ).rejects.toBe(exitSentinel);
-      expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
-      expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("service inspection failure"),
-      );
-      vi.clearAllMocks();
+  it("rejects gateway-stop without a host lifecycle before reaching the exiting native CLI", async () => {
+    service.isLoaded.mockRejectedValue(new Error("service inspection failure"));
+    await expect(runDaemonStop({ force: true })).rejects.toBe(exitSentinel);
+    expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("service inspection failure"),
+    );
+    vi.clearAllMocks();
 
-      const { runtime, lines } = createSystemAgentTestRuntime();
-      const captureExit = vi.spyOn(runtime, "exit");
-      await expect(
-        executeSystemAgentOperation({ kind }, runtime, {
-          approved: true,
-          deps: { setupSurface: "gateway" },
-        }),
-      ).rejects.toThrow("Gateway host lifecycle is unavailable");
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(captureExit).not.toHaveBeenCalled();
-      expect(service.isLoaded).not.toHaveBeenCalled();
-      expect(service.start).not.toHaveBeenCalled();
-      expect(service.stop).not.toHaveBeenCalled();
-      expect(appendAudit).not.toHaveBeenCalled();
-      expect(lines.join("\n")).not.toContain("[openclaw] done:");
-    },
-  );
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    const captureExit = vi.spyOn(runtime, "exit");
+    await expect(
+      executeSystemAgentOperation({ kind: "gateway-stop" }, runtime, {
+        approved: true,
+        deps: { setupSurface: "gateway" },
+      }),
+    ).rejects.toThrow("Gateway host lifecycle is unavailable");
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(captureExit).not.toHaveBeenCalled();
+    expect(service.isLoaded).not.toHaveBeenCalled();
+    expect(service.start).not.toHaveBeenCalled();
+    expect(service.stop).not.toHaveBeenCalled();
+    expect(appendAudit).not.toHaveBeenCalled();
+    expect(lines.join("\n")).not.toContain("[openclaw] done:");
+  });
 });

@@ -34,7 +34,11 @@ export function prepareSessionEntryReplacementPublication(
   result: SessionEntryReplacementCommitted,
   database: OpenClawAgentDatabase,
 ): SessionEntryReplacementPublication {
-  const archived = new Set(result.maintenancePlans.flatMap((plan) => plan.archivedSessionKeys));
+  const archived = new Set(
+    result.maintenancePlans.flatMap((plan) =>
+      plan.archivedEntries.map(({ sessionKey }) => sessionKey),
+    ),
+  );
   const invalidated = new Set([...result.membershipInvalidatedKeys, ...archived]);
   const current = new Map<string, SessionEntry>();
   for (const key of result.current.keys()) {
@@ -76,13 +80,7 @@ export function prepareSessionEntryReplacementPublication(
           },
         }
       : {}),
-    changedKeys: [
-      ...new Set([
-        ...result.previous.keys(),
-        ...result.current.keys(),
-        ...result.maintenancePlans.flatMap((plan) => plan.archivedSessionKeys),
-      ]),
-    ],
+    changedKeys: [...new Set([...result.previous.keys(), ...result.current.keys(), ...archived])],
   };
 }
 

@@ -4,7 +4,9 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { openContextEngineTurnOutboxWorkerStore } from "../agents/harness/context-engine-turn-outbox-store.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { TranscriptTurnBoundary } from "../config/sessions/transcript-entry-anchor.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -100,77 +102,90 @@ async function createTurn(name: string, owner = actor, agentId = "main"): Promis
 }
 
 async function accept(turn: Turn, owner = actor) {
-  await owner.sessions.outbox(authority, {
-    type: "session.outbox.enqueueIntent",
-    input: { ...turn, engineId, isHeartbeat: false, admission: turn.boundary.admission },
+  const store = outbox(turn, authority, owner);
+  await store.enqueueIntent({
+    ...turn,
+    engineId,
+    isHeartbeat: false,
+    admission: turn.boundary.admission,
   });
-  await owner.sessions.outbox(authority, {
-    type: "session.outbox.acceptIntent",
-    input: { ...turn, engineId, isHeartbeat: false },
+  await store.acceptIntent({ ...turn, engineId, isHeartbeat: false });
+}
+
+function outbox(turn: Turn, source = authority, owner = actor) {
+  return openContextEngineTurnOutboxWorkerStore({
+    agentId: owner.agentId,
+    path: owner.path,
+    incognito: {
+      actor: owner,
+      authority: source,
+      sessionKey: turn.sessionKey,
+      sessionId: turn.sessionId,
+    },
   });
 }
 
 function publish(turn: Turn, source = authority, owner = actor) {
-  return owner.sessions.outbox(source, {
-    type: "session.outbox.publishClosedTurn",
-    input: { ...turn, engineId, isHeartbeat: false, maxBytes: 10_000, maxEvents: 10 },
+  return outbox(turn, source, owner).publishClosedTurn({
+    ...turn,
+    engineId,
+    isHeartbeat: false,
+    maxBytes: 10_000,
+    maxEvents: 10,
   });
 }
 
 function recover(turn: Turn) {
-  return actor.sessions.outbox(authority, {
-    type: "session.outbox.prepareRun",
-    input: { ...turn, engineId, isHeartbeat: false },
-  });
+  return outbox(turn).prepareRun({ ...turn, engineId, isHeartbeat: false });
 }
 
 function next(turn: Turn) {
-  return actor.sessions.outbox(authority, {
-    type: "session.outbox.readNextPending",
-    input: { ...turn, engineId },
-  });
+  return outbox(turn).readNextPending({ ...turn, engineId });
 }
 
 it.each(["publish", "recover"] as const)(
   "%s is idempotent on the actor and cannot resurrect a completed turn",
   async (operation) => {
     const turn = await createTurn(operation);
-    expect(
-      await actor.sessions.transcript(authority, {
-        type: "session.turn.read",
-        input: { ...turn, fence: {}, maxBytes: 10_000, maxEvents: 10 },
-      }),
-    ).toMatchObject({ kind: "ok", messages: [{ role: "user" }, { role: "assistant" }] });
-    await accept(turn);
-    if (operation === "publish") {
+    const sql = observeHostDataSql();
+    try {
+      expect(
+        await actor.sessions.transcript(authority, {
+          type: "session.turn.read",
+          input: { ...turn, fence: {}, maxBytes: 10_000, maxEvents: 10 },
+        }),
+      ).toMatchObject({ kind: "ok", messages: [{ role: "user" }, { role: "assistant" }] });
+      await accept(turn);
+      if (operation === "publish") {
+        expect(await publish(turn)).toBe("ok");
+        expect(await publish(turn)).toBe("ok");
+      } else {
+        expect(await recover(turn)).toEqual({ warnings: [], pending: true, admitted: false });
+        expect(await recover(turn)).toEqual({ warnings: [], pending: true, admitted: false });
+      }
+      const row = await next(turn);
+      assert(row);
+      expect(JSON.parse(row.payload_json)).toMatchObject({
+        state: "ready",
+        boundary: turn.boundary,
+        messages: [
+          { role: "user", content: [{ type: "text", text: "question" }] },
+          { role: "assistant", content: [{ type: "text", text: "answer" }] },
+        ],
+      });
+      await outbox(turn).complete(row.advancement_key);
       expect(await publish(turn)).toBe("ok");
-      expect(await publish(turn)).toBe("ok");
-    } else {
-      expect(await recover(turn)).toEqual({ warnings: [], pending: true, admitted: false });
-      expect(await recover(turn)).toEqual({ warnings: [], pending: true, admitted: false });
+      expect(await recover(turn)).toEqual({ warnings: [], pending: false, admitted: false });
+      expect(
+        await actor.sessions.outbox(authority, {
+          type: "session.outbox.listPendingSessions",
+          input: { ...turn, engineId, limit: 10 },
+        }),
+      ).toEqual([]);
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
     }
-    const row = await next(turn);
-    assert(row);
-    expect(JSON.parse(row.payload_json)).toMatchObject({
-      state: "ready",
-      boundary: turn.boundary,
-      messages: [
-        { role: "user", content: [{ type: "text", text: "question" }] },
-        { role: "assistant", content: [{ type: "text", text: "answer" }] },
-      ],
-    });
-    await actor.sessions.outbox(authority, {
-      type: "session.outbox.complete",
-      input: { ...turn, advancementKey: row.advancement_key },
-    });
-    expect(await publish(turn)).toBe("ok");
-    expect(await recover(turn)).toEqual({ warnings: [], pending: false, admitted: false });
-    expect(
-      await actor.sessions.outbox(authority, {
-        type: "session.outbox.listPendingSessions",
-        input: { ...turn, engineId, limit: 10 },
-      }),
-    ).toEqual([]);
   },
 );
 

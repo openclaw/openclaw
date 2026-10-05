@@ -58,6 +58,24 @@ it("shows cache-limit recovery guidance without proxy metadata", () => {
   expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
 });
 
+it("retains the actual schema rejection without leaking the response envelope", () => {
+  const projected = failure("Invalid service_tier argument", {
+    errorType: "invalid_request_error",
+    errorBody: JSON.stringify({
+      error: { type: "invalid_request_error", message: "Invalid service_tier argument" },
+      request: { input: "PRIVATE_PROMPT", headers: { authorization: "PRIVATE_AUTH" } },
+    }),
+  });
+  expect(projected).toMatchObject({
+    content: [
+      { type: "text", text: String.raw`LLM request rejected: Invalid service\_tier argument` },
+    ],
+  });
+  expect(JSON.stringify(projected)).not.toContain("PRIVATE_");
+  expect(projected).not.toHaveProperty("errorBody");
+  expect(projectChatDisplayMessage(projected)).toEqual(projected);
+});
+
 it("keeps safe failure guidance alongside partial reply text", () => {
   const projected = failure("429: PRIVATE_CANARY", {
     content: [{ type: "text", text: "The first step completed." }],

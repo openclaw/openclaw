@@ -323,6 +323,7 @@ export function openPackageActivationJournal(anchor: string) {
                 descriptor.helperIdentity ||
               previous.descriptor.authority.databasePath !== descriptor.authority.databasePath ||
               (previous.intent?.kind !== "recovery-lease-identity-changed" &&
+                previous.intent?.kind !== "recovery-lease-missing" &&
                 (previous.descriptor.authority.databaseIdentity !==
                   descriptor.authority.databaseIdentity ||
                   previous.descriptor.authority.parentIdentity !==

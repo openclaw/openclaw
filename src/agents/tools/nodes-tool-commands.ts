@@ -171,7 +171,7 @@ export async function executeNodeCommandAction(params: {
       const invokeCommandNormalized = normalizeLowercaseStringOrEmpty(invokeCommand);
       if (BLOCKED_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
         throw new Error(
-          `invokeCommand "${invokeCommand}" is reserved for shell execution; use exec with host=node instead`,
+          `invokeCommand "${invokeCommand}" is reserved for shell execution; call the shell exec tool with { command, host: "node", node: "${nodeId}" } instead`,
         );
       }
       const dedicatedAction = MEDIA_INVOKE_ACTIONS[invokeCommandNormalized];

@@ -103,6 +103,47 @@ reason to wait, re-cut, or pause.
 See [Full release validation](/reference/full-release-validation) for coverage
 by profile and how to interpret the results.
 
+### Frozen qualification identity
+
+New candidate qualification records three separate identities:
+
+- **C — candidate:** the exact commit whose source and publication bytes are checked.
+- **Q — qualification:** the full workflow closure at C, including reusable workflows,
+  local actions, scripts, planners, contracts, and coverage data. By default **Q=C**.
+- **P — admission, verification, and publication tooling:** an independently trusted
+  main revision or protected publication tag. P may differ from C/Q; C/Q does not
+  need to be an ancestor of P. Trust in P does not replace qualification of C.
+
+The canonical SHA-pinned helper first asks P to record the reviewed operator
+attestation, complete normalized inputs, and data-only frozen Q coverage in an
+immutable admission artifact. Only then does that same helper dispatch Full
+Release Validation from an immutable `release-ci/*` ref at Q. A publication
+`release-publish/*` tag belongs to P, never to Q merely to make validation run.
+Admission is not a successful test result or publication approval.
+
+A candidate missing the required qualification contracts needs a deliberate
+backport. The helper does not silently use future-main checks or import
+main-only scenarios. A repair to the qualification harness changes C and Q and
+requires newly bound evidence; a P-only verifier/publisher repair can preserve
+C/Q and their original artifacts. Explicit trusted-main or protected-tag
+cross-revision validation is limited to diagnostic, main-qualification, and
+postpublish-confidence requests. It cannot supply new final candidate
+qualification. Existing historical publish requests keep their original meaning
+and remain recoverable. New publish qualification requires admitted Q=C.
+
+Evidence reuse preserves both the original producer identity and the current
+consumer identity, inputs, coverage, and artifact provenance. It cannot relabel
+an old run as candidate-owned. Reconciliation is read-only; explicit resume is
+limited to a candidate request before any qualification-ref mutation or FRV
+dispatch. An uncertain write never authorizes another dispatch. All publication
+gates, stable soak, blocking performance, environment approvals, and exact-byte
+checks remain unchanged.
+
+Local contract tests can prove input binding, refusal, and recovery behavior.
+They do not prove hosted workflow admission, environment access, OIDC, signing,
+or publication. Report hosted evidence and untested deployment prerequisites
+separately; a local green check is not a hosted release receipt.
+
 ## Packages and apps can become available at different times
 
 A published Gateway release does not mean every native app is ready. Signing and publishing the apps can

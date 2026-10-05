@@ -22,7 +22,12 @@ type CodeModeErrorCode =
 
 `invalid_input` covers bad `exec`/`wait` arguments, including retired `language`
 and `typecheck` fields, rejected module access, JavaScript syntax errors, unknown/expired/
-wrong-scope `runId` values, and too many suspended runs. `runtime_unavailable`
+wrong-scope `runId` values, and too many suspended runs. It also covers an
+uncaught nested tool call that the host rejected as invalid input (an
+`input_contract` schema mismatch or a tool's own input error); the error names
+the missing or unexpected arguments. Other uncaught tool failures report
+`internal_error`. Codes the guest assigns to `error.code` never change the
+terminal code. `runtime_unavailable`
 covers an unavailable executor or a worker that fails to start or exits
 unexpectedly. Check the selected `tools.codeMode.executor` and its plugin
 availability; the `quickjs` executor requires the bundled `code-mode-quickjs`
@@ -58,7 +63,9 @@ bridge contract does not make the Node executor a security boundary; see
 `failurePhase` identifies where the terminal error originated. An uncaught
 rejected tool call reports `"bridge"`; a new JavaScript error after a successful
 call or a caught tool rejection reports `"guest"`. Rethrowing the original tool
-error keeps `"bridge"`, including after `wait`.
+error keeps `"bridge"`, including after `wait`. Bridge failure origin and code
+come only from host replies. Guest code cannot settle its own pending tool calls
+or forge bridge provenance.
 
 Failure origin is separate from replay safety. When `bridgeDispatchStarted` is
 `true` and `replaySafe` is `false`, check the destination before repeating a send

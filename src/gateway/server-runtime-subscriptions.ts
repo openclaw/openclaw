@@ -34,6 +34,7 @@ import {
   onSessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   createLazyPromise,
   createLazyPromiseLoader,
@@ -146,7 +147,14 @@ export function startGatewayEventSubscriptions(params: {
     getConfig: getRuntimeConfig,
     getSessionRowProjection: params.getSessionRowProjection,
     onChanged: (target) => {
-      const publication = broadcastSessionActivitySummary(target, params).catch((error: unknown) =>
+      if (auditPolicyClosed || params.signal.aborted || params.scheduler.signal.aborted) {
+        return;
+      }
+      // Accepted notifications outlive their producer's scope. agentUnsub joins
+      // them before clients and the row projection close.
+      const publication = runWithRetainedGatewayRootWork(() =>
+        runOutsideAsyncWorkScope(() => broadcastSessionActivitySummary(target, params)),
+      ).catch((error: unknown) =>
         params.log.warn("Activity summary publication failed", { error }),
       );
       agentEventDispatches.add(publication);

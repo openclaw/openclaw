@@ -60,6 +60,12 @@ export async function withCliCommandCleanup<T>(
     return run();
   }
   const { GatewayScheduler } = await import("../infra/gateway-scheduler.js");
+  // A command can replace its own package. Retain cleanup before it can remove
+  // the files; another importer's module cache does not preserve this resolution.
+  const { runCliDisposerAfterPending } = await import("./runtime-cleanup.js");
+  const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db-cache.js");
+  const { closeDefaultRetainedNativeWorkerSource } =
+    await import("../infra/worker-native-lifecycle.js");
   const pluginResources = new CliPluginInvocationResources();
   const releaseSignals = installCliSignalExitHandlers();
   pluginResources.adopt({ release: async () => releaseSignals() });
@@ -79,15 +85,11 @@ export async function withCliCommandCleanup<T>(
       try {
         return await run(cleanup);
       } finally {
-        const { waitForPendingCliDisposers } = await import("./runtime-cleanup.js");
-        await waitForPendingCliDisposers();
-        const { closeOpenClawStateDatabaseAsync } =
-          await import("../state/openclaw-state-db-cache.js");
-        await closeOpenClawStateDatabaseAsync();
-        const { closeDefaultRetainedNativeWorkerSource } =
-          await import("../infra/worker-native-lifecycle.js");
-        // Plugin disposal may read state; join its workers only after the whole command unwinds.
-        await closeDefaultRetainedNativeWorkerSource();
+        // Owned shutdown runs before this drain; expired disposers keep their recorded outcome.
+        await runCliDisposerAfterPending("shared-state", async () => {
+          await closeOpenClawStateDatabaseAsync();
+          await closeDefaultRetainedNativeWorkerSource();
+        });
       }
     }),
   );

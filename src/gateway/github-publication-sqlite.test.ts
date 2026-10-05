@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   openOpenClawStateDatabase,
@@ -61,6 +62,19 @@ describe("publication SQLite materialization", () => {
       counter.restore();
       stop();
     }
+  });
+
+  it("observes no current publication after worktree GC retires the session checkout", () => {
+    insertSharedWorktreeReceipt("latest");
+    updateRegistryWorktree(process.env, "worktree-1", { removedAt: 2 });
+    expect(
+      readSharedGitHubPublicationRequestInDatabase(
+        openOpenClawStateDatabase().db,
+        session,
+        {},
+        githubPublicationTestMocks().loadSession(session.sessionKey).entry,
+      ),
+    ).toBeUndefined();
   });
 
   it("defers rich receipts with compact notifications while retaining rollback and input order", () => {

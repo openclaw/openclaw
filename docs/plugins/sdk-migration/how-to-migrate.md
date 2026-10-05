@@ -148,6 +148,19 @@ the prepared view. `inMemory()` and `fromEntries()` remain synchronous;
 `appendModelChange`, `appendThinkingLevelChange`, and `createBranchedSession`
 already return promises and keep their names.
 
+Replace `SessionManager.readSessionContext(target, read)` with
+`await SessionManager.readSessionContextAsync(target, read, { admission?, signal? })`.
+This reader preserves full-fidelity messages, including storage-only fields omitted
+from model context. Its consumer may return a promise; the iterator closes when
+the consumer settles, and source validation must succeed before the result is
+returned. A rewritten source or revoked admission rejects the read. The durable
+reader retains its database owner through consumption and cleanup;
+database closure revokes the read. Final acceptance uses the existing writer
+FIFO and native mutation witness, including rewrites made after worker validation.
+The `session-manager-sync-context-read` record deprecates the synchronous reader on
+October 4, 2026, with one warning per process and removal at the next Plugin SDK
+major. Its existing synchronous result remains compatible during that window.
+
 `branchAsync` can hydrate missing history through the read worker before selecting
 the branch. `resetLeafAsync(): Promise<void>` orders an in-memory navigation reset
 with queued session writes. Neither operation writes a leaf record by itself;
@@ -324,6 +337,16 @@ Entries also carry no `agentRuntime` or `compaction`. Validation rejects both, s
 the authored config type omits them and `resolveAgentConfig` no longer returns
 `agentRuntime`. Read runtime policy from per-model `models[ref].agentRuntime` and
 compaction settings from `agents.defaults.compaction`.
+
+`agents.defaults` also no longer types `imageGenerationModel`, `videoGenerationModel`,
+`musicGenerationModel`, `envelopeTimezone`, `envelopeTimestamp`, `envelopeElapsed`,
+`timeFormat`, `promptOverlays`, or `agentRuntime`; validation rejects all nine. Use
+`mediaModels.image`, `mediaModels.video`, and `mediaModels.music`, `userTimezone` with
+built-in envelope and time formatting, `plugins.entries.openai.config.personality`,
+and per-model `models[ref].agentRuntime`. This is a type-only SDK change; run
+`openclaw doctor --fix` to migrate stored configs. A stored `agents.defaults.agentRuntime`
+is a retired format that current Doctor refuses;
+[upgrade through OpenClaw 2026.9.5](/install/updating#upgrading-very-old-versions) first.
 
 Plugins built against stable SDK releases through 2026.9.x may still read the
 deprecated, non-enumerable runtime `agents.list` projection introduced in

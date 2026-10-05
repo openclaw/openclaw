@@ -92,6 +92,7 @@ export const en: TranslationMap & {
   sessionsView: TranslationMap;
   skillWorkshop: TranslationMap;
   systems: TranslationMap;
+  talkPage: TranslationMap;
   usage: TranslationMap & { overview: TranslationMap };
 } = {
   pluginUi: {
@@ -2104,47 +2105,7 @@ export const en: TranslationMap & {
   },
   mcpServers: {},
   mcpPage: {},
-  talkPage: {
-    intro: "Configure realtime voice providers, models, and speaker voices.",
-    voiceSection: {
-      title: "Realtime voice",
-      description:
-        "Continuous speech conversations with your agent. The pickers below write talk.realtime settings; the full form further down covers everything else.",
-    },
-    status: {
-      title: "Status",
-      ready: "Ready",
-      notReady: "Not configured",
-      unavailable: "Unavailable",
-      unavailableHint: "Connect to the Gateway to check realtime voice readiness.",
-      activeProvider: "Active provider: {provider}",
-      noProvider: "No realtime voice provider is configured yet.",
-    },
-    provider: {
-      title: "Provider",
-      description: "Auto picks the first provider with working credentials.",
-      auto: "Auto",
-    },
-    model: {
-      title: "Model",
-      description: "Realtime voice model for browser Talk sessions.",
-      default: "Provider default",
-      defaultNamed: "Default ({model})",
-    },
-    voice: {
-      title: "Speaker voice",
-      description: "Voice used for spoken replies. GPT-Live locks the voice once a call starts.",
-      default: "Provider default",
-      unsupported: "unsupported",
-      unsupportedDefault:
-        "This saved voice is unavailable for the selected route. Provider default will be used.",
-    },
-    gptLive: {
-      title: "GPT-Live",
-      hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
-      ready: "Ready",
-    },
-  },
+  talkPage: {},
   memoryPage: {},
   sessionsPage: {
     hubTablistLabel: "Session sections",
@@ -2325,6 +2286,12 @@ export const en: TranslationMap & {
     confirm: "Confirm original publication",
     check: "Check publication",
     refresh: "Refresh publication",
+    statusFailed: "Publication failed",
+    statusConfirm: "Confirmation needed",
+    statusRequested: "Publication queued",
+    statusPublishing: "Publication in progress",
+    statusUnavailable: "Publication status unavailable",
+    statusUnknown: "Outcome unknown",
     unknown:
       "The outcome is unknown. Retry keeps the original account and request; it does not switch accounts.",
     target: "Pull request: {repository} \u2192 {base}",
@@ -3483,8 +3450,6 @@ export const en: TranslationMap & {
       activeFilterCount: "Active filters: {count}",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
-      showOnlyPerson: "Show only {name}",
-      showEveryone: "Show everyone",
       showAllSessions: "Show all sessions",
       noActiveSessionsForFilter: "No active sessions match this filter",
       sortUpdated: "Last updated",

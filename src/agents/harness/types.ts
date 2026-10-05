@@ -560,6 +560,7 @@ type AgentHarnessContract<
 
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
 
+  /** Throw AgentHarnessSessionCleanupError when required cleanup must block session replacement. */
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
   /** Invalidate native context only when a same-key history cut commits; preserve compaction. */
   withSessionContextReset?<T>(

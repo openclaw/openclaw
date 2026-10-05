@@ -225,7 +225,6 @@ describe("monitorSignalProvider autostart", () => {
     spawnSignalDaemonMock.mockReturnValueOnce(
       createMockSignalDaemonHandle({
         exited: Promise.resolve({ source: "process", code: 1, signal: null }),
-        isExited: () => true,
       }),
     );
     waitForTransportReadyMock.mockImplementationOnce(

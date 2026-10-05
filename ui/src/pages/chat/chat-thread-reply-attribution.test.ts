@@ -5,23 +5,10 @@ import {
   sessionParticipantIdentityKey,
 } from "../../lib/chat/sender-label.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
+import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
 type Props = Parameters<typeof buildCachedChatItems>[0];
-function createProps(overrides: Partial<Props> = {}): Props {
-  return {
-    paneId: "reply-attribution",
-    sessionKey: "main",
-    runId: null,
-    messages: [],
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
-    ...overrides,
-  };
-}
 function userMessage(content: string, timestamp: number, overrides: Record<string, unknown> = {}) {
   return { role: "user", content, timestamp, ...overrides };
 }
@@ -38,122 +25,122 @@ function messageGroups(props: Partial<Props>) {
 beforeEach(() => resetChatThreadState());
 describe("reply attribution grouping", () => {
   it.each([
-    { boundary: "sender-less user", message: userMessage("Local follow-up", 1006) },
-    {
-      boundary: "system turn",
-      message: userMessage("[System] Scheduled report", 1006, {
-        provenance: { kind: "internal_system", sourceTool: "cron" },
-        __openclaw: { idempotencyKey: "system-run:user" },
-      }),
-    },
-    {
-      boundary: "forwarded input",
-      message: assistantMessage("Forwarded input", 1006, {
-        senderSession: { sessionKey: "agent:other:main" },
-        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-      }),
-    },
-  ])("attributes the latest prompt and clears it at $boundary", ({ message }) => {
-    const alice = userMessage("Alice asks", 1000, {
-      __openclaw: { senderId: "alice", senderName: "Alice" },
-    });
-    const followUp = userMessage("Bob follows up", 1003, {
-      __openclaw: { senderId: "bob", senderName: "Bob" },
-    });
-    const groups = messageGroups({
-      messages: [
-        alice,
-        assistantMessage("For Alice", 1001),
-        userMessage("Bob asks", 1002, {
+    ...[
+      { boundary: "sender-less user", message: userMessage("Local follow-up", 1006) },
+      {
+        boundary: "system turn",
+        message: userMessage("[System] Scheduled report", 1006, {
+          provenance: { kind: "internal_system", sourceTool: "cron" },
+          __openclaw: { idempotencyKey: "system-run:user" },
+        }),
+      },
+      {
+        boundary: "forwarded input",
+        message: assistantMessage("Forwarded input", 1006, {
+          senderSession: { sessionKey: "agent:other:main" },
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        }),
+      },
+    ].map((entry) => Object.assign(entry, { searchOpen: false, recipient: undefined })),
+    ...[
+      {
+        boundary: "human prompt",
+        message: userMessage("Status?", 1002, {
           __openclaw: { senderId: "bob", senderName: "Bob" },
         }),
-        followUp,
-        assistantMessage("For Bob", 1004),
-        message,
-        assistantMessage("After boundary", 1007),
-      ],
-    });
-
-    const assistantGroups = groups.filter((group) => group.role === "assistant");
-    expect(assistantGroups[0]).toMatchObject({
-      replyToSender: { id: "alice", name: "Alice" },
-      replyToMessage: { message: alice },
-    });
-    const bobGroup = groups.find((group) => group.role === "user" && group.sender?.id === "bob");
-    expect(bobGroup?.messages).toHaveLength(2);
-    expect(assistantGroups[1]).toMatchObject({
-      replyToSender: { id: "bob", name: "Bob" },
-      replyToMessage: { message: followUp, key: bobGroup?.messages.at(-1)?.key },
-    });
-    expect(assistantGroups.at(-1)?.replyToSender).toBeUndefined();
-    expect(assistantGroups.at(-1)?.replyToMessage).toBeUndefined();
-  });
-
-  it.each([
-    {
-      boundary: "human prompt",
-      message: userMessage("Status?", 1002, {
+        recipient: "Bob",
+      },
+      {
+        boundary: "forwarded input",
+        message: assistantMessage("Forwarded report", 1002, {
+          senderLabel: "Forwarded from main",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        }),
+        recipient: undefined,
+      },
+      {
+        boundary: "projected forwarded source",
+        message: assistantMessage("Forwarded report", 1002, {
+          senderSession: { sessionKey: "agent:other:main", agentId: "other" },
+        }),
+        recipient: undefined,
+      },
+      {
+        boundary: "cron delivery",
+        message: assistantMessage("Scheduled report", 1002, {
+          senderLabel: "Daily report",
+          provenance: {
+            kind: "internal_system",
+            sourceTool: "cron",
+            jobId: "daily",
+            runId: "cron-run",
+            sourceSessionKey: "agent:main:cron:daily",
+          },
+        }),
+        recipient: undefined,
+      },
+      {
+        boundary: "projected turn",
+        message: assistantMessage("Automatic continuation", 1002, {
+          __openclaw: { turnBoundary: true },
+        }),
+        recipient: undefined,
+      },
+    ].map((entry) => Object.assign(entry, { searchOpen: true })),
+  ])(
+    "attributes prompts across $boundary (search: $searchOpen)",
+    ({ message, recipient, searchOpen }) => {
+      const alice = userMessage("Alice asks", 1000, {
+        __openclaw: { senderId: "alice", senderName: "Alice" },
+      });
+      const followUp = userMessage("Bob follows up", 1003, {
         __openclaw: { senderId: "bob", senderName: "Bob" },
-      }),
-      recipient: "Bob",
+      });
+      const groups = messageGroups({
+        searchOpen,
+        searchQuery: "Rollout",
+        replyPeople: searchOpen
+          ? ["alice", "bob"].map((id) => sessionParticipantIdentityKey({ type: "profile", id }))
+          : undefined,
+        messages: searchOpen
+          ? [
+              alice,
+              assistantMessage("Rollout started", 1001),
+              message,
+              assistantMessage("Rollout done", 1003),
+            ]
+          : [
+              alice,
+              assistantMessage("For Alice", 1001),
+              userMessage("Bob asks", 1002, { __openclaw: { senderId: "bob", senderName: "Bob" } }),
+              followUp,
+              assistantMessage("For Bob", 1004),
+              message,
+              assistantMessage("After boundary", 1007),
+            ],
+      });
+      if (searchOpen) {
+        expect(groups.map((group) => [group.messages.length, group.replyToSender?.name])).toEqual([
+          [1, "Alice"],
+          [1, recipient],
+        ]);
+      } else {
+        const replies = groups.filter((group) => group.role === "assistant");
+        expect(replies[0]).toMatchObject({
+          replyToSender: { id: "alice", name: "Alice" },
+          replyToMessage: { message: alice },
+        });
+        const bob = groups.find((group) => group.role === "user" && group.sender?.id === "bob");
+        expect(bob?.messages).toHaveLength(2);
+        expect(replies[1]).toMatchObject({
+          replyToSender: { id: "bob", name: "Bob" },
+          replyToMessage: { message: followUp, key: bob?.messages.at(-1)?.key },
+        });
+        expect(replies.at(-1)?.replyToSender).toBeUndefined();
+        expect(replies.at(-1)?.replyToMessage).toBeUndefined();
+      }
     },
-    {
-      boundary: "forwarded input",
-      message: assistantMessage("Forwarded report", 1002, {
-        senderLabel: "Forwarded from main",
-        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-      }),
-      recipient: undefined,
-    },
-    {
-      boundary: "projected forwarded source",
-      message: assistantMessage("Forwarded report", 1002, {
-        senderSession: { sessionKey: "agent:other:main", agentId: "other" },
-      }),
-      recipient: undefined,
-    },
-    {
-      boundary: "cron delivery",
-      message: assistantMessage("Scheduled report", 1002, {
-        senderLabel: "Daily report",
-        provenance: {
-          kind: "internal_system",
-          sourceTool: "cron",
-          jobId: "daily",
-          runId: "cron-run",
-          sourceSessionKey: "agent:main:cron:daily",
-        },
-      }),
-      recipient: undefined,
-    },
-    {
-      boundary: "projected turn",
-      message: assistantMessage("Automatic continuation", 1002, {
-        __openclaw: { turnBoundary: true },
-      }),
-      recipient: undefined,
-    },
-  ])("keeps search hits apart across a hidden $boundary", ({ message, recipient }) => {
-    const groups = messageGroups({
-      searchOpen: true,
-      searchQuery: "Rollout",
-      replyPeople: [
-        sessionParticipantIdentityKey({ type: "profile", id: "alice" }),
-        sessionParticipantIdentityKey({ type: "profile", id: "bob" }),
-      ],
-      messages: [
-        userMessage("Deploy?", 1000, { __openclaw: { senderId: "alice", senderName: "Alice" } }),
-        assistantMessage("Rollout started", 1001),
-        message,
-        assistantMessage("Rollout done", 1003),
-      ],
-    });
-
-    expect(groups.map((group) => [group.messages.length, group.replyToSender?.name])).toEqual([
-      [1, "Alice"],
-      [1, recipient],
-    ]);
-  });
+  );
 
   it.each(["human", "forwarded", "projected source"] as const)(
     "keeps tool results out of the previous turn when search hides a %s boundary",
@@ -192,63 +179,70 @@ describe("reply attribution grouping", () => {
     },
   );
 
-  it("retains a search-hidden historical pending input as the reply source", () => {
-    const prompt = userMessage("Please resume", 1002, {
-      __openclaw: { id: "pending:bob", senderId: "bob", senderName: "Bob" },
-    });
-    const groups = messageGroups({
-      searchOpen: true,
-      searchQuery: "Rollout",
-      messages: [
-        userMessage("Rollout plan?", 1000, {
-          __openclaw: { senderId: "alice", senderName: "Alice" },
-        }),
-        assistantMessage("Rollout started", 1001),
-        assistantMessage("Rollout resumed", 1003),
-      ],
-      pendingInputs: [{ id: "bob", acceptedAt: 1002, state: "interrupted", message: prompt }],
-    });
-    const replies = groups.filter((group) => group.role === "assistant");
-    expect(replies.map((group) => [group.messages.length, group.replyToSender?.name])).toEqual([
-      [1, "Alice"],
-      [1, "Bob"],
-    ]);
-    expect(replies[1]?.replyTurnSource?.message).toBe(prompt);
-    expect(groups.some((group) => group.messages.some((source) => source.message === prompt))).toBe(
-      false,
-    );
-  });
-
-  it("keeps a search-hidden local prompt before its recovered output without inheriting a peer", () => {
-    const groups = messageGroups({
-      searchOpen: true,
-      searchQuery: "Rollout",
-      replyLocalPerson: localParticipantIdentityKey("viewer"),
-      messages: [
-        userMessage("Rollout plan?", 1000, {
-          __openclaw: { senderId: "bob", senderName: "Bob" },
-        }),
-        assistantMessage("Rollout started", 1001),
-        assistantMessage("Rollout resumed", 1003, {
-          __openclaw: { id: "recovered", seq: 3, runId: "local-run" },
-        }),
-      ],
-      queue: [
-        {
-          id: "local",
-          text: "Please resume",
-          createdAt: 1002,
-          sendRunId: "local-run",
-          sendState: "waiting-reconnect",
-          sendAttempts: 1,
-        },
-      ],
-    });
-    const replies = groups.filter((group) => group.role === "assistant");
-    expect(replies.map((group) => group.replyToSender?.name)).toEqual(["Bob", undefined]);
-    expect(replies[1]?.replyShared).toBe(true);
-    expect(replies[1]?.replyTurnSource?.key).toBe("msg:send:local-run:0");
-  });
+  it.each(["pending", "local"] as const)(
+    "attributes recovered output across a search-hidden %s prompt",
+    (source) => {
+      const local = source === "local";
+      const prompt = userMessage("Please resume", 1002, {
+        __openclaw: { id: "pending:bob", senderId: "bob", senderName: "Bob" },
+      });
+      const groups = messageGroups({
+        searchOpen: true,
+        searchQuery: "Rollout",
+        replyLocalPerson: local ? localParticipantIdentityKey("viewer") : undefined,
+        messages: [
+          userMessage("Rollout plan?", 1000, {
+            __openclaw: { senderId: local ? "bob" : "alice", senderName: local ? "Bob" : "Alice" },
+          }),
+          assistantMessage("Rollout started", 1001),
+          assistantMessage(
+            "Rollout resumed",
+            1003,
+            local ? { __openclaw: { id: "recovered", seq: 3, runId: "local-run" } } : {},
+          ),
+        ],
+        ...(local
+          ? {
+              queue: [
+                {
+                  id: "local",
+                  text: "Please resume",
+                  createdAt: 1002,
+                  sendRunId: "local-run",
+                  sendState: "waiting-reconnect",
+                  sendAttempts: 1,
+                },
+              ],
+            }
+          : {
+              pendingInputs: [
+                { id: "bob", acceptedAt: 1002, state: "interrupted", message: prompt },
+              ],
+            }),
+      });
+      const replies = groups.filter((group) => group.role === "assistant");
+      expect(replies.map((group) => [group.messages.length, group.replyToSender?.name])).toEqual(
+        local
+          ? [
+              [1, "Bob"],
+              [1, undefined],
+            ]
+          : [
+              [1, "Alice"],
+              [1, "Bob"],
+            ],
+      );
+      if (local) {
+        expect(replies[1]?.replyShared).toBe(true);
+        expect(replies[1]?.replyTurnSource?.key).toBe("msg:send:local-run:0");
+      } else {
+        expect(replies[1]?.replyTurnSource?.message).toBe(prompt);
+        expect(
+          groups.some((group) => group.messages.some((entry) => entry.message === prompt)),
+        ).toBe(false);
+      }
+    },
+  );
 
   it.each([false, true])(
     "keeps live attribution before a future pending input (search: %s)",
@@ -290,41 +284,6 @@ describe("reply attribution grouping", () => {
       expect(stream?.kind === "stream" && stream.replyToMessage?.message).toBe(current);
     },
   );
-
-  it("does not add reply attribution in a single-sender thread", () => {
-    const groups = messageGroups({
-      messages: [
-        userMessage("Alice asks", 1000, {
-          __openclaw: { senderId: "alice", senderName: "Alice" },
-        }),
-        assistantMessage("For Alice", 1001),
-      ],
-    });
-
-    const assistant = groups.find((group) => group.role === "assistant");
-    expect(assistant?.replyToSender).toBeUndefined();
-    expect(assistant?.replyToMessage).toBeUndefined();
-    expect(assistant?.replyShared).toBeUndefined();
-    expect(assistant?.replyTurnSource?.message).toMatchObject({ content: "Alice asks" });
-  });
-
-  it("marks own user replies as shared once several people speak", () => {
-    const groups = messageGroups({
-      messages: [
-        userMessage("Alice asks", 1000, {
-          __openclaw: { senderId: "alice", senderName: "Alice" },
-        }),
-        userMessage("Bob asks", 1001, { __openclaw: { senderId: "bob", senderName: "Bob" } }),
-        assistantMessage("For Bob", 1002),
-      ],
-    });
-
-    expect(groups.map((group) => [group.role, group.replyShared])).toEqual([
-      ["user", true],
-      ["user", true],
-      ["assistant", true],
-    ]);
-  });
 
   it.each([
     {
@@ -370,6 +329,13 @@ describe("reply attribution grouping", () => {
     });
 
     expect(groups.map((group) => group.replyShared)).toEqual(groups.map(() => shared));
+    expect(groups.map((group) => group.role)).toEqual(senders.flatMap(() => ["user", "assistant"]));
+    const last = groups.at(-1);
+    if (!shared) {
+      expect(last?.replyToSender).toBeUndefined();
+      expect(last?.replyToMessage).toBeUndefined();
+    }
+    expect(last?.replyTurnSource?.message).toMatchObject({ content: `Ask ${senders.length - 1}` });
   });
 
   it.each([

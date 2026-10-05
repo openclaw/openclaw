@@ -174,8 +174,8 @@ async function resolvePatchTarget(
   const isRequesterSession =
     resolved.key === context.effectiveRequesterKey && agentId === requesterAgentId;
   if (!isRequesterSession) {
-    // Session visibility is the configured read/write scope for session tools;
-    // the action only selects error copy. Owner gating remains separate.
+    // Session controls require status visibility, never an outbound-only send grant.
+    // Owner gating remains separate.
     const authorizationKey =
       agentId !== requesterAgentId && !parseAgentSessionKey(resolved.key)
         ? `agent:${agentId}:${resolved.key}`

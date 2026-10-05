@@ -119,6 +119,18 @@ describe.each(["node", "quickjs"] as const)("%s session store bridge", (executor
     });
   });
 
+  it("keeps bridge provenance for uncaught typed store errors", async () => {
+    const h = harness(executor);
+    const result = resultDetails(await h.exec('await store("a", "x".repeat(256 * 1024));'));
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "internal_error",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+    });
+    expect(String(result.error)).toMatch(/^RangeError/);
+  });
+
   it("retains writes across wait, hides them from sibling cells, and commits once", async () => {
     const h = harness(executor);
     const first = resultDetails(

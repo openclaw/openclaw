@@ -67,6 +67,9 @@ signal, streaming updates where available, and trajectory/audit events.
 Completed nested calls persist as bounded, redacted display-only activity, retaining
 their original parent and invocation ids across history reloads. Provider replay
 contains only the actual model calls; child activity adds no synthetic model turns.
+Nested invocation ids include the cell's replay identity, so a provider can reuse
+a tool-call id in a later assistant response without colliding with earlier activity.
+Replaying the same call within the same run and assistant response preserves its nested ids.
 Runtime transcript views omit these persisted payloads. Finalization and agent-end
 hooks read the accepted activity for their attempt from the transcript when needed.
 If a `before_message_write` hook suppresses a nested activity row, finalization and

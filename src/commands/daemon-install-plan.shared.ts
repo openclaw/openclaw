@@ -19,8 +19,8 @@ export type GatewayInstallPlan = {
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
 };
 
-function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
-  const entry = argv[1];
+function resolveGatewayDevMode(): boolean {
+  const entry = process.argv[1];
   const normalizedEntry = entry?.replaceAll("\\", "/");
   return (
     normalizedEntry !== undefined &&

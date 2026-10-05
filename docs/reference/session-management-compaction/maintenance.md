@@ -92,6 +92,13 @@ Transcript mutations pass through the session accessor and SQLite writer queue.
 Each mutation verifies the active run's durable writer claim inside its commit
 transaction, so a superseded run cannot write to the transcript.
 
+Plugin lifecycle cleanup selects old matching sessions from metadata before
+loading their entries and saved snapshots. It plans orphaned transcript windows
+in pages, releasing the read transaction between pages. Deletion still rechecks
+current references, the selected entries, transcript snapshots, and live lifecycle
+authority after archive preparation. Updates need no migration for this planning
+change; retention and archive durability are unchanged.
+
 ### Cold transcript storage
 
 Enable cold storage to keep older transcript payloads in compressed

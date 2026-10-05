@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
@@ -27,7 +26,6 @@ import { buildAgentHarnessSupportContext, resolveAutoAgentHarnessId } from "./ha
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
   createModelAuthAvailabilityResolver,
-  type ModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
 } from "./model-auth-availability.js";
 import { prepareModelCatalogView } from "./model-catalog-view.js";
@@ -43,101 +41,6 @@ import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
-
-function listEnabledSyntheticAuthProviderRefs(
-  metadataSnapshot: PluginMetadataSnapshot,
-  config: OpenClawConfig,
-): readonly string[] {
-  let normalizedConfig: NormalizedPluginsConfig | undefined;
-  return metadataSnapshot.plugins
-    .filter((plugin) =>
-      isManifestPluginAvailableForControlPlane({
-        snapshot: metadataSnapshot,
-        plugin,
-        config,
-        normalizedConfig:
-          config.plugins && (normalizedConfig ??= normalizePluginsConfig(config.plugins)),
-      }),
-    )
-    .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
-}
-
-function createModelsListEntryEvaluator(params: {
-  authResolver: ModelAuthAvailabilityResolver;
-  providerOutcomes?: readonly ProviderCatalogOutcome[];
-  preferredProfileId?: string;
-  preferredProfilesByProvider?: ReadonlyMap<string, string>;
-  pinnedProfileId?: string;
-  profileProvider?: string;
-  runtimeOverride?: string;
-  normalizeAuthProvider: (provider: string) => string;
-}): (
-  entry: Pick<ModelCatalogEntry, "provider" | "id" | "api" | "baseUrl">,
-  routeVariants?: readonly ModelCatalogEntry[],
-  runtimeId?: string,
-) => Promise<ModelAuthAvailabilityEvaluation> {
-  const pending = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
-  return (entry, routeVariants, runtimeId) => {
-    const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
-    const observedRoutes = (routeVariants ?? [entry]).map(({ api, baseUrl }) => ({ api, baseUrl }));
-    const cacheKey = JSON.stringify([
-      resolveModelCatalogIdentityKey(entry),
-      runtimeId,
-      entry.api,
-      entry.baseUrl,
-      observedRoutes,
-    ]);
-    return getOrCreatePromise(pending, cacheKey, () =>
-      Promise.resolve().then((): ModelAuthAvailabilityEvaluation => {
-        const defaultProfileId = params.preferredProfilesByProvider?.get(
-          normalizeProviderId(entry.provider),
-        );
-        const sameProvider =
-          !params.profileProvider ||
-          params.normalizeAuthProvider(params.profileProvider) ===
-            params.normalizeAuthProvider(entry.provider);
-        const preferredProfileId =
-          (sameProvider ? params.preferredProfileId : undefined) ?? defaultProfileId;
-        // New sessions capture personal defaults with the same strength as explicit account pins.
-        const pinnedProfileId =
-          (sameProvider ? params.pinnedProfileId : undefined) ?? defaultProfileId;
-        const requestedRuntimeId =
-          runtimeId ??
-          (sameProvider && params.profileProvider ? params.runtimeOverride : undefined);
-        const resolved = {
-          ...params.authResolver.evaluateRuntimeModelAuth(entry.provider, {
-            modelId: identity?.id ?? entry.id,
-            runtimeId: requestedRuntimeId,
-            ...(normalizeProviderId(entry.provider) === "openai"
-              ? {}
-              : { api: entry.api, baseUrl: entry.baseUrl }),
-            ...(preferredProfileId ? { preferredProfileId } : {}),
-            ...(pinnedProfileId ? { pinnedProfileId } : {}),
-            observedRoutes,
-          }),
-          ...(requestedRuntimeId ? { requestedRuntimeId } : {}),
-        };
-        const provider = normalizeProviderId(entry.provider);
-        // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
-        // profile discovery tested; widening it would hide routes backed by another valid profile.
-        return params.providerOutcomes?.some(
-          (outcome) =>
-            outcome.status === "auth-rejected" &&
-            outcome.rejectionScope !== "catalog" &&
-            normalizeProviderId(outcome.provider) === provider &&
-            (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
-        )
-          ? {
-              ...resolved,
-              availability: false,
-              unavailableReason: "auth-failed",
-              unavailableUntil: undefined,
-            }
-          : resolved;
-      }),
-    );
-  };
-}
 
 export type ModelCatalogDecisionParams = {
   cfg: OpenClawConfig;
@@ -300,6 +203,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     ].filter((deadline): deadline is number => deadline !== undefined && deadline > preparedAt),
   );
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  let normalizedPlugins: NormalizedPluginsConfig | undefined;
   const authResolver = createModelAuthAvailabilityResolver({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -316,22 +220,90 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     preparedSyntheticAuthComplete:
       params.preparedSyntheticAuthComplete ?? isPreparedModelCatalogFull(params.snapshot),
     workspaceDir,
-    syntheticAuthProviderRefs: listEnabledSyntheticAuthProviderRefs(metadataSnapshot, params.cfg),
+    syntheticAuthProviderRefs: metadataSnapshot.plugins
+      .filter((plugin) =>
+        isManifestPluginAvailableForControlPlane({
+          snapshot: metadataSnapshot,
+          plugin,
+          config: params.cfg,
+          normalizedConfig:
+            params.cfg.plugins &&
+            (normalizedPlugins ??= normalizePluginsConfig(params.cfg.plugins)),
+        }),
+      )
+      .flatMap((plugin) => plugin.syntheticAuthRefs ?? []),
     externalCliProviderIds: resolveExternalCliAuthScopeFromConfig(params.cfg)?.providerIds ?? [],
     preparedRuntimeAuthStore: authStore,
     routeResolverFactory: params.routeResolverFactory,
   });
-  const evaluateStoredEntry = createModelsListEntryEvaluator({
-    authResolver,
-    providerOutcomes,
-    preferredProfilesByProvider,
-    runtimeOverride: params.runtimeOverride,
-    normalizeAuthProvider: (provider) =>
-      resolveProviderIdForAuth(provider, { config: params.cfg, metadataSnapshot }),
-    ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
-    ...(params.pinnedProfileId ? { pinnedProfileId: params.pinnedProfileId } : {}),
-    profileProvider,
-  });
+  const pending = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
+  const preferredProfileIdForCatalog = params.preferredProfileId || undefined;
+  const pinnedProfileIdForCatalog = params.pinnedProfileId || undefined;
+  const runtimeOverride = params.runtimeOverride;
+  const normalizeAuthProvider = (provider: string) =>
+    resolveProviderIdForAuth(provider, { config: params.cfg, metadataSnapshot });
+  const evaluateStoredEntry = (
+    entry: Pick<ModelCatalogEntry, "provider" | "id" | "api" | "baseUrl">,
+    routeVariants?: readonly ModelCatalogEntry[],
+    runtimeId?: string,
+  ): Promise<ModelAuthAvailabilityEvaluation> => {
+    const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
+    const observedRoutes = (routeVariants ?? [entry]).map(({ api, baseUrl }) => ({ api, baseUrl }));
+    const cacheKey = JSON.stringify([
+      resolveModelCatalogIdentityKey(entry),
+      runtimeId,
+      entry.api,
+      entry.baseUrl,
+      observedRoutes,
+    ]);
+    return getOrCreatePromise(pending, cacheKey, () =>
+      Promise.resolve().then((): ModelAuthAvailabilityEvaluation => {
+        const defaultProfileId = preferredProfilesByProvider.get(
+          normalizeProviderId(entry.provider),
+        );
+        const sameProvider =
+          !profileProvider ||
+          normalizeAuthProvider(profileProvider) === normalizeAuthProvider(entry.provider);
+        const preferredProfileId =
+          (sameProvider ? preferredProfileIdForCatalog : undefined) ?? defaultProfileId;
+        // New sessions capture personal defaults with the same strength as explicit account pins.
+        const pinnedProfileId =
+          (sameProvider ? pinnedProfileIdForCatalog : undefined) ?? defaultProfileId;
+        const requestedRuntimeId =
+          runtimeId ?? (sameProvider && profileProvider ? runtimeOverride : undefined);
+        const resolved = {
+          ...authResolver.evaluateRuntimeModelAuth(entry.provider, {
+            modelId: identity?.id ?? entry.id,
+            runtimeId: requestedRuntimeId,
+            ...(normalizeProviderId(entry.provider) === "openai"
+              ? {}
+              : { api: entry.api, baseUrl: entry.baseUrl }),
+            ...(preferredProfileId ? { preferredProfileId } : {}),
+            ...(pinnedProfileId ? { pinnedProfileId } : {}),
+            observedRoutes,
+          }),
+          ...(requestedRuntimeId ? { requestedRuntimeId } : {}),
+        };
+        const provider = normalizeProviderId(entry.provider);
+        // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
+        // profile discovery tested; widening it would hide routes backed by another valid profile.
+        return providerOutcomes.some(
+          (outcome) =>
+            outcome.status === "auth-rejected" &&
+            outcome.rejectionScope !== "catalog" &&
+            normalizeProviderId(outcome.provider) === provider &&
+            (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
+        )
+          ? {
+              ...resolved,
+              availability: false,
+              unavailableReason: "auth-failed",
+              unavailableUntil: undefined,
+            }
+          : resolved;
+      }),
+    );
+  };
   const missingPersonalPin = Boolean(
     params.preferredProfileId &&
     isUserModelAuthProfileId(params.preferredProfileId) &&

@@ -40,7 +40,11 @@ import {
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { hasAuthForProvider, coerceToolModelConfig } from "./model-config.helpers.js";
+import {
+  hasAuthForProvider,
+  coerceToolModelConfig,
+  prepareToolAuthProfileStoreSource,
+} from "./model-config.helpers.js";
 import {
   createVideoGenerateDuplicateGuardResult,
   createVideoGenerateListActionResult,
@@ -208,6 +212,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   workspaceDir?: string;
 }): boolean {
   const snapshot = loadCapabilityMetadataSnapshot({
@@ -288,6 +293,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
+        authProfileStoreSource: params.authProfileStoreSource,
       })
     ) {
       return true;
@@ -313,6 +319,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
     cfg,
     agentDir: options?.agentDir,
     authStore: options?.authProfileStore,
+    authProfileStoreSource: options?.authProfileStoreSource,
     workspaceDir: options?.workspaceDir,
   });
 
@@ -330,10 +337,13 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
       const action = resolveGenerateAction(args);
 
       if (action === "list") {
+        const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+        signal?.throwIfAborted();
         return createVideoGenerateListActionResult(cfg, {
           workspaceDir: options?.workspaceDir,
           agentDir: options?.agentDir,
           authStore: options?.authProfileStore,
+          authProfileStoreSource,
         });
       }
 

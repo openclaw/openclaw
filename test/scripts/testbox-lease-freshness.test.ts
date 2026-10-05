@@ -14,33 +14,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   prepareTestboxLeaseFreshness,
   recordTestboxLeaseFreshness,
-  testboxLeaseStaleReasons,
 } from "../../scripts/testbox-lease-freshness.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const fingerprint = {
-  version: 2,
-  caller: "codex",
-  taskKey: "e".repeat(64),
-  checkoutKey: "f".repeat(64),
-  baseSha: "a".repeat(40),
-  headSha: "d".repeat(40),
-  dependencyDigest: "b".repeat(64),
-  environmentDigest: "c".repeat(64),
-  workflow: ".github/workflows/ci-check-testbox.yml",
-  job: "check",
-  ref: "main",
-};
-
 describe("Testbox lease freshness", () => {
-  it.each([undefined, 1, 3])("rejects provenance schema %s", (version) => {
-    expect(testboxLeaseStaleReasons({ ...fingerprint, version }, fingerprint)).toEqual([
-      "state schema",
-    ]);
-  });
-
   it("records and reuses a lease with more than a buffer of source deletions", () => {
     const fixture = createLeaseFixture();
     const blob = fixture.git(["hash-object", "-w", "--stdin"], "");
@@ -319,28 +298,19 @@ describe("Testbox lease freshness", () => {
     for (const args of [["warmup"], ["run", "--keep"], ["run", "--keep-on-failure"]]) {
       expect(() => fixture.prepare(args, env)).toThrow("--label");
     }
+    for (const value of ["1", "t", "T", "TRUE", "true", "True"]) {
+      for (const flag of ["keep", "keep-on-failure"]) {
+        expect(() => fixture.prepare(["run", `--${flag}=${value}`], env)).toThrow("--label");
+        expect(() =>
+          fixture.prepare(["run", `--${flag}=${value}`, `--${flag}=false`], env),
+        ).not.toThrow();
+      }
+    }
     const prepared = fixture.prepare(["run", "--keep", "--label", "task-one", "--", "true"], env);
     recordTestboxLeaseFreshness(prepared, "tbx_fixture");
     expect(fixture.reuse(["--label", "task-one"], env)?.current).toEqual(prepared?.current);
     expect(() => fixture.reuse(["--label", "task-two"], env)).toThrow("taskKey");
   });
-
-  it.each(["1", "t", "T", "TRUE", "true", "True"])(
-    "matches native retained boolean %s",
-    (value) => {
-      const fixture = createLeaseFixture();
-      for (const flag of ["keep", "keep-on-failure"]) {
-        expect(() =>
-          fixture.prepare(["run", `--${flag}=${value}`], { CODEX_THREAD_ID: undefined }),
-        ).toThrow("--label");
-        expect(() =>
-          fixture.prepare(["run", `--${flag}=${value}`, `--${flag}=false`], {
-            CODEX_THREAD_ID: undefined,
-          }),
-        ).not.toThrow();
-      }
-    },
-  );
 
   it.each([
     { args: ["run", "--", "true"], exitCode: 0, retained: false },

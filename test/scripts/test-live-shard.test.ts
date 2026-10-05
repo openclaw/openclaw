@@ -442,7 +442,15 @@ describe("scripts/test-live-shard", () => {
       "OPENCLAW_LIVE_SUBAGENT_E2E",
     ],
     [
+      "src/agents/subagents/announce/subagent-followup-yield.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_E2E",
+    ],
+    [
       "src/agents/subagents/announce/subagent-late-reply.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_STRESS",
+    ],
+    [
+      "src/agents/subagents/announce/subagent-yield-pause.live.test.ts",
       "OPENCLAW_LIVE_SUBAGENT_STRESS",
     ],
     [

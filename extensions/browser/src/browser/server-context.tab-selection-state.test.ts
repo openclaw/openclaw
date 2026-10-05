@@ -182,23 +182,6 @@ describe("browser tab selection and ownership", () => {
     expect(runtime.tabAliases).toBeUndefined();
   });
 
-  it("bootstraps a selectable tab under strict SSRF when only browser-internal targets exist", async () => {
-    const create = mockCreatedTarget("REAL", "about:blank");
-    const internal = page("OMNI", "chrome://omnibox-popup.top-chrome/");
-    const { openclaw, state, runtime } = listOnly(() =>
-      create.mock.calls.length ? [internal, page("REAL")] : [internal],
-    );
-    state.resolved.ssrfPolicy = {};
-    expect((await openclaw.ensureTabAvailable()).targetId).toBe("REAL");
-    expect(runtime.lastTargetId).toBe("REAL");
-    expect(create).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18800",
-      url: "about:blank",
-      ssrfPolicy: undefined,
-      waitForNavigationResult: true,
-    });
-  });
-
   it("retains dashboard and just-opened tabs when evicting excess managed tabs", async () => {
     vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
       {

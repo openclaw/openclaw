@@ -39,6 +39,7 @@ source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh"
 installer_node() { node "$@"; }
 installer_npm() { npm "$@"; }
 installer_step() { run_quiet_step "$@"; }
+installer_error() { ui_error "$@"; }
 installer_npm_version_error() {
     echo "Unable to determine npm version from ${1}; no package changes were made." >&2
 }
@@ -151,50 +152,6 @@ resolve_openclaw_user_path() {
 }
 
 DOWNLOADER=""
-detect_downloader() {
-    if command -v curl &> /dev/null; then
-        DOWNLOADER="curl"
-        return 0
-    fi
-    if command -v wget &> /dev/null; then
-        DOWNLOADER="wget"
-        return 0
-    fi
-    ui_error "Missing downloader (curl or wget required)"
-    exit 1
-}
-
-download_file() {
-    local url="$1"
-    local output="$2"
-    local redirect_mode="${3:-follow}"
-    if [[ -z "$DOWNLOADER" ]]; then
-        detect_downloader
-    fi
-    if [[ "$DOWNLOADER" == "curl" ]]; then
-        if [[ "$redirect_mode" == "deny" ]]; then
-            curl -fsSL --max-redirs 0 --proto '=https' --tlsv1.2 \
-                --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
-                --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
-                --retry 3 --retry-delay 1 --retry-connrefused \
-                -o "$output" "$url"
-            return
-        fi
-        # Bound connection and transfer stalls without a total download duration.
-        curl -fsSL --proto '=https' --tlsv1.2 \
-            --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
-            --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
-            --retry 3 --retry-delay 1 --retry-connrefused \
-            -o "$output" "$url"
-        return
-    fi
-    if [[ "$redirect_mode" == "deny" ]]; then
-        wget -q --max-redirect=0 --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
-        return
-    fi
-    wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
-}
-
 # Managed setup endpoints must return a non-empty script with a raw shebang.
 # This is a response-shape check, not an authenticity or completeness check.
 validate_downloaded_script() {
@@ -996,18 +953,8 @@ run_npm_global_install() {
     local npm_cwd="$PWD"
     lifecycle_arg="$(npm_lifecycle_allow_arg "$npm_cmd" "$spec" "$npm_cwd")" || return 1
 
-    local freshness_flag="--min-release-age=0"
-    local min_release_age=""
-    min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$npm_cmd" config get min-release-age --global 2>/dev/null || true)"
-    if npm_config_has_raw_key "$npm_cmd" "min-release-age"; then
-        freshness_flag="--min-release-age=0"
-    elif [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
-        local before_value=""
-        before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" config get before --global 2>/dev/null || true)"
-        if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
-            freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
-        fi
-    fi
+    local freshness_flag
+    freshness_flag="$(npm_freshness_flag "$npm_cmd")"
 
     local -a cmd
     cmd=(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" --loglevel "$NPM_LOGLEVEL")
@@ -2436,99 +2383,6 @@ ensure_pnpm() {
         return 1
     fi
     ui_success "pnpm ready ($(pnpm_cmd_pretty))"
-}
-
-checkout_git_openclaw_ref() {
-    local repo_dir="$1"
-    local ref="$2"
-    local original_head=""
-    local original_status=""
-    local namespaces=(heads tags)
-
-    GIT_REF_KIND=""
-
-    if [[ -z "$ref" ]]; then
-        return 0
-    fi
-
-    # Full commit IDs pin source bytes, even when a remote ref has the same name.
-    # Bundled/existing checkouts already have the object and need no remote lookup.
-    if [[ "$ref" =~ ^[[:xdigit:]]{40}$ ]]; then
-        if ! git -C "$repo_dir" cat-file -e "$ref" 2>/dev/null; then
-            if ! run_quiet_step "Fetching requested commit" git -C "$repo_dir" fetch --no-tags origin "$ref"; then
-                ui_error "Could not fetch requested git commit: ${ref}"
-                return 1
-            fi
-        fi
-        if ! git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
-            ui_error "Requested git version is not a commit: ${ref}"
-            return 1
-        fi
-        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
-        GIT_REF_KIND="immutable"
-        return 0
-    fi
-
-    if [[ "$ref" == "main" ]]; then
-        run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
-        run_quiet_step "Checking out main" git -C "$repo_dir" checkout main
-        if [[ "$GIT_UPDATE" == "1" ]]; then
-            if ! original_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
-                ui_error "Could not record repository state before updating from origin/main"
-                return 1
-            fi
-            if ! original_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
-                ui_error "Could not record repository state before updating from origin/main"
-                return 1
-            fi
-            if ! run_quiet_step "Updating repository" git -C "$repo_dir" rebase origin/main; then
-                if verify_git_rebase_recovery "$repo_dir" "$original_head" "$original_status"; then
-                    ui_error "Could not update repository from origin/main; the checkout was restored to its pre-update state"
-                else
-                    ui_error "Could not update repository from origin/main; checkout recovery was not verified. Run git -C \"$repo_dir\" rebase --abort and inspect the checkout before retrying"
-                fi
-                return 1
-            fi
-        fi
-        GIT_REF_KIND="moving"
-        return 0
-    fi
-
-    # Normalized release selectors prefer immutable tags. A same-name branch
-    # remains a fallback for operator-supplied v-prefixed branch names.
-    if [[ "$ref" == v[0-9]* ]]; then
-        namespaces=(tags heads)
-    fi
-
-    local namespace=""
-    local probe_status=0
-    for namespace in "${namespaces[@]}"; do
-        if git -C "$repo_dir" ls-remote --exit-code origin "refs/${namespace}/${ref}" >/dev/null 2>&1; then
-            if [[ "$namespace" == "heads" ]]; then
-                run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
-                run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
-                GIT_REF_KIND="moving"
-            else
-                run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"
-                if ! git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
-                    ui_error "Requested git version is not a commit: ${ref}"
-                    return 1
-                fi
-                run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "refs/tags/${ref}"
-                GIT_REF_KIND="immutable"
-            fi
-            return 0
-        else
-            probe_status=$?
-        fi
-        if (( probe_status != 2 )); then
-            ui_error "Could not resolve requested git ref: ${ref}"
-            return 1
-        fi
-    done
-
-    ui_error "Requested git version not found: ${ref}"
-    return 1
 }
 
 validate_git_checkout_head() {

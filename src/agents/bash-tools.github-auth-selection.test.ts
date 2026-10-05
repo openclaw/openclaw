@@ -170,7 +170,7 @@ describe.skipIf(process.platform === "win32")("selected GitHub profile authentic
               const requests = sends.flatMap((send) => send.mock.calls.map(([message]) => message));
               expect(requests).toContainEqual(
                 expect.objectContaining({
-                  type: "start",
+                  type: "prepare",
                   env: expect.objectContaining({ GH_TOKEN: "", GITHUB_TOKEN: "" }),
                 }),
               );

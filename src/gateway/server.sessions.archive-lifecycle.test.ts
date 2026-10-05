@@ -481,7 +481,12 @@ test("sessions.patch rechecks authoritative worker work before projection and re
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:archive-worker-recheck";
   const sessionId = "session-archive-worker-recheck";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const running = {
+    status: "running" as const,
+    abortedLastRun: true,
+    lifecycleRunId: "retained-worker-run",
+  };
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId, running) } });
   const release = vi.fn();
   const workerEnvironmentService = createWorkerInferenceDrainService(() => ({
     drained: Promise.resolve(),
@@ -502,6 +507,7 @@ test("sessions.patch rechecks authoritative worker work before projection and re
   expect(archived.ok).toBe(false);
   expect(archived.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+  expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(running);
   expect(release).toHaveBeenCalledOnce();
 });
 

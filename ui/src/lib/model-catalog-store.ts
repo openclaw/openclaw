@@ -169,27 +169,6 @@ export function settleModelCatalogRequests(
   return pending.length ? Promise.allSettled(pending).then(() => {}) : undefined;
 }
 
-/** Observe an eligible producer without joining its cancellation or publication ownership. */
-export function pendingModelCatalogResult(
-  client: ModelCatalogClient,
-  scope: ModelsListParams,
-  issuedBefore: ReadonlySet<ModelCatalogRead>,
-): Promise<ModelCatalogResult | undefined> | undefined {
-  const cache = modelCatalogCache.get(client);
-  const key = modelCatalogKey(modelCatalogParams(scope));
-  const pending = Array.from(cache?.requests.get(key)?.values() ?? []).find(
-    ({ active }) => active && cache?.reads.has(active.read) && !issuedBefore.has(active.read),
-  )?.active;
-  return pending?.promise.then(
-    () =>
-      modelCatalogCache.get(client) === cache &&
-      cache?.entries.get(key)?.publishedRead === pending.read.order
-        ? peekModelCatalog(client, scope)
-        : undefined,
-    () => undefined,
-  );
-}
-
 function createModelCatalogRequest(params: {
   client: ModelCatalogClient;
   scope: ModelsListParams;

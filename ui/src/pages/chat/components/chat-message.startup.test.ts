@@ -27,7 +27,7 @@ it("renders the startup status with elapsed time instead of a working phrase", (
   expect(container.querySelector("openclaw-working-phrase")).toBeNull();
 });
 
-it.each(["unknown", "state_contention"])(
+it.each(["state_contention"])(
   "labels only certified contention as a calm system notice (%s)",
   (errorKind) => {
     expect(

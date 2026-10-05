@@ -11,8 +11,10 @@ import {
   resolveOpaqueSessionFirstKeptEntryId,
   SessionEntryNavigation,
 } from "../../config/sessions/session-entry-navigation.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
-import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import {
+  captureSessionTranscriptTargetBinding,
+  sameSessionTranscriptTargetBinding,
+} from "../../config/sessions/transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
@@ -23,6 +25,11 @@ import {
   partitionSessionFileEntries,
 } from "./session-manager-codec.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
+import {
+  captureSessionManagerIncognitoBinding,
+  installSessionManagerIncognitoBinding,
+} from "./session-manager-incognito-scope.js";
+import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -81,6 +88,10 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.transcriptVersion = version ?? boundedContext?.version;
     if (persistenceTarget || loadedEntries) {
       this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? [], boundedContext, version);
+      installSessionManagerIncognitoBinding(
+        this,
+        captureSessionManagerIncognitoBinding(persistenceTarget),
+      );
     } else {
       this.newSession();
     }
@@ -135,10 +146,15 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     complete = false,
   ): Promise<void> {
     this.assertTranscriptViewAvailable();
-    const hydration = prepareSessionTranscriptHydration(
-      target,
+    const capturedTarget = captureSessionTranscriptTargetBinding(target);
+    const retarget =
+      !preserveCwd && !sameSessionTranscriptTargetBinding(capturedTarget, this.persistenceTarget);
+    const hydration = prepareSessionManagerHydration(
+      capturedTarget,
       complete ? undefined : this.boundedContextLimits,
       signal,
+      this,
+      retarget,
     );
     const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
     const revision = ++this.hydrationRevision;
@@ -164,6 +180,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       throw new Error("Session manager changed during transcript hydration");
     }
     this.adoptPreparedTranscriptReload(prepared, undefined, hydration.target);
+    installSessionManagerIncognitoBinding(this, hydration.incognitoBinding);
     if (!preserveCwd) {
       this.cwd = this.fileEntries.find((entry) => entry.type === "session")?.cwd ?? this.cwd;
     }
