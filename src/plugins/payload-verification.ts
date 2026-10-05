@@ -61,15 +61,12 @@ export function isPayloadMissing(env: NodeJS.ProcessEnv, rawInstallPath?: string
 export async function collectMissingPluginInstallPayloads(params: {
   records: Record<string, PluginInstallRecord>;
   config?: OpenClawConfig;
-  skipDisabledPlugins?: boolean;
-  syncOfficialPluginInstalls?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<MissingPluginInstallPayload[]> {
   const env = params.env ?? process.env;
-  const normalizedPluginConfig =
-    params.skipDisabledPlugins && params.config
-      ? normalizePluginsConfig(params.config.plugins)
-      : undefined;
+  const normalizedPluginConfig = params.config
+    ? normalizePluginsConfig(params.config.plugins)
+    : undefined;
   const missing: MissingPluginInstallPayload[] = [];
   for (const [pluginId, record] of Object.entries(params.records).toSorted(([left], [right]) =>
     left.localeCompare(right),
@@ -77,12 +74,14 @@ export async function collectMissingPluginInstallPayloads(params: {
     if (!TRACKED_SOURCES.has(record.source)) {
       continue;
     }
-    const officialNpmSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId, record })?.npmSpec
-      : undefined;
-    const officialClawHubSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId, record })?.clawhubSpec
-      : undefined;
+    const officialNpmSpec = resolveTrustedSourceLinkedOfficialNpmInstall({
+      pluginId,
+      record,
+    })?.npmSpec;
+    const officialClawHubSpec = resolveTrustedSourceLinkedOfficialClawHubInstall({
+      pluginId,
+      record,
+    })?.clawhubSpec;
     if (normalizedPluginConfig && params.config) {
       const enableState = resolveEffectiveEnableState({
         id: pluginId,

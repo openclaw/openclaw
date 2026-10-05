@@ -221,7 +221,7 @@ export function createFindToolDefinition(
               return;
             }
 
-            const fdPath = await ensureTool("fd", true);
+            const fdPath = await ensureTool("fd");
             if (signal?.aborted) {
               settle(() => reject(new Error("Operation aborted")));
               return;

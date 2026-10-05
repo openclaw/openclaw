@@ -75,7 +75,7 @@ describe("scheduled restart requester authority", () => {
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
       expect(beforeEmit).toHaveBeenCalledTimes(stage.includes("preparation") ? 1 : 0);
       expect(afterEmitRejected).toHaveBeenCalledTimes(stage === "preparation" ? 1 : 0);
-      scheduleGatewayRestart({ delayMs: 0, skipCooldown: true });
+      scheduleGatewayRestart({ delayMs: 0 });
       await vi.advanceTimersByTimeAsync(0);
       expect(signal).toHaveBeenCalledOnce();
     },

@@ -1046,7 +1046,6 @@ describe("matrix monitor handler pairing account scope", () => {
       resolveAgentRoute,
       isDirectMessage: true,
       startupMs: 1_000,
-      startupGraceMs: 0,
       dropPreStartupMessages: true,
     });
 

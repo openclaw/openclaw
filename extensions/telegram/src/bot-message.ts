@@ -188,8 +188,7 @@ export const createTelegramMessageProcessor = (
       typeof options?.receivedAtMs === "number" && Number.isFinite(options.receivedAtMs)
         ? options.receivedAtMs
         : undefined;
-    const ingressDebugEnabled =
-      shouldLogVerbose() || process.env.OPENCLAW_DEBUG_TELEGRAM_INGRESS === "1";
+    const ingressDebugEnabled = shouldLogVerbose();
     const ingressContextStartMs = ingressReceivedAtMs ? Date.now() : undefined;
     const context = await buildTelegramMessageContext({
       nativeCommandNames: deps.nativeCommandNames,
