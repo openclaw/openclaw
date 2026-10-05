@@ -49,7 +49,12 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.runtime-state.js";
-import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.server.js";
+import {
+  installGatewayTestHooks,
+  rpcReq,
+  startConnectedServerWithClient,
+  startTestGatewayServer,
+} from "./test-helpers.server.js";
 
 installGatewayTestHooks();
 let pendingFixtureCleanup: Promise<void> | undefined;
@@ -760,5 +765,44 @@ it("admits a version-changed fleet in parallel without gating readiness on an un
       release.resolve();
     }
     await server?.close();
+  }
+});
+
+it("reports history in a skipped unconfigured agent store as not found", async () => {
+  const sessionKey = "agent:gemini:acp:skipped-history";
+  await upsertSessionEntryCore(
+    { agentId: "gemini", sessionKey },
+    { sessionId: "skipped-history", updatedAt: 1 },
+  );
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeStateDatabaseForTest();
+  testState.agentsConfig = { ownership: "explicit", entries: { main: {} } };
+  testState.agentConfig = { systemAgent: { agentId: "main" } };
+  const env = { ...process.env };
+  const started = await withAgentDatabaseStartupAdmission(async () => {
+    await assertOpenClawDatabasesReady({
+      env,
+      operation: "gateway-startup",
+      config: loadGatewayTestConfig(),
+    });
+    return await startConnectedServerWithClient();
+  });
+  try {
+    await started.server.startupSettled;
+    const listed = await rpcReq<{ sessions: Array<{ key: string }> }>(started.ws, "sessions.list", {
+      limit: 1000,
+    });
+    expect(listed.payload?.sessions.map((row) => row.key)).not.toContain(sessionKey);
+    for (const method of ["chat.history", "chat.startup"]) {
+      expect(await rpcReq(started.ws, method, { sessionKey })).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: `Session "${sessionKey}" was not found.` },
+      });
+    }
+  } finally {
+    started.ws.close();
+    await started.server.close();
+    started.envSnapshot.restore();
   }
 });
