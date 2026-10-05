@@ -96,3 +96,5 @@ export function readMemoryRecallData(db: DatabaseSync, request: MemoryRecallQuer
   }
   return { rows, sourceMtimes };
 }
+
+export type MemoryRecallData = ReturnType<typeof readMemoryRecallData>;

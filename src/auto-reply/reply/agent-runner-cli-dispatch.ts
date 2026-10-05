@@ -28,7 +28,6 @@ import {
   createAgentEventBridge,
   createAgentEventDeliveryStartOrder,
 } from "./agent-event-bridge.js";
-import { createAssistantTextBridge } from "./cli-assistant-bridge.js";
 
 type RunCliAgentInternalParams = RunCliAgentParams & {
   mediaImageLayout?: MediaImageLayout;
@@ -49,6 +48,10 @@ type ReasoningTextPayload = {
   text: string;
   isReasoningSnapshot?: boolean;
 };
+
+type AssistantTextDelivery =
+  | { text: string; completed: false }
+  | { text: string; completed: true; assistantMessageIndex: number };
 
 export function createCliReasoningStreamBridge(
   onReasoningStream: GetReplyOptions["onReasoningStream"] | undefined,
@@ -312,6 +315,8 @@ async function runCliAgentWithLifecycleInternal(
     suppressed: params.suppressAssistantBridge,
     startOrder: progressStartOrder,
   };
+  const { onAssistantText, onCompletedReply } = params;
+  let lastAssistantText: string | undefined;
   let finalReasoningText: string | undefined;
   let lastReasoningText: string | undefined;
   let lastProgressTokens: number | undefined;
@@ -326,10 +331,37 @@ async function runCliAgentWithLifecycleInternal(
           },
         })
       : undefined,
-    createAssistantTextBridge({
+    createAgentEventBridge<AssistantTextDelivery>({
       ...progressBridgeParams,
-      deliver: params.onAssistantText,
-      deliverCompleted: params.onCompletedReply,
+      waitForEarlierDeliveries: (payload) => payload.completed,
+      deliver: async (payload) => {
+        if (payload.completed) {
+          await onCompletedReply?.(payload.text, payload.assistantMessageIndex);
+        } else {
+          await onAssistantText?.(payload.text);
+        }
+      },
+      read: (evt) => {
+        if (evt.stream !== "assistant") {
+          return undefined;
+        }
+        if (
+          typeof evt.data.completedText === "string" &&
+          typeof evt.data.assistantMessageIndex === "number"
+        ) {
+          return {
+            text: evt.data.completedText,
+            completed: true,
+            assistantMessageIndex: evt.data.assistantMessageIndex,
+          };
+        }
+        const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
+        if (text === undefined || text === lastAssistantText) {
+          return undefined;
+        }
+        lastAssistantText = text;
+        return { text, completed: false };
+      },
     }),
     createAgentEventBridge<ReasoningTextPayload>({
       ...progressBridgeParams,

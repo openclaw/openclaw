@@ -564,19 +564,15 @@ public actor GatewayNodeSession {
     }
 
     private func awaitPluginSurfaceRefresh(_ task: Task<String?, Never>, timeoutMs: Double) async -> String? {
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: max(0, timeoutMs) / 1000,
-                onTimeout: {
-                    NSError(
-                        domain: "Gateway",
-                        code: 8,
-                        userInfo: [NSLocalizedDescriptionKey: "plugin surface refresh timed out"])
-                },
-                operation: { await task.value })
-        } catch {
-            return nil
-        }
+        try? await AsyncTimeout.withTimeout(
+            seconds: max(0, timeoutMs) / 1000,
+            onTimeout: {
+                NSError(
+                    domain: "Gateway",
+                    code: 8,
+                    userInfo: [NSLocalizedDescriptionKey: "plugin surface refresh timed out"])
+            },
+            operation: { await task.value })
     }
 
     private func releasePluginSurfaceRefreshWaiter(surface: String, refreshID: UUID, waiterID: UUID) {

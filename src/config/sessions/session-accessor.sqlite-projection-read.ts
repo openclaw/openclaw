@@ -210,7 +210,8 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
     .$narrowType<{ message_position: number }>();
 }
 
-function createMessageRangeReaders(database: Pick<TranscriptReadDatabase, "db">) {
+const messageRangeReaders = createSqliteQueryCache((db) => {
+  const database = { db };
   const metadata = (direction: "asc" | "desc") =>
     prepareSqliteQueryIterator<
       MessageRangeParameters,
@@ -268,9 +269,7 @@ function createMessageRangeReaders(database: Pick<TranscriptReadDatabase, "db">)
     metadata: metadata("asc"),
     metadataDescending: metadata("desc"),
   };
-}
-
-const messageRangeReaders = createSqliteQueryCache((db) => createMessageRangeReaders({ db }));
+});
 
 export function getMessageRangeReaders(database: CurrentTranscriptProjection["database"]) {
   return messageRangeReaders(database.db);

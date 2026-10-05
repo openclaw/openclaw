@@ -122,25 +122,12 @@ export async function beginConversationDeliveryOperation(
   return writeConversationDelivery(scope, "conversation.delivery.begin", params, assertCurrent);
 }
 
-function updateConversationDeliveryOperation(
-  scope: ConversationDeliveryStoreScope,
-  params: ConversationDeliveryTransition,
-  assertCurrent?: () => void,
-): Promise<ConversationDeliveryRecord> {
-  return writeConversationDelivery(
-    scope,
-    "conversation.delivery.transition",
-    params,
-    assertCurrent,
-  );
-}
-
 export async function markConversationDeliveryQueued(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
   queueId: string,
 ): Promise<ConversationDeliveryRecord> {
-  return updateConversationDeliveryOperation(scope, {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "queued",
     queueId,
@@ -153,7 +140,7 @@ export async function markConversationDeliverySent(
   operationId: string,
   platformMessageId?: string,
 ): Promise<ConversationDeliveryRecord> {
-  return updateConversationDeliveryOperation(scope, {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "sent",
     ...(platformMessageId ? { platformMessageId } : {}),
@@ -165,7 +152,7 @@ export async function markConversationDeliverySuppressed(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
 ): Promise<ConversationDeliveryRecord> {
-  return updateConversationDeliveryOperation(scope, {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "suppressed",
     allowedFrom: ["created", "queued"],
@@ -181,7 +168,7 @@ export async function markConversationDeliveryRejected(
   if (!normalizedError) {
     throw new Error("Conversation delivery rejection error is required");
   }
-  return updateConversationDeliveryOperation(scope, {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "rejected",
     rejectionError: normalizedError,
@@ -193,7 +180,7 @@ export async function markConversationDeliveryUnknown(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
 ): Promise<ConversationDeliveryRecord> {
-  return updateConversationDeliveryOperation(scope, {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "unknown",
     allowedFrom: ["created", "queued"],
@@ -209,8 +196,9 @@ export async function markConversationDeliveryReplied(
   },
   assertCurrent?: () => void,
 ): Promise<ConversationDeliveryRecord> {
-  return updateConversationDeliveryOperation(
+  return writeConversationDelivery(
     scope,
+    "conversation.delivery.transition",
     {
       operationId: params.operationId,
       status: "replied",

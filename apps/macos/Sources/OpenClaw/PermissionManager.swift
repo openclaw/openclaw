@@ -109,15 +109,12 @@ enum PermissionManager {
         return false
     }
 
-    private static func ensureAccessibility(interactive: Bool) async -> Bool {
-        let trusted = await MainActor.run { AXIsProcessTrusted() }
-        if interactive, !trusted {
-            await MainActor.run {
-                let opts: NSDictionary = ["AXTrustedCheckOptionPrompt": true]
-                _ = AXIsProcessTrustedWithOptions(opts)
-            }
+    @MainActor private static func ensureAccessibility(interactive: Bool) -> Bool {
+        if interactive, !AXIsProcessTrusted() {
+            let opts: NSDictionary = ["AXTrustedCheckOptionPrompt": true]
+            _ = AXIsProcessTrustedWithOptions(opts)
         }
-        return await MainActor.run { AXIsProcessTrusted() }
+        return AXIsProcessTrusted()
     }
 
     @MainActor

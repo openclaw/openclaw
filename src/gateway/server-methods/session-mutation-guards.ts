@@ -1,5 +1,6 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -320,8 +321,17 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
     };
     const authorization = handler.sessionMutationAuthorization;
     if (authorization) {
+      const admitted = authorization.admittedInputAuthority;
       handler.sessionMutationAuthorization = {
         ...authorization,
+        ...(admitted
+          ? {
+              admittedInputAuthority: withSessionPendingInputAuthorityGuard(
+                admitted,
+                assertTransferredHandlerCurrent,
+              ),
+            }
+          : {}),
         assertAdmittedInputCurrent: () => {
           assertTransferredHandlerCurrent();
           (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)();
@@ -391,9 +401,17 @@ export function withSessionMutationCommitGuard(
     assertAdmittedSourceCurrent ?? assertCommitAllowed,
     authorization?.assertCurrent,
   ]);
+  const admitted = authorization?.admittedInputAuthority;
   return {
     ...authorization,
     assertAdmittedInputCurrent,
+    ...(admitted
+      ? {
+          admittedInputAuthority: withSessionPendingInputAuthorityGuard(admitted, () =>
+            (assertAdmittedSourceCurrent ?? assertCommitAllowed)?.(),
+          ),
+        }
+      : {}),
     ...(authorization?.withCurrent
       ? {
           withCurrent: <T>(consume: () => T) =>

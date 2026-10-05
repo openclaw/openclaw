@@ -166,7 +166,10 @@ export function listKnownSessionStoreAgentIds(
 
 function resolveSessionStoreDiscoveryState(
   cfg: OpenClawConfig,
-  params: SessionStoreTargetReadOptions & { agentIds?: ReadonlySet<string> },
+  params: SessionStoreTargetReadOptions & {
+    agentIds?: ReadonlySet<string>;
+    fixedStoreAgentIds?: ReadonlySet<string>;
+  },
 ): {
   configuredTargets: SessionStoreTarget[];
   agentsRoots: string[];
@@ -176,6 +179,21 @@ function resolveSessionStoreDiscoveryState(
   const configuredTargets = agentIds
     ? resolveConfiguredSessionStoreTargets(cfg, env, params.readPaths)
     : resolveSessionStoreTargets(cfg, { allAgents: true }, params);
+  if (!isPerAgentSessionStoreConfig(cfg.session?.store)) {
+    for (const agentId of params.fixedStoreAgentIds ?? []) {
+      if (!isConfiguredSessionStoreAgentId(cfg, agentId)) {
+        configuredTargets.push({
+          agentId,
+          storePath: resolveCapturedSessionStorePath(
+            cfg.session?.store,
+            agentId,
+            env,
+            params.readPaths,
+          ),
+        });
+      }
+    }
+  }
   const agentsRoots = new Set<string>();
   for (const target of configuredTargets) {
     const agentsDir = resolveAgentsDirFromSessionStorePath(target.storePath);
@@ -200,6 +218,7 @@ export function resolveAllAgentSessionStoreTargetsSync(
   params: {
     env?: NodeJS.ProcessEnv;
     agentIds?: ReadonlySet<string>;
+    fixedStoreAgentIds?: ReadonlySet<string>;
     registeredDatabases?: SessionStoreRegistryRead;
     readCandidates?: readonly SessionStoreReadCandidate[];
     readPaths?: CapturedSessionStorePaths;
@@ -239,6 +258,7 @@ function resolveAllAgentSessionStoreTargets(
     readCandidates: params.readCandidates,
     readPaths: params.readPaths,
     agentIds: params.agentIds,
+    fixedStoreAgentIds: params.fixedStoreAgentIds,
   });
   const getRealAgentsRoot = createRealAgentsRootResolver();
   const validatedConfiguredTargets = configuredTargets.flatMap((target) => {

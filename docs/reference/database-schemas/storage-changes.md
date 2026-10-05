@@ -2304,6 +2304,31 @@ covering access without temporary grouping or table-body reads, asserts retained
 events for null and named runs, and opens a populated old-index fixture through
 canonical admission without changing its version or rows.
 
+## Talk voice-session lookup indexes
+
+The voice-session lookup change keeps the existing `cache_entries` JSON bodies
+and table shape. Two partial expression indexes contain only valid JSON records
+whose status is `open`: one indexes agent, session key, and origin for legacy
+client inference; the other indexes update time for stale recovery. Malformed
+JSON and closed records do not enter either index. JSON expressions are guarded
+individually, so unrelated cache values need not contain JSON.
+
+This is an index-only change under the storage review checkpoint. Writable
+admission installs or repairs the indexes through the canonical index owner;
+existing records need no Doctor conversion or schema-version bump. Initial
+installation scans the cache table once. Subsequent writes maintain index entries
+only while a voice record is open. Older same-version readers ignore the additive
+indexes; upgrade, downgrade, and rollback preserve record bytes and retention.
+
+Legacy inference and stale candidate decoding run in the existing agent history
+reader. Recovery rechecks the cutoff inside the close transaction, so a concurrent
+resume is not closed from an earlier snapshot. Synchronous tool policy retains at
+most 128 compact voice facts per native connection, invalidated by the admitted
+schema, foreign-commit data version, or local mutation revision. Transactions and
+pinned or authorizer-controlled reads do not reuse those facts. Closing the native
+connection retires its cache. Confirmation capability remains available to bound
+consults after call closure, independently of the open-state check.
+
 ## Review checkpoint for material changes
 
 An explicit maintainer repair-and-land request covers internal scheduling,

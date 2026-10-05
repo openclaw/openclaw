@@ -62,6 +62,8 @@ import type {
   SessionEntryListWorkerResult,
   SessionEntryReadWorkerInput,
   SessionEntryReadWorkerResult,
+  SessionExactEntriesWorkerInput,
+  SessionExactEntriesWorkerResult,
   SessionRuntimeTargetWorkerInput,
   SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
@@ -74,8 +76,6 @@ import {
   type SessionDiagnosticTextWorkerInput,
   type SessionEntryCurrentWorkerInput,
   type SessionEntryCurrentWorkerResult,
-  type SessionExactEntriesWorkerInput,
-  type SessionExactEntriesWorkerResult,
   type SessionRowFactsWorkerInput,
   type SessionRowFactsWorkerResult,
   type SessionTranscriptWorkerValues,

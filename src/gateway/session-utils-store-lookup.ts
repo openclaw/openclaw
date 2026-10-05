@@ -489,7 +489,7 @@ export async function withGatewaySessionStoreTarget<T>(
               );
             },
             {
-              ordered: params.ordered,
+              ordered: params.ordered || params.includeMembership,
               prepareSource(input, database, source) {
                 for (const { read, scope } of publications) {
                   if (

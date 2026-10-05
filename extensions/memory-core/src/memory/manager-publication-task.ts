@@ -2,6 +2,10 @@ import type { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
 import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import type { MemoryShadowConnection, MemoryShadowFailure } from "./manager-shadow-task.js";
 import type { MemorySourceIndexHeader } from "./manager-source-index-kernel.js";
+import type {
+  loadMemorySourceFileState,
+  refreshMemorySessionSourceState,
+} from "./manager-source-state.js";
 
 export type MemoryPublicationConnection = MemoryShadowConnection;
 export type MemoryPublicationState = {
@@ -28,6 +32,14 @@ export type MemoryPublicationResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "source.refresh": {
+    input: Parameters<typeof refreshMemorySessionSourceState>[1];
+    output: MemoryPublicationResult<boolean>;
+  };
+  "source.state": {
+    input: Omit<Parameters<typeof loadMemorySourceFileState>[0], "db">;
+    output: ReturnType<typeof loadMemorySourceFileState>;
+  };
   "cache.read": {
     input: Omit<Parameters<typeof loadMemoryEmbeddingCache>[0], "db">;
     output: ReturnType<typeof loadMemoryEmbeddingCache>;
@@ -35,6 +47,10 @@ export type MemoryPublicationOperations = {
   "source.hash": {
     input: { source: "memory" | "sessions"; path: string };
     output: string | undefined;
+  };
+  "session.current": {
+    input: { agentId: string; sessionId: string };
+    output: "current" | "forgotten";
   };
   "cache.prune": {
     input: { maxEntries: number };

@@ -1649,7 +1649,7 @@ src/channels/draft-stream-loop.ts	1
 src/channels/draft-streaming-chunking.ts	1
 src/channels/feedback-reflection.ts	1
 src/channels/ids.ts	1
-src/channels/inbound-event/context.ts	6
+src/channels/inbound-event/context.ts	5
 src/channels/location.ts	1
 src/channels/message-access/admission-evidence.ts	1
 src/channels/message/adapter.ts	1

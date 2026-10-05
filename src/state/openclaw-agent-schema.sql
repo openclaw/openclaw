@@ -738,6 +738,17 @@ CREATE INDEX IF NOT EXISTS idx_agent_cache_expiry
 CREATE INDEX IF NOT EXISTS idx_agent_cache_updated
   ON cache_entries(scope, updated_at DESC, key);
 
+CREATE INDEX IF NOT EXISTS idx_agent_voice_session_open_scope
+  ON cache_entries(CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.agentId') END,
+    CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.sessionKey') END, CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.origin') END)
+  WHERE scope = 'talk-client-voice-sessions'
+    AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.status') END = 'open';
+
+CREATE INDEX IF NOT EXISTS idx_agent_voice_session_open_updated
+  ON cache_entries(scope, updated_at)
+  WHERE scope = 'talk-client-voice-sessions'
+    AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.status') END = 'open';
+
 CREATE TABLE IF NOT EXISTS auth_profile_store (
   store_key TEXT NOT NULL PRIMARY KEY,
   store_json TEXT NOT NULL,

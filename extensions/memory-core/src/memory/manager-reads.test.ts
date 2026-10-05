@@ -49,6 +49,23 @@ describe("memory manager reads", () => {
     closeAllMemorySearchManagers,
   });
 
+  it("reports source eligibility before the index exists", async () => {
+    const diagnostic = await fixture.getFreshManager(
+      fixture.createConfig({ provider: "none", sources: ["memory"] }),
+      "status",
+      true,
+    );
+    expect(diagnostic.status().sourceCounts).toMatchObject([
+      {
+        source: "memory",
+        files: 0,
+        chunks: 0,
+        eligible: 1,
+        issues: [],
+      },
+    ]);
+  });
+
   it("limits targeted archive cleanup to indexed live paths without pruning unrelated sources", async () => {
     const activeId = "active-read-target";
     const archivedId = "archived-read-target";

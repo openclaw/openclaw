@@ -1,6 +1,8 @@
+import type { SessionCostUsageCacheRead } from "../../infra/session-cost-usage-cache-read.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SessionTranscriptEventMatch } from "../../sessions/transcript-visible-record.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type { VoiceSessionLookup } from "../../talk/client-voice-session-store.js";
 import type {
   ResolvedTranscriptReadScope,
   ResolvedTranscriptScope,
@@ -67,4 +69,18 @@ export type SessionTranscriptMessagePresenceWorkerInput = Omit<
   "kind"
 > & {
   kind: "transcript-message-presence";
+};
+
+export type VoiceSessionsWorkerInput = {
+  kind: "voice-sessions";
+  database: { agentId: string; path: string };
+  request: VoiceSessionLookup;
+  env: NodeJS.ProcessEnv;
+};
+
+export type SessionUsageCacheWorkerInput = {
+  kind: "usage-cache";
+  database: { agentId: string; path: string };
+  request: SessionCostUsageCacheRead;
+  env: NodeJS.ProcessEnv;
 };

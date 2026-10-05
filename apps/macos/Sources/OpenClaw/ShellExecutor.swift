@@ -59,16 +59,6 @@ enum ShellExecutor {
         }
     }
 
-    private enum RunOutcome: Sendable {
-        case completed(TerminationStatus)
-        case timedOut
-    }
-
-    private enum StreamingTaskResult: Sendable {
-        case drained
-        case deadline(timedOut: Bool)
-    }
-
     private final class StreamingOutputCapture: @unchecked Sendable {
         private let lock = NSLock()
         private var stdoutLines: [String] = []
@@ -160,34 +150,6 @@ enum ShellExecutor {
             preflightError: preflightError)
     }
 
-    private static func runSubprocess(
-        configuration: Configuration,
-        output: OutputFiles) async throws -> TerminationStatus
-    {
-        let result = try await Subprocess.run(
-            configuration,
-            input: .currentStandardInput,
-            output: output.subprocessStandardOutput,
-            error: output.subprocessStandardError)
-        return result.terminationStatus
-    }
-
-    private static func runTimedSubprocess(
-        configuration: Configuration,
-        output: OutputFiles,
-        timeout: Double) async throws -> RunOutcome
-    {
-        let result = try await Subprocess.run(
-            configuration,
-            input: .currentStandardInput,
-            output: output.subprocessStandardOutput,
-            error: output.subprocessStandardError)
-        { execution in
-            await self.waitForExitOrTimeout(execution: execution, timeout: timeout)
-        }
-        return result.closureResult ? .timedOut : .completed(result.terminationStatus)
-    }
-
     private static func waitForExitOrTimeout(
         execution: Execution<some InputProtocol, some OutputProtocol, some OutputProtocol>,
         timeout: Double) async -> Bool
@@ -210,59 +172,6 @@ enum ShellExecutor {
             // Cancellation can arrive before the timeout race finishes.
             _ = Darwin.kill(-processIdentifier, SIGKILL)
         }
-    }
-
-    private static func runStreamingSubprocess(
-        configuration: Configuration,
-        timeout: Double?,
-        capture: StreamingOutputCapture,
-        onStandardOutputLine: @escaping @Sendable (String) async -> Void) async throws
-        -> (terminationStatus: TerminationStatus, timedOut: Bool)
-    {
-        let result = try await Subprocess.run(
-            configuration,
-            input: .currentStandardInput,
-            output: .sequence,
-            error: .sequence)
-        { execution in
-            let processIdentifier = pid_t(execution.processIdentifier.value)
-            return try await withTaskCancellationHandler {
-                try await withThrowingTaskGroup(of: StreamingTaskResult.self) { group in
-                    group.addTask {
-                        for try await line in execution.standardOutput.strings(bufferingPolicy: .unbounded) {
-                            capture.appendStdout(line: line)
-                            await onStandardOutputLine(line)
-                        }
-                        return .drained
-                    }
-                    group.addTask {
-                        for try await line in execution.standardError.strings(bufferingPolicy: .unbounded) {
-                            capture.appendStderr(line: line)
-                        }
-                        return .drained
-                    }
-                    if let timeout, timeout > 0 {
-                        group.addTask {
-                            await .deadline(
-                                timedOut: self.waitForExitOrTimeout(
-                                    execution: execution,
-                                    timeout: timeout))
-                        }
-                    }
-
-                    var timedOut = false
-                    for try await taskResult in group {
-                        if case let .deadline(didTimeOut) = taskResult {
-                            timedOut = didTimeOut
-                        }
-                    }
-                    return timedOut
-                }
-            } onCancel: {
-                _ = Darwin.kill(-processIdentifier, SIGKILL)
-            }
-        }
-        return (result.terminationStatus, result.closureResult)
     }
 
     static func runDetailed(
@@ -292,22 +201,31 @@ enum ShellExecutor {
 
         do {
             try Task.checkCancellation()
-            let outcome = if let timeout, timeout > 0 {
-                try await self.runTimedSubprocess(
-                    configuration: configuration,
-                    output: output,
-                    timeout: timeout)
+            let terminationStatus: TerminationStatus
+            let timedOut: Bool
+            if let timeout, timeout > 0 {
+                let result = try await Subprocess.run(
+                    configuration,
+                    input: .currentStandardInput,
+                    output: output.subprocessStandardOutput,
+                    error: output.subprocessStandardError)
+                { execution in
+                    await self.waitForExitOrTimeout(execution: execution, timeout: timeout)
+                }
+                terminationStatus = result.terminationStatus
+                timedOut = result.closureResult
             } else {
-                try await RunOutcome.completed(
-                    self.runSubprocess(configuration: configuration, output: output))
+                let result = try await Subprocess.run(
+                    configuration,
+                    input: .currentStandardInput,
+                    output: output.subprocessStandardOutput,
+                    error: output.subprocessStandardError)
+                terminationStatus = result.terminationStatus
+                timedOut = false
             }
             let captured = output.readAndRemove()
-            switch outcome {
-            case .timedOut:
-                return self.timedOutResult(captured: captured)
-            case let .completed(terminationStatus):
-                return self.completedResult(terminationStatus, captured: captured)
-            }
+            return timedOut ? self.timedOutResult(captured: captured) :
+                self.completedResult(terminationStatus, captured: captured)
         } catch {
             let captured = output.readAndRemove()
             return self.failedResult(
@@ -334,16 +252,44 @@ enum ShellExecutor {
         let capture = StreamingOutputCapture()
 
         do {
-            let outcome = try await self.runStreamingSubprocess(
-                configuration: configuration,
-                timeout: timeout,
-                capture: capture,
-                onStandardOutputLine: onStandardOutputLine)
+            let result = try await Subprocess.run(
+                configuration,
+                input: .currentStandardInput,
+                output: .sequence,
+                error: .sequence)
+            { execution in
+                let processIdentifier = pid_t(execution.processIdentifier.value)
+                return try await withTaskCancellationHandler {
+                    try await withThrowingTaskGroup(of: Bool.self) { group in
+                        group.addTask {
+                            for try await line in execution.standardOutput.strings(bufferingPolicy: .unbounded) {
+                                capture.appendStdout(line: line)
+                                await onStandardOutputLine(line)
+                            }
+                            return false
+                        }
+                        group.addTask {
+                            for try await line in execution.standardError.strings(bufferingPolicy: .unbounded) {
+                                capture.appendStderr(line: line)
+                            }
+                            return false
+                        }
+                        if let timeout, timeout > 0 {
+                            group.addTask {
+                                await self.waitForExitOrTimeout(execution: execution, timeout: timeout)
+                            }
+                        }
+                        return try await group.reduce(false) { $0 || $1 }
+                    }
+                } onCancel: {
+                    _ = Darwin.kill(-processIdentifier, SIGKILL)
+                }
+            }
             let captured = capture.snapshot()
-            if outcome.timedOut {
+            if result.closureResult {
                 return self.timedOutResult(captured: captured)
             }
-            return self.completedResult(outcome.terminationStatus, captured: captured)
+            return self.completedResult(result.terminationStatus, captured: captured)
         } catch {
             let captured = capture.snapshot()
             return self.failedResult(

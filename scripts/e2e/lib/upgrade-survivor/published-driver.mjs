@@ -274,6 +274,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       },
       plugins: { enabled: false },
       agents: {
+        defaults: { heartbeat: { every: "0m" } },
         list: [
           { id: "main", default: true, workspace: path.join(runtime, "workspaces", "main") },
           { id: "second", workspace: path.join(runtime, "workspaces", "second") },

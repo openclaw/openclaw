@@ -32,6 +32,10 @@ import {
   type MemorySourceIndexHeader,
   type MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
+import {
+  loadMemorySourceFileState,
+  refreshMemorySessionSourceState,
+} from "./manager-source-state.js";
 
 function failure(error: unknown): MemoryShadowFailure {
   return {
@@ -195,6 +199,17 @@ function createPublicationBackend(
         assertPath();
         if (command.type === "source.hash") {
           return readMemorySourceHash(db, command.input.source, command.input.path);
+        }
+        if (command.type === "source.state") {
+          return loadMemorySourceFileState({ db, ...command.input });
+        }
+        if (command.type === "source.refresh") {
+          return write(() => refreshMemorySessionSourceState(db, command.input));
+        }
+        if (command.type === "session.current") {
+          return hasMemorySessionTombstone(db, command.input.agentId, command.input.sessionId)
+            ? "forgotten"
+            : "current";
         }
         if (command.type === "cache.read") {
           return loadMemoryEmbeddingCache({ ...command.input, db });

@@ -138,15 +138,6 @@ function dropPreparedChannelTurn<TDispatchResult>(
   };
 }
 
-function resolveBotLoopProtectionDrop<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): ChannelTurnResult<TDispatchResult> | undefined {
-  return params.botLoopProtection &&
-    recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection).suppressed
-    ? dropPreparedChannelTurn(params, "bot-loop-protection")
-    : undefined;
-}
-
 function resolveOutboundEchoDrop<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
 ): ChannelTurnResult<TDispatchResult> | undefined {
@@ -211,8 +202,11 @@ async function runPreparedChannelTurnCoreInTrace<
     await params.runDispatchLifecycle?.onDispatchSkipped("outboundEcho");
     return outboundEchoDrop;
   }
-  const botLoopDrop = resolveBotLoopProtectionDrop(params);
-  if (botLoopDrop) {
+  if (
+    params.botLoopProtection &&
+    recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection).suppressed
+  ) {
+    const botLoopDrop = dropPreparedChannelTurn(params, "bot-loop-protection");
     clearPendingHistoryAfterTurn(params.history);
     await params.runDispatchLifecycle?.onDispatchSkipped("botLoopProtection");
     return botLoopDrop;

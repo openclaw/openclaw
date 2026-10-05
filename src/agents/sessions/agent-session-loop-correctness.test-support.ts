@@ -84,6 +84,27 @@ export function createAssistantResultStream(message: AssistantMessage) {
   return stream;
 }
 
+export function holdAssistantResponse(text: string) {
+  const response = createAssistantMessageEventStream();
+  let released = false;
+  return {
+    response,
+    isReleased: () => released,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      response.push({
+        type: "done",
+        reason: "stop",
+        message: createAssistant(testModel, [{ type: "text", text }]),
+      });
+      response.end();
+    },
+  };
+}
+
 export function createOverflowAssistant(activeModel: Model) {
   const contextWindow = activeModel.contextWindow;
   if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow) || contextWindow <= 0) {
