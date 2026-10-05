@@ -297,6 +297,37 @@ describe("native plugin browser builds", () => {
     ]);
   });
 
+  it("retries a transient Windows rename denial when the destination is absent", async () => {
+    const project = await fixture();
+    const realRename = fs.rename.bind(fs);
+    let renameCalls = 0;
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      renameCalls += 1;
+      if (renameCalls === 1) {
+        throw Object.assign(new Error("transient rename denial"), { code: "EPERM" });
+      }
+      return realRename(from, to);
+    });
+
+    const published = await buildPluginControlUi(project);
+    expect(published.entry).toMatch(/^dist\/control-ui\/[a-f0-9]{64}\/index.js$/u);
+    // The first denied rename was retried rather than misread as a prior generation.
+    expect(renameCalls).toBeGreaterThan(1);
+    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
+      path.basename(path.dirname(published.entry)),
+    ]);
+  });
+
+  it("fails cleanly when a rename denial never clears and no destination appears", async () => {
+    const project = await fixture();
+    const denial = Object.assign(new Error("persistent rename denial"), { code: "EPERM" });
+    vi.spyOn(fs, "rename").mockRejectedValue(denial);
+
+    await expect(buildPluginControlUi(project)).rejects.toThrow("could not be published");
+    // No half-published generation and no leftover staging directory.
+    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([]);
+  });
+
   // Windows chmod only toggles the read-only attribute, so exact POSIX mode bits
   // are asserted where the Gateway can actually run as a different UID.
   it.skipIf(process.platform === "win32")(
