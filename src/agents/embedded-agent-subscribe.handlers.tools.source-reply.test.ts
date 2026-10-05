@@ -29,6 +29,7 @@ async function completeTool(
     details: Record<string, unknown>;
     isError?: boolean;
     parentToolCallId?: string;
+    assistantTurnId?: string;
   },
 ) {
   await handleToolExecutionStart(ctx, {
@@ -44,6 +45,7 @@ async function completeTool(
     toolName: params.toolName,
     toolCallId: "tc-1",
     isError: params.isError ?? false,
+    assistantTurnId: params.assistantTurnId,
     result: {
       content: [{ type: "text", text: JSON.stringify(params.details) }],
       details: params.details,
@@ -52,6 +54,41 @@ async function completeTool(
 }
 
 describe("tool-authored source replies at tool completion", () => {
+  it("scopes reused call ids to assistant turns and keeps replays stable across runs", async () => {
+    const ctx = createContext(new Set(["order_status"]));
+
+    for (const [index, turn] of [1, 2, 1].entries()) {
+      // The replay runs under a recovery run id, as restart recovery does.
+      ctx.params.runId = index === 2 ? "run-recovery" : "run-test";
+      await completeTool(ctx, {
+        toolName: "order_status",
+        assistantTurnId: `turn-${turn}`,
+        details: { sourceReply: { text: `Order ${turn} created.` } },
+      });
+    }
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([
+      {
+        text: "Order 1 created.",
+        idempotencyKey: "turn-1:tool-source-reply:tc-1",
+        sourceReplyFinal: true,
+        toolAuthored: true,
+      },
+      {
+        text: "Order 2 created.",
+        idempotencyKey: "turn-2:tool-source-reply:tc-1",
+        sourceReplyFinal: true,
+        toolAuthored: true,
+      },
+      {
+        text: "Order 1 created.",
+        idempotencyKey: "turn-1:tool-source-reply:tc-1",
+        sourceReplyFinal: true,
+        toolAuthored: true,
+      },
+    ]);
+  });
+
   it("queues a final reply from a direct call to a capable tool", async () => {
     const ctx = createContext(new Set(["order_status"]));
 

@@ -637,6 +637,8 @@ export type AgentEvent =
   | {
       type: "tool_execution_end";
       toolCallId: string;
+      /** Issuing assistant response identity; provider call ids are only unique within one response. */
+      assistantTurnId?: string;
       toolName: string;
       result: unknown;
       isError: boolean;

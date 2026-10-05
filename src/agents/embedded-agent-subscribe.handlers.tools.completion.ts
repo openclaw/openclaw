@@ -407,7 +407,12 @@ export async function handleToolExecutionEnd(
     !isToolError &&
     !startData?.parentToolCallId &&
     ctx.params.sourceReplyCapableToolNames?.has(toolName) === true
-      ? captureToolAuthoredSourceReply({ result, toolCallId, idempotencyScope: runId })
+      ? captureToolAuthoredSourceReply({
+          result,
+          toolCallId,
+          // The persisted assistant turn survives recovery runs; the run id is the fallback.
+          idempotencyScope: evt.assistantTurnId ?? runId,
+        })
       : undefined;
   if (toolAuthoredSourceReply) {
     ctx.state.messagingToolSourceReplyPayloads.push(toolAuthoredSourceReply);

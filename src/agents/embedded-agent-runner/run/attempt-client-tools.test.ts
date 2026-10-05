@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { runWithAgentToolExecutionContext } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
@@ -25,6 +26,7 @@ import { runUntilCompleted } from "../../code-mode.test-support.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { compactToolSearchCatalogEntry } from "../../tool-search-catalog.js";
 import {
@@ -120,6 +122,96 @@ function prepare(input: {
 }
 
 describe("prepareEmbeddedAttemptClientTools", () => {
+  it("keeps reused client call ids distinct across assistant turns and stable on replay", async () => {
+    const prepared = prepare({
+      codeModeControlsEnabledForRun: false,
+      attemptConfig: CATALOGS_DISABLED_CONFIG,
+      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+      catalogRef: createToolSearchCatalogRef(),
+    });
+    const tool = wrapToolDefinition(expectDefined(prepared.clientToolDefs[0], "client tool"));
+    for (const value of [1, 2]) {
+      const toolCall = {
+        type: "toolCall" as const,
+        id: "lookup_0",
+        name: tool.name,
+        arguments: { value },
+      };
+      const context = {
+        assistantMessage: makeAgentAssistantMessage({
+          content: [toolCall],
+          turnId: `turn-${value}`,
+          stopReason: "toolUse",
+        }),
+        toolCall,
+      };
+      await runWithAgentToolExecutionContext(context, () =>
+        tool.execute(toolCall.id, toolCall.arguments),
+      );
+      await runWithAgentToolExecutionContext(context, () =>
+        tool.execute(toolCall.id, toolCall.arguments),
+      );
+      expect(prepared.clientToolCallSlots).toHaveLength(value);
+    }
+    expect(prepared.clientToolCallSlots).toEqual([
+      { toolCallId: "lookup_0", name: "client_probe", completed: true, params: { value: 1 } },
+      { toolCallId: "lookup_0", name: "client_probe", completed: true, params: { value: 2 } },
+    ]);
+  });
+
+  it("preserves a completed client call when a later turn reuses its id and is blocked", async () => {
+    const previousRegistry = getGlobalPluginRegistry();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          matcher: ["client_probe"],
+          handler: vi
+            .fn()
+            .mockReturnValueOnce(undefined)
+            .mockReturnValue({ block: true, blockReason: "blocked second call" }),
+        },
+      ]),
+    );
+    try {
+      const prepared = prepare({
+        codeModeControlsEnabledForRun: false,
+        attemptConfig: CATALOGS_DISABLED_CONFIG,
+        toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+        catalogRef: createToolSearchCatalogRef(),
+      });
+      const tool = wrapToolDefinition(expectDefined(prepared.clientToolDefs[0], "client tool"));
+      for (const value of [1, 2]) {
+        const toolCall = {
+          type: "toolCall" as const,
+          id: "lookup_0",
+          name: tool.name,
+          arguments: { value },
+        };
+        const result = await runWithAgentToolExecutionContext(
+          {
+            assistantMessage: makeAgentAssistantMessage({
+              content: [toolCall],
+              turnId: `turn-${value}`,
+              stopReason: "toolUse",
+            }),
+            toolCall,
+          },
+          () => tool.execute(toolCall.id, toolCall.arguments),
+        );
+        expect(result.details).toMatchObject({ status: value === 1 ? "pending" : "blocked" });
+      }
+      expect(prepared.clientToolCallSlots.filter((slot) => slot.completed)).toEqual([
+        { toolCallId: "lookup_0", name: "client_probe", completed: true, params: { value: 1 } },
+      ]);
+    } finally {
+      resetGlobalHookRunner();
+      if (previousRegistry) {
+        initializeGlobalHookRunner(previousRegistry);
+      }
+    }
+  });
+
   it("keeps authoritative client slots in source order across delayed hooks", async () => {
     const previousRegistry = getGlobalPluginRegistry();
     const firstHook = createDeferredCore();

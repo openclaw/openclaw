@@ -1,3 +1,4 @@
+import { getAgentToolAssistantTurnId } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import {
   getPluginToolMeta,
   getPluginToolSideEffectOwnerKey,
@@ -52,11 +53,15 @@ export function prepareEmbeddedAttemptClientTools(params: {
   // Reserve synchronously so parallel client-tool batches preserve assistant source order.
   const clientToolCallSlots: EmbeddedAttemptClientToolCallSlot[] = [];
   const clientToolCallSlotsById = new Map<string, EmbeddedAttemptClientToolCallSlot>();
+  // Provider call ids repeat across assistant responses; slots are per issuing response.
+  const clientToolCallSlotKey = (toolCallId: string) =>
+    `${getAgentToolAssistantTurnId() ?? ""}\u0000${toolCallId}`;
   const reserveClientToolCallSlot = (toolCallId: string, toolName: string) => {
-    let slot = clientToolCallSlotsById.get(toolCallId);
+    const slotKey = clientToolCallSlotKey(toolCallId);
+    let slot = clientToolCallSlotsById.get(slotKey);
     if (!slot) {
       slot = { toolCallId, name: toolName, completed: false };
-      clientToolCallSlotsById.set(toolCallId, slot);
+      clientToolCallSlotsById.set(slotKey, slot);
       clientToolCallSlots.push(slot);
     }
     return slot;
@@ -77,7 +82,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
             slot.completed = true;
           },
           discard: (toolCallId) => {
-            const slot = clientToolCallSlotsById.get(toolCallId);
+            const slot = clientToolCallSlotsById.get(clientToolCallSlotKey(toolCallId));
             if (slot) {
               slot.completed = false;
               slot.params = undefined;
