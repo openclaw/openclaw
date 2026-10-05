@@ -178,3 +178,76 @@ describe("moonshot provider plugin", () => {
     expect(provider.isModernModelRef?.({ provider: "moonshot", modelId: "kimi-k3" })).toBe(true);
   });
 });
+
+describe("moonshot tool schema normalization", () => {
+  it.each([
+    MOONSHOT_BASE_URL,
+    `${MOONSHOT_BASE_URL}/`,
+    MOONSHOT_CN_BASE_URL,
+    `${MOONSHOT_CN_BASE_URL}/`,
+  ])("normalizes tool schemas for native endpoint %s", async (baseUrl) => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const normalized = provider.normalizeToolSchemas?.({
+      provider: "moonshot",
+      modelId: "kimi-k2.6",
+      modelApi: "openai-completions",
+      model: {
+        provider: "moonshot",
+        id: "kimi-k2.6",
+        api: "openai-completions",
+        baseUrl,
+      },
+      tools: [
+        {
+          name: "apollo_tasks_bulk_create",
+          description: "create tasks",
+          parameters: {
+            type: "object",
+            anyOf: [{ required: ["contact_id"] }, { required: ["account_id"] }],
+            properties: { contact_id: { type: "string" }, account_id: { type: "string" } },
+          },
+        },
+      ],
+    } as never) as Array<{ parameters?: Record<string, unknown> }> | null | undefined;
+
+    const parameters = normalized?.[0]?.parameters;
+    expect(parameters?.type).toBeUndefined();
+    expect(parameters?.anyOf).toEqual([
+      { type: "object", required: ["contact_id"] },
+      { type: "object", required: ["account_id"] },
+    ]);
+  });
+
+  it.each([undefined, "https://moonshot.example/v1", `${MOONSHOT_BASE_URL}?proxy=1`])(
+    "preserves tool schemas for non-native endpoint %s",
+    async (baseUrl) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const tools = [
+        {
+          name: "apollo_tasks_bulk_create",
+          description: "create tasks",
+          parameters: {
+            type: "object",
+            anyOf: [{ required: ["contact_id"] }, { required: ["account_id"] }],
+          },
+        },
+      ];
+
+      const normalized = provider.normalizeToolSchemas?.({
+        provider: "moonshot",
+        modelId: "kimi-k2.6",
+        modelApi: "openai-completions",
+        model: {
+          provider: "moonshot",
+          id: "kimi-k2.6",
+          api: "openai-completions",
+          baseUrl,
+        },
+        tools,
+      } as never);
+
+      expect(normalized).toBe(tools);
+    },
+  );
+});
