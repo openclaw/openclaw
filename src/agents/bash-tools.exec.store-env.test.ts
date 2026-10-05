@@ -32,6 +32,7 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunnerRegistry: () => null,
 }));
 
+// mock-isolation: Egress registration is simulated so these env-shaping tests never register live proxy grants.
 vi.mock("../secrets/egress-proxy/registry.js", () => ({
   isSecretEgressProxyActive: () => mocks.egressActive,
   registerSecretEgressProxyProcess: (bindings: unknown) => {
@@ -41,6 +42,8 @@ vi.mock("../secrets/egress-proxy/registry.js", () => ({
       env: {
         HTTPS_PROXY: mocks.proxyUrl,
         HTTP_PROXY: mocks.proxyUrl,
+        https_proxy: mocks.proxyUrl,
+        http_proxy: mocks.proxyUrl,
         NODE_USE_ENV_PROXY: "1",
         NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
         SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
@@ -126,6 +129,8 @@ type StoreEnvHost = "gateway" | "sandbox" | "node";
 const EGRESS_ENV = {
   HTTPS_PROXY: mocks.proxyUrl,
   HTTP_PROXY: mocks.proxyUrl,
+  https_proxy: mocks.proxyUrl,
+  http_proxy: mocks.proxyUrl,
   NODE_USE_ENV_PROXY: "1",
   NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
   SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
@@ -396,6 +401,14 @@ describe("exec store environment", () => {
           allowedHosts: ["API.EXAMPLE.COM"],
         },
       ]);
+      const baselineEnv =
+        host === "gateway"
+          ? undefined
+          : await captureStoreExecEnvironment({
+              host,
+              callId: `call-egress-baseline-${host}`,
+              config: { secrets: { egressProxy: { enabled: false } } },
+            });
       mocks.egressActive = true;
       const env = await captureStoreExecEnvironment({
         host,
@@ -425,11 +438,37 @@ describe("exec store environment", () => {
 
       expect(env).not.toHaveProperty("AWS_REGION");
       expect(env).not.toHaveProperty("SERVICE_API_KEY");
-      expect(JSON.stringify(env)).not.toContain("oc-sent-v2.");
-      for (const [key, value] of Object.entries(EGRESS_ENV)) {
-        expect(env[key]).not.toBe(value);
+      // Remote hosts may inherit proxy settings and sentinels from the test runner.
+      // Enabling Gateway egress must not add or replace any of those values.
+      for (const key of Object.keys(EGRESS_ENV)) {
+        expect(env[key]).toBe(baselineEnv?.[key]);
       }
+      const sentinels = (values: Record<string, string>) =>
+        Object.entries(values).filter(([, value]) => looksLikeSecretSentinel(value));
+      expect(sentinels(env)).toEqual(sentinels(baselineEnv ?? {}));
       expect(mocks.proxyBindings).toEqual([]);
     },
   );
+
+  it("replaces inherited proxy aliases without changing bypass rules", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://uppercase.example:8080");
+    vi.stubEnv("HTTP_PROXY", "http://uppercase.example:8080");
+    vi.stubEnv("https_proxy", "http://lowercase.example:8080");
+    vi.stubEnv("http_proxy", "http://lowercase.example:8080");
+    vi.stubEnv("NO_PROXY", "metadata.example");
+    vi.stubEnv("no_proxy", "localhost");
+    mocks.egressActive = true;
+
+    const env = await captureStoreExecEnvironment({
+      host: "gateway",
+      callId: "call-egress-proxy-precedence",
+      config: { secrets: { egressProxy: { enabled: true } } },
+    });
+
+    expect(env).toMatchObject({
+      ...EGRESS_ENV,
+      NO_PROXY: "metadata.example",
+      no_proxy: "localhost",
+    });
+  });
 });

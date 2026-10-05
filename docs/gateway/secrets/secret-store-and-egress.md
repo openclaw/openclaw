@@ -102,10 +102,12 @@ Equivalent config:
 
 When enabled, OpenClaw adds these values to Gateway-hosted exec environments:
 
-- `HTTPS_PROXY` and `HTTP_PROXY`, with per-process credentials embedded in the loopback proxy URL
+- `HTTPS_PROXY`, `HTTP_PROXY`, `https_proxy`, and `http_proxy`, all set to the same loopback proxy URL with per-process credentials
 - `NODE_USE_ENV_PROXY=1`, which makes supported Node.js global `fetch` clients honor `HTTP_PROXY` and `HTTPS_PROXY` without using `NODE_OPTIONS`
 - `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, and `GIT_SSL_CAINFO`, pointing at the Gateway's trusted certificate bundle
 - each team-store `secret` entry as an `oc-sent-v2...end` sentinel; `env` entries keep their existing behavior and precedence
+
+When Secret Egress is enabled, these managed settings replace inherited uppercase and lowercase proxy routes. After upgrading, clients that prefer lowercase variables use the authenticated Gateway proxy instead of an inherited route. Requests to destinations excluded by the traffic policy, or plain-HTTP requests outside the literal-loopback exception described below, may therefore be refused even if the inherited route previously allowed them. `NO_PROXY` and `no_proxy` remain unchanged; clients that honor those bypass settings still bypass the proxy and receive no secret substitution. With Secret Egress disabled, this change does not replace inherited proxy routes.
 
 Proxy authentication uses standard Basic proxy auth with username `openclaw` and a random password for each managed exec process. OpenClaw creates the grant after approval and launch checks. A background command retains its grant when the originating agent turn ends; its process supervisor owns both execution and proxy access. Base64 is not treated as encryption: the listener binds only to loopback, and a process that can read the proxy token from the agent environment can already read the sentinels in that environment. Missing, wrong, or revoked credentials receive `407 Proxy Authentication Required` and are never forwarded.
 
