@@ -15,6 +15,7 @@ import {
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import * as runtimePlugins from "../agents/runtime-plugins.js";
 import { clearConfigCache } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -59,9 +60,34 @@ export async function fixture(
     homeScope?: "agent" | "user";
     modelTarget?: "utility";
     primaryModel?: string;
+    // Overrides the OpenAI fixture with another provider (e.g. OpenRouter) so
+    // onboarding flows that stage a provider-prefixed default model can be
+    // exercised through the real activation entry point.
+    provider?: {
+      id: string;
+      label: string;
+      modelRef: string;
+      modelId: string;
+      api: ModelProviderConfig["api"];
+      baseUrl: string;
+      credential: AuthProfileCredential;
+      profileId: string;
+    };
   } = {},
 ) {
   const root = tempDirs.make("setup-activation-");
+  const providerSpec = options.provider ?? {
+    id: "openai",
+    label: "OpenAI fixture",
+    modelRef,
+    modelId: "gpt-5.4-mini",
+    api: options.subscription ? "openai-chatgpt-responses" : "openai-responses",
+    baseUrl: options.subscription
+      ? "https://chatgpt.com/backend-api"
+      : "https://provider.example/v1",
+    credential,
+    profileId: "openai:fixture",
+  };
   const configPath = path.join(root, "openclaw.json");
   const workspace = path.join(root, "workspace");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
@@ -73,22 +99,24 @@ export async function fixture(
     vi.stubEnv("CODEX_API_KEY", "");
   }
   vi.stubEnv("SETUP_ACTIVATION_FIXTURE_KEY", credential.key);
-  const selectedCredential: AuthProfileCredential = options.subscription
-    ? {
-        type: "oauth",
-        provider: "openai",
-        access: "fixture-subscription-access",
-        refresh: "fixture-subscription-refresh",
-        expires: Date.now() + 3_600_000,
-        accountId: "fixture-chatgpt-account",
-      }
-    : options.secretRef
+  const selectedCredential: AuthProfileCredential = options.provider
+    ? providerSpec.credential
+    : options.subscription
       ? {
-          type: "api_key",
+          type: "oauth",
           provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "SETUP_ACTIVATION_FIXTURE_KEY" },
+          access: "fixture-subscription-access",
+          refresh: "fixture-subscription-refresh",
+          expires: Date.now() + 3_600_000,
+          accountId: "fixture-chatgpt-account",
         }
-      : credential;
+      : options.secretRef
+        ? {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "SETUP_ACTIVATION_FIXTURE_KEY" },
+          }
+        : credential;
   const config: OpenClawConfig = {
     meta: { migrations: { utilityModelSeparation: true } },
     gateway: { mode: "local" },
@@ -101,19 +129,17 @@ export async function fixture(
           ? { model: { primary: options.primaryModel, fallbacks: ["stable/fallback"] } }
           : {}),
         skipBootstrap: true,
-        models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
+        models: { [providerSpec.modelRef]: { agentRuntime: { id: "openclaw" } } },
       },
     },
     models: {
       providers: {
-        openai: {
-          baseUrl: options.subscription
-            ? "https://chatgpt.com/backend-api"
-            : "https://provider.example/v1",
-          api: options.subscription ? "openai-chatgpt-responses" : "openai-responses",
+        [providerSpec.id]: {
+          baseUrl: providerSpec.baseUrl,
+          api: providerSpec.api,
           models: [
             {
-              id: "gpt-5.4-mini",
+              id: providerSpec.modelId,
               name: "Fixture model",
               reasoning: false,
               input: ["text"],
@@ -149,8 +175,8 @@ export async function fixture(
   const agentDir = resolveAgentDir(config, "main");
   const metadata = createSystemAgentPluginMetadataTestSnapshot(config);
   const choice: ProviderAuthChoiceMetadata = {
-    pluginId: "openai",
-    providerId: "openai",
+    pluginId: providerSpec.id,
+    providerId: providerSpec.id,
     methodId: "fixture-login",
     choiceId: "fixture-login",
     choiceLabel: "Fixture sign-in",
@@ -160,26 +186,28 @@ export async function fixture(
       : { appGuidedAuth: "oauth" as const }),
   };
   const login = vi.fn(async () => ({
-    profiles: options.profiles ?? [{ profileId: "openai:fixture", credential: selectedCredential }],
-    defaultModel: modelRef,
+    profiles: options.profiles ?? [
+      { profileId: providerSpec.profileId, credential: selectedCredential },
+    ],
+    defaultModel: providerSpec.modelRef,
     ...(options.addProviderDuringLogin ? { configPatch: { models: providerModels } } : {}),
   }));
   const provider: ProviderPlugin = {
-    id: "openai",
-    pluginId: "openai",
-    label: "OpenAI fixture",
+    id: providerSpec.id,
+    pluginId: providerSpec.id,
+    label: providerSpec.label,
     auth: [
       {
         id: "fixture-login",
         label: "Fixture sign-in",
         kind: options.authMethod ?? "oauth",
-        starterModel: modelRef,
+        starterModel: providerSpec.modelRef,
         run: login,
       },
     ],
   };
   const pluginRegistry = createEmptyPluginRegistry();
-  pluginRegistry.providers.push({ pluginId: "openai", provider, source: "test" });
+  pluginRegistry.providers.push({ pluginId: providerSpec.id, provider, source: "test" });
   // Credential checks must use the same prepared provider as setup authentication.
   // Otherwise the real resolver cold-loads unrelated bundled setup plugins.
   const resolveAuth = (input: Parameters<typeof resolveApiKeyForProviderCore>[0]) =>
@@ -203,7 +231,9 @@ export async function fixture(
         (value.type === "api_key" &&
           (options.secretRef
             ? value.keyRef?.id === "SETUP_ACTIVATION_FIXTURE_KEY"
-            : value.key === credential.key)),
+            : options.provider
+              ? value.key === (providerSpec.credential as { key?: string }).key
+              : value.key === credential.key)),
     );
   const reply = async (params: RunParams) => {
     const stored = readProfile();
@@ -213,14 +243,14 @@ export async function fixture(
     const [profileId] = stored;
     expect(params.authProfileId).toBe(profileId);
     const auth = await resolveAuth({
-      provider: "openai",
+      provider: providerSpec.id,
       cfg: params.config,
       agentDir: params.agentDir,
       workspaceDir: workspace,
       profileId: params.authProfileId,
       lockedProfile: true,
       modelId: params.model,
-      modelApi: options.subscription ? "openai-chatgpt-responses" : "openai-responses",
+      modelApi: providerSpec.api,
       secretSentinels: true,
     });
     params.onSuccessfulAuthBinding?.({
@@ -242,14 +272,14 @@ export async function fixture(
             ...codexRuntimeArtifactAuth,
           }
         : {}),
-      modelId: "gpt-5.4-mini",
-      modelApi: options.subscription ? "openai-chatgpt-responses" : "openai-responses",
+      modelId: providerSpec.modelId,
+      modelApi: providerSpec.api,
     });
     return {
       payloads: [{ text: "OK" }],
       meta: {
         durationMs: 1,
-        executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.4-mini" },
+        executionTrace: { winnerProvider: providerSpec.id, winnerModel: providerSpec.modelId },
       },
     };
   };
@@ -308,7 +338,7 @@ export async function fixture(
         kind,
         ...(options.modelTarget ? { modelTarget: options.modelTarget } : {}),
         authChoice: choice.choiceId,
-        modelRef,
+        modelRef: providerSpec.modelRef,
         nativeSessionCatalogsEnabled: false,
         surface: options.surface ?? "cli",
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
