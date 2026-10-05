@@ -103,7 +103,8 @@ export function appendSqliteTrajectoryRuntimeEvents(
   const { database, revision } = appendSqliteTrajectoryRuntimeEventsWithWriter(input, write);
   const state = trajectoryRuntimeRetentionState(database);
   const now = Date.now();
-  if (trajectoryRuntimeRetentionDue(state, now)) {
+  // A nested append cannot commit maintenance independently of its caller.
+  if (!database.db.isTransaction && trajectoryRuntimeRetentionDue(state, now)) {
     try {
       let currentRevision = revision;
       for (;;) {

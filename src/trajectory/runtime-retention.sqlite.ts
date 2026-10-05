@@ -123,8 +123,8 @@ export function prepareTrajectoryRuntimeRetention(
       executeSqliteQuerySync(
         database,
         db
-          .with("runs", (qb) => {
-            const runs = qb
+          .with("runs", (qb) =>
+            qb
               .selectFrom("trajectory_runtime_events")
               .select(["session_id", "run_id"])
               .select((eb) => [
@@ -132,13 +132,9 @@ export function prepareTrajectoryRuntimeRetention(
                 eb.fn
                   .sum<number>(eb(eb.fn<number>("octet_length", ["event_json"]), "+", 1))
                   .as("bytes"),
-              ]);
-            // Each arm streams its existing index; no sorter ever retains event bodies.
-            return runs
-              .where("run_id", "is not", null)
-              .groupBy(["session_id", "run_id"])
-              .unionAll(runs.where("run_id", "is", null).groupBy("session_id"));
-          })
+              ])
+              .groupBy(["session_id", "run_id"]),
+          )
           .selectFrom("runs")
           // Match the previous GROUP BY input order for locale-equal strings and NULL/empty IDs.
           .select((eb) =>

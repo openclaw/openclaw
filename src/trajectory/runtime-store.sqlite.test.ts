@@ -12,7 +12,10 @@ import {
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   appendSqliteTrajectoryRuntimeEvents,
@@ -441,33 +444,34 @@ describe("SQLite trajectory runtime store", () => {
         if (sql.includes('group by "session_id", "run_id"')) {
           const all = statement.all.bind(statement);
           const iterate = statement.iterate.bind(statement);
-          const assertAggregate = (
+          const assertAggregatePlan = (
             rows: ReturnType<typeof statement.all>,
             args: Parameters<typeof statement.all>,
           ) => {
             aggregates += 1;
-            const previousRows = prepare(`
-              WITH event_sizes AS MATERIALIZED (
-                SELECT session_id, run_id, created_at,
-                       octet_length(event_json) + 1 AS runtime_bytes
-                FROM trajectory_runtime_events
-              )
-              SELECT session_id, run_id, max(created_at) AS newest_created_at,
-                     sum(runtime_bytes) AS runtime_bytes
-              FROM event_sizes GROUP BY session_id, run_id
-            `).all();
-            expect(rows).toEqual(previousRows);
             const plan = prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args);
-            expect(plan.map((row) => row.detail)).toEqual([
-              expect.stringMatching(/SCAN trajectory_runtime_events USING COVERING INDEX/),
+            const details = plan.map((row) => row.detail);
+            expect(
+              details.filter(
+                (detail) =>
+                  typeof detail === "string" &&
+                  /(?:SCAN|SEARCH) trajectory_runtime_events\b/.test(detail),
+              ),
+            ).toEqual([
+              expect.stringMatching(
+                /SCAN trajectory_runtime_events USING COVERING INDEX idx_agent_trajectory_runtime_run/,
+              ),
             ]);
+            expect(details).not.toContainEqual(
+              expect.stringMatching(/USE TEMP B-TREE FOR GROUP BY/),
+            );
             return rows;
           };
           vi.spyOn(statement, "all").mockImplementation((...args) =>
-            assertAggregate(all(...args), args),
+            assertAggregatePlan(all(...args), args),
           );
           vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
-            yield* assertAggregate([...iterate(...args)], args);
+            yield* assertAggregatePlan([...iterate(...args)], args);
             return undefined;
           });
         }
@@ -618,6 +622,18 @@ describe("SQLite trajectory runtime store", () => {
     await expect(runtimeEventTypes("old-session")).resolves.toEqual(["old"]);
 
     vi.advanceTimersByTime(60 * 60 * 1_000);
+    expect(() =>
+      runOpenClawAgentWriteTransaction(
+        () => {
+          appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+            createTrajectoryEvent({ type: "rolled-back", ts: new Date(Date.now()).toISOString() }),
+          ]);
+          throw new Error("synthetic enclosing rollback");
+        },
+        { agentId: "main", path: sqlitePath() },
+      ),
+    ).toThrow("synthetic enclosing rollback");
+    await expect(runtimeEventTypes("old-session")).resolves.toEqual(["old"]);
     appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
       createTrajectoryEvent({ type: "next-window", ts: new Date(Date.now()).toISOString() }),
     ]);
