@@ -28,6 +28,7 @@ import {
 import {
   buildPaginatedSessionHistory,
   readSessionHistorySnapshotKernel,
+  type IncognitoSessionHistoryReader,
 } from "./session-history-snapshot.js";
 import { readChatHistoryMessageSeq as resolveMessageSeq } from "./session-history-tail.js";
 import {
@@ -46,7 +47,11 @@ type InlineSessionHistoryAppend = {
 
 export async function readSessionHistorySnapshotAsync(
   params: SessionHistoryReadParams,
+  incognito?: IncognitoSessionHistoryReader,
 ): Promise<SessionHistorySnapshot> {
+  if (incognito) {
+    return incognito.http(params);
+  }
   if (
     !params.target.storePath ||
     params.target.sessionEntry?.incognito ||
@@ -104,14 +109,24 @@ export class SessionHistorySseState {
   private turnBoundaryPending: boolean;
   private assistantErrorPending: boolean;
   private transcriptPath: string | undefined;
+  private readonly incognito?: IncognitoSessionHistoryReader;
 
   static fromSnapshot(
-    params: SessionHistoryReadParams & { snapshot: SessionHistorySnapshot },
+    params: SessionHistoryReadParams & {
+      snapshot: SessionHistorySnapshot;
+      incognito?: IncognitoSessionHistoryReader;
+    },
   ): SessionHistorySseState {
     return new SessionHistorySseState(params);
   }
 
-  private constructor(params: SessionHistoryReadParams & { snapshot: SessionHistorySnapshot }) {
+  private constructor(
+    params: SessionHistoryReadParams & {
+      snapshot: SessionHistorySnapshot;
+      incognito?: IncognitoSessionHistoryReader;
+    },
+  ) {
+    this.incognito = params.incognito;
     this.target = params.target;
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
@@ -148,6 +163,16 @@ export class SessionHistorySseState {
     messageId?: string;
     messageSeq?: number;
   }): Promise<() => InlineSessionHistoryAppend | null> {
+    return this.incognito
+      ? this.incognito.consume(this.target, () => this.prepareOwnedInlineMessage(update))
+      : this.prepareOwnedInlineMessage(update);
+  }
+
+  private async prepareOwnedInlineMessage(update: {
+    message: unknown;
+    messageId?: string;
+    messageSeq?: number;
+  }): Promise<() => InlineSessionHistoryAppend | null> {
     if (this.limit !== undefined || this.cursor !== undefined) {
       return () => null;
     }
@@ -162,7 +187,8 @@ export class SessionHistorySseState {
       ...(idempotencyKey ? { idempotencyKey } : {}),
       seq: messageSeq,
     });
-    let subagentCoordination: SubagentCoordinationDisplayResolver | undefined;
+    let subagentCoordination: SubagentCoordinationDisplayResolver | undefined =
+      this.incognito?.readers.subagentCoordination;
     const lookup = readSessionHistorySubagentLookup(message);
     if (
       lookup &&
@@ -186,8 +212,15 @@ export class SessionHistorySseState {
       message,
     ]);
     // The stream queue retains ordering; its publisher reauthorizes before applying this transition.
-    return () =>
-      this.appendInlineMessage(message, messageSeq, subagentCoordination, resolveCronJobName);
+    return () => {
+      this.incognito?.assertCurrent();
+      return this.appendInlineMessage(
+        message,
+        messageSeq,
+        subagentCoordination,
+        resolveCronJobName,
+      );
+    };
   }
 
   private appendInlineMessage(
@@ -278,12 +311,15 @@ export class SessionHistorySseState {
   }
 
   async refreshAsync(): Promise<PaginatedSessionHistory> {
-    const snapshot = await readSessionHistorySnapshotAsync({
-      target: this.target,
-      maxChars: this.maxChars,
-      limit: this.limit,
-      cursor: this.cursor,
-    });
+    const snapshot = await readSessionHistorySnapshotAsync(
+      {
+        target: this.target,
+        maxChars: this.maxChars,
+        limit: this.limit,
+        cursor: this.cursor,
+      },
+      this.incognito,
+    );
     if (snapshot.history.windowReset) {
       this.cursor = undefined;
     }

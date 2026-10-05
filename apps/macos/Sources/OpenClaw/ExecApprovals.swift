@@ -71,10 +71,8 @@ enum ExecApprovalsReadError: Error, Equatable, Sendable {
 }
 
 struct ExecApprovalsResolved: Sendable {
-    let url: URL
     let socketPath: String
     let token: String
-    let defaults: ExecApprovalsResolvedDefaults
     let agent: ExecApprovalsResolvedDefaults
     let allowlist: [ExecAllowlistEntry]
     var file: ExecApprovalsFile

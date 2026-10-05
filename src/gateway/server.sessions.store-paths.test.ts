@@ -11,12 +11,14 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadSessionEntry,
+  replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import * as agentDatabasePaths from "../state/openclaw-agent-db.paths.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
@@ -303,15 +305,21 @@ test("configured-only multi-store target preparation is reused across distinct l
     const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
     testState.sessionConfig = { store: storeTemplate };
     testState.agentsConfig = { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) };
+    (await getGatewayConfigModule()).getRuntimeConfig();
     for (const agentId of agentIds) {
       const storePath = storeTemplate.replace("{agentId}", agentId);
-      await writeSessionStore({
-        agentId,
-        entries: {
-          [`agent:${agentId}:main`]: { sessionId: `session-${agentId}`, updatedAt: 10 },
+      // Seed list metadata without running unrelated lifecycle deletion workers.
+      await withOpenClawAgentDatabaseWrite(
+        {
+          agentId,
+          path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path,
         },
-        storePath,
-      });
+        () =>
+          replaceSessionEntrySync(
+            { agentId, sessionKey: `agent:${agentId}:main`, storePath },
+            { sessionId: `session-${agentId}`, updatedAt: 10 },
+          ),
+      );
     }
 
     expect((await directSessionReq("sessions.list", { configuredAgentsOnly: true })).ok).toBe(true);

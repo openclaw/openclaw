@@ -157,7 +157,7 @@ async function evictAcceptedWorktree(
                   ["rev-parse", `${snapshotRef}^{commit}`],
                   { signal, beforeRun },
                 );
-                await accepted.prepareArchive(snapshotCommit);
+                await accepted.prepareArchive?.(snapshotCommit);
               }
             },
           );

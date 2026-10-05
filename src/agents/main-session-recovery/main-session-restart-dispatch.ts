@@ -44,9 +44,9 @@ import {
   commitMainSessionRecovery,
   type MainSessionRecoveryStoreTarget,
 } from "./main-session-recovery-store.js";
-import { dispatchRestartRecoveryWithinCapacity } from "./main-session-restart-dispatch-capacity.js";
 import { settleAcceptedRestartRecovery } from "./main-session-restart-dispatch-settlement.js";
 import {
+  dispatchRestartRecoveryUntilStarted,
   normalizeRestartRecoveryTerminalStatus,
   probeRestartRecoveryTerminalStatus,
 } from "./main-session-restart-dispatch-start.js";
@@ -174,7 +174,6 @@ type ResumeMainSessionParams = {
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
-  recoveryCapacity?: Parameters<typeof dispatchRestartRecoveryWithinCapacity>[0]["capacity"];
 };
 
 export async function resumeMainSession(
@@ -467,25 +466,21 @@ async function resumeMainSessionWithinAdmission(
     if (params.forceRestartSafeTools) {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
     }
+    if (!params.recoveryAdmission.beginDispatch()) {
+      await rollbackReservation("cancel_reservation");
+      return "skipped";
+    }
     dispatchStarted = true;
     let dispatchSettled = false;
     let stopTyping: (() => void) | undefined;
-    const dispatchOutcome = await dispatchRestartRecoveryWithinCapacity({
+    const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
       agentParams,
-      capacity: params.recoveryCapacity,
-      beginDispatch: params.recoveryAdmission.beginDispatch,
       gatewayRuntime: params.gatewayRuntime,
       onSettled: () => {
         dispatchSettled = true;
         stopTyping?.();
       },
-      shouldContinue: () => params.shouldContinue?.() !== false,
     });
-    if (!dispatchOutcome) {
-      dispatchStarted = false;
-      await rollbackReservation("cancel_reservation");
-      return "skipped";
-    }
     ({ dispatchAccepted, executionStarted, preStartAbortAttempted, preStartAbortConfirmed } =
       dispatchOutcome.observation);
     if (dispatchOutcome.kind === "failed") {

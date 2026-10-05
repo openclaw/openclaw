@@ -851,7 +851,7 @@ extension OpenClawChatViewModel {
     private func refreshIfPending(
         runId: String,
         sessionSnapshot: SessionSnapshot,
-        armID: UInt64? = nil,
+        armID: UInt64,
         after timestamp: Double?,
         terminalState: OpenClawChatRunTerminalState? = nil,
         allowNoOutputCompletion: Bool = false,
@@ -929,11 +929,11 @@ extension OpenClawChatViewModel {
     private func isCurrentPendingRunOwner(
         runId: String,
         sessionSnapshot: SessionSnapshot,
-        armID: UInt64?) -> Bool
+        armID: UInt64) -> Bool
     {
         self.isCurrentSession(sessionSnapshot) &&
             self.pendingRuns.contains(runId) &&
-            (armID == nil || self.pendingRunOwnerArmIDs[runId] == armID)
+            self.pendingRunOwnerArmIDs[runId] == armID
     }
 
     @discardableResult
@@ -1021,7 +1021,6 @@ extension OpenClawChatViewModel {
         in messages: [OpenClawChatMessage]) -> Bool
     {
         let nextIndex = messages.index(after: userIndex)
-        guard nextIndex < messages.endIndex else { return false }
         return messages[nextIndex...].contains { message in
             guard message.role.lowercased() == "assistant", message.streamSegmentID == nil else { return false }
             let text = message.content.compactMap(\.text).joined(separator: "\n")
@@ -1048,7 +1047,6 @@ extension OpenClawChatViewModel {
     func assistantHapticEventAfterLatestUser() -> OpenClawChatHaptics.Event? {
         guard let userIndex = messages.lastIndex(where: { $0.role.lowercased() == "user" }) else { return nil }
         let nextIndex = self.messages.index(after: userIndex)
-        guard nextIndex < self.messages.endIndex else { return nil }
         return self.messages[nextIndex...].reversed().lazy.compactMap(Self.assistantHapticEvent).first
     }
 

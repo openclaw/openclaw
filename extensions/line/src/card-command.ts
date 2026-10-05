@@ -224,20 +224,18 @@ export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPa
         const bubble = createActionCard(
           title,
           body,
-          actions.map((action) => ({
-            label: action.label,
-            action:
-              action.type === "uri"
-                ? { type: "uri", label: action.label, uri: action.uri }
-                : action.type === "postback"
-                  ? {
-                      type: "postback",
-                      label: action.label,
-                      data: action.data,
-                      displayText: action.label,
-                    }
-                  : { type: "message", label: action.label, text: action.data },
-          })),
+          actions.map((action) =>
+            action.type === "uri"
+              ? { type: "uri", label: action.label, uri: action.uri }
+              : action.type === "postback"
+                ? {
+                    type: "postback",
+                    label: action.label,
+                    data: action.data,
+                    displayText: action.label,
+                  }
+                : { type: "message", label: action.label, text: action.data },
+          ),
           { imageUrl: flags.url || flags.image },
         );
         return buildLineFlexReply(body ? `${title}: ${body}` : title, bubble);

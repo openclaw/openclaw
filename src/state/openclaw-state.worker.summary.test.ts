@@ -301,31 +301,58 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
     expect(readFileSync(databasePath)).toEqual(initialBytes);
 
     const scope = "tests/health-native-borrow";
-    const write = (backend: typeof first, key: string) =>
-      runWithSqliteWorkerStateContext(context, () =>
-        operation === "config.health.patch"
-          ? backend.execute({
-              type: operation,
-              input: {
-                configPath: `/${key}.json`,
-                patch: { last_observed_suspicious_signature: key },
-                expected: null,
-                updatedAtMs: 100,
-              },
-            })
-          : backend.execute({
-              type: operation,
-              input: {
-                scope,
-                maxEntries: 10,
-                record: prepareSqliteAuditRecord(scope, {
-                  key,
-                  value: { marker: key },
-                  createdAt: 100,
-                }),
-              },
-            }),
-      );
+    const write = (backend: typeof first, key: string) => {
+      const execute = () =>
+        runWithSqliteWorkerStateContext(context, () =>
+          operation === "config.health.patch"
+            ? backend.execute({
+                type: operation,
+                input: {
+                  configPath: `/${key}.json`,
+                  patch: { last_observed_suspicious_signature: key },
+                  expected: null,
+                  updatedAtMs: 100,
+                },
+              })
+            : backend.execute({
+                type: operation,
+                input: {
+                  scope,
+                  maxEntries: 10,
+                  record: prepareSqliteAuditRecord(scope, {
+                    key,
+                    value: { marker: key },
+                    createdAt: 100,
+                  }),
+                },
+              }),
+        );
+      if (operation === "config.health.patch") {
+        return execute();
+      }
+      const stages: string[] = [];
+      const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+        stages.push(request.stage);
+        context.admission.assertCurrent();
+        grant();
+      });
+      const nativePost = admission.port.postMessage.bind(admission.port);
+      // Service the actual grant before this same-thread backend waits for its response.
+      const dispatch = vi
+        .spyOn(admission.port, "postMessage")
+        .mockImplementation((message, transferList) => {
+          nativePost(message, transferList);
+          admission.service();
+        });
+      try {
+        const result = withSqliteWorkerOperationAdmission({ port: admission.port }, execute);
+        expect(stages).toEqual(["transaction", "commit"]);
+        return result;
+      } finally {
+        dispatch.mockRestore();
+        admission.finish();
+      }
+    };
     const expectedResult = operation === "config.health.patch" ? true : undefined;
     expect(write(first, "first")).toBe(expectedResult);
     expect(write(second, "second")).toBe(expectedResult);

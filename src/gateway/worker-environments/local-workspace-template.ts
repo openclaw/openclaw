@@ -13,6 +13,7 @@ import { WORKTREE_SETUP_HEADROOM_BYTES } from "../../agents/worktrees/capacity.j
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
 import { detectWorktreeFilesystemBackend } from "../../agents/worktrees/filesystem-backend.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
+import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { prepareWorktreeTemplate } from "../../agents/worktrees/template-cache.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -173,15 +174,17 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
       "sandbox dependency template",
     );
     await backend.createTemplate(directory, guard);
-    await prepareLocalWorkspaceCheckout({
-      source: params.source,
-      destination: directory,
-      temporaryRoot: params.temporaryRoot,
-      baseCommit: params.baseCommit,
-      branch: "openclaw-template",
-      signal: guard.signal,
-      assertCurrent: guard.commitGuard,
-    });
+    await timeWorktreePreparationPhase("checkout", () =>
+      prepareLocalWorkspaceCheckout({
+        source: params.source,
+        destination: directory,
+        temporaryRoot: params.temporaryRoot,
+        baseCommit: params.baseCommit,
+        branch: "openclaw-template",
+        signal: guard.signal,
+        assertCurrent: guard.commitGuard,
+      }),
+    );
   };
   const record = await prepareWorktreeTemplate({
     env: params.env,
@@ -236,7 +239,9 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
 export async function cloneLocalWorkspaceTemplate(
   params: LocalWorkspaceTemplateParams & { branch: string; destination: string },
 ): Promise<boolean> {
-  const prepared = await prepareLocalWorkspaceTemplate(params);
+  const prepared = await timeWorktreePreparationPhase("templatePrepare", () =>
+    prepareLocalWorkspaceTemplate(params),
+  );
   if (!prepared) {
     return false;
   }
@@ -254,7 +259,9 @@ export async function cloneLocalWorkspaceTemplate(
     "sandbox workspace clone",
   );
   try {
-    await backend.cloneTemplate(record.path, params.destination, guard);
+    await timeWorktreePreparationPhase("templateApply", () =>
+      backend.cloneTemplate(record.path, params.destination, guard),
+    );
   } catch {
     guard.commitGuard();
     await fs.rm(params.destination, { recursive: true, force: true });

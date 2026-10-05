@@ -33,7 +33,6 @@ struct NodeInfo: Identifiable, Decodable {
 }
 
 private struct NodeListResponse: Decodable {
-    let ts: Double?
     let nodes: [NodeInfo]
 }
 

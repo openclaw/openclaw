@@ -877,11 +877,9 @@ extension MacNodeRuntime {
             task = initializationTask
         }
         let services = await task.value
-        if cachedMainActorServices == nil {
-            cachedMainActorServices = services
-            self.mainActorServicesInitializationTask = nil
-        }
-        return cachedMainActorServices ?? services
+        self.cachedMainActorServices = services
+        self.mainActorServicesInitializationTask = nil
+        return services
     }
 
     /// Releases any synthetic input the computer.act service is still holding

@@ -12,10 +12,9 @@ import {
   createReplySessionInitializationRevision,
 } from "./session-accessor.entry-mutation.js";
 import { resolveSessionEntryFromStore } from "./session-accessor.entry.js";
-import {
-  SessionEntryLifecycleUpsertConflictError,
-  type SessionEntryLifecycleUpsert,
-  type SessionResetBoundaryWrite,
+import type {
+  SessionEntryLifecycleUpsert,
+  SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
@@ -30,7 +29,10 @@ import type {
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import { SessionMaintenancePreservationConflictError } from "./session-mutation-conflict-error.js";
+import {
+  SessionEntryLifecycleUpsertConflictError,
+  SessionMaintenancePreservationConflictError,
+} from "./session-mutation-conflict-error.js";
 import { resolveReplySessionInitializationUpserts } from "./session-reset-entry.js";
 import type { ReplySessionInitializationUpsertDescriptor } from "./session-reset.types.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";

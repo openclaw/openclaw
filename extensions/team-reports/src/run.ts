@@ -103,7 +103,7 @@ export async function generateReportPeriods(params: {
       const discord =
         resolved.discord && sources.discord
           ? await untilAborted(
-              sources.discord.collect(resolved.discord, window, roster, async (entries) => {
+              sources.discord.collect(resolved.discord, window, async (entries) => {
                 runtime.signal.throwIfAborted();
                 await store.appendActivity({ source: "discord", entries });
               }),

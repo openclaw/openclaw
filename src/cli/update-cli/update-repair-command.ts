@@ -24,6 +24,7 @@ import {
 } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
+  createUpdateRun,
   listUpdateRuns,
   reconcileAbandonedUpdateRunsAsync,
   reconcilePackageOwnerRefusal,
@@ -87,8 +88,23 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
           settled.retained
             ? `Recovery evidence retained at ${settled.retained}.`
             : "The original package and launchers remain unchanged."
-        }`,
+        }${settled.detail ? ` ${settled.detail}` : ""}`,
       );
+      if (settled.detail) {
+        // The operation UUID identifies this repair receipt, not the original failed run.
+        // Replaying it after interrupted reporting preserves the original update outcome.
+        createUpdateRun(
+          {
+            runId: settled.operationId,
+            trigger: "cli",
+            settlement: {
+              reason: settled.reason,
+              detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+            },
+          },
+          options,
+        );
+      }
     }
   }
   using handoff =

@@ -110,6 +110,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_rpc_queue_wait_seconds`                 | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_stage_seconds`                      | histogram | `method`, `phase`                                                                         |
 | `openclaw_gateway_rpc_stage_thread_cpu_seconds`           | histogram | `method`, `phase`                                                                         |
+| `openclaw_worktree_preparation_seconds`                   | histogram | `kind`, `template`, `outcome`, `phase`                                                    |
 | `openclaw_gateway_rpc_outcomes_total`                     | counter   | `phase`, `outcome`                                                                        |
 | `openclaw_run_completed_total`                            | counter   | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
 | `openclaw_run_duration_seconds`                           | histogram | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
@@ -212,6 +213,19 @@ and increment `openclaw_prometheus_series_dropped_total`. Monitor that counter:
 coverage of every core method can fill the cap, so a zero value matters when
 interpreting totals or latency percentiles. Async diagnostic queue saturation can
 also drop observations, reported by `openclaw_diagnostic_async_queue_dropped_total`.
+
+### Worktree preparation
+
+`openclaw_worktree_preparation_seconds` records each managed checkout or sandbox
+preparation, including failures. `kind` distinguishes `managed` creation from
+`sandbox` projection and backend readiness. `template` distinguishes `warm`,
+`cold`, `unavailable`, and `reused` existing projections; `outcome` is `returned`
+or `threw`. `phase=total` is the complete elapsed time. Other fixed phases are
+`allocate`, `checkout`, `setup`, `templatePrepare`, `templateApply`, `snapshot`,
+`synchronizeCanonical`, `synchronizeProjection`, `workspaceLayout`, and
+`containerStart`. Only entered phases are recorded. Nested phases are inclusive
+and must not be summed. No paths, session identifiers, or template keys become
+metric labels.
 
 ### Catalog list stages
 

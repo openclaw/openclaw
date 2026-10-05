@@ -1,5 +1,5 @@
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
-import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
+import { executeSandboxRegistryCommand } from "../agents/sandbox/registry-write.worker.js";
 import { persistSubagentRunChangesInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { executeWorkspaceStateCommand } from "../agents/workspace-state-store.worker.js";
@@ -208,8 +208,13 @@ export function executeSharedStateCommand(
   ) {
     return executeWorkspaceStateCommand(command, database, writeOptions);
   }
-  if (command.type === "sandboxRegistry.write") {
-    return writeSandboxRegistry(command.input, writeOptions);
+  if (
+    command.type === "sandboxRegistry.write" ||
+    command.type === "sandboxRegistry.reserve" ||
+    command.type === "sandboxRegistry.beginRemoval" ||
+    command.type === "sandboxRegistry.finishRemoval"
+  ) {
+    return executeSandboxRegistryCommand(command, writeOptions);
   }
   if (command.type === "secrets.write") {
     return writeSecretStoreEntriesInDatabase(

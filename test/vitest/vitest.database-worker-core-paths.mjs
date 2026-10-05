@@ -1,5 +1,10 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/gateway/server-methods/chat-transcript-persistence.mirrors.test.ts",
+  "src/gateway/server-methods/chat-transcript-persistence.generated-media.test.ts",
+  "src/config/sessions/session-message-rewrite.test.ts",
+  "src/gateway/server-methods/chat-send-reply-dispatch.test.ts",
+  "src/gateway/server-methods/chat-send-commentary-media.test.ts",
   "src/channels/inbound-event/envelope.worker.test.ts",
   "src/model-catalog/remote-refresh.test.ts",
   "src/model-catalog/remote-store.test.ts",
@@ -7,6 +12,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-execution-incognito.compute.test.ts",
   "src/state/openclaw-agent-execution-incognito.lifecycle.test.ts",
   "src/state/openclaw-agent-execution-incognito.history.test.ts",
+  "src/state/openclaw-agent-execution-incognito.memory.test.ts",
   "src/state/openclaw-agent-execution-incognito.pending-history.test.ts",
   "src/state/openclaw-agent-execution-incognito.pending-input.test.ts",
   "src/config/sessions/session-sharing-store.incognito.test.ts",
@@ -426,7 +432,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli.fresh-doctor.test.ts",
   "src/cli/update-cli.git-service.test.ts",
   "src/cli/update-cli.node-runtime.test.ts",
-  "src/cli/update-cli.npm-runtime.test.ts",
   "src/cli/update-cli.package-lifecycle.test.ts",
   "src/cli/update-cli.plugin-convergence.test.ts",
   "src/cli/update-cli.post-core-handoff.test.ts",
