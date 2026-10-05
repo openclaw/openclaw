@@ -222,6 +222,89 @@ describe.runIf(process.platform === "win32")("Windows node direct argv transport
     expect(runParams[1]?.command).toEqual(plan.argv);
   });
 
+  describe("an agent CLI called with a prompt that changes on every call", () => {
+    async function installFakeAgentCli() {
+      const bin = path.join(request.workdir, "bin");
+      await fs.mkdir(bin, { recursive: true });
+      const cli = path.join(bin, "claude.exe");
+      await fs.copyFile(
+        path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "where.exe"),
+        cli,
+      );
+      setRuntimeConfigSnapshot({ tools: { exec: { security: "allowlist", ask: "on-miss" } } });
+      return cli;
+    }
+
+    function agentCliRun(cli: string, prompt: string) {
+      return {
+        ...request,
+        command: `"${cli}" -p "${prompt}" --permission-mode plan`,
+        security: "allowlist" as const,
+        ask: "on-miss" as const,
+      };
+    }
+
+    it("does not reuse an allow-always decision for a different prompt", async () => {
+      const cli = await installFakeAgentCli();
+      saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
+
+      const first = executeNodeHostCommand(agentCliRun(cli, "premier prompt"));
+      await Promise.race([decisionEntered.promise, first]);
+      resolveDecision({ decision: "allow-always" });
+      await first;
+      await executeNodeHostCommand(agentCliRun(cli, "premier prompt"));
+      await executeNodeHostCommand(agentCliRun(cli, "second prompt"));
+
+      expect(approvalRequests).toHaveLength(2);
+      const secondPlan = approvalRequests[1]?.systemRunPlan as { argv: string[] } | undefined;
+      expect(secondPlan?.argv[2]).toBe("second prompt");
+      expect(runParams).toHaveLength(3);
+    });
+
+    it("runs any prompt without approval under a path-only allowlist entry", async () => {
+      const cli = await installFakeAgentCli();
+      saveExecApprovals({
+        version: 1,
+        defaults: { security: "allowlist", ask: "on-miss" },
+        agents: { "*": { allowlist: [{ pattern: cli, lastUsedAt: Date.now() }] } },
+      });
+
+      await executeNodeHostCommand(agentCliRun(cli, "premier prompt"));
+      await executeNodeHostCommand(agentCliRun(cli, "second prompt différent"));
+      await executeNodeHostCommand(agentCliRun(cli, "Explique l'erreur"));
+
+      expect(approvalRequests).toHaveLength(0);
+      expect(runParams.map((params) => (params.command as string[]).slice(1))).toEqual([
+        ["-p", "premier prompt", "--permission-mode", "plan"],
+        ["-p", "second prompt différent", "--permission-mode", "plan"],
+        ["-p", "Explique l'erreur", "--permission-mode", "plan"],
+      ]);
+    });
+
+    it("refuses before any approval when the prompt needs cmd.exe", async () => {
+      const cli = await installFakeAgentCli();
+      saveExecApprovals({
+        version: 1,
+        defaults: { security: "allowlist", ask: "on-miss" },
+        agents: { "*": { allowlist: [{ pattern: cli, lastUsedAt: Date.now() }] } },
+      });
+
+      await expect(
+        executeNodeHostCommand(agentCliRun(cli, "Corrige le bug (urgent)")),
+      ).rejects.toThrow("SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime");
+
+      expect(prepareParams[0]?.command).toEqual([
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        `"${cli}" -p "Corrige le bug (urgent)" --permission-mode plan`,
+      ]);
+      expect(approvalRequests).toHaveLength(0);
+      expect(runParams).toHaveLength(0);
+    });
+  });
+
   it("keeps a command that needs cmd.exe on the unchanged envelope", async () => {
     const result = await executeNodeHostCommand({ ...request, command: "echo cmd-envelope-proof" });
 
