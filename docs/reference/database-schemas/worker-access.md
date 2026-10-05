@@ -1843,7 +1843,9 @@ shared-state writer. Callers capture the physical store and input before yieldin
 the worker preserves FIFO order, compares current rows, and requests live host
 authority at transaction and commit. Native fork guards consume transaction-local
 source-link facts for these grants. Exact rollback cleanup joins accepted writes
-before deleting its own link; uncertain outcomes are never replayed. The released
+before deleting its own link; uncertain outcomes are never replayed. Session deletion
+removes its upstream link and signal state in the existing cleanup transaction,
+capturing one physical store and revoking ambient reads before yielding. The released
 synchronous upsert/delete SDK methods and native initializer's `link` method remain
 deprecated compatibility paths until the next Plugin SDK major. Synchronous link
 reads used by immediate native-fork authority checks remain separate migration
