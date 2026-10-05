@@ -29,6 +29,8 @@ export async function inspectGatewayRestart(params: {
   expectedBuildId?: string | null;
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
   requirePluginHealth?: boolean;
+  /** Diagnostic-only fallback; never infer process ownership from protocol reachability. */
+  allowUnattributedDiagnosticProbe?: boolean;
   probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
@@ -190,14 +192,28 @@ export async function inspectGatewayRestart(params: {
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
   let healthy = running && ownsPort && !startupPhase;
+  // Windows can expose a listener PID but hide its elevated command line, while
+  // Task Scheduler reports Running without a PID. This is not restart authority.
+  const canProbeUnattributedListener =
+    params.allowUnattributedDiagnosticProbe === true &&
+    process.platform === "win32" &&
+    params.requirePluginHealth === false &&
+    runtimePid == null &&
+    portUsage.listeners.length > 0 &&
+    portUsage.listeners.every(
+      (listener) => !listener.commandLine && classifyPortListener(listener) === "unknown",
+    );
   if (
     !startupPhase &&
     running &&
     portUsage.status === "busy" &&
-    (requiresGatewayProbe ? healthy : !healthy)
+    ((requiresGatewayProbe ? healthy : !healthy) || (!healthy && canProbeUnattributedListener))
   ) {
     const reachable = (reachability ??= await loadReachability());
-    healthy = reachable.reachable;
+    // An auth rejection proves liveness but has no successful hello/version.
+    healthy =
+      reachable.reachable &&
+      (!canProbeUnattributedListener || Boolean(normalizeOptionalString(reachable.gatewayVersion)));
   }
   // Read after probes: an owner can acquire the coordinator while health is unavailable.
   const owner =

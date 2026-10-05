@@ -1,5 +1,6 @@
 import net from "node:net";
-import { isErrno, toErrorObject } from "./errors.js";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { isErrno } from "./errno.js";
 import type { PortUsageStatus } from "./ports-types.js";
 
 const PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::1", "::"];
@@ -124,6 +125,11 @@ async function probePortOnHost(
     signal?.throwIfAborted();
     if (isErrno(err) && err.code === "EADDRINUSE") {
       return "busy";
+    }
+    if (process.platform === "win32" && isErrno(err) && err.code === "EACCES") {
+      // An exclusive wildcard listener can deny a Windows loopback bind. Only a
+      // successful connection proves occupancy; reserved ports remain unknown.
+      return (await probeTcpListener(port, host, signal)) === "busy" ? "busy" : "unknown";
     }
     if (isErrno(err) && (err.code === "EADDRNOTAVAIL" || err.code === "EAFNOSUPPORT")) {
       return "skip";
