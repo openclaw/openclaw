@@ -542,7 +542,6 @@ src/plugins/hooks.ts
 src/plugins/install-security-scan.runtime.ts
 src/plugins/install.npm-spec.test.ts
 src/plugins/install.test.ts
-src/plugins/installed-plugin-index.test.ts
 src/plugins/loader.activation.test-utils.ts
 src/plugins/loader.base.test-utils.ts
 src/plugins/loader.discovery-and-security.test-utils.ts
