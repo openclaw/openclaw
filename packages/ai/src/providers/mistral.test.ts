@@ -762,6 +762,109 @@ describe("Mistral provider", () => {
     expect(toolCalls).toEqual([]);
   });
 
+  it("accumulates fragmented function names across continuations with stable id and index", async () => {
+    const { result, toolCalls } = await runMistralToolFixture("response-fragmented-name", [
+      [
+        {
+          id: "call_weather",
+          index: 0,
+          function: { name: "get_", arguments: '{"city":' },
+        },
+      ],
+      [
+        {
+          id: "call_weather",
+          index: 0,
+          function: { name: "weather", arguments: '"Paris"}' },
+        },
+      ],
+    ]);
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_weather",
+      name: "get_weather",
+      arguments: { city: "Paris" },
+    });
+  });
+
+  it("preserves one-shot names and handles empty name continuations without duplication", async () => {
+    const { result, toolCalls } = await runMistralToolFixture("response-oneshot-name", [
+      [
+        {
+          id: "call_1",
+          index: 0,
+          function: { name: "get_weather", arguments: '{"city":' },
+        },
+      ],
+      [
+        {
+          id: "call_1",
+          index: 0,
+          function: { name: "get_weather", arguments: '"London"' },
+        },
+      ],
+      [
+        {
+          id: "call_1",
+          index: 0,
+          function: { name: "", arguments: "}" },
+        },
+      ],
+    ]);
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_1",
+      name: "get_weather",
+      arguments: { city: "London" },
+    });
+  });
+
+  it("accumulates independently indexed parallel fragmented function names", async () => {
+    const { result, toolCalls } = await runMistralToolFixture("response-parallel-fragmented", [
+      [
+        {
+          id: "call_0",
+          index: 0,
+          function: { name: "get_", arguments: '{"city":' },
+        },
+        {
+          id: "call_1",
+          index: 1,
+          function: { name: "search_", arguments: '{"query":' },
+        },
+      ],
+      [
+        {
+          id: "call_0",
+          index: 0,
+          function: { name: "weather", arguments: '"Tokyo"}' },
+        },
+        {
+          id: "call_1",
+          index: 1,
+          function: { name: "docs", arguments: '"OpenClaw"}' },
+        },
+      ],
+    ]);
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_0",
+      name: "get_weather",
+      arguments: { city: "Tokyo" },
+    });
+    expect(toolCalls[1]).toMatchObject({
+      id: "call_1",
+      name: "search_docs",
+      arguments: { query: "OpenClaw" },
+    });
+  });
+
   it.each(["string", "text chunks"] as const)(
     "joins thinking text before %s and skips empty reference-only chunks",
     async (representation) => {
