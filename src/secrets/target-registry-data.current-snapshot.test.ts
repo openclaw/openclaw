@@ -10,6 +10,7 @@ const tempDirs: string[] = [];
 
 const metadataMocks = vi.hoisted(() => ({
   listBundledPluginMetadata: vi.fn(),
+  loadBundledPluginManifestRegistry: vi.fn<() => { plugins: never[] }>(() => ({ plugins: [] })),
   resolvePluginMetadataSnapshot: vi.fn<
     (params?: { config?: { plugins?: { load?: { paths?: string[] } } } }) => {
       plugins: never[];
@@ -19,6 +20,11 @@ const metadataMocks = vi.hoisted(() => ({
 
 vi.mock("../plugins/bundled-plugin-metadata.js", () => ({
   listBundledPluginMetadata: metadataMocks.listBundledPluginMetadata,
+}));
+
+vi.mock("../plugins/manifest-registry-build.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/manifest-registry-build.js")>()),
+  loadBundledPluginManifestRegistry: metadataMocks.loadBundledPluginManifestRegistry,
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
@@ -66,6 +72,8 @@ describe("getSecretTargetRegistry metadata reuse", () => {
     });
     metadataMocks.resolvePluginMetadataSnapshot.mockClear();
     metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: [] });
+    metadataMocks.loadBundledPluginManifestRegistry.mockReset();
+    metadataMocks.loadBundledPluginManifestRegistry.mockReturnValue({ plugins: [] });
   });
 
   afterEach(() => {
@@ -74,59 +82,97 @@ describe("getSecretTargetRegistry metadata reuse", () => {
     cleanupTrackedTempDirs(tempDirs);
   });
 
-  it.each(["bundled", "config"])(
-    "rejects a broken %s contract during source docs generation without changing runtime tolerance",
-    async (origin) => {
-      const healthy = writeChannelContract({
-        channelId: "healthy",
-        pluginId: "healthy",
-        targetId: "channels.healthy.token",
-        ownership: "channels",
-      });
-      const broken = writeChannelContract({
-        channelId: "broken",
-        pluginId: "broken",
-        targetId: "channels.broken.token",
-        ownership: "channels",
-      });
-      const missing = {
-        ...broken,
-        id: "missing",
-        rootDir: makeTrackedTempDir("openclaw-target-registry-missing", tempDirs),
-      };
-      // A dependency failure can resemble the old missing-artifact message; it is not absence.
-      const failure = "Unable to resolve bundled plugin public surface fixture dependency failed";
-      fs.writeFileSync(
-        path.join(broken.rootDir, "secret-contract-api.cjs"),
-        `throw new Error(${JSON.stringify(failure)});`,
-      );
-      const records = [healthy, broken, missing].map((record) =>
-        Object.assign({}, record, {
-          origin,
-          id: origin === "bundled" ? path.basename(record.rootDir) : record.id,
-        }),
-      );
-      vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.dirname(healthy.rootDir));
-      vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
-      metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: records } as never);
-      const { getSecretTargetRegistry } = await import("./target-registry-data.js");
-      const { buildSecretRefCredentialMatrix } =
-        await import("./credential-matrix.test-support.js");
+  it("rejects a broken bundled contract during source docs generation without changing runtime tolerance", async () => {
+    const healthy = writeChannelContract({
+      channelId: "healthy",
+      pluginId: "healthy",
+      targetId: "channels.healthy.token",
+      ownership: "channels",
+    });
+    const broken = writeChannelContract({
+      channelId: "broken",
+      pluginId: "broken",
+      targetId: "channels.broken.token",
+      ownership: "channels",
+    });
+    const missing = {
+      ...broken,
+      id: "missing",
+      rootDir: makeTrackedTempDir("openclaw-target-registry-missing", tempDirs),
+    };
+    // A dependency failure can resemble the old missing-artifact message; it is not absence.
+    const failure = "Unable to resolve bundled plugin public surface fixture dependency failed";
+    fs.writeFileSync(
+      path.join(broken.rootDir, "secret-contract-api.cjs"),
+      `throw new Error(${JSON.stringify(failure)});`,
+    );
+    const records = [healthy, broken, missing].map((record) =>
+      Object.assign({}, record, { origin: "bundled", id: path.basename(record.rootDir) }),
+    );
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.dirname(healthy.rootDir));
+    vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: records } as never);
+    metadataMocks.loadBundledPluginManifestRegistry.mockReturnValue({ plugins: records } as never);
+    const { getSecretTargetRegistry } = await import("./target-registry-data.js");
+    const { buildSecretRefCredentialMatrix } = await import("./credential-matrix.js");
 
-      const runtimeIds = getSecretTargetRegistry({ config: {}, env: {} }).map((entry) => entry.id);
-      expect(runtimeIds).toContain("channels.healthy.token");
-      expect(runtimeIds).toContain("gateway.auth.token");
-      expect(runtimeIds).not.toContain("channels.broken.token");
-      expect(() => buildSecretRefCredentialMatrix()).toThrow(failure);
+    const runtimeIds = getSecretTargetRegistry({ config: {}, env: {} }).map((entry) => entry.id);
+    expect(runtimeIds).toContain("channels.healthy.token");
+    expect(runtimeIds).toContain("gateway.auth.token");
+    expect(runtimeIds).not.toContain("channels.broken.token");
+    expect(() => buildSecretRefCredentialMatrix()).toThrow(failure);
 
-      metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({
-        plugins: [records[0], records[2]],
-      } as never);
-      const matrixIds = buildSecretRefCredentialMatrix().entries.map((entry) => entry.id);
-      expect(matrixIds).toContain("channels.healthy.token");
-      expect(matrixIds).toContain("gateway.auth.token");
-    },
-  );
+    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      plugins: [records[0], records[2]],
+    } as never);
+    metadataMocks.loadBundledPluginManifestRegistry.mockReturnValue({
+      plugins: [records[0], records[2]],
+    } as never);
+    const matrixIds = buildSecretRefCredentialMatrix().entries.map((entry) => entry.id);
+    expect(matrixIds).toContain("channels.healthy.token");
+    expect(matrixIds).toContain("gateway.auth.token");
+  });
+
+  it("excludes installed plugin contracts from source docs generation", async () => {
+    const record = writeChannelContract({
+      channelId: "installed",
+      pluginId: "installed",
+      targetId: "channels.installed.token",
+      ownership: "channels",
+    });
+    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: [record] } as never);
+    const { getSecretTargetRegistry } = await import("./target-registry-data.js");
+    expect(getSecretTargetRegistry({ config: {}, env: {} }).map((entry) => entry.id)).toContain(
+      "channels.installed.token",
+    );
+    expect(getSecretTargetRegistry({ sourceTree: true }).map((entry) => entry.id)).not.toContain(
+      "channels.installed.token",
+    );
+    expect(metadataMocks.loadBundledPluginManifestRegistry).toHaveBeenCalledOnce();
+  });
+
+  it("loads a bundled contract from the selected manifest root", async () => {
+    const source = writeChannelContract({
+      channelId: "shared",
+      pluginId: "shared",
+      targetId: "channels.source.token",
+      ownership: "channels",
+    });
+    const ambient = writeChannelContract({
+      channelId: "shared",
+      pluginId: "shared",
+      targetId: "channels.ambient.token",
+      ownership: "channels",
+    });
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.dirname(ambient.rootDir));
+    metadataMocks.loadBundledPluginManifestRegistry.mockReturnValue({
+      plugins: [{ ...source, origin: "bundled" }],
+    } as never);
+    const { getSecretTargetRegistry } = await import("./target-registry-data.js");
+    const ids = getSecretTargetRegistry({ sourceTree: true }).map((entry) => entry.id);
+    expect(ids).toContain("channels.source.token");
+    expect(ids).not.toContain("channels.ambient.token");
+  });
 
   it.runIf(process.platform !== "win32")(
     "reports a rejected contract boundary during source generation after runtime cached the rejection",
@@ -143,6 +189,9 @@ describe("getSecretTargetRegistry metadata reuse", () => {
         path.join(outsideDir, "linked-contract.cjs"),
       );
       metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: [record] } as never);
+      metadataMocks.loadBundledPluginManifestRegistry.mockReturnValue({
+        plugins: [record],
+      } as never);
       const { getSecretTargetRegistry } = await import("./target-registry-data.js");
       expect(
         getSecretTargetRegistry({ config: {}, env: {} }).map((entry) => entry.id),
