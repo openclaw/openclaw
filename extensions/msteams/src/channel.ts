@@ -179,26 +179,34 @@ function resolveGraphActionTarget(
   return currentChatType === "channel" ? "" : (currentChannelTarget ?? "");
 }
 
-function resolveMSTeamsActionMessageId(
+function resolveMSTeamsActionMessage(
   ctx: Parameters<NonNullable<ChannelMessageActionAdapter["handleAction"]>>[0],
   to: string,
   allowCurrentMessageIdFallback = false,
-): string {
-  const canUseCurrentMessageId =
-    allowCurrentMessageIdFallback &&
-    msteamsContextTargetsMatch(to, {
-      currentChannelId: ctx.toolContext?.currentChannelId ?? undefined,
-      currentMessagingTarget:
-        normalizeOptionalString(ctx.toolContext?.currentGraphChannelId) ??
-        normalizeOptionalString(ctx.toolContext?.currentMessagingTarget),
-    });
-  const messageId = canUseCurrentMessageId
-    ? resolveReactionMessageId({
-        args: ctx.params,
-        toolContext: { currentMessageId: ctx.toolContext?.currentMessageId ?? undefined },
-      })
-    : (normalizeOptionalString(ctx.params.messageId) ?? "");
-  return messageId == null ? "" : String(messageId).trim();
+): { messageId: string; threadRootMessageId?: string } {
+  const targetsCurrentConversation = msteamsContextTargetsMatch(to, {
+    currentChannelId: ctx.toolContext?.currentChannelId ?? undefined,
+    currentMessagingTarget:
+      normalizeOptionalString(ctx.toolContext?.currentGraphChannelId) ??
+      normalizeOptionalString(ctx.toolContext?.currentMessagingTarget),
+  });
+  const currentMessageId = ctx.toolContext?.currentMessageId;
+  const resolved =
+    allowCurrentMessageIdFallback && targetsCurrentConversation
+      ? resolveReactionMessageId({
+          args: ctx.params,
+          toolContext: { currentMessageId: currentMessageId ?? undefined },
+        })
+      : (normalizeOptionalString(ctx.params.messageId) ?? "");
+  const messageId = resolved == null ? "" : String(resolved).trim();
+  const threadRootMessageId = normalizeOptionalString(ctx.toolContext?.currentThreadTs);
+  const isCurrentThreadReply =
+    targetsCurrentConversation &&
+    currentMessageId != null &&
+    String(currentMessageId).trim() === messageId &&
+    threadRootMessageId !== undefined &&
+    threadRootMessageId !== messageId;
+  return isCurrentThreadReply ? { messageId, threadRootMessageId } : { messageId };
 }
 
 function describeMSTeamsMessageTool({
@@ -568,15 +576,15 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
 
           if (ctx.action === "read" || ctx.action === "pin" || ctx.action === "reactions") {
             const action = ctx.action;
-            const messageId = resolveMSTeamsActionMessageId(ctx, graphTo, action === "reactions");
-            if (!graphTo || !messageId) {
+            const messageRef = resolveMSTeamsActionMessage(ctx, graphTo, action === "reactions");
+            if (!graphTo || !messageRef.messageId) {
               return actionError(
                 `${{ read: "Read", pin: "Pin", reactions: "Reactions" }[action]} requires a target (to) and messageId.`,
               );
             }
             const to = await authorizeActionTarget(graphTo);
             const runtime = await loadMSTeamsChannelRuntime();
-            const params = { cfg: ctx.cfg, to, messageId };
+            const params = { cfg: ctx.cfg, to, ...messageRef };
             if (action === "read") {
               const message = await runtime.getMessageMSTeams(params);
               return jsonMSTeamsOkActionResult(action, { message });
@@ -616,8 +624,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
 
           if (ctx.action === "react") {
-            const messageId = resolveMSTeamsActionMessageId(ctx, graphTo, true);
-            if (!graphTo || !messageId) {
+            const messageRef = resolveMSTeamsActionMessage(ctx, graphTo, true);
+            if (!graphTo || !messageRef.messageId) {
               return actionError("React requires a target (to) and messageId.");
             }
             const emoji = typeof ctx.params.emoji === "string" ? ctx.params.emoji.trim() : "";
@@ -640,7 +648,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             const result = await react({
               cfg: ctx.cfg,
               to,
-              messageId,
+              ...messageRef,
               reactionType: emoji,
             });
             return jsonMSTeamsActionResult("react", {

@@ -454,6 +454,54 @@ describe("Teams action routing and authority", () => {
     );
   });
 
+  it.each(["react", "reactions"] as const)(
+    "addresses the current channel thread reply beneath its root for %s",
+    async (action) => {
+      const mock = action === "react" ? runtime.reactMessageMSTeams : runtime.listReactionsMSTeams;
+      mock.mockResolvedValue(action === "react" ? { ok: true } : { reactions: [] });
+      const context = current({
+        ChatType: "channel",
+        To: conversation,
+        NativeChannelId: graphTarget,
+        MessageThreadId: "root-1",
+      });
+      await expect(
+        run(action, action === "react" ? { emoji: "like" } : {}, {
+          ...context,
+          toolContext: { ...context.toolContext, currentMessageId: "reply-1" },
+        }),
+      ).resolves.not.toMatchObject({ isError: true });
+      expect(mock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: graphTarget,
+          messageId: "reply-1",
+          threadRootMessageId: "root-1",
+        }),
+      );
+    },
+  );
+
+  it("keeps a reaction to the current thread root on the root message", async () => {
+    runtime.reactMessageMSTeams.mockResolvedValue({ ok: true });
+    const context = current({
+      ChatType: "channel",
+      To: conversation,
+      NativeChannelId: graphTarget,
+      MessageThreadId: "root-1",
+    });
+    await run(
+      "react",
+      { emoji: "like" },
+      { ...context, toolContext: { ...context.toolContext, currentMessageId: "root-1" } },
+    );
+    expect(runtime.reactMessageMSTeams).toHaveBeenCalledWith({
+      cfg,
+      to: graphTarget,
+      messageId: "root-1",
+      reactionType: "like",
+    });
+  });
+
   it.each([
     { action: "react", params: { to: "conversation:19:other@thread.tacv2", emoji: "like" } },
     { action: "delete", params: { to: conversation } },

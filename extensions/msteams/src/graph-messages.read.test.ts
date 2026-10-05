@@ -334,6 +334,64 @@ describe("listReactionsMSTeams", () => {
   });
 });
 
+describe("MSTeams channel thread replies", () => {
+  const replyPath = "/teams/team-id-1/channels/channel-id-1/messages/root-1/replies/reply-1";
+
+  it.each([
+    { operation: "react", action: "setReaction" },
+    { operation: "unreact", action: "unsetReaction" },
+  ])("$operation addresses a reply beneath its thread root", async ({ operation, action }) => {
+    mockState.mutateGraphJson.mockResolvedValue(undefined);
+    const invoke = operation === "react" ? reactMessageMSTeams : unreactMessageMSTeams;
+    await invoke({
+      cfg: {},
+      to: CHANNEL_TO,
+      messageId: "reply-1",
+      threadRootMessageId: "root-1",
+      reactionType: "like",
+    });
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith(
+      expect.objectContaining({ path: `${replyPath}/${action}` }),
+    );
+  });
+
+  it("reads reactions and the message of a reply beneath its thread root", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ id: "reply-1", reactions: [] });
+    const target = {
+      cfg: {} as OpenClawConfig,
+      to: CHANNEL_TO,
+      messageId: "reply-1",
+      threadRootMessageId: "root-1",
+    };
+    await listReactionsMSTeams(target);
+    await getMessageMSTeams(target);
+    expect(mockState.fetchGraphJson.mock.calls.map(([request]) => request.path)).toEqual([
+      replyPath,
+      replyPath,
+    ]);
+  });
+
+  it("keeps root messages and chats on the message path", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ id: "root-1", reactions: [] });
+    await listReactionsMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHANNEL_TO,
+      messageId: "root-1",
+      threadRootMessageId: "root-1",
+    });
+    await listReactionsMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      messageId: "reply-1",
+      threadRootMessageId: "root-1",
+    });
+    expect(mockState.fetchGraphJson.mock.calls.map(([request]) => request.path)).toEqual([
+      "/teams/team-id-1/channels/channel-id-1/messages/root-1",
+      `/chats/${encodeURIComponent(CHAT_ID)}/messages/reply-1`,
+    ]);
+  });
+});
+
 describe("MSTeams reaction validation", () => {
   it("rejects empty reaction types", async () => {
     await expect(
