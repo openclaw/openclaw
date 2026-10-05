@@ -48,6 +48,7 @@ export function renderQuestionOptions(props: QuestionOptionsProps) {
     >
       ${options.map((option, index) => {
         const value = option.value ?? option.label;
+        const shortcut = index < 9 ? index + 1 : undefined;
         const selected = props.selected.has(value);
         const radioTabIndex = selected || (props.selected.size === 0 && index === 0) ? 0 : -1;
         return html`
@@ -61,6 +62,7 @@ export function renderQuestionOptions(props: QuestionOptionsProps) {
             aria-label=${ifDefined(implicit ? t("common.multiSelect.remove", { value: option.label }) : undefined)}
             tabindex=${question.multiSelect ? 0 : radioTabIndex}
             data-option-index=${index}
+            data-shortcut=${ifDefined(shortcut)}
             ?disabled=${props.disabled}
             @click=${() => props.onSelect(value)}
           >
@@ -72,7 +74,7 @@ export function renderQuestionOptions(props: QuestionOptionsProps) {
               <strong class="chat-question-panel__option-label">${option.label}</strong>
               ${option.description ? html`<small>${option.description}</small>` : nothing}
             </span>
-            ${index < 9 ? renderKbd(index + 1) : nothing}
+            ${shortcut ? renderKbd(shortcut) : nothing}
           </button>
           ${option.thumbnail && !option.thumbnail.startsWith("data:") ? html`<a class="chat-question-panel__external-image" href=${option.thumbnail} target="_blank" rel="noreferrer noopener">${t("chat.externalImage.notLoaded")}: ${option.label} — ${t("chat.externalImage.open")}</a>` : nothing}
         `;
@@ -86,6 +88,7 @@ function renderFreeTextControl(
   className: string,
   placeholder: string,
   label?: string,
+  shortcut?: number,
 ) {
   const handleInput = (event: Event) => {
     if (
@@ -98,6 +101,7 @@ function renderFreeTextControl(
   return props.question.isSecret
     ? html`<input
         class=${className}
+        data-shortcut=${ifDefined(shortcut)}
         type="password"
         autocomplete="off"
         placeholder=${placeholder}
@@ -108,6 +112,7 @@ function renderFreeTextControl(
       />`
     : html`<textarea
         class="${className} chat-question-panel__textarea"
+        data-shortcut=${ifDefined(shortcut)}
         rows="1"
         placeholder=${placeholder}
         aria-label=${ifDefined(label)}
@@ -124,6 +129,7 @@ export function renderQuestionFreeText(props: QuestionFreeTextProps) {
     return nothing;
   }
   const answerLabel = question.header || t("chat.questions.answer");
+  const otherShortcut = question.options.length < 9 ? question.options.length + 1 : undefined;
   return html`
     ${
       question.options.length === 0
@@ -148,8 +154,9 @@ export function renderQuestionFreeText(props: QuestionFreeTextProps) {
               "chat-question-panel__other",
               t("chat.questions.other"),
               t("chat.questions.ownAnswerFor", { header: question.header }),
+              otherShortcut,
             )}
-            ${question.options.length < 9 ? renderKbd(question.options.length + 1) : nothing}
+            ${otherShortcut ? renderKbd(otherShortcut) : nothing}
           </label>`
     }
     ${

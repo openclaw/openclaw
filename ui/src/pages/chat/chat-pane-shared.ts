@@ -182,12 +182,14 @@ const CHAT_DROPDOWN_KEYS = new Set([
   "Escape",
 ]);
 
-// Shortcut menus own only advertised, enabled keys; every other printable key
+// Shortcut surfaces own only advertised, enabled keys; every other printable key
 // can still transfer to the composer through the normal browser input pipeline.
 function keyboardShortcutTargetOwnsKey(target: HTMLElement, key: string): boolean {
   return (
     /^[a-z0-9]$/iu.test(key) &&
-    target.matches("wa-dropdown, [data-chat-autotype-shortcuts][open]") &&
+    target.matches(
+      "wa-dropdown, [data-chat-autotype-shortcuts][open], [data-chat-autotype-shortcuts='active']",
+    ) &&
     target.querySelector(`[data-shortcut="${key.toLowerCase()}"]:not([disabled])`) !== null
   );
 }

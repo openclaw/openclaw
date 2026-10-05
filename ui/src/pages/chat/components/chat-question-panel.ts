@@ -389,6 +389,7 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
     return html`
       <section
         class="chat-question-panel"
+        data-chat-autotype-shortcuts="active"
         role="group"
         aria-label=${model.title}
         tabindex="0"
