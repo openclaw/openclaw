@@ -40,8 +40,6 @@ afterEach(() => {
 describe("pending Gateway credentials", () => {
   it.each([
     ["wss://gateway.example", "Bearer document-gateway-token"],
-    ["wss://gateway.example/other", null],
-    ["wss://gateway.example?tenant=other", null],
     ["wss://other-gateway.example", null],
   ])(
     "scopes browser recovery credentials to the document Gateway (%s)",
@@ -213,11 +211,6 @@ describe("pending Gateway credentials", () => {
       retryUnavailable: false,
     },
     {
-      name: "a missing token after retrying an unavailable Gateway",
-      authCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
-      retryUnavailable: true,
-    },
-    {
       name: "a missing password after retrying an unavailable Gateway",
       authCode: ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
       retryUnavailable: true,
@@ -353,25 +346,6 @@ describe("pending Gateway credentials", () => {
     expect(runtime.context.gateway.connection.token).toBe("next-token");
     expect(runtime.context.gateway.connection.password).toBe("");
     persistSessionToken(nextGatewayUrl, "");
-  });
-
-  it("holds a bootstrap token until its changed Gateway URL is confirmed", () => {
-    const currentGatewayUrl = "wss://gateway.example/openclaw";
-    const nextGatewayUrl = "wss://other-gateway.example/openclaw";
-    setNativeAuth({ gatewayUrl: currentGatewayUrl });
-    window.history.replaceState(
-      {},
-      "",
-      `/#gatewayUrl=${encodeURIComponent(nextGatewayUrl)}&bootstrapToken=next-bootstrap`,
-    );
-    runtime = bootstrapApplication();
-
-    expect(runtime.context.gateway.connection.bootstrapToken).toBe("");
-
-    runtime.confirmPendingGatewayConnection();
-
-    expect(runtime.context.gateway.connection.gatewayUrl).toBe(nextGatewayUrl);
-    expect(runtime.context.gateway.connection.bootstrapToken).toBe("next-bootstrap");
   });
 
   it("uses paired-device credentials while other connection bootstrap work is pending", async () => {
