@@ -83,13 +83,14 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     assertMaintenance();
     return;
   }
+  const holderSuffix = ` (held by pid ${owner.pid}${owner.createdAt ? `, started ${owner.createdAt}` : ""}; if that process is actually gone, stop it manually and retry)`;
   if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
     throw new StateDatabaseAdmissionPendingError(
       databasePath,
-      `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`,
+      `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.${holderSuffix}`,
     );
   }
   throw new Error(
-    `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`,
+    `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.${holderSuffix}`,
   );
 }
