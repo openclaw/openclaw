@@ -500,6 +500,7 @@ async function patchSqliteSessionEntrySnapshot(
       consumePendingReset: options.consumePendingReset,
       providerReviewMutation: options.providerReviewMutation,
       shouldCommitIf: options.workerGuard?.shouldCommitIf,
+      cliHistory: options.workerGuard?.cliHistory,
     };
   };
   const withDatabase = <T>(operation: () => T | Promise<T>) => {

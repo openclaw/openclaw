@@ -7,7 +7,7 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
+import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { redactSecrets } from "../logging/redact.js";
 import { resolveConfigAuditStoreEnv } from "./config-journal-snapshot.js";
@@ -533,26 +533,45 @@ export function sanitizeConfigAuditRecord(record: ConfigAuditRecord): ConfigAudi
   return redactSecrets(sanitized);
 }
 
-export async function appendConfigAuditRecord(
-  params: ConfigAuditAppendParams,
+export function captureConfigAuditAppender(
+  params: Pick<ConfigAuditAppendParams, "env" | "homedir">,
   assertCurrent?: () => void,
-): Promise<void> {
-  assertCurrent?.();
+): (record: ConfigAuditRecord) => Promise<void> {
+  let captured:
+    | { writer: ReturnType<typeof createSqliteAuditRecordWriter<ConfigAuditRecord>> }
+    | { error: unknown };
   try {
-    const record = sanitizeConfigAuditRecord(params.record);
-    await registerSqliteAuditRecordAsync(
-      {
+    captured = {
+      writer: createSqliteAuditRecordWriter<ConfigAuditRecord>({
         scope: CONFIG_AUDIT_SCOPE,
         maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
         env: resolveConfigAuditStoreEnv(params),
         assertCurrent,
-      },
-      { key: configAuditEntryKey(record), value: record, createdAt: Date.parse(record.ts) },
-    );
-  } catch {
-    assertCurrent?.();
-    // best-effort
+      }),
+    };
+  } catch (error) {
+    captured = { error };
   }
+  return async (input) => {
+    assertCurrent?.();
+    try {
+      if ("error" in captured) {
+        throw captured.error;
+      }
+      const record = sanitizeConfigAuditRecord(input);
+      await captured.writer.register(configAuditEntryKey(record), record, Date.parse(record.ts));
+    } catch {
+      assertCurrent?.();
+      // best-effort
+    }
+  };
+}
+
+export async function appendConfigAuditRecord(
+  params: ConfigAuditAppendParams,
+  assertCurrent?: () => void,
+): Promise<void> {
+  await captureConfigAuditAppender(params, assertCurrent)(params.record);
 }
 
 export function appendConfigAuditRecordSync(params: ConfigAuditAppendParams): void {

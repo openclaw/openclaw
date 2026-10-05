@@ -1566,15 +1566,22 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["createSqliteAuditRecordKernel.deleteRecord"],
+        operations: [
+          "createSqliteAuditRecordKernel.deleteRecord",
+          "createSqliteAuditRecordKernel.compareAndSet",
+        ],
         evidence:
-          "src/config/config-journal-snapshot.worker.ts:11 → config-journal-snapshot.kernel.ts:38,43. Native greeting callbacks (src/system-agent/greeting.ts:424,554) never return delete, retaining their SQL T1.",
+          "src/config/config-journal-snapshot.worker.ts → config-journal-snapshot.kernel.ts; greeting comparisons use diagnostic.compareAndSet in src/infra/sqlite-audit-record.worker.ts. No native comparison adapter remains.",
       },
       {
         tier: "T2",
-        operations: ["createSqliteAuditRecordKernel.entries"],
+        operations: [
+          "createSqliteAuditRecordKernel.entries",
+          "createSqliteAuditRecordKernel.upsertPreparedRecord",
+          "createSqliteAuditRecordKernel.latest",
+        ],
         evidence:
-          "Migration readers src/infra/state-migrations.audit-checkpoints.ts:53,146, audit-recovery.ts:577, audit-logs.ts:416,436; CLI backup via backup-create.ts:350,360 → audit-backup.ts:113,141; worker diagnostics openclaw-state-read.worker.ts:401.",
+          "Native entries/upsert serve state-migrations.audit-checkpoints.ts, audit-recovery.ts, audit-logs.ts and CLI audit-backup.ts. Native latest serves readRecentConfigAuditRecords in Doctor config flow and update-immutable-protection.ts. Transcript/greeting reads and CAS, plus config-journal snapshots, use the existing workers. Native config observation still reaches register/count/next/prune, which remain T1.",
       },
     ],
   ],

@@ -21,6 +21,7 @@ import {
   SqliteTranscriptMutationConflictError,
 } from "../config/sessions/session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import { SessionTranscriptWriterClaimReboundError } from "../config/sessions/session-transcript-writer-claim-error.js";
 import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
@@ -66,6 +67,7 @@ const MESSAGE_ONLY_ERRORS = {
   "model-selection-locked": ModelSelectionLockedError,
   "session-canonical-key-migration": SessionCanonicalKeyMigrationRequiredError,
   "session-pending-input-custody": SessionPendingInputCustodyError,
+  "session-transcript-read-fence": SessionTranscriptReadFenceError,
   "skill-upload-request": SkillUploadRequestError,
   coordinator: SqliteCoordinatorError,
   ownership: OpenClawStateOwnershipError,

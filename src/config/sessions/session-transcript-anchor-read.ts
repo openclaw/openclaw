@@ -70,6 +70,7 @@ export async function readSessionTranscriptAnchorsAsync(
     afterSeq: selection.afterSeq,
     includeHeader: selection.includeHeader,
     contextValidation: selection.contextValidation && structuredClone(selection.contextValidation),
+    contextAuthority: selection.contextAuthority && structuredClone(selection.contextAuthority),
     replayValidation: selection.replayValidation && { ...selection.replayValidation },
   };
   const empty: SessionTranscriptAnchorFacts = {

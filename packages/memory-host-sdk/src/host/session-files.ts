@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import path from "node:path";
 import { safeStatSync } from "@openclaw/fs-safe/path";
@@ -44,6 +43,8 @@ import {
 import { retryTransientMemoryRead } from "./read-retry.js";
 import {
   collectRawSessionText,
+  hashSessionEntrySnapshot,
+  parseSessionTimestampMs,
   projectSessionEntryRecord,
   renderSessionExportLines,
 } from "./session-entry-projection.js";
@@ -68,7 +69,6 @@ export {
 export { readTranscriptStatsBatchReadOnlySync } from "./openclaw-runtime-session.js";
 
 const SESSION_ENTRY_PARSE_YIELD_LINES = 250;
-const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
 const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
 type SessionResetRecallCutoff = ReturnType<typeof resolveSessionResetRecallCutoff>;
@@ -128,27 +128,6 @@ type SessionTranscriptClassification = {
   dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
   cronRunTranscriptPaths: ReadonlySet<string>;
 };
-
-function hashSessionEntrySnapshot(params: {
-  content: string;
-  lineMap: readonly number[];
-  messageTimestampsMs: readonly number[];
-  lineProvenance: readonly MemoryEntryProvenance[];
-  resetRecallCutoff: SessionResetRecallCutoff;
-}): string {
-  // Preserve persisted hash bytes without flattening another full export string.
-  return createHash("sha256")
-    .update(params.content)
-    .update("\n")
-    .update(params.lineMap.join(","))
-    .update("\n")
-    .update(params.messageTimestampsMs.join(","))
-    .update("\n")
-    .update(JSON.stringify(params.lineProvenance))
-    .update("\n")
-    .update(JSON.stringify(params.resetRecallCutoff))
-    .digest("hex");
-}
 
 export function readSessionEntryResetRecallCutoff(
   entry: SessionFileEntry,
@@ -478,28 +457,6 @@ function isRecalledMemoryMessage(message: { provenance?: unknown }): boolean {
   );
 }
 
-function parseSessionTimestampMs(
-  record: { timestamp?: unknown },
-  message: { timestamp?: unknown },
-): number {
-  const candidates = [message.timestamp, record.timestamp];
-  for (const value of candidates) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      const ms = value > 0 && value < 1e11 ? value * 1000 : value;
-      if (Number.isFinite(ms) && ms > 0 && ms <= MAX_DATE_TIMESTAMP_MS) {
-        return Math.floor(ms);
-      }
-    }
-    if (typeof value === "string") {
-      const parsed = Date.parse(value);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        return parsed;
-      }
-    }
-  }
-  return 0;
-}
-
 function resolveSessionEntryParseYieldLines(opts: BuildSessionEntryOptions): number {
   const configured = opts.parseYieldEveryLines;
   if (typeof configured === "number" && Number.isFinite(configured)) {
@@ -571,7 +528,16 @@ async function yieldSessionEntryParseIfNeeded(
 export async function buildSessionEntry(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
+  source?: {
+    memoryEntry(
+      absPath: string,
+      options: BuildSessionEntryOptions,
+    ): Promise<SessionFileEntry | null>;
+  },
 ): Promise<SessionFileEntry | null> {
+  if (source) {
+    return source.memoryEntry(absPath, opts);
+  }
   const identity = resolveBuildSessionSqliteIdentity(absPath, opts);
   const prepare = async () => {
     // Archives may materialize files, observers own their callbacks, and incognito
@@ -621,7 +587,7 @@ export async function buildSessionEntryInProcess(
 /** Project an actor-owned snapshot without reopening its physical store on the caller. */
 export async function buildSessionEntryFromSnapshot(
   absPath: string,
-  opts: Omit<BuildSessionEntryOptions, "onTranscriptMessage"> & {
+  opts: BuildSessionEntryOptions & {
     agentId: string;
     sessionId: string;
     storePath: string;
@@ -630,9 +596,21 @@ export async function buildSessionEntryFromSnapshot(
   assertCurrent: () => void,
 ): Promise<SessionFileEntry | null> {
   assertCurrent();
+  const { onTranscriptMessage, ...options } = opts;
   const result = await buildSessionEntryFromSource(
     absPath,
-    structuredClone(opts),
+    {
+      ...structuredClone(options),
+      ...(onTranscriptMessage
+        ? {
+            onTranscriptMessage(message, observedAt) {
+              assertCurrent();
+              onTranscriptMessage(message, observedAt);
+              assertCurrent();
+            },
+          }
+        : {}),
+    },
     (text) => redactSensitiveText(text, { mode: "tools" }),
     snapshot,
   );

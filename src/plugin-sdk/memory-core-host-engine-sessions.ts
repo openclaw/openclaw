@@ -1,4 +1,9 @@
 /** Private-local SDK subpath for memory session transcript helpers. */
+import {
+  buildSessionEntry as buildSessionEntryFromHost,
+  listSessionTranscriptCorpusEntriesForAgent as listSessionTranscriptCorpusEntriesFromHost,
+  readSessionResetRecallCutoff as readSessionResetRecallCutoffFromHost,
+} from "../../packages/memory-host-sdk/src/engine-sessions.js";
 import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.js";
 import {
   projectSessionMetadata,
@@ -23,19 +28,31 @@ export {
 } from "../config/sessions/session-transcript-inventory-runtime.js";
 
 export {
-  buildSessionEntry,
   extractKeywords,
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
-  listSessionTranscriptCorpusEntriesForAgent,
   matchesSessionEntryPrefixHash,
   parseUsageCountedSessionIdFromFileName,
   readTranscriptStatsBatchReadOnlySync,
-  readSessionResetRecallCutoff,
   sessionPathForFile,
   sessionPathForSessionIdentity,
   statSessionEntrySync,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
+
+// Internal actor sources are not part of the released plugin call signatures.
+export const buildSessionEntry: (
+  absPath: string,
+  options?: Parameters<typeof buildSessionEntryFromHost>[1],
+) => ReturnType<typeof buildSessionEntryFromHost> = buildSessionEntryFromHost;
+export const listSessionTranscriptCorpusEntriesForAgent: (
+  agentId: string,
+  options?: Parameters<typeof listSessionTranscriptCorpusEntriesFromHost>[1],
+) => ReturnType<typeof listSessionTranscriptCorpusEntriesFromHost> =
+  listSessionTranscriptCorpusEntriesFromHost;
+export const readSessionResetRecallCutoff: (
+  scope: Parameters<typeof readSessionResetRecallCutoffFromHost>[0],
+) => ReturnType<typeof readSessionResetRecallCutoffFromHost> = readSessionResetRecallCutoffFromHost;
+
 export type {
   SessionFileEntry,
   SessionFileState,
