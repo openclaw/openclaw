@@ -101,11 +101,7 @@ final class DisabledUpdaterController: UpdaterProviding {
 @MainActor
 @Observable
 final class UpdateStatus {
-    var isUpdateReady: Bool
-
-    init(isUpdateReady: Bool = false) {
-        self.isUpdateReady = isUpdateReady
-    }
+    var isUpdateReady = false
 }
 
 #if canImport(Sparkle)

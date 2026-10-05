@@ -1,6 +1,7 @@
 import type {
+  SandboxRegistryCleanupOperations,
   SandboxRegistryInsert,
-  SandboxRegistryWrite,
+  SandboxRegistryOperations,
 } from "../agents/sandbox/registry.kernel.js";
 import type {
   SubagentRegistryWrite,
@@ -72,6 +73,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
+  SandboxRegistryOperations &
   WorktreeTemplateWorkerOperations &
   WorkspaceStateWorkerOperations &
   UpdateRunReconciliationOperations &
@@ -93,7 +95,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
     "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
     "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };
-    "sandboxRegistry.write": { input: SandboxRegistryWrite; output: void };
     "workspace.replaceAttestation": {
       input: WorkspaceAttestationInput & Pick<WorkspaceStateGuard, "recoveryHoldPredicate">;
       output: WorkspaceAttestation;
@@ -219,7 +220,8 @@ export type OpenClawStateWorkerCleanupOperations = Pick<
   OpenClawStateLeaseLifecycleOperations,
   "stateLease.release"
 > &
-  Pick<SkillUploadWorkerOperations, "skillUploads.release"> & {
+  Pick<SkillUploadWorkerOperations, "skillUploads.release"> &
+  SandboxRegistryCleanupOperations & {
     "agentDatabases.releaseExitedLease": {
       input: OpenClawAgentDatabaseWorkerLeaseReceipt;
       output: void;

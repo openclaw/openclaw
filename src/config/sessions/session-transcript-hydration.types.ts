@@ -77,6 +77,8 @@ export type SessionTranscriptHydrationWorkerInput = {
   target: SessionTranscriptReadScope;
   resolvedScope: ResolvedTranscriptReadScope;
   expectedIdentity?: DatabaseFileIdentity;
+  afterSeq?: number;
+  includeEventJson?: boolean;
   limits?: { maxBytes: number; maxEvents: number };
   admission?: UserTurnTranscriptAdmissionReceipt;
 };

@@ -350,10 +350,8 @@ enum ExecApprovalsStore {
         let socketPath = self.expandPath(file.socket?.path ?? self.socketPath())
         let token = file.socket?.token ?? ""
         return ExecApprovalsResolved(
-            url: self.databaseURL(),
             socketPath: socketPath,
             token: token,
-            defaults: resolvedDefaults,
             agent: resolvedAgent,
             allowlist: allowlist,
             file: file)
@@ -578,7 +576,7 @@ extension ExecApprovalsStore {
                     source: item.source,
                     argPattern: item.argPattern,
                     lastUsedAt: now,
-                    lastUsedCommand: self.shouldRecordLastUsedCommand(for: item) ? command : nil,
+                    lastUsedCommand: item.argPattern?.hasPrefix("sha256:") == true ? nil : command,
                     lastResolvedPath: use.resolvedPath)
             }
             if entryChanged {
@@ -591,10 +589,6 @@ extension ExecApprovalsStore {
             file.agents = agents
         }
         return changed
-    }
-
-    private static func shouldRecordLastUsedCommand(for entry: ExecAllowlistEntry) -> Bool {
-        !(entry.argPattern?.hasPrefix("sha256:") ?? false)
     }
 
     static func allowlistEntryMatchKey(_ entry: ExecAllowlistEntry) -> ExecAllowlistEntryMatchKey {
@@ -618,10 +612,7 @@ extension ExecApprovalsStore {
 
     static func expandPath(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let configuredHome = OpenClawEnv.path("OPENCLAW_HOME")
-            .map { ($0 as NSString).expandingTildeInPath }
-        let home = configuredHome.map { URL(fileURLWithPath: $0, isDirectory: true) }
-            ?? FileManager().homeDirectoryForCurrentUser
+        let home = self.homeURL()
         if trimmed == "~" {
             return home.path
         }

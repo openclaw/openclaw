@@ -308,7 +308,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             return false
         }
         if coreRepair == .reportFailure, let failure = manager.nodeMigrationFailure {
-            guard self.setGatewayUpdateIncomplete(true, receipt: currentReceipt) else { return true }
+            guard self.markGatewayUpdateIncomplete(receipt: currentReceipt) else { return true }
             self.show()
             self.fail(message: String(localized: "The Gateway runtime migration could not finish."), details: failure)
             return true
@@ -362,7 +362,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             return true
         }
         if GatewayProcessManager.shared.nodeMigrationVersionUpdated {
-            guard self.setGatewayUpdateIncomplete(true, receipt: currentReceipt) else { return true }
+            guard self.markGatewayUpdateIncomplete(receipt: currentReceipt) else { return true }
             self.deferNodeRuntimeMigration()
             return true
         }
@@ -472,7 +472,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
                 receipt: receipt,
                 repairingNodeMigration: repairingNodeMigration)
         } catch {
-            guard self.setGatewayUpdateIncomplete(true, receipt: receipt) else { return }
+            guard self.markGatewayUpdateIncomplete(receipt: receipt) else { return }
             self.show()
             self.fail(message: String(localized: "Gateway verification failed."), details: error.localizedDescription)
             return
@@ -536,7 +536,6 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         let notification = connectionMode == .local && AppStateStore.shared.isPaused
             ? PostUpdateNotificationOutcome.skippedWhilePaused
             : await self.notifyMostRecentSession(
-                version: receipt.toVersion,
                 connectionMode: connectionMode,
                 receipt: receipt)
 
@@ -608,12 +607,9 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func setGatewayUpdateIncomplete(
-        _ incomplete: Bool,
-        receipt: PostAppUpdateReceipt) -> Bool
-    {
+    private func markGatewayUpdateIncomplete(receipt: PostAppUpdateReceipt) -> Bool {
         let updated = PostAppUpdateReceiptStore.setGatewayUpdateIncomplete(
-            incomplete,
+            true,
             receipt: receipt)
         guard updated.toVersion == receipt.toVersion else {
             self.receipt = nil
@@ -641,7 +637,6 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
     }
 
     private func notifyMostRecentSession(
-        version: String,
         connectionMode: AppState.ConnectionMode,
         receipt: PostAppUpdateReceipt) async -> PostUpdateNotificationOutcome
     {
@@ -653,7 +648,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
                 ifCurrentServerLease: serverLease)
             if let blocked = Self.remoteNotificationBlocker(
                 gatewayVersion: gatewayVersion,
-                appVersion: version)
+                appVersion: receipt.toVersion)
             {
                 return blocked
             }
@@ -686,7 +681,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         }
 
         let text =
-            "OpenClaw updated to \(version). Briefly welcome the user back and say you are updated, " +
+            "OpenClaw updated to \(receipt.toVersion). Briefly welcome the user back and say you are updated, " +
             "then continue normally."
         guard let notificationReceipt = PostAppUpdateReceiptStore.setNotificationInFlight(
             true,
@@ -1108,7 +1103,7 @@ extension PostUpdateController {
         source: GatewayProcessManager.ActivationSource,
         generation: UInt64) async -> PostUpdateRuntimeVerification
     {
-        guard self.setGatewayUpdateIncomplete(true, receipt: receipt) else { return .failed }
+        guard self.markGatewayUpdateIncomplete(receipt: receipt) else { return .failed }
         self.model.phase = .updating
         self.model.message = String(localized: "Preparing the bundled Gateway runtime…")
         self.show()
@@ -1234,7 +1229,7 @@ extension PostUpdateController {
         case .verify:
             self.show()
         case .managedRuntimeUnavailable:
-            guard self.setGatewayUpdateIncomplete(true, receipt: receipt) else { return false }
+            guard self.markGatewayUpdateIncomplete(receipt: receipt) else { return false }
             self.show()
             self.fail(
                 message: String(localized: "Gateway verification failed."),
@@ -1247,7 +1242,7 @@ extension PostUpdateController {
             }
         case .ownershipFailure:
             if resolution.prepareLocalCompanion || verifiedCompanion {
-                guard self.setGatewayUpdateIncomplete(true, receipt: receipt) else { return false }
+                guard self.markGatewayUpdateIncomplete(receipt: receipt) else { return false }
             }
             self.finishAfterOwnershipCheckFailure(
                 connectionMode: connectionMode,
@@ -1281,7 +1276,7 @@ extension PostUpdateController {
                 return false
             }
         case .install:
-            guard self.setGatewayUpdateIncomplete(true, receipt: receipt) else { return false }
+            guard self.markGatewayUpdateIncomplete(receipt: receipt) else { return false }
             self.model.phase = .updating
             self.show()
             let installed = await CLIInstaller.install(target: .exact(receipt.toVersion)) { [weak self] message in

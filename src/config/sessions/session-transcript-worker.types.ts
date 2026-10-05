@@ -30,7 +30,6 @@ import type {
   ArchivedSessionEvictionQuery,
 } from "./disk-budget.types.js";
 import type { SessionGoalOperationLookupResult } from "./goals-operations.types.js";
-import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type {
   SessionPendingArchivesWorkerInput,
   SessionArchivePruningWorkerInput,
@@ -39,10 +38,7 @@ import type {
   SessionBranchSummaryReadRequest,
   SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
-import type {
-  SessionEntryStatusSelection,
-  TranscriptEvent,
-} from "./session-accessor.sqlite-contract.js";
+import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type {
   SessionIdentityEvidenceIdentity,
   SessionIdentityEvidenceResult,
@@ -52,13 +48,8 @@ import type {
   LifecycleArtifactCleanupWorkerResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
-import type { SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-projection-read.js";
-import type {
-  SessionEntryReplacementSelection,
-  SessionEntryReplacementState,
-} from "./session-accessor.sqlite-replacement-read.js";
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type {
   SessionAccessScope,
@@ -78,10 +69,12 @@ import type {
   SessionEntryListWorkerResult,
   SessionEntryReadWorkerInput,
   SessionEntryReadWorkerResult,
+  SessionExactEntriesWorkerInput,
+  SessionExactEntriesWorkerRequest,
+  SessionExactEntriesWorkerResult,
   SessionRuntimeTargetWorkerInput,
   SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
-import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
 import type * as HarnessCompletionSourceWorker from "./session-harness-completion-source.types.js";
 import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
@@ -294,68 +287,6 @@ type SessionStoreSummaryWorkerInput = {
   agentIds: readonly string[];
   recentLimit: number;
   continuation?: CanonicalSessionReaderContinuation;
-};
-
-export type SessionExactEntriesWorkerInput = {
-  kind: "session-exact-entries";
-  database: { agentId: string; path: string };
-} & SessionExactEntriesWorkerRequest;
-
-export type SessionExactEntriesWorkerSelection =
-  | {
-      sessionKeys: readonly string[];
-      selection?: never;
-      projection?: "full" | "sharing" | "replacement" | "creation" | "list" | "lifecycle" | "exact";
-    }
-  | {
-      sessionKeys?: never;
-      selection: { kind: "session-id"; sessionId: string };
-      projection: "sharing";
-    };
-
-type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
-  expectedIdentity?: SessionEntryListWorkerInput["expectedIdentity"];
-  /** Omitted retains the complete entry; an empty selection reads metadata only. */
-  snapshotFields?: readonly SessionEntrySnapshotField[];
-  env: NodeJS.ProcessEnv;
-  statusSelection?: SessionEntryStatusSelection;
-  lifecycleSessionKey?: string;
-  /** Reply initialization reads the current row's model parent in this same snapshot. */
-  replyInitializationSessionKey?: string;
-  includeMembers?: boolean;
-  includeParticipantRecords?: boolean;
-  includeAuthorization?: boolean;
-  replacementSelection?: SessionEntryReplacementSelection;
-  creationLabel?: string;
-  continuation?: CanonicalSessionReaderContinuation;
-};
-
-export type SessionExactEntriesWorkerResult = {
-  kind: "session-exact-entries";
-  source?: SessionEntryListWorkerResult["source"];
-  entries: SessionEntrySummary[];
-  lifecycleTimestamps: SessionLifecycleTimestamps;
-  pendingArchives?: boolean;
-  statusFound?: boolean;
-  databaseIdentity?: {
-    identity: string;
-    incarnation: string;
-    filename: string;
-    birthtime?: string;
-  };
-  members?: Record<string, SessionMember[]>;
-  participantRecords?: Record<string, SessionParticipantRecord[]>;
-  replacement?: SessionEntryReplacementState & { databaseIdentity: string };
-  creation?: import("./session-accessor.sqlite-creation-read.js").SessionCreationSnapshot & {
-    databaseIdentity: string;
-    databasePath: string;
-  };
-  sharing?: {
-    source: { agentId: string; path: string };
-    databaseIdentity: string;
-    members: Array<{ sessionKey: string; identityIds: string[] }>;
-    placeholders: Array<{ sessionKey: string; sessionId: string }>;
-  };
 };
 
 export const MAX_SESSION_ROW_FACTS_KEYS = 64;

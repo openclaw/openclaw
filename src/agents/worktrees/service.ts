@@ -916,7 +916,7 @@ export class ManagedWorktreeService {
               workerAuthority: {
                 ...params.workerAuthority,
                 ...accepted?.workerAuthority,
-                leaseSet: params.workerAuthority.leaseSet,
+                leaseSet: accepted?.workerAuthority.leaseSet ?? params.workerAuthority.leaseSet,
               },
               commitGuard: () => {
                 params.commitGuard?.();

@@ -3029,7 +3029,6 @@ describe("main-session-restart-recovery", () => {
     try {
       await firstDispatch.promise;
       expect(callGateway).toHaveBeenCalledOnce();
-      dispatchSettlement.resolve(); // The second store waits for the first recovery slot.
       await mockRecoveryRuntime.expectAdmission(
         2,
         recovery,

@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions.js";
 import { hasSessionEntriesByStatusReadOnly } from "../../config/sessions/session-accessor.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
+import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-store-config.js";
 import { prepareSessionStoreTargetInventory } from "../../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../../config/sessions/session-store-target-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -58,7 +59,8 @@ export async function discoverRestartRecoveryStoreTargets(params: {
     // Recovery must not reopen a deleted or otherwise unconfigured agent database merely
     // because its old directory still exists on disk. Those stores are intentionally fenced
     // by the deletion journal, and stale auth-probe directories are not agent roster entries.
-    const configuredAgentIds = listConfiguredSessionStoreAgentIds(params.cfg).filter(
+    const configuredAgentIds = listConfiguredSessionStoreAgentIds(params.cfg);
+    const selectedAgentIds = configuredAgentIds.filter(
       (agentId) => !params.agentIds || params.agentIds.has(agentId),
     );
     const configuredStorePaths = new Set(
@@ -68,7 +70,14 @@ export async function discoverRestartRecoveryStoreTargets(params: {
     );
     const configuredAgentIdSet = new Set(configuredAgentIds);
     const inventory = prepareSessionStoreTargetInventoryRead(
-      prepareSessionStoreTargetInventory(params.cfg, configuredAgentIds, env, "recovery"),
+      prepareSessionStoreTargetInventory(
+        params.cfg,
+        isPerAgentSessionStoreConfig(params.cfg.session?.store)
+          ? selectedAgentIds
+          : [...new Set([...configuredAgentIds, ...(params.agentIds ?? [])])],
+        env,
+        "recovery",
+      ),
     );
     const targets = await inventory.withRead(async (snapshot) =>
       snapshot.agents.flatMap(({ result }) => (result.available ? result.targets : [])),
@@ -82,6 +91,9 @@ export async function discoverRestartRecoveryStoreTargets(params: {
       // current roster entry. The validated path is the configuration fact; the target's
       // owner label is not evidence that the path itself is unconfigured.
       if (!configuredAgentIdSet.has(target.agentId) && !configuredStorePaths.has(storePath)) {
+        continue;
+      }
+      if (params.agentIds && !params.agentIds.has(target.agentId)) {
         continue;
       }
       storeTargets.push({ ...target, storePath });

@@ -248,14 +248,24 @@ describe("private session source staging", () => {
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
     const timedOut = createDeferred<void>();
-    const writes = vi.spyOn(sqliteRuntime, "runSqliteWorkerStoreWrite");
+    let shadowPath: string | undefined;
+    let activityAtSetup = { opens: 0, operations: 0 };
+    const open = vi.spyOn(sqliteRuntime, "openSqliteWorkerStore");
+    const operation = vi.spyOn(sqliteRuntime, "runSqliteWorkerStoreWrite");
+    const shadowActivity = () => ({
+      opens: open.mock.calls.filter(([options]) => options.databasePath === shadowPath).length,
+      operations: operation.mock.calls.filter((call) =>
+        call[3].some((location) => location === shadowPath),
+      ).length,
+    });
     const load = storage.loadSqliteVecExtension;
     vi.spyOn(storage, "loadSqliteVecExtension").mockImplementation(async (input) => {
-      if (!input.db.location()?.includes(".memory-reindex-")) {
+      const databasePath = input.db.location();
+      if (!databasePath?.includes(".memory-reindex-")) {
         return load(input);
       }
-      // Schema admission finished before this setup acquired private access.
-      writes.mockClear();
+      shadowPath = databasePath;
+      activityAtSetup = shadowActivity();
       entered.resolve();
       await resume.promise;
       return { ok: false, error: "controlled late vector setup" };
@@ -266,7 +276,6 @@ describe("private session source staging", () => {
       db: DatabaseSync;
       withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T>;
     };
-    let shadowPath: string | undefined;
     const withTimeout = owner.withTimeout.bind(owner);
     vi.spyOn(owner, "withTimeout").mockImplementation(
       <T>(promise: Promise<T>, timeoutMs: number, message: string) => {
@@ -283,8 +292,6 @@ describe("private session source staging", () => {
       },
     );
     const run = vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource");
-    const shadowWrites = () =>
-      writes.mock.calls.filter((call) => shadowPath !== undefined && call[3].includes(shadowPath));
     const sync = manager.sync({ reason: "cli", force: true });
     void sync.catch(() => undefined);
     let close: Promise<void> | undefined;
@@ -293,16 +300,19 @@ describe("private session source staging", () => {
       await Promise.race([Promise.all([entered.promise, timedOut.promise]), sync]);
       await nextTurn();
       expect(shadowPath).toBeDefined();
-      expect(shadowWrites()).toHaveLength(0);
+      // Reads may open the worker earlier; private setup excludes new opens and operations.
+      expect(shadowActivity()).toEqual(activityAtSetup);
       close = manager.close().then(() => {
         closed = true;
       });
       await nextTurn();
       expect(closed).toBe(false);
+      expect(shadowActivity()).toEqual(activityAtSetup);
       resume.resolve();
       await Promise.all([sync, close]);
       expect(run).toHaveBeenCalledTimes(1);
-      expect(shadowWrites().length).toBeGreaterThan(0);
+      expect(shadowActivity().opens).toBe(1);
+      expect(shadowActivity().operations).toBeGreaterThan(activityAtSetup.operations);
     } finally {
       resume.resolve();
       await Promise.allSettled([sync, close]);

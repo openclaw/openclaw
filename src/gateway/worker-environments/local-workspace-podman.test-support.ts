@@ -7,7 +7,7 @@ import { expect, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { localWorkspaceStore } from "./local-workspace-store.js";
+import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
 const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
@@ -170,12 +170,14 @@ export async function proveRequiredPodmanWorkspace(
     const pausedState = () =>
       execute(runtimeEngine, ["inspect", "-f", "{{.State.Paused}}", sandbox.containerName]);
     expect((await pausedState()).stdout.trim()).toBe("true");
-    expect(localWorkspaceStore().get(owner.worktree.id)?.paused_runtimes_json).toContain(
+    expect((await readLocalWorkspaceProjection(owner.worktree.id))?.paused_runtimes_json).toContain(
       sandbox.containerName,
     );
     await withLocalWorkspaceProjection(owner, (state) => state.prepare());
     expect((await pausedState()).stdout.trim()).toBe("false");
-    expect(localWorkspaceStore().get(owner.worktree.id)?.paused_runtimes_json).toBeNull();
+    expect(
+      (await readLocalWorkspaceProjection(owner.worktree.id))?.paused_runtimes_json,
+    ).toBeNull();
     const skillScaffold = path.join(sandbox.workspaceDir, ".openclaw/sandbox-skills/skills");
     expect((await fs.stat(skillScaffold)).uid).toBe((await fs.stat(sandbox.workspaceDir)).uid);
     await sandbox.fsBridge.writeFile({ filePath: "source.txt", data: "real sandbox edit\n" });
@@ -440,7 +442,7 @@ export async function proveRequiredPodmanWorkspace(
     ).toBe(true);
     now += SNAPSHOT_RETENTION_MS + 1;
     expect((await service.gc()).snapshotsPruned).toBe(1);
-    expect(localWorkspaceStore().get(owner.worktree.id)).toBeUndefined();
+    expect(await readLocalWorkspaceProjection(owner.worktree.id)).toBeUndefined();
     await expect(fs.stat(sandbox.workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
     await verifyCleanup(async () => {

@@ -35,17 +35,13 @@ final class DevicePairingApprovalPrompter {
     /// hidden optimistically and restored by the failure path.
     private var pendingLocalDecisionRequestIds: Set<String> = []
 
-    private struct PairingList: Codable {
+    private struct PairingList: Decodable {
         let pending: [PendingRequest]
         let paired: [PairedDevice]?
     }
 
-    private struct PairedDevice: Codable, Equatable {
+    private struct PairedDevice: Decodable {
         let deviceId: String
-        let approvedAtMs: Double?
-        let displayName: String?
-        let platform: String?
-        let remoteIp: String?
     }
 
     struct PendingRequest: Codable, Equatable, Identifiable {

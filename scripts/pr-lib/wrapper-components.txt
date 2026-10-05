@@ -181,6 +181,8 @@ scripts/lib/numeric-options.mjs
 scripts/lib/official-external-channel-catalog.json
 scripts/lib/official-external-plugin-catalog.json
 scripts/lib/official-external-provider-catalog.json
+scripts/lib/package-dist-inventory-contract.mts
+scripts/lib/package-lifecycle-marker.mjs
 scripts/lib/plain-gh.mjs
 scripts/lib/plain-gh.sh
 scripts/lib/record-shared.mjs
@@ -324,6 +326,7 @@ src/agents/worktrees/registry-run-end.worker.ts
 src/agents/worktrees/registry.ts
 src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
+src/agents/sandbox/registry-lifecycle.ts
 src/agents/worktrees/run-lease-owner.ts
 src/agents/worktrees/run-lease-store.kernel.ts
 src/agents/worktrees/run-lease-store.ts
@@ -931,6 +934,7 @@ src/infra/package-update-activation-journal.ts
 src/infra/package-update-activation-launcher.ts
 src/infra/package-update-activation-paths.ts
 src/infra/package-update-activation-schema.ts
+src/infra/package-update-activation-settlement.ts
 src/infra/package-update-activation-status.ts
 src/infra/package-update-filesystem.ts
 src/infra/package-update-integrity-hasher.ts
