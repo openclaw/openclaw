@@ -77,10 +77,10 @@ describe("retained worker direct task transport", () => {
       expect(events).toHaveLength(3);
     });
     const buffered = once(port, "message");
-    peer.postMessage("buffered");
+    peer.postMessage("buffered", []);
     await buffered;
     expect(events).toEqual([]);
-    peer.postMessage("queued");
+    peer.postMessage("queued", []);
     controls.push({ type: "created", id: 1, threadId: 101 });
     context.run("servicing", () => worker.service());
     expect(events).toEqual([
@@ -99,7 +99,7 @@ describe("retained worker direct task transport", () => {
     worker.on("execution-exit", () => events.push("execution-exit"));
     worker.on("exit", () => events.push("exit"));
     const buffered = once(port, "message");
-    peer.postMessage("final reply");
+    peer.postMessage("final reply", []);
     await buffered;
     expect(events).toEqual([]);
     worker.ownerFailed(new Error("native failure"));
@@ -126,8 +126,8 @@ describe("retained worker direct task transport", () => {
     worker.on("error", (error) => events.push([error.message, context.getStore()]));
     worker.on("execution-exit", () => events.push(["execution-exit", context.getStore()]));
     worker.on("exit", () => events.push(["exit", context.getStore()]));
-    peer.postMessage("first");
-    peer.postMessage("second");
+    peer.postMessage("first", []);
+    peer.postMessage("second", []);
     controls.push(
       { type: "error", id: 1, error: encodeNativeWorkerFailure(new Error("native failure")) },
       { type: "execution-exit", id: 1, code: 1 },

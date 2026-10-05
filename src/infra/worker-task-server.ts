@@ -62,7 +62,7 @@ export function serveOwnedWorkerTasks<Output>(
     {
       selectStartupPort(message) {
         if (!isRecord(message) || message.type !== WORKER_TASK_PORT_MESSAGE) {
-          return;
+          return undefined;
         }
         if (!(message.port instanceof MessagePort)) {
           throw new Error("Retained worker task port is invalid");
