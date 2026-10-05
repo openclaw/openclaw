@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
 import { SCHEMA_ARRAY_KEYS, SCHEMA_MAP_KEYS, SCHEMA_OBJECT_KEYS } from "./schema-walk.js";
+import { assertToolSchemaDepth, isWithinToolSchemaDepth } from "./tool-schema-depth.js";
 
 // Annotation-only keywords whose null values can be dropped without changing
 // what the schema accepts; null constraint keywords must stay so projection
@@ -17,7 +18,7 @@ const OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS = new Set(
   [...SCHEMA_OBJECT_KEYS, ...SCHEMA_ARRAY_KEYS].toSorted(),
 );
 
-function normalizeOpenAIStrictCompatSchemaMap(schema: unknown): unknown {
+function normalizeOpenAIStrictCompatSchemaMap(schema: unknown, depth = 0): unknown {
   if (!isRecord(schema)) {
     return schema;
   }
@@ -26,7 +27,10 @@ function normalizeOpenAIStrictCompatSchemaMap(schema: unknown): unknown {
   // Schema names are literal data; indexed writes would invoke __proto__'s setter.
   const normalized = Object.fromEntries<unknown>(
     Object.entries(schema).map(([key, value]) => {
-      const next = normalizeOpenAIStrictCompatSchemaRecursive(value);
+      // A properties/definitions map is a transparent container: its entries sit
+      // one level below the owning schema, matching the shared depth accounting
+      // used by the general normalizer (the map itself adds no level).
+      const next = normalizeOpenAIStrictCompatSchemaRecursive(value, false, depth);
       changed ||= next !== value;
       return [key, next];
     }),
@@ -37,11 +41,14 @@ function normalizeOpenAIStrictCompatSchemaMap(schema: unknown): unknown {
 function normalizeOpenAIStrictCompatSchemaRecursive(
   schema: unknown,
   promoteEmptyObject = false,
+  depth = 0,
 ): unknown {
+  assertToolSchemaDepth(depth);
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeOpenAIStrictCompatSchemaRecursive(entry);
+      // Array entries historically never promote an empty object, regardless of the root flag.
+      const next = normalizeOpenAIStrictCompatSchemaRecursive(entry, false, depth + 1);
       changed ||= next !== entry;
       return next;
     });
@@ -63,9 +70,9 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
       return [];
     }
     const next = SCHEMA_MAP_KEYS.has(key)
-      ? normalizeOpenAIStrictCompatSchemaMap(value)
+      ? normalizeOpenAIStrictCompatSchemaMap(value, depth + 1)
       : OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS.has(key)
-        ? normalizeOpenAIStrictCompatSchemaRecursive(value)
+        ? normalizeOpenAIStrictCompatSchemaRecursive(value, false, depth + 1)
         : value;
     changed ||= next !== value;
     return [[key, next]];
@@ -132,13 +139,19 @@ export function findOpenAIStrictSchemaViolations(
   schema: unknown,
   path: string,
   options?: { requireObjectRoot?: boolean },
+  depth = 0,
 ): string[] {
+  if (!isWithinToolSchemaDepth(depth)) {
+    // Deeper than the shared traversal budget: report and stop instead of
+    // overflowing the call stack on externally supplied schemas.
+    return [`${path}.depth`];
+  }
   if (Array.isArray(schema)) {
     if (options?.requireObjectRoot) {
       return [`${path}.type`];
     }
     return schema.flatMap((item, index) =>
-      findOpenAIStrictSchemaViolations(item, `${path}[${index}]`),
+      findOpenAIStrictSchemaViolations(item, `${path}[${index}]`, undefined, depth + 1),
     );
   }
   if (!schema || typeof schema !== "object") {
@@ -185,7 +198,14 @@ export function findOpenAIStrictSchemaViolations(
       continue;
     }
     for (const [entryKey, value] of Object.entries(schemaMap)) {
-      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}.${entryKey}`));
+      violations.push(
+        ...findOpenAIStrictSchemaViolations(
+          value,
+          `${path}.${key}.${entryKey}`,
+          undefined,
+          depth + 1,
+        ),
+      );
     }
   }
   // Only recurse through JSON Schema applicators. Annotation payloads such as
@@ -193,7 +213,9 @@ export function findOpenAIStrictSchemaViolations(
   for (const key of OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS) {
     const value = record[key];
     if (value && typeof value === "object") {
-      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}`));
+      violations.push(
+        ...findOpenAIStrictSchemaViolations(value, `${path}.${key}`, undefined, depth + 1),
+      );
     }
   }
 

@@ -1,4 +1,5 @@
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
+import { assertToolSchemaDepth, isWithinToolSchemaDepth } from "./tool-schema-depth.js";
 import { SCHEMA_MAP_KEYS } from "./tool-schema-refs.js";
 
 /** llama.cpp rejects grammar repetitions whose expanded rule count reaches 2000. */
@@ -23,11 +24,12 @@ const SCHEMA_CHILD_KEYS = new Set([
 ]);
 
 /** Removes JSON Schema constraints that llama.cpp cannot compile into GBNF. */
-export function cleanSchemaForLlamacppGbnf(schema: unknown): unknown {
+export function cleanSchemaForLlamacppGbnf(schema: unknown, depth = 0): unknown {
+  assertToolSchemaDepth(depth);
   if (Array.isArray(schema)) {
     let changed = false;
     const entries = schema.map((entry) => {
-      const next = cleanSchemaForLlamacppGbnf(entry);
+      const next = cleanSchemaForLlamacppGbnf(entry, depth + 1);
       changed ||= next !== entry;
       return next;
     });
@@ -58,7 +60,7 @@ export function cleanSchemaForLlamacppGbnf(schema: unknown): unknown {
       let mapChanged = false;
       next = Object.fromEntries(
         Object.entries(value).map(([childKey, childValue]) => {
-          const cleanedChild = cleanSchemaForLlamacppGbnf(childValue);
+          const cleanedChild = cleanSchemaForLlamacppGbnf(childValue, depth + 1);
           mapChanged ||= cleanedChild !== childValue;
           return [childKey, cleanedChild];
         }),
@@ -67,7 +69,7 @@ export function cleanSchemaForLlamacppGbnf(schema: unknown): unknown {
         next = value;
       }
     } else if (SCHEMA_CHILD_KEYS.has(key)) {
-      next = cleanSchemaForLlamacppGbnf(value);
+      next = cleanSchemaForLlamacppGbnf(value, depth + 1);
     }
     cleaned[key] = next;
     changed ||= next !== value;
@@ -75,9 +77,22 @@ export function cleanSchemaForLlamacppGbnf(schema: unknown): unknown {
   return changed ? cleaned : schema;
 }
 
-function collectSchemaViolations(node: unknown, path: string, violations: string[]): void {
+function collectSchemaViolations(
+  node: unknown,
+  path: string,
+  violations: string[],
+  depth = 0,
+): void {
+  if (!isWithinToolSchemaDepth(depth)) {
+    // Past the shared traversal budget the schema cannot be GBNF-compiled;
+    // report the truncated path instead of overflowing the call stack.
+    violations.push(`${path}.depth`);
+    return;
+  }
   if (Array.isArray(node)) {
-    node.forEach((entry, index) => collectSchemaViolations(entry, `${path}[${index}]`, violations));
+    node.forEach((entry, index) =>
+      collectSchemaViolations(entry, `${path}[${index}]`, violations, depth + 1),
+    );
     return;
   }
   if (!isSchemaRecord(node)) {
@@ -97,10 +112,10 @@ function collectSchemaViolations(node: unknown, path: string, violations: string
   for (const [key, value] of Object.entries(node)) {
     if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
       for (const [childKey, childValue] of Object.entries(value)) {
-        collectSchemaViolations(childValue, `${path}.${key}.${childKey}`, violations);
+        collectSchemaViolations(childValue, `${path}.${key}.${childKey}`, violations, depth + 1);
       }
     } else if (SCHEMA_CHILD_KEYS.has(key)) {
-      collectSchemaViolations(value, `${path}.${key}`, violations);
+      collectSchemaViolations(value, `${path}.${key}`, violations, depth + 1);
     }
   }
 }

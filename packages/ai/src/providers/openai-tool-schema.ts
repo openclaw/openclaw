@@ -6,6 +6,8 @@ import {
 } from "./agent-tools-parameter-schema.js";
 import type { OpenAIToolProjection } from "./openai-tool-projection.js";
 import { findOpenAIStrictSchemaViolations } from "./openai-tool-schema-compat.js";
+import { SCHEMA_MAP_KEYS } from "./schema-walk.js";
+import { assertToolSchemaDepth, ToolSchemaDepthExceededError } from "./tool-schema-depth.js";
 import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
 
 export { findOpenAIStrictSchemaViolations } from "./openai-tool-schema-compat.js";
@@ -76,11 +78,18 @@ export function normalizeStrictOpenAIJsonSchema(
     : normalized;
 }
 
-function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
+function normalizeStrictOpenAIJsonSchemaRecursive(
+  schema: unknown,
+  depth: number,
+  nesting = 0,
+): unknown {
+  // `depth` counts object levels for the root additionalProperties rule, while
+  // `nesting` bounds every structural hop, including unbounded array chains.
+  assertToolSchemaDepth(nesting);
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth);
+      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth, nesting + 1);
       changed ||= next !== entry;
       return next;
     });
@@ -94,9 +103,16 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
   let changed = false;
   const normalized = Object.fromEntries<unknown>(
     Object.entries(record).map(([key, value]) => {
+      // Schema map containers ($defs, properties, ...) are transparent for the
+      // nesting bound: their entries sit one level below the owning schema,
+      // matching the shared depth accounting used by the general and
+      // compatibility walkers. The `depth` rule (root additionalProperties) is
+      // unchanged: only `properties` carries the parent depth.
+      const mapContainer = SCHEMA_MAP_KEYS.has(key);
       const next = normalizeStrictOpenAIJsonSchemaRecursive(
         value,
         key === "properties" ? depth : depth + 1,
+        mapContainer ? nesting : nesting + 1,
       );
       changed ||= next !== value;
       return [key, next];
@@ -133,10 +149,18 @@ export function normalizeOpenAIStrictToolParameters<T>(
 
 /** Returns whether a schema already satisfies OpenAI strict tool-schema constraints. */
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  return (
-    findOpenAIStrictSchemaViolations(normalizeStrictOpenAIJsonSchema(schema), "parameters")
-      .length === 0
-  );
+  let normalized: unknown;
+  try {
+    normalized = normalizeStrictOpenAIJsonSchema(schema);
+  } catch (error) {
+    if (error instanceof ToolSchemaDepthExceededError) {
+      // A schema past the traversal budget cannot be verified, so it is not
+      // strict-compatible; strict-mode resolution must not crash either.
+      return false;
+    }
+    throw error;
+  }
+  return findOpenAIStrictSchemaViolations(normalized, "parameters").length === 0;
 }
 
 type OpenAIStrictToolSchemaDiagnostic = {
@@ -156,10 +180,23 @@ export function findOpenAIStrictToolProjectionDiagnostics(
       violations: [...diagnostic.violations],
     })),
     ...projection.tools.flatMap((tool) => {
-      const violations = findOpenAIStrictSchemaViolations(
-        normalizeStrictOpenAIJsonSchema(tool.parameters),
-        `${tool.name}.parameters`,
-      );
+      let violations: string[];
+      try {
+        violations = findOpenAIStrictSchemaViolations(
+          normalizeStrictOpenAIJsonSchema(tool.parameters),
+          `${tool.name}.parameters`,
+        );
+      } catch (error) {
+        if (error instanceof ToolSchemaDepthExceededError) {
+          // Diagnostics are logging-only: report the rejected schema as a
+          // bounded violation instead of rethrowing past the logger and
+          // aborting healthy siblings during strict-resolution logging.
+          return [
+            { toolIndex: tool.toolIndex, toolName: tool.name, violations: [`${tool.name}.parameters.depth`] },
+          ];
+        }
+        throw error;
+      }
       return violations.length > 0
         ? [{ toolIndex: tool.toolIndex, toolName: tool.name, violations }]
         : [];

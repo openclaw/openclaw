@@ -4,6 +4,7 @@ export * from "../providers/clean-for-llamacpp-gbnf.js";
 export * from "../providers/openai-tool-schema-compat.js";
 export * from "../providers/openai-tool-schema.js";
 export * from "../providers/schema-keyword-strip.js";
+export * from "../providers/tool-schema-depth.js";
 export {
   projectRuntimeToolInputSchema,
   type RuntimeToolInputSchemaJson,

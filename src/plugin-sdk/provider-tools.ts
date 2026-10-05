@@ -7,9 +7,11 @@ import {
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
   normalizeOpenAIStrictCompatSchema,
   stripUnsupportedSchemaKeywords,
+  ToolSchemaDepthExceededError,
 } from "@openclaw/ai/internal/tool-schema";
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 // Provider tool helpers expose shared tool-call payload contracts for provider plugins.
+import { logWarn } from "../logger.js";
 import type { TSchema } from "typebox";
 import {
   mergeLiteralSchemas,
@@ -80,17 +82,34 @@ function normalizeToolSchemasIfChanged(
   ctx: ProviderNormalizeToolSchemasContext,
   normalizeSchema: (schema: unknown) => unknown,
 ): AnyAgentTool[] {
-  return ctx.tools.map((tool) => {
+  return ctx.tools.flatMap((tool) => {
     if (!tool.parameters || typeof tool.parameters !== "object") {
-      return tool;
+      return [tool];
     }
-    const parameters = normalizeSchema(tool.parameters);
+    let parameters: unknown;
+    try {
+      parameters = normalizeSchema(tool.parameters);
+    } catch (error) {
+      if (error instanceof ToolSchemaDepthExceededError) {
+        // Contain the depth rejection at the tool boundary and quarantine the
+        // rejected tool: returning the original (un-cleaned) schema could ship
+        // provider-unsupported constraints downstream, so the tool is omitted
+        // with a warning while every healthy sibling still prepares.
+        logWarn(
+          `provider tool "${tool.name}" omitted: its schema exceeds the depth budget and cannot be safely cleaned (${error.message})`,
+        );
+        return [];
+      }
+      throw error;
+    }
     return parameters === tool.parameters
-      ? tool
-      : {
-          ...tool,
-          parameters: parameters as TSchema,
-        };
+      ? [tool]
+      : [
+          {
+            ...tool,
+            parameters: parameters as TSchema,
+          },
+        ];
   });
 }
 
@@ -162,10 +181,25 @@ export function normalizeOpenAIToolSchemas(
     if (tool.parameters != null && typeof tool.parameters !== "object") {
       return tool;
     }
-    return {
-      ...tool,
-      parameters: normalizeOpenAIStrictCompatSchema(tool.parameters ?? {}),
-    };
+    try {
+      return {
+        ...tool,
+        parameters: normalizeOpenAIStrictCompatSchema(tool.parameters ?? {}),
+      };
+    } catch (error) {
+      if (error instanceof ToolSchemaDepthExceededError) {
+        // Contain the depth rejection at the tool boundary: one pathological
+        // external schema must not abort preparation of every healthy sibling
+        // tool. Keep the tool with its original schema; the shared depth
+        // accounting treats map containers transparently, so only genuinely
+        // past-budget schemas land here.
+        logWarn(
+          `openai strict compat skipped for tool "${tool.name}": ${error.message}`,
+        );
+        return tool;
+      }
+      throw error;
+    }
   });
 }
 

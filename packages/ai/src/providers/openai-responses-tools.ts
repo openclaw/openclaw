@@ -9,6 +9,7 @@ import {
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIProjectedToolsStrictToolFlag,
 } from "./openai-tool-schema.js";
+import { ToolSchemaDepthExceededError } from "./tool-schema-depth.js";
 import { withPreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
 
 /** Options for converting internal tool schemas to OpenAI Responses function tools. */
@@ -61,23 +62,42 @@ function convertPreparedResponsesTools(
         })
       : resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
     // Sort tools before request construction so prompt-cache bytes stay deterministic.
-    return sortPromptCacheToolsByName(projection.tools).map((tool) => {
+    const converted: FunctionTool[] = [];
+    for (const tool of sortPromptCacheToolsByName(projection.tools)) {
+      let parameters: unknown;
+      try {
+        parameters = normalizeOpenAIStrictToolParameters(
+          tool.parameters,
+          strict === true,
+          model?.compat as OpenAIToolSchemaCompat,
+        );
+      } catch (error) {
+        if (error instanceof ToolSchemaDepthExceededError) {
+          // Contain the depth rejection at the tool boundary: one pathological
+          // external schema must not abort preparation of every healthy sibling
+          // tool, so the rejected tool is skipped (with a warning) instead.
+          getAiTransportHost().logWarn(
+            "[openai-tools]",
+            `skipping tool with schema past the depth budget`,
+            { tool: tool.name, message: error.message },
+          );
+          continue;
+        }
+        throw error;
+      }
       const result: ResponsesFunctionTool = {
         type: "function",
         name: tool.name,
         description: tool.description,
-        parameters: normalizeOpenAIStrictToolParameters(
-          tool.parameters,
-          strict === true,
-          model?.compat as OpenAIToolSchemaCompat,
-        ),
+        parameters,
       };
       if (strict !== undefined) {
         result.strict = strict;
       }
       // Compatible endpoints can require strict to be absent; the SDK declares it required.
-      return result as FunctionTool;
-    });
+      converted.push(result as FunctionTool);
+    }
+    return converted;
   });
 }
 

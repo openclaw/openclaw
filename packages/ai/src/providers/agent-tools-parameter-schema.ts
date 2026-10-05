@@ -13,6 +13,7 @@ import type { TSchema } from "typebox";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 import { cleanSchemaForLlamacppGbnf } from "./clean-for-llamacpp-gbnf.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
+import { assertToolSchemaDepth, isWithinToolSchemaDepth } from "./tool-schema-depth.js";
 import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
 import {
   setOwnSchemaProperty,
@@ -105,7 +106,14 @@ function isGeminiModelId(modelId: string): boolean {
   return /(?:^|[/:])gemini(?:$|[-/:.])/.test(modelId);
 }
 
-function extractEnumValues(schema: unknown, requireAllVariants = false): unknown[] | undefined {
+function extractEnumValues(
+  schema: unknown,
+  requireAllVariants = false,
+  depth = 0,
+): unknown[] | undefined {
+  if (!isWithinToolSchemaDepth(depth)) {
+    return undefined;
+  }
   if (!schema || typeof schema !== "object") {
     return undefined;
   }
@@ -124,7 +132,7 @@ function extractEnumValues(schema: unknown, requireAllVariants = false): unknown
   if (variants) {
     let complete = true;
     const values = variants.flatMap((variant) => {
-      const extracted = extractEnumValues(variant, requireAllVariants);
+      const extracted = extractEnumValues(variant, requireAllVariants, depth + 1);
       complete &&= extracted !== undefined;
       return extracted ?? [];
     });
@@ -200,14 +208,15 @@ function mergePropertySchemas(
 
 type ArrayItemsMode = "add" | "omit" | "normalize";
 
-function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode): unknown {
+function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode, depth = 0): unknown {
+  assertToolSchemaDepth(depth);
   if (Array.isArray(schema)) {
     // Only omission descends through a malformed array used as a schema node.
     // Addition visits direct tuple/composition entries through normalizeValue below.
     if (mode === "add") {
       return schema;
     }
-    const entries = schema.map((entry) => normalizeArraySchemaItems(entry, "omit"));
+    const entries = schema.map((entry) => normalizeArraySchemaItems(entry, "omit", depth + 1));
     return entries.some((entry, index) => entry !== schema[index]) ? entries : schema;
   }
   if (!isSchemaRecord(schema)) {
@@ -229,9 +238,9 @@ function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode): unkno
     schema.type === "array" || (Array.isArray(schema.type) && schema.type.includes("array"));
   const normalizeValue = (value: unknown, valueMode: ArrayItemsMode): unknown => {
     if (!Array.isArray(value)) {
-      return normalizeArraySchemaItems(value, valueMode);
+      return normalizeArraySchemaItems(value, valueMode, depth + 1);
     }
-    const entries = value.map((entry) => normalizeArraySchemaItems(entry, valueMode));
+    const entries = value.map((entry) => normalizeArraySchemaItems(entry, valueMode, depth + 1));
     return entries.some((entry, index) => entry !== value[index]) ? entries : value;
   };
   for (const [key, value] of Object.entries(normalized)) {
@@ -250,7 +259,7 @@ function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode): unkno
     if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
       const entries = Object.entries(value);
       for (const entry of entries) {
-        entry[1] = normalizeArraySchemaItems(entry[1], mode);
+        entry[1] = normalizeArraySchemaItems(entry[1], mode, depth + 1);
       }
       if (entries.some(([entryKey, entry]) => entry !== value[entryKey])) {
         next = Object.fromEntries(entries);
@@ -296,11 +305,12 @@ function isNullSchemaLike(schema: unknown): boolean {
   return Array.isArray(schema.enum) && schema.enum.includes(null);
 }
 
-function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
+function normalizeOpenApiSchemaKeywords(schema: unknown, depth = 0): unknown {
+  assertToolSchemaDepth(depth);
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeOpenApiSchemaKeywords(entry);
+      const next = normalizeOpenApiSchemaKeywords(entry, depth + 1);
       changed ||= next !== entry;
       return next;
     });
@@ -329,15 +339,15 @@ function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
       let mapChanged = false;
       const mapEntries = Object.entries(value);
       for (const entry of mapEntries) {
-        const nextEntry = normalizeOpenApiSchemaKeywords(entry[1]);
+        const nextEntry = normalizeOpenApiSchemaKeywords(entry[1], depth + 1);
         mapChanged ||= nextEntry !== entry[1];
         entry[1] = nextEntry;
       }
       next = mapChanged ? Object.fromEntries(mapEntries) : value;
     } else if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
-      next = normalizeOpenApiSchemaKeywords(value);
+      next = normalizeOpenApiSchemaKeywords(value, depth + 1);
     } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-      const nextEntries = value.map(normalizeOpenApiSchemaKeywords);
+      const nextEntries = value.map((entry) => normalizeOpenApiSchemaKeywords(entry, depth + 1));
       // A changed sibling also exposes these composition-array copies.
       (normalized ??= Object.fromEntries(entries))[key] = nextEntries;
       changed ||= nextEntries.some((entry, index) => entry !== value[index]);
