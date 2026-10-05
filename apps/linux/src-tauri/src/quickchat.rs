@@ -227,11 +227,6 @@ impl QuickChatState {
                 )
                 .await?;
             gateway.with_generation(generation, || {
-                if result.gateway_generation != generation
-                    || result.run_id != identity.idempotency_key
-                {
-                    return Err("Gateway acknowledged a different Quick Chat request.".to_string());
-                }
                 if result.status == "ok" {
                     self.update_retry(&identity, |current| {
                         current.terminal = Some(result.clone());

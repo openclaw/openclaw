@@ -93,7 +93,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         resolveAgentRoute: mockResolveAgentRoute,
       },
       session: {
-        readSessionUpdatedAt: mockReadSessionUpdatedAt,
+        readSessionUpdatedAtAsync: async (params: unknown) => mockReadSessionUpdatedAt(params),
         resolveStorePath: mockResolveStorePath,
         recordInboundSession: vi.fn(async () => undefined),
       },

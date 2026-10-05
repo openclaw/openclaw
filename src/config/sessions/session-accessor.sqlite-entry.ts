@@ -269,7 +269,7 @@ export function readSessionUpdatedAtCore(scope: SessionAccessScope): number | un
 export async function upsertSessionEntryCore(
   scope: SessionAccessScope,
   patch: Partial<SessionEntry>,
-  options: Pick<SessionEntryPatchOptions, "assertCommitAllowed"> = {},
+  options: Pick<SqliteSessionEntryPatchOptions, "assertCommitAllowed" | "workerGuard"> = {},
 ): Promise<SessionEntry | null> {
   return await patchSessionEntryCore(scope, () => patch, {
     workerGuard: {},
@@ -500,6 +500,7 @@ async function patchSqliteSessionEntrySnapshot(
       consumePendingReset: options.consumePendingReset,
       providerReviewMutation: options.providerReviewMutation,
       shouldCommitIf: options.workerGuard?.shouldCommitIf,
+      cliHistory: options.workerGuard?.cliHistory,
     };
   };
   const withDatabase = <T>(operation: () => T | Promise<T>) => {

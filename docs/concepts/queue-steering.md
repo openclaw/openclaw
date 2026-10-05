@@ -129,9 +129,10 @@ before its transcript commit.
 A visible message or send acknowledgment does not mean the active runtime has
 consumed it. The Control UI shows specific notices when an accepted message is
 waiting for worker setup or workspace sync.
-A steer sent while the initial turn is creating its worktree can join that turn
-once the runtime is ready. If the runtime cannot accept it, the message stays
-queued for a followup.
+A steer sent while a turn is creating its worktree or preparing its runtime stays
+pending for that turn. Once the runtime is ready, OpenClaw checks whether it can
+accept the input. If the turn ends or cannot accept it, the message stays queued
+for a followup.
 Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.

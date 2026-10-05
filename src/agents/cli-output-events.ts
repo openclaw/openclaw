@@ -38,19 +38,14 @@ type PendingToolUse = {
   blockInput?: Record<string, unknown>;
 };
 
-type ToolUseTracker = {
-  pendingByIndex: Map<number, PendingToolUse>;
-  nameById: Map<string, string>;
-  startedIds: Set<string>;
-  resultDeliveredIds: Set<string>;
-};
+type ToolUseTracker = ReturnType<typeof createToolUseTracker>;
 
-export function createToolUseTracker(): ToolUseTracker {
+export function createToolUseTracker() {
   return {
-    pendingByIndex: new Map(),
-    nameById: new Map(),
-    startedIds: new Set(),
-    resultDeliveredIds: new Set(),
+    pendingByIndex: new Map<number, PendingToolUse>(),
+    nameById: new Map<string, string>(),
+    startedIds: new Set<string>(),
+    resultDeliveredIds: new Set<string>(),
   };
 }
 

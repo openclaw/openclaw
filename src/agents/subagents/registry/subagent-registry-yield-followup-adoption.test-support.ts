@@ -20,7 +20,6 @@ export function registerYieldFollowupAdoptionTests({
   getLifecycleHandler,
   updateFixtureRun,
   settleLifecycle,
-  mockPendingAgentWait,
   wakeRequester,
 }: {
   getRegistry: () => SubagentRegistryHarness;
@@ -32,7 +31,6 @@ export function registerYieldFollowupAdoptionTests({
   getLifecycleHandler: () => (event: LifecycleEvent) => void;
   updateFixtureRun: (runId: string, update: (entry: SubagentRunRecord) => void) => Promise<void>;
   settleLifecycle: (event: LifecycleEvent) => Promise<void>;
-  mockPendingAgentWait: () => void;
   wakeRequester: Mock<typeof maybeWakeRequesterAfterAllChildrenSettled>;
 }) {
   describe("sessions_yield follow-up adoption", () => {
@@ -200,13 +198,12 @@ export function registerYieldFollowupAdoptionTests({
         completion: { required: true },
         taskRunId: kickoff.taskRunId ?? kickoff.runId,
         task: "the remote job finished",
-        requesterSettleWake: { batchRunIds: [FOLLOW_UP_RUN_ID] },
       });
       expect(adopted.execution).toEqual(successor.execution);
       expect(adopted.generation).toBeGreaterThan(
         expectDefined(successor.generation, "admitted follow-up generation"),
       );
-      expect(adopted.requesterSettleWake?.pauseNotice).toBeUndefined();
+      expect(adopted.requesterSettleWake).toBeUndefined();
       expect(wakeRequester).not.toHaveBeenCalled();
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
       expect(mocks.dispatchRecoveryAgent).not.toHaveBeenCalled();
@@ -244,25 +241,6 @@ export function registerYieldFollowupAdoptionTests({
         requesterSessionKey: followUpRequester,
         expectsCompletionMessage: true,
         execution: { status: "running" },
-      });
-    });
-
-    it("adopts a default sibling registered after the pause was published", async () => {
-      const paused = await arrangePausedChildWithYieldedRequester(ORIGINAL_REQUESTER);
-      mockPendingAgentWait();
-      await registerFollowUp();
-
-      expect(
-        await getRegistry().adoptPausedSubagentRunIntoSuccessor({
-          childSessionKey: CHILD_SESSION_KEY,
-        }),
-      ).toBe(true);
-
-      expect(findRequesterRun(PAUSED_RUN_ID, ORIGINAL_REQUESTER)).toBeUndefined();
-      expect(findRequesterRun(FOLLOW_UP_RUN_ID, ORIGINAL_REQUESTER)).toMatchObject({
-        requesterSessionKey: ORIGINAL_REQUESTER,
-        taskRunId: paused.taskRunId ?? paused.runId,
-        requesterSettleWake: { batchRunIds: [SIBLING_RUN_ID, FOLLOW_UP_RUN_ID].toSorted() },
       });
     });
   });

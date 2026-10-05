@@ -6,20 +6,12 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { executeAgentTurn } from "../../auto-reply/reply/agent-runner-execution.js";
-import { runReplyAgent } from "../../auto-reply/reply/agent-runner-run.js";
-import {
-  clearFollowupQueueForTest,
-  createQueueTestRun,
-} from "../../auto-reply/reply/queue.test-helpers.js";
+import { clearFollowupQueueForTest } from "../../auto-reply/reply/queue.test-helpers.js";
 import { getFollowupQueueDepth } from "../../auto-reply/reply/queue/enqueue.js";
-import type { FollowupRun } from "../../auto-reply/reply/queue/types.js";
 import {
-  createReplyOperation,
   replyRunRegistry,
   type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
-import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
-import { createTypingController } from "../../auto-reply/reply/typing.js";
 import {
   loadSessionEntry,
   loadTranscriptEventsSync,
@@ -49,13 +41,21 @@ vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOrigina
 test.for(["accepted", "unavailable", "rejected"] as const)(
   "preserves a prestart steer through workspace preparation when late injection is %s",
   async (injection, { signal }) => {
+    const realDispatch = await vi.importActual<typeof import("../../auto-reply/dispatch.js")>(
+      "../../auto-reply/dispatch.js",
+    );
+    const realReply = await vi.importActual<typeof import("../../auto-reply/reply/get-reply.js")>(
+      "../../auto-reply/reply/get-reply.js",
+    );
     const workspace = await initializeRepository(tempDirs.make("openclaw-prestart-steer-"), "repo");
     testState.agentConfig = { workspace };
     const { storePath } = await createSessionStoreDir();
     const preparingWorkspace = createDeferred();
     const releaseWorkspace = createDeferred();
     const releaseInitialRun = createDeferred();
-    const initialRunStarted = createDeferred();
+    const releaseInitialBackend = createDeferred();
+    const initialRuntimeStarted = createDeferred();
+    const inputQueued = createDeferred();
     const steerAccepted = createDeferred();
     const releaseSteerCommit = createDeferred();
     const steerTerminal = createDeferred();
@@ -93,10 +93,42 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         await releaseWorkspace.promise;
         return createWorktree(params);
       });
-    runtime.execute.mockImplementation(async ({ followupRun, opts }) => {
-      const runId = expectDefined(opts?.runId, "followup run ID");
-      await expectDefined(followupRun.userTurnTranscriptRecorder, "queued input").persistApproved();
-      consumed.push({ runId, text: followupRun.prompt });
+    runtime.execute.mockImplementation(async ({ followupRun, opts, replyOperation }) => {
+      const runId = expectDefined(opts?.runId, "runtime run ID");
+      if (!initialOperation) {
+        initialOperation = expectDefined(replyOperation, "initial reply admission");
+        initialRuntimeStarted.resolve();
+        await releaseInitialBackend.promise;
+        initialOperation.attachBackend({
+          kind: "embedded",
+          runId,
+          toolAuthorityFingerprint: initialOperation.bindToolAuthorityRoute(followupRun.run),
+          cancel: () => {},
+          messageInjectionV2: {
+            version: 2,
+            isAvailable: () => injection !== "unavailable",
+            queueMessage: async (text, options, assertCurrent) => {
+              assertCurrent();
+              if (injection === "rejected") {
+                throw new Error("Runtime declined late steering");
+              }
+              options?.onQueueAccepted?.(true);
+              steerAccepted.resolve();
+              await releaseSteerCommit.promise;
+              assertCurrent();
+              await options?.userTurnTranscriptRecorder?.persistApproved();
+              consumed.push({ runId, text });
+            },
+          },
+        });
+        await releaseInitialRun.promise;
+      } else {
+        await expectDefined(
+          followupRun.userTurnTranscriptRecorder,
+          "queued input",
+        ).persistApproved();
+        consumed.push({ runId, text: followupRun.prompt });
+      }
       return {
         runId,
         outcome: {
@@ -113,115 +145,27 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         },
       };
     });
-    // Keep handler admission, workspace preparation, steering, queue draining,
-    // and transcript persistence real; supply only prepared model/runtime facts.
+    // Observe custody without replacing dispatch, reply preparation, or queue policy.
     dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
-      const { ctx, cfg, replyOptions } = raw as Parameters<typeof dispatchInboundMessage>[0];
-      const opts = expectDefined(replyOptions, "prepared reply options");
-      const key = expectDefined(ctx.SessionKey, "prepared session key");
-      const entry = expectDefined(
-        loadSessionEntry({ agentId: "main", sessionKey: key, storePath }),
-        "created session",
-      );
-      const base = createQueueTestRun({
-        prompt: expectDefined(ctx.BodyForAgent, "prepared prompt"),
-        messageId: ctx.MessageSid,
-        originatingChannel: "webchat",
-      });
-      const followup: FollowupRun = {
-        ...base,
-        operatorAuthority: opts?.operatorAuthority,
-        abortSignal: opts?.abortSignal,
-        turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
-        userTurnTranscriptRecorder: opts?.userTurnTranscriptRecorder,
-        queuedFollowupReplyDisposition: {
-          kind: "deliver",
-          deliver: expectDefined(opts.onQueuedFollowupReplyBatch, "queued delivery owner"),
-        },
-        run: {
-          ...base.run,
-          config: cfg,
-          agentId: "main",
-          sessionId: entry.sessionId,
-          sessionKey: key,
-          sessionFile: entry.sessionFile ?? `${workspace}/session.jsonl`,
-          workspaceDir: entry.spawnedCwd ?? workspace,
-          cwd: entry.spawnedCwd,
-          messageProvider: "webchat",
-          chatType: "direct",
-          senderIsOwner: true,
-        },
-      };
-      if (opts?.runId !== steerRunId) {
-        const initialRunId = expectDefined(opts.runId, "initial run ID");
-        await opts?.userTurnTranscriptRecorder?.persistApproved();
-        initialOperation = createReplyOperation({
-          agentId: "main",
-          sessionKey: key,
-          sessionId: entry.sessionId,
-          resetTriggered: false,
-        });
-        initialOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followup));
-        const fingerprint = initialOperation.bindToolAuthorityRoute(followup.run);
-        initialOperation.attachBackend({
-          kind: "embedded",
-          runId: initialRunId,
-          toolAuthorityFingerprint: fingerprint,
-          cancel: () => {},
-          messageInjectionV2: {
-            version: 2,
-            isAvailable: () => injection !== "unavailable",
-            queueMessage: async (text, options, assertCurrent) => {
-              assertCurrent();
-              if (injection === "rejected") {
-                throw new Error("Runtime declined late steering");
-              }
-              options?.onQueueAccepted?.(true);
-              steerAccepted.resolve();
-              await releaseSteerCommit.promise;
-              assertCurrent();
-              await options?.userTurnTranscriptRecorder?.persistApproved();
-              consumed.push({ runId: initialRunId, text });
-            },
-          },
-        });
-        initialOperation.setPhase("running");
-        initialRunStarted.resolve();
-        await releaseInitialRun.promise;
-      } else {
-        await initialRunStarted.promise;
-        const lifecycle = expectDefined(opts.turnAdoptionLifecycle, "queued input lifecycle");
+      const params = raw as Parameters<typeof dispatchInboundMessage>[0];
+      if (params.replyOptions?.runId === steerRunId) {
+        const lifecycle = expectDefined(params.replyOptions.turnAdoptionLifecycle, "input custody");
+        const onDeferred = expectDefined(lifecycle.onDeferred, "queued input admission");
+        lifecycle.onDeferred = () => {
+          const admitted = onDeferred();
+          inputQueued.resolve();
+          return admitted;
+        };
         const onSettled = lifecycle.onSettled;
         lifecycle.onSettled = () => {
           onSettled?.();
           queuedSettled.resolve();
         };
-        await runReplyAgent({
-          commandBody: followup.prompt,
-          followupRun: followup,
-          queueKey: key,
-          resolvedQueue: { mode: "steer", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
-          shouldSteer: true,
-          shouldFollowup: true,
-          isActive: true,
-          isRunActive: () => replyRunRegistry.isActive(key),
-          opts,
-          typing: createTypingController({}),
-          sessionEntry: entry,
-          sessionStore: { [key]: entry },
-          sessionKey: key,
-          storePath,
-          defaultModel: "gpt-test",
-          resolvedVerboseLevel: "off",
-          isNewSession: false,
-          blockStreamingEnabled: false,
-          resolvedBlockStreamingBreak: "text_end",
-          sessionCtx: ctx,
-          shouldInjectGroupIntro: false,
-          typingMode: "never",
-        });
       }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+      return realDispatch.dispatchInboundMessage({
+        ...params,
+        replyResolver: realReply.getReplyFromConfig,
+      });
     });
     try {
       const created = await directSessionReq<{ key: string; runId: string }>(
@@ -257,6 +201,13 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       expect(sent).toMatchObject({ ok: true, payload: { runId: steerRunId, status: "started" } });
       expect(terminalBeforeConsumption).toEqual([]);
       releaseWorkspace.resolve();
+      await withinTest(Promise.race([inputQueued.promise, steerTerminal.promise]), signal);
+      // Steering can park before reply preparation reaches the runtime.
+      await withinTest(initialRuntimeStarted.promise, signal);
+      expect(context.chatQueuedTurns.has(steerRunId)).toBe(true);
+      expect(initialOperation?.phase).toBe("running");
+      expect(consumed).toEqual([]);
+      releaseInitialBackend.resolve();
       await withinTest(Promise.race([steerAccepted.promise, steerTerminal.promise]), signal);
       if (injection === "accepted") {
         expect(terminalBeforeConsumption).toEqual([]);
@@ -267,7 +218,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
           { runId: createdSession.runId, text: expect.stringContaining(steerText) },
         ]);
         expect(terminalBeforeConsumption).toEqual([false]);
-        expect(runtime.execute).not.toHaveBeenCalled();
+        expect(runtime.execute).toHaveBeenCalledOnce();
       } else {
         // Rejected steering retains the existing source-completion contract;
         // queue custody must still deliver the input after the first run ends.
@@ -277,7 +228,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         expectDefined(initialOperation, "initial run owner").complete();
         releaseInitialRun.resolve();
         await withinTest(queuedSettled.promise, signal);
-        expect(runtime.execute).toHaveBeenCalledOnce();
+        expect(runtime.execute).toHaveBeenCalledTimes(2);
         expect(consumed).toEqual([
           { runId: expect.any(String), text: expect.stringContaining(steerText) },
         ]);
@@ -311,6 +262,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         identities: [sessionKey],
       });
       releaseWorkspace.resolve();
+      releaseInitialBackend.resolve();
       releaseSteerCommit.resolve();
       if (sessionKey) {
         clearFollowupQueueForTest(sessionKey);

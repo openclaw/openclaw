@@ -250,7 +250,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
   });
 
-  it("preserves structured orphaned user content while keeping the leaf for later turns", () => {
+  it("keeps structured orphaned user input actionable alongside the current request", () => {
     expect(
       mergeOrphan({
         content: [
@@ -263,7 +263,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: false,
       prompt:
-        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
+        "[Earlier unanswered user message. Address this request alongside the current input; follow the latest user instruction if they conflict.]\n" +
         "please inspect this\n" +
         "[image_url] https://example.test/cat.png\n" +
         "[input_audio] https://example.test/cat.wav\n\n" +

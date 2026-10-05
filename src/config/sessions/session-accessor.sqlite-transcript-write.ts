@@ -67,7 +67,6 @@ import {
 } from "./session-accessor.sqlite-transcript-write-guard.js";
 import {
   runTranscriptWriteSnapshotSync,
-  SqliteTranscriptMutationConflictError,
   type TranscriptWriteViewGuard,
 } from "./session-accessor.sqlite-transcript-write-snapshot.js";
 import type {
@@ -76,6 +75,7 @@ import type {
   SessionTranscriptWriteTransactionContext,
 } from "./session-accessor.types.js";
 import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "./session-entry-projection.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import {

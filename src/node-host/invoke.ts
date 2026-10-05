@@ -96,27 +96,18 @@ type SystemWhichParams = {
   bins: string[];
 };
 
-type McpToolsCallParams = {
-  server: string;
-  tool: string;
-  arguments?: Record<string, unknown>;
-};
+type McpToolsCallParams = ReturnType<typeof decodeMcpToolsCallParams>;
 
 type SystemExecApprovalsSetParams = {
   file: ExecApprovalsFile;
   baseHash?: string | null;
 };
 
-type SystemRunPrepareParams = {
+type SystemRunPrepareParams = Parameters<typeof buildSystemRunApprovalPlan>[0] & {
   security?: ExecSecurity;
   ask?: ExecAsk;
-  command?: unknown;
-  rawCommand?: unknown;
-  cwd?: unknown;
   env?: Record<string, string> | null;
   executionContext?: unknown;
-  agentId?: unknown;
-  sessionKey?: unknown;
   strictInlineEval?: unknown;
 };
 
@@ -668,7 +659,7 @@ async function dispatchInvoke(
   });
 }
 
-function decodeMcpToolsCallParams(raw?: string | null): McpToolsCallParams {
+function decodeMcpToolsCallParams(raw?: string | null) {
   const value = decodeParams<unknown>(raw);
   if (!isRecord(value)) {
     throw new Error("INVALID_REQUEST: MCP tool params must be an object");

@@ -45,18 +45,23 @@ export async function reportUpdateStepCompletion(
   step: Parameters<NonNullable<UpdateStepProgress["onStepComplete"]>>[0],
   commandFailure?: { cause: unknown },
 ): Promise<void> {
+  let reportingFailure: { cause: unknown };
   try {
     await progress?.onStepComplete?.(step);
+    return;
   } catch (error) {
-    if (commandFailure || isFailedUpdateStep(step)) {
-      const failure = commandFailure ? commandFailure.cause : createUpdateStepFailureError(step);
-      // oxlint-disable-next-line preserve-caught-error -- The reporting error is retained in errors; the command failure remains the cause.
-      throw new AggregateError([failure, error], "Update command and completion reporting failed", {
-        cause: failure,
-      });
-    }
-    throw error;
+    reportingFailure = { cause: error };
   }
+  if (commandFailure || isFailedUpdateStep(step)) {
+    const failure = commandFailure ? commandFailure.cause : createUpdateStepFailureError(step);
+    // Keep the command failure primary without discarding the reporting failure.
+    throw new AggregateError(
+      [failure, reportingFailure.cause],
+      "Update command and completion reporting failed",
+      { cause: failure },
+    );
+  }
+  throw reportingFailure.cause;
 }
 
 export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
@@ -193,7 +198,7 @@ export function normalizeFallbackFailureReason(
 
 export async function buildUpdateCommandRunner(
   runCommand?: CommandRunner,
-): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv | undefined; runCommand: CommandRunner }> {
+): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv; runCommand: CommandRunner }> {
   const defaultCommandEnv = await createGlobalInstallEnv();
   return {
     defaultCommandEnv,
@@ -202,10 +207,7 @@ export async function buildUpdateCommandRunner(
       (async (argv, options) =>
         await runCommandWithTimeout(argv, {
           ...options,
-          env:
-            defaultCommandEnv && options.env
-              ? { ...defaultCommandEnv, ...options.env }
-              : (defaultCommandEnv ?? options.env),
+          env: options.env ? { ...defaultCommandEnv, ...options.env } : defaultCommandEnv,
           // Package-manager trees must not outlive a timed-out updater.
           killProcessTree: true,
         })),

@@ -1,10 +1,17 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { ResolvedXAccount } from "./accounts.js";
 import { normalizeXUserId, readPublishedXAllowlist } from "./allowlist.js";
 import type { XUser } from "./api.js";
+import { X_GUEST_TOOLS } from "./guest-tools.js";
 import { getXRuntime } from "./runtime.js";
 
 export type XSenderTier = "maintainer" | "guest";
-const X_GUEST_READ_TOOLS = ["read", "ls"] as const;
+
+export function supportsXGuestHelpers(
+  runtime: Pick<PluginRuntime, "capabilities"> = getXRuntime(),
+) {
+  return runtime.capabilities?.includes("sender-restricted-hidden-helpers-v1") === true;
+}
 
 export function resolveXGuestSettings(account: ResolvedXAccount) {
   return {
@@ -28,8 +35,11 @@ export function resolveXSenderTier(
 
 export function resolveXGuestToolPolicy(account: ResolvedXAccount) {
   const configured = account.config.guests?.tools;
-  const allow = X_GUEST_READ_TOOLS.filter(
-    (name) => !configured?.allow || configured.allow.includes(name),
+  const helpersAvailable = supportsXGuestHelpers();
+  const allow = X_GUEST_TOOLS.filter(
+    (name) =>
+      (helpersAvailable || name === "read" || name === "ls") &&
+      (!configured?.allow || configured.allow.includes(name)),
   );
   // An empty allow array means unrestricted to core; an empty guest selection means no tools.
   return allow.length
@@ -43,7 +53,11 @@ export function formatXSenderLine(tier: XSenderTier, authorId: string, user?: XU
   const displayName = user?.name ? `(${inline(user.name)})` : "";
   const label = [username, displayName].filter(Boolean).join(" ");
   const sender = `${label ? `${label}, ` : ""}X user id ${authorId}`;
-  return tier === "maintainer"
-    ? `This is from a verified user: ${sender}, on the maintainer allowlist.`
-    : `This is from a guest: ${sender}. Guest tier: answer from the OpenClaw repo only; you cannot open work sessions, write, run commands, or read other sessions for guests.`;
+  if (tier === "maintainer") {
+    return `This is from a verified user: ${sender}, on the maintainer allowlist.`;
+  }
+  const helperGuidance = supportsXGuestHelpers()
+    ? "hidden helpers must use the same agent and repository. You cannot open visible work sessions"
+    : "this host supports read-only guest answers. You cannot start helpers or work sessions";
+  return `This is from a guest: ${sender}. Guest tier: answer from the OpenClaw repo only; ${helperGuidance}, write, run commands, or read unrelated sessions for guests.`;
 }

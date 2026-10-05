@@ -22,7 +22,7 @@ import {
 } from "./cli-shared.js";
 
 export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandContext): void {
-  const { root, callGateway, operationTimeoutMs } = context;
+  const { root, operationTimeoutMs } = context;
 
   root
     .command("join")
@@ -36,7 +36,6 @@ export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandCon
     .action(async (url: string | undefined, options: JoinOptions) => {
       const payload = resolveCliJoinRequest(resolveMeetingInput(context.config, url), options);
       const delegated = await callGoogleMeetGateway({
-        callGateway,
         method: "googlemeet.join",
         payload,
         timeoutMs: operationTimeoutMs,

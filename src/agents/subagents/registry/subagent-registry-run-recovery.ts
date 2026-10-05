@@ -31,6 +31,7 @@ import {
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasRequesterCompletionCohort } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
   getSubagentRunRuntimeKey,
@@ -335,9 +336,11 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           // The frozen batch is addressed by runId. Adoption retires the previous id,
           // so an unmapped membership list would drop this row from its own batch and
           // let the wave complete without ever waking the requester.
-          const sourceRequesterSettleWake = replaceParams.preserveRequesterSettleWake
-            ? source.requesterSettleWake
-            : undefined;
+          // A child-only pause notice ends with adoption; it never owns the result.
+          const sourceRequesterSettleWake =
+            replaceParams.preserveRequesterSettleWake && hasRequesterCompletionCohort(source)
+              ? source.requesterSettleWake
+              : undefined;
           const remapRequesterSettleWake = (
             wake: RequesterSettleWakeState,
           ): RequesterSettleWakeState => ({

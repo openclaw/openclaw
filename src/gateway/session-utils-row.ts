@@ -130,7 +130,7 @@ export function readSessionRowInputs(params: {
       modelCatalog: params.modelCatalog,
       lightweightListRow: lightweight,
     });
-  const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
+  const freshSessionTotalTokens = resolveFreshSessionTotalTokens(entry);
   const usageByFallbackModel =
     params.skipTranscriptUsageFallback !== true
       ? resolveTranscriptUsageFallbacks({
@@ -479,6 +479,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     createdVia: entry?.createdVia,
+    createdSurface: entry?.createdSurface,
     ...projectSessionRowProfiles(input),
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,

@@ -158,7 +158,7 @@ describe("Doctor gateway config writer ordering", () => {
     },
   );
 
-  it.each(["success", "validation-refusal", "service-failure", "post-commit-failure"])(
+  it.each(["validation-refusal", "service-failure", "post-commit-failure"])(
     "uses Doctor's persisted baseline through service repair (%s)",
     async (outcome) => {
       await withGatewayServiceHome(

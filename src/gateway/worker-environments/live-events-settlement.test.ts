@@ -71,7 +71,7 @@ describe("worker live event write settlement", () => {
           updatedAt: 1,
         });
         const warmup = expectDefined(
-          createTrajectoryRuntimeRecorder({
+          await createTrajectoryRuntimeRecorder({
             sessionId: warmupTarget.sessionId,
             sessionTarget: warmupTarget,
           }),

@@ -40,6 +40,7 @@ const scope = {
   excludeSubagents: true,
   excludeCron: true,
   excludeSystem: true,
+  excludeDock: true,
 };
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let instance: OpenClawTestInstance | undefined;

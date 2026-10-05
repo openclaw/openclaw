@@ -442,9 +442,7 @@ export function createGatewaySubagentRuntime(
       return { runId, sessionKey, ...(runtime ? { runtime } : {}) };
     },
     async waitForRun(params) {
-      const payload = await dispatchGatewayMethodInProcess<
-        Omit<AgentWaitResult, "status"> & { status?: string }
-      >(
+      const payload = await dispatchGatewayMethodInProcess<AgentWaitResult>(
         "agent.wait",
         {
           runId: params.runId,
@@ -452,16 +450,9 @@ export function createGatewaySubagentRuntime(
         },
         { resolveGatewayContext },
       );
-      const { status: rawStatus, error, ...metadata } = payload;
-      let status = rawStatus;
-      if (status === "completed" || status === "succeeded") {
-        status = "ok";
-      } else if (status === "error" && error?.trim().toLowerCase() === "completed") {
-        status = "ok";
-      }
-      if (status !== "ok" && status !== "error" && status !== "timeout" && status !== "pending") {
-        throw new Error(`Gateway agent.wait returned unexpected status: ${rawStatus}`);
-      }
+      const { status: waitStatus, error, ...metadata } = payload;
+      const status =
+        waitStatus === "error" && error?.trim().toLowerCase() === "completed" ? "ok" : waitStatus;
       return {
         ...metadata,
         status,

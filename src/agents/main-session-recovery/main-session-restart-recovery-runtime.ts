@@ -122,7 +122,7 @@ export async function recoverRestartAbortedMainSessions(params: {
 
   if (result.started > 0 || result.settled > 0 || result.failed > 0 || result.skipped > 0) {
     const skipSummary =
-      result.started === 0 && skipReasons.size > 0
+      skipReasons.size > 0
         ? ` skipReasons=${[...skipReasons]
             .toSorted(([left], [right]) => left.localeCompare(right))
             .map(([reason, count]) => `${reason}:${count}`)

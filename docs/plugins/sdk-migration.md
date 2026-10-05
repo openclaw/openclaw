@@ -87,6 +87,18 @@ Removing the synchronous contracts
 requires a separately announced breaking SDK release. Incognito reads retain
 their existing native in-memory owner until that owner's worker migration.
 
+### Session reset freshness
+
+Channel runtime consumers should await
+`runtime.channel.session.resolveEntryResetFreshnessAsync(...)` when deciding
+whether a session needs reset. File-backed entries and transcript lifecycle
+timestamps are read from the same worker snapshot, with the original database
+owner retained through validation and cleanup. The synchronous
+`resolveEntryResetFreshness(...)` method shipped in `v2026.9.8` remains available
+for existing JavaScript consumers and is deprecated for runtime use; removal
+requires the next Plugin SDK major and explicit breaking-release approval. Both methods retain the
+existing reset policy and process-held incognito behavior.
+
 ### Why
 
 - **Slow startup** - importing one helper loaded dozens of unrelated modules.

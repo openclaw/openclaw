@@ -46,7 +46,6 @@ import {
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import {
   AuthStorage,
-  FileAuthStorageBackend,
   OAuthProviderConfiguredUnavailableError,
   type AuthStorageBackend,
 } from "./auth-storage.js";
@@ -336,29 +335,10 @@ describe("SQLite auth storage", () => {
     expect(() => AuthStorage.create(customPath)).toThrow(
       expect.objectContaining({ code: "AUTH_PROFILE_MIGRATION_REQUIRED" }),
     );
-    expect(() => new FileAuthStorageBackend(customPath)).toThrow(
-      expect.objectContaining({ code: "AUTH_PROFILE_MIGRATION_REQUIRED" }),
-    );
     expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
   });
 
-  it("keeps FileAuthStorageBackend as a deprecated fail-closed SQLite adapter", async () => {
-    const agentDir = makeAgentDir();
-    const legacyPath = path.join(agentDir, "auth.json");
-    const storage = AuthStorage.fromStorage(new FileAuthStorageBackend(legacyPath));
-    storage.set("openai", { type: "api_key", key: "fake-openai-key" });
-
-    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:default"]).toMatchObject({
-      key: "fake-openai-key",
-    });
-    expect(fs.existsSync(legacyPath)).toBe(false);
-    fs.writeFileSync(legacyPath, '{"openai":{"key":"fake-late"}}\n');
-    // Never read the retired file, but keep serving the migrated store beside it.
-    await expect(storage.getApiKey("openai")).resolves.toBe("fake-openai-key");
-    expect(fs.existsSync(legacyPath)).toBe(true);
-  });
-
-  it("blocks ambient fallback when the compatibility backend cannot materialize SQLite refs", async () => {
+  it("rejects unresolved SQLite refs before ambient fallback", () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
       createAuthProfileStoreFixture({
@@ -372,11 +352,7 @@ describe("SQLite auth storage", () => {
     );
     vi.stubEnv("OPENAI_API_KEY", "fake-ambient-key");
 
-    const storage = AuthStorage.fromStorage(
-      new FileAuthStorageBackend(path.join(agentDir, "auth.json")),
-    );
-
-    await expect(storage.getApiKey("openai")).rejects.toThrow(
+    expect(() => AuthStorage.forAgent(agentDir)).toThrow(
       "requires the active secrets runtime to materialize SecretRef credentials",
     );
   });

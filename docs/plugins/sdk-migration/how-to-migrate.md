@@ -161,6 +161,21 @@ The `session-manager-sync-context-read` record deprecates the synchronous reader
 October 4, 2026, with one warning per process and removal at the next Plugin SDK
 major. Its existing synchronous result remains compatible during that window.
 
+Actor-bound incognito sessions reject the deprecated synchronous persistence and
+context methods before native storage or loaded-view mutation. The error names
+the awaited replacement. Production incognito remains host-owned until the atomic
+worker activation; durable synchronous compatibility is unchanged. An ordinary
+`resolveCurrentTurnEntryId()` only walks the loaded view; to include omitted
+custom messages, await `openAsync(target)` and walk that complete view instead.
+
+Bundled Codex history captures `captureCodexSessionContextReader(target, signal?)`
+from `openclaw/plugin-sdk/codex-session-transcript-runtime` before yielding. When
+an actor binding exists, await the returned reader with the same target and a
+context consumer. It retains the actor through scanning, consumption, validation,
+and cleanup. Without an actor binding it returns `undefined`, preserving the
+existing host route. The synchronous Codex context reader and validators refuse
+actor-bound access; they never reopen a native incognito database.
+
 `branchAsync` can hydrate missing history through the read worker before selecting
 the branch. `resetLeafAsync(): Promise<void>` orders an in-memory navigation reset
 with queued session writes. Neither operation writes a leaf record by itself;

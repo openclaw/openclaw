@@ -50,8 +50,6 @@ type PluginHandledResult = {
   toolResult: AgentToolResult<unknown>;
 };
 
-type SendMessageParams = Parameters<typeof sendMessage>[0];
-
 export function materializeMessagePresentationFallback(params: {
   payload: Pick<ReplyPayload, "presentation" | "text">;
   text?: string;
@@ -89,88 +87,6 @@ type SendActionParams = {
   reply?: OutboundReplyFacts;
   threadId?: string | number;
 };
-
-async function sendCoreMessage(
-  params: SendActionParams & {
-    queuePolicy: NonNullable<SendMessageParams["queuePolicy"]>;
-    payloads?: SendMessageParams["payloads"];
-  },
-): Promise<{ result: MessageSendResult; deliveredText?: string }> {
-  const deliveredPayloads: NormalizedOutboundPayload[] = [];
-  const result = await sendMessage({
-    cfg: params.ctx.cfg,
-    to: params.to,
-    content: params.message,
-    ...(params.payloads ? { payloads: params.payloads } : {}),
-    agentId: params.ctx.agentId,
-    requesterSessionKey: params.ctx.input.sessionKey,
-    requesterAccountId: params.ctx.input.requesterAccountId ?? params.ctx.accountId ?? undefined,
-    requesterSenderId: params.ctx.input.requesterSenderId ?? undefined,
-    requesterSenderName: params.ctx.input.requesterSenderName ?? undefined,
-    requesterSenderUsername: params.ctx.input.requesterSenderUsername ?? undefined,
-    requesterSenderE164: params.ctx.input.requesterSenderE164 ?? undefined,
-    mediaUrl: params.mediaUrl || undefined,
-    mediaUrls: params.mediaUrls,
-    buffer: params.buffer,
-    filename: params.filename,
-    contentType: params.contentType,
-    asVoice: params.asVoice,
-    channel: params.ctx.channel || undefined,
-    accountId: params.ctx.accountId ?? undefined,
-    conversationType: params.ctx.conversationType,
-    conversationReadOrigin: normalizeConversationReadInvocationOrigin(
-      params.ctx.input.conversationReadOrigin,
-    ),
-    reply: params.reply,
-    threadId: params.threadId,
-    gifPlayback: params.gifPlayback,
-    forceDocument: params.forceDocument,
-    dryRun: params.ctx.dryRun,
-    bestEffort: params.bestEffort ?? undefined,
-    queuePolicy: params.queuePolicy,
-    deps: params.ctx.input.deps,
-    gateway: params.ctx.gateway,
-    idempotencyKey: params.ctx.idempotencyKey,
-    runId: params.ctx.input.runId,
-    executionIdentityToken: params.ctx.input.executionIdentityToken,
-    mirror: params.ctx.mirror,
-    abortSignal: params.ctx.abortSignal,
-    silent: params.ctx.silent,
-    mediaAccess: params.ctx.mediaAccess,
-    preparedMessageId: params.ctx.input.preparedMessageId,
-    preparedPlugin: params.ctx.channelPlugin,
-    gatewayOwnedDelivery: params.ctx.input.gatewayOwnedDelivery,
-    deliveryIntentId: params.ctx.input.deliveryIntentId,
-    deliveryCompletion: params.ctx.input.deliveryCompletion,
-    conversationDeliveryTarget: params.ctx.input.conversationDeliveryTarget,
-    deliveryRetryOwner: params.ctx.deliveryRetryOwner,
-    requireUnknownSendReconciliation: params.ctx.input.requireQueuePersistence ? false : undefined,
-    onDeliveryIntent: params.ctx.input.onDeliveryIntent,
-    onDeliveryAttempt: params.ctx.input.onDeliveryAttempt,
-    onDeliveryResult: async (evidence) => {
-      await params.ctx.onSendAccepted?.();
-      await params.ctx.input.onDeliveryResult?.(evidence);
-    },
-    onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
-    assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
-    skipQueue: params.ctx.input.skipQueue,
-    onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
-  });
-  const deliveredText =
-    result.deliveryStatus === "sent" &&
-    deliveredPayloads.every(
-      (payload) => payload.mediaUrls.length === 0 && payload.audioAsVoice !== true,
-    )
-      ? deliveredPayloads
-          .map((payload) => payload.text)
-          .filter((text) => text.trim())
-          .join("\n")
-      : "";
-  return {
-    result,
-    ...(deliveredText ? { deliveredText } : {}),
-  };
-}
 
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
@@ -356,18 +272,82 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     channelPlugin?.outbound?.deliveryMode === "gateway"
       ? materializeMessagePresentationFallback({ payload: corePayload, text: params.message })
       : params.message;
-  const delivery = await sendCoreMessage({
-    ...params,
-    message,
+  const deliveredPayloads: NormalizedOutboundPayload[] = [];
+  const result = await sendMessage({
+    cfg: params.ctx.cfg,
+    to: params.to,
+    content: message,
     ...(corePayload ? { payloads: [corePayload] } : {}),
+    agentId: params.ctx.agentId,
+    requesterSessionKey: params.ctx.input.sessionKey,
+    requesterAccountId: params.ctx.input.requesterAccountId ?? params.ctx.accountId ?? undefined,
+    requesterSenderId: params.ctx.input.requesterSenderId ?? undefined,
+    requesterSenderName: params.ctx.input.requesterSenderName ?? undefined,
+    requesterSenderUsername: params.ctx.input.requesterSenderUsername ?? undefined,
+    requesterSenderE164: params.ctx.input.requesterSenderE164 ?? undefined,
+    mediaUrl: params.mediaUrl || undefined,
+    mediaUrls: params.mediaUrls,
+    buffer: params.buffer,
+    filename: params.filename,
+    contentType: params.contentType,
+    asVoice: params.asVoice,
+    channel: params.ctx.channel || undefined,
+    accountId: params.ctx.accountId ?? undefined,
+    conversationType: params.ctx.conversationType,
+    conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+      params.ctx.input.conversationReadOrigin,
+    ),
+    reply: params.reply,
+    threadId: params.threadId,
+    gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
+    dryRun: params.ctx.dryRun,
+    bestEffort: params.bestEffort ?? undefined,
     queuePolicy,
+    deps: params.ctx.input.deps,
+    gateway: params.ctx.gateway,
+    idempotencyKey: params.ctx.idempotencyKey,
+    runId: params.ctx.input.runId,
+    executionIdentityToken: params.ctx.input.executionIdentityToken,
+    mirror: params.ctx.mirror,
+    abortSignal: params.ctx.abortSignal,
+    silent: params.ctx.silent,
+    mediaAccess: params.ctx.mediaAccess,
+    preparedMessageId: params.ctx.input.preparedMessageId,
+    preparedPlugin: params.ctx.channelPlugin,
+    gatewayOwnedDelivery: params.ctx.input.gatewayOwnedDelivery,
+    deliveryIntentId: params.ctx.input.deliveryIntentId,
+    deliveryCompletion: params.ctx.input.deliveryCompletion,
+    conversationDeliveryTarget: params.ctx.input.conversationDeliveryTarget,
+    deliveryRetryOwner: params.ctx.deliveryRetryOwner,
+    requireUnknownSendReconciliation: params.ctx.input.requireQueuePersistence ? false : undefined,
+    onDeliveryIntent: params.ctx.input.onDeliveryIntent,
+    onDeliveryAttempt: params.ctx.input.onDeliveryAttempt,
+    onDeliveryResult: async (evidence) => {
+      await params.ctx.onSendAccepted?.();
+      await params.ctx.input.onDeliveryResult?.(evidence);
+    },
+    onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
+    skipQueue: params.ctx.input.skipQueue,
+    onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
   });
+  const deliveredText =
+    result.deliveryStatus === "sent" &&
+    deliveredPayloads.every(
+      (payload) => payload.mediaUrls.length === 0 && payload.audioAsVoice !== true,
+    )
+      ? deliveredPayloads
+          .map((payload) => payload.text)
+          .filter((text) => text.trim())
+          .join("\n")
+      : "";
 
   return {
     handledBy: "core",
-    payload: delivery.result,
-    ...(delivery.deliveredText ? { deliveredText: delivery.deliveredText } : {}),
-    sendResult: delivery.result,
+    payload: result,
+    ...(deliveredText ? { deliveredText } : {}),
+    sendResult: result,
   };
 }
 

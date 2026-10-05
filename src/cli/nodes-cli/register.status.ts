@@ -109,17 +109,13 @@ function formatNodeVersions(
   );
 }
 
-function isWindowsNodePlatform(platform?: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(platform) ?? "";
-  return normalized === "win32" || normalized === "windows";
-}
-
 function formatPathEnv(raw?: string, platform?: string): string | null {
   const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
-  const delimiter = isWindowsNodePlatform(platform) ? ";" : ":";
+  const normalizedPlatform = normalizeOptionalLowercaseString(platform);
+  const delimiter = normalizedPlatform === "win32" || normalizedPlatform === "windows" ? ";" : ":";
   const parts = trimmed.split(delimiter).filter(Boolean);
   const display =
     parts.length <= 3
@@ -171,14 +167,14 @@ function isPendingApprovalState(
   return state === "pending-approval" || state === "pending-reapproval";
 }
 
-function parseSinceMs(raw: string | undefined, label: string): number | undefined {
+function parseSinceMs(raw: string | undefined): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
   try {
     return parseDurationMs(raw);
   } catch (err) {
-    throw new Error(`${label}: ${formatErrorMessage(err)}`, { cause: err });
+    throw new Error(`Invalid --last-connected: ${formatErrorMessage(err)}`, { cause: err });
   }
 }
 
@@ -273,7 +269,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("status", async () => {
           const connectedOnly = Boolean(opts.connected);
-          const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
+          const sinceMs = parseSinceMs(opts.lastConnected);
           const result = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
           const obj: Record<string, unknown> =
             typeof result === "object" && result !== null ? result : {};
@@ -509,7 +505,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("list", async () => {
           const connectedOnly = Boolean(opts.connected);
-          const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
+          const sinceMs = parseSinceMs(opts.lastConnected);
           const result = await callNodesGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
           const { heading, muted } = getNodesTheme();

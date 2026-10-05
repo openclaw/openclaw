@@ -307,10 +307,10 @@ vi.mock("../../../trajectory/runtime.js", async () => {
   );
   return {
     ...actual,
-    createTrajectoryRuntimeRecorder: (
+    createTrajectoryRuntimeRecorder: async (
       params: Parameters<typeof actual.createTrajectoryRuntimeRecorder>[0],
     ) => {
-      const recorder = actual.createTrajectoryRuntimeRecorder(params);
+      const recorder = await actual.createTrajectoryRuntimeRecorder(params);
       return {
         enabled: true as const,
         describeFlushState: () => recorder?.describeFlushState(),

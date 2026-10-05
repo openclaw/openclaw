@@ -139,6 +139,11 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+CLI shutdown drains process-wide work. Closing an individual Gateway drains its
+own active chat runs and queued turns, and waits on the process-wide pending-reply
+count. Both report remaining work as named counts; categories can overlap and
+should not be added as distinct turns.
+
 Read-only RPC waits (`agent.wait`, approval decision waits, `question.waitAnswer`,
 and `device.scopes.waitUpgrade`) stop observing when their client disconnects.
 When shutdown drain begins, connected waiters receive retryable `UNAVAILABLE`
@@ -245,9 +250,15 @@ new work is fenced and admitted work gets the computed grace period, still cappe
 by the native shutdown deadline. Deferral time does not spend that shutdown budget.
 For a supervisor's SIGTERM restart, a shorter requested drain limits when active
 runs are interrupted, not when database cleanup must finish: cleanup can use the
-remaining native stop budget. The Gateway still exits before the supervisor's
-deadline. Clean database restart proof is published only after writer leases,
-checkpointing, and native connection closure settle.
+remaining native stop budget. After an interrupted external restart, the Gateway
+joins final chat persistence, drains Memory's database borrows, and closes agent
+databases before exiting. It skips plugin and channel teardown that could retain
+the process until the deadline. Database admission stays fenced through lock
+release and log flushing, which have a final five-second exit window. Shutdown
+logs report the elapsed time for these steps. The supervisor deadline remains
+the hard upper bound. Clean database restart proof is published only after writer
+leases, checkpointing, and native connection closure settle; one database's idle
+receipt alone does not authorize process exit.
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must
@@ -718,6 +729,13 @@ failure cannot start the same recovery twice. Completed Control UI turns also
 retain bounded durable idempotency tombstones, allowing a reconnecting outbox
 to retire them without re-executing the request.
 
+When a pending final has no remaining queue owner and its delivery outcome is
+uncertain, recovery records a notice for the next turn on the same route when
+the saved final has a delivery context and intent ID. Settling that turn clears
+its recovery ownership together with its delivery claim, so the next agent turn
+can proceed. The notice and terminal deduplication evidence survive another
+restart; completed work is not replayed.
+
 Message-tool-only replies use a second durable correlation. Before a terminal
 same-conversation send reaches the channel, the gateway records an unresolved
 delivery intent on the exact session and source turn. A confirmed provider
@@ -797,11 +815,12 @@ An interruption alone is not a blocker; the parent continues until the request
 is finished or a specific blocker requires user input or unavailable authority.
 Existing cleanup and retention settings still apply.
 
-Startup skips superseded requester completion claims and logs the affected run.
+Startup retires superseded requester completion claims through the registry's
+cleanup owner before restoring the surviving claim.
 Those historical rows do not block current children in the same requester turn
 or recovery of other subagents. Saved yield intent is evaluated from the same
-current children used for the transfer. The existing cleanup owner settles historical rows;
-interrupted current children still report their restart outcome to the parent.
+current children used for the transfer. Interrupted current children still report
+their restart outcome to the parent.
 Turns with only superseded children need no requester settlement.
 
 If a parent yielded while waiting for children, its saved batch collects both

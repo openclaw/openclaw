@@ -21,7 +21,6 @@ import {
 } from "../config/sessions/paths.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
-import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   listDurableSqliteTargetPathsForSessionStorePath,
@@ -29,6 +28,7 @@ import {
   resolveSqliteTargetFromSessionStorePath,
 } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -369,10 +369,7 @@ export async function* readTranscriptRecords(
     if (incognito) {
       events = await readIncognitoUsageTranscript(incognito, marker);
     } else {
-      const { restoreSessionColdTranscript } =
-        await import("../config/sessions/session-cold-storage.js");
-      await restoreSessionColdTranscript(marker);
-      events = loadTranscriptEventsSync(marker);
+      events = await loadTranscriptEvents(marker);
     }
     for (const event of selectVisibleTranscriptEvents(events)) {
       incognito?.actor.assertCurrent();

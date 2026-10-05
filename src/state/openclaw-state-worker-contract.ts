@@ -18,10 +18,7 @@ import type { reserveWorktreeCapacityInWorker } from "../agents/worktrees/capaci
 import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
-import type {
-  ConfigHealthSnapshot,
-  ConfigHealthEntryBasis,
-} from "../config/io.health-state.types.js";
+import type { ConfigHealthEntryBasis } from "../config/io.health-state.types.js";
 import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
 import type {
@@ -200,7 +197,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       input: { artifactPreservingReadOnly: boolean };
       output: ClawInstallSchemaVersionRow[] | undefined;
     };
-    "config.health.read": { input: { artifactPreserving: boolean }; output: ConfigHealthSnapshot };
     "config.health.patch": {
       input: {
         configPath: string;

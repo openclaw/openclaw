@@ -25,6 +25,7 @@ import {
 import {
   abortFrozenOperations,
   attachedBackendByOperation,
+  backendReadyByOperation,
   clearReplyOperationByOperation,
   clearReplyRunState,
   evictReplyOperationByOperation,
@@ -107,6 +108,12 @@ export function createReplyOperation(params: {
   });
   const ownerSettlement = createDeferredCore();
   const producerCompletion = createDeferredCore();
+  let backendReady = createDeferredCore();
+  const notifyBackendReady = () => {
+    if (phase === "running" && getAttachedBackend(operation)) {
+      backendReady.resolve();
+    }
+  };
   let ownerCompletionBarrier: Promise<void> | undefined;
   const settleOwner = (): void => {
     const pending = ownerCompletionBarrier;
@@ -139,6 +146,7 @@ export function createReplyOperation(params: {
     toolAuthority.close();
     recordActivity();
     phase = next.kind;
+    backendReady.resolve();
   };
   const markProgress = (reason: string) => {
     markDiagnosticRunProgress({
@@ -156,6 +164,7 @@ export function createReplyOperation(params: {
       return;
     }
     stateCleared = true;
+    backendReady.resolve();
     toolAuthority.close();
     terminalSettleTimer.clear();
     finalizationLease.clear();
@@ -299,6 +308,7 @@ export function createReplyOperation(params: {
       }
       recordActivity();
       phase = next;
+      notifyBackendReady();
     },
     markWaitingForDeferredMaintenance() {
       if (result || phase !== "queued") {
@@ -330,6 +340,7 @@ export function createReplyOperation(params: {
       }
       phase = phaseBeforeGlobalLaneWait ?? "queued";
       phaseBeforeGlobalLaneWait = undefined;
+      notifyBackendReady();
       markProgress("global_lane:wait_ended");
     },
     markTerminalRecovery() {
@@ -387,6 +398,9 @@ export function createReplyOperation(params: {
       replyRunState.activeRunsByKey.delete(previousKey);
       replyRunState.activeSessionIdsByKey.delete(previousKey);
       currentSessionKey = update.sessionKey;
+      backendReady.resolve();
+      backendReady = createDeferredCore();
+      backendReadyByOperation.set(operation, backendReady.promise);
       replyRunState.activeRunsByKey.set(currentSessionKey, operation);
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
@@ -417,6 +431,7 @@ export function createReplyOperation(params: {
       recordActivity();
       toolAuthority.bindBackendFingerprint(handle.toolAuthorityFingerprint);
       attachedBackendByOperation.set(operation, handle);
+      notifyBackendReady();
       if (controller.signal.aborted) {
         handle.cancel("superseded");
       }
@@ -513,6 +528,7 @@ export function createReplyOperation(params: {
 
   clearReplyOperationByOperation.set(operation, clearState);
   producerCompletionByOperation.set(operation, producerCompletion.promise);
+  backendReadyByOperation.set(operation, backendReady.promise);
   expireReplyOperationByOperation.set(operation, (reason, options) => {
     if (
       replyRunState.activeRunsByKey.get(currentSessionKey) !== operation ||

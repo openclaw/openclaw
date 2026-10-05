@@ -8,6 +8,7 @@ import {
   prepareTranscriptMessageAppend,
   prepareTranscriptMessageAppendForWorker,
 } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { transcriptEventContextEligibility } from "../../config/sessions/session-transcript-projection-append.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -29,15 +30,13 @@ import {
   sessionManagerPrepareCurrentTurnReplay,
 } from "./session-manager-current-turn.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
+import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import {
   canonicalizeSessionEntry,
   type PersistRecordResult,
   type PersistWorkerRecordResult,
 } from "./session-manager-persistence-entry.js";
-import {
-  isSqliteTranscriptMutationConflict,
-  SessionManagerActorCommittedError,
-} from "./session-manager-persistence-error.js";
+import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
 import { SessionManagerSuffixPersistence } from "./session-manager-suffix-persistence.js";
 import type {
   AppendPersistenceOptions,
@@ -46,7 +45,6 @@ import type {
 } from "./session-manager-types.js";
 import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
-import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   protected appendEntryAsync<T extends SessionEntry>(
@@ -201,7 +199,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         admittedUserId,
       );
       if (validatedMutationAt === undefined) {
-        throw this.createTranscriptMutationConflictError();
+        throw new SqliteTranscriptMutationConflictError(this.persistenceTarget.sessionId);
       }
       attemptOptions = copyCodeModeSourceAppendOptions(persistenceOptions, {
         ...persistenceOptions,
@@ -238,7 +236,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       const retryableExplicitParentAppend = deliberateBranchAppend || sideBranchAppend;
       if (
         (!activeBranchAppend && !retryableExplicitParentAppend) ||
-        !isSqliteTranscriptMutationConflict(error)
+        !(error instanceof SqliteTranscriptMutationConflictError)
       ) {
         throw error;
       }
@@ -449,14 +447,6 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     };
   }
 
-  private createTranscriptMutationConflictError(): Error {
-    const error = new Error(
-      `SQLite transcript changed while preparing rewrite for ${this.persistenceTarget?.sessionId ?? this.sessionId}`,
-    );
-    error.name = "SqliteTranscriptMutationConflictError";
-    return error;
-  }
-
   // SDK v2026.9.5 exposes this synchronous opt-in; internal replay uses async preparation.
   resolveCurrentTurnEntryId(
     isInterruptedTail?: (entry: SessionEntry) => boolean,
@@ -464,6 +454,14 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   ): string | null {
     this.assertTranscriptViewAvailable();
     const includeOmitted = options?.includeOmittedCustomMessages === true;
+    if (includeOmitted) {
+      prepareSessionManagerSync(
+        "resolveCurrentTurnEntryId",
+        this.persistenceTarget,
+        this,
+        "openAsync, then resolveCurrentTurnEntryId without includeOmittedCustomMessages",
+      );
+    }
     return resolveCurrentTurnEntryId(
       {
         target: this.persistenceTarget,
@@ -507,7 +505,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): string {
-    warnSessionPersistenceDeprecation("SessionManager.appendMessage", "appendMessageAsync");
+    prepareSessionManagerSync("appendMessage", this.persistenceTarget, this);
     return this.appendMessageWithTranscriptAnchorSync(message, options).entryId;
   }
 
@@ -554,10 +552,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ) {
-    warnSessionPersistenceDeprecation(
-      "SessionManager.appendMessageWithTranscriptAnchor",
-      "appendMessageWithTranscriptAnchorAsync",
-    );
+    prepareSessionManagerSync("appendMessageWithTranscriptAnchor", this.persistenceTarget, this);
     return this.appendMessageWithTranscriptAnchorSync(message, options);
   }
 

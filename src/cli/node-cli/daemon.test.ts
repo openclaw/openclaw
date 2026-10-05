@@ -13,14 +13,7 @@ import type {
   GatewayServiceInstallArgs,
 } from "../../daemon/service-types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import {
-  runNodeDaemonInstall,
-  runNodeDaemonRestart,
-  runNodeDaemonStart,
-  runNodeDaemonStatus,
-  runNodeDaemonStop,
-  runNodeDaemonUninstall,
-} from "./daemon.js";
+import { runNodeDaemonInstall, runNodeDaemonLifecycle, runNodeDaemonStatus } from "./daemon.js";
 
 const TLS_FINGERPRINT = "ab".repeat(32);
 
@@ -632,35 +625,31 @@ describe("node daemon lifecycle adapters", () => {
   it.each([
     {
       name: "start",
-      action: runNodeDaemonStart,
       delegate: mocks.runServiceStart,
       expected: { renderStartHints: expect.any(Function) },
     },
     {
       name: "stop",
-      action: runNodeDaemonStop,
       delegate: mocks.runServiceStop,
       expected: {},
     },
     {
       name: "restart",
-      action: runNodeDaemonRestart,
       delegate: mocks.runServiceRestart,
       expected: { renderStartHints: expect.any(Function) },
     },
     {
       name: "uninstall",
-      action: runNodeDaemonUninstall,
       delegate: mocks.runServiceUninstall,
       expected: {
         stopBeforeUninstall: false,
         assertNotLoadedAfterUninstall: false,
       },
     },
-  ])(
+  ] as const)(
     "delegates $name with node-specific service options",
-    async ({ action, delegate, expected }) => {
-      await action({ json: true });
+    async ({ name, delegate, expected }) => {
+      await runNodeDaemonLifecycle(name, { json: true });
 
       expect(delegate).toHaveBeenCalledWith(
         expect.objectContaining({

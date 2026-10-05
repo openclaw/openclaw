@@ -11,6 +11,7 @@ import {
   sanitizeIrcOutboundText,
   sanitizeIrcTarget,
 } from "./protocol.js";
+import type { IrcNickServConfig } from "./types.js";
 
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
@@ -72,23 +73,9 @@ export type IrcClientOptions = {
   onLine?: (line: string) => void;
 };
 
-type IrcNickServOptions = {
-  enabled?: boolean;
-  service?: string;
-  password?: string;
-  register?: boolean;
-  registerEmail?: string;
-};
+type IrcNickServOptions = Omit<IrcNickServConfig, "passwordFile">;
 
-export type IrcClient = {
-  nick: string;
-  isReady: () => boolean;
-  sendRaw: (line: string) => void;
-  join: (channel: string) => void;
-  sendPrivmsg: (target: string, text: string, replyTo?: string) => Promise<void>;
-  quit: (reason?: string) => void;
-  close: () => void;
-};
+export type IrcClient = Awaited<ReturnType<typeof connectIrcClient>>;
 
 function toIrcError(err: unknown): Error {
   if (err instanceof Error) {
@@ -132,7 +119,7 @@ function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
   return commands;
 }
 
-export async function connectIrcClient(options: IrcClientOptions): Promise<IrcClient> {
+export async function connectIrcClient(options: IrcClientOptions) {
   const timeoutMs = options.connectTimeoutMs ?? 15000;
   const messageChunkMaxChars = Math.max(1, Math.floor(options.messageChunkMaxChars ?? 350));
 

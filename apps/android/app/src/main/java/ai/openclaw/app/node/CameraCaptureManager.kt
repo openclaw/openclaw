@@ -253,7 +253,7 @@ class CameraCaptureManager(
               ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")
           val rotated = JpegSizeLimiter.normalizeOrientation(decoded, orientation)
           val scaled =
-            if (maxWidth > 0 && rotated.width > maxWidth) {
+            if (rotated.width > maxWidth) {
               val h =
                 (rotated.height.toDouble() * (maxWidth.toDouble() / rotated.width.toDouble()))
                   .toInt()

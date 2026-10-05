@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { MessageReceipt } from "../message/types.js";
 import {
   createAcceptedChannelDeliveryResult,
+  createChannelDeliveryAccumulator,
   createChannelDeliveryResultFromReceipt,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
@@ -12,6 +13,61 @@ import {
   hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
 } from "./dispatch-result.js";
+
+describe("createChannelDeliveryAccumulator", () => {
+  it("suppresses an empty batch and leaves failures before acceptance unchanged", () => {
+    const accepted = createChannelDeliveryAccumulator();
+    const error = new Error("send rejected");
+
+    expect(accepted.result()).toEqual({
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
+    expect(accepted.partialError(error)).toBe(error);
+    expect(
+      accepted.partialError(
+        createChannelPartialDeliveryError(error, {
+          visibleReplySent: true,
+          messageIds: ["accepted-attachment"],
+        }),
+      ),
+    ).toMatchObject({
+      deliveryResult: { visibleReplySent: true, messageIds: ["accepted-attachment"], content: "" },
+    });
+  });
+
+  it("keeps immutable snapshots and a nested failure's accepted subset in send order", () => {
+    const accepted = createChannelDeliveryAccumulator({ kind: "media", replyToId: "parent" });
+    accepted.add({ messageId: "first" }, "first accepted text");
+    const snapshot = accepted.result();
+    accepted.add({ messageId: "attachment" }, "");
+    const failure = accepted.partialError(
+      createChannelPartialDeliveryError(new Error("last caption rejected"), {
+        visibleReplySent: true,
+        messageIds: ["last-attachment"],
+        content: "last accepted text",
+      }),
+    );
+
+    expect(failure).toMatchObject({
+      deliveryResult: {
+        visibleReplySent: true,
+        messageIds: ["first", "attachment", "last-attachment"],
+        content: "first accepted text\nlast accepted text",
+        receipt: { primaryPlatformMessageId: "first", replyToId: "parent" },
+      },
+    });
+    expect(snapshot).toMatchObject({
+      messageIds: ["first"],
+      content: "first accepted text",
+      receipt: { raw: [{ messageId: "first" }] },
+    });
+    expect(accepted.result()).toMatchObject({
+      messageIds: ["first", "attachment"],
+      content: "first accepted text",
+    });
+  });
+});
 
 describe("createAcceptedChannelDeliveryResult", () => {
   it.each([true, false])(

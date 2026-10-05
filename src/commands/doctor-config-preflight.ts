@@ -130,11 +130,11 @@ async function runDoctorConfigPreflightOperation(
   const readConfigSnapshotForPreflight = async (allowCurrentPluginMetadata = true) =>
     await measurePreflightStep("config-snapshot", async () =>
       readConfigPreflightSnapshot({
+        purpose: "doctor",
         allowCurrentPluginMetadata,
         includePluginMetadata: options.preparePluginMetadataSnapshot === true,
         measure: options.measure,
         observe: options.observe,
-        preparePluginMetadataSnapshot: options.preparePluginMetadataSnapshot === true,
         skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
         prepareSnapshot: getSnapshotPreparation(options.doctorOnlyStateMigrations === true),
         ...(await pluginMigrations.snapshotOptions()),

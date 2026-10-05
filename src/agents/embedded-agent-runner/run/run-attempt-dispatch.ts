@@ -165,11 +165,22 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     provider,
     runtimePlan,
   });
+  if (!params.admittedRunContext) {
+    throw new Error("embedded attempt reached dispatch without an admitted run context");
+  }
+  const admittedRunContext = params.admittedRunContext;
+  const assertTrajectoryCurrent = resolveAdmittedRunActiveAssertion(
+    admittedRunContext,
+    params.abortSignal,
+  );
+  if (!assertTrajectoryCurrent) {
+    throw new Error("embedded attempt reached dispatch without an active admitted run");
+  }
   const trajectoryRecorder =
     runtime.agentHarness.id === CODEX_HARNESS_ID &&
     !params.disableTrajectory &&
     params.sessionPersistence !== "detached"
-      ? createTrajectoryRuntimeRecorder({
+      ? await createTrajectoryRuntimeRecorder({
           cfg: params.config,
           env: process.env,
           runId: params.runId,
@@ -195,6 +206,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
           workspaceDir,
         })
       : undefined;
+  assertTrajectoryCurrent();
   let startupStagesEmitted = input.startupStagesEmitted;
   if (!startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
@@ -248,10 +260,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     modelMaxTokens: effectiveModel.maxTokens,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
   });
-  if (!params.admittedRunContext) {
-    throw new Error("embedded attempt reached dispatch without an admitted run context");
-  }
-  const admittedRunContext = params.admittedRunContext;
   const assertActiveRun = resolveAdmittedRunActiveAssertion(
     admittedRunContext,
     attemptAbortController.signal,

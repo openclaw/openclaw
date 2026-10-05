@@ -43,22 +43,12 @@ async function registerGatewayRunOnly(program: Command): Promise<void> {
   );
 }
 
-async function registerSubCliWithPluginCommands(
-  program: Command,
-  argv: string[],
-  registerSubCli: () => Promise<void>,
-  pluginCliPosition: "before" | "after",
-) {
+async function registerPluginCommandsIfNeeded(program: Command, argv: string[]) {
   const invocation = resolveCliArgvInvocation(argv);
   const shouldRegisterPluginCommands =
     !invocation.hasHelpOrVersion &&
     resolveCliCommandPathPolicy(invocation.commandPath).loadPlugins !== "never";
-  if (pluginCliPosition === "before" && shouldRegisterPluginCommands) {
-    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
-    await registerPluginCliCommandsFromValidatedConfig(program);
-  }
-  await registerSubCli();
-  if (pluginCliPosition === "after" && shouldRegisterPluginCommands) {
+  if (shouldRegisterPluginCommands) {
     const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
@@ -142,23 +132,15 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<
     ["pairing"],
     async (program, argv) => {
       // Pairing reads channel capabilities while registering, so initialize plugins first.
-      await registerSubCliWithPluginCommands(
-        program,
-        argv,
-        async () => (await import("../pairing-cli.js")).registerPairingCli(program),
-        "before",
-      );
+      await registerPluginCommandsIfNeeded(program, argv);
+      (await import("../pairing-cli.js")).registerPairingCli(program);
     },
   ],
   [
     ["plugins"],
     async (program, argv) => {
-      await registerSubCliWithPluginCommands(
-        program,
-        argv,
-        async () => (await import("../plugins-cli.js")).registerPluginsCli(program),
-        "after",
-      );
+      (await import("../plugins-cli.js")).registerPluginsCli(program);
+      await registerPluginCommandsIfNeeded(program, argv);
     },
   ],
   [

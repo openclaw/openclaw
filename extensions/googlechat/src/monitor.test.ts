@@ -42,7 +42,7 @@ const routingMocks = vi.hoisted(() => ({
 
 const inboundMocks = vi.hoisted(() => ({
   buildEnvelope: vi.fn(({ body }: { body: string }) => body),
-  resolveChannelInboundRouteEnvelope: vi.fn(),
+  resolveAgentRoute: vi.fn(),
   toInboundMediaFactsWithMetadata: vi.fn(),
 }));
 
@@ -53,10 +53,15 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   );
   return {
     ...actual,
-    resolveChannelInboundRouteEnvelope: inboundMocks.resolveChannelInboundRouteEnvelope,
+    createChannelInboundEnvelopeBuilderAsync: async () => inboundMocks.buildEnvelope,
     toInboundMediaFactsWithMetadata: inboundMocks.toInboundMediaFactsWithMetadata,
   };
 });
+
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/routing")>()),
+  resolveAgentRoute: inboundMocks.resolveAgentRoute,
+}));
 
 vi.mock("./api.js", () => ({
   deleteGoogleChatMessage: apiMocks.deleteGoogleChatMessage,
@@ -91,15 +96,12 @@ beforeEach(() => {
   apiMocks.updateGoogleChatMessage.mockReset().mockResolvedValue({});
   accessMocks.applyGoogleChatInboundAccessPolicy.mockReset();
   inboundMocks.buildEnvelope.mockReset().mockImplementation(({ body }: { body: string }) => body);
-  inboundMocks.resolveChannelInboundRouteEnvelope
+  inboundMocks.resolveAgentRoute
     .mockReset()
     .mockImplementation(({ accountId }: { accountId: string }) => ({
-      route: {
-        agentId: "agent-1",
-        accountId,
-        sessionKey: "session-1",
-      },
-      buildEnvelope: inboundMocks.buildEnvelope,
+      agentId: "agent-1",
+      accountId,
+      sessionKey: "session-1",
     }));
   inboundMocks.toInboundMediaFactsWithMetadata.mockClear();
 });
@@ -289,7 +291,7 @@ describe("googlechat monitor inbound space classification", () => {
     expect(accessMocks.applyGoogleChatInboundAccessPolicy).toHaveBeenCalledWith(
       expect.objectContaining({ isGroup }),
     );
-    expect(inboundMocks.resolveChannelInboundRouteEnvelope).toHaveBeenCalledWith({
+    expect(inboundMocks.resolveAgentRoute).toHaveBeenCalledWith({
       cfg: {},
       channel: "googlechat",
       accountId: "work",

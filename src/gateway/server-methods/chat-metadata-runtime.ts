@@ -81,9 +81,7 @@ function assertPreparedAgentCurrent(agent: PreparedAgentMetadata) {
 export function createGatewayChatMetadataRuntime(params: {
   getConfig: () => OpenClawConfig;
   getContext: () => GatewayModelCatalogContext;
-  beforeRefresh?: () => Promise<void>;
   onChanged?: (change: { modelCatalogChanged: boolean; authChanged: boolean }) => void;
-  refreshOnRead?: boolean;
   log: {
     warn: (message: string) => void;
   };
@@ -151,7 +149,7 @@ export function createGatewayChatMetadataRuntime(params: {
   };
   let pending:
     | {
-        facts?: PreparedGenerationFacts;
+        facts: PreparedGenerationFacts;
         promise: Promise<void>;
         generationReady: Deferred;
         notifyIfUnchanged: boolean;
@@ -287,10 +285,6 @@ export function createGatewayChatMetadataRuntime(params: {
     }
     assertOpen();
     try {
-      await params.beforeRefresh?.();
-      if (version !== refreshVersion) {
-        return;
-      }
       const facts = captureGenerationFacts(deps);
       if (current && generationFactsMatch(current.facts, facts)) {
         return;
@@ -326,44 +320,37 @@ export function createGatewayChatMetadataRuntime(params: {
     if (stoppedError) {
       return Promise.reject(stoppedError);
     }
-    let facts: PreparedGenerationFacts | undefined;
-    if (params.beforeRefresh) {
-      if (pending) {
-        pending.notifyIfUnchanged ||= options.notifyIfUnchanged === true;
-        return pending.promise;
+    let facts: PreparedGenerationFacts;
+    try {
+      facts = captureGenerationFacts(deps);
+    } catch (error) {
+      const refreshError = error instanceof Error ? error : new Error(formatErrorMessage(error));
+      fail(refreshError);
+      return Promise.reject(refreshError);
+    }
+    if (current && generationFactsMatch(current.facts, facts)) {
+      // A settled attempt can clear progress cached by models.list or models.snapshot readers
+      // without changing any prepared model/command facts. Wake them without retiring the cache.
+      if (options.notifyIfUnchanged) {
+        notifyChanged(current.facts, true);
       }
-    } else {
-      try {
-        facts = captureGenerationFacts(deps);
-      } catch (error) {
-        const refreshError = error instanceof Error ? error : new Error(formatErrorMessage(error));
-        fail(refreshError);
-        return Promise.reject(refreshError);
-      }
-      if (current && generationFactsMatch(current.facts, facts)) {
-        // A settled attempt can clear progress cached by models.list or models.snapshot readers
-        // without changing any prepared model/command facts. Wake them without retiring the cache.
-        if (options.notifyIfUnchanged) {
-          notifyChanged(current.facts, true);
-        }
-        return Promise.resolve();
-      }
-      if (pending?.facts && generationFactsMatch(pending.facts, facts)) {
-        pending.notifyIfUnchanged ||= options.notifyIfUnchanged === true;
-        return pending.promise;
-      }
-      if (current || pending) {
-        // Fence reads synchronously only after proving the published facts changed. A suspended
-        // session projection must not return its old success or failure while replacement builds.
-        invalidate(true);
-      }
+      return Promise.resolve();
+    }
+    if (pending && generationFactsMatch(pending.facts, facts)) {
+      pending.notifyIfUnchanged ||= options.notifyIfUnchanged === true;
+      return pending.promise;
+    }
+    if (current || pending) {
+      // Fence reads synchronously only after proving the published facts changed. A suspended
+      // session projection must not return its old success or failure while replacement builds.
+      invalidate(true);
     }
     const version = ++refreshVersion;
     const promise = refreshTail.catch(() => {}).then(() => runRefresh(version));
     refreshTail = promise;
     const generationReady = createDeferredCore();
     pending = {
-      ...(facts ? { facts } : {}),
+      facts,
       promise,
       generationReady,
       notifyIfUnchanged: options.notifyIfUnchanged === true,
@@ -431,7 +418,7 @@ export function createGatewayChatMetadataRuntime(params: {
       // Unavailable means the prepared owner was missing, not that publication failed.
       // Retry capture so a later published owner is not hidden behind lastError.
       const retryUnavailableOwner = lastError instanceof ChatMetadataSnapshotUnavailableError;
-      if (!generation && (params.refreshOnRead || retryUnavailableOwner)) {
+      if (!generation && retryUnavailableOwner) {
         await refresh();
         generation = current;
       }
@@ -441,33 +428,9 @@ export function createGatewayChatMetadataRuntime(params: {
         }
         throw new ChatMetadataSnapshotUnavailableError();
       }
-      if (!params.refreshOnRead && !authStoresCurrent(generation)) {
+      if (!authStoresCurrent(generation)) {
         await refresh();
         continue;
-      }
-      if (params.refreshOnRead) {
-        let latest: PreparedGenerationFacts | undefined;
-        try {
-          latest = captureGenerationFacts(deps);
-        } catch {
-          await refresh();
-          generation = current;
-        }
-        if (latest && generation && !generationFactsMatch(generation.facts, latest)) {
-          await refresh();
-          generation = current;
-        }
-      }
-      if (!generation) {
-        throw new ChatMetadataSnapshotUnavailableError();
-      }
-      if (params.refreshOnRead) {
-        const latest = captureGenerationFacts(deps);
-        if (!generationFactsMatch(generation.facts, latest)) {
-          throw new ChatMetadataSnapshotUnavailableError(
-            "prepared chat metadata snapshot is stale while its replacement is publishing",
-          );
-        }
       }
       try {
         const readProjection = await project(generation);
@@ -643,15 +606,6 @@ export function createGatewayChatMetadataRuntime(params: {
     // or wait for a lifecycle replacement just to decorate an available transcript.
     if (!generation || replacement || pending || !isCurrentGeneration(generation)) {
       return undefined;
-    }
-    if (params.refreshOnRead) {
-      try {
-        if (!generationFactsMatch(generation.facts, captureGenerationFacts(deps))) {
-          return undefined;
-        }
-      } catch {
-        return undefined;
-      }
     }
     const agentId = normalizeAgentId(readParams.agentId);
     const neutral = generation.neutralProjectionByAgentId.get(agentId);

@@ -54,7 +54,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       session: { threadBindings: { defaultSpawnContext: "isolated" } },
       agents: {
         entries: {
-          main: { workspace: "/tmp/workspace-main", subagents: { allowAgents: ["ops"] } },
+          main: { workspace: "/tmp/workspace-main", subagents: { allowAgents: ["main", "ops"] } },
           ops: { workspace: "/tmp/workspace-ops" },
         },
       },
@@ -118,6 +118,59 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     expect(request("agent")?.params).not.toHaveProperty("workspaceDir");
     expect(request("agent")?.params).not.toHaveProperty("cwd");
   });
+
+  it.each([false, true])(
+    "keeps a restricted same-agent helper's tools and root (sandboxed=%s)",
+    async (sandboxed) => {
+      resolveSandboxRuntimeStatusMock.mockReturnValue({ sandboxed });
+      let store: Record<string, Record<string, unknown>> = {};
+      installSessionStoreCaptureMock(updateSessionStoreMock, {
+        onStore: (value) => {
+          store = value;
+        },
+      });
+      const result = await spawnSubagentDirect(
+        { task: "inspect the assigned project", agentId: "main" },
+        {
+          ...context,
+          inheritedToolPolicySource: "sender",
+          inheritedToolAllowlist: ["read", "sessions_spawn"],
+          inheritedToolDenylist: ["exec"],
+          sessionPermissionPolicy: { mode: "read-only", root: "/tmp/requester-workspace/project" },
+        },
+      );
+      expect(result.status).toBe("accepted");
+      expect(store[result.childSessionKey!]).toMatchObject({
+        spawnedWorkspaceDir: "/tmp/requester-workspace",
+        ...(sandboxed ? {} : { spawnedCwd: "/tmp/requester-workspace/project" }),
+        sessionRoot: "/tmp/requester-workspace/project",
+        permissionMode: "read-only",
+        inheritedToolPolicySource: "sender",
+        inheritedToolAllow: ["read", "sessions_spawn"],
+        inheritedToolDeny: ["exec"],
+      });
+      if (sandboxed) {
+        expect(store[result.childSessionKey!]).not.toHaveProperty("spawnedCwd");
+      }
+      expect(request("agent")?.params.sessionKey).toBe(result.childSessionKey);
+    },
+  );
+
+  it.each([{ agentId: "ops" }, { cwd: "/tmp" }, { worktree: true }])(
+    "refuses a restricted helper that changes its agent or root: %j",
+    async (selection) => {
+      const result = await spawnSubagentDirect(
+        { task: "inspect", ...selection },
+        { ...context, inheritedToolPolicySource: "sender" },
+      );
+      expect(result).toMatchObject({
+        status: "forbidden",
+        error: expect.stringContaining("This sender"),
+      });
+      expect(updateSessionStoreMock).not.toHaveBeenCalled();
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects cwd overrides for sandboxed children before launch", async () => {
     resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({

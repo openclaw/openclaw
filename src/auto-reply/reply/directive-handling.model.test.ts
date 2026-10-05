@@ -748,14 +748,14 @@ describe("/model chat UX", () => {
     setAuthProfiles,
   });
 
-  it("auto-applies closest match for typos", () => {
+  it("auto-applies closest match for typos", async () => {
     const directives = parseInlineSessionDirectives("/model anthropic/claud-opus-4-5");
     const cfg: OpenClawConfig = {
       commands: { text: true },
       agents: { defaults: { modelPolicy: { allow: ["anthropic/claude-opus-4-6"] } } },
     };
 
-    const resolved = resolveModelSelectionFromDirective({
+    const resolved = await resolveModelSelectionFromDirective({
       directives,
       cfg,
       agentDir: "/tmp/agent",
@@ -773,8 +773,8 @@ describe("/model chat UX", () => {
     expect(resolved.errorText).toBeUndefined();
   });
 
-  it("rejects numeric /model selections with a guided error", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("rejects numeric /model selections with a guided error", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model 99",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
     });
@@ -784,8 +784,8 @@ describe("/model chat UX", () => {
     expect(resolved.errorText).toContain("Browse: /models or /models <provider>");
   });
 
-  it("includes additive allowlist repair when a runtime switch targets a blocked model", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("includes additive allowlist repair when a runtime switch targets a blocked model", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model openai/gpt-5.5 --runtime codex",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
     });
@@ -799,8 +799,8 @@ describe("/model chat UX", () => {
     expect(resolved.errorText).toContain("openclaw plugins enable codex");
   });
 
-  it("names the active per-agent allowlist in repair guidance", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("names the active per-agent allowlist in repair guidance", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model openai/gpt-5.5",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
       cfg: {
@@ -816,8 +816,8 @@ describe("/model chat UX", () => {
     );
   });
 
-  it("treats explicit default /model selection as resettable default", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("treats explicit default /model selection as resettable default", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model anthropic/claude-opus-4-6",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
     });
@@ -830,8 +830,8 @@ describe("/model chat UX", () => {
     });
   });
 
-  it("treats /model default as a session model reset", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("treats /model default as a session model reset", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model default",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
     });
@@ -845,8 +845,8 @@ describe("/model chat UX", () => {
     });
   });
 
-  it("keeps openrouter provider/model split for exact selections", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("keeps openrouter provider/model split for exact selections", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model openrouter/anthropic/claude-opus-4-6",
       allowedModelKeys: new Set(["openrouter/anthropic/claude-opus-4-6"]),
     });
@@ -859,8 +859,8 @@ describe("/model chat UX", () => {
     });
   });
 
-  it("keeps cloudflare @cf model segments for exact selections", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("keeps cloudflare @cf model segments for exact selections", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model openai/@cf/openai/gpt-oss-20b",
       allowedModelKeys: new Set(["openai/@cf/openai/gpt-oss-20b"]),
     });
@@ -873,10 +873,10 @@ describe("/model chat UX", () => {
     });
   });
 
-  it("keeps @YYYYMMDD as part of the model when the stored numeric profile is for another provider", () => {
+  it("keeps @YYYYMMDD as part of the model when the stored numeric profile is for another provider", async () => {
     setAuthProfiles(createDateAuthProfiles("anthropic"));
 
-    const resolved = resolveModelSelectionForCommand({
+    const resolved = await resolveModelSelectionForCommand({
       command: `/model custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}`,
       allowedModelKeys: new Set([`custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}`]),
     });

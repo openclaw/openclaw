@@ -2,7 +2,6 @@ import { ZodError } from "zod";
 import {
   DeferredPluginMigrationConflictError,
   readDeferredPluginMigrationCompletions,
-  readDeferredPluginMigrations,
   recordDeferredPluginMigrationsInTransaction,
   type DeferredPluginMigrationRecordInput,
 } from "../infra/deferred-plugin-migrations.js";
@@ -91,14 +90,6 @@ export const pluginRuntimeOperations = {
       throw error;
     }
   },
-  "plugins.deferredMigrations.read": (
-    input: { artifactPreservingReadOnly: boolean },
-    { stateOptions },
-  ) =>
-    readDeferredPluginMigrations({
-      ...stateOptions(),
-      artifactPreservingReadOnly: input.artifactPreservingReadOnly,
-    }),
   "plugins.deferredMigrations.completions.read": (_input: undefined, { stateOptions }) =>
     readDeferredPluginMigrationCompletions(stateOptions()),
 } satisfies WorkerOperationHandlers;

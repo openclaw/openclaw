@@ -1,18 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createSqliteWorkerOperationAdmission,
-  type SqliteWorkerAdmissionFactory,
   type SqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
-import { SqliteWorkerError, type SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
-import type {
-  AgentDatabaseIncognitoIdentity,
-  AgentDatabaseIncognitoOperations,
-} from "../../state/openclaw-agent-execution-contract.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-store.js";
+import type { AgentDatabaseIncognitoIdentity } from "../../state/openclaw-agent-execution-contract.js";
+import {
+  authorizeSessionFacts,
+  readIncognitoGrantFacts,
+  type IncognitoSessionRunner,
+} from "./session-incognito-admission.js";
 import {
   isIncognitoComputeWrite,
   type IncognitoComputeTarget,
@@ -25,13 +25,19 @@ import type {
   IncognitoSessionRead,
   IncognitoSessionOperations,
 } from "./session-incognito-contract.js";
-import type { IncognitoHistoryOperations } from "./session-incognito-history-contract.js";
 import {
+  incognitoHistoryKeys,
+  isIncognitoHistoryCommand,
+  type IncognitoHistoryOperations,
+} from "./session-incognito-history-contract.js";
+import {
+  captureIncognitoLifecycleSettlement,
   incognitoLifecycleKeys,
   isIncognitoLifecycleCommand,
   isIncognitoLifecycleWrite,
   type IncognitoLifecycleEntry,
   type IncognitoLifecycleOperations,
+  type IncognitoLifecycleSettlement as LifecycleSettlement,
 } from "./session-incognito-lifecycle-contract.js";
 import type { IncognitoOutboxOperations } from "./session-incognito-outbox-contract.js";
 import {
@@ -54,18 +60,7 @@ import type {
   PendingInputRead,
 } from "./session-pending-input-operations.types.js";
 
-type Scope = Pick<SqliteWorkerStore<AgentDatabaseIncognitoOperations>, "execute">;
-type LifecycleSettlement = {
-  beforeCommit(): void;
-  settle(outcome: "committed" | "rolled-back" | "unknown"): void;
-};
-export type IncognitoSessionRunner = <T>(
-  authority: IncognitoSessionAuthority,
-  operation: (scope: Scope) => Promise<T>,
-  signal?: AbortSignal,
-  admission?: SqliteWorkerAdmissionFactory,
-  cleanup?: boolean,
-) => Promise<T>;
+export type { IncognitoSessionRunner } from "./session-incognito-admission.js";
 
 export type IncognitoSessionClaim = {
   readonly identity: AgentDatabaseIncognitoIdentity;
@@ -82,18 +77,6 @@ export type IncognitoSessionActor = {
   readonly sessions: ReturnType<ReturnType<typeof createIncognitoSessionFacts>["bind"]>;
   assertCurrent(): void;
 };
-
-function authorizeSessionFacts(
-  authority: IncognitoSessionAuthority,
-  stage: "transaction" | "commit",
-  facts: IncognitoSessionFacts,
-) {
-  const authorization: unknown = authority.authorize?.(stage, structuredClone(facts));
-  if (isPromiseLike(authorization)) {
-    void Promise.resolve(authorization).catch(() => undefined);
-    throw new Error("Incognito session grants must remain synchronous");
-  }
-}
 
 /** Actor-local projection owned by its lifetime, never a roster or full-entry cache. */
 export function createIncognitoSessionFacts(
@@ -364,28 +347,20 @@ export function createIncognitoSessionFacts(
                     throw new Error("Incognito session authority requested out of order");
                   }
                   const received = request.facts.sessions;
-                  if (
-                    !Array.isArray(received) ||
-                    received.some(
-                      (facts: unknown) =>
-                        !isRecord(facts) ||
-                        !isDeepStrictEqual(facts.identity, identity) ||
-                        typeof facts.sessionKey !== "string" ||
-                        !Number.isSafeInteger(facts.revision),
-                    )
-                  ) {
-                    throw new Error("Incognito session grant differs from its captured target");
-                  }
-                  // SAFETY: the private, typed worker sends these bounded publication envelopes.
-                  const facts = received as IncognitoSessionFacts[];
+                  const facts = readIncognitoGrantFacts(received, identity);
                   const keys = facts.map((entry) => entry.sessionKey);
                   const lifecycleKeys = isIncognitoLifecycleCommand(captured)
                     ? incognitoLifecycleKeys(captured, identity)
                     : undefined;
+                  const historyKeys = isIncognitoHistoryCommand(captured)
+                    ? incognitoHistoryKeys(captured)
+                    : undefined;
                   if (
                     new Set(keys).size !== keys.length ||
+                    (historyKeys && !isDeepStrictEqual(keys, historyKeys)) ||
                     (lifecycleKeys && !isDeepStrictEqual(keys, lifecycleKeys)) ||
-                    ("sessionKey" in captured.input &&
+                    (!historyKeys &&
+                      "sessionKey" in captured.input &&
                       (keys.length !== 1 || keys[0] !== captured.input.sessionKey)) ||
                     (request.stage === "commit" && !isDeepStrictEqual(keys, [...targets]))
                   ) {
@@ -637,25 +612,13 @@ export function createIncognitoSessionFacts(
           assertBorrowed();
           authority.assertCurrent();
           const captured = structuredClone(command);
-          const input = captured.input;
-          const removedEntries =
-            "target" in input
-              ? [input.target]
-              : "plan" in input
-                ? input.plan.entries.flatMap(({ sessionKey, expectedEntry }) =>
-                    expectedEntry ? [{ sessionKey, entry: expectedEntry }] : [],
-                  )
-                : undefined;
-          if (removedEntries && !captureLifecycle) {
-            throw new Error("Incognito deletion requires its prepared lifecycle owner");
-          }
           return perform(
             authority,
             captured,
             isIncognitoLifecycleWrite(command.type),
             (result) => result.value,
             signal,
-            removedEntries ? captureLifecycle?.(removedEntries) : undefined,
+            captureIncognitoLifecycleSettlement(captured.input, captureLifecycle),
           );
         },
         captureCurrent(sessionKey: string) {

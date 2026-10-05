@@ -5,7 +5,7 @@ import type {
   WorkboardSessionsBoardRevision,
   WorkboardSessionsBoardView,
 } from "@openclaw/workboard-contract";
-import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
+import type { ControlUiHost, ControlUiSession } from "openclaw/plugin-sdk/control-ui";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { normalizeWorkboardChange } from "../../lib/workboard/change-payload.ts";
@@ -309,6 +309,19 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
             host.agents.defaultId ??
             host.connection.assistantAgentId ??
             undefined);
+        if (sessionKey) {
+          const { session } = await host.request<{ session: ControlUiSession | null }>(
+            "sessions.describe",
+            { key: sessionKey },
+          );
+          if (!current(id, receipt) || !writable()) {
+            return;
+          }
+          agentId = session?.agentId ?? agentId;
+          if (!session?.isDock) {
+            sessionKey = undefined;
+          }
+        }
         if (!sessionKey) {
           if (createdConversation?.boardId === id) {
             ({ sessionKey, agentId } = createdConversation);
@@ -316,7 +329,12 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
             if (!agentId) {
               throw new Error(t("workboard.sessionsBoard.agentUnavailable"));
             }
-            sessionKey = (await host.sessions.create({ agentId, label })) ?? undefined;
+            sessionKey =
+              (await host.sessions.create({
+                agentId,
+                displayName: label,
+                surface: "plugin-dock",
+              })) ?? undefined;
             if (!sessionKey) {
               throw new Error(t("workboard.sessionsBoard.agentCreateFailed"));
             }
