@@ -11,7 +11,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
@@ -37,7 +37,7 @@ import {
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
   setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
-import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
+import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -68,6 +68,7 @@ import {
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { isUnknownSystemInfoMethodError } from "../connection/system-info.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
+import { renderConfigPageSubtitle } from "./config-page-subtitle.ts";
 import { ConfigRouteScrollController } from "./config-route-scroll-controller.ts";
 import {
   configSectionKeysForPage,
@@ -76,7 +77,7 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
-import { renderMcp, renderMcpIntro } from "./mcp.ts";
+import { renderMcp } from "./mcp.ts";
 import "./meeting-capture.ts";
 import "./memory-page.ts";
 import { memorySettingsSchema } from "./memory-schema.ts";
@@ -158,26 +159,6 @@ export function configSelectionFromSearch(pageId: ConfigPageId, search: string):
     return defaultConfigSelection(pageId);
   }
   return normalizeConfigSelection(pageId, section, null);
-}
-
-function renderConfigPageSubtitle(pageId: ConfigPageId) {
-  switch (pageId) {
-    case "appearance":
-      return html`${t("configView.appearance.intro")}
-      ${renderLearnMoreLink("https://docs.openclaw.ai/web/control-ui")}`;
-    case "mcp":
-      return renderMcpIntro();
-    case "security":
-      return html`${t("quickSettings.security.intro")}
-      ${renderLearnMoreLink("https://docs.openclaw.ai/gateway/security")}`;
-    case "talk":
-      return html`${t("talkPage.intro")}
-      ${renderLearnMoreLink("https://docs.openclaw.ai/nodes/talk")}`;
-    case "updates":
-      return t("updates.page.intro");
-    default:
-      return subtitleForRoute(pageId);
-  }
 }
 
 export function extractQuickSettingsSecurity(root: Record<string, unknown>): SecurityOverview {
@@ -1126,6 +1107,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       onNativeNotificationsRequestPermission: () =>
         this.context.nativeNotifications?.requestPermission(),
       onNativeNotificationsSendTest: () => this.context.nativeNotifications?.sendTest(),
+      nativeDeviceSettings: this.context.nativeDeviceSettings?.snapshot,
+      deviceSettingsHref: pathForRoute("device", this.context.basePath),
+      devicePermissionsHref: pathForRoute("device-permissions", this.context.basePath),
+      onOpenDeviceSettings: () => this.context.navigate("device"),
+      onOpenDevicePermissions: () => this.context.navigate("device-permissions"),
       webPush: this.context.webPush.snapshot,
       onWebPushSubscribe: () => void this.context.webPush.run({ kind: "enable" }),
       onWebPushUnsubscribe: () => void this.context.webPush.run({ kind: "disable" }),
@@ -1208,7 +1194,7 @@ export class ConfigPage extends OpenClawLightDomElement {
           : html`
               ${renderSettingsPageHeader({
                 title: titleForRoute(this.pageId),
-                subtitle: renderConfigPageSubtitle(this.pageId),
+                subtitle: renderConfigPageSubtitle(this.pageId, this.context),
               })}
             `
       }
