@@ -266,6 +266,40 @@ describe("Google stream projection", () => {
     expect(output.usage.cost.total).toBeGreaterThan(0);
   });
 
+  it("reports provider context usage from Gemini usage metadata", async () => {
+    const { output } = await runFixture([
+      response({ parts: [{ text: "hello" }], usageMetadata: { promptTokenCount: 1200 } }),
+      response({
+        finishReason: FinishReason.STOP,
+        usageMetadata: {
+          cachedContentTokenCount: 800,
+          toolUsePromptTokenCount: 30,
+          candidatesTokenCount: 40,
+          thoughtsTokenCount: 60,
+          totalTokenCount: 1330,
+        },
+      }),
+    ]);
+    expect(output.usage).toMatchObject({
+      input: 430,
+      output: 100,
+      cacheRead: 800,
+      totalTokens: 1330,
+      contextUsage: { state: "available", promptTokens: 1230, totalTokens: 1330 },
+    });
+  });
+
+  it("keeps context usage unavailable when Gemini omits the prompt token count", async () => {
+    const { output } = await runFixture([
+      response({
+        parts: [{ text: "hello" }],
+        finishReason: FinishReason.STOP,
+        usageMetadata: { candidatesTokenCount: 5, totalTokenCount: 5 },
+      }),
+    ]);
+    expect(output.usage.contextUsage).toEqual({ state: "unavailable" });
+  });
+
   it.each([
     {
       requested: "projects/fixture/locations/global/publishers/google/models/gemini-test",

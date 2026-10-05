@@ -122,6 +122,7 @@ export async function consumeGoogleGenerateContentStream(params: {
     candidatesTokenCount: 0,
     thoughtsTokenCount: 0,
   };
+  let sawPromptTokenCount = false;
   const toolCallIds = new Set<string>();
   for (const block of blocks) {
     if (block.type === "toolCall") {
@@ -167,13 +168,24 @@ export async function consumeGoogleGenerateContentStream(params: {
       const cacheRead = knownUsage.cachedContentTokenCount;
       const toolUsePromptTokens = knownUsage.toolUsePromptTokenCount;
       const outputTokens = knownUsage.candidatesTokenCount + knownUsage.thoughtsTokenCount;
+      const totalTokens =
+        chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens;
+      sawPromptTokenCount ||= typeof chunk.usageMetadata.promptTokenCount === "number";
+      const contextPromptTokens = promptTokens + toolUsePromptTokens;
       params.output.usage = {
         ...createEmptyTransportUsage(),
         input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
         output: outputTokens,
         cacheRead,
-        totalTokens:
-          chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
+        totalTokens,
+        contextUsage:
+          sawPromptTokenCount && contextPromptTokens > 0 && cacheRead <= promptTokens
+            ? {
+                state: "available",
+                promptTokens: contextPromptTokens,
+                totalTokens: Math.max(totalTokens, contextPromptTokens + outputTokens),
+              }
+            : { state: "unavailable" },
       };
       calculateCost(params.model, params.output.usage);
     }

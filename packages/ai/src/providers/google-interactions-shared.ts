@@ -420,6 +420,7 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             usage.total_tokens ?? promptTokens + outputTokens + toolUseTokens,
           );
 
+          const contextPromptTokens = promptTokens + toolUseTokens;
           output.usage = {
             input: Math.max(0, promptTokens - cacheRead) + toolUseTokens,
             output: outputTokens,
@@ -427,6 +428,17 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             cacheWrite: 0,
             cacheTelemetry: { state: "available" },
             totalTokens,
+            contextUsage:
+              typeof usage.total_input_tokens === "number" &&
+              contextPromptTokens > 0 &&
+              cacheRead <= promptTokens &&
+              Number.isFinite(totalTokens + outputTokens)
+                ? {
+                    state: "available",
+                    promptTokens: contextPromptTokens,
+                    totalTokens: Math.max(totalTokens, contextPromptTokens + outputTokens),
+                  }
+                : { state: "unavailable" },
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           };
           if (model.cost) {

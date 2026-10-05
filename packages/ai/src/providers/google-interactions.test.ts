@@ -380,6 +380,7 @@ describe("google-interactions provider", () => {
       cacheRead: 40,
       totalTokens: 155,
       cacheTelemetry: { state: "available" },
+      contextUsage: { state: "available", promptTokens: 105, totalTokens: 155 },
       cost: {
         input: 0.000065,
         output: 0.0001,
