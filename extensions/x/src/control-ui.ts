@@ -44,6 +44,12 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
         notice = "Account added. Its mentions can now receive replies.";
       } else if (method === "x.allowlist.remove") {
         notice = "Stored entry removed. Any config entry still applies.";
+      } else if (method === "x.guests.set") {
+        notice = result.guests.enabled
+          ? result.guests.blockedReason
+            ? "Guest mode is on. Complete the setup below before guests can receive replies."
+            : "Guest mode is on. Guest replies use the configured repository restrictions and limits."
+          : "Guest mode is off. Only maintainers can receive replies.";
       }
     } catch (cause) {
       if (isCurrent(id)) {
@@ -149,11 +155,63 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                     </p>
                     ${error ? html`<p class="x-replies__error" role="alert">${error}</p>` : nothing}
                     <div aria-live="polite">
-                      ${busy ? html`<p>Updating allowlist…</p>` : notice ? html`<p>${notice}</p>` : nothing}
+                      ${busy ? html`<p>Updating X replies…</p>` : notice ? html`<p>${notice}</p>` : nothing}
                     </div>
                     ${
                       snapshot
                         ? html`
+                            <section class="x-replies__guests" aria-labelledby="x-guests-title">
+                              <div class="x-replies__guest-header">
+                                <div>
+                                  <h2 id="x-guests-title">Guest mode</h2>
+                                  <p>Let anyone ask questions about the OpenClaw repository.</p>
+                                </div>
+                                <button
+                                  class="x-replies__switch"
+                                  type="button"
+                                  role="switch"
+                                  aria-label="Guest mode"
+                                  aria-checked=${snapshot.guests.enabled}
+                                  ?disabled=${busy}
+                                  @click=${() => void request("x.guests.set", { enabled: !snapshot?.guests.enabled })}
+                                >
+                                  <span class="x-replies__switch-track" aria-hidden="true"></span>
+                                  <span>${snapshot.guests.enabled ? "On" : "Off"}</span>
+                                </button>
+                              </div>
+                              <dl class="x-replies__guest-counts">
+                                <div>
+                                  <dt>Per guest, per UTC day</dt>
+                                  <dd>${snapshot.guests.maxMentionsPerAuthorPerDay} mentions</dd>
+                                </div>
+                                <div>
+                                  <dt>Admitted today</dt>
+                                  <dd>${snapshot.guests.admittedToday}</dd>
+                                </div>
+                                <div>
+                                  <dt>Rate-limited today</dt>
+                                  <dd>${snapshot.guests.rateLimitedToday}</dd>
+                                </div>
+                              </dl>
+                              <p class="x-replies__hint">
+                                Applies to the selected bot account. Guests get answers only: no
+                                writes, commands, work sessions, or subagents. Maintainers keep
+                                their normal access.
+                                <a
+                                  href="https://docs.openclaw.ai/channels/x#guest-mode"
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  >Guest setup and limits</a
+                                >
+                              </p>
+                              ${
+                                snapshot.guests.blockedReason
+                                  ? html`<p class="x-replies__error" role="alert">
+                                      ${snapshot.guests.blockedReason}
+                                    </p>`
+                                  : nothing
+                              }
+                            </section>
                             <div class="x-replies__list" aria-busy=${busy}>
                               ${
                                 snapshot.entries.length
@@ -210,7 +268,13 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                               }
                             </div>
                             <p class="x-replies__hint">
-                              With the default allowlist policy, all other mentions are ignored.
+                              ${
+                                snapshot.guests.enabled
+                                  ? snapshot.guests.blockedReason
+                                    ? "Guest replies are blocked until the setup above is complete."
+                                    : "Allowlisted users are maintainers. Other users receive limited guest replies."
+                                  : "Guest mode is off. Only allowlisted maintainers receive replies."
+                              }
                             </p>
                           `
                         : nothing
