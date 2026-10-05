@@ -211,7 +211,9 @@ describe("independent release child reuse", () => {
     data.request.workflowSha = TARGET;
     data.run.head_sha = TARGET;
     data.run.head_branch = workflowRef;
+    data.run.path = `${data.run.path.split("@", 1)[0]}@refs/heads/${workflowRef}`;
     data.parent.head_sha = TARGET;
+    data.parent.head_branch = workflowRef;
     for (const job of data.jobs) {
       job.head_sha = TARGET;
     }
