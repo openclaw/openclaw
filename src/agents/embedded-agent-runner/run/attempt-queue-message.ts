@@ -1,5 +1,11 @@
-import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
-import { MessageInjectionAcceptedUnconfirmedError } from "../../../auto-reply/reply/message-injection-authority.js";
+import {
+  collectErrorGraphCandidates,
+  readErrorCauses,
+} from "@openclaw/normalization-core/error-coercion";
+import {
+  MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionWithdrawnError,
+} from "../../../auto-reply/reply/message-injection-authority.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import { hasPromptImageInput } from "../../../media/prompt-image-input.js";
 import {
@@ -39,7 +45,7 @@ class EmbeddedSteeringAcceptedUnconfirmedError extends Error {
 }
 
 function hasAcceptedSteeringCustody(error: unknown): boolean {
-  return collectErrorGraphCandidates(error, (current) => [current.cause]).some(
+  return collectErrorGraphCandidates(error, readErrorCauses).some(
     (candidate) => candidate instanceof MessageInjectionAcceptedUnconfirmedError,
   );
 }
@@ -126,7 +132,7 @@ async function steerWithTranscriptLifecycle(
     let accepted = false;
     let abortRequested = abortSignal?.aborted === true;
     let acceptanceReported = false;
-    let cancellation: Promise<void> | undefined;
+    let cancellation: Promise<boolean> | undefined;
     let acceptanceOpen = true;
     const observerErrors: unknown[] = [];
     const notifyObserver = (callback: (() => void) | undefined) => {
@@ -164,7 +170,10 @@ async function steerWithTranscriptLifecycle(
                 cause: err === undefined ? errors[0] : err,
               });
         reject(
-          accepted && observerErrors.length > 0 && !hasAcceptedSteeringCustody(err)
+          accepted &&
+            observerErrors.length > 0 &&
+            !hasAcceptedSteeringCustody(err) &&
+            !(err instanceof MessageInjectionWithdrawnError)
             ? new EmbeddedSteeringAcceptedUnconfirmedError(
                 "Queued steering was accepted but its completion observer failed",
                 { cause: failure },
@@ -192,14 +201,15 @@ async function steerWithTranscriptLifecycle(
             log.warn("failed to find queued steering message for cancellation");
             throw new EmbeddedSteeringAcceptedUnconfirmedError(message);
           }
+          return removed;
         },
       );
       void cancellation.then(
-        () => {
+        (removed) => {
           if (!accepted) {
             reportAcceptance(false);
           }
-          finish(new Error(message));
+          finish(removed ? new MessageInjectionWithdrawnError(message) : new Error(message));
         },
         (error: unknown) => {
           if (!(error instanceof EmbeddedSteeringAcceptedUnconfirmedError)) {

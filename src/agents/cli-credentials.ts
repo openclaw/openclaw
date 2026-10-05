@@ -289,25 +289,16 @@ function readCliOauthTokenFields(
   return { access: accessToken, refresh: refreshToken, expires: expiresAt };
 }
 
-function readPortalCliOauthCredentials<TProvider extends string>(
-  credPath: string,
-  provider: TProvider,
-): { type: "oauth"; provider: TProvider; access: string; refresh: string; expires: number } | null {
+function readMiniMaxCliCredentials(credPath: string): MiniMaxCliCredential | null {
   const raw = loadJsonFileThroughSymlink(credPath);
   if (!raw || typeof raw !== "object") {
     return null;
   }
   const tokens = readCliOauthTokenFields(raw as Record<string, unknown>);
-  return tokens ? { type: "oauth", provider, ...tokens } : null;
+  return tokens ? { type: "oauth", provider: "minimax-portal", ...tokens } : null;
 }
 
-function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCredential | null {
-  const credPath = resolveMiniMaxCliCredentialsPath(options?.homeDir);
-  return readPortalCliOauthCredentials(credPath, "minimax-portal");
-}
-
-function readGeminiCliCredentials(options?: { homeDir?: string }): GeminiCliCredential | null {
-  const credPath = resolveGeminiCliCredentialsPath(options?.homeDir);
+function readGeminiCliCredentials(credPath: string): GeminiCliCredential | null {
   const raw = loadJsonFileThroughSymlink(credPath);
   if (!raw || typeof raw !== "object") {
     return null;
@@ -479,7 +470,7 @@ export function readMiniMaxCliCredentialsCached(options?: {
     ttlMs: options?.ttlMs ?? 0,
     cache: minimaxCliCache,
     cacheKey: credPath,
-    read: () => readMiniMaxCliCredentials({ homeDir: options?.homeDir }),
+    read: () => readMiniMaxCliCredentials(credPath),
     setCache: (next) => {
       minimaxCliCache = next;
     },
@@ -497,7 +488,7 @@ export function readGeminiCliCredentialsCached(options?: {
     ttlMs: options?.ttlMs ?? 0,
     cache: geminiCliCache,
     cacheKey: credPath,
-    read: () => readGeminiCliCredentials({ homeDir: options?.homeDir }),
+    read: () => readGeminiCliCredentials(credPath),
     setCache: (next) => {
       geminiCliCache = next;
     },

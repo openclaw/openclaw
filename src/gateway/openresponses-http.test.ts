@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import OpenAI from "openai";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { FailoverError } from "../agents/failover-error.js";
@@ -64,26 +64,24 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-installGatewayTestHooks({ scope: "suite" });
-
 let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
-beforeAll(async () => {
-  const started = await startGatewayServerWithRetries({
-    port: await getGatewayTestPort(),
-    opts: {
-      host: "127.0.0.1",
-      auth: { mode: "none" },
-      controlUiEnabled: false,
-      openResponsesEnabled: true,
-    },
-  });
-  enabledPort = started.port;
-  enabledServer = started.server;
-});
-
-afterAll(async () => {
-  await enabledServer?.close({ reason: "openresponses enabled suite done" });
+installGatewayTestHooks({
+  scope: "suite",
+  setup: async () => {
+    const started = await startGatewayServerWithRetries({
+      port: await getGatewayTestPort(),
+      opts: {
+        host: "127.0.0.1",
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        openResponsesEnabled: true,
+      },
+    });
+    enabledPort = started.port;
+    enabledServer = started.server;
+  },
+  cleanup: async () => enabledServer?.close({ reason: "openresponses enabled suite done" }),
 });
 
 beforeEach(() => {

@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectErrorGraphCandidates,
+  readErrorCauses,
+} from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   MessageInjectionAcceptedUnconfirmedError,
   MessageInjectionAuthorityError,
+  MessageInjectionWithdrawnError,
 } from "../../auto-reply/reply/message-injection-authority.js";
 import type { ReplyMessageInjectionOptions } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
@@ -597,14 +601,21 @@ const queueEmbeddedAgentMessageAsync = createEmbeddedMessageInjectionQueue(async
     };
   };
   const failed = (error: unknown): EmbeddedAgentQueueMessageOutcome => {
-    const accepted = collectErrorGraphCandidates(error, (current) => [current.cause]).findLast(
+    const candidates = collectErrorGraphCandidates(error, readErrorCauses);
+    const accepted = candidates.findLast(
       (candidate) => candidate instanceof MessageInjectionAcceptedUnconfirmedError,
     );
-    if (accepted || queueAccepted) {
+    const questionUnconfirmed = candidates.findLast(
+      (candidate) => candidate instanceof QuestionAnswerUnconfirmedError,
+    );
+    const withdrawn = candidates.some(
+      (candidate) => candidate instanceof MessageInjectionWithdrawnError,
+    );
+    if (accepted || (queueAccepted && (!withdrawn || questionUnconfirmed))) {
       return unconfirmed(accepted?.message ?? formatErrorMessage(error));
     }
-    if (error instanceof QuestionAnswerUnconfirmedError) {
-      throw error;
+    if (questionUnconfirmed) {
+      throw questionUnconfirmed;
     }
     const errorMessage = formatErrorMessage(error);
     diag.debug(`queue message rejected: sessionId=${sessionId} err=${errorMessage}`);

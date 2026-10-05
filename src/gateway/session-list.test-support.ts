@@ -95,7 +95,12 @@ export async function listSessionFixture(
   });
   if (params.opts.includeActivitySummary) {
     for (const row of projection.selectEntries()) {
-      row.facts = readSessionRowFacts({ cfg: params.cfg, target: row, entry: row.entry });
+      row.facts = readSessionRowFacts({
+        cfg: params.cfg,
+        target: row,
+        entry: row.entry,
+        databaseFacts: { hasBoard: row.hasBoard ?? false },
+      });
       row.hasBoard = row.facts.hasBoard;
     }
   }

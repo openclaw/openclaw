@@ -57,8 +57,10 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
     sharedEvents = [];
     trustedEvents = [];
     onDiagnosticEvent((event) => publicEvents.push(event));
-    onInternalDiagnosticEvent((event) => sharedEvents.push(event));
-    onTrustedInternalDiagnosticEvent((event) => trustedEvents.push(event));
+    onInternalDiagnosticEvent((event) => sharedEvents.push(event), { include: ["skill.used"] });
+    onTrustedInternalDiagnosticEvent((event) => trustedEvents.push(event), {
+      include: ["skill.used"],
+    });
     unregisterUsage = registerSkillUsageTracking({ env: testState.env });
   });
 

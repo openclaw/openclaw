@@ -665,7 +665,7 @@ describe("runReplyAgent active steering", () => {
     await expect(run()).resolves.toBeUndefined();
 
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(parkedSteer.fallback).toHaveBeenCalledOnce();
     active.complete();
   });
 
@@ -3230,7 +3230,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
 
     try {
-      await expect(run()).rejects.toThrow("restart recovery claim changed before agent adoption");
+      await expect(run()).resolves.toBeDefined();
 
       expect(onAdopted).not.toHaveBeenCalled();
       expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();

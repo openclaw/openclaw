@@ -129,6 +129,14 @@ export class MessageInjectionTargetUnavailableError extends Error {
   }
 }
 
+/** The delivery owner removed the exact queued input before provider submission. */
+export class MessageInjectionWithdrawnError extends MessageInjectionTargetUnavailableError {
+  constructor(message: string) {
+    super(message);
+    this.name = "MessageInjectionWithdrawnError";
+  }
+}
+
 /** Enqueued input retains custody even when admission cleanup or notification fails. */
 export class MessageInjectionAcceptedUnconfirmedError extends Error {
   constructor(options?: ErrorOptions) {

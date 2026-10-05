@@ -30,6 +30,10 @@ import type {
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
 import { SessionHistoryDeltaPreparationError } from "./session-history-worker-errors.js";
+import type {
+  SessionColdMetadataWorkerInput,
+  SessionColdMetadataWorkerResult,
+} from "./session-transcript-inventory.types.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
@@ -40,11 +44,7 @@ import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
-import type {
-  SessionColdMetadataWorkerInput,
-  SessionColdMetadataWorkerResult,
-  SessionTranscriptHistoryWorkerInput,
-} from "./session-transcript-worker.types.js";
+import type { SessionTranscriptHistoryWorkerInput } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type ForegroundHistoryResult = SessionHistoryWorkerResult | SessionColdMetadataWorkerResult;

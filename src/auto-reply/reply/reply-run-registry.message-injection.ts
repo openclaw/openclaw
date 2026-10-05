@@ -1,5 +1,6 @@
 import {
   collectErrorGraphCandidates,
+  readErrorCauses,
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -25,6 +26,7 @@ import {
   MessageInjectionAcceptedUnconfirmedError,
   MessageInjectionAuthorityError,
   MessageInjectionTargetUnavailableError,
+  MessageInjectionWithdrawnError,
 } from "./message-injection-authority.js";
 import {
   replyMessageInjectionTargetOwner,
@@ -334,7 +336,7 @@ function resolveReplyMessageInjectionFailure(
   params: { assertCurrent?: () => void; accepted: boolean },
 ): ReplyMessageInjectionOutcome | undefined {
   const { assertCurrent, accepted } = params;
-  const candidates = collectErrorGraphCandidates(error, (current) => [current.cause]);
+  const candidates = collectErrorGraphCandidates(error, readErrorCauses);
   const unsupported = candidates.findLast(
     (candidate) => candidate instanceof QuestionDispatchUnsupportedError,
   );
@@ -346,7 +348,10 @@ function resolveReplyMessageInjectionFailure(
   if (unconfirmed) {
     return { status: "indeterminate", errorMessage: unconfirmed.message };
   }
-  if (accepted) {
+  if (
+    accepted &&
+    !candidates.some((candidate) => candidate instanceof MessageInjectionWithdrawnError)
+  ) {
     return {
       status: "indeterminate",
       errorMessage: toErrorObject(error, "Message injection completion failed").message,

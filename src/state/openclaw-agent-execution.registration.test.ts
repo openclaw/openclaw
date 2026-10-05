@@ -167,6 +167,7 @@ function retireFailedReply(
   const reject = vi.fn((error: unknown) => completion.resolve(error));
   const settleNative = vi.fn();
   const job: Job = {
+    observation: { started() {}, completed() {} },
     request,
     bytes: 0,
     nativeDispatched: true,

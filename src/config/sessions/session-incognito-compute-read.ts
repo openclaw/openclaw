@@ -41,7 +41,7 @@ export function bindIncognitoSessionComputeReader(params: {
   const disclose = () => {
     signal?.throwIfAborted();
     claim.authorize(authority, "commit");
-    actor.assertCurrent();
+    actor.assertReadable();
   };
   const assertScope = (scope: Partial<SessionTranscriptReadScope>) => {
     disclose();
@@ -55,7 +55,10 @@ export function bindIncognitoSessionComputeReader(params: {
     }
   };
   const retain = <T>(operation: () => Promise<T>) =>
-    actor.sessions.withCompute(authority, target, operation, signal);
+    actor.sessions.withCompute(authority, target, operation, signal).then((result) => {
+      disclose();
+      return result;
+    });
   return {
     prepareHydration(
       limits?: Parameters<typeof prepareIncognitoSessionTranscriptHydration>[0]["limits"],
@@ -63,7 +66,10 @@ export function bindIncognitoSessionComputeReader(params: {
       disclose();
       return prepareIncognitoSessionTranscriptHydration({
         actor,
-        authority,
+        authority: {
+          assertCurrent: disclose,
+          authorize: (stage, facts) => authority.authorize?.(stage, facts),
+        },
         target,
         limits,
         signal,

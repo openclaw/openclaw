@@ -680,10 +680,10 @@ describe("stuck session diagnostics threshold", () => {
     );
     await vi.advanceTimersByTimeAsync(0);
 
-    // Semantic progress gives the next request its full provider allowance.
-    vi.advanceTimersByTime(30_000);
+    // Semantic progress grants the full allowance; recovery waits for the next heartbeat.
+    vi.advanceTimersByTime(requestTimeoutMs - 30_000);
     expect(recoverStuckSession).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(120_000);
+    vi.advanceTimersByTime(60_000);
 
     expectRecoveryCall(recoverStuckSession, { ...ref, queueDepth: 0, allowActiveAbort: true });
   });

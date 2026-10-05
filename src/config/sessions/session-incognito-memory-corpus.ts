@@ -28,7 +28,6 @@ export function readIncognitoMemoryCorpus(
   const snapshots = new Map<string, ReturnType<typeof actor.sessions.captureSnapshot>>();
   const assertCurrent = () => {
     signal?.throwIfAborted();
-    actor.assertCurrent();
     authority.assertCurrent();
     const currentKeys = actor.sessions.deadlines().map(({ sessionKey }) => sessionKey);
     if (currentKeys.length !== claims.size || currentKeys.some((key) => !claims.has(key))) {
@@ -38,6 +37,7 @@ export function readIncognitoMemoryCorpus(
       claim.authorize(authority, "commit");
       snapshots.get(key)?.assertCurrent();
     }
+    actor.assertReadable();
   };
   assertCurrent();
   return actor.sessions.withSharedState(async () => {

@@ -158,6 +158,13 @@ function resolveRuntimeAvailableProviderAuth<T>(
     ? authConfig.resolveInlineProviderApiKeyCooldownUntil(params.store, provider)
     : null;
   const inlineProviderApiKeyUsable = unusableUntil === null || unusableUntil <= Date.now();
+  const isUsableSource = (source: string) =>
+    !authConfig.isConfigBackedInlineProviderApiKey({
+      cfg: params.cfg,
+      provider,
+      source,
+      store: params.store,
+    }) || inlineProviderApiKeyUsable;
 
   const envAuth = resolveEnvApiKey(provider, params.env, {
     config: params.cfg,
@@ -175,13 +182,7 @@ function resolveRuntimeAvailableProviderAuth<T>(
       capability: params.capability,
       mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     }) &&
-    (!authConfig.isConfigBackedInlineProviderApiKey({
-      cfg: params.cfg,
-      provider,
-      source: envAuth.source,
-      store: params.store,
-    }) ||
-      inlineProviderApiKeyUsable)
+    isUsableSource(envAuth.source)
   ) {
     return true;
   }
@@ -210,13 +211,7 @@ function resolveRuntimeAvailableProviderAuth<T>(
         mode: managedRuntimeAuth.mode,
         authFlow: managedRuntimeAuth.authFlow,
       })) &&
-    (!authConfig.isConfigBackedInlineProviderApiKey({
-      cfg: params.cfg,
-      provider,
-      source: managedRuntimeAuth.source,
-      store: params.store,
-    }) ||
-      inlineProviderApiKeyUsable)
+    isUsableSource(managedRuntimeAuth.source)
   ) {
     return true;
   }

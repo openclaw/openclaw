@@ -11,6 +11,7 @@ import {
   MessageInjectionAcceptedUnconfirmedError,
   MessageInjectionAuthorityError,
   MessageInjectionTargetUnavailableError,
+  MessageInjectionWithdrawnError,
 } from "./message-injection-authority.js";
 import type {
   ReplyBackendMessageInjectionV2,
@@ -170,33 +171,44 @@ it.each([
   { sink: "claim", failure: "wrapped-accepted-cleanup" },
   { sink: "claim", failure: "accepted-generic" },
   { sink: "claim", failure: "accepted-refused" },
+  { sink: "claim", failure: "withdrawn-unconfirmed" },
+  { sink: "claim", failure: "withdrawn-source-closed" },
 ] as const)("keeps $sink replay decisions bounded after $failure", async ({ sink, failure }) => {
   const unsupported = new QuestionDispatchUnsupportedError("legacy dispatcher");
+  const withdrawn = new MessageInjectionWithdrawnError("exact input withdrawn");
   const cleanup = new MessageInjectionAcceptedUnconfirmedError({ cause: new Error("cleanup") });
   const error =
-    failure === "refused" || failure === "accepted-refused"
-      ? new QuestionDispatchRefusedError("owner refused", { cause: unsupported })
-      : failure === "unconfirmed"
-        ? new Error("runtime failure", { cause: new QuestionAnswerUnconfirmedError(unsupported) })
-        : failure === "accepted-cleanup"
-          ? cleanup
-          : failure === "wrapped-accepted-cleanup"
-            ? new Error("backend completion failed", { cause: cleanup })
-            : failure.startsWith("target-")
-              ? new MessageInjectionAuthorityError({
-                  cause: new MessageInjectionTargetUnavailableError("Terminal delivery closed"),
-                })
-              : failure === "generic" || failure === "accepted-generic"
-                ? new Error("unknown cancellation failure")
-                : unsupported;
+    failure === "withdrawn-source-closed"
+      ? withdrawn
+      : failure === "refused" || failure === "accepted-refused"
+        ? new QuestionDispatchRefusedError("owner refused", { cause: unsupported })
+        : failure === "unconfirmed" || failure === "withdrawn-unconfirmed"
+          ? new Error("runtime failure", {
+              cause: new QuestionAnswerUnconfirmedError(
+                failure === "withdrawn-unconfirmed" ? withdrawn : unsupported,
+              ),
+            })
+          : failure === "accepted-cleanup"
+            ? cleanup
+            : failure === "wrapped-accepted-cleanup"
+              ? new Error("backend completion failed", { cause: cleanup })
+              : failure.startsWith("target-")
+                ? new MessageInjectionAuthorityError({
+                    cause: new MessageInjectionTargetUnavailableError("Terminal delivery closed"),
+                  })
+                : failure === "generic" || failure === "accepted-generic"
+                  ? new Error("unknown cancellation failure")
+                  : unsupported;
   const reportsAccepted =
     failure === "accepted" ||
     failure === "target-accepted" ||
     failure === "accepted-generic" ||
-    failure === "accepted-refused";
+    failure === "accepted-refused" ||
+    failure === "withdrawn-source-closed";
   const indeterminate =
-    reportsAccepted ||
+    (reportsAccepted && failure !== "withdrawn-source-closed") ||
     failure === "unconfirmed" ||
+    failure === "withdrawn-unconfirmed" ||
     failure === "accepted-cleanup" ||
     failure === "wrapped-accepted-cleanup";
   let sourceCurrent = true;
@@ -208,7 +220,11 @@ it.each([
     if (reportsAccepted) {
       options?.onQueueAccepted?.(true);
     }
-    if (failure === "source-closed" || failure === "target-source-closed") {
+    if (
+      failure === "source-closed" ||
+      failure === "target-source-closed" ||
+      failure === "withdrawn-source-closed"
+    ) {
       sourceCurrent = false;
     }
     throw error;
@@ -253,7 +269,7 @@ it.each([
             : {}),
         });
       }
-      await expect(attempt.acceptance).resolves.toBe(indeterminate);
+      await expect(attempt.acceptance).resolves.toBe(indeterminate || reportsAccepted);
       expect(queueMessage).not.toHaveBeenCalled();
       expect(operation.result).toBeNull();
     },

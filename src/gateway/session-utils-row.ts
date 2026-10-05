@@ -90,6 +90,7 @@ export function readSessionRowInputs(params: {
   active?: boolean;
   /** A supplied resident model avoids transcript reads; null uses only stored model facts. */
   activeModel?: { provider: string; model: string } | null;
+  terminalModel?: { modelProvider: string; model: string } | null;
   store: Record<string, SessionEntry>;
   modelSource?: GatewaySessionModelSource;
   key: string;
@@ -155,6 +156,7 @@ export function readSessionRowInputs(params: {
     cfg,
     active: params.active,
     activeModel: params.activeModel,
+    terminalModel: params.terminalModel,
     storeAgentId: params.storeAgentId,
     selectedModel,
     projectedAgentRuns: (rowContext.projectedAgentRuns ??= buildProjectedAgentRunIndex()),
@@ -305,6 +307,7 @@ export function resolveGatewaySessionActiveModel(params: {
   cfg: OpenClawConfig;
   active?: boolean;
   activeModel?: { provider: string; model: string } | null;
+  terminalModel?: { modelProvider: string; model: string } | null;
   agentId: string;
   storeAgentId?: string;
   sessionId?: string;
@@ -334,6 +337,7 @@ export function resolveGatewaySessionActiveModel(params: {
           selectedModel: selectedModel.model,
           sessionEntry: params.entry,
           config: params.cfg,
+          terminalModel: params.terminalModel,
           sessionScope: {
             agentId: params.storeAgentId ?? params.agentId,
             sessionKey: params.sessionKey,

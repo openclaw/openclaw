@@ -269,11 +269,20 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     state.shouldSendToolSummaries() &&
     !state.shouldSuppressProgressDeliverySync();
   const { commentaryPayloadsEnabled, draftOwnsCommentaryProgress } =
-    resolveTurnCommentaryProgressOwner({
+    await resolveTurnCommentaryProgressOwner({
       commentaryPayloadsEnabled: state.commentaryPayloadsEnabled,
       options: params.replyOptions,
       resolveVerboseProgressVisibility,
+      resolveVerboseProgressVisibilityAsync: async () => {
+        const visible =
+          standaloneCommentaryProgressVisible &&
+          (await state.shouldSendToolSummariesAsync()) &&
+          !(await state.shouldSuppressProgressDelivery());
+        state.assertProgressCurrent();
+        return visible;
+      },
     });
+  state.assertProgressCurrent();
   const deliverStandaloneCommentaryProgress =
     standaloneCommentaryProgressVisible && !draftOwnsCommentaryProgress;
   const canForwardItemEvents = Boolean(params.replyOptions?.onItemEvent);

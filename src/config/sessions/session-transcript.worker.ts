@@ -385,24 +385,16 @@ serveOwnedWorkerTasks(
           await import("../../state/openclaw-agent-db-readonly.js");
         const { runSqliteDeferredTransactionSync } =
           await import("../../infra/sqlite-transaction.js");
-        const {
-          hasSessionsNeedingTranscriptIndexReconcile,
-          hasOrphanedTranscriptIndexRows,
-          sessionTranscriptIndexNeedsReconcile,
-        } = await import("./session-transcript-index.js");
+        const { sessionTranscriptIndexNeedsReconcile } =
+          await import("./session-transcript-index.js");
         const result = withOpenClawAgentDatabaseReadOnly(
           ({ db }) =>
             runSqliteDeferredTransactionSync(db, () =>
-              request.sessionId !== undefined
-                ? sessionTranscriptIndexNeedsReconcile(db, request.sessionId)
-                : hasSessionsNeedingTranscriptIndexReconcile(db) ||
-                  hasOrphanedTranscriptIndexRows(db),
+              sessionTranscriptIndexNeedsReconcile(db, request.sessionId),
             ),
           { ...request.database, env: request.env },
         );
-        return result.found
-          ? result.value
-          : request.sessionId === undefined && result.reason === "schema-missing";
+        return result.found && result.value;
       }
       if (request.kind === "session-members") {
         const { withOpenClawAgentDatabaseReadOnly } =

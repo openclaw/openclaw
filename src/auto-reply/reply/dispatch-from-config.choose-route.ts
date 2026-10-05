@@ -664,7 +664,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     };
   }
 
-  const replyDispatchTakeover = await runReplyDispatchTakeover(state, shouldSendToolSummaries);
+  const replyDispatchTakeover = await runReplyDispatchTakeover(
+    state,
+    shouldSendToolSummaries,
+    shouldSendToolSummariesAsync,
+  );
   if (replyDispatchTakeover) {
     return replyDispatchTakeover;
   }

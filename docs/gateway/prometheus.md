@@ -164,6 +164,9 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_memory_bytes`                                   | gauge     | `kind`                                                                                    |
 | `openclaw_heap_space_bytes`                               | gauge     | `space`, `stat`                                                                           |
 | `openclaw_worker_count`                                   | gauge     | none                                                                                      |
+| `openclaw_worker_queue_depth`                             | gauge     | `kind`                                                                                    |
+| `openclaw_worker_queue_wait_seconds`                      | histogram | `kind`, `request_class`                                                                   |
+| `openclaw_worker_request_seconds`                         | histogram | `kind`, `request_class`                                                                   |
 | `openclaw_worker_heap_sampled_count`                      | gauge     | none                                                                                      |
 | `openclaw_worker_heap_used_bytes`                         | gauge     | `script`                                                                                  |
 | `openclaw_worker_started_total`                           | counter   | `script`                                                                                  |
@@ -314,6 +317,50 @@ monitor resets discard the unfinished window. Diagnostic queue drops, the
 exporter's series cap, and process restarts can also lose observations. Watch
 the existing drop counters and the represented-duration counter when assessing
 coverage. Readiness decisions and persistent liveness-warning thresholds are unchanged.
+
+### Worker request queues
+
+`openclaw_worker_queue_depth{kind}` reports requests awaiting dispatch across
+worker owners of that kind. It includes SQLite writer capacity waiters and scoped
+read-only requests, and excludes requests that already hold an execution slot.
+`openclaw_worker_queue_wait_seconds{kind,request_class}` measures enqueue to
+dispatch; `openclaw_worker_request_seconds{kind,request_class}` measures dispatch
+to reply or failure. Both use the existing duration histogram buckets. Cancellation
+before dispatch removes the queued request without adding a duration sample.
+
+Kinds are `identity`, `avatar`, `catalog`, `transcript`, `sqlite_read`,
+`sqlite_writer`, `state_read`, `cron`, `compute`, or `other`. Request classes are
+`task`, `open`, `close`, `execute`, `transcript_read`, `sessions`, `transcripts`,
+`domain_execute`, `plugin_state`, `auth_profiles`, `cron`, or `other`. Unknown commands collapse to
+these fixed families; session IDs, database paths, and caller names are never
+labels. This bounds the three metric families to 250 retained label sets, even
+if every kind/class combination occurs; the exporter's shared series cap still
+applies.
+
+The `transcripts` request family includes canonical event appends and retention.
+
+Dispatch is the host scheduler's allocation of a slot, not a worker-side CPU
+timestamp. Request duration includes preparation, cold worker startup, transport,
+host exchanges, and I/O. General task pools report `task`; SQLite commands retain
+their bounded method family. These metrics do not separate individual pools with
+the same kind, and unscoped one-shot inspection subprocesses are outside the queue
+gauge. Identity and avatar pools share compute admission with other compute pools;
+their queue wait does not by itself prove their own worker limit is too small.
+
+Observations use the existing asynchronous diagnostic queue and begin when a
+consumer subscribes. Queue drops can lose samples or leave a gauge at its last
+delivered value until another request updates it. Check
+`openclaw_diagnostic_async_queue_dropped_total` before interpreting a saturated
+interval. No worker limits, scheduling order, or cancellation behavior change.
+
+```promql
+# Worker wait p99, by kind and bounded request family
+histogram_quantile(0.99,
+  sum by (le, kind, request_class) (rate(openclaw_worker_queue_wait_seconds_bucket[5m])))
+
+# Request classes occupying dispatch slots for the most wall time
+sum by (kind, request_class) (rate(openclaw_worker_request_seconds_sum[5m]))
+```
 
 ### Memory and process churn
 

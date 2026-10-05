@@ -208,6 +208,10 @@ it("composes empty and multi-session store compute without holding its actor FIF
   await expect(reconcileSessionTranscriptIndexes({ ...location(), env }, binding)).resolves.toEqual(
     { reconciledSessions: 0 },
   );
+  // Clean headers sort before the dirty targets and exceed one maintenance batch.
+  for (let index = 0; index < 129; index++) {
+    await create(`admission-${String(index).padStart(3, "0")}`);
+  }
   const first = await create("store-first");
   const second = await create("store-second");
   for (const target of [first, second]) {
@@ -288,6 +292,39 @@ it("composes empty and multi-session store compute without holding its actor FIF
     ],
     cacheStatus: { status: "fresh", cachedFiles: 2 },
   });
+});
+
+it("refuses new compute work through a released borrow", async () => {
+  const target = await create("released-borrow");
+  const reference = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: "main",
+    env,
+    authority,
+    existingOnly: true,
+  });
+  assert(reference);
+  await reference.release();
+  const operation = vi.fn(async () => "late compute");
+  await expect(
+    Promise.resolve().then(() => reference.sessions.withCompute(authority, target, operation)),
+  ).rejects.toThrow("Incognito execution reference is released");
+  expect(operation).not.toHaveBeenCalled();
+});
+
+it("captures the selected compute target before accepting deferred work", async () => {
+  const selected = await create("captured-target");
+  const replacement = await create("replacement-target");
+  await append(selected, "selected transcript");
+  const target = { ...selected };
+  const read = actor.sessions.withCompute(authority, target, (compute) =>
+    compute.execute({
+      type: "session.compute.usage.stats",
+      input: { ...selected, request: {} },
+    }),
+  );
+  Object.assign(target, replacement);
+  await expect(read).resolves.toMatchObject({ eventCount: 2 });
 });
 
 describe("cross-actor compute", () => {

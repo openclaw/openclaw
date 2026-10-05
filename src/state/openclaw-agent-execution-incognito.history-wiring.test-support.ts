@@ -426,16 +426,14 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
         );
         if (mode === "revoke") {
           revoked = true;
-        } else if (mode !== "unchanged") {
-          if (mode === "release") {
-            releasing = borrowed.release().then(() => {
-              released = true;
-            });
-          }
+        } else if (mode === "write") {
           await append(session, "context changed while consumer awaited");
-          if (mode === "release") {
-            expect(released).toBe(false);
-          }
+        } else if (mode === "release") {
+          releasing = borrowed.release().then(() => {
+            released = true;
+          });
+          await actor.run(authority, async () => undefined);
+          expect(released).toBe(false);
         }
         resume.resolve();
         await Promise.all([settled, releasing]);

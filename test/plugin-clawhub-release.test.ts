@@ -22,6 +22,7 @@ import {
   collectClawHubVersionGateErrors,
   collectPluginClawHubReleasePathsFromGitRange,
   collectPluginClawHubReleasePlan,
+  resolveOpenClawClawHubPackageFamily,
   resolveSelectedClawHubPublishablePluginPackages,
 } from "../scripts/lib/plugin-clawhub-release.ts";
 import { collectPublishablePluginPackages } from "../scripts/lib/plugin-npm-release.ts";
@@ -376,6 +377,11 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
 });
 
 describe("collectPluginClawHubReleasePlan", () => {
+  it("preserves legacy bundle families for established ClawHub package names", () => {
+    expect(resolveOpenClawClawHubPackageFamily("@openclaw/cloudflare")).toBe("bundle-plugin");
+    expect(resolveOpenClawClawHubPackageFamily("@openclaw/demo-plugin")).toBe("");
+  });
+
   it.each([
     { state: "published" },
     { state: "absent" },
@@ -1239,6 +1245,7 @@ describe("collectPluginClawHubReleasePlan", () => {
       artifactName: "clawhub-package-openclaw-demo-plugin-2026.4.1",
       channel: "stable",
       extensionId: "demo-plugin",
+      family: "",
       packageDir: "extensions/demo-plugin",
       packageName: "@openclaw/demo-plugin",
       publishTag: "latest",
@@ -1762,6 +1769,33 @@ describe("buildOpenClawReleaseClawHubRuntimeState", () => {
 });
 
 describe("plugin-clawhub-publish.sh", () => {
+  it("passes the release-plan package family to ClawHub publish", () => {
+    const repoDir = createTempPluginRepo();
+    const binDir = join(repoDir, "bin");
+    const markerPath = join(repoDir, "clawhub-invoked");
+    writeClawHubPackStub(binDir, markerPath);
+
+    execFileSync(
+      "bash",
+      [
+        join(process.cwd(), "scripts/plugin-clawhub-publish.sh"),
+        "--dry-run",
+        "extensions/demo-plugin",
+      ],
+      {
+        cwd: repoDir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_CLAWHUB_PACKAGE_FAMILY: "bundle-plugin",
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+    expect(readFileSync(markerPath, "utf8")).toContain("--family bundle-plugin");
+  });
+
   it("prefers GNU timeout and keeps a portable bounded fallback", () => {
     const source = readFileSync("scripts/plugin-clawhub-publish.sh", "utf8");
     const packExitIndex = source.indexOf('if [[ "${mode}" == "--pack" ]]');

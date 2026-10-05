@@ -18,6 +18,7 @@ import {
 import { resolveReplySteeringAuthority } from "./agent-runner-fallback-authority.js";
 import {
   admitFollowupRunLifecycle,
+  isFollowupRunAborted,
   parkSteerCandidate,
   resolveFollowupAbortSignal,
   scheduleFollowupDrain,
@@ -343,10 +344,14 @@ export async function runActiveReplySteer(
   } finally {
     try {
       if (followupRun.steerPending) {
-        try {
-          assertReadCurrent();
-        } catch {
+        if (isFollowupRunAborted(followupRun)) {
           parked.consume();
+        } else {
+          try {
+            assertReadCurrent();
+          } catch {
+            parked.consume();
+          }
         }
         if (followupRun.steerPending) {
           parked.fallback();

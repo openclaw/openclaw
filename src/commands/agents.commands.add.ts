@@ -68,14 +68,8 @@ type AgentsAddOptions = {
   json?: boolean;
 };
 
-type AgentBindingResult = ReturnType<typeof applyAgentBindings>;
-
 function failAgentsAdd(message: string): never {
   throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-}
-
-function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): AgentBindingResult {
-  return { config, added: [], updated: [], skipped: [], conflicts: [] };
 }
 
 function loadReadablePersistedAuthProfileStore(agentDir: string): AuthProfileStore | null {
@@ -84,10 +78,6 @@ function loadReadablePersistedAuthProfileStore(agentDir: string): AuthProfileSto
     throw new AuthProfileStoreUnreadableError(resolveAuthProfileDatabasePath(agentDir));
   }
   return store;
-}
-
-function hasOAuthProfiles(store: AuthProfileStore, profileIds: readonly string[]): boolean {
-  return profileIds.some((profileId) => store.profiles[profileId]?.type === "oauth");
 }
 
 function formatSkippedOAuthProfilesMessage(
@@ -174,7 +164,7 @@ export async function agentsAddCommand(
       );
     }
 
-    const bindingResult = created.bindingResult ?? emptyBindingResult(cfg);
+    const { added = [], updated = [], skipped = [], conflicts = [] } = created.bindingResult ?? {};
     if (!opts.json) {
       logConfigUpdated(runtime);
     }
@@ -186,10 +176,10 @@ export async function agentsAddCommand(
       agentDir: created.agentDir,
       model: created.model,
       bindings: {
-        added: bindingResult.added.map(describeBinding),
-        updated: bindingResult.updated.map(describeBinding),
-        skipped: bindingResult.skipped.map(describeBinding),
-        conflicts: bindingResult.conflicts.map(describeBindingConflict),
+        added: added.map(describeBinding),
+        updated: updated.map(describeBinding),
+        skipped: skipped.map(describeBinding),
+        conflicts: conflicts.map(describeBindingConflict),
       },
     };
     if (opts.json) {
@@ -201,11 +191,11 @@ export async function agentsAddCommand(
       if (created.model) {
         runtime.log(`Model: ${created.model}`);
       }
-      if (bindingResult.conflicts.length > 0) {
+      if (conflicts.length > 0) {
         runtime.error(
           [
             "Skipped bindings already claimed by another agent:",
-            ...bindingResult.conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
+            ...conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
           ].join("\n"),
         );
       }
@@ -332,7 +322,9 @@ export async function agentsAddCommand(
           : undefined;
         const skippedOAuthProfiles =
           sourceStore && portable
-            ? hasOAuthProfiles(sourceStore, portable.skippedProfileIds)
+            ? portable.skippedProfileIds.some(
+                (profileId) => sourceStore.profiles[profileId]?.type === "oauth",
+              )
             : false;
         if (
           sourceStore &&

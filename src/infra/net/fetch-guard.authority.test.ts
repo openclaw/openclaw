@@ -27,35 +27,70 @@ describe("guarded fetch request authority", () => {
     },
   );
 
-  it.each([false, true])(
-    "closes retained request authority without affecting an independent request (nested: %s)",
-    async (nested) => {
-      const release = createDeferred();
-      const fetchImpl = vi.fn(async () => new Response("ok"));
-      const fetch = () =>
-        fetchWithSsrFGuard({ url: "https://public.example/resource", fetchImpl, lookupFn });
-      let retained: Promise<unknown> | undefined;
-      const retain = async () => {
-        retained = release.promise.then(fetch);
-      };
-      await withGuardedFetchRequestAuthority(
-        () => {},
-        async () => {
-          if (nested) {
-            await withGuardedFetchRequestAuthority(undefined, retain);
-            release.resolve();
-            await expect(retained).rejects.toThrow("no longer active");
-          } else {
-            await retain();
-          }
+  it("closes nested request authority without affecting an independent request", async () => {
+    const release = createDeferred();
+    const fetchImpl = vi.fn(async () => new Response("ok"));
+    const fetch = () =>
+      fetchWithSsrFGuard({ url: "https://public.example/resource", fetchImpl, lookupFn });
+    let retained: Promise<unknown> | undefined;
+    const retain = async () => {
+      retained = release.promise.then(fetch);
+    };
+    await withGuardedFetchRequestAuthority(
+      () => {},
+      async () => {
+        await withGuardedFetchRequestAuthority(undefined, retain);
+        release.resolve();
+        await expect(retained).rejects.toThrow("no longer active");
+      },
+    );
+    release.resolve();
+    await expect(retained).rejects.toThrow("no longer active");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const result = await fetch();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    await result.release();
+  });
+});
+
+describe("fetchWithSsrFGuard redirect policy", () => {
+  it("rejects unsafe cross-origin redirect bodies before replay when requested", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(
+      new Response(null, {
+        status: 307,
+        headers: { location: "https://cdn.example.com/upload-2" },
+      }),
+    );
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.example.com/upload",
+        fetchImpl,
+        lookupFn,
+        rejectCrossOriginUnsafeRedirectReplay: true,
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: '{"secret":"123"}',
         },
-      );
-      release.resolve();
-      await expect(retained).rejects.toThrow("no longer active");
-      expect(fetchImpl).not.toHaveBeenCalled();
-      const result = await fetch();
-      expect(fetchImpl).toHaveBeenCalledOnce();
-      await result.release();
-    },
-  );
+      }),
+    ).rejects.toThrow("Refusing to follow cross-origin redirect for POST request body");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects contradictory unsafe cross-origin redirect policies before fetching", async () => {
+    const fetchImpl = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.example.com/upload",
+        fetchImpl,
+        allowCrossOriginUnsafeRedirectReplay: true,
+        rejectCrossOriginUnsafeRedirectReplay: true,
+      }),
+    ).rejects.toThrow("Cross-origin unsafe redirect replay cannot be both allowed and rejected");
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

@@ -345,7 +345,7 @@ async function resolveUncachedSystemAgentGreeting(params: {
   timeoutMs?: number;
 }): Promise<SystemAgentGreetingResolution> {
   const timeoutMs = params.timeoutMs ?? SYSTEM_AGENT_GREETING_TIMEOUT_MS;
-  let plan: SystemAgentGreetingPlan | null = null;
+  let plan: SystemAgentGreetingPlan | null;
   try {
     // This is the only metered greeting turn. The single-slot hash keeps unchanged
     // caretaker opens at zero tokens while preserving a model-free rescue path.
@@ -360,7 +360,8 @@ async function resolveUncachedSystemAgentGreeting(params: {
   }
   const text = plan ? normalizeGreetingText(plan.text) : null;
   const groundedText = text && modelGreetingCoversFacts(text, params.facts) ? text : null;
-  if (!groundedText || !plan?.modelRef.trim()) {
+  const modelRef = groundedText ? plan?.modelRef.trim() : undefined;
+  if (!groundedText || !modelRef) {
     // Keep provider outages cheap without writing a template into the model-greeting cache.
     greetingFailures.set(params.cacheKey, {
       factsHash: params.factsHash,
@@ -386,7 +387,7 @@ async function resolveUncachedSystemAgentGreeting(params: {
           lastSeenAuditSequence: current?.lastSeenAuditSequence ?? 0,
           factsHash: params.factsHash,
           text: groundedText,
-          modelRef: plan.modelRef.trim(),
+          modelRef,
           at: params.at,
         };
       },

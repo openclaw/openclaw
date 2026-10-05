@@ -40,7 +40,7 @@ function extractCompactInstructions(params: {
     ? stripMentions(raw, params.ctx, params.cfg, params.agentId)
     : raw;
   const trimmed = stripped.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("/compact")) {
+  if (!trimmed.toLowerCase().startsWith("/compact")) {
     return undefined;
   }
   let rest = trimmed.slice("/compact".length).trimStart();
@@ -141,7 +141,7 @@ function resolveManualCompactContextModelId(params: {
   contextConfigProvider: string;
   model: string;
 }): string {
-  const model = params.model.trim();
+  const model = params.model;
   const slashIndex = model.indexOf("/");
   if (slashIndex <= 0) {
     return model;

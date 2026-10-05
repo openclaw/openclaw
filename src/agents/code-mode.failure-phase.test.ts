@@ -51,7 +51,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
         await wait.execute("guest-settlement-wait", { runId: details.runId }),
       );
     }
-    expect(target.execute).toHaveBeenCalledOnce();
+    expect(target.execute, JSON.stringify(details)).toHaveBeenCalledOnce();
     if (reject) {
       expect(details).toMatchObject({
         status: "failed",

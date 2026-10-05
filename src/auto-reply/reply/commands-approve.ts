@@ -60,7 +60,7 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   if (!rest) {
     return { ok: false, error: APPROVE_USAGE_TEXT };
   }
-  const tokens = rest.split(/\s+/).filter(Boolean);
+  const tokens = rest.split(/\s+/);
   if (tokens.length < 2) {
     return { ok: false, error: APPROVE_USAGE_TEXT };
   }
@@ -73,7 +73,7 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     return {
       ok: true,
       decision: firstDecision,
-      id: tokens.slice(1).join(" ").trim(),
+      id: tokens.slice(1).join(" "),
     };
   }
   const secondDecision = DECISION_ALIASES.get(second);

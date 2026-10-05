@@ -152,7 +152,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
       { ...originDetails, slug: trackedSlug, lockPath: lockRead.path },
     );
   }
-  const originRegistry = normalizeStoredRegistry(originRead.origin.registry);
+  const originRegistry = originRead.origin.registry;
   const lockedRegistry =
     locked.registry === undefined ? originRegistry : normalizeStoredRegistry(locked.registry);
   const sourceUrl = normalizeOptionalStringValue(locked.sourceUrl);
@@ -317,7 +317,7 @@ export async function resolveClawHubSkillVerificationTarget(
           error: `Skill "${trackedSlug}" has ClawHub origin metadata for "${originRead.origin.slug}". Reinstall it from ClawHub before verifying it as an installed ClawHub skill.`,
         };
       }
-      const originRegistry = normalizeStoredRegistry(originRead.origin.registry);
+      const originRegistry = originRead.origin.registry;
       const lockedRegistry =
         locked.registry === undefined ? originRegistry : normalizeStoredRegistry(locked.registry);
       const ownerHandle = normalizeOptionalStringValue(locked.ownerHandle);

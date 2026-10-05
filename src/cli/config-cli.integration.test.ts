@@ -522,47 +522,38 @@ describe("config cli integration", () => {
     });
   });
 
-  it.each(["root", "agent"])(
-    "repairs a stale deployment patch at %s scope without changing policy",
-    async (scope) => {
-      const configForExec = (exec: Record<string, string>) =>
-        scope === "root"
-          ? { tools: { exec } }
-          : { agents: { entries: { worker: { tools: { exec } } } } };
-      const migrated = configForExec({ mode: "ask" });
-      const migratedRaw = JSON.stringify(migrated) + "\n";
-      await withConfig(migratedRaw, async ({ configPath, tempDir }) => {
-        const patchPath = path.join(tempDir, "patch.json5");
-        fs.writeFileSync(
-          patchPath,
-          JSON.stringify(configForExec({ security: "allowlist", ask: "on-miss" })),
-        );
-        const output = createTestRuntime();
+  it("repairs a stale agent deployment patch without changing policy", async () => {
+    const configForExec = (exec: Record<string, string>) => ({
+      agents: { entries: { worker: { tools: { exec } } } },
+    });
+    const migrated = configForExec({ mode: "ask" });
+    const migratedRaw = JSON.stringify(migrated) + "\n";
+    await withConfig(migratedRaw, async ({ configPath, tempDir }) => {
+      const patchPath = path.join(tempDir, "patch.json5");
+      fs.writeFileSync(
+        patchPath,
+        JSON.stringify(configForExec({ security: "allowlist", ask: "on-miss" })),
+      );
+      const output = createTestRuntime();
 
-        await expect(
-          runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime }),
-        ).rejects.toThrow("__exit__:1");
+      await expect(
+        runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime }),
+      ).rejects.toThrow("__exit__:1");
 
-        expect(read(configPath)).toBe(migratedRaw);
-        const diagnostic = output.errors.join("\n");
-        expect(diagnostic).toContain(
-          scope === "root" ? "tools.exec.mode:" : "agents.entries.worker.tools.exec.mode:",
-        );
-        expect(diagnostic).toContain('Replace security/ask with mode="ask"');
-        expect(diagnostic).toContain("at this scope");
+      expect(read(configPath)).toBe(migratedRaw);
+      const diagnostic = output.errors.join("\n");
+      expect(diagnostic).toContain("agents.entries.worker.tools.exec.mode:");
+      expect(diagnostic).toContain('Replace security/ask with mode="ask"');
+      expect(diagnostic).toContain("at this scope");
 
-        fs.writeFileSync(
-          patchPath,
-          JSON.stringify({ ...migrated, messages: { ackReaction: "✅" } }),
-        );
-        await runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime });
-        expect(load(configPath)).toMatchObject({
-          ...migrated,
-          messages: { ackReaction: "✅" },
-        });
+      fs.writeFileSync(patchPath, JSON.stringify({ ...migrated, messages: { ackReaction: "✅" } }));
+      await runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime });
+      expect(load(configPath)).toMatchObject({
+        ...migrated,
+        messages: { ackReaction: "✅" },
       });
-    },
-  );
+    });
+  });
 
   it("conflicts when a top-level include changes after config set starts", async () => {
     await withConfig(

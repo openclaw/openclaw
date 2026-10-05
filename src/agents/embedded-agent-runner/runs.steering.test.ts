@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MessageInjectionAcceptedUnconfirmedError } from "../../auto-reply/reply/message-injection-authority.js";
+import {
+  MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionWithdrawnError,
+} from "../../auto-reply/reply/message-injection-authority.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
@@ -367,38 +370,48 @@ describe("embedded-agent active-run steering", () => {
     );
   });
 
-  it.each([false, true])("does not replay pending input: unconfirmed=%s", async (unconfirmed) => {
-    const error = new QuestionAnswerUnconfirmedError(new Error("answer receipt unavailable"));
-    const claim = vi.fn(async () => {
+  it.each(["accepted", "unconfirmed", "wrapped-withdrawal"] as const)(
+    "does not replay pending input: %s",
+    async (disposition) => {
+      const unconfirmed = disposition !== "accepted";
+      const error = new QuestionAnswerUnconfirmedError(
+        disposition === "wrapped-withdrawal"
+          ? new MessageInjectionWithdrawnError("exact queue input withdrawn")
+          : new Error("answer receipt unavailable"),
+      );
+      const claim = vi.fn(async () => {
+        if (unconfirmed) {
+          throw disposition === "wrapped-withdrawal"
+            ? new Error("backend failed", { cause: error })
+            : error;
+        }
+        return true;
+      });
+      const handle = start({
+        toolAuthorityFingerprint: "fallback",
+        claimPendingUserInputAnswer: claim,
+      });
+      const options = {
+        isInboundUserMessage: true,
+        onQueueAccepted: vi.fn(),
+        onQueueSettled: vi.fn(),
+        pendingInputAuthorityFingerprint: "fallback",
+        toolAuthorityFingerprint: "default",
+      } as const;
+      const outcome = queueAsync(sessionId, "2", options);
       if (unconfirmed) {
-        throw error;
+        await expect(outcome).rejects.toBe(error);
+        expect(options.onQueueAccepted).not.toHaveBeenCalled();
+        expect(options.onQueueSettled).not.toHaveBeenCalled();
+      } else {
+        await expect(outcome).resolves.toMatchObject({ queued: true, target: "embedded_run" });
+        expect(options.onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+        expect(options.onQueueSettled).toHaveBeenCalledOnce();
       }
-      return true;
-    });
-    const handle = start({
-      toolAuthorityFingerprint: "fallback",
-      claimPendingUserInputAnswer: claim,
-    });
-    const options = {
-      isInboundUserMessage: true,
-      onQueueAccepted: vi.fn(),
-      onQueueSettled: vi.fn(),
-      pendingInputAuthorityFingerprint: "fallback",
-      toolAuthorityFingerprint: "default",
-    } as const;
-    const outcome = queueAsync(sessionId, "2", options);
-    if (unconfirmed) {
-      await expect(outcome).rejects.toBe(error);
-      expect(options.onQueueAccepted).not.toHaveBeenCalled();
-      expect(options.onQueueSettled).not.toHaveBeenCalled();
-    } else {
-      await expect(outcome).resolves.toMatchObject({ queued: true, target: "embedded_run" });
-      expect(options.onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
-      expect(options.onQueueSettled).toHaveBeenCalledOnce();
-    }
-    expect(claim).toHaveBeenCalledExactlyOnceWith("2", options);
-    expect(handle.queueMessage).not.toHaveBeenCalled();
-  });
+      expect(claim).toHaveBeenCalledExactlyOnceWith("2", options);
+      expect(handle.queueMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])("rejects unmatched authority: unproven image=%s", async (image) => {
     const claim = vi.fn(async () => image),

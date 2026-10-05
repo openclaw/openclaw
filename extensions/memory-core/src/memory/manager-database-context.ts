@@ -58,7 +58,7 @@ import type { loadMemorySourceFileState } from "./manager-source-state.js";
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
 const log = createSubsystemLogger("memory");
 type PublicationWorker = {
-  store: OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>;
+  store: Pick<OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>, "run" | "close">;
   busyTimeoutMs: number;
 };
 

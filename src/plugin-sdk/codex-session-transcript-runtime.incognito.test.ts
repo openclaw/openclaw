@@ -63,6 +63,24 @@ it("reads Codex context from the captured actor and rejects synchronous or retir
           messages: [{ role: "user", content: "Synthetic actor context.", timestamp: 1 }],
           header: { type: "session", id: "shared-binding" },
         });
+        const controller = new AbortController();
+        const guarded = captureCodexSessionContextReader(target, controller.signal);
+        assert(guarded);
+        const retain = actor.sessions.withSharedState.bind(actor.sessions);
+        const settle = async <T>(work: () => Promise<T>): Promise<T> => {
+          const value = await retain(work);
+          controller.abort(new Error("SDK context authority ended"));
+          return value;
+        };
+        const settled = vi.spyOn(actor.sessions, "withSharedState").mockImplementationOnce(settle);
+        try {
+          await expect(guarded(target, (messages) => [...messages])).rejects.toThrow(
+            "SDK context authority ended",
+          );
+          actor.assertReadable();
+        } finally {
+          settled.mockRestore();
+        }
         expect(consume).not.toHaveBeenCalled();
         expect(prepare).not.toHaveBeenCalled();
         expect(exec).not.toHaveBeenCalled();

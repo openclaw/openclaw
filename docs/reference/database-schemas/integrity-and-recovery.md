@@ -201,6 +201,11 @@ reclamation connections close immediately. Active executions close when their
 final borrower releases them; active reclamation requests settle before closing.
 External cleanup can still be pending. Cancellation alone never certifies a
 receipt: the last lease must still complete its checkpoint and native close.
+Restart recovery markers and reply cancellation precede background-service
+joins, including scheduled continuation delivery. An interrupted external restart
+can exit after accepted terminal writes, memory preparation, and database close
+settle, without waiting for unrelated service teardown. Scheduled deliveries retain
+their Gateway owner so restart cancellation reaches their reply admissions.
 Database retirement completes independently for each path. A database whose
 resources have settled can publish its clean-close receipt while another database
 still owns pending work. Each path still joins its accepted writers, pending opens,

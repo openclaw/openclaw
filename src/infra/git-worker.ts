@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -183,10 +184,22 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
     !Object.entries(baseEnv).some(
       ([key, value]) =>
         value !== undefined &&
-        /^(GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_NAMESPACE|GIT_SHALLOW_FILE|GIT_GRAFT_FILE|GIT_REPLACE_REF_BASE|GIT_NO_REPLACE_OBJECTS|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES)$/i.test(
+        (/^(GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_NAMESPACE|GIT_SHALLOW_FILE|GIT_GRAFT_FILE|GIT_REPLACE_REF_BASE|GIT_NO_REPLACE_OBJECTS|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_CONFIG_PARAMETERS)$/i.test(
           key,
-        ),
-    );
+        ) ||
+          (/^(HOME|XDG_CONFIG_HOME|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM)$/i.test(key) &&
+            /[\r\n]/u.test(value))),
+    )
+      ? createHash("sha256")
+          .update(
+            JSON.stringify(
+              Object.entries(baseEnv).filter(([key]) =>
+                /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key),
+              ),
+            ),
+          )
+          .digest("hex")
+      : undefined;
   const operation = executeOperation(poolFor(state, admitted), admitted, baseEnv, {
     ...options,
     git: options.git ? { text: options.git.text, buffered: options.git.buffered } : undefined,

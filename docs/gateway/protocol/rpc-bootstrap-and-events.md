@@ -53,8 +53,8 @@ invalidates the cached list. Reconnects require a new subscription and snapshot.
 The Gateway keeps durable session metadata in memory and finishes its initial
 row materialization before normal startup completes. Reconnecting clients can
 read the initial roster as soon as the Gateway is ready. Committed owner changes
-refresh affected rows incrementally; there is no
-completed-page cache or one-second staleness window. Keyed descriptions,
+refresh affected rows incrementally; responses consume current row facts without
+a staleness window. Keyed descriptions,
 resolution, and chat startup prepare their requested row without waiting for the
 bulk refresh. Newly admitted or replaced stores load their metadata once, and
 rows disappear when their store leaves the current topology. Each response
@@ -62,6 +62,12 @@ applies the current viewer's visibility and current activity time. Equivalent
 viewers share immutable row presentations and encoded row bytes until their
 projection facts change; `snapshotAt` retains the row's sampling time. Runtime
 authority, permission changes, and clock-expiring facts are checked before reuse.
+WebSocket views of the same identity, sharing policy, and query also share
+selection and facets within the current row publication. Queries that depend on
+live runs, a clock window, child retention, or search select again for each read.
+Every read presents current rows; unchanged rows share their array and assembled
+JSON bytes. In-process callers retain their own selection and row wrappers for
+authorized enrichment.
 
 Resident rows use stored titles and usage. Optional message previews and terminal
 fallback-model metadata fill in through bounded read-only background transcript

@@ -22,11 +22,12 @@ import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.
 import { agentDatabaseLifecycle } from "./openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import type {
-  AgentDatabaseExecutionFileIdentity,
-  AgentDatabaseExecutionScope,
-  AgentDatabaseRequestExecutionSource,
-  OpenClawAgentDatabaseExecution,
+import {
+  AgentDatabaseExecutionAdmissionClosedError,
+  type AgentDatabaseExecutionFileIdentity,
+  type AgentDatabaseExecutionScope,
+  type AgentDatabaseRequestExecutionSource,
+  type OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
 import {
   createAgentDatabaseExecutionCapture,
@@ -221,7 +222,9 @@ function createAgentDatabaseExecution(
       executions.get(pathname) !== owner ||
       !supportsAgentDatabaseExecutionScope(executionOptions)
     ) {
-      throw new Error("Agent database execution admission is closed");
+      throw new AgentDatabaseExecutionAdmissionClosedError(
+        "Agent database execution admission is closed",
+      );
     }
     context.admission.assertCurrent();
     assertAgentAdmitted();
@@ -238,29 +241,29 @@ function createAgentDatabaseExecution(
     if (!captured) {
       return Promise.resolve();
     }
-    const result = captured.close().then(
-      () => {
-        if (generation === captured) {
-          generation = undefined;
-          cleanupFailure = undefined;
-          if (executionState.idle === owner) {
-            executionState.idle = undefined;
+    const result = captured
+      .close()
+      .then(
+        () => {
+          if (generation === captured) {
+            generation = undefined;
+            cleanupFailure = undefined;
+            if (executionState.idle === owner) {
+              executionState.idle = undefined;
+            }
           }
-        }
-      },
-      (error: unknown) => {
-        cleanupFailure = { error };
-        throw error;
-      },
-    );
-    nativeClosing = result;
-    void result
+        },
+        (error: unknown) => {
+          cleanupFailure = { error };
+          throw error;
+        },
+      )
       .finally(() => {
         if (nativeClosing === result) {
           nativeClosing = undefined;
         }
-      })
-      .catch(() => undefined);
+      });
+    nativeClosing = result;
     return result;
   };
   async function run<T>(
@@ -544,45 +547,39 @@ function createAgentDatabaseExecution(
           const capturedGeneration = generation;
           const completion = createDeferredCore();
           pending.add(completion.promise);
-          const result = (async () => {
-            try {
-              assertBorrowed();
-              assertCreationReference(false);
-              return await run(
-                source,
-                operation,
-                (nativeIdentity) => {
-                  assertReferenceCurrent(nativeIdentity);
-                  assertCreationReference(false);
-                },
-                expectedIdentity,
-                runOptions?.retireNativeOnFailure,
-              );
-            } catch (error) {
-              if (runOptions?.retireNativeOnFailure && capturedGeneration) {
-                try {
-                  await closeNative(capturedGeneration);
-                } catch (cleanupError) {
-                  throw retainSqliteWorkerErrorCode(
-                    new AggregateError(
-                      [error, cleanupError],
-                      "Agent execution refusal and native cleanup failed",
-                      { cause: error },
-                    ),
-                    error,
-                  );
-                }
+          try {
+            assertBorrowed();
+            assertCreationReference(false);
+            return await run(
+              source,
+              operation,
+              (nativeIdentity) => {
+                assertReferenceCurrent(nativeIdentity);
+                assertCreationReference(false);
+              },
+              expectedIdentity,
+              runOptions?.retireNativeOnFailure,
+            );
+          } catch (error) {
+            if (runOptions?.retireNativeOnFailure && capturedGeneration) {
+              try {
+                await closeNative(capturedGeneration);
+              } catch (cleanupError) {
+                throw retainSqliteWorkerErrorCode(
+                  new AggregateError(
+                    [error, cleanupError],
+                    "Agent execution refusal and native cleanup failed",
+                    { cause: error },
+                  ),
+                  error,
+                );
               }
-              throw error;
             }
-          })();
-          void result
-            .finally(() => {
-              pending.delete(completion.promise);
-              completion.resolve();
-            })
-            .catch(() => undefined);
-          return result;
+            throw error;
+          } finally {
+            pending.delete(completion.promise);
+            completion.resolve();
+          }
         },
         release() {
           released = true;

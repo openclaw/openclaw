@@ -491,8 +491,9 @@ case "$command" in
     fi
     # Published readers omit LoadState or ControlGroup; retain their exact queries.
     runtime_properties='Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent'
+    current_runtime_properties="${runtime_properties/Id,/Id,LoadState,UnitFileState,RefuseManualStart,CanStart,},ControlGroup"
     case "$property" in
-      "$runtime_properties" | "${runtime_properties/Id,/Id,LoadState,}" | "${runtime_properties/Id,/Id,LoadState,},ControlGroup") ;;
+      "$runtime_properties" | "${runtime_properties/Id,/Id,LoadState,}" | "${runtime_properties/Id,/Id,LoadState,},ControlGroup" | "$current_runtime_properties") ;;
       *)
         echo "systemctl shim unsupported user-scope show: $*" >&2
         exit 1
@@ -501,6 +502,18 @@ case "$command" in
     if [[ "$property" == Id,LoadState,* ]]; then
       load_state="$(node "$manager_script" load-state)"
       printf 'Id=%s\nLoadState=%s\n' "$unit_name" "$load_state"
+    fi
+    if [ "$property" = "$current_runtime_properties" ]; then
+      unit_file_state=""
+      can_start=no
+      if [ "$load_state" = loaded ]; then
+        unit_file_state=disabled
+        can_start=yes
+        if [ -L "$(dirname "$(unit_path)")/default.target.wants/openclaw-gateway.service" ]; then
+          unit_file_state=enabled
+        fi
+      fi
+      printf 'UnitFileState=%s\nRefuseManualStart=no\nCanStart=%s\n' "$unit_file_state" "$can_start"
     fi
     node "$manager_script" runtime
     exit 0
