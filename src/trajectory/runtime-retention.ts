@@ -33,7 +33,7 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
   options: OpenClawAgentDatabaseOptions;
   input: TrajectoryRuntimeRetentionInput;
   revision: TrajectoryRuntimeRetentionRevision;
-  assertCurrent(): void;
+  assertCurrent(this: void): void;
 }): Promise<void> | undefined {
   const { database, options, revision, assertCurrent: assertSourceCurrent } = params;
   const input = {

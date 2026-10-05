@@ -353,7 +353,7 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
       }
     });
     if (retentionRevision) {
-      scheduleSqliteTrajectoryRuntimeRetention({
+      void scheduleSqliteTrajectoryRuntimeRetention({
         database,
         options,
         input,

@@ -137,20 +137,21 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
     run_id: event.runId ?? null,
     event_json: JSON.stringify(event),
     created_at: parseDateStringTimestampMs(event.ts) ?? Date.now(),
+    seq: 0,
   }));
   return write("trajectory.runtime.append", (database) => {
     const db = getTrajectoryKysely(database.db);
     let seq = readNextTrajectorySeq(database, sessionId);
     const discardBeforeSeq = input.discardPrevious ? seq : undefined;
+    for (const row of rows) {
+      row.seq = seq++;
+    }
     for (let index = 0; index < rows.length; index += TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE) {
       executeSqliteQuerySync(
         database.db,
-        db.insertInto("trajectory_runtime_events").values(
-          rows.slice(index, index + TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE).map((row) => ({
-            ...row,
-            seq: seq++,
-          })),
-        ),
+        db
+          .insertInto("trajectory_runtime_events")
+          .values(rows.slice(index, index + TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE)),
       );
     }
     trimSqliteTrajectoryRuntimeWindow(
