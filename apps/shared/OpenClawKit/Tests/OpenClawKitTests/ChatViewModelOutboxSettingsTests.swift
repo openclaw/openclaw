@@ -67,7 +67,7 @@ struct ChatViewModelOutboxSettingsTests {
 
         await MainActor.run { vm.load() }
         await vm.bootstrapTask?.value
-        await waitForOutboxObservedState { vm.hasRestoredOutboxMessages }
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
         #expect(await MainActor.run { !vm.isLoading && vm.hasRestoredOutboxMessages })
         await outbox.holdLoadAfterFailure()
         await transport.goOnline()
@@ -91,7 +91,7 @@ struct ChatViewModelOutboxSettingsTests {
                 vm.messages.first { vm.outboxState(for: $0.id)?.isFailed == true }?.id
             })
             await MainActor.run { vm.retryOutboxMessage(messageID) }
-            await waitForOutboxObservedState { vm.outboxState(for: messageID) == .queued }
+            await waitForObservedState { vm.outboxState(for: messageID) == .queued }
             #expect(await store.loadCommands().first?.status == .queued)
         } catch {
             await outbox.releaseSnapshot()
@@ -196,7 +196,7 @@ struct ChatViewModelOutboxSettingsTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { vm.load() }
         await vm.bootstrapTask?.value
-        await waitForOutboxObservedState { vm.hasRestoredOutboxMessages }
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
         #expect(await vm.hasRestoredOutboxMessages)
         await MainActor.run {
             vm.sessions = [outboxSessionEntry(
@@ -245,7 +245,7 @@ struct ChatViewModelOutboxSettingsTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { vm.load() }
         await vm.bootstrapTask?.value
-        await waitForOutboxObservedState {
+        await waitForObservedState {
             vm.messages.contains { vm.outboxState(for: $0.id) == .queued }
         }
         #expect(await MainActor.run { vm.messages.contains { vm.outboxState(for: $0.id) == .queued } })
@@ -253,7 +253,7 @@ struct ChatViewModelOutboxSettingsTests {
         #expect(await store.parkQueuedCommands(
             in: OpenClawChatOutboxScope(sessionKey: "main", agentID: "main"),
             lastError: "Restriction was not saved."))
-        await waitForOutboxObservedState {
+        await waitForObservedState {
             vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
         }
         #expect(await MainActor.run { vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true } })

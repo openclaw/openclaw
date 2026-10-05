@@ -229,14 +229,7 @@ export function resolveAllAgentSessionStoreCandidateTargetsSync(
 
 function resolveAllAgentSessionStoreTargets(
   cfg: OpenClawConfig,
-  params: {
-    env?: NodeJS.ProcessEnv;
-    agentIds?: ReadonlySet<string>;
-    registeredDatabases?: SessionStoreRegistryRead;
-    readCandidates?: readonly SessionStoreReadCandidate[];
-    readPaths?: CapturedSessionStorePaths;
-    onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
-  },
+  params: NonNullable<Parameters<typeof resolveAllAgentSessionStoreTargetsSync>[1]>,
   recoveryCandidates: boolean,
 ): SessionStoreTarget[] {
   const env = params.env ?? process.env;

@@ -37,8 +37,8 @@ import {
   formatHookMissingSummary,
   formatHooksCheck,
   formatHooksList,
-  type HookInfoOptions,
   type HooksListOptions,
+  type HooksReportOptions,
 } from "./hooks-cli.format.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
@@ -288,7 +288,7 @@ export function registerHooksCli(program: Command): void {
     .description("Show detailed information about a hook")
     .option("--agent <id>", "Agent id to inspect")
     .option("--json", "Output as JSON", false)
-    .action(async (name, opts: HookInfoOptions, command: Command) =>
+    .action(async (name, opts: HooksReportOptions, command: Command) =>
       runOneShotHooksCliAction(async () => {
         const json = hasJsonOutput(opts);
         const result = await loadHooksReport(

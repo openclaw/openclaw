@@ -170,7 +170,7 @@ auth health, sandbox images, and plugin installs.
 
     Doctor also imports legacy generated provider catalogs (`plugins/*/catalog.json` and retained migration claims) into agent SQLite while preserving provider credentials. Run `openclaw doctor --fix` to import these catalogs or repair persisted generated models whose transport API cannot be derived. Ordinary model loading reads canonical SQLite catalogs without importing sidecars or repairing saved rows. Initial disk discovery and explicit registry refresh report legacy catalogs with a Doctor command; hot model lookups and lifecycle-captured catalogs do not inspect legacy files. Newly generated catalogs are still normalized before publication.
 
-    OAuth credential sidecar imports are retired. Doctor leaves their files and encryption keys untouched and refuses the migration. Upgrade through `2026.9.7` and run `openclaw doctor --fix` from an interactive terminal on the original host before retrying; that release can recover the historical key and import the credentials. See [retention policy](/gateway/doctor/config-migrations#retention-policy).
+    OAuth credential sidecar imports are retired. Doctor leaves their files and encryption keys untouched. When a legacy `auth-profiles.json` still references a sidecar, Doctor refuses the migration: upgrade through `2026.9.7` and run `openclaw doctor --fix` from an interactive terminal on the original host before retrying; that release can recover the historical key and import the credentials. Unreferenced sidecars stay in place without blocking. See [retention policy](/gateway/doctor/config-migrations#retention-policy).
 
   </Accordion>
   <Accordion title="6. Hooks model validation">

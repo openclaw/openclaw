@@ -10,7 +10,6 @@ import { SqliteWorkerError } from "../../infra/sqlite-worker-store.js";
 import type { AgentDatabaseIncognitoIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import {
   authorizeSessionFacts,
-  incognitoPendingHistoryPublication,
   readIncognitoGrantFacts,
   type IncognitoSessionRunner,
 } from "./session-incognito-admission.js";
@@ -36,6 +35,7 @@ import {
 } from "./session-incognito-lifecycle-contract.js";
 import type { IncognitoOutboxOperations } from "./session-incognito-outbox-contract.js";
 import {
+  createIncognitoPendingInputHistorySettlement,
   createIncognitoPendingInputSettlement,
   type IncognitoPendingInputOperations,
 } from "./session-incognito-pending-input-contract.js";
@@ -568,7 +568,7 @@ export function createIncognitoSessionFacts(
             undefined,
             undefined,
             false,
-            incognitoPendingHistoryPublication(captured, admitCustody),
+            createIncognitoPendingInputHistorySettlement(captured, admitCustody),
           );
         },
         transcript: <Key extends keyof IncognitoTranscriptOperations>(

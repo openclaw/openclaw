@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../../gateway/connection-details.js";
 import { isLoopbackHost } from "../../gateway/net.js";
+import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
 import { isTtsConfigReservedKey, resolveTtsPersonaList } from "../../tts/tts-settings.js";
@@ -34,7 +35,6 @@ import {
   providerHasGenericConfig,
   resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
-  resolveSelectedProviderFromModelRef,
 } from "./shared.js";
 
 export async function runTtsConvert(params: {
@@ -74,8 +74,7 @@ export async function runTtsConvert(params: {
       targetIds: getTtsCommandSecretTargetIds(),
     });
     let ttsProvider =
-      params.provider ??
-      resolveSelectedProviderFromModelRef(normalizeOptionalString(params.modelId));
+      params.provider ?? resolveModelRefOverride(normalizeOptionalString(params.modelId)).provider;
     if (!ttsProvider) {
       const ttsConfig = resolveTtsConfig(cfg, { channelId: params.channel });
       ttsProvider = getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig));

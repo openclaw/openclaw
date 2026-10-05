@@ -21,6 +21,7 @@ import { findStartupMaintenanceRequiredError } from "../../infra/startup-mainten
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { sleep } from "../../utils/sleep.js";
 import { formatCliCommand } from "../command-format.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
@@ -526,9 +527,7 @@ export async function runGatewayLoop(params: {
       }
       gatewayLog.info("restart mode: full process restart (supervisor restart)");
       if (supervisorMode === "launchd") {
-        const delay = new Promise<void>((resolve) => {
-          setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
-        });
+        const delay = sleep(LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
         const spawned = respawn.handoffSpawned
           ? await Promise.race([respawn.handoffSpawned, delay.then(() => true)])
           : false;

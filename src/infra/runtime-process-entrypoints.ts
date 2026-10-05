@@ -48,6 +48,9 @@ export const runtimeProcessEntrypoints = {
   sessionMessageRewriteDomain: runtimeProcessEntrypoint(
     "config/sessions/session-message-rewrite.worker",
   ),
+  sessionTranscriptStats: runtimeProcessEntrypoint(
+    "config/sessions/session-transcript-stats.worker",
+  ),
   heartbeatOutcomeStore: runtimeProcessEntrypoint("infra/heartbeat-outcome-store.worker"),
   acpParentStreamStore: runtimeProcessEntrypoint(
     "agents/subagents/spawn/acp-parent-stream-store.worker",

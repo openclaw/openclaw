@@ -331,14 +331,11 @@ async function resumePostCoreUpdateInternal(
         assertCurrent?.();
         // Each fresh Doctor holds its own database fences after admission.
         await maintenance?.releaseState();
-        await withPluginLifecycleLease({ assertCurrent }, async (lease) => {
-          await completeSourceUpdateRuntime({
-            root: params.root,
-            sourceRuntimePrepared: params.opts.sourceRuntimePrepared,
-            timeoutMs: params.timeoutMs,
-            lease,
-            beforePersistentEffect: assertCurrent,
-          });
+        await completeSourceUpdateRuntime({
+          root: params.root,
+          sourceRuntimePrepared: params.opts.sourceRuntimePrepared,
+          timeoutMs: params.timeoutMs,
+          assertCurrent,
         });
         assertCurrent?.();
         if (!parentOwnsCompletion) {

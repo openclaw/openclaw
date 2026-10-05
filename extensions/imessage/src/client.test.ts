@@ -374,6 +374,7 @@ describe("IMessageRpcClient child stream error handling", () => {
   );
 
   it("propagates a synchronous stdin write failure as a terminal transport error", async () => {
+    vi.useFakeTimers();
     const writeError = new Error("write after end");
     child.stdin.write = () => {
       throw writeError;
@@ -381,7 +382,8 @@ describe("IMessageRpcClient child stream error handling", () => {
     const client = new IMessageRpcClient({ cliPath: "imsg" });
     await client.start();
 
-    await expect(client.request("ping", {}, { timeoutMs: 0 })).rejects.toBe(writeError);
+    await expect(client.request("ping", {}, { timeoutMs: 10 })).rejects.toBe(writeError);
+    expect(vi.getTimerCount()).toBe(0);
     await expect(client.waitForClose()).rejects.toBe(writeError);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
 
@@ -739,6 +741,7 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -819,18 +822,22 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
   });
 
   // send.ts matches this timeout wording; a wrapper deadline is not a bridge stall.
-  it("leaves a client-side timeout undecorated", async () => {
+  it("leaves a client-side timeout undecorated without disturbing another pending request", async () => {
     vi.useFakeTimers();
     const client = new IMessageRpcClient({ cliPath: "/tmp/imsg-stall-clienttimeout" });
     await client.start();
     const pending = client.request("send", {}, { timeoutMs: 10 });
     pending.catch(() => {});
+    const untimed = client.request("ping", {}, { timeoutMs: -1 });
+    untimed.catch(() => {});
     await vi.advanceTimersByTimeAsync(20);
 
     const error = (await pending.catch((cause: unknown) => cause)) as Error;
-    vi.useRealTimers();
-    expect(/imsg rpc timeout \(send\)/i.test(error.message)).toBe(true);
+    expect(error.message).toBe("imsg rpc timeout (send)");
     expect(error.message).not.toContain("imsg launch");
+    child.stdout.emit("data", '{"id":1,"result":"late"}\n{"id":2,"result":"alive"}\n');
+    await expect(untimed).resolves.toBe("alive");
+    expect(vi.getTimerCount()).toBe(0);
 
     child.emit("close", 0, null);
     await client.stop();

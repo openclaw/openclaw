@@ -15,7 +15,6 @@ import {
   buildRestartRecoveryTerminalDeliveryEvidence,
   constrainRestartRecoveryDeliveryPayloads,
   shouldPersistCurrentRunSessionCleanup,
-  shouldPersistRestartRecoveryCleanup,
 } from "../agent-command-restart-recovery.js";
 import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import {
@@ -59,69 +58,6 @@ import type { AgentCommandOpts } from "./types.js";
 type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;
 
 const log = createSubsystemLogger("agents/agent-command");
-
-export async function clearCommandRecoveryClaim(params: {
-  prepared: Pick<
-    PreparedAgentCommandExecution,
-    "sessionStore" | "sessionKey" | "storePath" | "runId" | "sessionAgentId"
-  >;
-  sessionEntry?: SessionEntry;
-  runOwnedSessionId: string;
-  sessionReboundDuringRun: boolean;
-  trackedRestartRecoveryDeliveryClaim: boolean;
-  terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
-  terminalEvent: Parameters<typeof inspectRecoveryLifecycleEvent>[0]["event"];
-  abortSignal?: AbortSignal;
-}): Promise<void> {
-  const { sessionStore, sessionKey, storePath, runId } = params.prepared;
-  const interruptedForRestart = () =>
-    inspectRecoveryLifecycleEvent({ event: params.terminalEvent, abortSignal: params.abortSignal })
-      .interrupted;
-  if (
-    params.sessionReboundDuringRun ||
-    !params.trackedRestartRecoveryDeliveryClaim ||
-    !sessionStore ||
-    !sessionKey ||
-    interruptedForRestart()
-  ) {
-    return;
-  }
-  try {
-    const entry = sessionStore[sessionKey] ?? params.sessionEntry;
-    if (entry?.restartRecoveryDeliveryRunId === runId) {
-      await persistAgentSession({
-        agentId: params.prepared.sessionAgentId,
-        sessionStore,
-        sessionKey,
-        storePath,
-        initialEntry: entry,
-        entry: {
-          ...entry,
-          ...buildRestartRecoveryClaimCleanupPatch({
-            entry,
-            recordTerminalSource: true,
-            terminalRunId: runId,
-            terminalDeliveryEvidence: params.terminalDeliveryEvidence,
-          }),
-          ...buildMainSessionRecoveryClearPatch(entry),
-          updatedAt: Date.now(),
-        },
-        assertCommitAllowed: () => {
-          if (interruptedForRestart()) {
-            throw createAgentRunRestartAbortError();
-          }
-        },
-        shouldPersist: (current) =>
-          !interruptedForRestart() &&
-          shouldPersistRestartRecoveryCleanup(current, params.runOwnedSessionId, runId),
-      });
-    }
-  } catch (error) {
-    log.warn(
-      `failed to clear restart recovery delivery context for ${sessionKey}: ${coerceErrorMessage(error)}`,
-    );
-  }
-}
 
 export function createCompactionSessionIdReporter(
   sessionId: string,

@@ -184,6 +184,18 @@ original files before stopping the running Gateway. The same early check reports
 the existing recovery guidance for a retired `plugins/installs.json` index. See
 [state migration recovery](/gateway/doctor/state-and-sessions).
 
+Voice Wake trigger/routing JSON, plugin-binding approvals,
+current-conversation bindings, ACP replay `acp/event-ledger.json`, and
+`restart-sentinel.json` are retired. Their last writers shipped before July 1.
+A leftover `update-check.json` is only a notification cache, so Doctor and
+updates ignore it.
+Doctor and update admission preserve the files and refuse with the intermediate
+upgrade path: install `2026.9.7`, run `openclaw doctor --fix` on the original
+host, then retry. Interrupted ACP and restart-sentinel import claims are also
+preserved. Current SQLite state and the supported config-health importer remain
+unchanged. Plugin-binding approvals retain their original default-home scope;
+a custom state directory does not inspect another profile's approval file.
+
 Doctor also refuses these retired config inputs:
 
 - `agents.defaults.llm`, agent `embeddedPi`, `embeddedHarness`, whole-agent
@@ -232,10 +244,13 @@ can use the intermediate release above to remove it.
 OAuth credential sidecars under `credentials/auth-profiles/` are retired. Their
 last writer shipped in `2026.5.16-beta.3` on May 16, 2026; `2026.5.16-beta.4`
 removed that writer. Doctor detects these files without reading credentials or
-accessing encryption keys. Upgrade through `2026.9.7` and run
-`openclaw doctor --fix` on the original host before retrying. The supported
-`auth.json`, `auth-profiles.json`, SQLite credential, and migration-recovery
-contracts remain unchanged.
+accessing encryption keys. When a legacy `auth-profiles.json` still references
+one, upgrade through `2026.9.7` and run `openclaw doctor --fix` on the original
+host before retrying. Sidecars that no legacy profile references stay in place
+and do not block the upgrade; `2026.9.7` also keeps them, because agent
+directories outside its scan might still use them. The supported `auth.json`,
+`auth-profiles.json`, SQLite credential, and migration-recovery contracts
+remain unchanged.
 
 ## Cron ownership before roster migration
 

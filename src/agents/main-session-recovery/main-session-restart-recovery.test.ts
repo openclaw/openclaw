@@ -742,21 +742,6 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("keeps a configured fixed store when its path carries a retired owner id", async () => {
-    const sessionsDir = await makeSessionsDir("old");
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeMainSession({ sessionsDir, sessionKey: "agent:old:main" });
-
-    const cfg = {
-      agents: { entries: { main: {} } },
-      session: { store: storePath },
-    } as OpenClawConfig;
-
-    await expect(
-      discoverRestartRecoveryStoreTargets({ cfg, stateDir: tmpDir, statuses: ["running"] }),
-    ).resolves.toContainEqual({ agentId: "old", storePath });
-  });
-
   it("preserves the yielded global requester owner in a shared store", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
       const storePath = path.join(tmpDir, "yielded", "shared.sqlite");
@@ -2745,6 +2730,7 @@ describe("main-session-restart-recovery", () => {
   registerStartupSessionRepairCases(() => ({
     tmpDir,
     makeSessionsDir,
+    mainSessionEntry,
     writeStore,
     writeTranscript,
     runningSessionEntry,

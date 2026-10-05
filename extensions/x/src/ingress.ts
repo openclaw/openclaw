@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveXAccount } from "./accounts.js";
 import { normalizeXUserId, openXAllowlist } from "./allowlist.js";
 import type { XPost } from "./api.js";
+import { resolveXGuestSettings, resolveXSenderTier } from "./guest-policy.js";
 import { getXRuntime } from "./runtime.js";
 
 export const xMentionFacts = { canDetectMention: true, wasMentioned: true };
@@ -19,6 +20,8 @@ export async function resolveXIngress(
   // 2026.9.8 only invokes readStoreAllowFrom for DMs. This admin-owned store
   // supplies raw group entries; the host still owns all matching and policy.
   const groupAllowFrom = [...(account.config.allowFrom ?? []), ...snapshot.allowFrom];
+  const tier = resolveXSenderTier(account, post.author_id);
+  const guestsEnabled = resolveXGuestSettings(account).enabled;
   const ingress = await core.channel.inbound.ingress.resolveStable({
     channelId: "x",
     accountId,
@@ -34,7 +37,8 @@ export async function resolveXIngress(
     contextBinding,
     event: { kind: "message", authMode: "inbound", mayPair: false },
     dmPolicy: "disabled",
-    groupPolicy: account.config.groupPolicy ?? "allowlist",
+    groupPolicy:
+      account.config.groupPolicy === "disabled" ? "disabled" : guestsEnabled ? "open" : "allowlist",
     allowFrom: account.config.allowFrom ?? [],
     groupAllowFrom,
     mentionFacts: xMentionFacts,
@@ -50,5 +54,5 @@ export async function resolveXIngress(
     }
   };
   assertCurrent();
-  return { ingress, assertCurrent };
+  return { ingress, assertCurrent, tier };
 }

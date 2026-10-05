@@ -59,6 +59,8 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.withTrustedPluginUserProfileIdentity(captured, run);
     },
+    resolveGitHubAccount: async ({ login, signal }) =>
+      (await loadGatewayPluginRuntime()).resolveTrustedPluginGitHubAccount({ login, signal }),
   };
 }
 

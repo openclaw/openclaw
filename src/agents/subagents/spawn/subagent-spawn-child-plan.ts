@@ -41,7 +41,24 @@ export async function resolveSubagentChildPlan(params: {
   requesterSandboxed?: boolean;
 }) {
   const requestedCwd = normalizeOptionalString(params.request.cwd);
-  const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
+  const senderRestricted = params.ctx.inheritedToolPolicySource === "sender";
+  const requesterRoot = params.ctx.sessionPermissionPolicy?.root ?? params.ctx.workspaceDir;
+  if (
+    senderRestricted &&
+    (params.request.worktree ||
+      params.request.projectId ||
+      (requestedCwd &&
+        (!requesterRoot || resolveUserPath(requestedCwd) !== resolveUserPath(requesterRoot))))
+  ) {
+    return {
+      ok: false as const,
+      result: {
+        status: "forbidden",
+        error:
+          "This sender's helpers must keep the requester's workspace and session root. Omit cwd, projectId, and worktree.",
+      } satisfies SpawnSubagentResult,
+    };
+  }
   const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
     agentGroupId: params.ctx.agentGroupId,
     agentGroupChannel: params.ctx.agentGroupChannel,
@@ -98,6 +115,9 @@ export async function resolveSubagentChildPlan(params: {
   const childRuntimeSandboxed =
     creationPolicy.sandbox === "required" ||
     resolveSandboxRuntimeStatus({ cfg: params.cfg, sessionKey: childSessionKey }).sandboxed;
+  const childCwd =
+    requestedCwd ?? (senderRestricted && !childRuntimeSandboxed ? requesterRoot : undefined);
+  const spawnedCwd = childCwd ? resolveUserPath(childCwd) : undefined;
   const sandboxError = resolveSpawnSandboxError({
     backend: "subagent",
     // Prefer the explicit active classification from the spawn tool; fall back to key-derived

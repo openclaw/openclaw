@@ -1,7 +1,6 @@
 // Commander registration for model catalog, status, auth, alias, and fallback commands.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
+import { formatDocsHelp } from "./help-format.js";
 import { registerModelsAccountsCli } from "./models-accounts-cli.js";
 import type { GlobalOnlyModelCommandName } from "./models-cli.runtime.js";
 import { isModelsStatusJsonOutput } from "./models-output-mode.js";
@@ -43,11 +42,7 @@ export function registerModelsCli(program: Command) {
     .option("--status-json", "Output JSON (alias for `models status --json`)", false)
     .option("--status-plain", "Plain output (alias for `models status --plain`)", false)
     .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/models", "docs.openclaw.ai/cli/models")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/models"));
   const hasJsonOutput = (opts?: { json?: boolean }): boolean =>
     Boolean(opts?.json || models.opts<{ json?: boolean }>().json);
   setCommandJsonMode(models, "output", ({ argv, command }) =>

@@ -43,11 +43,7 @@ function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
 
     const aToolLatency = a.tool.latencyMs ?? Number.POSITIVE_INFINITY;
     const bToolLatency = b.tool.latencyMs ?? Number.POSITIVE_INFINITY;
-    if (aToolLatency !== bToolLatency) {
-      return aToolLatency - bToolLatency;
-    }
-
-    return compareScanMetadata(a, b);
+    return aToolLatency === bToolLatency ? compareScanMetadata(a, b) : aToolLatency - bToolLatency;
   });
 }
 
@@ -55,11 +51,7 @@ function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
   return results.toSorted((a, b) => {
     const aLatency = a.image.latencyMs ?? Number.POSITIVE_INFINITY;
     const bLatency = b.image.latencyMs ?? Number.POSITIVE_INFINITY;
-    if (aLatency !== bLatency) {
-      return aLatency - bLatency;
-    }
-
-    return compareScanMetadata(a, b);
+    return aLatency === bLatency ? compareScanMetadata(a, b) : aLatency - bLatency;
   });
 }
 
@@ -72,11 +64,7 @@ function compareScanMetadata(a: ModelScanResult, b: ModelScanResult): number {
 
   const aParams = a.inferredParamB ?? 0;
   const bParams = b.inferredParamB ?? 0;
-  if (aParams !== bParams) {
-    return bParams - aParams;
-  }
-
-  return a.modelRef.localeCompare(b.modelRef);
+  return aParams === bParams ? a.modelRef.localeCompare(b.modelRef) : bParams - aParams;
 }
 
 function buildScanHint(result: ModelScanResult): string {
@@ -360,8 +348,9 @@ export async function modelsScanCommand(
           }
         : cfg.agents?.defaults?.imageModel;
     const existingModel = toAgentModelListLike(cfg.agents?.defaults?.model);
-    const defaults = {
-      ...cfg.agents?.defaults,
+    cfg.agents ??= {};
+    cfg.agents.defaults = {
+      ...cfg.agents.defaults,
       model: {
         ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
         fallbacks: selected,
@@ -369,14 +358,8 @@ export async function modelsScanCommand(
       },
       ...(nextImageModel ? { imageModel: nextImageModel } : {}),
       models: nextModels,
-    } satisfies NonNullable<NonNullable<typeof cfg.agents>["defaults"]>;
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults,
-      },
     };
+    return cfg;
   });
 
   if (opts.json) {

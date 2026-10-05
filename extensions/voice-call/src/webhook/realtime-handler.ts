@@ -29,7 +29,7 @@ import {
   type RealtimeVoiceSessionHarness,
   type TalkEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -1653,9 +1653,7 @@ export class RealtimeCallHandler {
       if (quietFor >= CONSULT_TRANSCRIPT_SETTLE_MS || now >= deadline) {
         return;
       }
-      await new Promise((resolve) => {
-        setTimeout(resolve, Math.min(CONSULT_TRANSCRIPT_SETTLE_MS - quietFor, deadline - now));
-      });
+      await sleep(Math.min(CONSULT_TRANSCRIPT_SETTLE_MS - quietFor, deadline - now));
     }
   }
 

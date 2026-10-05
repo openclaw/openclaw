@@ -1,3 +1,4 @@
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import {
   invokeNativeHookRelayBridge,
   isNativeHookRelayBridgeStaleRegistrationError,
@@ -287,43 +288,23 @@ async function withNativeHookRelayDeadline<T>(
   deadline: NativeHookRelayDeadline,
   promise: Promise<T>,
 ): Promise<T> {
-  return await new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const cleanup = () => deadline.signal.removeEventListener("abort", abort);
-    const abort = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(new NativeHookRelayDeadlineError(deadline.timeoutMs));
-    };
-    deadline.signal.addEventListener("abort", abort, { once: true });
+  if (deadline.expiresAtMs <= performance.now()) {
+    // Startup may spend the deadline before handing back its already-running promise.
+    void promise.catch(() => undefined);
+    throw new NativeHookRelayDeadlineError(deadline.timeoutMs);
+  }
+  return await racePromiseWithAbortSignal(
     promise.then(
       (value) => {
-        if (settled) {
-          return;
-        }
         // Promise reactions can run before an overdue timer after an event-loop stall.
-        if (deadline.signal.aborted || deadline.expiresAtMs <= performance.now()) {
-          abort();
-          return;
-        }
-        settled = true;
-        cleanup();
-        resolve(value);
+        remainingNativeHookRelayDeadlineMs(deadline);
+        return value;
       },
       (error: unknown) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanup();
-        reject(error instanceof Error ? error : new Error(String(error)));
+        throw error instanceof Error ? error : new Error(String(error));
       },
-    );
-    if (deadline.signal.aborted || deadline.expiresAtMs <= performance.now()) {
-      abort();
-    }
-  });
+    ),
+    deadline.signal,
+    () => new NativeHookRelayDeadlineError(deadline.timeoutMs),
+  );
 }

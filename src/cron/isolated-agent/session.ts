@@ -16,7 +16,10 @@ import {
   type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
 import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-accessor.js";
-import { preserveSqliteSameKeySessionRolloverLineage } from "../../config/sessions/session-entry-lineage.js";
+import {
+  preserveSessionInheritedToolPolicy,
+  preserveSqliteSameKeySessionRolloverLineage,
+} from "../../config/sessions/session-entry-lineage.js";
 import { preserveCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -42,9 +45,6 @@ const AMBIENT_SESSION_CONTEXT_FIELDS = [
   "spawnDepth",
   "subagentRole",
   "subagentControlScope",
-  "inheritedToolPolicyVersion",
-  "inheritedToolAllow",
-  "inheritedToolDeny",
   "permissionMode",
   "sandboxMode",
   "sessionRoot",
@@ -137,6 +137,7 @@ function sanitizeFreshCronSessionEntry(
   }
   if (options.preserveAmbientContext) {
     copySessionFields(next, entry, AMBIENT_SESSION_CONTEXT_FIELDS);
+    Object.assign(next, preserveSessionInheritedToolPolicy(entry));
   }
   preserveNonAutoModelOverride(next, entry);
   preserveUserAuthOverride(next, entry);

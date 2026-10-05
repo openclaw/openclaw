@@ -115,6 +115,8 @@ it.each(["missing", "drifted"] as const)(
       }
       expect(loadSessionEntry(agent.session)).toEqual(agent.entry);
     }
+    // Worker-local log queues drain on close; the parent logger cannot flush them.
+    await closeOpenClawAgentDatabasesAsync();
     await flushLogger();
     const repairs = () =>
       fs
@@ -141,6 +143,7 @@ it.each(["missing", "drifted"] as const)(
       assertOpenClawDatabasesReady({ env, operation: "gateway-restart", config }),
     ).resolves.toBeUndefined();
     await runStartup();
+    await closeOpenClawAgentDatabasesAsync();
     await flushLogger();
     expect(repairs()).toHaveLength(3);
   },

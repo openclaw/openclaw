@@ -78,29 +78,16 @@ export {
   buildSessionContext,
   getLatestCompactionEntry,
   migrateSessionEntries,
-  normalizeLoadedFileEntry,
   parseSessionEntries,
 } from "./session-manager-codec.js";
 export type {
   BranchSummaryEntry,
   CompactionEntry,
-  CustomEntry,
-  CustomMessageEntry,
   FileEntry,
-  LabelEntry,
-  ModelChangeEntry,
-  NewSessionOptions,
-  ResetEntry,
-  ResetReason,
-  SessionContext,
   SessionEntry,
-  SessionEntryBase,
   SessionHeader,
-  SessionInfoEntry,
   SessionLeafControl,
   SessionMessageEntry,
-  SessionTreeNode,
-  ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
 
 export class SessionManager extends SessionManagerBranching {

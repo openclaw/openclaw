@@ -342,3 +342,36 @@ describe("agent activity events", () => {
     },
   );
 });
+
+test("marks only unpaired history calls as provisional, including terminal unknown outcomes", () => {
+  const call = {
+    messageId: "call",
+    message: {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "command", name: "exec", arguments: {} }],
+    },
+  };
+  const missing = projectAgentHistoryActivity([call])[0]?.items[0];
+  expect(missing).toMatchObject({ phase: "end", unpairedCall: true, summary: "Outcome unknown" });
+  expect(missing?.status).toBeUndefined();
+  const result = {
+    messageId: "result",
+    message: {
+      role: "toolResult",
+      toolCallId: "command",
+      toolName: "exec",
+      isError: false,
+      details: {
+        status: "completed",
+        exitCode: 143,
+        persistedDetailsTruncated: true,
+        originalDetailKeys: ["exitReason"],
+      },
+    },
+  };
+  for (const entry of projectAgentHistoryActivity([call, result])) {
+    expect(entry.items[0]).toMatchObject({ phase: "end", summary: "Outcome unknown" });
+    expect(entry.items[0]?.status).toBeUndefined();
+    expect(entry.items[0]).not.toHaveProperty("unpairedCall");
+  }
+});

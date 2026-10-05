@@ -1,5 +1,7 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { X_POST_READ_MICRO_USD, X_USER_READ_MICRO_USD, xReadCost, xReplyCost } from "./pricing.js";
+import { XBudgetExceededError, type XSpend } from "./spend.js";
 
 const X_API_ORIGIN = "https://api.x.com";
 const POST_FIELDS =
@@ -21,7 +23,7 @@ export type XPage = {
   includes: { users: XUser[]; tweets: XPost[] };
   meta: { newest_id?: string; next_token?: string };
 };
-export type XPostEnvelope = { post: XPost; users: XUser[] };
+export type XPostEnvelope = { post: XPost; users: XUser[]; recipientPending?: true };
 export type XFetch = (input: string, init?: RequestInit) => Promise<Response>;
 export type XTokenState = "idle" | "refreshing" | "ready" | "error";
 export type XAssertActive = () => void | (() => void) | Promise<void | (() => void)>;
@@ -157,6 +159,7 @@ export function parseXPostEnvelope(input: unknown): XPostEnvelope | undefined {
         users: (Array.isArray(row?.users) ? row.users : []).flatMap(
           (value) => parseUser(value) ?? [],
         ),
+        ...(row?.recipientPending === true ? { recipientPending: true } : {}),
       }
     : undefined;
 }
@@ -195,6 +198,7 @@ function parsePage(input: unknown): XPage {
 export type XApiClient = ReturnType<typeof createXApiClient>;
 
 export function createXApiClient(options: {
+  spend: XSpend;
   clientId: string;
   clientSecret: string;
   refreshToken: string;
@@ -318,105 +322,145 @@ export function createXApiClient(options: {
     await refreshTask;
   }
 
-  async function request(
+  type RequestOptions = {
+    method?: "GET" | "POST";
+    body?: unknown;
+    signal?: AbortSignal;
+    appOnly?: boolean;
+    stream?: boolean;
+    assertActive?: XAssertActive;
+    onDispatch?: () => void;
+    onAuthenticationRejected?: () => void;
+  };
+  type Billing<T> = {
+    maximum: number;
+    actual: (value: unknown) => number;
+    parse: (value: unknown) => T;
+  };
+
+  async function request<T>(
     path: string,
-    params: {
-      method?: "GET" | "POST";
-      body?: unknown;
-      signal?: AbortSignal;
-      appOnly?: boolean;
-      stream?: boolean;
-      assertActive?: XAssertActive;
-      onDispatch?: () => void;
-      onAuthenticationRejected?: () => void;
-    } = {},
-  ): Promise<Response> {
+    params: RequestOptions & { billing: Billing<T> },
+  ): Promise<T>;
+  async function request(path: string, params?: RequestOptions): Promise<Response>;
+  async function request<T>(
+    path: string,
+    params: RequestOptions & { billing?: Billing<T> } = {},
+  ): Promise<T | Response> {
     for (let attempt = 0; attempt < 2; attempt++) {
-      if (!params.appOnly) {
-        await ensureAccessToken();
-      }
-      const token = params.appOnly ? options.bearerToken : accessToken;
-      if (!token) {
-        throw new Error("X Activity API requires a bearer token");
-      }
-      const signal = params.stream
-        ? AbortSignal.any(
-            [options.signal, params.signal].filter((value): value is AbortSignal => Boolean(value)),
-          )
-        : requestSignal(params.signal);
-      signal.throwIfAborted();
-      let response: Response;
-      let authorityRejected = false;
-      let authorityError: unknown;
+      const reservation = params.billing
+        ? await options.spend.reserve(params.billing.maximum)
+        : undefined;
+      let cost = 0;
       try {
-        response = await fetcher(
-          `${X_API_ORIGIN}${path}`,
-          {
-            method: params.method ?? "GET",
-            redirect: "error",
-            headers: {
-              Authorization: `Bearer ${token}`,
-              ...(params.body ? { "Content-Type": "application/json" } : {}),
-            },
-            ...(params.body ? { body: JSON.stringify(params.body) } : {}),
-            signal,
-          },
-          params.assertActive
-            ? async () => {
-                try {
-                  const assertCurrent = await params.assertActive?.();
-                  return () => {
-                    try {
-                      assertCurrent?.();
-                    } catch (error) {
-                      authorityRejected = true;
-                      authorityError = error;
-                      throw error;
-                    }
-                  };
-                } catch (error) {
-                  authorityRejected = true;
-                  authorityError = error;
-                  throw error;
-                }
-              }
-            : undefined,
-          params.onDispatch,
-        );
-      } catch {
-        if (authorityRejected) {
-          throw authorityError;
+        if (!params.appOnly) {
+          await ensureAccessToken();
         }
+        const token = params.appOnly ? options.bearerToken : accessToken;
+        if (!token) {
+          throw new Error("X Activity API requires a bearer token");
+        }
+        const signal = params.stream
+          ? AbortSignal.any(
+              [options.signal, params.signal].filter((value): value is AbortSignal =>
+                Boolean(value),
+              ),
+            )
+          : requestSignal(params.signal);
         signal.throwIfAborted();
-        throw new Error("X API network request failed");
-      }
-      if (response.status === 401) {
-        params.onAuthenticationRejected?.();
-      }
-      if (response.status === 401 && !params.appOnly && attempt === 0) {
-        await response.body?.cancel();
-        if (accessToken === token) {
-          accessToken = undefined;
+        let response: Response;
+        let authorityRejected = false;
+        let authorityError: unknown;
+        try {
+          response = await fetcher(
+            `${X_API_ORIGIN}${path}`,
+            {
+              method: params.method ?? "GET",
+              redirect: "error",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                ...(params.body ? { "Content-Type": "application/json" } : {}),
+              },
+              ...(params.body ? { body: JSON.stringify(params.body) } : {}),
+              signal,
+            },
+            params.assertActive
+              ? async () => {
+                  try {
+                    const assertCurrent = await params.assertActive?.();
+                    return () => {
+                      try {
+                        assertCurrent?.();
+                      } catch (error) {
+                        authorityRejected = true;
+                        authorityError = error;
+                        throw error;
+                      }
+                    };
+                  } catch (error) {
+                    authorityRejected = true;
+                    authorityError = error;
+                    throw error;
+                  }
+                }
+              : undefined,
+            () => {
+              // From dispatch until a readable successful result or an explicit rejection,
+              // the entire reservation remains charged, including lost responses and 5xx.
+              cost = params.billing?.maximum ?? 0;
+              params.onDispatch?.();
+            },
+          );
+        } catch {
+          if (authorityRejected) {
+            throw authorityError;
+          }
+          signal.throwIfAborted();
+          throw new Error("X API network request failed");
         }
-        continue;
-      }
-      if (!response.ok) {
-        let detail: string | undefined;
-        if (path.startsWith("/2/activity/")) {
-          detail = await readActivityErrorDetail(response, signal, [
-            token,
-            accessToken,
-            options.bearerToken,
-            refreshToken,
-            options.refreshToken,
-            options.clientSecret,
-          ]);
-        } else {
-          await response.body?.cancel();
+        if (response.status >= 400 && response.status < 500) {
+          cost = 0;
+          if (params.billing) {
+            const value = await readJson(response).catch(() => undefined);
+            cost = params.billing.actual(value);
+          }
         }
-        throw new XApiError(response.status, path.split("?")[0] ?? path, detail);
+        if (response.status === 401) {
+          params.onAuthenticationRejected?.();
+          if (!params.appOnly && attempt === 0) {
+            await response.body?.cancel().catch(() => {});
+            if (accessToken === token) {
+              accessToken = undefined;
+            }
+            continue;
+          }
+        }
+        if (!response.ok) {
+          let detail: string | undefined;
+          if (path.startsWith("/2/activity/")) {
+            detail = await readActivityErrorDetail(response, signal, [
+              token,
+              accessToken,
+              options.bearerToken,
+              refreshToken,
+              options.refreshToken,
+              options.clientSecret,
+            ]);
+          } else {
+            await response.body?.cancel().catch(() => {});
+          }
+          throw new XApiError(response.status, path.split("?")[0] ?? path, detail);
+        }
+        if (!params.billing) {
+          return response;
+        }
+        const value = await readJson(response);
+        const parsed = params.billing.parse(value);
+        cost = params.billing.actual(value);
+        return parsed;
+      } finally {
+        await reservation?.settle(cost);
       }
-      return response;
     }
     throw new Error("X user token was rejected after refresh");
   }
@@ -424,11 +468,13 @@ export function createXApiClient(options: {
   async function page(
     path: string,
     query: Record<string, string | undefined>,
+    maximumPosts: number,
     signal?: AbortSignal,
   ) {
     const params = new URLSearchParams({
       "tweet.fields": POST_FIELDS,
-      expansions: "author_id,referenced_tweets.id",
+      // Reference IDs remain in tweet.fields; fetch their contents through bounded calls.
+      expansions: "author_id",
       "user.fields": "username,name",
     });
     for (const [key, value] of Object.entries(query)) {
@@ -436,10 +482,18 @@ export function createXApiClient(options: {
         params.set(key, value);
       }
     }
-    return parsePage(await readJson(await request(`${path}?${params}`, { signal })));
+    return request(`${path}?${params}`, {
+      signal,
+      billing: {
+        maximum: maximumPosts * (X_POST_READ_MICRO_USD + X_USER_READ_MICRO_USD),
+        actual: (value) => xReadCost(value, "posts"),
+        parse: parsePage,
+      },
+    });
   }
 
   return {
+    spend: options.spend,
     getMentions: (params: {
       userId: string;
       sinceId?: string;
@@ -448,17 +502,19 @@ export function createXApiClient(options: {
     }) =>
       page(
         `/2/users/${encodeURIComponent(params.userId)}/mentions`,
-        { since_id: params.sinceId, pagination_token: params.paginationToken, max_results: "100" },
+        { since_id: params.sinceId, pagination_token: params.paginationToken, max_results: "10" },
+        10,
         params.signal,
       ),
     getPosts: (ids: string[], signal?: AbortSignal) => {
       if (!ids.length || ids.length > 100) {
         throw new Error("X post lookup requires 1–100 post ids");
       }
-      return page("/2/tweets", { ids: ids.join(",") }, signal);
+      return page("/2/tweets", { ids: ids.join(",") }, ids.length, signal);
     },
     searchConversation: (params: {
       conversationId: string;
+      maxPosts: number;
       nextToken?: string;
       signal?: AbortSignal;
     }) =>
@@ -467,17 +523,37 @@ export function createXApiClient(options: {
         {
           query: `conversation_id:${params.conversationId}`,
           next_token: params.nextToken,
-          max_results: "100",
+          max_results: String(Math.max(10, Math.min(Math.floor(params.maxPosts), 100))),
           sort_order: "recency",
         },
+        Math.max(10, Math.min(Math.floor(params.maxPosts), 100)),
         params.signal,
       ),
     async getUserByUsername(username: string, signal?: AbortSignal): Promise<XUser> {
-      const response = await request(
+      const user = await request(
         `/2/users/by/username/${encodeURIComponent(username.replace(/^@/, ""))}?user.fields=id,username,name`,
-        { signal },
+        {
+          signal,
+          billing: {
+            maximum: X_USER_READ_MICRO_USD,
+            actual: (value) => xReadCost(value, "users"),
+            parse: (value) => {
+              const row = record(value);
+              if (!row) {
+                throw new Error("X API returned an invalid user response");
+              }
+              if (row.data === undefined) {
+                return undefined;
+              }
+              const resolved = parseUser(row.data);
+              if (!resolved) {
+                throw new Error("X API returned no matching user");
+              }
+              return resolved;
+            },
+          },
+        },
       );
-      const user = parseUser(record(await readJson(response))?.data);
       if (!user) {
         throw new Error("X API returned no matching user");
       }
@@ -492,7 +568,18 @@ export function createXApiClient(options: {
       let dispatched = false;
       try {
         params.signal?.throwIfAborted();
-        const response = await request("/2/tweets", {
+        return await request("/2/tweets", {
+          billing: {
+            maximum: xReplyCost(params.text),
+            actual: (value) => (record(record(value)?.data)?.id ? xReplyCost(params.text) : 0),
+            parse: (value) => {
+              const id = record(record(value)?.data)?.id;
+              if (typeof id !== "string" || !/^\d+$/.test(id)) {
+                throw new Error("X API returned no reply id; delivery outcome is unknown");
+              }
+              return id;
+            },
+          },
           method: "POST",
           body: { text: params.text, reply: { in_reply_to_tweet_id: params.inReplyToId } },
           signal: params.signal,
@@ -505,14 +592,12 @@ export function createXApiClient(options: {
             dispatched = false;
           },
         });
-        const id = record(record(await readJson(response))?.data)?.id;
-        if (typeof id !== "string" || !/^\d+$/.test(id)) {
-          throw new Error("X API returned no reply id; delivery outcome is unknown");
-        }
-        return id;
       } catch (cause) {
         if (cause instanceof PlatformMessageNotDispatchedError) {
           throw cause;
+        }
+        if (cause instanceof XBudgetExceededError) {
+          throw new PlatformMessageNotDispatchedError(cause.message, { cause, retryable: false });
         }
         if (cause instanceof XApiError && cause.status < 500) {
           // A 4xx rejection proves X created no post: rate limits are safe to retry,

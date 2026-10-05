@@ -563,9 +563,11 @@ export async function acquireGatewayLock(
                 role === "sqlite-maintenance" ? owner : undefined,
               ),
             );
-            opts.assertCurrent?.();
-            await previousOwner?.release();
-            owner.assertCurrent();
+            if (previousOwner) {
+              // Policy reads borrow the newly acquired custody before releasing the old root.
+              owner.run(() => opts.assertCurrent?.());
+              await previousOwner.release();
+            }
             return owner;
           } catch (error) {
             projection?.release();
@@ -648,7 +650,7 @@ export async function acquireGatewayLock(
       : undefined;
   let ownerLease: GatewayOwnerLease | undefined;
   try {
-    opts.assertCurrent?.();
+    assertStateOwnerCurrent(opts.assertCurrent);
     // Shipped Gateways discover this PID sidecar before starting. Synchronous
     // schema work retains the same fs-safe owner through its final reference.
     const shouldReclaim = (previous: LockPayload | null) =>

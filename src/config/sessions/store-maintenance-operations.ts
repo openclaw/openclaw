@@ -12,11 +12,6 @@ import {
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
-type SessionMaintenanceLogger = {
-  warn: (message: string, context?: Record<string, unknown>) => void;
-  info: (message: string, context?: Record<string, unknown>) => void;
-};
-
 type RemovedSessionFiles = Map<string, string | undefined>;
 
 type RemovedSessionArtifactCleanup = {
@@ -37,7 +32,7 @@ type FileBackedSessionStoreMaintenanceParams = {
   storePath: string;
   store: Record<string, SessionEntry>;
   maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
-  log: SessionMaintenanceLogger;
+  log: NonNullable<Parameters<typeof enforceSessionDiskBudget>[0]["log"]>;
   artifacts: RemovedSessionArtifactCleanup;
   commitReducedStore?: () => Promise<void>;
 };

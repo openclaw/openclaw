@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -218,9 +219,7 @@ async function foldSqliteTouchedFiles(
     if (delta.requiredBytes !== undefined) {
       maxBytes = delta.requiredBytes;
     }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
   }
 }
 

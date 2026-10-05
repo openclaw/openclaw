@@ -202,6 +202,34 @@ describe("sidebar people workload", () => {
     expect(sidebar.querySelector(".sidebar-online")).toBeNull();
   });
 
+  it.each(["chip", "roster"] as const)(
+    "hides filters while collapsed and preserves the people view when reopened (%s)",
+    async (mode) => {
+      const { sidebar } = await mountWorkload();
+      sidebar.sidebarAgentsMode = mode;
+      const view = sidebar.sidebarMenus.host.people;
+      view.setStatusFilter("running");
+      view.setSortMode("running");
+      await settle(sidebar);
+      const toggle = ".sidebar-online .sidebar-session-group-toggle";
+      if (sidebar.querySelector(toggle)?.getAttribute("aria-expanded") === "false") {
+        await click(sidebar, toggle);
+      }
+      expect(names(sidebar)).toEqual(["bea", "ada"]);
+      expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
+
+      await click(sidebar, toggle);
+      expect(sidebar.querySelector(".sidebar-online__filter-toggle")).toBeNull();
+      expect(sidebar.querySelector("openclaw-viewer-facepile")?.staticUsers).toHaveLength(3);
+
+      await click(sidebar, toggle);
+      expect(names(sidebar)).toEqual(["bea", "ada"]);
+      expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
+      await click(sidebar, ".sidebar-online__filter-toggle");
+      expect(sidebar.sidebarMenus.peopleFilterMenuPosition).not.toBeNull();
+    },
+  );
+
   it("uses one complete cross-agent summary, including self, not the paginated or owner-filtered sidebar", async () => {
     const pending = createDeferred<SessionsListResult>();
     const { sidebar, sessions, context, request, summaryRequest } = await mountWorkload(

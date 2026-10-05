@@ -28,6 +28,13 @@ you still need their state, restore a complete pre-update backup and run
 Telegram JSON ingress-spool migration still imports pending updates, processing
 claims, and failed tombstones with verified backups.
 
+Pre-July Voice Wake settings, update-check state, plugin-binding approvals,
+current-conversation bindings, ACP replay, and restart-sentinel JSON are also
+retired. Doctor preserves these sources and interrupted ACP/restart import
+claims, then directs you to upgrade through `2026.9.7` and run its Doctor first.
+Update admission checks the original files before activation. Current SQLite
+state remains supported.
+
 Retired `subagents/runs.json` files are also ignored and left untouched;
 transient runs are never restored from them.
 
@@ -72,7 +79,7 @@ its original rollback paths, so a later failed update can refuse automatic
 rollback after relocation. It preserves the moved state and retained snapshots;
 follow its candidate-Doctor recovery guidance before restarting or downgrading.
 
-`openclaw doctor --fix` owns general persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Gateway, node-host, and local CLI startup leave general legacy repair to Doctor. Normal versioned database opening, native initialization, and recovery of valid current config remain available. The narrow [restart-notice importer](/gateway/restart-recovery#agent-requested-restarts) also serves the late update notices written by shipped June updaters, through the same migration owner and receipts.
+`openclaw doctor --fix` owns general persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Gateway, node-host, and local CLI startup leave general legacy repair to Doctor. Normal versioned database opening, native initialization, and recovery of valid current config remain available.
 
 The container image entrypoint automatically runs `openclaw doctor --fix --non-interactive`
 against the mounted state and config before starting the Gateway. If you override

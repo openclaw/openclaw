@@ -253,6 +253,16 @@ export class PluginInstance {
     );
   }
 
+  /** Observe when a pre-stop replacement drain would pass: no retained work or calls, cleanup included. */
+  async waitForIdle(signal: AbortSignal): Promise<void> {
+    await waitForPluginInstanceSettlement(
+      this.pluginId,
+      this.waiters,
+      () => this.calls.size === 0 && this.retainedWorkCount === 0,
+      signal,
+    );
+  }
+
   /** Reserve replacement atomically before host owners invalidate or stop this instance. */
   reserveReplacement(): () => void {
     if (this.hasActiveCall) {

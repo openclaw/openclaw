@@ -36,6 +36,7 @@ import { createPluginModelRuntimeMock } from "./plugin-runtime-model-mock.js";
 import { createPluginStateRuntimeMock } from "./plugin-runtime-state-mock.js";
 import { createPluginThreadBindingsRuntimeMock } from "./plugin-runtime-thread-bindings-mock.js";
 
+type SessionRuntime = PluginRuntime["channel"]["session"];
 type InboundDebounceFlush = ReturnType<InboundDebounceCreateParams<unknown>["onFlush"]>;
 type InboundDebounceFlushFactory = Parameters<InboundDebounceCreateParams<unknown>["onFlush"]>[1];
 
@@ -454,11 +455,10 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     } as Awaited<BuildContextResult>;
   });
   const sessionRuntime = {
-    resolveStorePath: vi.fn<PluginRuntime["channel"]["session"]["resolveStorePath"]>(
-      () => "/tmp/sessions.json",
-    ),
-    readSessionUpdatedAt: vi.fn<PluginRuntime["channel"]["session"]["readSessionUpdatedAt"]>(
-      () => undefined,
+    resolveStorePath: vi.fn<SessionRuntime["resolveStorePath"]>(() => "/tmp/sessions.json"),
+    readSessionUpdatedAt: vi.fn<SessionRuntime["readSessionUpdatedAt"]>(() => undefined),
+    readSessionUpdatedAtAsync: vi.fn<SessionRuntime["readSessionUpdatedAtAsync"]>(
+      async () => undefined,
     ),
     recordSessionMetaFromInbound:
       vi.fn<PluginRuntime["channel"]["session"]["recordSessionMetaFromInbound"]>(),

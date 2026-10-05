@@ -51,6 +51,7 @@ describe("google-meet lazy imports", () => {
         createMeetFromParams: async () => ({ meetingUri: "https://meet.google.com/abc-defg-hij" }),
       };
     });
+    // mock-isolation: Keep the real runtime graph cold while observing its first lazy import.
     vi.doMock("./src/runtime.js", () => {
       runtimeImports += 1;
       return {
@@ -65,12 +66,8 @@ describe("google-meet lazy imports", () => {
             return { ok: true };
           }
 
-          transcriptSourceRuntime() {
-            return {
-              startTranscriptSource: async () => ({ ok: true }),
-              stopTranscriptSource: async () => ({ ok: true }),
-            };
-          }
+          startTranscriptSource = async () => ({ ok: true });
+          stopTranscriptSource = async () => ({ ok: true });
         },
       };
     });

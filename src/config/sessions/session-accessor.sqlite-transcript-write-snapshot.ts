@@ -17,18 +17,12 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
-
-export class SqliteTranscriptMutationConflictError extends Error {
-  constructor(sessionId: string) {
-    super(`SQLite transcript changed while preparing rewrite for ${sessionId}`);
-    this.name = "SqliteTranscriptMutationConflictError";
-  }
-}
 
 export type TranscriptWriteViewGuard = {
   assertCurrent: () => void;

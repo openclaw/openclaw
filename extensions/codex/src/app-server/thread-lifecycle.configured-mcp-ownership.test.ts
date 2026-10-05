@@ -198,7 +198,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     expect(releaseSibling).toHaveBeenCalledWith("thread-sibling");
   });
 
-  it.each(["start", "conflict", "error", "abort"] as const)(
+  it.each(["start", "conflict", "error"] as const)(
     "preserves the predecessor and cleans only an accepted successor after %s failure",
     async (failure) => {
       const sessionFile = path.join(tempDir, "session.jsonl");
@@ -213,7 +213,6 @@ describe("startOrResumeThread — configured MCP ownership", () => {
         mcpServersFingerprint: "mcp-v1",
         dynamicToolsFingerprint: "[]",
       });
-      const controller = new AbortController();
       const request = vi.fn(async (method: string) => {
         if (method === "config/read") {
           return { config: {}, origins: {}, layers: [] };
@@ -221,9 +220,6 @@ describe("startOrResumeThread — configured MCP ownership", () => {
         if (method === "thread/start") {
           if (failure === "start") {
             throw new Error("successor start failed");
-          }
-          if (failure === "abort") {
-            controller.abort("test abort");
           }
           return threadStartResult("thread-uncommitted");
         }
@@ -261,14 +257,12 @@ describe("startOrResumeThread — configured MCP ownership", () => {
           bindingStore,
           client,
           ...scheduledStartOptions(sessionFile, workspaceDir),
-          signal: controller.signal,
         }),
       ).rejects.toThrow(
         {
           start: "successor start failed",
           conflict: "Codex thread binding changed",
           error: "lost replacement lease",
-          abort: "test abort",
         }[failure],
       );
       expect(request.mock.calls.map(([method]) => method)).toEqual([

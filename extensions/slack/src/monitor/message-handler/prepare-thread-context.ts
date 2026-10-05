@@ -8,7 +8,7 @@ import {
   shouldIncludeSupplementalContext,
 } from "openclaw/plugin-sdk/security-runtime";
 import {
-  readSessionUpdatedAt,
+  readSessionUpdatedAtAsync,
   resolveChannelResetConfig,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -24,14 +24,6 @@ import { isSlackThreadAuthorCurrentBot } from "./prepare-thread-context-root.js"
 import { resolveSlackTimestampMs } from "./timestamp.js";
 
 const loadSlackMediaModule = createLazyRuntimeModule(() => import("../media.js"));
-
-type SlackThreadContextData = {
-  threadStarterBody: string | undefined;
-  threadHistoryBody: string | undefined;
-  shouldSeedInitialThreadContext: boolean;
-  threadLabel: string | undefined;
-  threadStarterMedia: SlackMediaResult[] | null;
-};
 
 const SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY = 4;
 
@@ -132,7 +124,7 @@ export async function resolveSlackThreadContextData(params: {
   excludedMessageIds?: ReadonlySet<string>;
   assertHistoryCurrent?: () => void;
   abortSignal?: AbortSignal;
-}): Promise<SlackThreadContextData> {
+}) {
   const botIdentity = {
     botUserId: params.ctx.botUserId,
     botId: params.ctx.botId,
@@ -155,7 +147,7 @@ export async function resolveSlackThreadContextData(params: {
       : undefined;
   const threadSessionPreviousTimestamp =
     params.isThreadReply && params.threadTs && !threadSessionFreshness
-      ? readSessionUpdatedAt({
+      ? await readSessionUpdatedAtAsync({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
         })

@@ -10,10 +10,6 @@ import {
 
 const SECRET_STORE_IMPORT_MAX_BYTES = 16 * 1024 * 1024;
 
-function stripOneTerminalNewline(value: string): string {
-  return value.replace(/\r?\n$/u, "");
-}
-
 async function readBoundedStdin(maxBytes: number): Promise<string> {
   const bytes = await readByteStreamWithLimit(process.stdin, {
     maxBytes,
@@ -47,12 +43,12 @@ async function readBoundedFile(pathname: string, maxBytes: number): Promise<stri
   }
 }
 
-export async function readSecretStoreInput(params: { valueFile?: string }): Promise<string> {
-  if (params.valueFile && params.valueFile !== "-") {
-    return await readBoundedFile(params.valueFile, SECRET_STORE_VALUE_MAX_BYTES);
+export async function readSecretStoreInput(valueFile?: string): Promise<string> {
+  if (valueFile && valueFile !== "-") {
+    return await readBoundedFile(valueFile, SECRET_STORE_VALUE_MAX_BYTES);
   }
-  if (params.valueFile === "-" || !process.stdin.isTTY) {
-    return stripOneTerminalNewline(await readBoundedStdin(SECRET_STORE_VALUE_MAX_BYTES));
+  if (valueFile === "-" || !process.stdin.isTTY) {
+    return (await readBoundedStdin(SECRET_STORE_VALUE_MAX_BYTES)).replace(/\r?\n$/u, "");
   }
   const value = await password({
     message: "Secret value",

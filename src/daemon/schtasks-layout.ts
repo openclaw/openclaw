@@ -5,7 +5,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { normalizeProfileName } from "../cli/profile-utils.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
-import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
+import { getWindowsCmdExePath, getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
@@ -47,6 +47,7 @@ export function resolveTaskName(env: GatewayServiceEnv): string {
 // Keeps the service gateway's stdin off the (possibly hidden) console so TTY
 // heuristics fail closed for permission prompts (#112173).
 const STDIN_NUL_REDIRECT = "< NUL";
+const DIRECT_TASK_LAUNCHER_MARKER = `if not defined ${WINDOWS_TASK_LAUNCHER_ENV} set "${WINDOWS_TASK_LAUNCHER_ENV}=cmd"`;
 
 export function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
   // Permission failures and hung schtasks calls can use the per-user Startup fallback.
@@ -129,7 +130,7 @@ async function readTaskLauncher(
 ): Promise<{ scriptPath: string; content?: string }> {
   assertTaskInspectionDeadline(deadline);
   assertStaticTaskPath(launcherPath);
-  if (/\.cmd$/i.test(launcherPath) && !startup) {
+  if (/\.(?:cmd|bat)$/i.test(launcherPath) && !startup) {
     return { scriptPath: launcherPath };
   }
   if (!/\.(?:vbs|cmd)$/i.test(launcherPath)) {
@@ -344,8 +345,20 @@ async function readWindowsTaskCommand(
     if (action?.workingDirectory) {
       assertStaticTaskPath(action.workingDirectory);
     }
-    const directExecutable = action && /\.exe$/i.test(action.path);
-    if (action && !directExecutable && action.arguments.trim()) {
+    const cmdLauncher =
+      action && action.path.toLowerCase() === getWindowsCmdExePath(env).toLowerCase()
+        ? /^\/d \/s \/c ""([^"%\r\n]+\.(?:cmd|bat))""$/i.exec(action.arguments.trim())?.[1]
+        : undefined;
+    const wscriptLauncher =
+      action &&
+      ["wscript.exe", getWindowsSystem32ExePath("wscript.exe", env).toLowerCase()].includes(
+        action.path.toLowerCase(),
+      )
+        ? /^"([^"%\r\n]+\.vbs)"$/i.exec(action.arguments.trim())?.[1]
+        : undefined;
+    const registeredLauncher = cmdLauncher ?? wscriptLauncher;
+    const directExecutable = action && !registeredLauncher && /\.exe$/i.test(action.path);
+    if (action && !directExecutable && !registeredLauncher && action.arguments.trim()) {
       throw new Error("Scheduled Task launcher arguments cannot be inspected");
     }
     const captureLaunchers = async (onContent?: LauncherContentObserver) =>
@@ -356,7 +369,7 @@ async function readWindowsTaskCommand(
               ...(await readTaskLauncher(startupEntryPath, onContent, true, deadline)),
             },
           ]
-        : readTaskLaunchers(env, action?.path, onContent, deadline);
+        : readTaskLaunchers(env, registeredLauncher ?? action?.path, onContent, deadline);
     const launchers =
       (registered && !directExecutable) || startupEntryPath !== undefined
         ? await captureLaunchers(options?.onLauncherContent)
@@ -437,6 +450,9 @@ async function readWindowsTaskCommand(
         break;
       }
       if (lower === "@echo off") {
+        continue;
+      }
+      if (line === DIRECT_TASK_LAUNCHER_MARKER) {
         continue;
       }
       if (lower.startsWith("set ")) {
@@ -590,6 +606,10 @@ export function buildTaskScript({
     environment?.OPENCLAW_SERVICE_KIND === "gateway"
       ? [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
       : programArguments;
+  if (environment?.OPENCLAW_SERVICE_KIND === "gateway") {
+    // Legacy VBS launchers supply their own outer owner; direct tasks own CMD.
+    lines.push(DIRECT_TASK_LAUNCHER_MARKER);
+  }
   lines.push(
     `${commandArguments.map((argument) => quoteCmdScriptArg(argument)).join(" ")} ${STDIN_NUL_REDIRECT}`,
   );
