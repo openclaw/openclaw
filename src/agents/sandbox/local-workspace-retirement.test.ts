@@ -7,6 +7,8 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.j
 import { BROWSER_BRIDGES, type CachedBrowserBridge } from "./browser-bridges.js";
 import * as engine from "./container-engine.js";
 import { quiesceLocalWorkspace } from "./local-workspace-quiescence.js";
+import { removeSandboxRuntimeGeneration } from "./manage.js";
+import * as target from "./podman-runtime.js";
 import * as registry from "./registry.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -235,3 +237,32 @@ it.each(["container", "browser"] as const)(
     expect(await h.rows()).toEqual([]);
   },
 );
+
+it("refuses direct foreground retirement before any target probe or physical removal", async () => {
+  const command = vi.spyOn(engine, "execContainer");
+  const validate = vi.spyOn(target, "validateSandboxContainerEngineTarget");
+  await expect(
+    removeSandboxRuntimeGeneration({
+      runtime: {
+        kind: "container",
+        entry: {
+          ...entry,
+          foreground: {
+            runId: "run",
+            instanceId: "instance",
+            engineIdentity: { kind: "docker", id: "daemon" },
+            createAttempted: true,
+            startAttempted: true,
+            containerId: oldId,
+          },
+        },
+      },
+      engine: engine.DOCKER_SANDBOX_ENGINE,
+      id: oldId,
+      bridges: [],
+      assertCurrent: () => {},
+    }),
+  ).rejects.toThrow("confirmed owner retirement");
+  expect(validate).not.toHaveBeenCalled();
+  expect(command).not.toHaveBeenCalled();
+});

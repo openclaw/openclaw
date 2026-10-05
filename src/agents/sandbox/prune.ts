@@ -68,6 +68,11 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
   const now = Date.now();
   const registry = await params.read();
   for (const entry of registry.entries) {
+    // Foreground receipts are retired only by their exact allocation owner;
+    // age-based pruning cannot prove process extinction after a Gateway crash.
+    if (entry.foreground) {
+      continue;
+    }
     if (!shouldPruneSandboxEntry(resolveEntryPruneConfig(params.config, entry), now, entry)) {
       continue;
     }

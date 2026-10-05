@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH } from "./config-hash.js";
 import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import { createSandboxContainerTestHarness } from "./docker.create.test-helpers.js";
+import { resolvePodmanSandboxConfigHash } from "./podman-runtime.js";
 import { collectDockerFlagValues } from "./test-args.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
@@ -20,6 +21,86 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     computeTestSandboxHash,
     ensureSandboxCreateCallForTest,
   } = harness;
+
+  it.each([
+    ["docker", "cold"],
+    ["docker", "stopped"],
+    ["podman", "cold"],
+    ["podman", "stopped"],
+  ] as const)(
+    "refuses to replace or restart a ready foreground %s allocation (%s)",
+    async (backend, state) => {
+      const workspaceDir = tempDirs.make("openclaw-foreground-reuse-");
+      const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`], "rw", {});
+      cfg.backend = backend;
+      const genericHash = await computeTestSandboxHash({
+        docker: cfg.docker,
+        dockerEnvPolicyEpoch: harness.resolveDockerEnvPolicyEpoch(cfg.docker.env),
+        workspaceAccess: cfg.workspaceAccess,
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+        createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+      });
+      const currentHash =
+        backend === "podman"
+          ? resolvePodmanSandboxConfigHash({
+              genericConfigHash: genericHash,
+              configuredUser: Boolean(cfg.docker.user),
+              dockerTmpfsSource: cfg.dockerTmpfsSource,
+            })
+          : genericHash;
+      spawnState.labelHash = state === "cold" ? "stale-hash" : currentHash;
+      spawnState.inspectRunning = state === "cold";
+      registryMocks.readRegistryEntry.mockResolvedValue({
+        containerName: backend === "podman" ? "oc-test-podman-shared" : "oc-test-shared",
+        backendId: backend,
+        backendTarget: { key: "local", globalArgs: [] },
+        sessionKey: "shared",
+        workspaceDir,
+        createdAtMs: 1,
+        lastUsedAtMs: 0,
+        image: cfg.docker.image,
+        configHash: spawnState.labelHash,
+        runtimeState: "ready",
+        foreground: {
+          runId: "run",
+          instanceId: "instance",
+          engineIdentity:
+            backend === "docker"
+              ? { kind: "docker", id: "daemon" }
+              : {
+                  kind: "podman",
+                  graphRoot: "/storage/graph",
+                  runRoot: "/run/containers",
+                  driver: "overlay",
+                  rootless: true,
+                  idMappings: { uidmap: [], gidmap: [] },
+                },
+          createAttempted: true,
+          startAttempted: true,
+          containerId: "c".repeat(64),
+        },
+      });
+      await expect(
+        harness.ensureSandboxContainer({
+          scopeKey: "shared",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          cfg,
+          ...(backend === "podman" ? { engine: harness.PODMAN_SANDBOX_ENGINE } : {}),
+        }),
+      ).rejects.toThrow("confirmed owner retirement");
+      expect(
+        spawnState.calls.some((call) =>
+          ["rm", "start", "create", "exec"].includes(call.args[0] ?? ""),
+        ),
+      ).toBe(false);
+      expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
+      expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+      expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
+    },
+  );
 
   it("serializes concurrent provisioning for one container", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-mounts-");

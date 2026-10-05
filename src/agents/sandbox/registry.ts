@@ -5,7 +5,8 @@
  */
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { withFileLock } from "../../infra/file-lock.js";
+import { extractErrorCode } from "../../infra/errors.js";
+import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import {
@@ -19,6 +20,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   assertSandboxRegistryReservationCurrent,
+  assertForegroundSandboxReservationCurrent,
   browserEntryToRow,
   containerEntryToRow,
   insertSandboxRegistryRowInDatabase,
@@ -130,6 +132,21 @@ export async function updateRegistry(entry: SandboxRegistryEntry) {
   await writeRegistry({ operation: "update", entry });
 }
 
+export async function recordForegroundSandboxReceipt(
+  previous: SandboxRegistryEntry,
+  entry: SandboxRegistryEntry,
+) {
+  await writeRegistry({ operation: "foreground-record", previous, entry });
+}
+
+export async function assertForegroundSandboxRegistryEntryCurrent(entry: SandboxRegistryEntry) {
+  assertForegroundSandboxReservationCurrent(await readRegistryEntry(entry.containerName), entry);
+}
+
+export async function retireForegroundSandboxRegistryEntry(entry: SandboxRegistryEntry) {
+  await writeRegistry({ operation: "foreground-retire", entry });
+}
+
 /** Removes one sandbox runtime registry entry by container name. */
 export async function removeRegistryEntry(
   containerName: string,
@@ -159,6 +176,9 @@ export function reserveSandboxRegistryEntry(candidate: SandboxRegistryEntry): Sa
     ).rows;
     const existing = rows.map(rowToContainerEntry).find((entry) => entry !== null);
     if (existing) {
+      if (existing.foreground) {
+        throw new Error("Foreground sandbox cannot be reused by another execution owner.");
+      }
       assertSandboxRegistryReservationCurrent(existing, candidate);
       if (!existing.runtimeState || !existing.workspaceDir) {
         existing.runtimeState ??= "pending";
@@ -207,16 +227,32 @@ export async function withSandboxRegistryEntryLock<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   const key = createHash("sha256").update(entry.containerName).digest("hex");
-  return await withFileLock(
-    `${resolveOpenClawStateSqlitePath()}.sandbox-${key}`,
-    {
-      // Cover provider warmup (10 minutes), inspection, and cleanup contention.
-      retries: { retries: 9000, factor: 1, minTimeout: 100, maxTimeout: 100 },
-      stale: 0,
-      staleRecovery: "remove-if-definitely-stale",
-    },
-    operation,
-  );
+  try {
+    return await withFileLock(
+      `${resolveOpenClawStateSqlitePath()}.sandbox-${key}`,
+      {
+        // Ordinary lifecycle waits cover provider warmup. Foreground requests must
+        // not queue behind another turn's lifetime, including while Stop is joining.
+        retries: {
+          retries: entry.foreground ? 0 : 9000,
+          factor: 1,
+          minTimeout: 100,
+          maxTimeout: 100,
+        },
+        stale: 0,
+        staleRecovery: "remove-if-definitely-stale",
+      },
+      operation,
+    );
+  } catch (error) {
+    if (entry.foreground && extractErrorCode(error) === FILE_LOCK_TIMEOUT_ERROR_CODE) {
+      throw new Error(
+        "A previous foreground request still owns this workspace. Stop it or wait for cleanup, then send a new message.",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
 }
 
 /** Persist removal intent before waiting for provisioning, and retain failed cleanup for retry. */
@@ -231,6 +267,9 @@ export async function removeSandboxRegistryRuntime(
   const selected = runOpenClawStateWriteTransaction(({ db }) => {
     const row = readSandboxRegistryRowInDatabase(db, "container", entry.containerName);
     const current = row ? rowToContainerEntry(row) : null;
+    if (current?.foreground) {
+      throw new Error("Foreground sandbox requires confirmed owner retirement before removal.");
+    }
     if (
       !current ||
       current.backendId !== entry.backendId ||
@@ -338,6 +377,9 @@ export function removeSandboxRegistryGeneration(
     assertCurrent();
     const row = readSandboxRegistryRowInDatabase(db, kind, entry.containerName);
     const current = row && (kind === "browser" ? rowToBrowserEntry(row) : rowToContainerEntry(row));
+    if (current && "foreground" in current && current.foreground) {
+      throw new Error("Foreground sandbox requires confirmed owner retirement before removal.");
+    }
     if (!current || !sameSandboxRegistryGeneration(current, entry)) {
       throw new Error("Sandbox runtime generation changed during retirement");
     }

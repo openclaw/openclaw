@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   command: vi.fn(),
+  validateTarget: vi.fn(),
   current: vi.fn(),
   read: vi.fn(),
   browsers: vi.fn(),
@@ -16,7 +17,7 @@ vi.mock("./docker.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker" },
   bindPodmanSandboxEngine: () => ({ id: "podman" }),
   execContainer: mocks.command,
-  validateSandboxContainerEngineTarget: async () => {},
+  validateSandboxContainerEngineTarget: mocks.validateTarget,
 }));
 import { quiesceLocalWorkspace } from "./local-workspace-quiescence.js";
 const id = "a".repeat(64);
@@ -28,6 +29,7 @@ const entry = {
 };
 beforeEach(() => {
   mocks.command.mockReset();
+  mocks.validateTarget.mockReset().mockResolvedValue(undefined);
   mocks.current.mockReset();
   mocks.read.mockReset().mockResolvedValue({ entries: [entry] });
   mocks.browsers.mockReset().mockResolvedValue({ entries: [] });
@@ -254,3 +256,35 @@ it.each([true, false])(
     expect(mocks.command.mock.calls.some((call) => call[1][0] === "unpause")).toBe(false);
   },
 );
+
+it("rejects the entire selection before probing or pausing any foreground allocation", async () => {
+  mocks.read.mockResolvedValue({
+    entries: [
+      entry,
+      {
+        ...entry,
+        containerName: "foreground-owned",
+        foreground: {
+          runId: "run",
+          instanceId: "instance",
+          engineIdentity: { kind: "docker", id: "daemon" },
+          createAttempted: true,
+          startAttempted: true,
+          containerId: id,
+        },
+      },
+    ],
+  });
+  const persist = vi.fn();
+  await expect(
+    quiesceLocalWorkspace({
+      workspaceDir: entry.workspaceDir,
+      retained: [],
+      persist,
+      assertCurrent: () => {},
+    }),
+  ).rejects.toThrow("confirmed owner retirement");
+  expect(mocks.validateTarget).not.toHaveBeenCalled();
+  expect(mocks.command).not.toHaveBeenCalled();
+  expect(persist).not.toHaveBeenCalled();
+});

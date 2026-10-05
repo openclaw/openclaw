@@ -123,6 +123,9 @@ export async function removeSandboxRuntimeGeneration(params: {
   assertCurrent: () => void;
 }): Promise<void> {
   const { runtime, engine, id } = params;
+  if (runtime.kind === "container" && runtime.entry.foreground) {
+    throw new Error("Foreground sandbox requires confirmed owner retirement before removal.");
+  }
   const assertCurrent = () => {
     params.assertCurrent();
     if (

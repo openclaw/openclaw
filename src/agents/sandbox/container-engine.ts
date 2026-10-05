@@ -3,9 +3,93 @@
  */
 import { createAbortError } from "../../infra/abort-signal.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { resolveExecutableFromPathEnv } from "../../infra/executable-path.js";
+import {
+  runOutsideCommandProcessScope,
+  withCommandProcessScope,
+} from "../../process/exec-spawn.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
+
+// Cleanup has its own bounded process scope, independent of revoked turn authority.
+const NATIVE_SANDBOX_SETTLEMENT_MS = 30_000;
+
+const nativeBinding = Symbol("native sandbox transport");
+type NativeBinding = {
+  executable: string;
+  cwd: string;
+  env: Readonly<NodeJS.ProcessEnv>;
+  target?: Readonly<{ key: string; globalArgs: readonly string[] }>;
+};
+type BoundEngine = SandboxContainerEngine & { [nativeBinding]: NativeBinding };
+
+function isBoundEngine(engine: SandboxContainerEngine): engine is BoundEngine {
+  return nativeBinding in engine;
+}
+
+/** Restart recovery can only retire recorded resources, never launch new work. */
+export function captureNativeSandboxCleanupEngine(
+  engine: SandboxContainerEngine,
+): SandboxContainerEngine {
+  const cwd = process.cwd();
+  const env = Object.freeze({ ...process.env });
+  const executable = resolveExecutableFromPathEnv(engine.command, env.PATH ?? "", env, {
+    cwd,
+    useCache: false,
+  });
+  if (!executable) {
+    throw new Error("Native sandbox executable could not be captured.");
+  }
+  return Object.freeze({
+    ...engine,
+    globalArgs: Object.freeze([...(engine.globalArgs ?? [])]),
+    [nativeBinding]: Object.freeze({ executable, cwd, env }),
+  });
+}
+
+export function bindNativeSandboxEngineTarget(
+  engine: SandboxContainerEngine,
+  target: SandboxContainerEngineTarget,
+): SandboxContainerEngine {
+  if (!isBoundEngine(engine)) {
+    throw new Error("Native sandbox transport is not captured.");
+  }
+  const flag = engine.id === "docker" ? "--host" : "--url";
+  if (
+    !(engine.id === "podman" && target.key === "local" && target.globalArgs.length === 0) &&
+    (target.globalArgs.length !== 2 ||
+      target.globalArgs[0] !== flag ||
+      !target.globalArgs[1]?.startsWith("unix:///"))
+  ) {
+    throw new Error(
+      "Foreground sandbox requires local Podman or a captured Unix service endpoint.",
+    );
+  }
+  const globalArgs = Object.freeze([...target.globalArgs]);
+  const env = { ...engine[nativeBinding].env };
+  if (engine.id === "docker") {
+    delete env.DOCKER_CONTEXT;
+    delete env.DOCKER_HOST;
+  } else {
+    delete env.CONTAINER_HOST;
+    delete env.CONTAINER_CONNECTION;
+  }
+  return Object.freeze({
+    ...engine,
+    globalArgs: engine.id === "podman" && target.key === "local" ? ["--remote=false"] : globalArgs,
+    [nativeBinding]: Object.freeze({
+      ...engine[nativeBinding],
+      env: Object.freeze(env),
+      target: Object.freeze({ key: target.key, globalArgs }),
+    }),
+  });
+}
+
+export function readNativeSandboxEngineTarget(engine: SandboxContainerEngine) {
+  const target = isBoundEngine(engine) ? engine[nativeBinding].target : undefined;
+  return target ? { key: target.key, globalArgs: [...target.globalArgs] } : undefined;
+}
 
 export type ExecContainerRawOptions = {
   allowFailure?: boolean;
@@ -51,16 +135,33 @@ export async function execContainerRaw(
   args: string[],
   opts?: ExecContainerRawOptions,
 ): Promise<ExecDockerRawResult> {
+  return await runContainerRaw(engine, args, opts);
+}
+
+async function runContainerRaw(
+  engine: SandboxContainerEngine,
+  args: string[],
+  opts?: ExecContainerRawOptions,
+  cleanup = false,
+): Promise<ExecDockerRawResult> {
+  const binding = isBoundEngine(engine) ? engine[nativeBinding] : undefined;
+  if (binding && !cleanup) {
+    throw new Error("Cleanup-only sandbox transport cannot execute work.");
+  }
   let result;
   try {
-    result = await spawnCommand([engine.command, ...(engine.globalArgs ?? []), ...args], {
-      cancelSignal: opts?.signal,
-      encoding: "buffer",
-      input: opts?.input ?? Buffer.alloc(0),
-      maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
-      reject: false,
-      stripFinalNewline: false,
-    });
+    result = await spawnCommand(
+      [binding?.executable ?? engine.command, ...(engine.globalArgs ?? []), ...args],
+      {
+        ...(binding ? { baseEnv: binding.env, cwd: binding.cwd } : {}),
+        cancelSignal: opts?.signal,
+        encoding: "buffer",
+        input: opts?.input ?? Buffer.alloc(0),
+        maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+        reject: false,
+        stripFinalNewline: false,
+      },
+    );
   } catch (error) {
     if (opts?.signal?.aborted) {
       throw createAbortError("Aborted");
@@ -107,6 +208,26 @@ export async function execContainerRaw(
     );
   }
   return { stdout, stderr, code: exitCode };
+}
+
+/** Cleanup never re-enters the revoked producer set it is joining. */
+export async function runNativeSandboxCleanup<T>(
+  engine: SandboxContainerEngine,
+  run: (
+    exec: (args: string[], allowFailure?: boolean) => Promise<ExecDockerRawResult>,
+  ) => Promise<T>,
+): Promise<T> {
+  if (!isBoundEngine(engine) || !engine[nativeBinding].target) {
+    throw new Error("Native sandbox cleanup requires its captured target and custody.");
+  }
+  const signal = AbortSignal.timeout(NATIVE_SANDBOX_SETTLEMENT_MS);
+  return await runOutsideCommandProcessScope(() =>
+    withCommandProcessScope(
+      () =>
+        run((args, allowFailure) => runContainerRaw(engine, args, { signal, allowFailure }, true)),
+      signal,
+    ),
+  );
 }
 
 export async function execContainer(

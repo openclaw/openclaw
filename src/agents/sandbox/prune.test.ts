@@ -138,6 +138,33 @@ describe("maybePruneSandboxes", () => {
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("sandbox-1");
   });
 
+  it("preserves aged foreground receipts without invoking ordinary removal", async () => {
+    registryMocks.readRegistry.mockResolvedValue({
+      entries: [
+        {
+          containerName: "foreground",
+          backendId: "docker",
+          sessionKey: "agent:main:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "fixture",
+          foreground: {
+            runId: "run",
+            instanceId: "instance",
+            engineIdentity: { kind: "docker", id: "daemon" },
+            createAttempted: true,
+            startAttempted: true,
+            containerId: "a".repeat(64),
+          },
+        },
+      ],
+    });
+    await maybePruneSandboxes(buildPruneConfig());
+    expect(backendMocks.getSandboxBackendManager).not.toHaveBeenCalled();
+    expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
+    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+  });
+
   it("uses each registry owner's prune policy for containers and browsers", async () => {
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now);

@@ -445,6 +445,11 @@ async function ensureSandboxContainerLifecycle(
     : configuredEngine;
   params.assertCurrent?.();
   let existingRegistryEntry = await readRegistryEntry(containerName);
+  // Built-in engines bypass generic reservation; fence their retained native
+  // owner before config replacement or restart can touch the physical allocation.
+  if (existingRegistryEntry?.foreground) {
+    throw new Error("Foreground sandbox requires confirmed owner retirement before reuse.");
+  }
   if (
     existingRegistryEntry?.runtimeState === "removing" ||
     existingRegistryEntry?.runtimeState === "removing-pending"

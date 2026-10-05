@@ -77,6 +77,13 @@ export async function quiesceLocalWorkspace(params: {
         : [],
   }));
   params.assertCurrent();
+  // Reject the whole selection before touching any runtime: a foreground
+  // receipt can only be retired by its exact native allocation owner.
+  if (selected.some(({ runtime }) => runtime.kind === "container" && runtime.entry.foreground)) {
+    throw new Error(
+      "Foreground sandbox requires confirmed owner retirement before workspace settlement.",
+    );
+  }
   let paused = [...params.retained];
   const releases: Array<() => Promise<void>> = [];
   const retirements: Array<() => Promise<void>> = [];

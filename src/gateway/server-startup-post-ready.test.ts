@@ -141,3 +141,76 @@ describe("Gateway post-ready startup work", () => {
     },
   );
 });
+
+it("holds request dispatch until prior foreground native receipts settle", async () => {
+  const port = await getFreePort();
+  const state = await createOpenClawTestState({
+    label: "gateway-foreground-startup",
+    layout: "home",
+    env: {
+      OPENCLAW_GATEWAY_PASSWORD: undefined,
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_CRON: "1",
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+      OPENCLAW_SKIP_PROVIDERS: "1",
+      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+      VITEST: "1",
+    },
+  });
+  const started = createDeferred();
+  const settle = createDeferred();
+  let runtime:
+    | Parameters<
+        typeof import("./server-startup-finish.js").finishGatewayStartup
+      >[0]["kernelRuntime"]
+    | undefined;
+  let server: GatewayServer | undefined;
+  let pending: Promise<GatewayServer> | undefined;
+  try {
+    const token = "foreground-startup-fixture-token";
+    await state.writeConfig({
+      gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
+      plugins: { enabled: false },
+      discovery: { mdns: { mode: "off" } },
+    });
+    state.applyEnv();
+    const native = await import("../agents/sandbox/docker-native-custody.js");
+    vi.spyOn(native, "reconcileForegroundSandboxesAtStartup").mockImplementation(async () => {
+      started.resolve();
+      await settle.promise;
+      return [];
+    });
+    const startup = await import("./server-startup-finish.js");
+    const finish = startup.finishGatewayStartup;
+    vi.spyOn(startup, "finishGatewayStartup").mockImplementation(async (params) => {
+      runtime = params.kernelRuntime;
+      return await finish(params);
+    });
+    const { startGatewayServerCore } = await import("./server-start.js");
+    pending = startGatewayServerCore(port, {
+      auth: { mode: "token", token },
+      bind: "loopback",
+      controlUiEnabled: false,
+      sidecarStartup: "defer",
+    });
+    await started.promise;
+    expect(runtime?.startupState.dispatchReady).toBe(false);
+    settle.resolve();
+    server = await pending;
+    expect(runtime?.startupState.dispatchReady).toBe(true);
+  } finally {
+    settle.resolve();
+    if (pending && !server) {
+      server = await pending;
+    }
+    try {
+      await server?.close();
+    } finally {
+      vi.restoreAllMocks();
+      await state.cleanup();
+    }
+  }
+});

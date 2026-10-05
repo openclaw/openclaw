@@ -186,6 +186,16 @@ export async function finishGatewayStartup(params: {
     }),
   );
   await startupTrace.measure("http.listen", () => startListening());
+  // Prior foreground native work must be reconciled before fresh requests or
+  // recovery dispatch can run. Failed receipts remain quarantined by their owner.
+  await startupTrace.measure("runtime.foreground-reconciliation", async () => {
+    const { reconcileForegroundSandboxesAtStartup } =
+      await import("../agents/sandbox/docker-native-custody.js");
+    const failures = await reconcileForegroundSandboxesAtStartup();
+    for (const failure of failures) {
+      log.warn(`Foreground sandbox startup cleanup remains unconfirmed: ${String(failure)}`);
+    }
+  });
   kernel.setDispatchReady(true);
   startupTrace.mark("http.bound");
   // Health can answer as soon as the listener binds. Discovery, remote-skill

@@ -1,5 +1,28 @@
 import type { SandboxContainerEngineTarget } from "./container-engine.js";
 
+export type ForegroundSandboxReceipt = {
+  runId: string;
+  instanceId: string;
+  engineIdentity:
+    | { kind: "docker"; id: string }
+    | {
+        kind: "podman";
+        graphRoot: string;
+        runRoot: string;
+        driver: string;
+        rootless: boolean;
+        idMappings: Record<string, unknown>;
+      };
+  createAttempted: boolean;
+  startAttempted: boolean;
+  /** Live owner observed revocation after intent persisted but before native dispatch. */
+  createNotDispatched?: true;
+  startNotDispatched?: true;
+  containerId?: string;
+  namespace?: string;
+  cleanupUncertain?: true;
+};
+
 export type SandboxRegistryEntry = {
   containerName: string;
   backendId?: string;
@@ -15,6 +38,8 @@ export type SandboxRegistryEntry = {
   workspaceDir?: string;
   /** Provisioning and removal state for backends that retain unfinished allocations. */
   runtimeState?: "pending" | "ready" | "removing" | "removing-pending";
+  /** Exact foreground allocation receipt; only confirmed retirement can remove it. */
+  foreground?: ForegroundSandboxReceipt;
 };
 
 export type SandboxRegistry = {
