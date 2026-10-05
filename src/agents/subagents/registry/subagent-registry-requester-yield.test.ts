@@ -9,6 +9,7 @@ import {
   finalizeRequesterFinalAttachment,
   registerRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   adoptSubagentRunForRequesterTurnInRuns,
   listUnsettledRequesterChildrenInRuns,
@@ -282,6 +283,151 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
 });
 
 describe("settleRequesterTurnAfterSessionSpawns", () => {
+  it("rejects a native failed-delete category change after initial cohort selection", async () => {
+    const child: SubagentRunRecord = {
+      ...makeRun("category-drift-child"),
+      cleanup: "delete",
+      delivery: { status: "failed", lastError: "original delivery suppressed" },
+      archiveAtMs: 62_100,
+      deleteCleanupTarget: { sessionId: "original-child", lifecycleRevision: "original-revision" },
+      deleteCleanupDispatchedAt: 2_050,
+    };
+    const sibling = makeRun("category-drift-sibling");
+    const runs = new Map([
+      [child.runId, child],
+      [sibling.runId, sibling],
+    ]);
+    saveSubagentRegistryChangesToSqlite(runs, [...runs.keys()]);
+    const beforeWrite = vi.fn();
+    const schedule = vi.fn();
+    const transfer = createRequesterInitialTransferFixture(runs, beforeWrite);
+    let afterDrift: Map<string, SubagentRunRecord> | undefined;
+    let nativeAfterDrift: Map<string, SubagentRunRecord> | undefined;
+    await expect(
+      settleRuns([child, sibling], {
+        runs,
+        schedule,
+        transfer: async (params) => {
+          // Real native publication acknowledges completed cleanup and changes only the completion category, not cohort/source identity.
+          await mutateSubagentRuns(
+            [child.runId],
+            (rows) => {
+              const closed = structuredClone(rows.get(child.runId)!);
+              closed.cleanupCompletedAt = 2_100;
+              return { value: undefined, postimages: new Map([[closed.runId, closed]]) };
+            },
+            { runs },
+          );
+          afterDrift = structuredClone(runs);
+          nativeAfterDrift = loadSubagentRegistryFromSqlite();
+          await transfer(params);
+        },
+      }),
+    ).rejects.toThrow("Requester cohort membership changed before admission");
+    expect(afterDrift).toBeDefined();
+    expect(beforeWrite).not.toHaveBeenCalled();
+    expect(schedule).not.toHaveBeenCalled();
+    expect(runs).toEqual(afterDrift);
+    expect(loadSubagentRegistryFromSqlite()).toEqual(nativeAfterDrift);
+    expect(runs.get(child.runId)?.requesterTurnRunId).toBe(REQUESTER_TURN);
+    expect(runs.get(sibling.runId)?.requesterTurnRunId).toBe(REQUESTER_TURN);
+    expect(runs.get(child.runId)?.requesterSettleWake).toBeUndefined();
+    expect(runs.get(sibling.runId)?.requesterSettleWake).toBeUndefined();
+  });
+
+  it.each(
+    [false, true].flatMap((requesterYielded) =>
+      (["complete", "omitted", "changed"] as const).map((receipt) => ({
+        requesterYielded,
+        receipt,
+      })),
+    ),
+  )(
+    "acknowledges an all-closed delete cohort without a wake (yielded=$requesterYielded, receipt=$receipt)",
+    async ({ requesterYielded, receipt }) => {
+      const children = ["closed-first", "closed-last"].map((runId, index) =>
+        Object.assign(makeRun(runId, requesterYielded), {
+          cleanup: "delete" as const,
+          cleanupCompletedAt: 2_100 + index,
+          archiveAtMs: 62_100 + index,
+          deleteCleanupTarget: {
+            sessionId: `original-${runId}`,
+            lifecycleRevision: `revision-${runId}`,
+          },
+          deleteCleanupDispatchedAt: 2_050 + index,
+          delivery: { status: "failed" as const, lastError: "original delivery suppressed" },
+          requesterSettleWake: { status: "pending" as const, attemptCount: 0 },
+          retireAfterRequesterTurn: true,
+        }),
+      );
+      const requester: SubagentRunRecord = {
+        ...makeRun(REQUESTER_TURN, false),
+        childSessionKey: REQUESTER,
+        requesterSessionKey: "agent:main:outer-requester",
+        requesterTurnRunId: undefined,
+        execution: { status: "running", startedAt: 1_000 },
+        delivery: { status: "pending" },
+      };
+      const runs = new Map<string, SubagentRunRecord>([
+        ...children.map((entry) => [entry.runId, entry] as const),
+        [requester.runId, requester],
+      ]);
+      saveSubagentRegistryChangesToSqlite(runs, [...runs.keys()]);
+      const before = structuredClone(runs);
+      const nativeBefore = loadSubagentRegistryFromSqlite();
+      const receipts = children.map(accepted);
+      if (receipt === "omitted") {
+        receipts.pop();
+      } else if (receipt === "changed") {
+        receipts[0]!.childSessionKey = "agent:main:subagent:unrelated";
+      }
+      const beforeWrite = vi.fn();
+      const schedule = vi.fn();
+      expect(
+        await settleRuns(children, {
+          runs,
+          requesterYielded,
+          acceptedSessionSpawns: receipts,
+          beforeWrite,
+          schedule,
+        }),
+      ).toBe(receipt === "complete");
+      expect(schedule).not.toHaveBeenCalled();
+      expect(runs.get(requester.runId)).toEqual(before.get(requester.runId));
+      expect(runs.get(requester.runId)?.pauseReason).toBeUndefined();
+      expect(loadSubagentRegistryFromSqlite().get(requester.runId)).toEqual(
+        nativeBefore.get(requester.runId),
+      );
+      if (receipt !== "complete") {
+        expect(beforeWrite).not.toHaveBeenCalled();
+        expect(runs).toEqual(before);
+        expect(loadSubagentRegistryFromSqlite()).toEqual(nativeBefore);
+        return;
+      }
+      expect(beforeWrite).toHaveBeenCalled();
+      const native = loadSubagentRegistryFromSqlite();
+      for (const original of children) {
+        const current = runs.get(original.runId)!;
+        const stored = native.get(original.runId)!;
+        const retained = {
+          cleanup: "delete",
+          cleanupCompletedAt: original.cleanupCompletedAt,
+          archiveAtMs: original.archiveAtMs,
+          deleteCleanupTarget: original.deleteCleanupTarget,
+          deleteCleanupDispatchedAt: original.deleteCleanupDispatchedAt,
+          delivery: original.delivery,
+        };
+        for (const entry of [current, stored]) {
+          expect(entry).toMatchObject(retained);
+          expect(entry.requesterTurnRunId).toBeUndefined();
+          expect(entry.requesterTurnYielded).toBeUndefined();
+          expect(entry.requesterSettleWake).toBeUndefined();
+          expect(entry.retireAfterRequesterTurn).toBeUndefined();
+        }
+      }
+    },
+  );
+
   it.each([false, true])(
     "publishes a nested requester's pause with its wake batch (plan rejection: %s)",
     async (rejectPlan) => {

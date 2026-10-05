@@ -56,6 +56,8 @@ import { testing } from "./subagent-registry.test-helpers.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 import { createSuspendedDeleteNativeFixture } from "./subagent-suspended-delete-native.test-support.js";
 
+vi.mock("../announce/subagent-announce-delivery.js", { spy: true });
+
 vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 
 vi.mock("./subagent-registry-lifecycle-announce-cleanup.js", { spy: true });
@@ -93,7 +95,12 @@ async function registerCompletion(
   runId: string,
   options: {
     holdForRequester?: boolean;
+    expectsCompletionMessage?: boolean;
     cleanup?: "keep" | "delete";
+    collect?: boolean;
+    groupId?: string;
+    completionRequesterSessionId?: string;
+    completionRequesterLifecycleRevision?: string;
     originalSessionIdentity?: typeof originalPhysicalTarget;
     gatewayContextResolver?: Parameters<typeof registerSubagentRun>[0]["gatewayContextResolver"];
   } = {},
@@ -121,8 +128,12 @@ async function registerCompletion(
     requesterDisplayKey: "main",
     task: "finish ordinary cleanup",
     cleanup: options.cleanup ?? "keep",
-    expectsCompletionMessage: options.holdForRequester === true,
+    collect: options.collect,
+    groupId: options.groupId,
+    expectsCompletionMessage: options.expectsCompletionMessage ?? options.holdForRequester === true,
     completionTarget: options.holdForRequester ? "parent" : undefined,
+    completionRequesterSessionId: options.completionRequesterSessionId,
+    completionRequesterLifecycleRevision: options.completionRequesterLifecycleRevision,
     requesterTurnRunId: options.holdForRequester ? "held-requester-turn" : undefined,
   });
   return { runId, childSessionKey };

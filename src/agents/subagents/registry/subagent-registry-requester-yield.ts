@@ -7,6 +7,7 @@ import {
   type PreparedRequesterCronAuthority,
 } from "../requester-cron-authority.js";
 import { promoteRequesterFinalAttachment } from "../requester-final-attachment.js";
+import { isRetainedFailedDeleteCompletion } from "./subagent-delivery-state.js";
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
 import {
   mutateSubagentRuns,
@@ -221,12 +222,7 @@ function selectRequesterTurnChildren(
       entry.requesterSessionKey === requesterSessionKey &&
       (!requesterAgentId || entry.requesterAgentId === requesterAgentId) &&
       entry.requesterTurnRunId === requesterTurnRunId &&
-      entry.expectsCompletionMessage === true &&
-      !(
-        entry.cleanup === "delete" &&
-        typeof entry.cleanupCompletedAt === "number" &&
-        entry.delivery?.status === "failed"
-      ),
+      entry.expectsCompletionMessage === true,
   );
 }
 
@@ -340,6 +336,10 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     params.requesterAgentId,
     requesterTurnRunId,
   );
+  // A later cleanup must reject admission rather than change this observed cohort.
+  const closedRunIds = new Set(
+    selectedEntries.filter(isRetainedFailedDeleteCompletion).map((entry) => entry.runId),
+  );
   const requiredRunIds = new Set(
     params.acceptedSessionSpawns
       .filter((spawn) => spawn.expectsCompletionMessage === true)
@@ -351,7 +351,9 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     if (
       !spawn ||
       entry.childSessionKey !== spawn.childSessionKey ||
-      (params.requesterYielded && entry.requesterTurnYielded !== true)
+      (params.requesterYielded &&
+        !closedRunIds.has(entry.runId) &&
+        entry.requesterTurnYielded !== true)
     ) {
       return false;
     }
@@ -363,7 +365,10 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     return false;
   }
 
-  const childRunIds = new Set(selectedEntries.map((entry) => entry.runId));
+  const claimedRunIds = new Set(selectedEntries.map((entry) => entry.runId));
+  const childRunIds = new Set(
+    selectedEntries.filter((entry) => !closedRunIds.has(entry.runId)).map((entry) => entry.runId),
+  );
   const batchRunIds = [...childRunIds].toSorted();
   let rearmGeneration: number | undefined;
   let needsCohortRelease = false;
@@ -382,11 +387,13 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     );
   const selectedRequester = params.runs.get(requesterTurnRunId);
   const selectedMembers =
-    ownsRequester(selectedRequester) && !childRunIds.has(selectedRequester.runId)
+    ownsRequester(selectedRequester) && !claimedRunIds.has(selectedRequester.runId)
       ? [...selectedEntries, selectedRequester]
       : selectedEntries;
   const children = (candidates: readonly SubagentRunRecord[]) =>
     candidates.filter((entry) => childRunIds.has(entry.runId));
+  const closedChildren = (candidates: readonly SubagentRunRecord[]) =>
+    candidates.filter((entry) => closedRunIds.has(entry.runId));
   const validateSelection = () => {
     const currentRequester = params.runs.get(requesterTurnRunId);
     if (
@@ -404,8 +411,12 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
       requesterTurnRunId,
     );
     if (
-      current.length !== childRunIds.size ||
-      current.some((entry) => !childRunIds.has(entry.runId))
+      current.length !== claimedRunIds.size ||
+      current.some(
+        (entry) =>
+          !claimedRunIds.has(entry.runId) ||
+          isRetainedFailedDeleteCompletion(entry) !== closedRunIds.has(entry.runId),
+      )
     ) {
       throw new SubagentRegistryMutationRejectedError(
         "Requester cohort membership changed before admission",
@@ -439,18 +450,33 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
       }
     },
     mutate: (members) => {
+      const claimed = members.filter((entry) => claimedRunIds.has(entry.runId));
       const entries = children(members);
-      for (const entry of entries) {
+      for (const entry of claimed) {
         const spawn = spawnsByRunId.get(entry.taskRunId ?? entry.runId);
         if (
           !spawn ||
           entry.childSessionKey !== spawn.childSessionKey ||
-          (params.requesterYielded && entry.requesterTurnYielded !== true)
+          isRetainedFailedDeleteCompletion(entry) !== closedRunIds.has(entry.runId) ||
+          (params.requesterYielded &&
+            !closedRunIds.has(entry.runId) &&
+            entry.requesterTurnYielded !== true)
         ) {
           throw new SubagentRegistryMutationRejectedError(
             "Requester spawn receipt lost its child owner",
           );
         }
+      }
+      // Acknowledge closed claims; keep failed delivery, deletion proof and archive intact.
+      for (const entry of closedChildren(members)) {
+        entry.requesterTurnRunId = undefined;
+        entry.requesterTurnYielded = undefined;
+        entry.requesterSettleWake = undefined;
+        entry.retireAfterRequesterTurn = undefined;
+      }
+      const retired = new Set<string>();
+      if (entries.length === 0) {
+        return retired;
       }
       const firstEntry = entries[0]!;
       const requester = members.find((entry) => entry.runId === requesterTurnRunId);
@@ -505,7 +531,6 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
           "superseded",
         );
       }
-      const retired = new Set<string>();
       if (params.requesterYielded && !requesterAlreadyDeliveredFinal && !preparedCohort) {
         rearmGeneration = nextRearmGeneration(entries);
         const progressOperationId = params.progressPresentation?.operationId;
@@ -609,7 +634,12 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     finish: (members) => {
       const entries = children(members);
       promoteFollowupYield({ requesterTurnRunId, entries, rearmGeneration });
-      promoteRequesterCronAuthority({ requesterTurnRunId, batch: entries, rearmGeneration });
+      promoteRequesterCronAuthority({
+        requesterTurnRunId,
+        batch: entries,
+        acknowledgedClosedEntries: closedChildren(members),
+        rearmGeneration,
+      });
       if (rearmGeneration !== undefined && params.requesterAgentId) {
         promoteRequesterFinalAttachment({
           requesterAgentId: params.requesterAgentId,

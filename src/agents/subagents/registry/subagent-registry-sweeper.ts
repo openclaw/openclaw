@@ -582,7 +582,7 @@ export function createSubagentRegistrySweeper(params: {
           if (!isCleanupCurrent(current, candidate) || !isCollectorArchiveReady(current, now)) {
             continue collectorGroups;
           }
-          if (!shouldSuppressSubagentRecoverySessionEffects(current)) {
+          if (shouldRunSweptSessionEffects(current)) {
             const sessionIdentity = cleanupIdentities.get(getSubagentRunRuntimeKey(candidate));
             try {
               const changed =

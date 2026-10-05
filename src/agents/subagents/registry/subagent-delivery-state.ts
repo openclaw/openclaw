@@ -243,6 +243,17 @@ export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">):
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
 }
 
+/** The failed completion remains readable after its original delete cleanup is terminal. */
+export function isRetainedFailedDeleteCompletion(entry: SubagentRunRecord): boolean {
+  return (
+    entry.cleanup === "delete" &&
+    typeof entry.cleanupCompletedAt === "number" &&
+    entry.execution.status === "terminal" &&
+    typeof entry.execution.endedAt === "number" &&
+    entry.delivery?.status === "failed"
+  );
+}
+
 /** A finished requester without its required message receipt must not execute again implicitly. */
 export function isCompletedRequesterDeliveryBlocked(
   entry: Pick<SubagentRunRecord, "delivery">,

@@ -1,8 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
+import { isRetainedFailedDeleteCompletion } from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
+  getSubagentRunRuntimeKey,
   isSameSubagentRun,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
@@ -228,10 +230,25 @@ export function isRequesterRetirementCustodyCurrent(
 export function sameRequesterSettleBatch(
   left: readonly SubagentRunRecord[],
   right: readonly SubagentRunRecord[],
+  acknowledgement?: {
+    closed: readonly SubagentRunRecord[];
+    runs: ReadonlyMap<string, SubagentRunRecord>;
+  },
 ): boolean {
   return (
     left.length === right.length &&
-    left.every((entry) => right.some((candidate) => isSameSubagentRunOwner(candidate, entry)))
+    left.every((entry) => right.some((candidate) => isSameSubagentRunOwner(candidate, entry))) &&
+    // Discharging claims additionally requires the complete native-published union.
+    (!acknowledgement ||
+      (new Set(right.map(getSubagentRunRuntimeKey)).size === right.length &&
+        right.every((entry) => acknowledgement.runs.get(entry.runId) === entry) &&
+        acknowledgement.closed.every(
+          (entry) =>
+            isRetainedFailedDeleteCompletion(entry) &&
+            entry.requesterTurnRunId === undefined &&
+            entry.requesterTurnYielded === undefined &&
+            entry.requesterSettleWake === undefined,
+        )))
   );
 }
 

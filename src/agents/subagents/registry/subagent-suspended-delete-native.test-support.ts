@@ -16,11 +16,17 @@ import {
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
+import * as announceDelivery from "../announce/subagent-announce-delivery.js";
 import {
   runSubagentStateWorkerOperation,
   type useSubagentControlFixture,
 } from "./subagent-control.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import {
+  adoptSubagentRunForRequesterTurn,
+  markRequesterTurnYielded,
+  settleRequesterAfterSessionSpawns,
+} from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import {
   parseSubagentRegistryWriteReceipt,
@@ -32,6 +38,13 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const nativeSessionsDelete = await vi.importActual<
   typeof import("../../../gateway/server-methods/sessions-delete.js")
 >("../../../gateway/server-methods/sessions-delete.js");
+
+const nativeAnnounce = await vi.importActual<typeof import("../announce/subagent-announce.js")>(
+  "../announce/subagent-announce.js",
+);
+const nativeWake = await vi.importActual<
+  typeof import("../announce/subagent-announce.requester-settle-wake.js")
+>("../announce/subagent-announce.requester-settle-wake.js");
 
 export function createSuspendedDeleteNativeFixture(
   fixture: ReturnType<typeof useSubagentControlFixture>,
@@ -186,8 +199,13 @@ export function createSuspendedDeleteNativeFixture(
     registerCompletion: (
       runId: string,
       options: {
-        cleanup: "delete";
-        holdForRequester: true;
+        cleanup?: "keep" | "delete";
+        holdForRequester?: boolean;
+        expectsCompletionMessage?: boolean;
+        collect?: boolean;
+        groupId?: string;
+        completionRequesterSessionId?: string;
+        completionRequesterLifecycleRevision?: string;
         originalSessionIdentity?: typeof originalPhysicalTarget;
         gatewayContextResolver: Parameters<
           (typeof import("./subagent-registry.js"))["registerSubagentRun"]
@@ -198,6 +216,246 @@ export function createSuspendedDeleteNativeFixture(
     updateRun: (runId: string, edit: (draft: SubagentRunRecord) => void) => Promise<void>;
   }) {
     const { testing, registerCompletion, completeRegistered, updateRun } = params;
+    it("archives a completed delete collector without reentering its retired Gateway or deleting a successor", async () => {
+      const gateway = installOwnedNativeDeleteGateway();
+      const groupId = "completed-delete-collector-group";
+      const run = await gateway.inScope(() =>
+        registerCompletion("completed-delete-collector", {
+          cleanup: "delete",
+          collect: true,
+          groupId,
+          originalSessionIdentity: originalPhysicalTarget,
+          gatewayContextResolver: gateway.resolveGatewayContext,
+        }),
+      );
+      // Only registration inputs are configured; the real terminal owner creates completion and bookkeeping.
+      expect(readNativeChildNode(run.childSessionKey)).toBeDefined();
+      expect(getGatewayContextResolver(subagentRuns.get(run.runId)!)).toBe(
+        gateway.resolveGatewayContext,
+      );
+      completeRegistered(run);
+      await fixture.settle();
+
+      const completed = subagentRuns.get(run.runId)!;
+      expect(completed).toMatchObject({
+        collect: true,
+        groupId,
+        cleanup: "delete",
+        spawnMode: "run",
+        execution: { status: "terminal", outcome: { status: "ok" } },
+        collectorCompletion: { status: "done" },
+        cleanupCompletedAt: expect.any(Number),
+        deleteCleanupTarget: originalPhysicalTarget,
+        deleteCleanupDispatchedAt: expect.any(Number),
+      });
+      expect(completed.collectorLaunchCleanupPending).not.toBe(true);
+      expect(completed.requesterSettleWake).toBeUndefined();
+      expect(getGatewayContextResolver(completed)).toBeUndefined();
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
+        collect: true,
+        groupId,
+        cleanup: "delete",
+        collectorCompletion: { status: "done" },
+        cleanupCompletedAt: completed.cleanupCompletedAt,
+        deleteCleanupTarget: originalPhysicalTarget,
+        deleteCleanupDispatchedAt: completed.deleteCleanupDispatchedAt,
+      });
+      expect(gateway.requests).toEqual([
+        {
+          key: run.childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+          expectedSessionId: originalPhysicalTarget.sessionId,
+          expectedLifecycleRevision: originalPhysicalTarget.lifecycleRevision,
+        },
+      ]);
+      expect(gateway.outcomes).toHaveLength(1);
+      expect(gateway.outcomes[0]).toMatchObject({ ok: true, result: { deleted: true } });
+      expect(readNativeChildNode(run.childSessionKey)).toBeUndefined();
+      expect(fixture.announce).not.toHaveBeenCalled();
+      expect(fixture.wake).not.toHaveBeenCalled();
+
+      const archiveAtMs = completed.archiveAtMs;
+      if (archiveAtMs === undefined) {
+        throw new Error("Expected the terminal collector's original archive deadline");
+      }
+      expect(archiveAtMs).toBeGreaterThan(Date.now());
+      await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey: run.childSessionKey,
+        defaultSessionId: "collector-successor-session",
+        sessionId: "collector-successor-session",
+        lifecycleRevision: "collector-successor-revision",
+      });
+      const successorNode = readNativeChildNode(run.childSessionKey);
+      expect(successorNode).toBeDefined();
+      expect(successorNode).toMatchObject({ current_session_id: "collector-successor-session" });
+
+      // Retention before the original deadline must not reopen physical child cleanup.
+      await testing.sweepOnceForTests();
+      await fixture.settle();
+      expect(gateway.requests).toHaveLength(1);
+      expect(subagentRuns.get(run.runId)?.archiveAtMs).toBe(archiveAtMs);
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)?.cleanupCompletedAt).toBe(
+        completed.cleanupCompletedAt,
+      );
+      expect(readNativeChildNode(run.childSessionKey)).toEqual(successorNode);
+
+      const clock = vi.spyOn(Date, "now").mockReturnValue(archiveAtMs);
+      try {
+        await testing.sweepOnceForTests();
+        await fixture.settle();
+        // The actual collector group mutation must retire only its metadata; no lost-context retry or CAS RPC.
+        expect(readNativeChildNode(run.childSessionKey)).toEqual(successorNode);
+        expect(subagentRuns.has(run.runId)).toBe(false);
+        expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
+        expect(gateway.requests).toHaveLength(1);
+        expect(gateway.outcomes).toHaveLength(1);
+        expect(fixture.announce).not.toHaveBeenCalled();
+        expect(fixture.wake).not.toHaveBeenCalled();
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it.each([
+      { failedFirst: true, yielded: true },
+      { failedFirst: false, yielded: true },
+      { failedFirst: true, yielded: false },
+      { failedFirst: false, yielded: false },
+    ])(
+      "releases an adopted failed delete receipt and continues its sibling (failedFirst=$failedFirst, yielded=$yielded)",
+      async ({ failedFirst, yielded }) => {
+        const gateway = installOwnedNativeDeleteGateway();
+        await writeSubagentSessionEntry({
+          stateDir: fixture.stateDir,
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          defaultSessionId: "mixed-cohort-requester-session",
+          lifecycleRevision: "mixed-cohort-requester-revision",
+        });
+        const registerFailed = () =>
+          gateway.inScope(() =>
+            registerCompletion("failed-origin-child", {
+              cleanup: "delete",
+              expectsCompletionMessage: true,
+              originalSessionIdentity: originalPhysicalTarget,
+              gatewayContextResolver: gateway.resolveGatewayContext,
+            }),
+          );
+        const registerSibling = () =>
+          gateway.inScope(() =>
+            registerCompletion("remaining-parent-child", {
+              holdForRequester: true,
+              completionRequesterSessionId: "mixed-cohort-requester-session",
+              completionRequesterLifecycleRevision: "mixed-cohort-requester-revision",
+              gatewayContextResolver: gateway.resolveGatewayContext,
+            }),
+          );
+        const first = await (failedFirst ? registerFailed() : registerSibling());
+        const second = await (failedFirst ? registerSibling() : registerFailed());
+        const failed = failedFirst ? first : second;
+        const sibling = failedFirst ? second : first;
+        const receipt = await adoptSubagentRunForRequesterTurn({
+          expected: subagentRuns.get(failed.runId)!,
+          requesterSessionKey: "agent:main:main",
+          requesterAgentId: "main",
+          requesterTurnRunId: "held-requester-turn",
+          assertCurrent: () => {},
+        });
+        expect(receipt).toEqual({
+          runId: failed.runId,
+          childSessionKey: failed.childSessionKey,
+          expectsCompletionMessage: true,
+        });
+        expect(loadSubagentRegistryFromSqlite().get(failed.runId)?.requesterTurnRunId).toBe(
+          "held-requester-turn",
+        );
+
+        fixture.announce.mockImplementation(nativeAnnounce.runSubagentAnnounceFlow);
+        const delivery = vi
+          .spyOn(announceDelivery, "deliverSubagentAnnouncement")
+          .mockReset()
+          .mockResolvedValueOnce({
+            delivered: false,
+            path: "none",
+            reason: "delivery_suppressed",
+            disposition: "intentional_non_delivery",
+          })
+          .mockResolvedValue({
+            delivered: true,
+            path: "direct",
+            requesterVisibleFinalDelivered: true,
+            finalAssistantVisibleText: "Remaining sibling completion.",
+          });
+        completeRegistered(failed);
+        await fixture.settle();
+        const completed = subagentRuns.get(failed.runId)!;
+        expect(completed).toMatchObject({
+          requesterTurnRunId: "held-requester-turn",
+          cleanup: "delete",
+          cleanupCompletedAt: expect.any(Number),
+          delivery: { status: "failed", disposition: "intentional_non_delivery" },
+        });
+        expect(getGatewayContextResolver(completed)).toBeUndefined();
+        expect(readNativeChildNode(failed.childSessionKey)).toBeUndefined();
+        expect(gateway.requests).toHaveLength(1);
+        expect(gateway.outcomes[0]).toMatchObject({ ok: true, result: { deleted: true } });
+        const retainedDeadline = completed.archiveAtMs;
+        completeRegistered(sibling);
+        await fixture.settle();
+        expect(delivery).toHaveBeenCalledTimes(1);
+        fixture.wake.mockImplementation(nativeWake.maybeWakeRequesterAfterAllChildrenSettled);
+        if (yielded) {
+          expect(
+            await markRequesterTurnYielded({
+              requesterSessionKey: "agent:main:main",
+              requesterAgentId: "main",
+              requesterTurnRunId: "held-requester-turn",
+            }),
+          ).toBeGreaterThan(0);
+        }
+        expect(
+          await settleRequesterAfterSessionSpawns({
+            requesterSessionKey: "agent:main:main",
+            requesterAgentId: "main",
+            requesterTurnRunId: "held-requester-turn",
+            requesterYielded: yielded,
+            acceptedSessionSpawns: [
+              receipt!,
+              {
+                runId: sibling.runId,
+                childSessionKey: sibling.childSessionKey,
+                expectsCompletionMessage: true,
+              },
+            ],
+          }),
+        ).toBe(true);
+        await fixture.settle();
+        const retained = loadSubagentRegistryFromSqlite().get(failed.runId)!;
+        expect(retained).toMatchObject({
+          cleanupCompletedAt: completed.cleanupCompletedAt,
+          archiveAtMs: retainedDeadline,
+          delivery: { status: "failed", disposition: "intentional_non_delivery" },
+        });
+        expect(retained.requesterTurnRunId).toBeUndefined();
+        expect(retained.requesterTurnYielded).toBeUndefined();
+        expect(retained.requesterSettleWake).toBeUndefined();
+        expect(retained.delivery?.deliveredAt).toBeUndefined();
+        expect(gateway.requests).toHaveLength(1);
+        expect(readNativeChildNode(failed.childSessionKey)).toBeUndefined();
+        expect(getGatewayContextResolver(subagentRuns.get(failed.runId)!)).toBeUndefined();
+        expect(delivery.mock.calls.length).toBeGreaterThan(1);
+        const deliveredSibling = loadSubagentRegistryFromSqlite().get(sibling.runId);
+        expect(deliveredSibling, JSON.stringify(deliveredSibling)).toMatchObject({
+          delivery: { status: "delivered" },
+        });
+        expect(deliveredSibling?.requesterTurnRunId).toBeUndefined();
+        expect(deliveredSibling?.requesterSettleWake).toBeUndefined();
+      },
+    );
+
     it.each([
       "original",
       "same-key-successor",
