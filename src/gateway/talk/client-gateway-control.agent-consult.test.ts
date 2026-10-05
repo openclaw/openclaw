@@ -833,6 +833,27 @@ describe("Talk client agent consult admission", () => {
     expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
   });
 
+  it("keeps one owned run instance when a consult retries on a fallback model", async () => {
+    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
+      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 60_000 });
+      await expect(params.agentRuntime.runEmbeddedAgent({ ...coreParams })).rejects.toThrow(
+        "primary failed",
+      );
+      await params.agentRuntime.runEmbeddedAgent({ ...coreParams });
+      return { text: "done" };
+    });
+    mocks.runEmbeddedAgentCore.mockRejectedValueOnce(new Error("primary failed"));
+    const runner = createRunner(vi.fn(), undefined, {
+      ownerConnId: "connection-owner",
+      isRunCurrent: () => true,
+    });
+    runner.runPrompt.adoptCompletionClaims();
+
+    await expect(runner.runPrompt({ prompt: "check" })).resolves.toEqual({ text: "done" });
+    expect(mocks.createOperationalRunInstanceRef).toHaveBeenCalledOnce();
+    expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledTimes(2);
+  });
+
   it("closes the Talk admission when core execution fails", async () => {
     mocks.runEmbeddedAgentCore.mockRejectedValueOnce(new Error("core failed"));
 
