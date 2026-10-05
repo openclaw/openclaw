@@ -112,7 +112,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
           handlers: registry.gatewayHandlers,
           owner: { kind: "plugin", pluginId: "synthetic-rpc-proof" },
           defaultScope: "operator.admin",
-        }).map((descriptor) => ({ ...descriptor, profileAccess: "required" as const }));
+        }).map((descriptor) => Object.assign(descriptor, { profileAccess: "required" as const }));
         const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
         prometheusPlugin.register(
           createTestPluginApi({
