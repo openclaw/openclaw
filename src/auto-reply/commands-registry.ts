@@ -37,7 +37,6 @@ export { shouldHandleTextCommands } from "./commands-text-routing.js";
 
 export type {
   ChatCommandDefinition,
-  CommandArgChoiceContext,
   CommandArgDefinition,
   CommandArgValues,
   CommandArgs,
@@ -52,7 +51,7 @@ type NativeCommandProviderLookupOptions = {
 function createNativeCommandNameMapper(
   provider?: string,
   options?: NativeCommandProviderLookupOptions,
-): (command: ChatCommandDefinition) => Array<{ name: string; normalizedName?: string }> {
+): (command: ChatCommandDefinition) => string[] {
   // Registry state is lifecycle-owned, so resolve the adapter once per list or lookup operation.
   const resolveNativeCommandName = !provider
     ? undefined
@@ -67,9 +66,9 @@ function createNativeCommandNameMapper(
           defaultName: command.nativeName,
         }) ?? command.nativeName)
       : undefined;
-    return [primary, ...(command.nativeAliases ?? [])]
-      .filter((name): name is string => Boolean(name))
-      .map((name) => ({ name, normalizedName: normalizeOptionalLowercaseString(name) }));
+    return [primary, ...(command.nativeAliases ?? [])].filter((name): name is string =>
+      Boolean(name),
+    );
   };
 }
 
@@ -98,7 +97,7 @@ function listNativeSpecsFromCommands(
         command.scope !== "text" && command.nativeName && supportsNativeProvider(command, provider),
     )
     .flatMap((command) =>
-      mapNativeCommandNames(command).map(({ name }, index) => {
+      mapNativeCommandNames(command).map((name, index) => {
         const nativeSpec: NativeCommandSpec = {
           name,
           description: command.description,
@@ -193,7 +192,9 @@ export function findCommandByNativeName(
     (command) =>
       command.scope !== "text" &&
       supportsNativeProvider(command, provider) &&
-      mapNativeCommandNames(command).some(({ normalizedName }) => normalizedName === normalized),
+      mapNativeCommandNames(command).some(
+        (nativeName) => normalizeOptionalLowercaseString(nativeName) === normalized,
+      ),
   );
 }
 
@@ -227,12 +228,6 @@ export function isActiveRunSafeCommandTurn(params: {
     command?.activeRunSafe === true ||
     (command?.key === "login" && /^\/login\s+cancel$/iu.test(commandTurn.body?.trim() ?? ""))
   );
-}
-
-/** Formats a command and optional raw argument string as slash-command text. */
-function buildCommandText(commandName: string, args?: string): string {
-  const trimmedArgs = args?.trim();
-  return trimmedArgs ? `/${commandName} ${trimmedArgs}` : `/${commandName}`;
 }
 
 function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): CommandArgValues {
@@ -325,25 +320,11 @@ export function buildCommandTextFromArgs(
   args?: CommandArgs,
 ): string {
   const commandName = command.nativeName ?? command.key;
-  return buildCommandText(commandName, serializeCommandArgs(command, args));
+  const raw = serializeCommandArgs(command, args)?.trim();
+  return raw ? `/${commandName} ${raw}` : `/${commandName}`;
 }
 
-function resolveDefaultCommandContext(cfg?: OpenClawConfig): {
-  provider: string;
-  model: string;
-} {
-  const resolved = resolveConfiguredModelRef({
-    cfg: cfg ?? ({} as OpenClawConfig),
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  return {
-    provider: resolved.provider ?? DEFAULT_PROVIDER,
-    model: resolved.model ?? DEFAULT_MODEL,
-  };
-}
-
-export type ResolvedCommandArgChoice = { value: string; label: string };
+type ResolvedCommandArgChoice = { value: string; label: string };
 
 /** Resolves static or context-aware choices for one command argument. */
 export function resolveCommandArgChoices(
@@ -355,13 +336,17 @@ export function resolveCommandArgChoices(
     return [];
   }
   if (typeof choices === "function") {
-    const defaults = resolveDefaultCommandContext(cfg);
+    const defaults = resolveConfiguredModelRef({
+      cfg: cfg ?? {},
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    });
     choices = choices({
       cfg,
       command: params.command,
       arg,
-      provider: params.provider ?? defaults.provider,
-      model: params.model ?? defaults.model,
+      provider: params.provider ?? defaults.provider ?? DEFAULT_PROVIDER,
+      model: params.model ?? defaults.model ?? DEFAULT_MODEL,
       agentRuntime: params.agentRuntime,
       catalog: params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined),
     });
@@ -403,41 +388,26 @@ export function resolveCommandArgMenu(
   }
   const { command, args, cfg, provider, model, agentRuntime, catalog } = params;
   const resolvedCatalog = catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined);
+  const resolveChoices = (arg: CommandArgDefinition) =>
+    resolveCommandArgChoices({
+      command,
+      arg,
+      cfg,
+      provider,
+      model,
+      agentRuntime,
+      catalog: resolvedCatalog,
+    });
   const argSpec = command.argsMenu;
   const argName =
     argSpec === "auto"
-      ? command.args.find(
-          (arg) =>
-            resolveCommandArgChoices({
-              command,
-              arg,
-              cfg,
-              provider,
-              model,
-              agentRuntime,
-              catalog: resolvedCatalog,
-            }).length > 0,
-        )?.name
+      ? command.args.find((arg) => resolveChoices(arg).length > 0)?.name
       : argSpec.arg;
-  if (!argName) {
-    return null;
-  }
-  if (args?.values && args.values[argName] != null) {
-    return null;
-  }
   const arg = command.args.find((entry) => entry.name === argName);
-  if (!arg) {
+  if (!argName || !arg || args?.values?.[argName] != null) {
     return null;
   }
-  const choices = resolveCommandArgChoices({
-    command,
-    arg,
-    cfg,
-    provider,
-    model,
-    agentRuntime,
-    catalog: resolvedCatalog,
-  });
+  const choices = resolveChoices(arg);
   if (choices.length === 0) {
     return null;
   }

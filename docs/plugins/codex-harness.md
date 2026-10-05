@@ -47,7 +47,11 @@ display rows and is invalidated by resident row changes. Complete, unfiltered
 queries reuse it directly; live status and workspace settings still apply per page.
 This memory-only boundary is the local
 resident query. The Gateway also reads session entries from its resident session-row
-projection once ready; mutations can require exact-key refreshes before delivery.
+projection once its metadata is ready; mutations can require exact-key metadata refreshes
+before delivery. Catalog requests do not prepare unrelated session display rows, and
+sharing and adoption checks still use current metadata before each delivery.
+Display-only catalog refreshes retain prepared metadata selections; stored-entry,
+identity, and topology changes still invalidate them.
 Native adoption bindings still use their storage owner, and paired-node enumeration
 can use network I/O. Previews remain limited to 500 characters;
 native hydration and catalog pages remain limited to 64 rows each. Native `thread/list` has no bounded metadata projection, so wire JSON can still be
@@ -196,10 +200,19 @@ an interrupted read logs that its metadata refresh is deferred for automatic
 recovery by the current catalog owner, retaining the original cause. Genuine read,
 reconciliation, and storage failures still log background update warnings.
 Observations do not keep retired clients alive. A startup scan and
-the 15-minute stat-only safety scan discover external rollout changes; no
-recursive filesystem watcher retains a directory inventory. The scan streams
-directory entries and retains at most 20,000 file fingerprints while separately
-checking the presence of resident paths. Only changed or
+the 15-minute safety scan discover external rollout changes. Each resident home
+caches at most 20,000 fingerprints across 256 watched day directories. Directory
+identity and timestamps detect replacements and membership changes; file-change
+notifications invalidate the containing directory for in-place appends. Unchanged
+directories reuse their fingerprints without statting each rollout. Unwatchable
+directories, watcher failures, and directories beyond the cache bounds use a full
+stat scan. Restart rebuilds this memory-only cache, and retiring the home closes its
+watchers. On macOS, a full read after the watcher has armed closes its startup
+notification gap before fingerprints can be reused. Parent directories are still
+enumerated to discover new days.
+Scans, snapshot restoration, and reconciliation yield between bounded batches.
+The scan streams directory entries and retains at most 20,000 candidate fingerprints
+while separately checking the presence of resident paths. Only changed or
 new files are read: at most 128 KiB each from the head and tail of a plain rollout,
 or a bounded 128 KiB compressed head. A missing first-user preview stays missing
 until a later change makes it discoverable. Native titles are preserved when a
@@ -270,7 +283,10 @@ entries in each named structure; a home with 490 current rows can still have
 20,000 historical field or queue entries.
 With those independent field and scan-path indexes full, settled string payload is
 bounded by 472.164 MiB for 490 current rows, or 936.165 MiB for 20,000 rows. These
-figures exclude active work and object/engine overhead.
+figures exclude active work and object/engine overhead. The watched-directory cache
+can additionally retain 20,000 rollout paths (156.250 MiB at the maximum string
+length) and 256 directory keys (2 MiB). Unchanged generations share fingerprint
+objects with the scan result; these are conservative independent bounds.
 
 | Retained string payload                        | 490 entries | 20,000 entries |
 | ---------------------------------------------- | ----------: | -------------: |
@@ -360,6 +376,14 @@ When sandboxing disables the native surface, allowed shell commands remain avail
 through `sandbox_exec`. Denying `process` removes `sandbox_process` and background
 continuation, while `sandbox_exec` runs to completion under the existing timeout,
 sandbox backend, and workspace-access policy.
+
+When deferred tools or native delegation are available, normal threads receive
+guidance to call listed tools directly and use `tool_search` for unlisted tools.
+They keep an `exec` / `ALL_TOOLS` fallback for the case where `tool_search` is
+not directly callable (for example a model whose metadata selects code-mode-only
+execution), but are told never to use `exec` to look up a listed tool or to
+repeat a completed call. Configured code-mode-only threads receive the original
+`exec` / `ALL_TOOLS` discovery guidance.
 
 Sandbox turns also use these tools when Codex allows only managed hooks and cannot
 install the native process-admission hook. OpenClaw selects this existing execution
@@ -537,8 +561,8 @@ same child result after the parent replies.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.159.1`. The plugin ships and manages
-  `@openai/codex` `0.159.1` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.160.0`. The plugin ships and manages
+  `@openai/codex` `0.160.0` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime

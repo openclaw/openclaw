@@ -358,62 +358,53 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
     params.entry.restartRecoveryDeliverySourceRunId === undefined;
   const adoptsExistingClaim =
     params.entry.restartRecoveryDeliveryRunId === params.runId && !bindsAdmittedHarnessSource;
+  if (adoptsExistingClaim) {
+    const entry = params.entry;
+    return {
+      ...(entry.restartRecoveryHarnessCompletion
+        ? { restartRecoveryHarnessCompletion: entry.restartRecoveryHarnessCompletion }
+        : {}),
+      restartRecoveryDeliveryContext: entry.restartRecoveryDeliveryContext,
+      restartRecoveryDeliveryMediaUrls: entry.restartRecoveryDeliveryMediaUrls,
+      restartRecoveryDisableMessageTool: entry.restartRecoveryDisableMessageTool,
+      restartRecoverySuppressTextDelivery: entry.restartRecoverySuppressTextDelivery,
+      restartRecoveryDeliveryRunId: params.runId,
+      restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+      restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
+      restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
+      restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
+    };
+  }
   const createsTranscriptOnlySourceClaim =
     params.sourceRunId !== undefined && params.deliveryContext === undefined;
   const createsScopedDeliveryClaim = params.sourceRunId !== undefined;
-  if (!adoptsExistingClaim && createsScopedDeliveryClaim && !params.sourceIngress) {
+  if (createsScopedDeliveryClaim && !params.sourceIngress) {
     throw new Error("restart recovery source ownership is required for a new claim");
   }
   return {
-    ...(adoptsExistingClaim
-      ? params.entry.restartRecoveryHarnessCompletion
-        ? { restartRecoveryHarnessCompletion: params.entry.restartRecoveryHarnessCompletion }
-        : {}
-      : params.harnessCompletion
-        ? { restartRecoveryHarnessCompletion: params.harnessCompletion }
-        : params.entry.restartRecoveryHarnessCompletion
-          ? { restartRecoveryHarnessCompletion: undefined }
-          : {}),
-    restartRecoveryDeliveryContext: adoptsExistingClaim
-      ? params.entry.restartRecoveryDeliveryContext
-      : params.deliveryContext,
-    restartRecoveryDeliveryMediaUrls: adoptsExistingClaim
-      ? params.entry.restartRecoveryDeliveryMediaUrls
-      : createsScopedDeliveryClaim && params.deliveryMediaUrls !== undefined
+    ...(params.harnessCompletion
+      ? { restartRecoveryHarnessCompletion: params.harnessCompletion }
+      : params.entry.restartRecoveryHarnessCompletion
+        ? { restartRecoveryHarnessCompletion: undefined }
+        : {}),
+    restartRecoveryDeliveryContext: params.deliveryContext,
+    restartRecoveryDeliveryMediaUrls:
+      createsScopedDeliveryClaim && params.deliveryMediaUrls !== undefined
         ? [...params.deliveryMediaUrls]
         : undefined,
-    restartRecoveryDisableMessageTool: adoptsExistingClaim
-      ? params.entry.restartRecoveryDisableMessageTool
-      : createsScopedDeliveryClaim && params.disableMessageTool === true
-        ? true
-        : undefined,
-    restartRecoverySuppressTextDelivery: adoptsExistingClaim
-      ? params.entry.restartRecoverySuppressTextDelivery
-      : createsScopedDeliveryClaim && params.suppressTextDelivery === true
-        ? true
-        : undefined,
+    restartRecoveryDisableMessageTool:
+      createsScopedDeliveryClaim && params.disableMessageTool === true ? true : undefined,
+    restartRecoverySuppressTextDelivery:
+      createsScopedDeliveryClaim && params.suppressTextDelivery === true ? true : undefined,
     restartRecoveryDeliveryRunId:
-      params.deliveryContext || adoptsExistingClaim || createsTranscriptOnlySourceClaim
-        ? params.runId
-        : undefined,
-    restartRecoveryDeliverySourceRunId: adoptsExistingClaim
-      ? params.entry.restartRecoveryDeliverySourceRunId
-      : params.sourceRunId,
-    restartRecoverySourceIngress: adoptsExistingClaim
-      ? params.entry.restartRecoverySourceIngress
-      : createsScopedDeliveryClaim
-        ? params.sourceIngress
-        : undefined,
-    restartRecoverySourceReplyDeliveryMode: adoptsExistingClaim
-      ? params.entry.restartRecoverySourceReplyDeliveryMode
-      : params.sourceRunId
-        ? params.sourceReplyDeliveryMode
-        : undefined,
-    restartRecoveryForceSafeTools: adoptsExistingClaim
-      ? params.entry.restartRecoveryForceSafeTools
-      : createsScopedDeliveryClaim && params.forceRestartSafeTools === true
-        ? true
-        : undefined,
+      params.deliveryContext || createsTranscriptOnlySourceClaim ? params.runId : undefined,
+    restartRecoveryDeliverySourceRunId: params.sourceRunId,
+    restartRecoverySourceIngress: createsScopedDeliveryClaim ? params.sourceIngress : undefined,
+    restartRecoverySourceReplyDeliveryMode: params.sourceRunId
+      ? params.sourceReplyDeliveryMode
+      : undefined,
+    restartRecoveryForceSafeTools:
+      createsScopedDeliveryClaim && params.forceRestartSafeTools === true ? true : undefined,
   };
 }
 

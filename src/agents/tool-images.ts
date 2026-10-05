@@ -28,7 +28,6 @@ import type { AgentToolResult } from "./runtime/index.js";
 
 type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
-type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 
 type ToolImageSanitizationOptions = ImageSanitizationLimits & {
   verifyDecodability?: boolean;
@@ -112,15 +111,12 @@ function fileNameFromPathLike(pathLike: string): string | undefined {
 
   try {
     const url = new URL(value);
-    const candidate = url.pathname.split("/").findLast(Boolean);
-    return candidate;
+    return url.pathname.split("/").findLast(Boolean);
   } catch {
     // Not a URL; continue with path-like parsing.
   }
 
-  const normalized = value.replaceAll("\\", "/");
-  const candidate = normalized.split("/").findLast(Boolean);
-  return candidate;
+  return value.replaceAll("\\", "/").split("/").findLast(Boolean);
 }
 
 function inferImageFileName(params: {
@@ -145,12 +141,8 @@ function inferImageFileName(params: {
   }
 
   if (typeof params.label === "string" && params.label.startsWith("read:")) {
-    const candidate = fileNameFromPathLike(params.label.slice("read:".length));
-    if (candidate) {
-      return candidate;
-    }
+    return fileNameFromPathLike(params.label.slice("read:".length));
   }
-
   return undefined;
 }
 
@@ -176,7 +168,6 @@ async function resizeImageBase64IfNeeded(params: {
 }): Promise<{
   base64: string;
   mimeType: string;
-  resized: boolean;
 }> {
   const buf = Buffer.from(params.base64, "base64");
   const meta = readImageMetadataFromHeader(buf) ?? (await getImageMetadata(buf));
@@ -193,7 +184,6 @@ async function resizeImageBase64IfNeeded(params: {
     return {
       base64: params.base64,
       mimeType: params.mimeType,
-      resized: false,
     };
   }
 
@@ -201,6 +191,16 @@ async function resizeImageBase64IfNeeded(params: {
   const sideStart = maxDim > 0 ? Math.min(params.maxDimensionPx, maxDim) : params.maxDimensionPx;
   const sideGrid = buildImageResizeSideGrid(params.maxDimensionPx, sideStart);
 
+  const sourcePixels = hasDimensions ? `${width}x${height}px` : "unknown";
+  const sourceWithFile = params.fileName ? `${params.fileName} ${sourcePixels}` : sourcePixels;
+  const sourceDetails = {
+    label: params.label,
+    fileName: params.fileName,
+    sourceMimeType: params.mimeType,
+    sourceWidth: width,
+    sourceHeight: height,
+    sourceBytes: buf.byteLength,
+  };
   let smallestSize: number | undefined;
   for (const side of sideGrid) {
     for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
@@ -222,13 +222,6 @@ async function resizeImageBase64IfNeeded(params: {
         smallestSize = out.byteLength;
       }
       if (out.byteLength <= params.maxBytes) {
-        const sourcePixels =
-          typeof width === "number" && typeof height === "number"
-            ? `${width}x${height}px`
-            : "unknown";
-        const sourceWithFile = params.fileName
-          ? `${params.fileName} ${sourcePixels}`
-          : sourcePixels;
         const byteReductionPct =
           buf.byteLength > 0
             ? Number((((buf.byteLength - out.byteLength) / buf.byteLength) * 100).toFixed(1))
@@ -236,12 +229,7 @@ async function resizeImageBase64IfNeeded(params: {
         log.info(
           `Image resized to fit limits: ${sourceWithFile} ${formatBytesShort(buf.byteLength)} -> ${formatBytesShort(out.byteLength)} (${byteReductionPct < 0 ? "+" : ""}${-byteReductionPct}%)`,
           {
-            label: params.label,
-            fileName: params.fileName,
-            sourceMimeType: params.mimeType,
-            sourceWidth: width,
-            sourceHeight: height,
-            sourceBytes: buf.byteLength,
+            ...sourceDetails,
             maxBytes: params.maxBytes,
             maxDimensionPx: params.maxDimensionPx,
             triggerOverBytes: overBytes,
@@ -256,25 +244,16 @@ async function resizeImageBase64IfNeeded(params: {
         return {
           base64: out.toString("base64"),
           mimeType: "image/jpeg",
-          resized: true,
         };
       }
     }
   }
 
   const bestSize = smallestSize ?? buf.byteLength;
-  const sourcePixels =
-    typeof width === "number" && typeof height === "number" ? `${width}x${height}px` : "unknown";
-  const sourceWithFile = params.fileName ? `${params.fileName} ${sourcePixels}` : sourcePixels;
   log.warn(
     `Image resize failed to fit limits: ${sourceWithFile} best=${formatBytesShort(bestSize)} limit=${formatBytesShort(params.maxBytes)}`,
     {
-      label: params.label,
-      fileName: params.fileName,
-      sourceMimeType: params.mimeType,
-      sourceWidth: width,
-      sourceHeight: height,
-      sourceBytes: buf.byteLength,
+      ...sourceDetails,
       maxDimensionPx: params.maxDimensionPx,
       maxBytes: params.maxBytes,
       smallestCandidateBytes: bestSize,
@@ -297,13 +276,11 @@ export async function sanitizeContentBlocksImages(
   });
   const maxBytes = resolveIntegerOption(opts.maxBytes, MAX_IMAGE_BYTES, { min: 1 });
   const out: ToolContentBlock[] = [];
+  const omit = (reason: string) => out.push({ type: "text", text: `[${label}] ${reason}` });
   for (const block of blocks) {
     if (!isImageBlock(block)) {
       if (isImageTypeBlock(block)) {
-        out.push({
-          type: "text",
-          text: `[${label}] omitted image payload: missing data or mimeType`,
-        } satisfies TextContentBlock);
+        omit("omitted image payload: missing data or mimeType");
         continue;
       }
       out.push(block);
@@ -316,27 +293,20 @@ export async function sanitizeContentBlocksImages(
     // conservative pre-decode ceiling (10 MiB) far below the 25MP/100MB
     // processing headroom, so legitimate tool images still decode and resize.
     if (estimateBase64DecodedBytes(block.data) > MAX_IMAGE_INPUT_BYTES) {
-      out.push({
-        type: "text",
-        text: `[${label}] omitted image payload: image exceeds input size limit (${formatBytesShort(MAX_IMAGE_INPUT_BYTES)})`,
-      } satisfies TextContentBlock);
+      omit(
+        `omitted image payload: image exceeds input size limit (${formatBytesShort(MAX_IMAGE_INPUT_BYTES)})`,
+      );
       continue;
     }
 
     const data = block.data.trim();
     if (!data) {
-      out.push({
-        type: "text",
-        text: `[${label}] omitted empty image payload`,
-      } satisfies TextContentBlock);
+      omit("omitted empty image payload");
       continue;
     }
     const canonicalData = canonicalizeBase64(data);
     if (!canonicalData) {
-      out.push({
-        type: "text",
-        text: `[${label}] omitted image payload: invalid base64`,
-      } satisfies TextContentBlock);
+      omit("omitted image payload: invalid base64");
       continue;
     }
 
@@ -356,13 +326,10 @@ export async function sanitizeContentBlocksImages(
       out.push({
         ...block,
         data: resized.base64,
-        mimeType: resized.resized ? resized.mimeType : mimeType,
+        mimeType: resized.mimeType,
       });
     } catch (err) {
-      out.push({
-        type: "text",
-        text: `[${label}] omitted image payload: ${String(err)}`,
-      } satisfies TextContentBlock);
+      omit(`omitted image payload: ${String(err)}`);
     }
   }
 

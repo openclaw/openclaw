@@ -146,7 +146,7 @@ function readSessionRowHasBoard(target: {
 }) {
   const { key, storeTarget } = target;
   const board = withOpenClawAgentDatabaseReadOnly(
-    (database) => readBoardSessionKeys(database, key).length > 0,
+    (database) => readBoardSessionKeys(database, [key]).has(key),
     { agentId: storeTarget.agentId, path: storeTarget.storePath },
   );
   return board.found && board.value;

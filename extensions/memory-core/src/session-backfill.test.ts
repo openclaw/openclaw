@@ -676,7 +676,7 @@ describe("runSessionBackfill", () => {
     "forgets published %s diary facts after reopening without removing unrelated facts",
     async (mode) => {
       const workspaceDir = await createIsolatedWorkspace(`forget-${mode}-`);
-      const cfg = { agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main" }] } };
+      const cfg = { agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } } };
       const diaryPath = path.join(workspaceDir, "DREAMS.md");
       const operatorNote = "Keep this unrelated operator note.";
       await fs.writeFile(diaryPath, `# Dream Diary\n${operatorNote}\n`);
@@ -749,7 +749,7 @@ describe("runSessionBackfill", () => {
 
   it("retains both origins when diary publication deduplicates identical apply blocks", async () => {
     const workspaceDir = await createIsolatedWorkspace("diary-dedupe-");
-    const cfg = { agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main" }] } };
+    const cfg = { agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } } };
     for (const sessionId of ["first", "second"]) {
       await seedCanonicalTranscript(sessionId, [
         {
@@ -776,7 +776,7 @@ describe("runSessionBackfill", () => {
 
   it("keeps all origins of a coalesced REM claim while preserving independent facts", async () => {
     const workspaceDir = await createIsolatedWorkspace("rem-coalesced-");
-    const cfg = { agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main" }] } };
+    const cfg = { agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } } };
     for (const [sessionId, item] of [
       ["first", "cobalt lanterns"],
       ["second", "silver ribbons"],

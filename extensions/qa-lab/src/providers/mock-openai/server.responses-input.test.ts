@@ -24,15 +24,15 @@ describe("mock Responses input text", () => {
     {
       name: "ignores a runtime carrier before continuation",
       laterInput: [
-        makeUserInput(
-          [
-            "OpenClaw runtime event.",
-            "This context is runtime-generated, not user-authored. Keep internal details private.",
-            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-            "Runtime: synthetic metadata.",
-            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-          ].join("\n"),
-        ),
+        {
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: "OpenClaw runtime context:\nRuntime: synthetic metadata.",
+            },
+          ],
+        },
         makeUserInput("Continue."),
       ],
       requestKind: "tool-continuation",

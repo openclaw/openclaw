@@ -63,19 +63,13 @@ function resolveApiKeySecretInput(
   input: SecretInput,
   options?: ApiKeyStorageOptions,
 ): SecretInput {
-  if (input !== null && typeof input === "object") {
-    const coercedRef = coerceSecretRef(input);
-    if (!coercedRef || !isValidSecretRef(coercedRef)) {
-      throw new Error("API key SecretRef is invalid.");
-    }
-    return coercedRef;
-  }
-  if (options?.secretInputMode === "plaintext") {
+  const objectInput = input !== null && typeof input === "object";
+  if (!objectInput && options?.secretInputMode === "plaintext") {
     return normalizeSecretInput(input);
   }
   const coercedRef = coerceSecretRef(input);
-  if (coercedRef) {
-    if (!isValidSecretRef(coercedRef)) {
+  if (objectInput || coercedRef) {
+    if (!coercedRef || !isValidSecretRef(coercedRef)) {
       throw new Error("API key SecretRef is invalid.");
     }
     return coercedRef;

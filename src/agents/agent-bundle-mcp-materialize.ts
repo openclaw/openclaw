@@ -494,7 +494,8 @@ export async function materializeBundleMcpToolsForRun(params: {
                             ),
                           };
                           return await createMcpAppFormResourceContext({
-                            ...request,
+                            snapshot: request.snapshot,
+                            signal: request.signal,
                             origin,
                             uploadResources: await prepareMcpAppFormUpload(origin),
                           });

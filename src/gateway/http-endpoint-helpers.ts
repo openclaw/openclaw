@@ -1,5 +1,4 @@
-// Gateway HTTP endpoint helpers.
-// Wraps common POST JSON method, auth, scope, and body handling.
+// Shared admission for OpenAI-compatible POST JSON endpoints.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   readJsonBodyOrError,
@@ -10,22 +9,18 @@ import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js"
 import {
   authorizeGatewayHttpRequestOrReply,
   type AuthorizedGatewayHttpRequest,
-  resolveTrustedHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
-/** Handles a gateway POST JSON endpoint and returns the parsed body when authorized. */
+/** Returns a parsed body after authorizing an OpenAI-compatible request. */
 export async function handleGatewayPostJsonEndpoint(
   req: IncomingMessage,
   res: ServerResponse,
   opts: GatewayHttpRequestAuthOptions & {
     pathname: string;
     maxBodyBytes: number;
-    requiredOperatorMethod?: "chat.send" | (string & Record<never, never>);
-    resolveOperatorScopes?: (
-      req: IncomingMessage,
-      requestAuth: AuthorizedGatewayHttpRequest,
-    ) => string[];
+    requiredOperatorMethod: string;
   },
 ): Promise<
   | false
@@ -51,15 +46,12 @@ export async function handleGatewayPostJsonEndpoint(
     return undefined;
   }
 
-  const operatorScopes =
-    opts.resolveOperatorScopes?.(req, requestAuth) ??
-    resolveTrustedHttpOperatorScopes(req, requestAuth);
-  if (opts.requiredOperatorMethod) {
-    const scopeAuth = authorizeOperatorScopesForMethod(opts.requiredOperatorMethod, operatorScopes);
-    if (!scopeAuth.allowed) {
-      sendMissingScopeForbidden(res, scopeAuth.missingScope);
-      return undefined;
-    }
+  // Compat HTTP treats shared-secret bearer auth as full operator access.
+  const operatorScopes = resolveSharedSecretHttpOperatorScopes(req, requestAuth);
+  const scopeAuth = authorizeOperatorScopesForMethod(opts.requiredOperatorMethod, operatorScopes);
+  if (!scopeAuth.allowed) {
+    sendMissingScopeForbidden(res, scopeAuth.missingScope);
+    return undefined;
   }
 
   const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes);

@@ -22,16 +22,9 @@ export function createMediaPlayerCard(params: {
   source?: string;
   imageUrl?: string;
   isPlaying?: boolean;
-  progress?: string;
-  controls?: {
-    previous?: { data: string };
-    play?: { data: string };
-    pause?: { data: string };
-    next?: { data: string };
-  };
-  extraActions?: Array<{ label: string; data: string }>;
+  controls: Record<"previous" | "play" | "pause" | "next", { data: string }>;
 }): FlexBubble {
-  const { title, subtitle, source, imageUrl, isPlaying, progress, controls, extraActions } = params;
+  const { title, subtitle, source, imageUrl, isPlaying, controls } = params;
   const trackInfo: FlexComponent[] = [createCardTitle(title)];
 
   if (subtitle) {
@@ -83,17 +76,6 @@ export function createMediaPlayerCard(params: {
     } as FlexText);
   }
 
-  if (progress) {
-    statusItems.push({
-      type: "text",
-      text: progress,
-      size: "xs",
-      color: "#888888",
-      align: "end",
-      flex: 1,
-    } as FlexText);
-  }
-
   const bodyContents: FlexComponent[] = [
     {
       type: "box",
@@ -116,69 +98,32 @@ export function createMediaPlayerCard(params: {
       aspectMode: "cover",
     } as FlexImage;
   }
-  if (controls || extraActions?.length) {
-    const footerContents: FlexComponent[] = [];
-
-    if (controls) {
-      const controlButtons: FlexComponent[] = [];
-
-      for (const [key, label, style] of [
-        ["previous", "⏮", "secondary"],
-        ["play", "▶", isPlaying ? "secondary" : "primary"],
-        ["pause", "⏸", isPlaying ? "primary" : "secondary"],
-        ["next", "⏭", "secondary"],
-      ] as const) {
-        const control = controls[key];
-        if (!control) {
-          continue;
-        }
-        const button: FlexButton = {
-          type: "button",
-          action: postbackAction(label, control.data),
-          style,
-          flex: 1,
-          height: "sm",
-        };
-        // Previous omits margin; the other controls retain an own property even when unset.
-        if (key !== "previous") {
-          button.margin = controlButtons.length > 0 ? "md" : undefined;
-        }
-        controlButtons.push(button);
-      }
-
-      if (controlButtons.length > 0) {
-        footerContents.push(horizontalRow(controlButtons));
-      }
+  const controlButtons: FlexComponent[] = [];
+  for (const [key, label, style] of [
+    ["previous", "⏮", "secondary"],
+    ["play", "▶", isPlaying ? "secondary" : "primary"],
+    ["pause", "⏸", isPlaying ? "primary" : "secondary"],
+    ["next", "⏭", "secondary"],
+  ] as const) {
+    const button: FlexButton = {
+      type: "button",
+      action: postbackAction(label, controls[key].data),
+      style,
+      flex: 1,
+      height: "sm",
+    };
+    if (key !== "previous") {
+      button.margin = "md";
     }
-    if (extraActions?.length) {
-      footerContents.push(
-        horizontalRow(
-          extraActions.slice(0, 2).map(
-            (action, index) =>
-              ({
-                type: "button",
-                action: postbackAction(truncateLineActionLabel(action.label, 15), action.data),
-                style: "secondary",
-                flex: 1,
-                height: "sm",
-                margin: index > 0 ? "md" : undefined,
-              }) as FlexButton,
-          ),
-          { margin: "md" },
-        ),
-      );
-    }
-
-    if (footerContents.length > 0) {
-      bubble.footer = {
-        type: "box",
-        layout: "vertical",
-        contents: footerContents,
-        paddingAll: "lg",
-        backgroundColor: "#FAFAFA",
-      };
-    }
+    controlButtons.push(button);
   }
+  bubble.footer = {
+    type: "box",
+    layout: "vertical",
+    contents: [horizontalRow(controlButtons)],
+    paddingAll: "lg",
+    backgroundColor: "#FAFAFA",
+  };
 
   return bubble;
 }
@@ -276,16 +221,12 @@ export function createDeviceControlCard(params: {
   deviceName: string;
   deviceType?: string;
   status?: string;
-  isOnline?: boolean;
-  imageUrl?: string;
   controls: Array<{
     label: string;
-    icon?: string;
     data: string;
-    style?: "primary" | "secondary";
   }>;
 }): FlexBubble {
-  const { deviceName, deviceType, status, isOnline, imageUrl, controls } = params;
+  const { deviceName, deviceType, status, controls } = params;
   const headerContents: FlexComponent[] = [
     horizontalRow(
       [
@@ -295,7 +236,7 @@ export function createDeviceControlCard(params: {
           contents: [],
           width: "10px",
           height: "10px",
-          backgroundColor: isOnline !== false ? "#06C755" : "#FF5555",
+          backgroundColor: "#06C755",
           cornerRadius: "5px",
         } as FlexBox,
         {
@@ -340,15 +281,6 @@ export function createDeviceControlCard(params: {
 
   const bubble = createCardBubble(headerContents);
 
-  if (imageUrl) {
-    bubble.hero = {
-      type: "image",
-      url: imageUrl,
-      size: "full",
-      aspectRatio: "16:9",
-      aspectMode: "cover",
-    } as FlexImage;
-  }
   if (controls.length > 0) {
     const rows: FlexComponent[] = [];
     const limitedControls = controls.slice(0, 6);
@@ -357,12 +289,10 @@ export function createDeviceControlCard(params: {
       const rowButtons: FlexComponent[] = [];
 
       for (const [offset, ctrl] of limitedControls.slice(i, i + 2).entries()) {
-        const buttonLabel = ctrl.icon ? `${ctrl.icon} ${ctrl.label}` : ctrl.label;
-
         rowButtons.push({
           type: "button",
-          action: postbackAction(truncateLineActionLabel(buttonLabel, 18), ctrl.data),
-          style: ctrl.style ?? "secondary",
+          action: postbackAction(truncateLineActionLabel(ctrl.label, 18), ctrl.data),
+          style: "secondary",
           flex: 1,
           height: "sm",
           margin: offset > 0 ? "md" : undefined,

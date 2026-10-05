@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { Context, Tool } from "../types.js";
+import type { OpenAICompletionsOptions } from "../provider-options.js";
+import type { Context, Model, Tool } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
+import type { OpenAIModeModel } from "./openai-transport-shared.js";
+
+type CompletionsModel = Omit<Model<"openai-completions">, "compat"> &
+  Pick<OpenAIModeModel, "compat">;
 
 const native = makeCompletionsModel({ id: "gpt-5" });
 const proxy = makeCompletionsModel({
@@ -57,98 +62,109 @@ const brokenTool: Tool = {
   },
 };
 
+function request(
+  model: Partial<CompletionsModel>,
+  context = emptyContext(),
+  options?: OpenAICompletionsOptions,
+) {
+  const { compat, ...fields } = model;
+  return buildOpenAICompletionsParams(
+    { ...makeCompletionsModel(fields), compat },
+    context,
+    options,
+  );
+}
+
 describe("OpenAI completions compatibility and tools", () => {
   it("keeps implicit tool choice limited to proxy endpoints", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({ provider: "custom-cpa", baseUrl: "https://proxy.example.com/v1" }),
+    const params = request(
+      { provider: "custom-cpa", baseUrl: "https://proxy.example.com/v1" },
       toolContext(),
       { reasoningEffort: "high" },
     );
     expect(params.messages[0]).toEqual({ role: "system", content: "system" });
-    expect(params).not.toHaveProperty("reasoning_effort");
-    expect(params).not.toHaveProperty("stream_options");
-    expect(params).not.toHaveProperty("store");
+    for (const key of ["reasoning_effort", "stream_options", "store"]) {
+      expect(params).not.toHaveProperty(key);
+    }
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
     expect(params.tool_choice).toBe("auto");
-
-    const nativeParams = buildOpenAICompletionsParams(native, toolContext(), undefined);
+    const nativeParams = request(native, toolContext());
     expect(nativeParams.tools).toHaveLength(1);
     expect(nativeParams).not.toHaveProperty("tool_choice");
   });
 
-  it("honors streaming usage opt-out on the Moonshot default route", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "kimi-k2.5",
-        provider: "moonshot",
-        baseUrl: "",
-        compat: { supportsUsageInStreaming: false },
-      }),
-      emptyContext(),
-      undefined,
-    );
-    expect(params.messages[0]).toEqual({ role: "system", content: "system" });
-    expect(params).not.toHaveProperty("stream_options");
+  it("applies provider and native-host compatibility defaults", () => {
+    const cases = [
+      [
+        request({
+          id: "kimi-k2.5",
+          provider: "moonshot",
+          baseUrl: "",
+          compat: { supportsUsageInStreaming: false },
+        }),
+        { "messages.0": { role: "system", content: "system" } },
+        ["stream_options"],
+      ],
+      [
+        request(
+          {
+            id: "mistral-small-latest",
+            provider: "custom-mistral-host",
+            baseUrl: "https://api.mistral.ai/v1",
+          },
+          emptyContext(),
+          { maxTokens: 2048, reasoningEffort: "high" },
+        ),
+        { max_tokens: 2048 },
+        ["max_completion_tokens", "store", "reasoning_effort"],
+      ],
+      [
+        request({ id: "glm-5", provider: "zai", baseUrl: "" }, toolContext()),
+        { "tools.0.function": expect.any(Object) },
+        ["tools.0.function.strict"],
+      ],
+    ] as const;
+    for (const [params, expected, absent] of cases) {
+      for (const [path, value] of Object.entries(expected)) {
+        expect(params).toHaveProperty(path, value);
+      }
+      for (const path of absent) {
+        expect(params).not.toHaveProperty(path);
+      }
+    }
   });
 
-  it("uses Mistral defaults for custom providers on native Mistral hosts", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "mistral-small-latest",
-        provider: "custom-mistral-host",
-        baseUrl: "https://api.mistral.ai/v1",
-      }),
-      emptyContext(),
-      { maxTokens: 2048, reasoningEffort: "high" },
-    );
-    expect(params.max_tokens).toBe(2048);
-    expect(params).not.toHaveProperty("max_completion_tokens");
-    expect(params).not.toHaveProperty("store");
-    expect(params).not.toHaveProperty("reasoning_effort");
-  });
-
-  it("flattens text blocks for string-only backends", () => {
-    const model = { ...proxy, compat: { requiresStringContent: true } };
-    const params = buildOpenAICompletionsParams(
-      model,
-      {
-        ...emptyContext(),
-        messages: [
-          { role: "user", content: [{ type: "text", text: "What is 2 + 2?" }], timestamp: 1 },
+  it("shapes message content and keys for restrictive backends", () => {
+    const cases: [Partial<CompletionsModel>, Context, unknown[]][] = [
+      [
+        { ...proxy, compat: { requiresStringContent: true } },
+        {
+          ...emptyContext(),
+          messages: [
+            { role: "user", content: [{ type: "text", text: "What is 2 + 2?" }], timestamp: 1 },
+          ],
+        },
+        [
+          { role: "system", content: "system" },
+          { role: "user", content: "What is 2 + 2?" },
         ],
-      },
-      undefined,
-    );
-    expect(params.messages).toEqual([
-      { role: "system", content: "system" },
-      { role: "user", content: "What is 2 + 2?" },
-    ]);
-  });
-
-  it("strips tool-call metadata for strict-key backends", () => {
-    const model = { ...proxy, compat: { strictMessageKeys: true } };
-    const params = buildOpenAICompletionsParams(
-      model,
-      { ...historyContext(), tools: [] },
-      undefined,
-    );
-    expect(params.messages).toEqual([
-      { role: "assistant", content: null },
-      { role: "tool", content: "sunny" },
-    ]);
-  });
-
-  it("omits strict tool shaping on the Z.ai default route", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({ id: "glm-5", provider: "zai", baseUrl: "" }),
-      toolContext(),
-      undefined,
-    );
-    expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
+      ],
+      [
+        { ...proxy, compat: { strictMessageKeys: true } },
+        { ...historyContext(), tools: [] },
+        [
+          { role: "assistant", content: null },
+          { role: "tool", content: "sunny" },
+        ],
+      ],
+    ];
+    for (const [model, context, expected] of cases) {
+      expect(request(model, context).messages).toEqual(expected);
+    }
   });
 
   it("keeps strict projected tools usable by required choice after quarantining bad schemas", () => {
-    const params = buildOpenAICompletionsParams(
+    const params = request(
       native,
       {
         ...emptyContext(),
@@ -175,85 +191,71 @@ describe("OpenAI completions compatibility and tools", () => {
     expect(params.tool_choice).toBe("required");
   });
 
-  it("downgrades a non-strict-compatible native schema to strict:false", () => {
-    const params = buildOpenAICompletionsParams(
-      native,
-      toolContext({
-        type: "object",
-        additionalProperties: false,
-        properties: { path: { type: "string" } },
-        required: [],
-      }),
-      undefined,
-    );
-    expect(params.tools?.[0]?.function.strict).toBe(false);
-  });
-
-  it("removes configured unsupported schema keywords", () => {
-    const model = { ...proxy, compat: { unsupportedToolSchemaKeywords: ["not"] } };
-    const params = buildOpenAICompletionsParams(
-      model,
-      toolContext({ type: "object", properties: { forbidden: { not: {} } } }),
-      undefined,
-    );
-    expect(params.tools?.[0]?.function.parameters).toHaveProperty("properties.forbidden", {});
-  });
-
-  it("omits empty array items without losing typed items", () => {
-    const model = { ...proxy, compat: { omitEmptyArrayItems: true } };
-    const params = buildOpenAICompletionsParams(
-      model,
-      toolContext({
-        type: "object",
-        properties: {
-          hints: { type: "array" },
-          typedHints: { type: "array", items: { type: "string" } },
+  it("normalizes projected schemas according to strictness and compatibility", () => {
+    const cases = [
+      [
+        request(
+          native,
+          toolContext({
+            type: "object",
+            additionalProperties: false,
+            properties: { path: { type: "string" } },
+            required: [],
+          }),
+        ),
+        { strict: false },
+      ],
+      [
+        request(
+          { ...proxy, compat: { unsupportedToolSchemaKeywords: ["not"] } },
+          toolContext({ type: "object", properties: { forbidden: { not: {} } } }),
+        ),
+        { "parameters.properties.forbidden": {} },
+      ],
+      [
+        request(
+          { ...proxy, compat: { omitEmptyArrayItems: true } },
+          toolContext({
+            type: "object",
+            properties: {
+              hints: { type: "array" },
+              typedHints: { type: "array", items: { type: "string" } },
+            },
+          }),
+        ),
+        {
+          "parameters.properties.hints": { type: "array" },
+          "parameters.properties.typedHints": { type: "array", items: { type: "string" } },
         },
-      }),
-      undefined,
-    );
-    expect(params.tools?.[0]?.function.parameters).toHaveProperty("properties.hints", {
-      type: "array",
-    });
-    expect(params.tools?.[0]?.function.parameters).toHaveProperty("properties.typedHints", {
-      type: "array",
-      items: { type: "string" },
-    });
-  });
-
-  it("omits both active tools and the history marker when tools are unsupported", () => {
-    const model = { ...proxy, compat: { ...proxy.compat, supportsTools: false } };
-    const params = buildOpenAICompletionsParams(
-      model,
-      { ...historyContext(), tools: [tool()] },
-      undefined,
-    );
-    expect(params).not.toHaveProperty("tools");
-    expect(params).not.toHaveProperty("tool_choice");
+      ],
+    ] as const;
+    for (const [params, expected] of cases) {
+      for (const [path, value] of Object.entries(expected)) {
+        expect(params.tools?.[0]?.function).toHaveProperty(path, value);
+      }
+    }
   });
 
   it("fails required choice when every schema is quarantined", () => {
     expect(() =>
-      buildOpenAICompletionsParams(
-        native,
-        { ...emptyContext(), tools: [brokenTool] },
-        { toolChoice: "required" },
-      ),
+      request(native, { ...emptyContext(), tools: [brokenTool] }, { toolChoice: "required" }),
     ).toThrow("no tools survived schema conversion");
   });
 
-  it("preserves the native history marker after quarantining every schema", () => {
-    const params = buildOpenAICompletionsParams(
-      native,
-      { ...historyContext(), tools: [brokenTool] },
-      undefined,
-    );
-    expect(params.tools).toEqual([]);
-  });
-
-  it("omits empty tools and tool choice for proxy requests with only tool history", () => {
-    const params = buildOpenAICompletionsParams(proxy, historyContext(), undefined);
-    expect(params).not.toHaveProperty("tools");
-    expect(params).not.toHaveProperty("tool_choice");
+  it("preserves history markers only for native requests with supported tools", () => {
+    const unsupported = { ...proxy, compat: { ...proxy.compat, supportsTools: false } };
+    const cases = [
+      [request(unsupported, { ...historyContext(), tools: [tool()] }), false],
+      [request(native, { ...historyContext(), tools: [brokenTool] }), true],
+      [request(proxy, historyContext()), false],
+    ] as const;
+    for (const [params, marker] of cases) {
+      if (marker) {
+        expect(params.tools).toEqual([]);
+      } else {
+        expect(params).not.toHaveProperty("tools");
+        expect(params).not.toHaveProperty("tool_choice");
+      }
+    }
   });
 });

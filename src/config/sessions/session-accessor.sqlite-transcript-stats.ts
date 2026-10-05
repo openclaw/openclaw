@@ -1,6 +1,10 @@
 import { toUSVString } from "node:util";
 import { sql } from "kysely";
-import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
+  prepareSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptStats } from "./session-accessor.sqlite-contract.js";
@@ -71,10 +75,7 @@ function createTranscriptStatsQuery(database: Pick<OpenClawAgentDatabase, "db">)
   );
 }
 
-const transcriptStatsQueries = new WeakMap<
-  OpenClawAgentDatabase["db"],
-  ReturnType<typeof createTranscriptStatsQuery>
->();
+const transcriptStatsQuery = createSqliteQueryCache((db) => createTranscriptStatsQuery({ db }));
 
 /** Reads transcript freshness and byte size without materializing event rows. */
 export function readTranscriptStatsFromDatabase(
@@ -84,12 +85,7 @@ export function readTranscriptStatsFromDatabase(
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
-      let query = transcriptStatsQueries.get(database.db);
-      if (!query) {
-        query = createTranscriptStatsQuery(database);
-        transcriptStatsQueries.set(database.db, query);
-      }
-      const row = query(sessionId).rows[0];
+      const row = transcriptStatsQuery(database.db)(sessionId).rows[0];
       return {
         eventCount: row?.cold_event_count ?? row?.event_count ?? 0,
         ...(row?.transcript_updated_at != null

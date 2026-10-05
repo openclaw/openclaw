@@ -1,9 +1,9 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.hardware.camera2.CameraCharacteristics
@@ -22,7 +22,6 @@ import androidx.camera.video.Recorder
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
-import androidx.core.content.ContextCompat.checkSelfPermission
 import androidx.core.graphics.scale
 import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.Lifecycle
@@ -154,14 +153,12 @@ class CameraCaptureManager(
     }
 
   private fun ensureCameraPermission() {
-    val granted = checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-    if (granted) return
+    if (context.hasPermission(Manifest.permission.CAMERA)) return
     throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
   }
 
   private fun ensureMicPermission() {
-    val granted = checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    if (granted) return
+    if (context.hasPermission(Manifest.permission.RECORD_AUDIO)) return
     throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
   }
 
@@ -256,7 +253,7 @@ class CameraCaptureManager(
               ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")
           val rotated = JpegSizeLimiter.normalizeOrientation(decoded, orientation)
           val scaled =
-            if (maxWidth > 0 && rotated.width > maxWidth) {
+            if (rotated.width > maxWidth) {
               val h =
                 (rotated.height.toDouble() * (maxWidth.toDouble() / rotated.width.toDouble()))
                   .toInt()

@@ -295,6 +295,13 @@ private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
 
 @MainActor
 func makeUpdaterController() -> UpdaterProviding {
+    guard AppLaunchRuntimePlan.current.allowsUpdater else {
+        if !AppLaunchRuntimePlan.current.allowsActivation {
+            Logger(subsystem: "ai.openclaw", category: "app").info(
+                "Update dialogs deferred by --no-activate; relaunch without the flag to check for updates.")
+        }
+        return DisabledUpdaterController()
+    }
     guard AppProfile.current.validationError == nil, !AppProfile.current.isActive else {
         return DisabledUpdaterController()
     }

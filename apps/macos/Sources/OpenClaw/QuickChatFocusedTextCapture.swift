@@ -1,15 +1,12 @@
 import AppKit
 @preconcurrency import ApplicationServices
 import Foundation
+import OpenClawKit
 
 struct QuickChatTextContext: Equatable, Sendable {
     let appName: String
     let windowTitle: String
     let text: String
-
-    var characterCount: Int {
-        self.text.count
-    }
 }
 
 struct QuickChatTextCollectionLimits: Equatable, Sendable {
@@ -40,48 +37,6 @@ protocol QuickChatTextTreeNode: Sendable {
     func stringValue() -> String?
     func computedName() -> String?
     func children(limit: Int) -> QuickChatTextTreeChildren
-}
-
-private enum QuickChatCaptureRaceResult: Sendable {
-    case snapshot(String, QuickChatTextCollection)
-    case timedOut
-    case cancelled
-}
-
-/// Synchronous one-shot arbitration lets a cancellation handler settle the AX race
-/// immediately, including when cancellation wins before the continuation is installed.
-private final class QuickChatCaptureRace: @unchecked Sendable {
-    private let lock = NSLock()
-    private var result: QuickChatCaptureRaceResult?
-    private var continuation: CheckedContinuation<QuickChatCaptureRaceResult, Never>?
-
-    func wait() async -> QuickChatCaptureRaceResult {
-        await withCheckedContinuation { continuation in
-            self.lock.lock()
-            if let result = self.result {
-                self.lock.unlock()
-                continuation.resume(returning: result)
-            } else {
-                self.continuation = continuation
-                self.lock.unlock()
-            }
-        }
-    }
-
-    @discardableResult
-    func resolve(_ result: QuickChatCaptureRaceResult) -> Bool {
-        self.lock.lock()
-        guard self.result == nil else {
-            self.lock.unlock()
-            return false
-        }
-        self.result = result
-        let continuation = self.continuation
-        self.continuation = nil
-        self.lock.unlock()
-        continuation?.resume(returning: result)
-        return true
-    }
 }
 
 enum QuickChatFocusedTextCollector {
@@ -213,7 +168,12 @@ enum QuickChatFocusedTextCaptureService {
         let hasPermission = await PermissionManager.grantedStatus([.accessibility])[.accessibility] == true
         guard !Task.isCancelled else { return .cancelled }
         if !hasPermission {
-            guard self.confirmAccessibilityRequest(appName: appName) else { return .cancelled }
+            guard AppLaunchRuntimePlan.current.allowsActivation else {
+                PermissionManager.reportDeferredRequest()
+                return .failed(String(
+                    format: String(localized: "Accessibility access is required to attach text from %@."), appName))
+            }
+            guard await self.confirmAccessibilityRequest(appName: appName) else { return .cancelled }
             guard !Task.isCancelled else { return .cancelled }
             let result = await PermissionManager.ensure([.accessibility], interactive: true)
             guard !Task.isCancelled else { return .cancelled }
@@ -262,37 +222,20 @@ enum QuickChatFocusedTextCaptureService {
                 isCancelled: { Task.isCancelled })
             return (title, collection)
         }
-        // Hard outer bound: a hung target can stall individual AX reads past any
-        // cooperative check. A structured group would JOIN the losing child (and thus
-        // still wait for the walk), so the race is unstructured: first result wins the
-        // continuation, the abandoned walk is cancelled and its result discarded.
-        let race = QuickChatCaptureRace()
-        Task.detached {
-            let value = await walk.value
-            race.resolve(.snapshot(value.0, value.1))
-        }
-        let timeout = Task.detached {
-            try? await Task.sleep(for: .seconds(4))
-            if race.resolve(.timedOut) {
-                walk.cancel()
-            }
-        }
-        let result = await withTaskCancellationHandler {
-            await race.wait()
-        } onCancel: {
-            walk.cancel()
-            race.resolve(.cancelled)
-        }
-        timeout.cancel()
-
-        switch result {
-        case .cancelled:
-            return .cancelled
-        case .timedOut:
-            walk.cancel()
-            return .failed(String(
-                format: String(localized: "%@ is not responding to Accessibility requests."), appName))
-        case let .snapshot(title, collection):
+        defer { walk.cancel() }
+        do {
+            // AsyncTimeout does not join a hung AX walk. Forward its cancellation
+            // to the detached worker so cooperative traversal also stops.
+            let (title, collection) = try await AsyncTimeout.withTimeout(
+                seconds: 4,
+                onTimeout: { URLError(.timedOut) },
+                operation: {
+                    await withTaskCancellationHandler {
+                        await walk.value
+                    } onCancel: {
+                        walk.cancel()
+                    }
+                })
             guard collection.textEntryCount > 0 else {
                 return .failed(String(format: String(localized: "No readable text was found in %@."), appName))
             }
@@ -300,17 +243,22 @@ enum QuickChatFocusedTextCaptureService {
                 appName: appName,
                 windowTitle: title,
                 text: collection.text))
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failed(String(
+                format: String(localized: "%@ is not responding to Accessibility requests."), appName))
         }
     }
 
-    private static func confirmAccessibilityRequest(appName: String) -> Bool {
+    private static func confirmAccessibilityRequest(appName: String) async -> Bool {
         let alert = NSAlert()
         alert.messageText = String(format: String(localized: "Allow OpenClaw to read text from %@"), appName)
         alert.informativeText = String(localized: "Attaching focused-window text uses macOS Accessibility access.")
         alert.addButton(withTitle: String(localized: "Grant Access"))
         alert.addButton(withTitle: String(localized: "Cancel"))
         // User-initiated confirmation owns the only path that may trigger the TCC prompt.
-        return alert.runModal() == .alertFirstButtonReturn
+        return await AppActivation.shared.response(to: alert) == .alertFirstButtonReturn
     }
 }
 

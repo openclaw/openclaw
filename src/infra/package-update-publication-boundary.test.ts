@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -21,8 +21,12 @@ import { createPackageActivationLifetimeFixture } from "./package-update-activat
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
 import * as packageFilesystem from "./package-update-filesystem.js";
+import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
+import { createPublicationOwner } from "./package-update-publication-owner.js";
+import * as publicationCopy from "./package-update-publication-tree.js";
 import { createNpmTarget, writePackageRoot } from "./package-update-steps.test-support.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as snapshot from "./sqlite-snapshot.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
@@ -99,16 +103,15 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
         "candidate bytes",
       );
       const reads = { previous: 0, candidate: 0 };
-      const open = fsp.open.bind(fsp);
-      vi.spyOn(fsp, "open").mockImplementation((...args) => {
-        const name = path.basename(String(args[0]));
+      interceptPackageFileHashes((file, _stat, next) => {
+        const name = path.basename(file);
         if (name === "previous.payload") {
           reads.previous++;
         }
         if (name === "candidate.payload") {
           reads.candidate++;
         }
-        return open(...args);
+        return next();
       });
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
@@ -218,13 +221,14 @@ it.skipIf(process.platform === "win32").each(["activation", "publication", "reti
           ? Promise.resolve(unchanged)
           : lstat(...args),
       );
-      const open = fsp.open.bind(fsp);
-      vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
-        const handle = await open(...args);
-        if (path.basename(String(args[0])) === name) {
-          vi.spyOn(handle, "stat").mockResolvedValue(unchanged);
+      let changedBytesRead = false;
+      interceptPackageFileHashes(async (file, _stat, next) => {
+        if (path.basename(file) === name) {
+          const contents = fs.readFileSync(file);
+          changedBytesRead ||= contents.toString() === "modified bytes";
+          return createHash("sha256").update(contents).digest("hex");
         }
-        return handle;
+        return next();
       });
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
       const change = (directory: string) =>
@@ -265,6 +269,7 @@ it.skipIf(process.platform === "win32").each(["activation", "publication", "reti
           expect(result.status).toBe("failed");
           expect(result.step.stderrTail).toContain("Package publication object changed");
         }
+        expect(changedBytesRead).toBe(true);
         if (boundary === "activation") {
           expect(packageActivationIdentity(f.packageRoot, true)).toBe(previousIdentity);
           expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
@@ -428,6 +433,152 @@ it.skipIf(process.platform === "win32")(
         ).toBe("prepared");
       });
     }),
+);
+
+it
+  .skipIf(process.platform === "win32")
+  .each([
+    "commit",
+    "rollback",
+    "mismatch",
+    "creation-acknowledgement",
+    "copy-acknowledgement",
+    "partial-removal",
+    "resume",
+  ] as const)("settles an EXDEV package displacement: %s", (outcome) =>
+  fixtures.lifetime.run(async () => {
+    const f = await createPackageSwapFixture(root);
+    await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+    fs.writeFileSync(path.join(f.packageRoot, "previous.payload"), "previous bytes");
+    fs.symlinkSync("previous.payload", path.join(f.packageRoot, "payload.link"));
+    const originalIdentity = packageActivationIdentity(f.packageRoot, true);
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(f.packageRoot);
+      const anchor = resolvePackageActivationAnchor(f.packageRoot);
+      const rename = fsp.rename.bind(fsp);
+      const mkdir = fsp.mkdir.bind(fsp);
+      vi.spyOn(fsp, "mkdir").mockImplementation(async (...args) => {
+        const result = await mkdir(...args);
+        if (
+          outcome === "creation-acknowledgement" &&
+          (String(args[0]) === path.join(anchor, "previous.copy") ||
+            String(args[0]).startsWith(`${anchor}.copy-`))
+        ) {
+          throw new Error("copy staging creation acknowledgement lost");
+        }
+        return result;
+      });
+      let attempts = 0;
+      vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+        if (from === f.packageRoot && to === path.join(anchor, "previous")) {
+          attempts++;
+          throw Object.assign(new Error("EXDEV: cross-device link not permitted"), {
+            code: "EXDEV",
+          });
+        }
+        await rename(from, to);
+        if (outcome === "copy-acknowledgement" && String(from).startsWith(`${anchor}.copy-`)) {
+          throw new Error("copy publication acknowledgement lost");
+        }
+      });
+      const copy = publicationCopy.copyPackagePublicationTree;
+      vi.spyOn(publicationCopy, "copyPackagePublicationTree").mockImplementation(
+        async (...args) => {
+          await copy(...args);
+          if (outcome === "mismatch") {
+            fs.writeFileSync(path.join(args[1], "previous.payload"), "corrupted copy");
+          }
+        },
+      );
+      const remove = packageFilesystem.removePackagePath;
+      let interrupted = false;
+      vi.spyOn(packageFilesystem, "removePackagePath").mockImplementation(async (...args) => {
+        if (
+          (outcome === "partial-removal" || outcome === "resume") &&
+          args[0] === f.packageRoot &&
+          !interrupted
+        ) {
+          interrupted = true;
+          fs.unlinkSync(path.join(f.packageRoot, "previous.payload"));
+          throw new Error("source removal interrupted");
+        }
+        return remove(...args);
+      });
+      let transaction: PackageUpdateTransaction | undefined;
+      const result = await swapStagedPackageInstall({
+        ...f.params,
+        activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+        onTransaction: (issued) => {
+          transaction = issued;
+        },
+      });
+      expect(attempts).toBe(1);
+      const succeeded = outcome === "commit" || outcome === "rollback";
+      expect(result.status, result.step.stderrTail ?? undefined).toBe(
+        succeeded ? "committed" : "failed",
+      );
+      if (outcome === "mismatch" || outcome === "creation-acknowledgement") {
+        expect(result.step.stderrTail).toContain(
+          outcome === "mismatch"
+            ? "Package copy inventory does not match"
+            : "copy staging creation acknowledgement lost",
+        );
+        expect(packageActivationIdentity(f.packageRoot, true)).toBe(originalIdentity);
+        expect(fs.readFileSync(path.join(f.packageRoot, "previous.payload"), "utf8")).toBe(
+          "previous bytes",
+        );
+        expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+        expect(fs.existsSync(path.join(anchor, "previous"))).toBe(false);
+      } else {
+        const record = openPackageActivationJournal(anchor).read();
+        expect(record.descriptor.previous.identity).not.toBe(originalIdentity);
+        expect(record.descriptor.previous.identity).toBe(
+          packageActivationIdentity(path.join(anchor, "previous"), true),
+        );
+        expect(fs.readFileSync(path.join(anchor, "previous", "previous.payload"), "utf8")).toBe(
+          "previous bytes",
+        );
+        expect(fs.readlinkSync(path.join(anchor, "previous", "payload.link"))).toBe(
+          "previous.payload",
+        );
+      }
+      if (outcome === "resume") {
+        // Reopen durable facts, without the original owner's in-memory inventory.
+        const owner = createPublicationOwner(
+          anchor,
+          openPackageActivationJournal(anchor),
+          fence.assertCurrent,
+        );
+        await expect(owner.publish(true)).resolves.toMatchObject({ phase: "publication-complete" });
+        await owner.retire();
+      } else {
+        if (!transaction) {
+          throw new Error("Publication did not retain its package transaction.");
+        }
+        if (outcome !== "commit") {
+          await expect(transaction.rollback(fence.assertCurrent)).resolves.toMatchObject({
+            exitCode: 0,
+          });
+          expect(fs.readFileSync(path.join(f.packageRoot, "previous.payload"), "utf8")).toBe(
+            "previous bytes",
+          );
+          expect(fs.readlinkSync(path.join(f.packageRoot, "payload.link"))).toBe(
+            "previous.payload",
+          );
+          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+        }
+        await transaction.complete({ activationVerified: true }, fence.assertCurrent);
+      }
+      expect(fs.existsSync(anchor)).toBe(false);
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      if (outcome === "commit" || outcome === "resume") {
+        expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+        expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain(
+          '"version":"2.0.0"',
+        );
+      }
+    });
+  }),
 );
 
 it.skipIf(process.platform === "win32")(

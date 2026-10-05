@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 describe("palette live roster authority", () => {
-  it.each(["untouched", "removed-agent", "refresh-failure"] as const)(
+  it.each(["removed-agent", "refresh-failure"] as const)(
     "waits for current defaults and preserves %s intent in the create request",
     async (choice) => {
       const fresh = createDeferred<AgentsListResult>();

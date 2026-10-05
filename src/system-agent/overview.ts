@@ -19,7 +19,6 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createSetupTranslator, type SetupTranslator } from "../wizard/i18n/index.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
@@ -68,27 +67,6 @@ export type SystemAgentOverview = {
     sourcePath?: string;
     sourceUrl: string;
   };
-};
-
-type OpenClawReferencePaths = Awaited<ReturnType<typeof resolveOpenClawReferencePaths>>;
-
-type GatewayConnectionDetails = {
-  url: string;
-  urlSource: string;
-  remoteFallbackNote?: string;
-};
-
-type SystemAgentOverviewDependencies = {
-  readConfigFileSnapshot?: typeof readConfigFileSnapshot;
-  resolveConfigPath?: typeof resolveConfigPath;
-  resolveGatewayPort?: typeof resolveGatewayPort;
-  buildGatewayConnectionDetails?: (input: {
-    config: OpenClawConfig;
-    configPath: string;
-  }) => GatewayConnectionDetails;
-  probeLocalCommand?: typeof probeLocalCommand;
-  probeGatewayUrl?: typeof probeGatewayUrl;
-  resolveOpenClawReferencePaths?: typeof resolveOpenClawReferencePaths;
 };
 
 function issueMessages(snapshot: ConfigFileSnapshot): string[] {
@@ -143,24 +121,11 @@ function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): Syste
   return summaries;
 }
 
-function resolveFastTestReferences(env: NodeJS.ProcessEnv): OpenClawReferencePaths | undefined {
-  if (!isFastTestRuntimeEnv(env)) {
-    return undefined;
-  }
-  const sourcePath = process.cwd();
-  return {
-    sourcePath,
-    docsPath: `${sourcePath}/docs`,
-  };
-}
-
 export async function loadSystemAgentOverview(
-  opts: { agentId?: string; env?: NodeJS.ProcessEnv; deps?: SystemAgentOverviewDependencies } = {},
+  opts: { agentId?: string } = {},
 ): Promise<SystemAgentOverview> {
-  const env = opts.env ?? process.env;
-  const deps = opts.deps ?? {};
-  const readSnapshot = deps.readConfigFileSnapshot ?? readConfigFileSnapshot;
-  const snapshot = await readSnapshot();
+  const env = process.env;
+  const snapshot = await readConfigFileSnapshot();
   const cfg = snapshot.runtimeConfig ?? snapshot.sourceConfig ?? {};
   const defaultAgentId = resolveAmbientOwnerAgentId(cfg, opts.agentId);
   const defaultModel =
@@ -168,14 +133,12 @@ export async function loadSystemAgentOverview(
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
   const setupSelection = resolveConfiguredSetupModelForAgent({ cfg, agentId: defaultAgentId });
   const utility = readUtilityModelSetting(cfg, defaultAgentId);
-  const configPath = snapshot.path || (deps.resolveConfigPath ?? resolveConfigPath)(env);
-  let gatewayUrl = `ws://127.0.0.1:${(deps.resolveGatewayPort ?? resolveGatewayPort)(cfg, env)}`;
+  const configPath = snapshot.path || resolveConfigPath(env);
+  let gatewayUrl = `ws://127.0.0.1:${resolveGatewayPort(cfg, env)}`;
   let gatewaySource = "local loopback";
   let gatewayError: string | undefined;
   try {
-    const buildGatewayConnectionDetails =
-      deps.buildGatewayConnectionDetails ??
-      (await import("../gateway/call.js")).buildGatewayConnectionDetails;
+    const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
     const details = buildGatewayConnectionDetails({ config: cfg, configPath });
     gatewayUrl = details.url;
     gatewaySource = details.urlSource;
@@ -183,20 +146,17 @@ export async function loadSystemAgentOverview(
   } catch (err) {
     gatewayError = err instanceof Error ? err.message : String(err);
   }
-  const resolveReferences = deps.resolveOpenClawReferencePaths ?? resolveOpenClawReferencePaths;
-  const commandProbe = deps.probeLocalCommand ?? probeLocalCommand;
   const [codex, claude, gemini, gateway, references] = await Promise.all([
     // Probes run in parallel; each individual probe is timeout-bounded in probes.ts.
-    commandProbe("codex"),
-    commandProbe("claude"),
-    commandProbe("gemini"),
-    (deps.probeGatewayUrl ?? probeGatewayUrl)(gatewayUrl),
-    resolveFastTestReferences(env) ??
-      resolveReferences({
-        argv1: process.argv[1],
-        cwd: process.cwd(),
-        moduleUrl: import.meta.url,
-      }),
+    probeLocalCommand("codex"),
+    probeLocalCommand("claude"),
+    probeLocalCommand("gemini"),
+    probeGatewayUrl(gatewayUrl),
+    resolveOpenClawReferencePaths({
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+      moduleUrl: import.meta.url,
+    }),
   ]);
   return {
     config: {
@@ -319,20 +279,6 @@ function recommendSystemAgentNextStep(overview: SystemAgentOverview): string {
   return 'run "talk to agent" to enter your default agent';
 }
 
-function formatStartupConfigStatus(overview: SystemAgentOverview): string {
-  if (!overview.config.exists) {
-    return "missing";
-  }
-  return overview.config.valid ? "valid" : "invalid";
-}
-
-function formatStartupGatewayStatus(overview: SystemAgentOverview): string {
-  if (overview.gateway.reachable) {
-    return `Gateway: reachable at ${overview.gateway.url}.`;
-  }
-  return `Gateway: not reachable at ${overview.gateway.url}; I already did the first probe.`;
-}
-
 function formatStartupAction(overview: SystemAgentOverview): string | undefined {
   if (!overview.config.valid) {
     return "Config needs attention. Run `doctor` to inspect it.";
@@ -373,6 +319,11 @@ export function formatSystemAgentStartupMessage(overview: SystemAgentOverview): 
   const agentLabel = agent?.name
     ? `${overview.defaultAgentId} (${agent.name})`
     : overview.defaultAgentId;
+  const configStatus = !overview.config.exists
+    ? "missing"
+    : overview.config.valid
+      ? "valid"
+      : "invalid";
   return [
     "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
     // Inference status stays independent of the recovery action line: with an
@@ -382,8 +333,10 @@ export function formatSystemAgentStartupMessage(overview: SystemAgentOverview): 
       : overview.setupModel
         ? `Setup model: ${overview.setupModel}.`
         : "Inference is unavailable.",
-    `Config: ${formatStartupConfigStatus(overview)}. Default agent: ${agentLabel}.`,
-    formatStartupGatewayStatus(overview),
+    `Config: ${configStatus}. Default agent: ${agentLabel}.`,
+    overview.gateway.reachable
+      ? `Gateway: reachable at ${overview.gateway.url}.`
+      : `Gateway: not reachable at ${overview.gateway.url}; I already did the first probe.`,
     formatStartupAction(overview),
   ]
     .filter((line): line is string => line !== undefined)

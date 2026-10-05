@@ -284,6 +284,17 @@ public final class OpenClawChatSessionSidebarData {
         self.entries[id] = current
     }
 
+    func restoredIDs(after readRevision: Int) -> [String] {
+        // A confirmed restore outranks membership read before its ACK, just as its row fields do.
+        // A later authoritative list can retire this temporary membership without a second cache.
+        self.receipts.compactMap { id, fields -> (String, Int)? in
+            guard let receipt = fields[.archived], receipt.cutoff >= readRevision,
+                  receipt.ack.entry.archivedAt == nil, let row = self.entries[id],
+                  receipt.ack.matches(row), !row.isArchived else { return nil }
+            return (id, receipt.order)
+        }.sorted { ($0.1, $0.0) < ($1.1, $1.0) }.map(\.0)
+    }
+
     func remove(_ target: OpenClawChatSessionEntry) {
         let id = Self.identity(target)
         guard self.entries[id]?.sessionId == target.sessionId else { return }

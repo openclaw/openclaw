@@ -83,21 +83,16 @@ function joinBody(notes: string, tail: string | undefined) {
   return normalizedTail ? `${normalizedNotes}\n\n${normalizedTail}` : normalizedNotes;
 }
 
-function verificationWithAdvisories(verification: string, manifest: unknown) {
+function normalizeVerification(verification: string, manifest: unknown) {
   if (manifest === undefined) {
     return normalizeTail(verification);
   }
-  const escape = (value: string) => value.replace(/[\\`*_{}[\]()<>!#|]/gu, "\\$&");
-  const lines = validateReleaseManifestAdvisoryJobs(manifest).map(
-    (job) =>
-      `${ADVISORY_LINE_PREFIX}${job.class}): ${escape(job.child)} / ${escape(job.job)} (${job.conclusion}): ${job.url}`,
-  );
-  const proof = normalizeTail(verification)
+  validateReleaseManifestAdvisoryJobs(manifest);
+  return normalizeTail(verification)
     .split("\n")
     .filter((line) => !line.startsWith(ADVISORY_LINE_PREFIX))
     .join("\n")
     .trimEnd();
-  return lines.length > 0 ? [proof || RELEASE_VERIFICATION_HEADING, ...lines].join("\n") : proof;
 }
 
 function extendedStableReleaseNotice({
@@ -442,17 +437,10 @@ export function renderGithubReleaseNotes({
       `compacted release notes are still too large for GitHub: ${size.characters} characters, ${size.bytes} bytes`,
     );
   }
-  const normalizedVerification = verificationWithAdvisories(verification, validationManifest);
+  const normalizedVerification = normalizeVerification(verification, validationManifest);
   const bodyWithVerification = joinBody(baseBody, normalizedVerification);
   const verificationIncluded =
     normalizedVerification !== "" && fitsGithubReleaseBody(bodyWithVerification);
-  if (
-    !verificationIncluded &&
-    validationManifest !== undefined &&
-    validateReleaseManifestAdvisoryJobs(validationManifest).length > 0
-  ) {
-    fail("release notes exceed GitHub's body limit with required advisory evidence");
-  }
   const body = verificationIncluded ? bodyWithVerification : baseBody;
   return {
     body,
@@ -573,6 +561,9 @@ function main() {
     : changelogPath
       ? readFileSync(changelogPath, "utf8")
       : fail("release notes source was not validated");
+  const validationManifest: unknown = options.validationManifest
+    ? JSON.parse(readFileSync(options.validationManifest, "utf8"))
+    : undefined;
   const target = {
     changelog,
     version,
@@ -580,9 +571,7 @@ function main() {
     repository,
     regularStableVersion: options.regularStableVersion,
     contributionRecordPath: source?.recordPath ?? undefined,
-    validationManifest: options.validationManifest
-      ? JSON.parse(readFileSync(options.validationManifest, "utf8"))
-      : undefined,
+    validationManifest,
   };
   if (options.verifyBody) {
     const result = verifyGithubReleaseNotes({

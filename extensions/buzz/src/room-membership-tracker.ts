@@ -1,5 +1,6 @@
 import type { Event, Filter, Relay } from "nostr-tools";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isNewerBuzzRevision } from "./event-order.js";
 import { catchUpBuzzRoomHistory } from "./history-catchup.js";
 import { BUZZ_INBOUND_MESSAGE_KINDS, isBuzzInboundMessageKind } from "./message-event.js";
@@ -25,33 +26,14 @@ const MEMBERSHIP_EVENT_CACHE_MAX_ENTRIES = 10_000;
 
 async function sleepWithSignal(delayMs: number, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted();
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      if (error === undefined) {
-        resolve();
-      } else {
-        reject(
-          error instanceof Error
-            ? error
-            : new Error("Buzz room membership refresh failed", { cause: error }),
-        );
-      }
-    };
-    const onAbort = () =>
-      finish(signal?.reason ?? new Error("Buzz room membership refresh aborted"));
-    const timer = setTimeout(() => finish(), delayMs);
-    signal?.addEventListener("abort", onAbort, { once: true });
-    if (signal?.aborted) {
-      onAbort();
-    }
-  });
+  try {
+    await sleepWithAbort(delayMs, signal);
+  } catch {
+    const error = signal?.reason ?? new Error("Buzz room membership refresh aborted");
+    throw error instanceof Error
+      ? error
+      : new Error("Buzz room membership refresh failed", { cause: error });
+  }
 }
 
 export async function createBuzzRoomMembershipTracker(params: {

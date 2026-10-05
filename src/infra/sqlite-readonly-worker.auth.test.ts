@@ -12,8 +12,8 @@ import { BrokerChild } from "../process/spawn-broker/child.js";
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { SpawnBrokerError } from "../process/spawn-broker/protocol.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
@@ -477,7 +477,7 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
           expect(nativeClosed).toBe(true);
           expect(nativeChild?.exitCode).toBe(0);
           expect(nativeChild?.connected).toBe(false);
-          expect(nativeOptions?.cwd).toBe(brokerOptions?.cwd);
+          expect(nativeOptions?.cwd ?? process.cwd()).toBe(brokerOptions?.cwd);
         }
         expect(proxyClosed).toBe(true);
       } finally {

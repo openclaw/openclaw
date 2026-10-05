@@ -182,8 +182,6 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
 
 /** Prepares canonical native MCP policy and projects it into Codex before thread creation. */
 export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
-  // Both existing full attempts and admitted session setup carry these MCP policy facts.
-  // The session-only carrier keeps its required V1 authority instead of borrowing legacy optionality.
   run:
     | import("../harness/types.js").AgentHarnessAttemptParams
     | import("../harness/types.js").AgentHarnessSessionRuntimeParamsV1;
@@ -231,6 +229,7 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
     senderUsername: run.senderUsername,
     senderE164: run.senderE164,
     senderIsOwner: run.senderIsOwner,
+    conversationToolPolicy: run.conversationToolPolicy,
     modelProvider: run.provider,
     modelId: run.modelId,
     workspaceDir: run.workspaceDir,

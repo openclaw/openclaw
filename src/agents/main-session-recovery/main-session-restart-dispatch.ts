@@ -89,22 +89,18 @@ export function requiresRestartRecoveryMessageActionAuthority(entry: SessionEntr
 }
 
 function buildResumeMessage(
-  pendingFinalDeliveryText?: string | null,
+  pendingFinalDeliveryText: string,
   forceRestartSafeTools?: boolean,
   childRecoveryRoster?: string,
 ): string {
-  const sanitizedPendingText =
-    typeof pendingFinalDeliveryText === "string"
-      ? sanitizePendingFinalDeliveryText(pendingFinalDeliveryText)
-      : "";
+  const sanitizedPendingText = sanitizePendingFinalDeliveryText(pendingFinalDeliveryText);
   const instructions = forceRestartSafeTools
     ? `${RESTART_RECOVERY_RESUME_MESSAGE}\n\n${RESTART_SAFE_TOOLS_NOTICE}`
     : RESTART_RECOVERY_RESUME_MESSAGE;
   const base = childRecoveryRoster ? `${instructions}\n\n${childRecoveryRoster}` : instructions;
-  if (sanitizedPendingText) {
-    return `${base}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`;
-  }
-  return base;
+  return sanitizedPendingText
+    ? `${base}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`
+    : base;
 }
 
 type MainSessionResumeResult = "started" | "settled" | "skipped" | "failed";

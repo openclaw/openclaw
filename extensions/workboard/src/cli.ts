@@ -1,8 +1,4 @@
-import {
-  WORKBOARD_STATUSES,
-  type WorkboardCard,
-  type WorkboardStatus,
-} from "@openclaw/workboard-contract";
+import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
@@ -30,18 +26,14 @@ type DispatchOptions = GatewayOptions & {
   maxStarts?: number;
 };
 
-function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
-  const error = new Error(message) as Error & { code: string; exitCode: number };
-  error.name = "InvalidArgumentError";
-  error.code = "commander.invalidArgument";
-  error.exitCode = 1;
-  return error;
-}
-
-function parsePositiveIntegerOption(value: string, flag: string): number {
+function parseMaxStarts(value: string): number {
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined) {
-    throw invalidCliArgument(`${flag} must be a positive integer.`);
+    throw Object.assign(new Error("--max-starts must be a positive integer."), {
+      name: "InvalidArgumentError",
+      code: "commander.invalidArgument",
+      exitCode: 1,
+    });
   }
   return parsed;
 }
@@ -52,17 +44,6 @@ function writeJson(value: unknown): void {
 
 function writeLine(value: string): void {
   process.stdout.write(`${value}\n`);
-}
-
-function splitLabels(value: string | undefined): string[] | undefined {
-  return value
-    ?.split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function isWorkboardStatus(value: string): value is WorkboardStatus {
-  return (WORKBOARD_STATUSES as readonly string[]).includes(value);
 }
 
 function formatCardLine(card: WorkboardCard): string {
@@ -78,6 +59,14 @@ function writeCards(cards: WorkboardCard[], options: JsonOptions): void {
     return;
   }
   for (const card of cards) {
+    writeLine(formatCardLine(card));
+  }
+}
+
+function writeCard(card: WorkboardCard, options: JsonOptions): void {
+  if (options.json) {
+    writeJson({ card: redactClaimToken(card) });
+  } else {
     writeLine(formatCardLine(card));
   }
 }
@@ -191,14 +180,10 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
           priority: options.priority,
           agentId: options.agent,
           boardId: options.board,
-          labels: splitLabels(options.labels),
+          labels: options.labels,
           workspaceAccess: { unrestricted: true },
         });
-        if (options.json) {
-          writeJson({ card: redactClaimToken(card) });
-        } else {
-          writeLine(formatCardLine(card));
-        }
+        writeCard(card, options);
       },
     );
 
@@ -213,13 +198,9 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       if (!card) {
         throw new Error(error);
       }
-      if (options.json) {
-        writeJson({ card: redactClaimToken(card) });
-      } else {
-        writeLine(formatCardLine(card));
-        if (card.notes) {
-          writeLine(card.notes);
-        }
+      writeCard(card, options);
+      if (!options.json && card.notes) {
+        writeLine(card.notes);
       }
     });
 
@@ -230,7 +211,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .requiredOption("--status <status>", "Target status")
     .option("--json", "Print JSON", false)
     .action(async (id: string, options: JsonOptions & { status: string }) => {
-      if (!isWorkboardStatus(options.status)) {
+      if (!(WORKBOARD_STATUSES as readonly string[]).includes(options.status)) {
         throw new Error(`--status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
       }
       const cards = await params.store.list();
@@ -239,11 +220,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
         throw new Error(error);
       }
       const updated = await params.store.move(card.id, options.status, undefined);
-      if (options.json) {
-        writeJson({ card: redactClaimToken(updated) });
-      } else {
-        writeLine(formatCardLine(updated));
-      }
+      writeCard(updated, options);
     });
 
   addGatewayClientOptions(
@@ -254,7 +231,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       .option(
         "--max-starts <count>",
         "Maximum new worker runs to start in this pass (default 3)",
-        (value: string) => parsePositiveIntegerOption(value, "--max-starts"),
+        parseMaxStarts,
       )
       .option("--admin", "Request full-host workspace access", false)
       .option("--json", "Print JSON", false),

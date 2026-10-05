@@ -20,15 +20,8 @@ const MAX_BREAK_PROBES = 32;
 const STABLE_LINE_CONTAINER_TYPES = new Set(["list", "blockquote", "code"]);
 
 function resolveRemoteImageUrl(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? value : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(value ?? "");
+  return url?.protocol === "http:" || url?.protocol === "https:" ? value : undefined;
 }
 
 function collectMarkdownImages(root: FeishuMarkdownNode): DocxMarkdownImage[] {
@@ -189,17 +182,7 @@ function splitTableAtRow(
 }
 
 function isFencedCodeSource(source: string): boolean {
-  const firstLineEnd = source.indexOf("\n");
-  const firstLine = source.slice(0, firstLineEnd === -1 ? source.length : firstLineEnd);
-  let indent = 0;
-  while (indent < firstLine.length && firstLine[indent] === " ") {
-    indent += 1;
-  }
-  if (indent > 3) {
-    return false;
-  }
-  const marker = firstLine.slice(indent);
-  return marker.startsWith("```") || marker.startsWith("~~~");
+  return /^ {0,3}(?:`{3}|~{3})/.test(source);
 }
 
 export function createDocxMarkdownChunk(markdown: string): DocxMarkdownChunk {

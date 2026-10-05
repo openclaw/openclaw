@@ -45,7 +45,7 @@ private enum VoiceWakeAudioError: LocalizedError {
     }
 }
 
-private enum VoiceWakeSuppressionReason: Hashable {
+enum VoiceWakeSuppressionReason: Hashable {
     case auxiliaryAudio
     case background
     case talk
@@ -135,27 +135,7 @@ final class VoiceWakeManager: NSObject {
         }
     }
 
-    func setSuppressedByTalk(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .talk)
-    }
-
-    func setSuppressedForBackground(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .background)
-    }
-
-    func setSuppressedForAuxiliaryAudio(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .auxiliaryAudio)
-    }
-
-    func setSuppressedByPushToTalk(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .pushToTalk)
-    }
-
-    func setSuppressedByVoiceNote(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .voiceNote)
-    }
-
-    private func setSuppressed(_ suppressed: Bool, reason: VoiceWakeSuppressionReason) {
+    func setSuppressed(_ suppressed: Bool, reason: VoiceWakeSuppressionReason) {
         if suppressed {
             self.suppressionReasons.insert(reason)
         } else {

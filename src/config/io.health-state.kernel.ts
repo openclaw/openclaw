@@ -3,11 +3,11 @@ import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { Insertable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import type {
   ConfigHealthEntry,
   ConfigHealthEntryChanges,
   ConfigHealthEntryBasis,
-  ConfigHealthSnapshot,
   ConfigHealthFingerprint,
   ConfigHealthState,
 } from "./io.health-state.types.js";
@@ -68,23 +68,28 @@ export function readConfigHealthStateInDatabase(db: DatabaseSync): ConfigHealthS
   return decodeConfigHealthRows(selectConfigHealthRows(db));
 }
 
-export function readConfigHealthSnapshotInDatabase(db: DatabaseSync): ConfigHealthSnapshot {
-  const rows = selectConfigHealthRows(db);
-  return {
-    state: decodeConfigHealthRows(rows),
-    basis: Object.fromEntries(
-      rows.map((row) => [
-        row.config_path,
-        {
-          lastKnownGoodJson: row.last_known_good_json,
-          lastPromotedGoodJson: row.last_promoted_good_json,
-          suspiciousSignature: row.last_observed_suspicious_signature,
-          updatedAtMs: row.updated_at_ms,
-        } satisfies ConfigHealthEntryBasis,
-      ]),
-    ),
-  };
-}
+export const configHealthReadOperations = {
+  "config.health.read": (_input: undefined, db) => {
+    const rows = selectConfigHealthRows(db);
+    return {
+      type: "config.health.read" as const,
+      snapshot: {
+        state: decodeConfigHealthRows(rows),
+        basis: Object.fromEntries(
+          rows.map((row) => [
+            row.config_path,
+            {
+              lastKnownGoodJson: row.last_known_good_json,
+              lastPromotedGoodJson: row.last_promoted_good_json,
+              suspiciousSignature: row.last_observed_suspicious_signature,
+              updatedAtMs: row.updated_at_ms,
+            } satisfies ConfigHealthEntryBasis,
+          ]),
+        ),
+      },
+    };
+  },
+} satisfies WorkerOperationHandlers<DatabaseSync>;
 
 /** Omitted fields remain untouched; explicit undefined and null clear their stored value. */
 export function prepareConfigHealthPatch(changes: ConfigHealthEntryChanges): ConfigHealthPatch {

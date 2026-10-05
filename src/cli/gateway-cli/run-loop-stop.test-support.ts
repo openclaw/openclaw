@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
-import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.js";
+import type { GatewayRestartResult } from "../daemon-cli/restart-health.types.js";
 import {
   createActiveWorkSnapshot,
   createUpdateRespawnChild,
@@ -559,7 +559,7 @@ export function registerForegroundUpdateStopTests({
     { phase: "log-flush", signal: "SIGINT" },
   ] as const)("retains $signal stop intent during foreground $phase", async ({ signal, phase }) => {
     const updater = createDeferred<{ respawn: boolean }>();
-    const readiness = createDeferred<GatewayRestartSnapshot>();
+    const readiness = createDeferred<GatewayRestartResult>();
     const flushEntered = createDeferred();
     const flush = createDeferred();
     const child = createUpdateRespawnChild();

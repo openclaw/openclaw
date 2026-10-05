@@ -94,6 +94,30 @@ export const mcpImportBoundaryEntrypoints = {
   },
 } as const;
 
+// Preserve module boundaries so a child can retire only its own cleanup source copies.
+export const cliCleanupRetirementEntrypoints = {
+  scope: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "runtime-cleanup-scope",
+    distWorkerPath: "legacy-finalizer/src/cli/runtime-cleanup-scope.js",
+  },
+  cleanup: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "runtime-cleanup",
+    distWorkerPath: "legacy-finalizer/src/cli/runtime-cleanup.js",
+  },
+  database: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../state/openclaw-state-db-cache",
+    distWorkerPath: "legacy-finalizer/src/state/openclaw-state-db-cache.js",
+  },
+  workers: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/worker-native-lifecycle",
+    distWorkerPath: "legacy-finalizer/src/infra/worker-native-lifecycle.js",
+  },
+} as const;
+
 // Failure reporting and exit finalization must share their compiled error classes.
 export const updateCandidateExitEntrypoints = {
   oneShotExit: {
@@ -119,6 +143,18 @@ export const stateDirGatewayFixtureEntrypoint = {
   currentModuleUrl: import.meta.url,
   sourceWorkerName: "state-dir-gateway-check.server-fixture.test-support",
   distWorkerPath: "cli/state-dir-gateway-check.server-fixture.test-support.js",
+} as const;
+
+export const localStateOwnerFixtureEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "local-state-owner.child.test-support",
+  distWorkerPath: "cli/local-state-owner.child.test-support.js",
+} as const;
+
+export const adminStateOwnerFixtureEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "admin-state-owner.child.test-support",
+  distWorkerPath: "cli/admin-state-owner.child.test-support.js",
 } as const;
 
 export const updateFinalizationOutputEntrypoint = {

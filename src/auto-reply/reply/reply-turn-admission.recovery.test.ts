@@ -282,7 +282,7 @@ it("keeps new input and followups behind a concurrent recovery winner", async ()
         expect(isCompetingSessionWorkAdmissionActive(f.storePath, [sessionKey, sessionId])).toBe(
           false,
         );
-        return runExclusiveSessionLifecycleMutation({
+        return runExclusiveSessionLifecycleMutation("recover", {
           ...f.scope,
           run: () =>
             f.write({
@@ -414,31 +414,42 @@ it.each(["started", "cancelled", "replaced"] as const)(
   },
 );
 
-it("admits monitoring without claiming foreground recovery from current delivery residue", async () => {
-  const f = recoveryFixture({
-    abortedLastRun: false,
-    restartRecoveryDeliveryRunId: "completed-recovery",
-    restartRecoveryRuns: [
-      { runId: "completed-recovery", lifecycleGeneration: getAgentEventLifecycleGeneration() },
-    ],
-  });
-  const result = await f.admit({ kind: "heartbeat" });
-  expect(result.status).toBe("owned");
-  expect(f.read()).toMatchObject(f.entry);
-  expect(f.read()?.mainRestartRecovery).toBeUndefined();
-});
-
-it("leaves a named live recovery owner intact and skips the monitor", async () => {
-  const f = recoveryFixture({ status: undefined, abortedLastRun: undefined });
-  const owner = await f.begin({ owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER });
-  let released = false;
-  void owner.released.then(() => {
-    released = true;
-  });
-  const result = await f.admit({ kind: "heartbeat" });
-  expect(result).toMatchObject({ status: "skipped", reason: "active-run" });
-  expect(released).toBe(false);
-  expect(f.read()?.sessionId).toBe(sessionId);
-  owner.release();
-  await owner.released;
-});
+it.each(["delivery-residue", "live-owner"] as const)(
+  "preserves recovery authority when monitoring encounters %s",
+  async (recovery) => {
+    const f = recoveryFixture(
+      recovery === "live-owner"
+        ? { status: undefined, abortedLastRun: undefined }
+        : {
+            abortedLastRun: false,
+            restartRecoveryDeliveryRunId: "completed-recovery",
+            restartRecoveryRuns: [
+              {
+                runId: "completed-recovery",
+                lifecycleGeneration: getAgentEventLifecycleGeneration(),
+              },
+            ],
+          },
+    );
+    const owner =
+      recovery === "live-owner"
+        ? await f.begin({ owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER })
+        : undefined;
+    let released = false;
+    void owner?.released.then(() => {
+      released = true;
+    });
+    const result = await f.admit({ kind: "heartbeat" });
+    if (owner) {
+      expect(result).toMatchObject({ status: "skipped", reason: "active-run" });
+      expect(released).toBe(false);
+      expect(f.read()?.sessionId).toBe(sessionId);
+      owner.release();
+      await owner.released;
+    } else {
+      expect(result.status).toBe("owned");
+      expect(f.read()).toMatchObject(f.entry);
+      expect(f.read()?.mainRestartRecovery).toBeUndefined();
+    }
+  },
+);

@@ -44,12 +44,6 @@ function render(
 }
 
 describe("ClawHub staged publication recovery commands", () => {
-  it("accepts the pnpm argument separator from pnpm release:clawhub-recovery --", () => {
-    const result = render([pending], "Recovery", version, ["--"]);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("package recover 'attempt-1'");
-  });
-
   it("rejects a version that could escape the generated comment", () => {
     const releaseVersion = "2026.9.7\necho injected";
     const result = render([{ ...pending, version: releaseVersion }], "Recovery", releaseVersion);
@@ -71,6 +65,8 @@ describe("ClawHub staged publication recovery commands", () => {
         },
       ],
       reason,
+      version,
+      ["--"],
     );
     expect(result.status, result.stderr).toBe(0);
     const bun = join(result.directory, "bun");

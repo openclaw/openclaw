@@ -1,5 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
@@ -53,6 +55,24 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readMessagePresence: reader(
+      "transcript-message-presence",
+      "message presence",
+      (input) => ({ kind: "transcript-message-presence", ...input }),
+      (value) => value.present,
+    ),
+    readAnchors: reader(
+      "transcript-anchors",
+      "transcript anchors",
+      (input) => ({ kind: "transcript-anchors", ...input }),
+      (value) => value.facts,
+    ),
+    readRuntimeTarget: reader(
+      "session-runtime-target",
+      "runtime transcript target",
+      (input) => ({ kind: "session-runtime-target", ...input }),
+      (value) => value.target,
+    ),
     readConversations: reader(
       "conversation-rows",
       "conversations",
@@ -219,6 +239,7 @@ export function createSessionHistoryWorkerReaders(
             value.kind !== "source-messages" &&
             value.kind !== "recent-page" &&
             value.kind !== "rpc" &&
+            value.kind !== "rpc-message" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&
             value.kind !== "inline-visibility" &&
@@ -393,6 +414,18 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-pending-input-receipts", ...input }),
       (value) => value.receipts,
     ),
+    readHarnessCompletionSource: reader(
+      "session-harness-completion-source",
+      "a harness completion source",
+      (input) => ({ kind: "session-harness-completion-source", ...input }),
+      (value) => value.snapshot,
+    ),
+    readPendingInputSource: reader(
+      "session-pending-input-source",
+      "a submitted input source",
+      (input) => ({ kind: "session-pending-input-source", ...input }),
+      (value) => value.snapshot,
+    ),
     readConversationDelivery: reader(
       "conversation-delivery",
       "a conversation delivery receipt",
@@ -426,15 +459,36 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-diagnostic-text", ...input }),
       (value) => value.text,
     ),
-    readEntries: async (scope, continuation) =>
-      runRequest(
-        () => ({ kind: "session-entry-list", scope, continuation }),
-        JSON.stringify({ scope, continuation }).length * 2,
+    readEntries: async (scope, continuation, expectedIdentity) => {
+      const captured = expectedIdentity && { ...expectedIdentity };
+      const assertIdentity = () => {
+        if (
+          captured &&
+          !isDeepStrictEqual(readDatabasePathIdentitySync(captured.canonicalPath), captured)
+        ) {
+          throw new Error("Session listing changed its captured physical owner");
+        }
+      };
+      assertIdentity();
+      return runRequest(
+        () => {
+          assertIdentity();
+          return { kind: "session-entry-list", scope, continuation, expectedIdentity: captured };
+        },
+        JSON.stringify({ scope, continuation, expectedIdentity: captured }).length * 2,
         (value) => {
           assertResultKind(value, "session-entry-list", "entries");
+          assertIdentity();
           return value.entries;
         },
-      ),
+      );
+    },
+    readStoreProjection: reader(
+      "session-store-projection",
+      "store projection admission",
+      (input) => ({ kind: "session-store-projection", ...input }),
+      (value) => value,
+    ),
     readStoreSummary: reader(
       "session-store-summary",
       "a store summary",

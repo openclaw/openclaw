@@ -534,16 +534,27 @@ it.for(["sessions.create", "sessions.catalog.continue"])(
   "materializes %s identity for every read",
   async (method, { connect }) => {
     const key = "agent:main:created";
-    const { request } = await connect({
+    const { request, controls } = await connect({
       methodResponses: {
-        [method]: { key, entry: { sessionId: "created-generation" }, runStarted: true },
+        [method]: {
+          key,
+          entry: { sessionId: "created-generation" },
+          runStarted: true,
+          runId: "created-run",
+        },
       },
     });
     await request(method, { label: "Created" });
     for (const read of ["chat.history", "chat.startup"]) {
       expect((await request(read, { sessionKey: key })).payload).toMatchObject({
         sessionId: "created-generation",
-        sessionInfo: { key, sessionId: "created-generation", label: "Created", hasActiveRun: true },
+        sessionInfo: {
+          key,
+          sessionId: "created-generation",
+          label: "Created",
+          hasActiveRun: true,
+          activeRunIds: ["created-run"],
+        },
       });
     }
     expect((await request("sessions.describe", { key })).payload).toMatchObject({
@@ -551,6 +562,27 @@ it.for(["sessions.create", "sessions.catalog.continue"])(
     });
     expect((await request("sessions.list")).payload.sessions).toEqual(
       expect.arrayContaining([expect.objectContaining({ key, sessionId: "created-generation" })]),
+    );
+    controls.emit("chat", {
+      sessionKey: key,
+      runId: "created-run",
+      state: "error",
+      errorMessage: "Workspace preparation failed",
+    });
+    const settled = {
+      key,
+      activeRunIds: [],
+      hasActiveRun: false,
+      status: "failed",
+      lastRunError: "Workspace preparation failed",
+    };
+    for (const read of ["chat.history", "chat.startup"]) {
+      expect((await request(read, { sessionKey: key })).payload.sessionInfo).toMatchObject(settled);
+    }
+    expect((await request("sessions.describe", { key })).payload.session).toMatchObject(settled);
+    await request(method, { label: "Created" });
+    expect((await request("sessions.list")).payload.sessions).toEqual(
+      expect.arrayContaining([expect.objectContaining(settled)]),
     );
   },
 );

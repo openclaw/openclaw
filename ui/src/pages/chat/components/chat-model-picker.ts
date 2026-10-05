@@ -64,7 +64,6 @@ type ChatModelPickerParams = {
   triggerModelValue?: string;
   triggerStatusLabel?: string;
   triggerLoading?: boolean;
-  triggerStarting?: boolean;
   onModelSetup?: () => void;
   onProviderSettings?: (provider: string) => void;
   onOpen?: () => unknown;
@@ -113,7 +112,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     params.contextWindow?.selected !== params.contextWindow?.defaultId;
   const triggerTitle = [
     params.triggerStatusLabel ?? params.triggerModelLabel,
-    params.triggerStarting ? t("chat.modelControls.modelStarting") : "",
     modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
   ]
     .filter(Boolean)
@@ -135,29 +133,23 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       : nothing;
   const providerGroups = new Map<string, ChatModelPickerOption[]>();
   for (const option of params.modelOptions) {
-    const existing = providerGroups.get(option.provider);
-    if (existing) {
-      // Default restores inheritance; it stays ahead of ranked model choices.
-      if (option.isDefault) {
-        existing.unshift(option);
-      } else if (option === leadingModelOption) {
-        existing.splice(existing[0]?.isDefault ? 1 : 0, 0, option);
-      } else {
-        existing.push(option);
-      }
+    const existing = providerGroups.get(option.provider) ?? [];
+    // Default restores inheritance; it stays ahead of ranked model choices.
+    if (option.isDefault) {
+      existing.unshift(option);
+    } else if (option === leadingModelOption) {
+      existing.splice(existing[0]?.isDefault ? 1 : 0, 0, option);
     } else {
-      providerGroups.set(option.provider, [option]);
+      existing.push(option);
     }
+    providerGroups.set(option.provider, existing);
   }
   const orderedProviderGroups = [...providerGroups];
   const selectedProviderIndex = orderedProviderGroups.findIndex(
     ([provider]) => provider === leadingModelOption?.provider,
   );
   if (selectedProviderIndex > 0) {
-    const [selectedGroup] = orderedProviderGroups.splice(selectedProviderIndex, 1);
-    if (selectedGroup) {
-      orderedProviderGroups.unshift(selectedGroup);
-    }
+    orderedProviderGroups.unshift(...orderedProviderGroups.splice(selectedProviderIndex, 1));
   }
   const orderedOptions = orderedProviderGroups.flatMap(([, options]) => options);
   const optionIndex = new Map(
@@ -243,7 +235,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}${
           params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""
         }`}
-        aria-busy=${params.triggerLoading || params.triggerStarting ? "true" : "false"}
+        aria-busy=${params.triggerLoading ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
         title=${params.disabledReason?.trim() || nothing}
         @click=${(event: MouseEvent) => {
@@ -290,9 +282,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
             : nothing
         }
         <span class="chat-controls__inline-select-chevron" aria-hidden="true"
-          >${
-            params.triggerStarting ? html`<span class="btn__spinner"></span>` : icons.chevronUp
-          }</span
+          >${icons.chevronUp}</span
         >
       </summary>
       <wa-popup data-anchored-overlay>

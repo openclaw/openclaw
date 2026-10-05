@@ -53,7 +53,8 @@ describe("AppSidebar agent roster", () => {
     patchSettings({ theme: "claw" });
     context.theme.refresh();
     await sidebar.updateComplete;
-    expect(header?.querySelector("img")?.getAttribute("src")).toBe("/favicon.svg");
+    expect(header?.querySelector(".sidebar-workspace-header__mark--neutral")).toBeNull();
+    expect(header?.querySelector(".sidebar-workspace-header__mark svg")).not.toBeNull();
   });
 
   it.each([undefined, "Studio workspace", "   "])(
@@ -75,7 +76,7 @@ describe("AppSidebar agent roster", () => {
         const header = sidebar.querySelector(".sidebar-workspace-header");
         expect(header?.textContent).toContain(name?.trim() || "OpenClaw");
         expect(header?.querySelector(".sidebar-agent-card__avatar")).toBeNull();
-        expect(header?.querySelector("img")?.getAttribute("src")).toBe("/favicon.svg");
+        expect(header?.querySelector(".sidebar-workspace-header__mark svg")).not.toBeNull();
         expect(sidebar.querySelector("openclaw-sidebar-agent-card")).toBeNull();
         sidebar.querySelector<HTMLButtonElement>(".sidebar-workspace-header__main")?.click();
         await vi.waitFor(() => expect(sidebar.querySelector(".sidebar-agent-menu")).not.toBeNull());
@@ -84,22 +85,17 @@ describe("AppSidebar agent roster", () => {
           [...(menu?.querySelectorAll(":scope > wa-dropdown-item") ?? [])].map((item) =>
             item.textContent?.trim(),
           ),
-        ).toEqual(["Show one agent", "Agent settings", expect.stringContaining("Help")]);
-        expect(menu?.querySelector(".sidebar-agent-menu__agent-grid")).toBeNull();
+        ).toEqual(["New agent", "See all agents", "What can Harbor do?", "Harbor settings"]);
+        expect(
+          menu?.querySelectorAll(".sidebar-agent-menu__agent-grid wa-dropdown-item"),
+        ).toHaveLength(4);
         expect(
           [...(menu?.querySelectorAll("a") ?? [])].map((link) => link.getAttribute("href")),
-        ).toEqual([
-          "https://docs.openclaw.ai",
-          "https://docs.openclaw.ai/help",
-          "https://discord.gg/clawd",
-          "https://docs.openclaw.ai/releases",
-        ]);
-        menu?.dispatchEvent(
-          new CustomEvent("wa-select", {
-            detail: { item: menu.querySelector('[value="command:sidebar-agents"]') },
-            bubbles: true,
-          }),
+        ).toEqual([]);
+        expect(menu?.querySelector('[value="scope:all"]')?.getAttribute("aria-current")).toBe(
+          "true",
         );
+        menu?.querySelector<HTMLElement>('[value="agent:main"]')?.click();
         await vi.waitFor(() =>
           expect(sidebar.querySelector(".sidebar-agent-card__main")?.textContent).toContain(
             "Harbor",
@@ -108,9 +104,11 @@ describe("AppSidebar agent roster", () => {
         expect(sidebar.querySelector(".sidebar-workspace-header")).toBeNull();
         sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
         await vi.waitFor(() =>
-          expect(sidebar.querySelector('[value="command:sidebar-agents"]')?.textContent).toContain(
-            "Show all agents",
-          ),
+          expect(
+            sidebar
+              .querySelector('.sidebar-agent-menu [value="agent:main"]')
+              ?.getAttribute("aria-current"),
+          ).toBe("true"),
         );
       } finally {
         vi.unstubAllGlobals();
@@ -305,9 +303,9 @@ describe("AppSidebar agent roster", () => {
       "chat",
       expect.objectContaining({ pathname: "/chat/recent" }),
     );
-    await toggleRoster(sidebar);
+    await toggleRoster(sidebar, "recent");
     await vi.waitFor(() => expect(sidebar.querySelector(".nav-item--home")).not.toBeNull());
-    expect(context.agentSelection.state.scopeId).toBe("main");
+    expect(context.agentSelection.state).toEqual({ selectedId: "recent", scopeId: "recent" });
   });
 
   it("offers new sessions for agents in group order from the brand menu", async () => {

@@ -52,48 +52,37 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
   const scopes: ExecSafeBinScopeRef[] = [];
   const globalExec = asNullableRecord(cfg.tools?.exec);
   const globalTrustedDirs = normalizeConfiguredTrustedSafeBinDirs(globalExec?.safeBinTrustedDirs);
-  if (globalExec) {
-    const safeBins = normalizeConfiguredSafeBins(globalExec.safeBins);
-    if (safeBins.length > 0) {
-      scopes.push({
-        scopePath: "tools.exec",
-        safeBins,
-        exec: globalExec,
-        mergedProfiles:
-          resolveMergedSafeBinProfileFixtures({
-            global: globalExec,
-          }) ?? {},
-        trustedSafeBinDirs: getTrustedSafeBinDirs({
-          extraDirs: globalTrustedDirs,
-        }),
-      });
-    }
-  }
-  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
-    const agentExec = asNullableRecord(agent.tools?.exec);
-    if (!agentExec) {
+  const candidates = [
+    { exec: globalExec, scopePath: "tools.exec", local: undefined },
+    ...listAgentEntriesWithSource(cfg).map(({ entry: agent, source }) => {
+      const exec = asNullableRecord(agent.tools?.exec);
+      return {
+        exec,
+        local: exec,
+        scopePath:
+          source.kind === "entries"
+            ? `agents.entries.${source.key}.tools.exec`
+            : `agents.list.${source.index}.tools.exec`,
+      };
+    }),
+  ];
+  for (const { exec, scopePath, local } of candidates) {
+    if (!exec) {
       continue;
     }
-    const safeBins = normalizeConfiguredSafeBins(agentExec.safeBins);
+    const safeBins = normalizeConfiguredSafeBins(exec.safeBins);
     if (safeBins.length === 0) {
       continue;
     }
     scopes.push({
-      scopePath:
-        source.kind === "entries"
-          ? `agents.entries.${source.key}.tools.exec`
-          : `agents.list.${source.index}.tools.exec`,
+      scopePath,
       safeBins,
-      exec: agentExec,
-      mergedProfiles:
-        resolveMergedSafeBinProfileFixtures({
-          global: globalExec,
-          local: agentExec,
-        }) ?? {},
+      exec,
+      mergedProfiles: resolveMergedSafeBinProfileFixtures({ global: globalExec, local }) ?? {},
       trustedSafeBinDirs: getTrustedSafeBinDirs({
         extraDirs: [
           ...globalTrustedDirs,
-          ...normalizeConfiguredTrustedSafeBinDirs(agentExec.safeBinTrustedDirs),
+          ...normalizeConfiguredTrustedSafeBinDirs(local?.safeBinTrustedDirs),
         ],
       }),
     });

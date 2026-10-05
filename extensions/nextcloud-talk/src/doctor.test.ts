@@ -14,51 +14,9 @@ vi.mock("./bot-preflight.js", () => ({
 
 const { nextcloudTalkDoctor } = await import("./doctor.js");
 
-function getNextcloudTalkCompatibilityNormalizer(): NonNullable<
-  typeof nextcloudTalkDoctor.normalizeCompatibilityConfig
-> {
-  const normalize = nextcloudTalkDoctor.normalizeCompatibilityConfig;
-  if (!normalize) {
-    throw new Error("Expected nextcloud-talk doctor to expose normalizeCompatibilityConfig");
-  }
-  return normalize;
-}
-
 describe("nextcloud-talk doctor", () => {
   beforeEach(() => {
     hoisted.probeNextcloudTalkBotResponseFeature.mockReset();
-  });
-
-  it("normalizes legacy private-network aliases", () => {
-    const normalize = getNextcloudTalkCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          "nextcloud-talk": {
-            allowPrivateNetwork: true,
-            accounts: {
-              work: {
-                allowPrivateNetwork: false,
-              },
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.config.channels?.["nextcloud-talk"]?.network).toEqual({
-      dangerouslyAllowPrivateNetwork: true,
-    });
-    expect(
-      (
-        result.config.channels?.["nextcloud-talk"]?.accounts?.work as
-          | { network?: Record<string, unknown> }
-          | undefined
-      )?.network,
-    ).toEqual({
-      dangerouslyAllowPrivateNetwork: false,
-    });
   });
 
   it.each([
@@ -68,15 +26,15 @@ describe("nextcloud-talk doctor", () => {
       webhookPath: undefined,
       legacyWebhook: { port: 9876, host: "127.0.0.1" },
       expectedNote:
-        "- channels.nextcloud-talk.default: legacy webhook listener 127.0.0.1:9876 forwards to the Gateway route. Point the Nextcloud callback or reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook, verify delivery, then set legacyWebhook: false to disable this account's legacy forwarding.",
+        "- channels.nextcloud-talk.default: legacy webhook listener 127.0.0.1:9876 forwards to the Gateway route. Point the Nextcloud callback or reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook, verify delivery, then remove the legacyWebhook pin; use legacyWebhook: false to override an inherited endpoint.",
     },
     {
-      label: "preserved implicit listener",
+      label: "Gateway-only default",
       noteKind: "info",
       webhookPath: undefined,
       legacyWebhook: undefined,
       expectedNote:
-        "- channels.nextcloud-talk.default: legacy webhook listener 0.0.0.0:8788 forwards to the Gateway route. Point the Nextcloud callback or reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook, verify delivery, then set legacyWebhook: false to disable this account's legacy forwarding.",
+        "- channels.nextcloud-talk.default: no legacy listener is configured; use Gateway port 19801/nextcloud-talk-webhook for the Nextcloud callback or reverse-proxy upstream.",
     },
     {
       label: "explicit opt-out",
@@ -84,7 +42,7 @@ describe("nextcloud-talk doctor", () => {
       webhookPath: undefined,
       legacyWebhook: false,
       expectedNote:
-        "- channels.nextcloud-talk.default: legacyWebhook is false; use Gateway port 19801/nextcloud-talk-webhook for the Nextcloud callback or reverse-proxy upstream.",
+        "- channels.nextcloud-talk.default: no legacy listener is configured; use Gateway port 19801/nextcloud-talk-webhook for the Nextcloud callback or reverse-proxy upstream.",
     },
     {
       label: "blocked probe path",
@@ -95,12 +53,12 @@ describe("nextcloud-talk doctor", () => {
         '- channels.nextcloud-talk.default: Webhook path "/ready?tenant=a" is reserved for Gateway probes and cannot receive Nextcloud callbacks on the Gateway port. Set webhookPath to "/nextcloud-talk-webhook" and update the Nextcloud bot callback and reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook. This account cannot start until the callback path is changed.',
     },
     {
-      label: "implicit legacy probe path",
+      label: "explicit legacy probe path",
       noteKind: "warning",
       webhookPath: "/healthz?tenant=a",
-      legacyWebhook: undefined,
+      legacyWebhook: { port: 8788 },
       expectedNote:
-        '- channels.nextcloud-talk.default: Webhook path "/healthz?tenant=a" is reserved for Gateway probes and cannot receive Nextcloud callbacks on the Gateway port. Set webhookPath to "/nextcloud-talk-webhook" and update the Nextcloud bot callback and reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook. Legacy webhook listener 0.0.0.0:8788 remains available; verify the new route before setting legacyWebhook: false.',
+        '- channels.nextcloud-talk.default: Webhook path "/healthz?tenant=a" is reserved for Gateway probes and cannot receive Nextcloud callbacks on the Gateway port. Set webhookPath to "/nextcloud-talk-webhook" and update the Nextcloud bot callback and reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook. Legacy webhook listener 0.0.0.0:8788 remains available; verify the new route before removing the legacyWebhook pin.',
     },
     {
       label: "blocked Gateway-authenticated path",
@@ -116,7 +74,7 @@ describe("nextcloud-talk doctor", () => {
       webhookPath: "/%61pi/channels/talk?tenant=a",
       legacyWebhook: { port: 8788 },
       expectedNote:
-        '- channels.nextcloud-talk.default: Webhook path "/%61pi/channels/talk?tenant=a" requires Gateway authentication and cannot receive Nextcloud callbacks on the Gateway port. Set webhookPath to "/nextcloud-talk-webhook" and update the Nextcloud bot callback and reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook. Legacy webhook listener 0.0.0.0:8788 remains available; verify the new route before setting legacyWebhook: false.',
+        '- channels.nextcloud-talk.default: Webhook path "/%61pi/channels/talk?tenant=a" requires Gateway authentication and cannot receive Nextcloud callbacks on the Gateway port. Set webhookPath to "/nextcloud-talk-webhook" and update the Nextcloud bot callback and reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook. Legacy webhook listener 0.0.0.0:8788 remains available; verify the new route before removing the legacyWebhook pin.',
     },
   ])(
     "reports $label at the correct severity without changing config",
@@ -172,7 +130,7 @@ describe("nextcloud-talk doctor", () => {
       changeNotes: [],
       warningNotes: [],
       infoNotes: [
-        "- channels.nextcloud-talk.default: legacy webhook listener 0.0.0.0:8788 forwards to the Gateway route. Point the Nextcloud callback or reverse-proxy upstream to Gateway port 19801/nextcloud-talk-webhook, verify delivery, then set legacyWebhook: false to disable this account's legacy forwarding.",
+        "- channels.nextcloud-talk.default: no legacy listener is configured; use Gateway port 19801/nextcloud-talk-webhook for the Nextcloud callback or reverse-proxy upstream.",
       ],
     });
     expect(cfg).toEqual(before);

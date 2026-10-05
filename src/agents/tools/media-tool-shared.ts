@@ -10,8 +10,8 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import {
   findCapabilityProviderById,
   resolveCapabilityModelRefForProviders,
-  type CapabilityModelRef,
 } from "../../../packages/media-generation-core/src/capability-model-ref.js";
+import { parseGenerationModelRef } from "../../../packages/media-generation-core/src/model-ref.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -73,8 +73,6 @@ type TextToolResult = {
   attempts: TextToolAttempt[];
 };
 
-type ParseGenerationModelRef = (raw: string | undefined) => CapabilityModelRef | null;
-
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
 
 export const MEDIA_GENERATE_DESCRIPTIONS = {
@@ -122,6 +120,7 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
 }): boolean {
   const provider =
     params.provider ??
@@ -138,6 +137,7 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
           workspaceDir: params.workspaceDir,
           agentDir: params.agentDir,
           authStore: params.authStore,
+          authProfileStoreSource: params.authProfileStoreSource,
         })
       : false;
   }
@@ -153,6 +153,7 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
+    authProfileStoreSource: params.authProfileStoreSource,
   });
 }
 
@@ -173,19 +174,18 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   providers: T[];
   modelConfig: ToolModelConfig;
   modelOverride?: string;
-  parseModelRef: ParseGenerationModelRef;
 }): T | undefined {
   const selectedRef =
     resolveCapabilityModelRefForProviders({
       providers: params.providers,
       raw: params.modelOverride,
-      parseModelRef: params.parseModelRef,
+      parseModelRef: parseGenerationModelRef,
       normalizeProviderId,
     }) ??
     resolveCapabilityModelRefForProviders({
       providers: params.providers,
       raw: params.modelConfig.primary,
-      parseModelRef: params.parseModelRef,
+      parseModelRef: parseGenerationModelRef,
       normalizeProviderId,
     });
   if (!selectedRef) {
@@ -203,6 +203,7 @@ function resolveCapabilityModelCandidatesForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   providers: CapabilityProvider[];
 }): string[] {
   const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
@@ -230,18 +231,14 @@ function resolveCapabilityModelCandidatesForTool(params: {
   const primaryProvider = resolveDefaultModelRef(params.cfg).provider;
   const normalizedPrimaryProvider = normalizeProviderId(primaryProvider);
   const providerIds = [...providerDefaults.keys()].toSorted();
-  const matchesPrimaryProvider = (providerId: string): boolean => {
-    const entry = providerDefaults.get(providerId);
-    return (
-      normalizeProviderId(providerId) === normalizedPrimaryProvider ||
-      (entry?.aliases ?? []).includes(normalizedPrimaryProvider)
-    );
-  };
+  const matchesPrimaryProvider = (providerId: string): boolean =>
+    normalizeProviderId(providerId) === normalizedPrimaryProvider ||
+    providerDefaults.get(providerId)!.aliases.includes(normalizedPrimaryProvider);
   const orderedProviders = [
     ...providerIds.filter(matchesPrimaryProvider),
     ...providerIds.filter((providerId) => !matchesPrimaryProvider(providerId)),
   ];
-  return uniqueStrings(orderedProviders.flatMap((id) => providerDefaults.get(id)?.ref ?? []));
+  return uniqueStrings(orderedProviders.map((id) => providerDefaults.get(id)!.ref));
 }
 
 /**
@@ -253,6 +250,7 @@ export function resolveCapabilityModelConfigForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
   modelOverride?: string;
   providers: CapabilityProviderSource;
@@ -278,6 +276,7 @@ export function hasGenerationToolAvailability(params: {
   agentDir?: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
   providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
   providerKey: GenerationCapabilityProviderKey;
@@ -324,6 +323,7 @@ export function hasGenerationToolAvailability(params: {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
+      authProfileStoreSource: params.authProfileStoreSource,
       capability: capabilityAuthOperation(params.providerKey),
     }),
   );
@@ -490,7 +490,6 @@ export async function loadMediaToolReferences<T>(params: {
   fsPolicy?: ToolFsPolicy;
   maxBytes: number;
   ssrfPolicy?: SsrFPolicy;
-  timeoutMs?: number;
   signal?: AbortSignal;
   mapMedia: (media: LoadedToolReferenceMedia) => T;
   mapRemote?: (url: string) => T;
@@ -542,7 +541,7 @@ export async function loadMediaToolReferences<T>(params: {
       const timeout =
         params.toolName === "music_generate" && !params.sandbox
           ? buildTimeoutAbortSignal({
-              timeoutMs: params.timeoutMs ?? 30_000,
+              timeoutMs: 30_000,
               operation: "music-generate.reference-fetch",
               ...(params.signal ? { signal: params.signal } : {}),
               ...(reference.isHttpUrl ? { url: resolvedPath ?? resolvedInput } : {}),

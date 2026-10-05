@@ -176,12 +176,19 @@ describe("sandbox media container file URLs", () => {
     await fs.mkdir(workspace, { recursive: true });
     await fs.writeFile(imagePath, "image", "utf8");
     bridge = createSandboxFsBridge({
-      sandbox: createSandboxTestContext({
-        overrides: {
-          workspaceDir: workspace,
-          agentWorkspaceDir: workspace,
+      sandbox: {
+        ...createSandboxTestContext({
+          overrides: {
+            workspaceDir: workspace,
+            agentWorkspaceDir: workspace,
+          },
+        }),
+        backend: {
+          runShellCommand: async () => {
+            throw new Error("Path resolution must not execute backend commands");
+          },
         },
-      }),
+      },
     });
   });
 

@@ -108,8 +108,7 @@ export function captureResidentUserProfileAccess(
   if (!catalog?.valid || !bindings || !catalog.assertCurrent) {
     throw new Error("User profile catalog is not ready");
   }
-  const rows = catalog.rows;
-  const guard = catalog.assertCurrent;
+  const { rows, assertCurrent: guard } = catalog;
   const assertCurrent = () => {
     if (profileCatalogs.get(pathname) !== catalog || catalog.rows !== rows) {
       throw new UserProfileNotFoundError(profileId);
@@ -132,6 +131,7 @@ export function captureResidentUserProfileAccess(
         emails: [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted(),
         ...(profile.githubAccountIds ? { githubAccountIds: [...profile.githubAccountIds] } : {}),
         assignedRole: profile.role ?? null,
+        githubLogin: profile.githubLogin ?? null,
       };
     },
   };

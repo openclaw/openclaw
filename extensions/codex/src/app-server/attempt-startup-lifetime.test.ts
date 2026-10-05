@@ -41,6 +41,7 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
+import { createInferenceReadyClientHarness } from "./test-support.js";
 
 vi.mock("./desktop-generation.js", () => ({
   isCodexDesktopGenerationCurrent: () => false,
@@ -63,6 +64,7 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await clearSharedCodexAppServerClientAndWait();
     setManagedCodexPluginRoot(undefined);
     defaultCodexPluginMetadataCache.clear();
@@ -75,7 +77,17 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
   });
 
   it("retires indeterminate thread startup while another leased peer completes", async () => {
-    const retained = createAttemptClientHarness();
+    const threadWritten = createDeferred<{ id: number }>();
+    const retained = createInferenceReadyClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line) as { id: number; method: string };
+        if (request.method === "configRequirements/read") {
+          send({ id: request.id, result: { requirements: null } });
+        } else if (request.method === "thread/start") {
+          threadWritten.resolve(request);
+        }
+      },
+    });
     const replacement = createAttemptClientHarness();
     vi.spyOn(CodexAppServerClient, "start")
       .mockResolvedValueOnce(retained.client)
@@ -91,16 +103,22 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
     await expect(retainedLease).resolves.toBe(retained.client);
 
     const peer = retained.client.request("turn/start", { threadId: "healthy-peer" });
+    void peer.catch(() => undefined);
     const peerStart = await waitForRequest(retained, "turn/start");
+    // Hold the startup clock while real worker admission runs, then expire the
+    // same 100-ms budget only after the request has actually crossed the wire.
+    vi.useFakeTimers();
     const { run } = startThreadWithHarness(100, new AbortController().signal, {
       harness: retained,
       paths,
       skipStartSpy: true,
     });
     const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
-    const threadStart = await waitForThreadStart(retained);
+    const threadStart = await threadWritten.promise;
+    await vi.advanceTimersByTimeAsync(100);
 
     await rejected;
+    vi.useRealTimers();
     expect(threadStart.id).toBeDefined();
     expect(retained.process.stdin.destroyed).toBe(false);
     const replacementRun = startThreadWithHarness(5_000, new AbortController().signal, {

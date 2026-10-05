@@ -223,13 +223,13 @@ describe("DiscordCommandDeployer SQLite cache", () => {
         commands,
         hashStore: store,
         rest: () => restA,
-      }).deploy({ mode: "reconcile" }),
+      }).deploy(),
       new DiscordCommandDeployer({
         clientId: "app-secondary",
         commands,
         hashStore: store,
         rest: () => restB,
-      }).deploy({ mode: "reconcile" }),
+      }).deploy(),
     ]);
 
     expect(restA.get).toHaveBeenCalledTimes(1);
@@ -253,7 +253,7 @@ describe("DiscordCommandDeployer SQLite cache", () => {
       commands: [new StaticCommand("ping")],
       hashStore: store,
       rest: () => rest,
-    }).deploy({ mode: "reconcile" });
+    }).deploy();
 
     expect(store.lookup).toHaveBeenCalledOnce();
     expect(store.lookup).toHaveBeenCalledWith("app:app-default:global:reconcile");
@@ -274,7 +274,7 @@ describe("DiscordCommandDeployer SQLite cache", () => {
       commands: [new StaticCommand("ping")],
       hashStore: store,
       rest: () => rest,
-    }).deploy({ mode: "reconcile" });
+    }).deploy();
 
     expect(rest.get).toHaveBeenCalledTimes(1);
     expect(rest.post).toHaveBeenCalledTimes(1);
@@ -296,8 +296,8 @@ describe("DiscordCommandDeployer SQLite cache", () => {
       rest: () => rest,
     });
 
-    await deployer.deploy({ mode: "reconcile" });
-    await deployer.deploy({ mode: "reconcile" });
+    await deployer.deploy();
+    await deployer.deploy();
 
     expect(rest.get).toHaveBeenCalledTimes(1);
     expect(rest.post).toHaveBeenCalledTimes(1);
@@ -317,7 +317,7 @@ describe("DiscordCommandDeployer SQLite cache", () => {
         commands: [new StaticCommand("ping")],
         hashStore: store,
         rest: () => rest,
-      }).deploy({ mode: "reconcile" }),
+      }).deploy(),
     ).rejects.toThrow("Discord rejected deploy");
 
     expect(store.register).not.toHaveBeenCalled();

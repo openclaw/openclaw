@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionGitHubStatusResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -10,6 +11,7 @@ import {
 } from "../../state/user-github-connections.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import * as prRead from "../control-ui-session-pr-read.js";
+import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { personalGitHubStatus } from "../github-personal-oauth.js";
 import * as publicationAvailability from "../github-publication-availability.js";
 import * as relevance from "../github-publication-relevance.js";
@@ -42,6 +44,7 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -62,13 +65,23 @@ describe("publication receipt reads", () => {
     );
     await withReadFixture(async (fixture) => {
       for (let index = 0; index < 2; index++) {
-        const respond = await fixture.invoke("sessions.github.options", { sessionKey });
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({
-            shared: { ...publisher, source: "system-detected" },
-          }),
+        const respond = await fixture.invoke("sessions.github.options", {
+          sessionKey,
+          idempotencyKey: "owned-unknown-attempt",
+        });
+        expect(respond).toHaveBeenCalledWith(true, {
+          personal: null,
+          shared: { ...publisher, source: "system-detected" },
+          pendingPersonal: null,
+          latestShared: receipt,
+        });
+        expect(fixture.latestShared).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
+          "owned-unknown-attempt",
+          expect.any(Function),
         );
+        expect(fixture.personalPending).not.toHaveBeenCalled();
+        expect(fixture.requestForSession).not.toHaveBeenCalled();
       }
       expect(mocks.runCommandBuffered).toHaveBeenCalledOnce();
       expect(mocks.runCommandBuffered).toHaveBeenCalledWith(
@@ -79,25 +92,6 @@ describe("publication receipt reads", () => {
       clearGitHubCredentialVerificationCache();
       await fixture.invoke("sessions.github.options", { sessionKey });
       expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  it("reads an accepted shared request without a personal profile or write permission", async () => {
-    await withReadFixture(async (fixture) => {
-      const respond = await fixture.invoke("sessions.github.status", {
-        sessionKey,
-        requestId: receipt.result.requestId,
-      });
-      expect(respond).toHaveBeenCalledWith(true, receipt);
-      expect(fixture.sharedStatus).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
-        receipt.result.requestId,
-      );
-      expect(fixture.personalStatus).not.toHaveBeenCalled();
-      expect(fixture.requestForSession).not.toHaveBeenCalled();
-      expect(
-        publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
-      ).not.toHaveBeenCalled();
     });
   });
 
@@ -172,67 +166,114 @@ describe("publication receipt reads", () => {
     },
   );
 
-  it("discovers the shared receipt and can restrict recovery to the exact invocation key", async () => {
-    await withReadFixture(async (fixture) => {
-      const respond = await fixture.invoke("sessions.github.options", {
-        sessionKey,
-        idempotencyKey: "owned-unknown-attempt",
-      });
-      expect(respond).toHaveBeenCalledWith(true, {
-        personal: null,
-        shared: publisher,
-        pendingPersonal: null,
-        latestShared: receipt,
-      });
-      expect(fixture.latestShared).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
-        "owned-unknown-attempt",
-        expect.any(Function),
+  it.each(["refresh", "personal", "receipt"] as const)(
+    "bounds a stalled %s read and prevents late work or a second response",
+    async (phase) => {
+      await withReadFixture(
+        async (fixture) => {
+          const entered = createDeferredCore();
+          const pending = createDeferredCore();
+          const hold = async () => {
+            entered.resolve();
+            await pending.promise;
+          };
+          if (phase === "refresh") {
+            vi.mocked(
+              publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
+            ).mockRestore();
+            vi.mocked(requestCurrentGitHubOAuthRefresh).mockImplementationOnce(hold);
+            mocks.runCommandBuffered.mockClear();
+          } else if (phase === "personal") {
+            fixture.personalConnectionStatus.mockImplementationOnce(async (action) => {
+              await hold();
+              return personalGitHubStatus(action);
+            });
+          } else {
+            fixture.latestShared.mockImplementationOnce(async () => {
+              await hold();
+              return receipt;
+            });
+          }
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          const respond = vi.fn();
+          const request = fixture.invoke("sessions.github.options", { sessionKey }, respond);
+          try {
+            await awaitGateBeforeSettlement(entered.promise, request, "Held read did not start");
+            await vi.advanceTimersByTimeAsync(4_999);
+            expect(respond).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "UNAVAILABLE",
+                message: "GitHub publication options timed out after 5 seconds; retry the request.",
+                retryable: true,
+              }),
+            );
+            await request;
+            pending.resolve();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(respond).toHaveBeenCalledOnce();
+            if (phase === "refresh") {
+              expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+              expect(fixture.personalConnectionStatus).not.toHaveBeenCalled();
+            }
+            if (phase !== "receipt") {
+              expect(fixture.latestShared).not.toHaveBeenCalled();
+            }
+          } finally {
+            pending.resolve();
+            await vi.advanceTimersByTimeAsync(0);
+            vi.useRealTimers();
+            await request;
+          }
+        },
+        { personal: true },
       );
-      expect(fixture.personalPending).not.toHaveBeenCalled();
-      expect(fixture.requestForSession).not.toHaveBeenCalled();
-    });
-  });
+    },
+  );
 
-  it.each(["scope", "connection", "unverified-profile"] as const)(
-    "does not downgrade a failed %s check into shared access",
-    async (failure) => {
+  it.each(["accepted", "missing", "scope", "connection", "unverified-profile"] as const)(
+    "limits profileless receipt reads to authorized shared state (%s)",
+    async (outcome) => {
       await withReadFixture(async (fixture) => {
-        if (failure === "scope") {
+        if (outcome === "scope") {
           fixture.client.connect.scopes = [];
-        } else if (failure === "connection") {
+        } else if (outcome === "connection") {
           fixture.disconnect();
-        } else {
+        } else if (outcome === "unverified-profile") {
           fixture.client.authenticatedUserProfile = {
             profileId: "unverified-publication-person",
             displayName: null,
             hasAvatar: false,
             updatedAt: 1,
           };
+        } else if (outcome === "missing") {
+          fixture.sharedStatus.mockResolvedValue(undefined);
         }
         const respond = await fixture.invoke("sessions.github.status", {
           sessionKey,
           requestId: receipt.result.requestId,
         });
-        expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
-        expect(fixture.sharedStatus).not.toHaveBeenCalled();
+        if (outcome === "accepted") {
+          expect(respond).toHaveBeenCalledWith(true, receipt);
+          expect(fixture.sharedStatus).toHaveBeenCalledWith(
+            expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
+            receipt.result.requestId,
+          );
+          expect(fixture.requestForSession).not.toHaveBeenCalled();
+          expect(
+            publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
+          ).not.toHaveBeenCalled();
+        } else {
+          expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+          expect(fixture.sharedStatus).toHaveBeenCalledTimes(outcome === "missing" ? 1 : 0);
+        }
         expect(fixture.personalStatus).not.toHaveBeenCalled();
       });
     },
   );
-
-  it("does not expose personal receipts to a profileless shared reader", async () => {
-    await withReadFixture(async (fixture) => {
-      fixture.sharedStatus.mockResolvedValue(undefined);
-      const respond = await fixture.invoke("sessions.github.status", {
-        sessionKey,
-        requestId: receipt.result.requestId,
-      });
-      expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
-      expect(fixture.sharedStatus).toHaveBeenCalledOnce();
-      expect(fixture.personalStatus).not.toHaveBeenCalled();
-    });
-  });
 
   it.each([
     ...[

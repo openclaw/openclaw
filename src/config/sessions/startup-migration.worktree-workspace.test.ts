@@ -55,7 +55,7 @@ it("backfills a nested requested workspace once instead of using the agent defau
   const sessionKey = "agent:main:dashboard:legacy-worktree";
   const ordinarySessionKey = "agent:main:dashboard:ordinary";
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true, workspace: agentWorkspace }] },
+    agents: { entries: { main: { workspace: agentWorkspace } } },
     session: { store: storePath },
   };
   insertRegistryWorktree(env, {
@@ -266,7 +266,7 @@ async function createRegisteredProjectMigrationFixture() {
   const sessionKey = "agent:main:dashboard:legacy-project-worktree";
   const scope = { agentId: "main", env, sessionKey, storePath };
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true, workspace: agentWorkspace }] },
+    agents: { entries: { main: { workspace: agentWorkspace } } },
     session: { store: storePath },
   };
   // Persisted legacy setup only: public project registration separately validates Git.

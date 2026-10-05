@@ -51,10 +51,29 @@ type PublicationWorker = {
   busyTimeoutMs: number;
 };
 
+function readConnectionPragmas(db: DatabaseSync, errorMessage: string) {
+  const read = (name: keyof MemoryPublicationConnection["pragmas"]): number => {
+    const row = db.prepare(`PRAGMA ${name}`).get();
+    const value = row?.[name] ?? row?.timeout;
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+      throw new Error(errorMessage);
+    }
+    return value;
+  };
+  return {
+    busy_timeout: read("busy_timeout"),
+    synchronous: read("synchronous"),
+    foreign_keys: read("foreign_keys"),
+    journal_size_limit: read("journal_size_limit"),
+    checkpoint_fullfsync: read("checkpoint_fullfsync"),
+  };
+}
+
 export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
   private nativeWriterActive = false;
   private publicationWorker?: Promise<PublicationWorker>;
+  private publicationGenerationActive = false;
   private shadow?: {
     path: string;
     identity: MemoryShadowConnection["fileIdentity"];
@@ -97,24 +116,10 @@ export class MemoryIndexDatabase {
     );
     try {
       database = new MemoryIndexDatabase(db);
-      const readPragma = (name: keyof MemoryShadowConnection["pragmas"]): number => {
-        const row = db.prepare(`PRAGMA ${name}`).get();
-        const value = name === "busy_timeout" ? (row?.busy_timeout ?? row?.timeout) : row?.[name];
-        if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-          throw new Error("Invalid memory shadow connection policy");
-        }
-        return value;
-      };
       database.shadow = {
         path: filename,
         identity: readMemoryShadowIdentity(filename),
-        pragmas: {
-          busy_timeout: readPragma("busy_timeout"),
-          synchronous: readPragma("synchronous"),
-          foreign_keys: readPragma("foreign_keys"),
-          journal_size_limit: readPragma("journal_size_limit"),
-          checkpoint_fullfsync: readPragma("checkpoint_fullfsync"),
-        },
+        pragmas: readConnectionPragmas(db, "Invalid memory shadow connection policy"),
       };
       return database;
     } catch (error) {
@@ -241,21 +246,8 @@ export class MemoryIndexDatabase {
       if (!filename || this.readOnly || this.closed) {
         throw new Error("Memory publication requires its live file owner");
       }
-      const readPragma = (name: keyof MemoryPublicationConnection["pragmas"]): number => {
-        const row = this.db.prepare("PRAGMA " + name).get();
-        const value = row?.[name] ?? row?.timeout;
-        if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-          throw new Error("Invalid memory connection policy");
-        }
-        return value;
-      };
-      const pragmas = this.shadow?.pragmas ?? {
-        busy_timeout: readPragma("busy_timeout"),
-        synchronous: readPragma("synchronous"),
-        foreign_keys: readPragma("foreign_keys"),
-        journal_size_limit: readPragma("journal_size_limit"),
-        checkpoint_fullfsync: readPragma("checkpoint_fullfsync"),
-      };
+      const pragmas =
+        this.shadow?.pragmas ?? readConnectionPragmas(this.db, "Invalid memory connection policy");
       const worker = {
         moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
         input: {
@@ -268,7 +260,10 @@ export class MemoryIndexDatabase {
           store: await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
             this.writeOptions,
             this.db,
-            worker,
+            {
+              ...worker,
+              retainExecutionUntilClose: this.publicationGenerationActive ? true : undefined,
+            },
           ),
           busyTimeoutMs: pragmas.busy_timeout,
         };
@@ -524,6 +519,15 @@ export class MemoryIndexDatabase {
     }
   }
 
+  async withPublicationGeneration(run: () => Promise<void>): Promise<void> {
+    this.publicationGenerationActive = true;
+    try {
+      await run();
+    } finally {
+      this.publicationGenerationActive = false;
+    }
+  }
+
   closeShadow(): Promise<void> {
     this.closed = true;
     this.shadowClose ??= (async () => {
@@ -574,11 +578,6 @@ export abstract class MemoryManagerDatabaseContext {
     return database.writeOptions
       ? await withOpenClawAgentDatabaseWrite(database.writeOptions, run, database.db)
       : await database.withPrivateAccess(run, { reentrant: true });
-  }
-
-  protected async withDatabaseRead<T>(read: () => T): Promise<T> {
-    const database = this.database;
-    return database.isShadow ? database.withPrivateAccess(read) : read();
   }
 
   protected get database(): MemoryIndexDatabase {

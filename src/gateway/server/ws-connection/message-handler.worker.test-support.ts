@@ -21,6 +21,7 @@ import {
   type WorkerInferenceTerminalFrame,
   WORKER_INFERENCE_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createToolSurfacePresentationForTest } from "../../../agents/tool-surface-plan.test-support.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import { GatewayConnectionWork } from "../../server-connection-work.js";
@@ -218,6 +219,7 @@ export function attachHarness(
       ok: true,
       result: {
         generation: "generation-1",
+        presentation: createToolSurfacePresentationForTest(),
         tools: [],
         policy: {
           workspaceOnly: true,

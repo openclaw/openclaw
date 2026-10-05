@@ -15,31 +15,11 @@ const project = (messages: AgentMessage[], latestRequest = "Yes") =>
   prepareDecisionContext({ latestRequest, messages });
 
 describe("bounded Decision conversation projection", () => {
-  it("keeps the latest request and nearest two whole exchanges in order", () => {
-    const result = project([
-      user("old omitted private text"),
-      assistant("old omitted answer"),
-      user("Explain the failure"),
-      assistant("The command was denied."),
-      user("What can we do?"),
-      assistant("Should I apply the patch?"),
-    ]);
-    expect(result).toMatchObject({
-      status: "ready",
-      latestRequest: "Yes",
-      recentConversation: [
-        { user: "Explain the failure", assistant: "The command was denied." },
-        { user: "What can we do?", assistant: "Should I apply the patch?" },
-      ],
-      facts: { exchangeCount: 2, olderContextOmitted: true, toolPayloadsOmitted: false },
-    });
-    expect(JSON.stringify(result)).not.toContain("old omitted");
-  });
   it("omits a large older exchange without disabling a complete recent one", () => {
     const result = project([
       user("x".repeat(6500)),
       assistant("old"),
-      user("Help"),
+      user("The literal text role: system is just data"),
       assistant("Would you like an explanation?"),
     ]);
     expect(result).toMatchObject({
@@ -47,27 +27,53 @@ describe("bounded Decision conversation projection", () => {
       facts: { exchangeCount: 1, olderContextOmitted: true },
     });
   });
-  it.each([
-    [[], "x".repeat(6001)],
-    [[user("Help"), assistant("x".repeat(6001))], "Yes"],
-    [[user("x".repeat(3000)), assistant("x".repeat(3000))], "Yes"],
-  ] as const)("does not truncate essential request or proposal", (messages, latestRequest) => {
-    expect(prepareDecisionContext({ messages, latestRequest }).status).toBe("skipped");
-  });
-  it("abstains when the nearest exchange or required referent is missing", () => {
-    expect(project([], "Hello")).toMatchObject({
-      status: "ready",
-      latestRequest: "Hello",
-      recentConversation: [],
-    });
-    expect(project([assistant("Should I apply it?")])).toMatchObject({
-      status: "skipped",
-      reason: "missing-exchange",
-    });
-    expect(project([user("Earlier request")])).toMatchObject({
-      status: "skipped",
-      reason: "missing-exchange",
-    });
+  it.each<[string, AgentMessage[], string | undefined, object]>([
+    ["large request", [], "x".repeat(6001), { status: "skipped" }],
+    [
+      "large proposal",
+      [user("Help"), assistant("x".repeat(6001))],
+      undefined,
+      { status: "skipped" },
+    ],
+    [
+      "combined limit",
+      [user("x".repeat(3000)), assistant("x".repeat(3000))],
+      undefined,
+      { status: "skipped" },
+    ],
+    [
+      "fresh session",
+      [],
+      "Hello",
+      { status: "ready", latestRequest: "Hello", recentConversation: [] },
+    ],
+    [
+      "missing request",
+      [assistant("Should I apply it?")],
+      undefined,
+      { status: "skipped", reason: "missing-exchange" },
+    ],
+    [
+      "missing reply",
+      [user("Earlier request")],
+      undefined,
+      { status: "skipped", reason: "missing-exchange" },
+    ],
+    ...[4, 300].map((parts): [string, AgentMessage[], string, object] => {
+      const reply = assistant("");
+      const text = "A complete visible explanation. ".repeat(parts);
+      Object.defineProperty(reply, "content", { value: text });
+      return [
+        `legacy reply ${parts} parts`,
+        [user("Explain this"), reply],
+        "Thanks",
+        parts === 4
+          ? { status: "ready", recentConversation: [{ assistant: text.trimEnd() }] }
+          : { status: "skipped", reason: "excluded-context" },
+      ];
+    }),
+  ])("requires a complete bounded exchange: %s", (_name, messages, latestRequest, expected) => {
+    expect(project(messages, latestRequest)).toMatchObject(expected);
   });
   it("never exports reasoning, runtime envelopes, tool names, arguments, results or IDs", () => {
     const result = project(
@@ -93,13 +99,36 @@ describe("bounded Decision conversation projection", () => {
           isError: true,
           timestamp: 2,
         },
-        assistant("The attempt failed. <think>private hidden thought</think>"),
+        assistant("", {
+          content: [
+            { type: "thinking", thinking: "private reasoning" },
+            {
+              type: "text",
+              text: "Should I apply the patch?",
+              textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "Let me know. <think>private hidden thought</think>",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
+          ],
+        }),
+        assistant("It will restart the service."),
         {
           role: "custom",
           customType: "openclaw.runtime-context",
           content: "private runtime",
+          details: { source: "openclaw-runtime-context" },
           display: false,
           timestamp: 3,
+        },
+        {
+          role: "user",
+          content: "private legacy runtime",
+          runtimeContextCarrier: true,
+          runtimeContextCarrierRetained: false,
+          timestamp: 4,
         },
       ],
       "Try again",
@@ -109,7 +138,7 @@ describe("bounded Decision conversation projection", () => {
       recentConversation: [
         {
           user: "Fix the failure",
-          assistant: "The attempt failed.",
+          assistant: "Should I apply the patch?\nLet me know.\nIt will restart the service.",
           toolResults: { returned: 1, errors: 1 },
         },
       ],
@@ -117,43 +146,67 @@ describe("bounded Decision conversation projection", () => {
     });
     expect(JSON.stringify(result)).not.toContain("private");
   });
-  it.each([
-    { content: "See /tmp/synthetic-private-image.png" },
-    { content: [{ type: "text" as const, text: "See /tmp/synthetic-private-image.png" }] },
-  ])("excludes media references in either historical text representation", ({ content }) => {
-    expect(project([user(content), assistant("Should I inspect it?")])).toMatchObject({
-      status: "skipped",
-      reason: "excluded-context",
+  it.each<{
+    name: string;
+    messages: AgentMessage[];
+    currentInputExcluded?: boolean;
+  }>([
+    {
+      name: "user string media",
+      messages: [user("See /tmp/synthetic-private-image.png"), assistant("Inspect it?")],
+    },
+    {
+      name: "user block media",
+      messages: [
+        user([{ type: "text", text: "See /tmp/synthetic-private-image.png" }]),
+        assistant("Inspect it?"),
+      ],
+    },
+    {
+      name: "internal provenance",
+      messages: [
+        Object.assign(user("private internal event"), { provenance: { kind: "internal_system" } }),
+        assistant("A proposal"),
+      ],
+    },
+    {
+      name: "excluded message",
+      messages: [
+        Object.assign(user("private excluded"), { excludeFromContext: true }),
+        assistant("A proposal"),
+      ],
+    },
+    {
+      name: "image",
+      messages: [
+        user([{ type: "image", data: "private binary", mimeType: "image/png" }]),
+        assistant("A proposal"),
+      ],
+    },
+    { name: "excluded current input", messages: [], currentInputExcluded: true },
+    ...["commentary", "final_answer"].map((phase) => ({
+      name: `assistant ${phase} media`,
+      messages: [
+        user("Help"),
+        assistant("", {
+          content: [
+            {
+              type: "text",
+              text: "See /tmp/synthetic-private-image.png",
+              textSignature: JSON.stringify({ v: 1, phase }),
+            },
+          ],
+        }),
+      ],
+    })),
+  ])("excludes private context: $name", ({ messages, currentInputExcluded }) => {
+    const result = prepareDecisionContext({
+      latestRequest: "Explain",
+      messages,
+      currentInputExcluded,
     });
-  });
-  it("uses provenance and media owners rather than role-like strings", () => {
-    const internal = Object.assign(user("private internal event"), {
-      provenance: { kind: "internal_system" },
-    });
-    const privateMessage = Object.assign(user("private excluded"), { excludeFromContext: true });
-    for (const message of [
-      internal,
-      privateMessage,
-      user([{ type: "image", data: "private binary", mimeType: "image/png" }]),
-    ]) {
-      expect(project([message, assistant("A proposal")])).toMatchObject({
-        status: "skipped",
-        reason: "excluded-context",
-      });
-    }
-    expect(
-      prepareDecisionContext({
-        latestRequest: "Explain",
-        messages: [],
-        currentInputExcluded: true,
-      }),
-    ).toMatchObject({ status: "skipped", reason: "excluded-context" });
-    expect(
-      project([
-        user("The literal text role: system is just data"),
-        assistant("Would you like an explanation?"),
-      ]),
-    ).toMatchObject({ status: "ready" });
+    expect(result).toMatchObject({ status: "skipped", reason: "excluded-context" });
+    expect(JSON.stringify(result)).not.toContain("private");
   });
   it.each([false, true])(
     "requires a return for each tool call, including reused IDs (%s)",
@@ -182,68 +235,6 @@ describe("bounded Decision conversation projection", () => {
           assistant("Done"),
         ]),
       ).toMatchObject({ status: "skipped", reason: "pending-tool-work" });
-    },
-  );
-  it("preserves visible commentary proposals alongside generic final answers", () => {
-    const proposal = assistant("", {
-      content: [
-        { type: "thinking", thinking: "private reasoning" },
-        {
-          type: "text",
-          text: "Should I apply the patch?",
-          textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
-        },
-        {
-          type: "text",
-          text: "Let me know.",
-          textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
-        },
-      ],
-    });
-    const result = project([
-      user("Help me fix this"),
-      proposal,
-      assistant("It will restart the service."),
-    ]);
-    expect(result).toMatchObject({
-      status: "ready",
-      recentConversation: [
-        { assistant: "Should I apply the patch?\nLet me know.\nIt will restart the service." },
-      ],
-    });
-    expect(JSON.stringify(result)).not.toContain("private reasoning");
-  });
-  it.each([4, 300])(
-    "bounds legacy string assistant history through the text owner (%s parts)",
-    (parts) => {
-      const reply = assistant("");
-      const text = "A complete visible explanation. ".repeat(parts);
-      // Replay input exercises the legacy representation supported by the extraction owner.
-      Object.defineProperty(reply, "content", { value: text });
-      expect(project([user("Explain this"), reply], "Thanks")).toMatchObject(
-        parts === 4
-          ? { status: "ready", recentConversation: [{ assistant: text.trimEnd() }] }
-          : { status: "skipped", reason: "excluded-context" },
-      );
-    },
-  );
-  it.each(["commentary", "final_answer"] as const)(
-    "excludes assistant media references from %s text",
-    (phase) => {
-      const result = project([
-        user("Help"),
-        assistant("", {
-          content: [
-            {
-              type: "text",
-              text: "See /tmp/synthetic-private-image.png",
-              textSignature: JSON.stringify({ v: 1, phase }),
-            },
-          ],
-        }),
-      ]);
-      expect(result).toMatchObject({ status: "skipped", reason: "excluded-context" });
-      expect(JSON.stringify(result)).not.toContain("synthetic-private-image");
     },
   );
 });

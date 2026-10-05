@@ -7,7 +7,7 @@ import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
-import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
+import { createCodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import {
   emitCodexAppServerEvent,
   withCodexAppServerFastModeServiceTier,
@@ -83,6 +83,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     });
     const startupResult = await startCodexAttemptThread({
       assertCurrent: connection.assertCurrent,
+      authority: connection.authority,
       attemptClientFactory,
       bindingStore,
       runtime: connection.options.runtime,
@@ -160,11 +161,8 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     // preflight succeeds; startup retries may have replaced the initial client.
     await attemptTools.captureCronCreatorToolAllowlist();
     pluginAppServer = startupResult.pluginAppServer;
-    toolBridge.setRemoteWorkspaceFileReader?.((request) =>
-      readBoundedCodexRemoteWorkspaceFile({
-        ...request,
-        client: startupResult.client,
-      }),
+    toolBridge.setRemoteWorkspaceFileReader?.(
+      createCodexRemoteWorkspaceFileReader(startupResult.client, connection.authority),
     );
     if (
       usesSupervisionConnection &&

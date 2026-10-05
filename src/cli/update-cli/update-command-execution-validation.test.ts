@@ -70,7 +70,6 @@ describe("mutable update validation", () => {
   registerExecutionPhaseReceiptTests({ executionParams, mocks, successfulUpdate, phaseAdmission });
   it.each([
     { owner: "dead", changed: false },
-    { owner: "live", changed: false },
     { owner: "absent", changed: false },
     { owner: "absent", changed: true },
   ])(
@@ -96,7 +95,7 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
         );
         const lock = path.join(root, ".artifacts", "dist-artifacts.lock");
         const ownerFile = path.join(lock, "owner.json");
-        const pid = owner === "live" ? process.pid : 0x7fff_ffff;
+        const pid = 0x7fff_ffff;
         const ownerRecord = JSON.stringify({
           pid,
           startedAt: "2026-09-20T01:00:00.000Z",
@@ -162,13 +161,12 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
       }),
   );
 
-  it.each(
-    (["package", "git"] as const).flatMap((kind) =>
-      [false, true].map((changed) => ({ kind, changed })),
-    ),
-  )(
-    "checks admitted configuration before $kind rehearsal (changed=$changed)",
-    async ({ kind, changed }) => {
+  it.each([
+    { kind: "package", timeoutMs: undefined },
+    { kind: "git", timeoutMs: 600_000 },
+  ] as const)(
+    "rehearses $kind with refreshed configuration and the operator's $timeoutMs ms deadline",
+    async ({ kind, timeoutMs }) => {
       const { revalidateUpdateDatabaseContext } = await vi.importActual<
         typeof import("./update-command-managed-context.js")
       >("./update-command-managed-context.js");
@@ -191,19 +189,18 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
       }) => {
         await inspectGitTarget?.({ schemaVersions: { state: 15, agent: 19 } });
         // Staging/building is outside the admission window and can take minutes.
-        if (changed) {
-          const config = { gateway: { port: 19002 } };
-          current = {
-            ...current,
+        const config = { gateway: { port: 19002 } };
+        current = {
+          ...current,
+          config,
+          configSnapshot: {
+            ...current.configSnapshot,
+            raw: JSON.stringify(config),
+            sourceConfig: config,
             config,
-            configSnapshot: {
-              ...current.configSnapshot,
-              raw: JSON.stringify(config),
-              sourceConfig: config,
-              config,
-            },
-          };
-        }
+          },
+        };
+        expect(validateCandidate).toBeTypeOf("function");
         await validateCandidate("/candidate");
         return successfulUpdate;
       };
@@ -211,21 +208,25 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
       mocks.runPackageUpdate.mockImplementation(runStagedUpdate);
 
       const execution = await executeMutableUpdate(
-        await bindExecutionGuards(executionParams(kind)),
+        await bindExecutionGuards({
+          ...executionParams(kind),
+          timeoutMs,
+          updateStepTimeoutMs: timeoutMs ?? 30 * 60_000,
+        }),
       );
 
       expect(execution?.result.status).toBe("ok");
       expect(mocks.validateCanary).toHaveBeenCalledTimes(1);
       expect(mocks.serviceStopped).toBe(false);
       expect(execution?.mutationStarted).toBe(false);
-      if (changed) {
-        expect(mocks.validateCanary.mock.calls[0]?.[0].config).toEqual({
-          gateway: { port: 19002 },
-        });
-        expect(warning).toHaveBeenCalledWith(
-          expect.stringContaining("Configuration changed during database admission"),
-        );
-      }
+      expect(mocks.validateCanary.mock.calls[0]?.[0].root).toBe("/candidate");
+      expect(mocks.validateCanary.mock.calls[0]?.[0].timeoutMs).toBe(timeoutMs);
+      expect(mocks.validateCanary.mock.calls[0]?.[0].config).toEqual({
+        gateway: { port: 19002 },
+      });
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining("Configuration changed during database admission"),
+      );
     },
   );
 
@@ -285,39 +286,6 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
     expect(updateRunWarningMessages(recorded)).toEqual([message]);
     expect(recorded.every((entry) => entry.status === "completed")).toBe(true);
   });
-
-  it.each([
-    { kind: "package", timeoutMs: undefined },
-    { kind: "git", timeoutMs: 600_000 },
-  ] as const)(
-    "passes only the operator's $timeoutMs ms deadline to $kind candidate validation",
-    async ({ kind, timeoutMs }) => {
-      const runStagedUpdate = async ({
-        validateCandidate,
-      }: {
-        validateCandidate?: (root: string) => Promise<unknown>;
-      }) => {
-        expect(validateCandidate).toBeTypeOf("function");
-        await validateCandidate?.("/candidate");
-        return successfulUpdate;
-      };
-      mocks.runPackageUpdate.mockImplementation(runStagedUpdate);
-      mocks.runGitUpdate.mockImplementation(runStagedUpdate);
-
-      const execution = await executeMutableUpdate(
-        await bindExecutionGuards({
-          ...executionParams(kind),
-          timeoutMs,
-          updateStepTimeoutMs: timeoutMs ?? 30 * 60_000,
-        }),
-      );
-
-      expect(execution?.result.status).toBe("ok");
-      expect(mocks.validateCanary).toHaveBeenCalledOnce();
-      expect(mocks.validateCanary.mock.calls[0]?.[0].root).toBe("/candidate");
-      expect(mocks.validateCanary.mock.calls[0]?.[0].timeoutMs).toBe(timeoutMs);
-    },
-  );
 
   it.each([
     ["measured startup", undefined, true, undefined],

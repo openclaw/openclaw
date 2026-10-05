@@ -131,6 +131,8 @@ export const AgentActivityItemSchema = closedObject({
   meta: Type.Optional(Type.String()),
   commandBearing: Type.Optional(Type.Boolean()),
   toolCallId: Type.Optional(Type.String()),
+  // The history page has no matching result; this is not a terminal receipt.
+  unpairedCall: Type.Optional(Type.Boolean()),
   startedAt: Type.Optional(Type.Number()),
   endedAt: Type.Optional(Type.Number()),
   error: Type.Optional(Type.String()),
@@ -182,6 +184,12 @@ export const ChatHistoryCursorResultSchema = Type.Union([
 export const ChatMetadataParamsSchema = Object.assign(
   closedObject({
     agentId: Type.Optional(NonEmptyString),
+    includeModels: Type.Optional(
+      Type.Boolean({
+        description:
+          "Include model and account selection metadata (default true). Set false when reading models.list separately.",
+      }),
+    ),
     authProfileId: Type.Optional(
       Type.String({
         minLength: 1,
@@ -235,7 +243,11 @@ export const ChatMessageGetParamsSchema = closedObject({
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000_000 })),
 });
 
-/** Result envelope for single-message lookup, including the stable miss/visibility reason. */
+/**
+ * Single-message lookup result. History messages also carry this envelope as
+ * `__openclaw.replyToMessage`: a display preview capped at 500 chars per field
+ * and 8 KiB, or an unavailable reason. It never changes the persisted transcript.
+ */
 export const ChatMessageGetResultSchema = closedObject({
   ok: Type.Boolean(),
   message: Type.Optional(Type.Unknown()),

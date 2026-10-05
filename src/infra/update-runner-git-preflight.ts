@@ -15,7 +15,7 @@ import {
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
+import { runStep } from "./update-runner-command.js";
 import { cleanupGitPreflight } from "./update-runner-git-cleanup.js";
 import {
   buildDevTargetRefResolutionCandidates,
@@ -32,7 +32,7 @@ import {
   shouldRunDevPreflightLint,
 } from "./update-runner-git-commands.js";
 import { prepareGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
-import { runGitCleanCheckStep } from "./update-runner-git-steps.js";
+import { runClassifiedGitStep, runGitCleanCheckStep } from "./update-runner-git-steps.js";
 import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -79,34 +79,28 @@ async function resolveExplicitTarget(params: {
           ["git", "-C", params.gitRoot, "fetch", remote, `+${tagFetchRef}:${tagFetchRef}`],
           params.gitRoot,
         );
-        const fetchStep = await runStep({
-          ...options,
-          progress: { ...options.progress, onStepComplete: undefined },
+        const fetchOutcome = await runClassifiedGitStep(options, (fetchStep) => {
+          const interrupted =
+            fetchStep.termination === "signal" ||
+            fetchStep.exitCode === 130 ||
+            fetchStep.exitCode === 143;
+          const fetchedSuccessfully = fetchStep.exitCode === 0 && !isFailedUpdateStep(fetchStep);
+          if (!fetchedSuccessfully && !interrupted) {
+            fetchStep.advisory = {
+              kind: "recoverable-maintenance",
+              message: `Could not fetch the requested tag from ${remote}; trying another remote. ${fetchStep.stderrTail ?? ""}`,
+            };
+            warnings.push(fetchStep.advisory.message);
+          }
+          if (warnings.length > 0) {
+            fetchStep.warnings = [...warnings];
+          }
+          return { interrupted, fetchedSuccessfully };
         });
-        const interrupted =
-          fetchStep.termination === "signal" ||
-          fetchStep.exitCode === 130 ||
-          fetchStep.exitCode === 143;
-        const fetchedSuccessfully = fetchStep.exitCode === 0 && !isFailedUpdateStep(fetchStep);
-        if (!fetchedSuccessfully && !interrupted) {
-          fetchStep.advisory = {
-            kind: "recoverable-maintenance",
-            message: `Could not fetch the requested tag from ${remote}; trying another remote. ${fetchStep.stderrTail ?? ""}`,
-          };
-          warnings.push(fetchStep.advisory.message);
-        }
-        if (warnings.length > 0) {
-          fetchStep.warnings = [...warnings];
-        }
-        await reportUpdateStepCompletion(options.progress, {
-          ...fetchStep,
-          index: options.stepIndex,
-          total: options.totalSteps,
-        });
-        if (interrupted) {
+        if (fetchOutcome.interrupted) {
           return null;
         }
-        if (fetchedSuccessfully) {
+        if (fetchOutcome.fetchedSuccessfully) {
           fetchedTag = true;
           break;
         }
@@ -315,6 +309,12 @@ async function testPreflightCandidate(
   // A local rebase can change package metadata from the fetched base revision.
   await params.beforeCandidate(candidateSha);
   await params.referenceSource?.copyBuildInputs(params.worktreeDir);
+  if (
+    params.frozenLockfile &&
+    !parsePnpmPackageManagerVersion(await readPackageManagerSpec(params.worktreeDir))
+  ) {
+    return { status: "manager-unavailable", reason: "immutable-pnpm-pin-required" };
+  }
   const nodeRuntime = await prepareGitCandidateNodeRuntime(
     params.worktreeDir,
     params.defaultCommandEnv,
@@ -353,7 +353,7 @@ async function testPreflightCandidate(
     }
   }
   const manager: Awaited<ReturnType<typeof resolveUpdateBuildManager>> = params.referenceSource
-    ? { kind: "resolved", manager: "pnpm", preferred: "pnpm", fallback: false }
+    ? { kind: "resolved", manager: "pnpm", fallback: false }
     : await resolveUpdateBuildManager(
         params.runCommand,
         params.worktreeDir,
@@ -381,7 +381,7 @@ async function testPreflightCandidate(
           compatFallback: manager.fallback && manager.manager === "npm",
         });
     const installName = preferIgnoreScripts ? "deps-install-ignore-scripts" : "deps-install";
-    if (params.referenceSource) {
+    if (params.referenceSource || params.frozenLockfile) {
       installArgv.push("--frozen-lockfile");
     }
     const candidateCommand = await prepareCandidateCommandEnv(
@@ -485,6 +485,8 @@ export async function runGitCandidatePreflight(params: {
   };
   beforeRuntimeVerified: boolean;
   sourceRuntimePrepared?: boolean;
+  /** Immutable releases must build exactly the candidate's recorded dependency graph. */
+  frozenLockfile?: boolean;
   beforeGitStaging?: UpdateRunnerOptions["beforeGitStaging"];
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];

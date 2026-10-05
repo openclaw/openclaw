@@ -32,7 +32,7 @@ it("counts caller-visible open ownership and direct running work across agents b
     const bob = ensureProfileForEmail("counts-bob@example.test").id;
     const actor = (id: string) => ({ type: "human", source: "profile", id }) as const;
     const context = requestContext({
-      agents: { entries: { main: { default: true }, work: {} } },
+      agents: { entries: { main: {}, work: {} } },
     });
     const client = identifiedClient(ada);
     const seed = (name: string, agentId = "main", fields: Partial<SessionEntry> = {}) => {
@@ -210,7 +210,7 @@ it("keeps the owner summary complete beyond the people facet cap and resolves me
         },
       );
     }
-    const context = requestContext({ agents: { entries: { main: { default: true } } } });
+    const context = requestContext({ agents: { entries: { main: {} } } });
     const client = identifiedClient(profiles[1]!);
     const request = { includeOwnerSessionCounts: true, includePeople: true, limit: 1 };
     const counts = profiles.map((profileId) => ({ profileId, open: 1, running: 0 }));

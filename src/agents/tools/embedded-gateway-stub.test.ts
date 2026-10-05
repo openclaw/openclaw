@@ -11,7 +11,7 @@ import {
 
 const runtime = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn((): OpenClawConfig => ({
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
   })),
   resolveSessionStoreKey: vi.fn(({ sessionKey }: { sessionKey: string }) =>
     sessionKey === "main" ? "agent:main:main" : sessionKey,
@@ -215,7 +215,7 @@ describe("embedded gateway stub", () => {
     "canonicalizes embedded session search filters with store %s",
     async (store) => {
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         ...(store ? { session: { store } } : {}),
       };
       const storePath = store ? "/stores/main.sqlite" : "/tmp/openclaw-sessions.json";
@@ -257,7 +257,7 @@ describe("embedded gateway stub", () => {
     const agentId = "ops";
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }, { id: "ops" }],
+        entries: { main: {}, ops: {} },
         defaults: { sessionStore: { agentId } },
       },
       session: { store: "/stores/shared.sqlite" },
@@ -317,7 +317,7 @@ describe("embedded gateway stub", () => {
     ).rejects.toThrow('belongs to "ops", not "research"');
     expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
       sessionKey: "global",
-      config: { agents: { list: [{ id: "main", default: true }] } },
+      config: { agents: { entries: { main: {} } } },
       agentId: "research",
     });
     expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();

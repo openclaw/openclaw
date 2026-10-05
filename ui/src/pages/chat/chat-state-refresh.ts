@@ -201,10 +201,6 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
         if (update.type !== "loading") {
           if (update.type === "result") {
             applyRemoteSlashCommandsResult(update.result);
-            if (update.catalogChanged) {
-              binding.sessionFactsInvalidated = true;
-              void refreshChatMetadata(host, { automatic: true });
-            }
           }
           if (binding.sessionFactsRetryPending) {
             binding.sessionFactsRetryPending = false;
@@ -380,7 +376,7 @@ function refreshChatSessionFacts(host: ChatPageHost, binding: ChatMetadataBindin
   return promise;
 }
 
-export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { refresh?: boolean }) {
+export async function refreshChatModelAuthStatus(host: ChatPageHost) {
   if (!host.client || !host.connected) {
     return;
   }
@@ -395,10 +391,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
     host.modelAuthStatusRequestVersion === requestVersion &&
     resolveChatAgentId(host) === agentId;
   try {
-    const result = await loadModelAuthStatus(client, {
-      ...opts,
-      agentId,
-    });
+    const result = await loadModelAuthStatus(client, { agentId });
     if (!ownsRequest()) {
       return;
     }

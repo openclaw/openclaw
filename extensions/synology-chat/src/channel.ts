@@ -379,7 +379,6 @@ export const synologyChatPlugin = {
       const cleanup = await registerSynologyWebhookRoute({
         cfg,
         account,
-        accountId,
         log,
         abortSignal,
       });

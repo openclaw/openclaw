@@ -1,8 +1,11 @@
+import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type {
   PendingSessionEntryPublication,
   SessionEntryCacheDatabase,
+  SessionEntryReplacementPublication,
   SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
@@ -54,6 +57,47 @@ export function recordCommittedSessionMetadataPublication(
       pending.metadataSuperseded.add(sessionKey);
     }
   }
+}
+
+export function recordCommittedSessionOwnerPublication(
+  database: SessionEntryCacheDatabase,
+  sessionKey: string,
+  change: Extract<SessionRowFacts, { kind: "owner" }>,
+): void {
+  const identity = findOpenClawAgentDatabaseIdentity(database)?.identity;
+  if (typeof identity === "string") {
+    for (const pending of pendingSessionEntryPublications.get(`file:${identity}\0${sessionKey}`) ??
+      []) {
+      // A field update supersedes its value, not the pending entry's generation fence.
+      pending.ownerChanges.set(sessionKey, structuredClone(change));
+    }
+  }
+}
+
+export function applyPendingSessionEntryOwnerChanges(
+  replacement: SessionEntryReplacementPublication | undefined,
+  ownerChanges: PendingSessionEntryPublication["ownerChanges"],
+): SessionEntryReplacementPublication | undefined {
+  if (!replacement || ownerChanges.size === 0) {
+    return replacement;
+  }
+  const current = new Map(replacement.current);
+  for (const [sessionKey, change] of ownerChanges) {
+    const entry = current.get(sessionKey);
+    if (
+      !entry ||
+      entry.sessionId !== change.sessionId ||
+      (entry.lifecycleRevision ?? null) !== change.lifecycleRevision
+    ) {
+      continue;
+    }
+    const { owner: _previousOwner, ...metadata } = entry;
+    current.set(
+      sessionKey,
+      freezeJsonSnapshot({ ...metadata, ...(change.owner ? { owner: change.owner } : {}) }),
+    );
+  }
+  return { ...replacement, current };
 }
 
 /** The existing entry writer advances retained facts before any commit observer can reenter. */

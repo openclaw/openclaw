@@ -27,7 +27,7 @@ import {
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
-import { presentedContent, type PresentationBinding } from "../../../lit/presentation-binding.ts";
+import { presentedContent, type PresentationValue } from "../../../lit/presentation-binding.ts";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
@@ -64,7 +64,7 @@ import {
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { renderReplyLine, type ReplyLine } from "./chat-reply-attribution.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
   renderToolApprovalReviews,
   renderToolCard,
@@ -179,8 +179,7 @@ export function renderGroupedMessage(
     isForwarded?: boolean;
     sessionKey?: string;
     presented?: boolean;
-    transcriptVisible?: boolean;
-    transcriptPresentation?: PresentationBinding;
+    transcriptVisible?: PresentationValue;
     boardProvider?: BoardProvider;
     agentId?: string;
     duplicateCount?: number;
@@ -218,13 +217,13 @@ export function renderGroupedMessage(
     githubRepo?: MarkdownRenderOptions["githubRepo"];
     githubRepositories?: MarkdownRenderOptions["githubRepositories"];
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+    fileLinkSessionKey?: string;
     avatar?: TemplateResult | typeof nothing;
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
     entryRef?: (element?: Element) => void;
     /** This message's own "Replying to" line, drawn inside the bubble. */
     replyLine?: ReplyLine;
-    onResolveReply?: (replyToId: string) => void;
     onOpenReply?: (replyToId: string) => void;
     replyNavigationId?: string | null;
   },
@@ -546,6 +545,10 @@ export function renderGroupedMessage(
   const renderMessageContent = () => (renderInOrder ? renderOrderedContent() : renderText());
   // Collapsed tool results must not load attachments or render hidden markdown.
   // Retained panes use opacity, so hidden transcripts must unmount video previews.
+  const transcriptVisible =
+    typeof opts.transcriptVisible === "object"
+      ? opts.transcriptVisible.isPresented()
+      : opts.transcriptVisible;
   const renderBody = () => html`
     ${
       sourceRole === "assistant"
@@ -564,7 +567,7 @@ export function renderGroupedMessage(
       videoPreviews.map(
         (item) => html`
           <div class="chat-image-frame chat-video-preview">
-            ${opts.transcriptVisible === false ? nothing : presentedContent(opts.transcriptPresentation ?? true, renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview"))}
+            ${transcriptVisible === false ? nothing : presentedContent(opts.transcriptVisible ?? true, renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview"))}
           </div>
         `,
       ),
@@ -619,6 +622,7 @@ export function renderGroupedMessage(
       class="${bubbleClasses}"
       ${opts.entryRef ? ref(opts.entryRef) : nothing}
       data-message-id=${messageKey}
+      data-file-session-key=${opts.fileLinkSessionKey ?? nothing}
       data-entry-id=${opts.entryId || nothing}
       data-message-text=${actionText || nothing}
       .messageActions=${opts.messageActions}

@@ -3,6 +3,7 @@ import { reserveWorkerEnvironmentNativePublication } from "../gateway/worker-env
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
 import { invalidatePairedCardRendererCache } from "./device-pairing-card-renderer.js";
@@ -128,24 +129,42 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
   command: { type: Key; input: DevicePairingWorkerOperations[Key]["input"] },
   options: {
     baseDir?: string;
+    context?: OpenClawStateWorkerContext;
     assertCurrent?: () => void;
     admit?: (facts: DevicePairingAdmissionFacts) => void;
     onTokensReplaced?: (deviceId: string, roles: readonly string[]) => void;
+    /** Map a refused operation only after its admission and publication have settled. */
+    onAuthorityRefused?: () => DevicePairingWorkerOperations[Key]["output"];
   } = {},
 ): Promise<DevicePairingWorkerOperations[Key]["output"]> {
-  const context = captureOpenClawStateWorkerContext(
-    options.baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: options.baseDir } } : {},
-  );
+  const context =
+    options.context ??
+    captureOpenClawStateWorkerContext(
+      options.baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: options.baseDir } } : {},
+    );
   const captured = structuredClone(command);
-  return withDevicePairingLock(async () => {
+  const operation = withDevicePairingLock(async () => {
     context.admission.assertCurrent();
     options.assertCurrent?.();
-    const publication = captureDevicePairingPublication(context.admission);
-    const mutation = publication.beginMutation();
+    // Join codes never change paired records or their live authority projection.
+    const publication =
+      captured.type === "devicePairing.registerJoinCode" ||
+      captured.type === "devicePairing.redeemJoinCode"
+        ? undefined
+        : captureDevicePairingPublication(context.admission);
+    // Runtime facts preserve pairing identity; publishing them must not interrupt live node work.
+    const mutation = publication?.beginMutation(
+      captured.type !== "node.updateSessionHost" &&
+        captured.type !== "node.recordHostStats" &&
+        captured.type !== "node.updateBins",
+    );
     let admission: SqliteWorkerOperationAdmission | undefined;
     let published = false;
     let publishEnvironment: ReturnType<typeof reserveWorkerEnvironmentNativePublication>;
     const install = () => {
+      if (!mutation) {
+        return;
+      }
       const committed = admission?.committed;
       if (committed && !published) {
         const receipt = commitReceipt(committed.facts);
@@ -170,7 +189,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         }
       }
     };
-    const removeService = publication.servicePending(install);
+    const removeService = publication?.servicePending(install);
     try {
       return await runOpenClawStateWorkerOperation(
         context,
@@ -212,20 +231,33 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       try {
         install();
       } finally {
-        mutation.finish(!admission || admission.settlement?.kind === "completed");
-        removeService();
+        mutation?.finish(!admission || admission.settlement?.kind === "completed");
+        removeService?.();
       }
     }
   });
+  const onAuthorityRefused = options.onAuthorityRefused;
+  return onAuthorityRefused
+    ? operation.catch((error: unknown) => {
+        if (error instanceof DevicePairingAuthorityRefusedError) {
+          return onAuthorityRefused();
+        }
+        throw error;
+      })
+    : operation;
 }
 
 /** Start the privileged effect in the same interval that publishes its pairing facts. */
 export async function withCurrentDevicePairingSnapshot<T>(
   baseDir: string | undefined,
   prepare: (paired: readonly PairedDevice[]) => { start: () => T | Promise<T> } | undefined,
+  preparePublication?: () => Promise<void>,
 ): Promise<T | undefined> {
   const begun = await withDevicePairingLock(async () => {
     const { paired } = await listDevicePairingStoreRecordsReadOnly(baseDir, true);
+    if (preparePublication) {
+      await preparePublication();
+    }
     const action = prepare(paired);
     return { value: action?.start() };
   });

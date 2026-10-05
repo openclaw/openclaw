@@ -300,7 +300,7 @@ describe("buildModelProviderCards", () => {
       id: "anthropic",
       credentialProviderIds: ["claude-cli"],
       displayName: "Claude",
-      auth: { kind: "ok", profileCount: 1 },
+      auth: { kind: "ok" },
     });
     expect(firstCard(cards).usage).toMatchObject({
       provider: "anthropic",
@@ -382,7 +382,6 @@ describe("buildModelProviderCards", () => {
     expect(cards).toHaveLength(1);
     expect(firstCard(cards).auth).toMatchObject({
       kind: "expired",
-      profileCount: 2,
       expiryLabel: "-1m",
     });
     expect(firstCard(cards).credentialProviderIds).toEqual(["anthropic", "claude-cli"]);
@@ -466,7 +465,7 @@ describe("buildModelProviderCards", () => {
       ]),
     });
 
-    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 1 });
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing" });
   });
 
   it("preserves missing MiniMax OAuth beside a separate API key", () => {
@@ -489,7 +488,7 @@ describe("buildModelProviderCards", () => {
       ]),
     });
 
-    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 0 });
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing" });
   });
 
   it("prefers usage.status snapshots over the auth-status embed", () => {

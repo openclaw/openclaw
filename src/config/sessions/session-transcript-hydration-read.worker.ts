@@ -1,4 +1,4 @@
-import type { WorkerTaskControl } from "../../infra/worker-task-native-sections.js";
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import type { SessionTranscriptHydrationWorkerRequest } from "./session-transcript-hydration.types.js";
 import type { SessionTranscriptWorkerValues } from "./session-transcript-worker.types.js";

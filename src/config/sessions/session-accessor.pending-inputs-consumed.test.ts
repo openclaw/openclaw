@@ -89,10 +89,13 @@ describe("committed pending input release", () => {
   beforeEach(async () => {
     await upsertSessionEntryCore(scope(), { sessionId: scope().sessionId, updatedAt: 1 });
   });
-  afterEach(() => {
-    for (const receipt of receipts.splice(0)) {
+  afterEach(async () => {
+    const retained = receipts.splice(0);
+    for (const receipt of retained) {
       receipt.finish("interrupted");
     }
+    await Promise.allSettled(retained.map(async (receipt) => receipt.settled?.()));
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -212,7 +215,9 @@ describe("committed pending input release", () => {
     expect((await listSessionPendingInputs(scope())).total).toBe(2);
     const appended = await promote(aggregate);
     expect(appended).toMatchObject({ appended: true, messageId: aggregate.inputId });
-    expect(readSessionSubmittedInput(scope(), "collect-c:user")?.["__openclaw"]).toMatchObject({
+    expect(
+      (await readSessionSubmittedInput(scope(), "collect-c:user"))?.["__openclaw"],
+    ).toMatchObject({
       transport: {
         clients: [
           { id: "cli", mode: "cli", displayName: "CLI" },
@@ -231,12 +236,13 @@ describe("committed pending input release", () => {
       { runId: "collect-b", state: "consumed", consumedByEventId: aggregate.inputId },
     ]);
     aggregate.finish("cancelled");
+    await aggregate.settled?.();
     await replaceTranscriptEvents(scope(), []);
     rotateAgentEventLifecycleGeneration();
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    expect(readSessionSubmittedInput(scope(), "collect-a:user")).toEqual(first.message);
-    expect(readSessionSubmittedInput(scope(), "collect-b:user")).toEqual(second.message);
+    expect(await readSessionSubmittedInput(scope(), "collect-a:user")).toEqual(first.message);
+    expect(await readSessionSubmittedInput(scope(), "collect-b:user")).toEqual(second.message);
     const duplicate = await stage("collect-a", {
       message: { ...firstMessage, timestamp: 200 },
     });
@@ -318,6 +324,7 @@ describe("committed pending input release", () => {
     receipts.push(aggregate);
     await promote(aggregate);
     aggregate.finish("interrupted");
+    await aggregate.settled?.();
     const stored = () =>
       database().db.prepare("SELECT request_hash, message_json FROM session_pending_inputs").all();
     const before = stored();
@@ -346,7 +353,7 @@ describe("committed pending input release", () => {
       expect(() => receipt.run(() => {})).toThrow("already been consumed");
     }
     expect(stored()).toEqual(before);
-    expect(readSessionSubmittedInput(scope(), "legacy-client:user")).toEqual(original);
+    expect(await readSessionSubmittedInput(scope(), "legacy-client:user")).toEqual(original);
   });
 
   const stagePrivate = async (text = "private child marker", assertCurrent = () => {}) => {
@@ -404,8 +411,8 @@ describe("committed pending input release", () => {
         .get()?.request_hash;
       if (state === "completed") {
         // Handled private input can leave only its hash/outcome, not a transcript.
-        first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
-        expect(readSessionSubmittedInput(scope(), `${runId}:user`)).toBeUndefined();
+        await first.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
+        expect(await readSessionSubmittedInput(scope(), `${runId}:user`)).toBeUndefined();
       }
       if (state.endsWith("transcript")) {
         promoteSync(first);
@@ -413,6 +420,7 @@ describe("committed pending input release", () => {
         expect(completionRows()).toEqual([]);
       }
       first.finish("interrupted");
+      await first.settled?.();
       const acceptedOrder = () =>
         database()
           .db.prepare(
@@ -422,6 +430,7 @@ describe("committed pending input release", () => {
       const beforeReplay = acceptedOrder();
       const beforeTranscript = transcriptRows();
       rotateAgentEventLifecycleGeneration();
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const replay = stage(runId, {
         message: {
@@ -447,7 +456,7 @@ describe("committed pending input release", () => {
       } else {
         expect(receipt.completion).toBeUndefined();
         expect(receipt.run(() => "resumed")).toBe("resumed");
-        receipt.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
+        await receipt.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
         expect(completionRows()).toMatchObject([{ request_hash: originalHash }]);
       }
       expect(transcriptRows()).toEqual(beforeTranscript);
@@ -486,9 +495,10 @@ describe("committed pending input release", () => {
             .run(`${runId}:user`);
         }
       } else {
-        first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
+        await first.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
       }
       first.finish("interrupted");
+      await first.settled?.();
       const before = completionRows();
       const beforeTranscript = transcriptRows();
       if (difference === "session") {
@@ -579,6 +589,7 @@ describe("committed pending input release", () => {
       });
       promoteSync(first);
       first.finish("interrupted");
+      await first.settled?.();
       expect(pendingCount()).toBe(0);
       expect(completionRows()).toEqual([]);
       const before = transcriptRows();
@@ -603,6 +614,7 @@ describe("committed pending input release", () => {
   it("opens a same-version store without completion tracking and installs it only on private use", async () => {
     const version = database().db.prepare("PRAGMA user_version").get();
     database().db.exec("DROP TABLE session_input_completions");
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const hasCompletionTable = () =>
       Boolean(
@@ -614,9 +626,13 @@ describe("committed pending input release", () => {
     const ordinary = await stage("ordinary-without-feature");
     expect(hasCompletionTable()).toBe(false);
     ordinary.finish("cancelled");
-    await stagePrivate();
+    await ordinary.settled?.();
+    const privateInput = await stagePrivate();
     expect(hasCompletionTable()).toBe(true);
     expect(database().db.prepare("PRAGMA user_version").get()).toEqual(version);
+    privateInput.finish("interrupted");
+    await privateInput.settled?.();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     expect(hasCompletionTable()).toBe(true);
   });
@@ -625,6 +641,7 @@ describe("committed pending input release", () => {
     const first = await stagePrivate();
     promoteSync(first);
     first.finish("interrupted");
+    await first.settled?.();
     const replay = await stageSessionPendingInput(scope(), {
       runId: "announce:private-child",
       trackCompletion: true,
@@ -640,10 +657,14 @@ describe("committed pending input release", () => {
     const first = await stagePrivate();
     promoteSync(first);
     const cancelled = buildAgentRunTerminalOutcome({ status: "error", stopReason: "rpc" });
-    first.complete!(cancelled);
-    expect(first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }))).toEqual(cancelled);
+    await first.completeAsync!(cancelled);
+    expect(await first.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }))).toEqual(
+      cancelled,
+    );
     expect(pendingCount()).toBe(0);
     rotateAgentEventLifecycleGeneration();
+    await first.settled?.();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const retry = await stagePrivate();
     expect(retry.completion).toMatchObject({ reason: "cancelled", stopReason: "rpc" });
@@ -654,13 +675,17 @@ describe("committed pending input release", () => {
   it("retries a restart interruption instead of treating it as an operator stop", async () => {
     const first = await stagePrivate();
     promoteSync(first);
-    first.complete!(buildAgentRunTerminalOutcome({ status: "timeout", stopReason: "restart" }));
+    await first.completeAsync!(
+      buildAgentRunTerminalOutcome({ status: "timeout", stopReason: "restart" }),
+    );
     first.finish("interrupted");
+    await first.settled?.();
     rotateAgentEventLifecycleGeneration();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const retry = await stagePrivate();
     expect(retry.completion).toBeUndefined();
-    retry.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
+    await retry.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
     expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
   });
 
@@ -668,11 +693,13 @@ describe("committed pending input release", () => {
     const first = await stagePrivate();
     let nextSpawns = 0;
     nextSpawns += 1;
-    first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
+    await first.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
     expect(pendingCount()).toBe(0);
     expect(completionRows()).toMatchObject([{ succeeded: 1, run_id: "announce:private-child" }]);
     // The child delivery save has not happened. A fresh process has only the DB.
     rotateAgentEventLifecycleGeneration();
+    await first.settled?.();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const replay = await stagePrivate();
     expect(replay.completion).toMatchObject({ status: "ok", reason: "completed" });
@@ -695,11 +722,13 @@ describe("committed pending input release", () => {
       }
       expect(completionRows()).toEqual([]);
       rotateAgentEventLifecycleGeneration();
+      await first.settled?.();
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const resumed = await stagePrivate();
       expect(resumed.completion).toBeUndefined();
       expect(resumed.run(() => "one resumed execution")).toBe("one resumed execution");
-      resumed.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
+      await resumed.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
       expect(pendingCount()).toBe(0);
       expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
       await expect(stagePrivate("changed committed payload")).rejects.toThrow("conflicts");
@@ -708,21 +737,24 @@ describe("committed pending input release", () => {
 
   it("keeps private failed attempts retryable without letting stale failure replace success", async () => {
     const first = await stagePrivate();
-    first.complete!(
+    await first.completeAsync!(
       buildAgentRunTerminalOutcome({ status: "error", error: "provider unavailable" }),
     );
     expect(completionRows()).toMatchObject([{ succeeded: 0 }]);
     first.finish("interrupted");
+    await first.settled?.();
     const retry = await stagePrivate();
-    retry.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
-    expect(() => first.complete!(buildAgentRunTerminalOutcome({ status: "error" }))).toThrow(
-      "released",
-    );
+    await retry.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
+    expect(
+      await first.completeAsync!(buildAgentRunTerminalOutcome({ status: "error" })),
+    ).toMatchObject({
+      error: "provider unavailable",
+    });
     expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
     expect(pendingCount()).toBe(0);
   });
 
-  it("rolls back private success and input retirement together", async () => {
+  it("preserves the released synchronous completion contract inside an outer rollback", async () => {
     const first = await stagePrivate();
     expect(() =>
       runOpenClawAgentWriteTransaction(() => {
@@ -736,7 +768,7 @@ describe("committed pending input release", () => {
     expect(pendingCount()).toBe(0);
   });
 
-  it("keeps committed private success when a postcommit observer fails", async () => {
+  it("preserves released synchronous completion when a postcommit observer fails", async () => {
     const first = await stagePrivate();
     expect(() =>
       runOpenClawAgentWriteTransaction((current) => {
@@ -768,7 +800,9 @@ describe("committed pending input release", () => {
       if (boundary === "lifecycle") {
         rotateAgentEventLifecycleGeneration();
       }
-      expect(() => first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }))).toThrow();
+      await expect(async () =>
+        first.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" })),
+      ).rejects.toThrow();
       expect(completionRows()).toEqual([]);
     },
   );
@@ -799,6 +833,7 @@ describe("committed pending input release", () => {
         Array(sources.length + 1).fill("queued"),
       );
       receipt.finish("cancelled");
+      await receipt.settled?.();
       expect(
         database()
           .db.prepare("SELECT state, consumed_event_id FROM session_pending_inputs ORDER BY seq")

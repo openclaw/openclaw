@@ -15,14 +15,27 @@ import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-tra
 import type { SessionBranchListParams, SessionBranchListResult } from "./session-accessor.types.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import {
+  readIncognitoSessionHistory,
+  type IncognitoSessionHistoryBinding,
+} from "./session-incognito-history-read.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
 const pendingBranchReads = new Map<string, Promise<SessionBranchSummaryReadResult>>();
 
 export async function listSessionBranches(
   params: SessionBranchListParams,
+  incognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionBranchListResult> {
   const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
+  if (incognito) {
+    const result = await readIncognitoSessionHistory(
+      incognito,
+      { ...params, sessionKey: sourceKey, sessionId: incognito.target.sessionId },
+      (target) => ({ type: "session.history.branches", input: target }),
+    );
+    return result.status === "ok" ? { status: "ok", branches: result.branches } : result;
+  }
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.env ? { env: params.env } : {}),

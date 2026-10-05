@@ -88,7 +88,7 @@ class ActivityHeadlineDirective extends AsyncDirective {
     this.pending = undefined;
     if (!activity) {
       this.shown = undefined;
-      return this.content(undefined, summary);
+      return this.content(summary);
     }
     const urgent = activity.status === "failed" || activity.status === "blocked";
     const remaining = HEADLINE_HOLD_MS - (Date.now() - this.shownAt);
@@ -125,7 +125,8 @@ class ActivityHeadlineDirective extends AsyncDirective {
     this.shown = activity;
   }
 
-  private content(activity = this.shown, summary = "") {
+  private content(summary = "") {
+    const activity = this.shown;
     const name = activity?.name;
     // Icon and purpose share the same dwell, including asynchronous tool switches.
     return html`

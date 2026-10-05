@@ -2,7 +2,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-// Canonical shared-SQLite store for APNs device and relay registrations.
 import type { Selectable } from "kysely";
 import { z } from "zod";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -117,10 +116,7 @@ export function isValidApnsTopic(value: string): boolean {
 }
 
 function normalizeTokenDebugSuffix(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(value.trim()).replace(/[^0-9a-z]/g, "");
+  const normalized = normalizeLowercaseStringOrEmpty(value).replace(/[^0-9a-z]/g, "");
   return normalized.length > 0 ? normalized.slice(-8) : undefined;
 }
 
@@ -136,9 +132,6 @@ function normalizeRelayOrigin(
   value: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
@@ -148,9 +141,6 @@ function normalizeRelayOrigin(
 }
 
 function normalizePersistedRelayOrigin(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
@@ -159,16 +149,9 @@ function normalizePersistedRelayOrigin(value: unknown): string | undefined {
   return normalized.ok ? normalized.value : undefined;
 }
 
-/** Normalizes the APNs environment string accepted by registration inputs. */
 export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null {
-  if (typeof value !== "string") {
-    return null;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (normalized === "sandbox" || normalized === "production") {
-    return normalized;
-  }
-  return null;
+  return normalized === "sandbox" || normalized === "production" ? normalized : null;
 }
 
 const apnsNodeIdSchema = z.string().transform(normalizeApnsNodeId).refine(isValidApnsNodeId);
@@ -181,6 +164,7 @@ const apnsUpdatedAtSchema = z
   .number()
   .refine(Number.isSafeInteger)
   .refine((value) => value >= 0);
+const trimmedRelayIdentifierSchema = z.string().transform((value) => value.trim());
 const directApnsRegistrationSchema = z.object({
   nodeId: apnsNodeIdSchema,
   transport: z.string().transform(normalizeLowercaseStringOrEmpty).pipe(z.literal("direct")),
@@ -192,18 +176,11 @@ const directApnsRegistrationSchema = z.object({
 const relayApnsRegistrationSchema = z.object({
   nodeId: apnsNodeIdSchema,
   transport: z.string().transform(normalizeLowercaseStringOrEmpty).pipe(z.literal("relay")),
-  relayHandle: z
-    .string()
-    .transform((value) => value.trim())
-    .refine(isValidRelayIdentifier),
-  sendGrant: z
-    .string()
-    .transform((value) => value.trim())
-    .refine((value) => isValidRelayIdentifier(value, MAX_SEND_GRANT_LENGTH)),
-  installationId: z
-    .string()
-    .transform((value) => value.trim())
-    .refine(isValidRelayIdentifier),
+  relayHandle: trimmedRelayIdentifierSchema.refine(isValidRelayIdentifier),
+  sendGrant: trimmedRelayIdentifierSchema.refine((value) =>
+    isValidRelayIdentifier(value, MAX_SEND_GRANT_LENGTH),
+  ),
+  installationId: trimmedRelayIdentifierSchema.refine(isValidRelayIdentifier),
   topic: apnsTopicSchema,
   environment: apnsEnvironmentSchema,
   distribution: z.unknown().transform(normalizeDistribution).pipe(z.literal("official")),

@@ -196,6 +196,7 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
             gatewayVersion: candidateVersion,
             gatewayBuildId: candidateBuildId,
             gatewayBootId: "candidate-boot",
+            outcome: "ready",
             waitOutcome: "healthy",
           };
         });
@@ -289,6 +290,7 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
           gatewayVersion: candidateVersion,
           gatewayBuildId: candidateBuildId,
           gatewayBootId: "candidate-boot",
+          outcome: "ready",
           waitOutcome: "healthy",
         };
       });
@@ -411,6 +413,7 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
           gatewayVersion: candidateVersion,
           gatewayBuildId: null,
           probeError: "synthetic replacement identity unavailable",
+          outcome: "failed",
           waitOutcome: "timeout",
         };
       });

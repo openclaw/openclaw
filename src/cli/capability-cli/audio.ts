@@ -5,49 +5,6 @@ import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
-async function runAudioTranscribe(params: {
-  file: string;
-  language?: string;
-  model?: string;
-  prompt?: string;
-  agent?: string;
-}) {
-  const { requireProviderModelOverride, resolveLocalCapabilityAgent } = await import("./shared.js");
-  const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-  const { transcribeAudioFile } = await import("../../media-understanding/runtime.js");
-  const { cfg, agentId, agentDir } = await resolveLocalCapabilityAgent({
-    commandName: "infer audio transcribe",
-    targetIds: getModelsCommandSecretTargetIds(),
-    agent: params.agent,
-  });
-  const result = await transcribeAudioFile({
-    agentDir,
-    activeModel: requireProviderModelOverride(params.model),
-    filePath: path.resolve(params.file),
-    cfg,
-    agentId,
-    language: params.language,
-    prompt: params.prompt,
-  });
-  if (!result.text) {
-    if (isMissingMediaUnderstandingProvider(result)) {
-      throw new Error(
-        "No audio transcription provider is configured or ready. Configure an audio-capable tools.media.models entry, or pass --model <provider/model> after configuring that provider's auth/API key.",
-      );
-    }
-    throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);
-  }
-  return {
-    ok: true,
-    capability: "audio.transcribe",
-    transport: "local" as const,
-    provider: result.provider,
-    model: result.model,
-    attempts: [],
-    outputs: [{ path: path.resolve(params.file), text: result.text, kind: "audio.transcription" }],
-  } satisfies CapabilityEnvelope;
-}
-
 export function registerAudioCapabilityCommands(capability: Command): void {
   const audio = capability
     .command("audio")
@@ -65,14 +22,46 @@ export function registerAudioCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action((opts, command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
-        const { resolveCapabilityAgentOption } = await import("./shared.js");
-        return runAudioTranscribe({
-          file: String(opts.file),
-          agent: resolveCapabilityAgentOption(command, opts.agent),
+        const {
+          requireProviderModelOverride,
+          resolveLocalCapabilityAgent,
+          resolveCapabilityAgentOption,
+        } = await import("./shared.js");
+        const file = String(opts.file);
+        const agent = resolveCapabilityAgentOption(command, opts.agent);
+        const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+        const { transcribeAudioFile } = await import("../../media-understanding/runtime.js");
+        const { cfg, agentId, agentDir } = await resolveLocalCapabilityAgent({
+          commandName: "infer audio transcribe",
+          targetIds: getModelsCommandSecretTargetIds(),
+          agent,
+        });
+        const result = await transcribeAudioFile({
+          agentDir,
+          activeModel: requireProviderModelOverride(opts.model as string | undefined),
+          filePath: path.resolve(file),
+          cfg,
+          agentId,
           language: opts.language as string | undefined,
-          model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
         });
+        if (!result.text) {
+          if (isMissingMediaUnderstandingProvider(result)) {
+            throw new Error(
+              "No audio transcription provider is configured or ready. Configure an audio-capable tools.media.models entry, or pass --model <provider/model> after configuring that provider's auth/API key.",
+            );
+          }
+          throw new Error(`No transcript returned for audio: ${path.resolve(file)}`);
+        }
+        return {
+          ok: true,
+          capability: "audio.transcribe",
+          transport: "local" as const,
+          provider: result.provider,
+          model: result.model,
+          attempts: [],
+          outputs: [{ path: path.resolve(file), text: result.text, kind: "audio.transcription" }],
+        } satisfies CapabilityEnvelope;
       }),
     );
 

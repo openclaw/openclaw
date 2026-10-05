@@ -86,18 +86,19 @@ function formatModelRef(candidate: ModelCandidate): string {
   return `${candidate.provider}/${candidate.model}`;
 }
 
-function isAuthDecisionLogCoalescingEligible(params: ModelFallbackDecisionParams): boolean {
-  return (
-    (params.decision === "candidate_failed" || params.decision === "skip_candidate") &&
-    (params.reason === "auth" || params.reason === "auth_permanent")
-  );
-}
-
-function buildAuthDecisionLogCoalesceKey(
+function resolveAuthDecisionLogCoalescing(
   params: ModelFallbackDecisionParams,
   observedError: ErrorObservationFields,
-): string {
-  return JSON.stringify([
+): { shouldLog: boolean; suppressedDuplicateCount?: number } {
+  if (
+    (params.decision !== "candidate_failed" && params.decision !== "skip_candidate") ||
+    (params.reason !== "auth" && params.reason !== "auth_permanent")
+  ) {
+    return { shouldLog: true };
+  }
+
+  const now = Date.now();
+  const key = JSON.stringify([
     params.sessionId ?? params.runId,
     params.lane,
     params.requestedProvider,
@@ -122,69 +123,39 @@ function buildAuthDecisionLogCoalesceKey(
     params.requestedModelMatched,
     params.fallbackConfigured,
   ]);
-}
-
-function pruneAuthDecisionLogCoalesceEntries(now: number): void {
-  const staleBefore = now - AUTH_DECISION_LOG_COALESCE_WINDOW_MS * 2;
-  for (const [key, entry] of authDecisionLogCoalesceEntries) {
-    if (entry.lastLoggedAt < staleBefore) {
-      authDecisionLogCoalesceEntries.delete(key);
-    }
-  }
-}
-
-function evictOldestAuthDecisionLogCoalesceEntry(): void {
-  let oldestKey: string | undefined;
-  let oldestLoggedAt = Infinity;
-  for (const [key, entry] of authDecisionLogCoalesceEntries) {
-    if (entry.lastLoggedAt < oldestLoggedAt) {
-      oldestLoggedAt = entry.lastLoggedAt;
-      oldestKey = key;
-    }
-  }
-  if (oldestKey !== undefined) {
-    authDecisionLogCoalesceEntries.delete(oldestKey);
-  }
-}
-
-function rememberAuthDecisionLogCoalesceEntry(key: string, now: number): void {
-  if (!authDecisionLogCoalesceEntries.has(key)) {
-    pruneAuthDecisionLogCoalesceEntries(now);
-    if (authDecisionLogCoalesceEntries.size >= AUTH_DECISION_LOG_COALESCE_MAX_ENTRIES) {
-      evictOldestAuthDecisionLogCoalesceEntry();
-    }
-  }
-  authDecisionLogCoalesceEntries.set(key, { lastLoggedAt: now, suppressed: 0 });
-}
-
-function resolveAuthDecisionLogCoalescing(
-  params: ModelFallbackDecisionParams,
-  observedError: ErrorObservationFields,
-): { shouldLog: boolean; suppressedDuplicateCount?: number } {
-  if (!isAuthDecisionLogCoalescingEligible(params)) {
-    return { shouldLog: true };
-  }
-
-  const now = Date.now();
-  const key = buildAuthDecisionLogCoalesceKey(params, observedError);
   const recent = authDecisionLogCoalesceEntries.get(key);
-  const recentAgeMs = recent ? now - recent.lastLoggedAt : undefined;
-  if (
-    recent &&
-    recentAgeMs !== undefined &&
-    recentAgeMs >= AUTH_DECISION_LOG_COALESCE_WINDOW_MS * 2
-  ) {
-    authDecisionLogCoalesceEntries.delete(key);
-    rememberAuthDecisionLogCoalesceEntry(key, now);
-    return { shouldLog: true };
-  }
-  if (recent && recentAgeMs !== undefined && recentAgeMs < AUTH_DECISION_LOG_COALESCE_WINDOW_MS) {
+  const recentAgeMs = recent ? now - recent.lastLoggedAt : Infinity;
+  if (recent && recentAgeMs < AUTH_DECISION_LOG_COALESCE_WINDOW_MS) {
     recent.suppressed += 1;
     return { shouldLog: false };
   }
 
-  const suppressedDuplicateCount = recent?.suppressed;
-  rememberAuthDecisionLogCoalesceEntry(key, now);
+  const staleWindowMs = AUTH_DECISION_LOG_COALESCE_WINDOW_MS * 2;
+  const suppressedDuplicateCount = recentAgeMs < staleWindowMs ? recent?.suppressed : undefined;
+  if (recentAgeMs >= staleWindowMs) {
+    authDecisionLogCoalesceEntries.delete(key);
+  }
+  if (!authDecisionLogCoalesceEntries.has(key)) {
+    for (const [entryKey, entry] of authDecisionLogCoalesceEntries) {
+      if (entry.lastLoggedAt < now - staleWindowMs) {
+        authDecisionLogCoalesceEntries.delete(entryKey);
+      }
+    }
+    if (authDecisionLogCoalesceEntries.size >= AUTH_DECISION_LOG_COALESCE_MAX_ENTRIES) {
+      let oldestKey: string | undefined;
+      let oldestLoggedAt = Infinity;
+      for (const [entryKey, entry] of authDecisionLogCoalesceEntries) {
+        if (entry.lastLoggedAt < oldestLoggedAt) {
+          oldestLoggedAt = entry.lastLoggedAt;
+          oldestKey = entryKey;
+        }
+      }
+      if (oldestKey !== undefined) {
+        authDecisionLogCoalesceEntries.delete(oldestKey);
+      }
+    }
+  }
+  authDecisionLogCoalesceEntries.set(key, { lastLoggedAt: now, suppressed: 0 });
   return { shouldLog: true, suppressedDuplicateCount };
 }
 

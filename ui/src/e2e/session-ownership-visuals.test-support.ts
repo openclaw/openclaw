@@ -95,7 +95,7 @@ export async function captureSessionOwnerPageProof(
 }
 
 export async function openSidebarSortMenu(page: Page) {
-  const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
+  const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
   await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
   const menu = await openSidebarMenu(page);
   await waitForControlUiProofSurface(menu.locator(".sidebar-session-filter-panel"), [

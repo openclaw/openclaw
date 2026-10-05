@@ -1,16 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
+  appendTranscriptEvent,
   appendTranscriptMessage,
   loadTranscriptEvents,
+  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import * as historyWorker from "../../config/sessions/session-history-worker-runtime.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -18,27 +22,25 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
-import * as sessionUtils from "../session-utils.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 describe("chat.message.get recovery visibility", () => {
-  it("hides recovered empty failures while retaining unresolved, partial, and successful replies", async () => {
+  it("hides recovered failures across hidden announce chunks while retaining unresolved and partial replies", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:message-recovery",
         sessionId: "message-recovery",
       };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      await appendTranscriptMessage(scope, {
-        eventId: "user",
-        message: { role: "user", content: "hello" },
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        sessionStartedAt: 2000,
       });
       const failure = {
         role: "assistant",
@@ -49,9 +51,45 @@ describe("chat.message.get recovery visibility", () => {
         errorMessage: "model unavailable",
         __openclaw: { runId: "run-recovery" },
       };
-      await appendTranscriptMessage(scope, { eventId: "failed", message: failure });
+      const messages: Array<[string, Record<string, unknown>]> = [
+        ["user", { role: "user", content: "hello" }],
+        ["failed", failure],
+        ...Array.from({ length: 99 }, (_, index): [string, Record<string, unknown>] => [
+          `progress-${index}`,
+          { role: "toolResult", content: "Still working", toolCallId: `tool-${index}` },
+        ]),
+        // The pair crosses the recovery reader's chunk boundary; neither row ends this turn.
+        [
+          "old-announce",
+          {
+            role: "user",
+            timestamp: 1000,
+            content: "Old worker completion",
+            provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+          },
+        ],
+        [
+          "old-pair",
+          {
+            ...failure,
+            timestamp: 1000,
+            stopReason: "stop",
+            errorMessage: undefined,
+            content: [{ type: "text", text: "Old paired answer" }],
+          },
+        ],
+      ];
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: scope.sessionId },
+        ...messages.map(([id, message], index) => ({
+          type: "message",
+          id,
+          parentId: messages[index - 1]?.[0] ?? null,
+          message,
+        })),
+      ]);
       const respond = vi.fn();
-      const context = createDirectChatContext();
+      const context = await createHistoryReadContext();
       const lookup = async (messageId: string) => {
         respond.mockClear();
         await expectDefined(
@@ -66,8 +104,31 @@ describe("chat.message.get recovery visibility", () => {
           respond,
         });
       };
+      const readHistory = async (params: Record<string, unknown>) => {
+        const historyRespond = vi.fn();
+        await expectDefined(
+          chatHistoryHandlers["chat.history"],
+          "history handler",
+        )({
+          params: { sessionKey: scope.sessionKey, ...params },
+          context,
+          req: { type: "req", id: "page-recovery", method: "chat.history" },
+          client: null,
+          isWebchatConnect: () => false,
+          respond: historyRespond,
+        });
+        expect(historyRespond.mock.calls[0]?.[0]).toBe(true);
+        return asOptionalRecord(historyRespond.mock.calls[0]?.[1])?.messages;
+      };
+      const failedMessage = expect.objectContaining({
+        __openclaw: expect.objectContaining({ id: "failed" }),
+      });
       await lookup("failed");
       expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }));
+      // The initial page ends on the hidden announce; its paired reply is newer lookahead.
+      expect(await readHistory({ offset: 1, limit: messages.length - 1 })).toContainEqual(
+        failedMessage,
+      );
 
       await appendTranscriptMessage(scope, {
         eventId: "answer",
@@ -82,6 +143,17 @@ describe("chat.message.get recovery visibility", () => {
       const persisted = await loadTranscriptEvents(scope);
       await lookup("failed");
       expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
+      for (const params of [{ messageId: "failed" }, { offset: messages.length - 1 }]) {
+        expect(await readHistory({ limit: 1, ...params })).toEqual(
+          "messageId" in params
+            ? []
+            : [expect.objectContaining({ __openclaw: expect.objectContaining({ id: "user" }) })],
+        );
+      }
+      // Both hidden rows now fit the initial window; only the real retry repairs the failure.
+      expect(await readHistory({ offset: 1, limit: messages.length })).not.toContainEqual(
+        failedMessage,
+      );
       await lookup("answer");
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -107,6 +179,102 @@ describe("chat.message.get recovery visibility", () => {
         }),
       );
     });
+  });
+});
+
+it("resolves one indexed message per worker request while hiding stale announce pairs", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:indexed-message-get",
+      sessionId: "indexed-message-get",
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      sessionStartedAt: 2000,
+    });
+    const messages = [
+      { id: "question", role: "user", timestamp: 1000, content: "Previous question" },
+      { id: "answer", role: "assistant", timestamp: 1000, content: "Previous answer" },
+      {
+        id: "announce",
+        role: "user",
+        timestamp: 1000,
+        content: "Worker finished",
+        provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      },
+      { id: "stale-answer", role: "assistant", timestamp: 1000, content: "Hidden pair" },
+      { id: "current-answer", role: "assistant", timestamp: 3000, content: "Current answer" },
+    ];
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: scope.sessionId },
+      ...messages.map(({ id, ...message }, index) => ({
+        type: "message",
+        id,
+        parentId: messages[index - 1]?.id ?? null,
+        message,
+      })),
+    ]);
+    const context = await createHistoryReadContext();
+    const read = vi.spyOn(historyWorker, "readSessionHistoryPageInWorker");
+    try {
+      const lookup = async (messageId: string) => {
+        read.mockClear();
+        const respond = vi.fn<RespondFn>();
+        const sql = observeHostDataSql();
+        try {
+          await expectDefined(
+            chatMessageGetHandlers["chat.message.get"],
+            "message handler",
+          )({
+            params: { sessionKey: scope.sessionKey, messageId },
+            context,
+            client: null,
+            req: { type: "req", id: "indexed-message-get", method: "chat.message.get" },
+            isWebchatConnect: () => false,
+            respond,
+          });
+          expect(sql.queries).toEqual([]);
+        } finally {
+          sql.restore();
+        }
+        expect(read.mock.calls.map(([request]) => request.kind)).toEqual(["message-by-id"]);
+        if (messageId === "announce" || messageId === "stale-answer") {
+          expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
+        } else {
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              ok: true,
+              message: expect.objectContaining({
+                __openclaw: expect.objectContaining({ id: messageId }),
+              }),
+            }),
+          );
+        }
+      };
+      for (const messageId of [
+        "question",
+        "answer",
+        "announce",
+        "stale-answer",
+        "current-answer",
+      ]) {
+        await lookup(messageId);
+      }
+      await appendTranscriptEvent(scope, {
+        type: "reset",
+        id: "close-interval",
+        parentId: "current-answer",
+        reason: "new",
+        timestamp: "2026-09-30T00:00:00.000Z",
+      });
+      await lookup("stale-answer");
+      await lookup("answer");
+    } finally {
+      read.mockRestore();
+    }
   });
 });
 
@@ -290,7 +458,7 @@ describe("durable tool output inspection", () => {
         "message handler",
       )({
         params: { sessionKey: scope.sessionKey, messageId: "large-result", maxChars: 2_000_000 },
-        context: createDirectChatContext(),
+        context: await createHistoryReadContext(),
         client: null,
         req: { type: "req", id: "tool-transport", method: "chat.message.get" },
         isWebchatConnect: () => false,
@@ -338,13 +506,11 @@ it.each([
           stopReason: "stop",
         },
       });
-      const context = createDirectChatContext({ getRuntimeConfig: () => config });
+      const context = await createHistoryReadContext({ getRuntimeConfig: () => config });
       const request = { sessionKey: scope.sessionKey, messageId: "retained-message" };
-      const readEntry = vi.spyOn(sessionUtils, "loadGatewaySessionEntryReadOnly");
       const readMessage = vi.spyOn(transcriptReaders, "readSessionMessageByIdAsync");
       try {
         for (const explicitOwner of [false, true]) {
-          readEntry.mockClear();
           readMessage.mockClear();
           const respond = vi.fn();
           await expectDefined(
@@ -368,7 +534,6 @@ it.each([
                 message: `Unknown agent id "${agentId}"`,
               }),
             );
-            expect(readEntry).not.toHaveBeenCalled();
             expect(readMessage).not.toHaveBeenCalled();
           } else {
             expect(respond).toHaveBeenCalledWith(
@@ -381,12 +546,10 @@ it.each([
                 }),
               }),
             );
-            expect(readEntry).toHaveBeenCalled();
             expect(readMessage).toHaveBeenCalledOnce();
           }
         }
       } finally {
-        readEntry.mockRestore();
         readMessage.mockRestore();
       }
     });

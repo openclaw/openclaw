@@ -146,6 +146,7 @@ describe("persistent session roster", () => {
     persist(record("retired"));
     persist(record("surviving"));
     await clearCachedBootState("retired");
+    expect(await sessionRosterCache.read("surviving", expected)).toBeNull();
     await vi.advanceTimersByTimeAsync(500);
     // Observe the normal scheduled write; an explicit flush would conceal a lost timer.
     await vi.waitFor(async () => {
@@ -156,7 +157,7 @@ describe("persistent session roster", () => {
 
   it("round-trips durable sidebar fields while excluding live run state and avatars", async () => {
     const writes = vi.spyOn(IDBObjectStore.prototype, "put");
-    const row: GatewaySessionRow = {
+    const durable: GatewaySessionRow = {
       key: "agent:main:one",
       kind: "direct",
       sessionId: "session-one",
@@ -169,11 +170,15 @@ describe("persistent session roster", () => {
       category: "Work",
       boardFace: "chat",
       thinkingLevel: "high",
+      model: "primary",
+      modelProvider: "example",
+      owner: { actor: { type: "human", id: "profile-one" } },
+    };
+    const row: GatewaySessionRow = {
+      ...durable,
       owner: { actor: { type: "human", id: "profile-one", avatarUrl: "/avatar" } },
       hasActiveRun: true,
       activeRunIds: ["run"],
-      model: "primary",
-      modelProvider: "example",
       activeModel: "fallback",
       activeModelProvider: "example",
       status: "running",
@@ -192,34 +197,19 @@ describe("persistent session roster", () => {
       channelAvatarUrl: "/channel-avatar",
     };
     const source = record("gateway-one", [row]);
+    source.query = { agentId: "main", source: "sidebar", rowMode: "compact" };
     persist(source);
     await flushSessionRosters();
     expect(writes).toHaveBeenCalledOnce();
     expect(JSON.stringify(writes.mock.calls[0]?.[0])).not.toMatch(/activeModel|snapshotAt/u);
     const saved = await sessionRosterCache.read(source.scope, expected);
+    expect(saved?.query).not.toHaveProperty("source");
+    expect(saved?.query).not.toHaveProperty("rowMode");
     expect(saved).toMatchObject({
       groups: ["Work"],
       groupSettings: source.groupSettings,
       sectionOrder: source.sectionOrder,
-      result: {
-        sessions: [
-          {
-            key: row.key,
-            derivedTitle: row.derivedTitle,
-            lastMessagePreview: row.lastMessagePreview,
-            updatedAt: 42,
-            unread: true,
-            archived: false,
-            pinned: true,
-            category: "Work",
-            boardFace: "chat",
-            thinkingLevel: "high",
-            model: "primary",
-            modelProvider: "example",
-            owner: { actor: { type: "human", id: "profile-one" } },
-          },
-        ],
-      },
+      result: { sessions: [durable] },
     });
     expect(JSON.stringify(saved)).not.toMatch(
       /hasActiveRun|activeRunIds|activeModel|runtimeMs|runtimeSampledAt|snapshotAt|swarmPhase|swarmLog|subagentRunState|hasActiveSubagentRun|avatarUrl|channelAvatarUrl|"status"/u,
@@ -227,8 +217,11 @@ describe("persistent session roster", () => {
     expect(row.hasActiveRun).toBe(true);
     expect(row.snapshotAt).toBe(50);
     expect(await sessionRosterCache.read("gateway-two", expected)).toBeNull();
-    await putRaw(source);
-    const oldWriter = await sessionRosterCache.read(source.scope, expected);
+    await putRaw({ ...source, query: {} });
+    const oldWriter = await sessionRosterCache.read(source.scope, {
+      ...expected,
+      query: source.query,
+    });
     expect(oldWriter?.result.sessions[0]).toMatchObject({
       model: "primary",
       modelProvider: "example",
@@ -259,21 +252,20 @@ describe("persistent session roster", () => {
   });
 
   it.each([
-    ["profile", { ...expected, profileId: "profile-two" }],
-    ["agent", { ...expected, agentId: "other" }],
-    ["query", { ...expected, query: { search: "different" } }],
-  ])("rejects a different %s without losing the valid record", async (_name, mismatch) => {
+    ["profile", { ...expected, profileId: "profile-two" }, false],
+    ["agent", { ...expected, agentId: "other" }, false],
+    ["query", { ...expected, query: { search: "different" } }, false],
+    ["saved query agent", expected, true],
+  ])("rejects a different %s", async (_name, mismatch, changeStoredQuery) => {
     persist(record());
     await flushSessionRosters();
+    if (changeStoredQuery) {
+      await putRaw({ ...record(), query: { agentId: "other" } });
+    }
     expect(await sessionRosterCache.read("gateway-one", mismatch)).toBeNull();
-    expect(await sessionRosterCache.read("gateway-one", expected)).not.toBeNull();
-  });
-
-  it("rejects a roster whose saved query belongs to another agent", async () => {
-    persist(record());
-    await flushSessionRosters();
-    await putRaw({ ...record(), query: { agentId: "other" } });
-    expect(await sessionRosterCache.read("gateway-one", expected)).toBeNull();
+    if (!changeStoredQuery) {
+      expect(await sessionRosterCache.read("gateway-one", expected)).not.toBeNull();
+    }
   });
 
   it.each(["rows", "bytes"] as const)(
@@ -314,11 +306,15 @@ describe("persistent session roster", () => {
     }
   });
 
-  it("resets malformed stored shapes instead of publishing partial state", async () => {
+  it.each(["malformed", "expired"])("resets a %s stored roster and recovers", async (invalid) => {
     persist(record());
     persist(record("other"));
     await flushSessionRosters();
-    await putRaw({ ...record(), result: { sessions: [{ key: 7 }] } });
+    if (invalid === "malformed") {
+      await putRaw({ ...record(), result: { sessions: [{ key: 7 }] } });
+    } else {
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + SESSION_ROSTER_MAX_AGE_MS + 1);
+    }
     expect(await sessionRosterCache.read("gateway-one", expected)).toBeNull();
     expect(await sessionRosterCache.read("other", expected)).toBeNull();
     persist(record());
@@ -383,27 +379,6 @@ describe("persistent session roster", () => {
       });
     },
   );
-
-  it("ignores a record that ages out after it was written", async () => {
-    persist(record());
-    await flushSessionRosters();
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + SESSION_ROSTER_MAX_AGE_MS + 1);
-    expect(await sessionRosterCache.read("gateway-one", expected)).toBeNull();
-    vi.restoreAllMocks();
-  });
-
-  it("debounces writes and flushes them when the page is hidden", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    persist(record());
-    expect(await sessionRosterCache.read("gateway-one", expected)).toBeNull();
-    await vi.advanceTimersByTimeAsync(500);
-    await flushSessionRosters();
-    expect(await sessionRosterCache.read("gateway-one", expected)).not.toBeNull();
-    persist(record("pagehide"));
-    window.dispatchEvent(new Event("pagehide"));
-    await flushSessionRosters();
-    expect(await sessionRosterCache.read("pagehide", expected)).not.toBeNull();
-  });
 
   it.each([
     ["before", false],

@@ -247,10 +247,10 @@ function resolveTelegramClientOptions(
     };
   }
 
-  const proxyUrl = normalizeOptionalString(account.config.proxy);
-  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
   const apiRoot = normalizeOptionalString(account.config.apiRoot);
   const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
+  const proxyUrl = normalizeOptionalString(account.config.proxy);
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
   const transport = resolveTelegramTransport(proxyFetch, {
     network: account.config.network,
   });

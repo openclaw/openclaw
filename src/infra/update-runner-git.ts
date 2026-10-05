@@ -255,6 +255,9 @@ export async function updateGitCheckout(params: {
       });
     }
   };
+  if (beforeShaResult.code !== 0 || !beforeSha) {
+    return buildError("git-root-unresolved");
+  }
   const { result: statusCheck, dirty } = await runGitCleanCheckStep(
     step("clean-check", gitCleanCheckArgs(gitRoot), gitRoot),
   );

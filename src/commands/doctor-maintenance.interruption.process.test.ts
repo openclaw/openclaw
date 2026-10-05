@@ -63,7 +63,7 @@ function interruptionScript(
       ["/daemon/service.js", 'export const resolveGatewayService = () => globalThis.doctorFixture.service; export const readGatewayServiceState = async () => globalThis.doctorFixture.state;'],
       ["/daemon/service-operation-lock.js", 'export const withGatewayServiceOperationLock = async (_env, run) => run(() => {});'],
       ["/cli/update-cli/update-command-service-plan.js", 'export const resolveUpdatedGatewayRestartPort = async () => 19871;'],
-      ["/cli/daemon-cli/restart-health.js", 'export const waitForGatewayHealthyRestart = async () => { globalThis.doctorFixture.record("healthy"); return { healthy: true }; };'],
+      ["/cli/daemon-cli/restart-health.js", 'export const waitForGatewayHealthyRestart = async () => { globalThis.doctorFixture.record("healthy"); return { outcome: "ready", healthy: true }; };'],
     ]);
     registerHooks({ resolve(specifier, context, nextResolve) {
       const resolved = nextResolve(specifier, context);

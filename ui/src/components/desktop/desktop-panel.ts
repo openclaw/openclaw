@@ -427,7 +427,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private async connectEnvironment(
     environmentId: string | null,
     control: boolean,
-    options: { preserveNotice?: boolean; takeoverRecovery?: boolean } = {},
+    takeoverRecovery = false,
   ): Promise<void> {
     const client = this.client;
     if (!environmentId || !client || !this.available || (this.embedded && !this.presented)) {
@@ -451,10 +451,10 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.state = "connecting";
     this.errorText = null;
     this.disconnectedReason = null;
-    if (!options.preserveNotice) {
+    if (!takeoverRecovery) {
       this.noticeText = null;
     }
-    this.controlTakeoverRecoveryUsed = options.takeoverRecovery === true;
+    this.controlTakeoverRecoveryUsed = takeoverRecovery;
     try {
       const supplied = desktopAuth.forObserve(source, this.credentialAuth, this.credentials);
       const observed = await client.request<DesktopObserveResult>("desktop.observe", {
@@ -621,10 +621,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       this.noticeText = operator
         ? t("desktop.controlTakenBy", { operator })
         : t("desktop.controlTaken");
-      void this.connectEnvironment(environmentId, false, {
-        preserveNotice: true,
-        takeoverRecovery: true,
-      });
+      void this.connectEnvironment(environmentId, false, true);
       return;
     }
     this.state = "disconnected";

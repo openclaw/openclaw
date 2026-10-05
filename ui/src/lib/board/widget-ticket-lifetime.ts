@@ -16,15 +16,15 @@ export function recordBoardWidgetTicketReceipt(
 export function copyBoardWidgetTicketReceipt(
   widget: BoardWidgetTicketIdentity,
   previous: BoardWidgetTicketIdentity,
-  fallbackReceivedAtMs = Date.now(),
+  fallbackReceivedAtMs: number,
 ): void {
   recordBoardWidgetTicketReceipt(widget, ticketReceivedAtMs.get(previous) ?? fallbackReceivedAtMs);
 }
 
 export function remainingBoardWidgetTicketTtlMs(
   widget: BoardWidgetTicketIdentity,
-  nowMs = Date.now(),
 ): number | undefined {
+  const nowMs = Date.now();
   const ttlMs = widget.viewTicketTtlMs;
   if (!widget.viewTicket || !ttlMs) {
     return undefined;

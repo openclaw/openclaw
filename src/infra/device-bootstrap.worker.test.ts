@@ -35,9 +35,14 @@ async function verifyBootstrapToken(baseDir: string, token: string) {
   });
 }
 
-it.each(["replaced identity", "retired authority"] as const)(
-  "keeps the bearer and completion unchanged when consumption sees %s",
+it.each(["replaced identity", "retired authority", "expired credential"] as const)(
+  "refuses setup completion when consumption sees %s",
   async (changed) => {
+    const expired = changed === "expired credential";
+    if (expired) {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-14T12:00:00Z"));
+    }
     const baseDir = tempDirs.make("openclaw-device-bootstrap-worker-");
     const issued = await issueDevicePairSetupBootstrapToken({
       baseDir,
@@ -61,32 +66,43 @@ it.each(["replaced identity", "retired authority"] as const)(
         baseDir,
         "paired",
       );
-    persistPaired(changed === "replaced identity" ? "replacement-key" : "public-key-123");
+    if (expired) {
+      vi.setSystemTime(new Date(Date.now() + 10 * 60 * 1000 + 1));
+    } else {
+      persistPaired(changed === "replaced identity" ? "replacement-key" : "public-key-123");
+    }
     let authorityCurrent = true;
     const completion = {
       baseDir,
       token: issued.token,
       deviceId: "device-123",
-      completedAtMs: 1_000,
+      completedAtMs: expired ? Date.now() : 1_000,
     };
     await expect(
       consumeDeviceBootstrapTokenWithSetupCompletion({
         ...completion,
-        pairedDeviceMatches: (device) => {
-          const accepted = authorityCurrent && device?.publicKey === "public-key-123";
-          if (changed === "retired authority") {
-            queueMicrotask(() => {
-              authorityCurrent = false;
-            });
-          }
-          return accepted;
-        },
+        pairedDeviceMatches: expired
+          ? undefined
+          : (device) => {
+              const accepted = authorityCurrent && device?.publicKey === "public-key-123";
+              if (changed === "retired authority") {
+                queueMicrotask(() => {
+                  authorityCurrent = false;
+                });
+              }
+              return accepted;
+            },
       }),
     ).resolves.toBeNull();
-    expect(JSON.stringify(loadDeviceBootstrapTokenRecords(baseDir))).toBe(tokenBytes);
+    if (!expired) {
+      expect(JSON.stringify(loadDeviceBootstrapTokenRecords(baseDir))).toBe(tokenBytes);
+    }
     await expect(
       readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
     ).resolves.toBeNull();
+    if (expired) {
+      return;
+    }
 
     persistPaired("public-key-123");
     await expect(
@@ -99,31 +115,6 @@ it.each(["replaced identity", "retired authority"] as const)(
     });
   },
 );
-
-it("rejects a setup credential that expires after verification but before consumption", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-03-14T12:00:00Z"));
-  const baseDir = tempDirs.make("openclaw-device-bootstrap-worker-expiry-");
-  const issued = await issueDevicePairSetupBootstrapToken({
-    baseDir,
-    profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  });
-  await verifyBootstrapToken(baseDir, issued.token);
-
-  vi.setSystemTime(new Date(Date.now() + 10 * 60 * 1000 + 1));
-  await expect(
-    consumeDeviceBootstrapTokenWithSetupCompletion({
-      token: issued.token,
-      deviceId: "device-123",
-      completedAtMs: Date.now(),
-      baseDir,
-    }),
-  ).resolves.toBeNull();
-
-  await expect(
-    readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
-  ).resolves.toBeNull();
-});
 
 it("rejecting a pending request revokes only bootstrap tokens bound to its exact identity", async () => {
   const baseDir = tempDirs.make("openclaw-device-bootstrap-reject-");

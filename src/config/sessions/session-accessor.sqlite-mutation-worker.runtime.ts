@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync-cache-state.js";
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
 import { onSqliteWalCheckpoint } from "../../infra/sqlite-wal-checkpoint.js";
@@ -73,9 +74,7 @@ async function settleReclamationDatabase(
       break;
     }
     if (attempt + 1 < WORKER_CLOSE_MAX_ATTEMPTS) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 25 * 2 ** attempt);
-      });
+      await sleepWithAbort(25 * 2 ** attempt);
     }
   }
   return { cleanupWarnings: [...warnings], settled: outcome.settled };

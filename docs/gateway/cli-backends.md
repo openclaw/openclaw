@@ -121,6 +121,15 @@ plugin code registered with `api.registerCliBackend(...)`.
 4. Parses output (JSON or plain text) and returns the final text.
 5. Persists session ids per backend so follow-ups reuse the same CLI session.
 
+Direct agent calls and child-completion updates share the same session reply policy.
+A completion turn's delivery override does not by itself start a fresh CLI session;
+authentication, workspace, and tool compatibility checks still apply.
+Each turn receives delivery instructions for its current mode and available tools,
+while the stored user message and reusable system prompt remain unchanged.
+
+Existing sessions that stored the implicit automatic policy also retain continuity.
+OpenClaw records the current policy when the next turn completes.
+
 ## Timeouts and long-running work
 
 CLI backends have two independent limits:
@@ -139,6 +148,19 @@ openclaw config set agents.defaults.timeoutSeconds 43200
 ```
 
 Background work started inside a CLI is still part of that CLI subprocess. If the parent turn reaches its overall limit, OpenClaw stops the subprocess and its CLI-internal background tasks together. For durable long work, use a detached OpenClaw [sub-agent](/tools/subagents) or [ACP agent](/tools/acp-agents). Detached sub-agents have no run timeout by default.
+
+Local Claude CLI turns with bundled Gateway MCP use OpenClaw's `exec` and `process`
+for shell work. Native `Bash` is disabled for those turns. A command still running
+after the default 10-second yield window returns a managed process handle instead
+of holding the tool call until it finishes. When completion notifications are
+enabled, the result wakes the originating conversation; a busy conversation handles
+it after its current turn. If only waiting remains, the agent reports that the job
+is running and ends its turn instead of repeatedly polling. Exec policy, configured
+yield windows, command deadlines, and explicit notification settings still apply.
+
+Exact tool selections, tool-free side questions, standalone CLI runs without
+Gateway MCP, and paired-node Claude runs keep their existing tool contracts.
+Plugin tools such as remote SSH do not become background jobs automatically.
 
 When Claude Code moves a foreground Bash command to the background after its tool timeout,
 OpenClaw keeps the turn active until Claude processes the completion and returns its final answer.
@@ -223,7 +245,7 @@ every request, and ask `off` with less than full security denies without asking.
 
 ### Native Bash and the exec allowlist
 
-With `ask: "on-miss"`, the `claude-cli` backend checks native `Bash` commands
+When a run retains native `Bash`, `ask: "on-miss"` makes the `claude-cli` backend check commands
 against the agent's [exec allowlist](/tools/exec-approvals). For example:
 
 ```bash
@@ -303,7 +325,15 @@ context note before the current user prompt. Chat history first matches imported
 Claude user turns against the full local text, including any literal quote of the
 note. If that does not match, it ignores one exact context note for comparison, so
 the same turn appears once. Stored transcript text and unmatched imported turns
-remain intact.
+remain intact. Native and OpenClaw history share bounded pages and message-anchor
+lookups. The history worker prepares a temporary merged index without modifying
+the canonical transcript. A cold index scans bounded source pages to preserve
+global deduplication; subsequent reads select only their requested window. The
+index is discarded when either transcript changes or its database owner closes.
+Reset-archive fallbacks rebuild the index per request because their source files
+have a separate revision from the active database.
+Incognito history uses a request-scoped memory index and never writes that index
+to disk. No migration or update repair is required.
 
 ### History account boundaries
 
@@ -474,6 +504,7 @@ stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
 bytes are not tool results or agent progress; client request deadlines and the
 overall agent turn timeout still apply.
 
+The shared listener remains available after the turn that first started it completes.
 After plugin replacement, new CLI turns resolve bridge tools against the current
 plugin generation without restarting the listener. Retired plugin instances remain
 unavailable, and each turn still needs its own active context grant.
@@ -486,17 +517,19 @@ cancellation, including when a warm CLI process is reused for a later turn.
 
 Automations created through the bridge without a finite `toolsAllow` list follow the
 owner session's tool policy at run time. A finite list is capped to the bridge's final
-permitted tools and supported native capabilities. When Claude's native `Bash` supplies `exec`,
+permitted tools and supported native capabilities. When a run retains native `Bash` for `exec`,
 the saved automation retains its Gateway host target, including with an explicit
 `toolsAllow: ["exec"]` cap. Current account, tool, sandbox, and approval restrictions
 still apply; capturing the target does not grant broader execution permission.
 
-The node-only `exec` tool is offered only when policy permits it and a connected
+Backends that retain their native shell can also receive a node-only `exec` tool,
+offered only when policy permits it and a connected
 node advertises `system.run`. Offline paired devices and approval-only phones do
 not make remote execution available. A configured node binding must identify an
 eligible node. It never redirects to another device. When several eligible nodes
 are connected, select one explicitly. When local execution is allowed by policy,
-use the CLI's native shell for local work.
+use managed `exec` for local Claude MCP turns, or the native shell when the backend
+retains it.
 
 `tools.allow` and `tools.deny` also constrain configured native MCP servers.
 OpenClaw lists each server through its session-scoped runtime, assigns the same

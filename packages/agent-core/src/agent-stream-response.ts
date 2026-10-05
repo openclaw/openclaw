@@ -11,6 +11,7 @@ import type {
   ToolResultMessage,
 } from "@openclaw/llm-core";
 import { uuidv7 } from "./harness/session/uuid.js";
+import { copyInternalToolResultState } from "./internal-hooks.js";
 import {
   type AgentCoreStreamRuntimeDeps,
   resolveAgentCoreStreamFn,
@@ -18,14 +19,17 @@ import {
 } from "./runtime-deps.js";
 import { createStreamSteering } from "./stream-steering.js";
 import { normalizeCoreContextMessages } from "./turn-interruption.js";
+import { withToolResultContentSource } from "./turn-taint.js";
 import type {
   AgentContext,
   AgentEvent,
   AgentLoopConfig,
   AgentMessage,
   AgentToolCall,
+  AgentToolResult,
   StreamFn,
   ToolLoopIntervention,
+  ToolResultContentSource,
 } from "./types.js";
 
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
@@ -86,6 +90,36 @@ function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
   }
   // message_end persists this local identity before any tool can execute.
   return { ...message, turnId: uuidv7() };
+}
+
+export async function emitToolResultMessage(
+  finalized: {
+    toolCall: AgentToolCall;
+    result: AgentToolResult<unknown>;
+    isError: boolean;
+    resultContentSource?: ToolResultContentSource;
+  },
+  emit: AgentEventSink,
+): Promise<ToolResultMessage> {
+  const message = copyInternalToolResultState(
+    finalized.result,
+    withToolResultContentSource(
+      {
+        role: "toolResult",
+        toolCallId: finalized.toolCall.id,
+        toolName: finalized.toolCall.name,
+        content: finalized.result.content ?? [],
+        details: finalized.result.details,
+        isError: finalized.isError,
+        timestamp: Date.now(),
+      },
+      finalized.resultContentSource,
+    ),
+  );
+  await emit({ type: "message_start", message });
+  const event = { type: "message_end" as const, message };
+  await emit(event);
+  return event.message;
 }
 
 export async function streamAgentResponse(
@@ -161,11 +195,25 @@ export async function streamAgentResponse(
   let admissions = Promise.resolve();
   let executionFailure: { error: unknown } | undefined;
   const emitToolEvent: AgentEventSink = async (event) => {
-    if (event.type === "message_end" && event.message.role === "toolResult") {
-      context.messages.push(event.message);
-      newMessages.push(event.message);
+    if (event.type !== "message_end" || event.message.role !== "toolResult") {
+      await emit(event);
+      return;
     }
-    await emit(event);
+    const message = event.message;
+    const contextIndex = context.messages.push(message) - 1;
+    const newIndex = newMessages.push(message) - 1;
+    try {
+      await emit(event);
+    } finally {
+      if (event.message !== message && event.message.role === "toolResult") {
+        if (context.messages[contextIndex] === message) {
+          context.messages[contextIndex] = event.message;
+        }
+        if (newMessages[newIndex] === message) {
+          newMessages[newIndex] = event.message;
+        }
+      }
+    }
   };
   const enqueueTools = (message: AssistantMessage) => {
     if (message.stopReason === "error" || message.stopReason === "aborted") {
@@ -349,10 +397,18 @@ export async function streamAgentResponse(
             // Record one provider terminal, with its original usage, after tool outcomes settle.
             await executions;
           }
+          const tail = remainingFragment(result);
           const finalMessage = prepareAssistantMessage(
             ensureToolTurnIdentity(
               removeNonExecutableToolCalls({
-                ...remainingFragment(result),
+                ...tail,
+                // The provider stop covers the whole response. Its calls were committed
+                // with earlier fragments, so a call-free tail is the response's end.
+                ...(committedContentCount > 0 &&
+                tail.stopReason === "toolUse" &&
+                !tail.content.some((item) => item.type === "toolCall")
+                  ? { stopReason: "stop" as const }
+                  : {}),
                 ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
                 ...(outputLimit && signal?.aborted
                   ? { stopReason: "aborted" }

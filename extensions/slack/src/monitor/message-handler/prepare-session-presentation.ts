@@ -31,12 +31,7 @@ export function resolveSlackConversationLink(params: {
     return params.existingLink;
   }
   const teamId = normalizeOptionalString(params.teamId);
-  let apiHost = "";
-  try {
-    apiHost = params.slackApiUrl ? new URL(params.slackApiUrl).hostname.toLowerCase() : "";
-  } catch {
-    // Invalid or custom API roots use the public Slack redirect host.
-  }
+  const apiHost = params.slackApiUrl ? URL.parse(params.slackApiUrl)?.hostname.toLowerCase() : "";
   // Slack documents app_redirect for opening a conversation. Its exact-message permalink
   // API is remote and optional, so session preparation must not wait on it.
   const host = apiHost === "slack-gov.com" ? "slack-gov.com" : "slack.com";

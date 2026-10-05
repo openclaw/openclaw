@@ -14,7 +14,7 @@ const WINDOWS_RUNNERS = new Set([
   "blacksmith-8vcpu-windows-2025",
   "blacksmith-16vcpu-windows-2025",
 ]);
-const ADMISSION_AGE_MS = 10 * 60_000;
+const ADMISSION_AGE_MS = 60 * 60_000;
 const CONCURRENT_LEASES = 32;
 const MAX_IDLE_MINUTES = 15;
 const DEFAULT_STANDARD_MINUTES = 60;
@@ -23,7 +23,9 @@ const HIGH_MEMORY_LEASES = 4;
 export function assertFreshTestboxAdmission(expiresAt, now = Date.now()) {
   const deadline = Number(expiresAt);
   if (!Number.isSafeInteger(deadline) || deadline <= now) {
-    throw new Error("Testbox admission expired after 10 minutes; request a fresh lease.");
+    throw new Error(
+      "Testbox admission expired after 60 minutes from dispatch; stop this lease and request a fresh one.",
+    );
   }
 }
 

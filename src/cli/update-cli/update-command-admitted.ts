@@ -10,10 +10,10 @@ import {
 } from "./update-command-executor.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
 import { admitUpdateRequesterContinuation } from "./update-command-managed-context.js";
+import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   admitUpdateCommandRun,
-  assertUpdatePackageActivationAdmission,
   resolveUpdateCommandAdmissionRoot,
   withUpdatePreviewSignals,
   type prepareUpdateCommand,

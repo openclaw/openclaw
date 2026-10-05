@@ -130,10 +130,18 @@ type ActiveRecallParams = {
   authorityFingerprint: string;
   memorySlot?: string;
   activeProjectKeys?: string[];
+  memoryAudience?: Parameters<
+    OpenClawPluginApi["runtime"]["agent"]["runEmbeddedAgent"]
+  >[0]["memoryAudience"];
+  /** Host check for the parent turn's audience; recall state is never retained once it lapses. */
+  assertMemoryAudienceCurrent?: () => void;
 };
 
 async function recordRecallResult(
-  params: Pick<ActiveRecallParams, "abortSignal" | "agentId" | "api" | "config" | "sessionKey"> & {
+  params: Pick<
+    ActiveRecallParams,
+    "abortSignal" | "agentId" | "api" | "assertMemoryAudienceCurrent" | "config" | "sessionKey"
+  > & {
     logPrefix: string;
     result: ActiveRecallResult;
   },
@@ -142,6 +150,7 @@ async function recordRecallResult(
     params.api.logger.info?.(buildRecallDoneLogLine(params.logPrefix, params.result));
   }
   params.abortSignal?.throwIfAborted();
+  params.assertMemoryAudienceCurrent?.();
   await persistPluginStatusLines({
     api: params.api,
     agentId: params.agentId,
@@ -151,6 +160,7 @@ async function recordRecallResult(
     searchDebug: params.result.searchDebug,
   });
   params.abortSignal?.throwIfAborted();
+  params.assertMemoryAudienceCurrent?.();
 }
 
 async function resolveActiveRecall(
@@ -174,6 +184,7 @@ async function resolveActiveRecall(
         sessionId: params.sessionId,
         query: params.query,
         authorityFingerprint: params.authorityFingerprint,
+        memoryAudience: params.memoryAudience,
         memorySlot: params.memorySlot,
         activeProjectKeys: params.activeProjectKeys,
         modelProviderId: resolvedModelRef?.provider,
@@ -197,6 +208,7 @@ async function resolveActiveRecall(
   let logPrefix = buildLogPrefix(params.config.fastMode);
   if (cached) {
     params.abortSignal?.throwIfAborted();
+    params.assertMemoryAudienceCurrent?.();
     await persistPluginStatusLines({
       api: params.api,
       agentId: params.agentId,
@@ -402,6 +414,7 @@ async function resolveActiveRecall(
     resetCircuitBreaker(cbKey);
     await recordRecallResult({ ...params, logPrefix, result });
     if (cacheKey && shouldCacheResult(result)) {
+      params.assertMemoryAudienceCurrent?.();
       setCachedResult(cacheKey, result, params.config.cacheTtlMs);
     }
     return result;
@@ -465,6 +478,7 @@ export async function maybeResolveActiveRecall(
     // Run-local reuse follows request identity; the cross-turn content cache stays query-based.
     query: params.requestKey ?? params.query,
     authorityFingerprint: params.authorityFingerprint,
+    memoryAudience: params.memoryAudience,
     memorySlot: params.memorySlot,
     activeProjectKeys: params.activeProjectKeys,
     modelProviderId: model?.provider,

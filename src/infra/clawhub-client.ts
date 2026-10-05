@@ -424,6 +424,22 @@ export function readClawHubStringField(
   throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string or null.`);
 }
 
+/** Validate optional strings, omitting absent, null, and empty values. */
+export function readClawHubNonEmptyStringFields<T extends string>(
+  source: Record<string, unknown>,
+  fields: readonly T[],
+  context: string,
+): Partial<Record<T, string>> {
+  const result: Partial<Record<T, string>> = {};
+  for (const field of fields) {
+    const value = readClawHubStringField(source, field, context);
+    if (value) {
+      result[field] = value;
+    }
+  }
+  return result;
+}
+
 export function readRequiredClawHubBooleanField(
   source: Record<string, unknown>,
   field: string,

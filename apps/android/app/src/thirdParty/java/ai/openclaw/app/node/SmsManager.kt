@@ -1,13 +1,13 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.PermissionRequester
+import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.ContactsContract
 import android.provider.Telephony
-import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -22,8 +22,6 @@ import android.telephony.SmsManager as AndroidSmsManager
 class SmsManager(
   private val context: Context,
 ) {
-  private val json = JsonConfig
-
   @Volatile private var permissionRequester: PermissionRequester? = null
 
   internal data class QueryMetadata(
@@ -89,7 +87,6 @@ class SmsManager(
 
     internal fun parseParams(
       paramsJson: String?,
-      json: Json = JsonConfig,
     ): ParseResult {
       val params = paramsJson?.trim().orEmpty()
       if (params.isEmpty()) {
@@ -98,7 +95,7 @@ class SmsManager(
 
       val obj =
         try {
-          json.parseToJsonElement(params).jsonObject
+          JsonConfig.parseToJsonElement(params).jsonObject
         } catch (_: Throwable) {
           null
         }
@@ -128,7 +125,6 @@ class SmsManager(
 
     internal fun parseQueryParams(
       paramsJson: String?,
-      json: Json = JsonConfig,
     ): QueryParseResult {
       val params = paramsJson?.trim().orEmpty()
       if (params.isEmpty()) {
@@ -137,7 +133,7 @@ class SmsManager(
 
       val obj =
         try {
-          json.parseToJsonElement(params).jsonObject
+          JsonConfig.parseToJsonElement(params).jsonObject
         } catch (_: Throwable) {
           return QueryParseResult.Error("INVALID_REQUEST: expected JSON object")
         }
@@ -438,7 +434,6 @@ class SmsManager(
     }
 
     internal fun buildPayloadJson(
-      json: Json = JsonConfig,
       ok: Boolean,
       to: String,
       error: String?,
@@ -451,11 +446,10 @@ class SmsManager(
       if (!ok) {
         payload["error"] = JsonPrimitive(error ?: "SMS_SEND_FAILED")
       }
-      return json.encodeToString(JsonObject.serializer(), JsonObject(payload))
+      return JsonConfig.encodeToString(JsonObject.serializer(), JsonObject(payload))
     }
 
     internal fun buildQueryPayloadJson(
-      json: Json = JsonConfig,
       ok: Boolean,
       messages: List<SmsMessage>,
       error: String? = null,
@@ -465,7 +459,7 @@ class SmsManager(
         mutableMapOf<String, JsonElement>(
           "ok" to JsonPrimitive(ok),
           "count" to JsonPrimitive(messages.size),
-          "messages" to json.encodeToJsonElement(messages),
+          "messages" to JsonConfig.encodeToJsonElement(messages),
         )
       queryMetadata?.let {
         payload["mmsRequested"] = JsonPrimitive(it.mmsRequested)
@@ -476,15 +470,15 @@ class SmsManager(
       if (!ok && error != null) {
         payload["error"] = JsonPrimitive(error)
       }
-      return json.encodeToString(JsonObject.serializer(), JsonObject(payload))
+      return JsonConfig.encodeToString(JsonObject.serializer(), JsonObject(payload))
     }
   }
 
-  fun hasSmsPermission(): Boolean = hasPermission(Manifest.permission.SEND_SMS)
+  fun hasSmsPermission(): Boolean = context.hasPermission(Manifest.permission.SEND_SMS)
 
-  fun hasReadSmsPermission(): Boolean = hasPermission(Manifest.permission.READ_SMS)
+  fun hasReadSmsPermission(): Boolean = context.hasPermission(Manifest.permission.READ_SMS)
 
-  fun hasReadContactsPermission(): Boolean = hasPermission(Manifest.permission.READ_CONTACTS)
+  fun hasReadContactsPermission(): Boolean = context.hasPermission(Manifest.permission.READ_CONTACTS)
 
   fun canSendSms(): Boolean = hasSmsPermission() && hasTelephonyFeature()
 
@@ -509,7 +503,7 @@ class SmsManager(
       )
     }
 
-    val parseResult = parseParams(paramsJson, json)
+    val parseResult = parseParams(paramsJson)
     if (parseResult is ParseResult.Error) {
       return errorResult(
         error = parseResult.error,
@@ -566,7 +560,7 @@ class SmsManager(
         return@withContext queryError("SMS_PERMISSION_REQUIRED: grant READ_SMS permission")
       }
 
-      val parseResult = parseQueryParams(paramsJson, json)
+      val parseResult = parseQueryParams(paramsJson)
       if (parseResult is QueryParseResult.Error) {
         return@withContext queryError(parseResult.error)
       }
@@ -635,10 +629,8 @@ class SmsManager(
       }
     }
 
-  private fun hasPermission(permission: String): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-
   private suspend fun ensurePermission(permission: String): Boolean {
-    if (hasPermission(permission)) return true
+    if (context.hasPermission(permission)) return true
     val requester = permissionRequester ?: return false
     return requester.requestIfMissing(listOf(permission))[permission] == true
   }
@@ -647,7 +639,7 @@ class SmsManager(
     SmsResult(
       ok = true,
       error = null,
-      payloadJson = buildPayloadJson(json = json, ok = true, to = to, error = null),
+      payloadJson = buildPayloadJson(ok = true, to = to, error = null),
     )
 
   private fun errorResult(
@@ -657,7 +649,7 @@ class SmsManager(
     SmsResult(
       ok = false,
       error = error,
-      payloadJson = buildPayloadJson(json = json, ok = false, to = to, error = error),
+      payloadJson = buildPayloadJson(ok = false, to = to, error = error),
     )
 
   private fun queryOk(
@@ -667,14 +659,14 @@ class SmsManager(
     SmsResult(
       ok = true,
       error = null,
-      payloadJson = buildQueryPayloadJson(json, ok = true, messages = messages, queryMetadata = queryMetadata),
+      payloadJson = buildQueryPayloadJson(ok = true, messages = messages, queryMetadata = queryMetadata),
     )
 
   private fun queryError(error: String): SmsResult =
     SmsResult(
       ok = false,
       error = error,
-      payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = error),
+      payloadJson = buildQueryPayloadJson(ok = false, messages = emptyList(), error = error),
     )
 
   private fun getPhoneNumbersFromContactName(contactName: String): List<String> {

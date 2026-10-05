@@ -8,6 +8,7 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/ma
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
+import type { OpenClawConfigWithLegacyRoster } from "./legacy.roster.js";
 import { validateConfigObjectWithPlugins as validateConfigObjectWithPluginsRaw } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -597,23 +598,19 @@ describe("config plugin validation", () => {
     });
 
     it("keeps the two-argument diagnostic API correct for a legacy list", () => {
-      expect(
-        shouldSuppressMissingCodexPluginDiagnostics(
-          {
-            agents: {
-              list: [
-                {
-                  id: "10",
-                  default: true,
-                  model: "anthropic/claude-sonnet-4-6",
-                },
-                { id: "2", model: "openai/gpt-5.6" },
-              ],
+      const raw: OpenClawConfigWithLegacyRoster = {
+        agents: {
+          list: [
+            {
+              id: "10",
+              default: true,
+              model: "anthropic/claude-sonnet-4-6",
             },
-          },
-          suiteEnv(),
-        ),
-      ).toBe(false);
+            { id: "2", model: "openai/gpt-5.6" },
+          ],
+        },
+      };
+      expect(shouldSuppressMissingCodexPluginDiagnostics(raw, suiteEnv())).toBe(false);
     });
 
     it.each([

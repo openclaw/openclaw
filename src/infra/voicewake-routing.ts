@@ -1,4 +1,5 @@
 // Persists and resolves voice wake routing rules.
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -42,10 +43,10 @@ function normalizeVoiceWakeTriggerWord(value: string): string {
 }
 
 function normalizeRouteTarget(value: unknown): VoiceWakeRouteTarget | null {
-  if (!value || typeof value !== "object") {
+  const rec = asOptionalObjectRecord(value);
+  if (!rec) {
     return null;
   }
-  const rec = value as { mode?: unknown; agentId?: unknown; sessionKey?: unknown };
   const mode = normalizeOptionalString(rec.mode);
   if (mode === "current") {
     return { mode: "current" };
@@ -62,10 +63,10 @@ function normalizeRouteTarget(value: unknown): VoiceWakeRouteTarget | null {
 }
 
 function normalizeRouteRule(value: unknown): VoiceWakeRouteRule | null {
-  if (!value || typeof value !== "object") {
+  const rec = asOptionalObjectRecord(value);
+  if (!rec) {
     return null;
   }
-  const rec = value as { trigger?: unknown; target?: unknown };
   const triggerRaw = normalizeOptionalString(rec.trigger);
   if (!triggerRaw) {
     return null;
@@ -82,16 +83,11 @@ function normalizeRouteRule(value: unknown): VoiceWakeRouteRule | null {
 }
 
 /** Normalize persisted or user-provided voice wake routing config. */
-export function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutingConfig {
-  if (!input || typeof input !== "object") {
+function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutingConfig {
+  const rec = asOptionalObjectRecord(input);
+  if (!rec) {
     return { ...DEFAULT_ROUTING };
   }
-  const rec = input as {
-    version?: unknown;
-    defaultTarget?: unknown;
-    routes?: unknown;
-    updatedAtMs?: unknown;
-  };
   const defaultTarget = normalizeRouteTarget(rec.defaultTarget) ?? { mode: "current" as const };
   const routes = Array.isArray(rec.routes)
     ? rec.routes
@@ -126,13 +122,13 @@ type VoiceWakeResolvedRoute = { mode: "current" } | { agentId: string } | { sess
 function resolveVoiceWakeRouteTarget(
   routeTarget: VoiceWakeRouteTarget | undefined,
 ): VoiceWakeResolvedRoute {
-  if (!routeTarget || ("mode" in routeTarget && routeTarget.mode === "current")) {
+  if (routeTarget?.mode === "current") {
     return { mode: "current" };
   }
-  if ("agentId" in routeTarget && routeTarget.agentId) {
+  if (routeTarget?.agentId) {
     return { agentId: routeTarget.agentId };
   }
-  if ("sessionKey" in routeTarget && routeTarget.sessionKey) {
+  if (routeTarget?.sessionKey) {
     return { sessionKey: routeTarget.sessionKey };
   }
   return { mode: "current" };
@@ -143,9 +139,7 @@ export function resolveVoiceWakeRouteByTrigger(params: {
   trigger: string | undefined;
   config: VoiceWakeRoutingConfig;
 }): VoiceWakeResolvedRoute {
-  const normalizedTrigger = normalizeOptionalString(params.trigger)
-    ? normalizeVoiceWakeTriggerWord(params.trigger as string)
-    : "";
+  const normalizedTrigger = normalizeVoiceWakeTriggerWord(params.trigger ?? "");
   if (normalizedTrigger) {
     const matched = params.config.routes.find((route) => route.trigger === normalizedTrigger);
     if (matched) {

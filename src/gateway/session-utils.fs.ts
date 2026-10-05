@@ -38,14 +38,10 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
-  agentId?: string,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
-  const filePath = resolveSessionTranscriptCandidates(
-    sessionId,
-    storePath,
-    sessionFile,
-    agentId,
-  ).find((value) => fs.existsSync(value));
+  const filePath = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile).find(
+    (value) => fs.existsSync(value),
+  );
   if (!filePath) {
     return null;
   }

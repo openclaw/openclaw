@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { GitHubPublicationKnownFailure } from "./github-publication-failure.js";
 import {
@@ -7,33 +8,44 @@ import {
   requirePublicationCommand,
 } from "./github-publication-git-transport.js";
 
-type GitHubPublicationPullRequest = {
-  userId: number;
-  url: string;
-  state: "open" | "closed";
-  body: string;
-  headSha: string;
-  headRef: string;
-  baseRef: string;
-};
-
 type GitHubPublicationPullRequestLookup = {
   repository: string;
   pushOwner: string;
   branch: string;
   baseBranch: string;
   marker: string;
+  host?: string;
   refreshIdentity: () => Promise<PreparedGitHubPublicationIdentity>;
   assertCurrent: () => void;
 };
 
-async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRequestLookup) {
+async function readGitHubPublicationApi(
+  params: GitHubPublicationPullRequestLookup,
+  endpoint: string,
+  args: string[] = [],
+) {
   const identity = await params.refreshIdentity();
   params.assertCurrent();
-  const marker = JSON.stringify(params.marker);
   const raw = await requirePublicationCommand(
     [
-      ...githubPublicationApiArgs(`repos/${params.repository}/pulls`),
+      ...githubPublicationApiArgs(
+        endpoint,
+        "GET",
+        identity.host ?? params.host ?? resolveGitHubHost(),
+      ),
+      ...args,
+    ],
+    { env: identity.env },
+  );
+  return { identity, raw };
+}
+
+async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRequestLookup) {
+  const marker = JSON.stringify(params.marker);
+  const { identity, raw } = await readGitHubPublicationApi(
+    params,
+    `repos/${params.repository}/pulls`,
+    [
       "-f",
       `head=${params.pushOwner}:${params.branch}`,
       "-f",
@@ -45,13 +57,12 @@ async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRe
       // Compact pages remain independently parseable; only the request marker is needed from prose.
       `map({url: .html_url, userId: .user.id, state: .state, body: (if ((.body // "") | contains(${marker})) then ${marker} else "" end), headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref}) | tojson`,
     ],
-    { env: identity.env },
   );
   return { identity, candidates: parseGitHubPublicationPullRequests(raw) };
 }
 
 /** Parses the complete authenticated PR lookup; one malformed candidate invalidates the response. */
-function parseGitHubPublicationPullRequests(raw: string): GitHubPublicationPullRequest[] {
+function parseGitHubPublicationPullRequests(raw: string) {
   let pages: unknown[];
   try {
     pages = raw
@@ -95,32 +106,6 @@ function parseGitHubPublicationPullRequests(raw: string): GitHubPublicationPullR
   });
 }
 
-function resolveGitHubPublicationPullRequest(
-  candidates: readonly GitHubPublicationPullRequest[],
-  params: {
-    accountId: number;
-    headCommit: string;
-    branch: string;
-    baseBranch: string;
-    marker: string;
-  },
-): GitHubPublicationPullRequest | undefined {
-  const exact = candidates.filter(
-    (candidate) =>
-      candidate.userId === params.accountId &&
-      candidate.headSha === params.headCommit &&
-      candidate.headRef === params.branch &&
-      candidate.baseRef === params.baseBranch,
-  );
-  const open = exact.find((candidate) => candidate.state === "open");
-  return (
-    open ??
-    exact.find(
-      (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
-    )
-  );
-}
-
 export async function findGitHubPublicationPullRequest(
   params: GitHubPublicationPullRequestLookup & {
     headCommit: string;
@@ -128,13 +113,18 @@ export async function findGitHubPublicationPullRequest(
   },
 ): Promise<string | undefined> {
   const { identity, candidates } = await loadGitHubPublicationPullRequests(params);
-  const found = resolveGitHubPublicationPullRequest(candidates, {
-    accountId: identity.account.accountId,
-    headCommit: params.headCommit,
-    branch: params.branch,
-    baseBranch: params.baseBranch,
-    marker: params.marker,
-  });
+  const exact = candidates.filter(
+    (candidate) =>
+      candidate.userId === identity.account.accountId &&
+      candidate.headSha === params.headCommit &&
+      candidate.headRef === params.branch &&
+      candidate.baseRef === params.baseBranch,
+  );
+  const found =
+    exact.find((candidate) => candidate.state === "open") ??
+    exact.find(
+      (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
+    );
   if (found) {
     params.recordObserved?.(found.url);
     if (found.state === "closed") {
@@ -181,11 +171,9 @@ export async function reconcileGitHubPublicationPullRequest(
     recordPushObserved?: (headCommit: string) => void;
   },
 ): Promise<string | undefined> {
-  const identity = await params.refreshIdentity();
-  params.assertCurrent();
-  const raw = await requirePublicationCommand(
-    githubPublicationApiArgs(`repos/${params.pushRepository}/git/commits/${params.headCommit}`),
-    { env: identity.env },
+  const { raw } = await readGitHubPublicationApi(
+    params,
+    `repos/${params.pushRepository}/git/commits/${params.headCommit}`,
   );
   params.assertCurrent();
   const commit: unknown = JSON.parse(raw);
@@ -222,20 +210,12 @@ export async function reconcileGitHubPublicationPullRequest(
     if (!objectId.test(head)) {
       throw new Error("GitHub publication head observation is invalid.");
     }
-    const currentIdentity = await params.refreshIdentity();
-    params.assertCurrent();
-    const comparison: unknown = JSON.parse(
-      await requirePublicationCommand(
-        [
-          ...githubPublicationApiArgs(
-            `repos/${params.pushRepository}/compare/${params.headCommit}...${head}?per_page=1`,
-          ),
-          "--jq",
-          "{sha: .merge_base_commit.sha}",
-        ],
-        { env: currentIdentity.env },
-      ),
+    const { raw: comparisonRaw } = await readGitHubPublicationApi(
+      params,
+      `repos/${params.pushRepository}/compare/${params.headCommit}...${head}?per_page=1`,
+      ["--jq", "{sha: .merge_base_commit.sha}"],
     );
+    const comparison: unknown = JSON.parse(comparisonRaw);
     if (
       !isRecord(comparison) ||
       typeof comparison.sha !== "string" ||
@@ -270,16 +250,11 @@ export async function reconcileGitHubPublicationPullRequest(
   if (params.pushOnly === "observed") {
     return undefined;
   }
-  const refIdentity = await params.refreshIdentity();
-  params.assertCurrent();
-  const refs: unknown = JSON.parse(
-    await requirePublicationCommand(
-      githubPublicationApiArgs(
-        `repos/${params.pushRepository}/git/matching-refs/heads/${encodeURIComponent(params.branch)}`,
-      ),
-      { env: refIdentity.env },
-    ),
+  const { raw: refsRaw } = await readGitHubPublicationApi(
+    params,
+    `repos/${params.pushRepository}/git/matching-refs/heads/${encodeURIComponent(params.branch)}`,
   );
+  const refs: unknown = JSON.parse(refsRaw);
   if (!Array.isArray(refs)) {
     throw new Error("GitHub publication branch observation is invalid.");
   }

@@ -10,10 +10,7 @@ export function parseSendPolicyCommand(raw?: string): {
   hasCommand: boolean;
   mode?: SendPolicyOverride | "inherit";
 } {
-  if (!raw) {
-    return { hasCommand: false };
-  }
-  const trimmed = raw.trim();
+  const trimmed = raw?.trim();
   if (!trimmed) {
     return { hasCommand: false };
   }

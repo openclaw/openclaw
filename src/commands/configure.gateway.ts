@@ -125,6 +125,16 @@ export async function promptGatewayConfig(
     note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
   }
 
+  // Disable incompatible exposure before it rewrites the selected auth or bind.
+  // Same-host proxies still require explicit loopback trust and consent.
+  if (authMode === "trusted-proxy" && tailscaleMode !== "off") {
+    note(
+      "Trusted proxy auth is incompatible with Tailscale serve/funnel. Disabling Tailscale.",
+      "Note",
+    );
+    tailscaleMode = "off";
+  }
+
   if (tailscaleMode !== "off" && bind !== "loopback") {
     note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
     bind = "loopback";
@@ -133,16 +143,6 @@ export async function promptGatewayConfig(
   if (tailscaleMode === "funnel" && authMode !== "password") {
     note("Tailscale funnel requires password auth.", "Note");
     authMode = "password";
-  }
-
-  // trusted-proxy + loopback is valid when the reverse proxy runs on the same
-  // host, with the loopback source in trustedProxies and allowLoopback consent.
-  if (authMode === "trusted-proxy" && tailscaleMode !== "off") {
-    note(
-      "Trusted proxy auth is incompatible with Tailscale serve/funnel. Disabling Tailscale.",
-      "Note",
-    );
-    tailscaleMode = "off";
   }
 
   let gatewayToken: SecretInput | undefined;

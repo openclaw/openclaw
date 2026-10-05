@@ -23,11 +23,6 @@ import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-const defaultBundleLspRuntimeDependencies = {
-  loadLspConfig: loadEnabledBundleLspConfig,
-  spawnServerProcess: spawnLspServerProcess,
-};
-
 type LspSession = {
   serverName: string;
   process: OwnedStdioProcess;
@@ -536,11 +531,9 @@ export async function createBundleLspToolRuntime(params: {
   abortSignal?: AbortSignal;
   reservedToolNames?: Iterable<string>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  dependencies?: typeof defaultBundleLspRuntimeDependencies;
 }): Promise<BundleLspToolRuntime> {
   throwIfLspAborted(params.abortSignal);
-  const dependencies = params.dependencies ?? defaultBundleLspRuntimeDependencies;
-  const loaded = dependencies.loadLspConfig({
+  const loaded = loadEnabledBundleLspConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
@@ -574,7 +567,7 @@ export async function createBundleLspToolRuntime(params: {
       try {
         session = createLspSession(
           serverName,
-          await dependencies.spawnServerProcess(launchConfig, { abortSignal: params.abortSignal }),
+          await spawnLspServerProcess(launchConfig, { abortSignal: params.abortSignal }),
         );
         activeBundleLspSessions.add(session);
         attachLspProcessHandlers(session);

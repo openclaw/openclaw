@@ -23,7 +23,7 @@ vi.mock("../infra/gateway-scheduler.js", async (importOriginal) => {
 });
 
 describe("Gateway post-ready startup work", () => {
-  it.each(["settles", "closes"] as const)(
+  it.each(["settles", "closes", "repair-closes"] as const)(
     "holds post-ready maintenance until deferred startup %s",
     async (outcome) => {
       const clock = createGatewaySchedulerClock();
@@ -47,6 +47,8 @@ describe("Gateway post-ready startup work", () => {
       });
       state.envVars.OPENCLAW_TEST_MINIMAL_GATEWAY = undefined;
       const startup = createDeferred();
+      const repairStarted = createDeferred();
+      const repairRelease = createDeferred();
       const resumed = vi.fn<(closing: boolean) => void>();
       const startMaintenance = vi.fn(async () => null);
       let server: GatewayServer | undefined;
@@ -54,6 +56,13 @@ describe("Gateway post-ready startup work", () => {
       let postReadyWork: Promise<void> | undefined;
       let closeOutcome: Promise<void> | undefined;
       let beforeReadyWake: void | Promise<void> = undefined;
+      let repairWake: void | Promise<void> = undefined;
+      const plugins = await import("./server-startup-plugins.js");
+      vi.spyOn(plugins, "runGatewayPostReadyStartupMaintenance").mockImplementation(async () => {
+        repairStarted.resolve();
+        await repairRelease.promise;
+        throw new Error("synthetic optional repair failure");
+      });
       const earlyModule = await import("./server-startup-early.js");
       const startEarlyRuntime = earlyModule.startGatewayEarlyRuntime;
       const earlyFactory = vi
@@ -117,19 +126,39 @@ describe("Gateway post-ready startup work", () => {
           await server.startupSettled;
           await clock.advanceBy(499);
           expect(resumed).not.toHaveBeenCalled();
-          await clock.advanceBy(1);
+          repairWake = clock.advanceBy(1);
           await postReadyWork;
-          await beforeReadyWake;
+          await repairStarted.promise;
           expect(resumed).toHaveBeenCalledExactlyOnceWith(false);
-          expect(startMaintenance).toHaveBeenCalledOnce();
+          expect(startMaintenance).not.toHaveBeenCalled();
+          const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
+          expect(readiness.status).toBe(200);
+          if (outcome === "repair-closes") {
+            let closed = false;
+            closeOutcome = server.close().then(() => {
+              closed = true;
+            });
+            await Promise.resolve();
+            expect(closed).toBe(false);
+          }
+          repairRelease.resolve();
+          await repairWake;
+          await beforeReadyWake;
+          await closeOutcome;
+          if (outcome === "settles") {
+            // Failed optional repair must not suppress the periodic maintenance owner.
+            expect(startMaintenance).toHaveBeenCalledOnce();
+          }
         }
       } finally {
         startup.resolve();
+        repairRelease.resolve();
         try {
           await closeOutcome;
           await server?.close();
           await postReadyWork;
           await beforeReadyWake;
+          await repairWake;
           await state.cleanup();
         } finally {
           schedulerClock.current = undefined;

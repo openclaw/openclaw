@@ -1,20 +1,16 @@
-import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   extractBundleServerMap,
   loadEnabledBundleConfig,
   readBundleJsonObject,
-  resolveBundleJsonOpenFailure,
 } from "./bundle-config-shared.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-  mergeBundlePathLists,
-  normalizeBundlePathList,
+  resolveBundleComponentPaths,
 } from "./bundle-manifest.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
-import { pluginCacheExistsSync } from "./plugin-cache-files.js";
 
 /** LSP server config block loaded from plugin bundle metadata. */
 type BundleLspServerConfig = Record<string, unknown>;
@@ -32,17 +28,6 @@ type BundleLspRuntimeSupport = {
   diagnostics: string[];
 };
 
-function resolveBundleLspConfigPaths(params: {
-  raw: Record<string, unknown>;
-  rootDir: string;
-}): string[] {
-  const declared = normalizeBundlePathList(params.raw.lspServers);
-  const defaults = pluginCacheExistsSync(path.join(params.rootDir, ".lsp.json"))
-    ? [".lsp.json"]
-    : [];
-  return mergeBundlePathLists(defaults, declared);
-}
-
 function loadBundleLspConfigFile(params: { rootDir: string; relativePath: string }): {
   config: BundleLspConfig;
   diagnostics: string[];
@@ -50,12 +35,7 @@ function loadBundleLspConfigFile(params: { rootDir: string; relativePath: string
   const result = readBundleJsonObject({
     rootDir: params.rootDir,
     relativePath: params.relativePath,
-    onOpenFailure: (failure) =>
-      resolveBundleJsonOpenFailure({
-        failure,
-        relativePath: params.relativePath,
-        allowMissing: true,
-      }),
+    allowMissing: true,
   });
   if (!result.ok) {
     return {
@@ -91,10 +71,9 @@ function loadBundleLspConfig(params: {
   }
 
   let merged: BundleLspConfig = { lspServers: {} };
-  const filePaths = resolveBundleLspConfigPaths({
-    raw: manifestLoaded.raw,
-    rootDir: params.rootDir,
-  });
+  const filePaths = resolveBundleComponentPaths(manifestLoaded.raw.lspServers, params.rootDir, [
+    ".lsp.json",
+  ]);
   const diagnostics: string[] = [];
   for (const relativePath of filePaths) {
     const loaded = loadBundleLspConfigFile({
@@ -141,6 +120,5 @@ export function loadEnabledBundleLspConfig(params: {
     manifestRegistry: params.manifestRegistry,
     createEmptyConfig: () => ({ lspServers: {} }),
     loadBundleConfig: loadBundleLspConfig,
-    createDiagnostic: (pluginId, message) => ({ pluginId, message }),
   });
 }

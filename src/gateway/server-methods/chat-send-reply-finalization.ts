@@ -4,7 +4,7 @@ import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcri
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
 import {
   combineNonStreamingReplyParts,
@@ -33,8 +33,10 @@ import {
 import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
 import { buildTranscriptReplyTextFromInputs } from "./chat-send-reply-dispatch.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
-import type { GatewayInjectedTtsSupplementMarker } from "./chat-transcript-inject.js";
-import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
+import {
+  appendInjectedAssistantMessageToTranscript,
+  type GatewayInjectedTtsSupplementMarker,
+} from "./chat-transcript-inject.js";
 import { buildMediaOnlyTtsSupplementTranscriptMarker } from "./chat-tts-markers.js";
 import type { GatewayChatUserTurnPersist } from "./chat-user-turn-recorder.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -217,13 +219,24 @@ export async function finalizeChatSendDispatchedReplies(params: {
       }
     },
   });
-  const sourceSession = loadSessionEntry(sessionKey, sessionLoadOptions);
+  const sourceSession = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: context.getRuntimeConfig(),
+    key: sessionKey,
+    ...sessionLoadOptions,
+    projection: [],
+  });
   const requestedTranscriptSession = transcriptMirrorOwner
-    ? loadSessionEntry(transcriptMirrorOwner.sessionKey, {
+    ? await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: context.getRuntimeConfig(),
+        key: transcriptMirrorOwner.sessionKey,
         ...sessionLoadOptions,
         ...(transcriptMirrorOwner.agentId ? { agentId: transcriptMirrorOwner.agentId } : {}),
+        projection: [],
       })
     : undefined;
+  if (!authorizeDelivery("session preparation")) {
+    return;
+  }
   // Binding-owned payloads already retargeted the user turn. Keep the assistant
   // beside it only when that durable target still exists. Never fall back to the
   // source transcript after ownership metadata appears on any final payload.
@@ -329,19 +342,18 @@ export async function finalizeChatSendDispatchedReplies(params: {
     return;
   }
   if (shouldAppendAssistantTranscript) {
-    const appended = await appendAssistantTranscriptMessage({
+    const appended = await appendInjectedAssistantMessageToTranscript({
       sessionKey: transcriptSessionKey,
       message: transcriptReply,
       ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
       sessionId,
       storePath: latestStorePath,
       agentId: transcriptAgentId,
-      createIfMissing: true,
       idempotencyKey: clientRunId,
       stopReason,
       ttsSupplement: ttsSupplementMarker,
       ...(contextFreeCommand ? { contextFreeCommand: true } : {}),
-      cfg,
+      config: cfg,
       onMessageCommitted: (receipt, acceptCompletion) => {
         const blocks = readAssistantDisplayContent(receipt.message);
         if (hasManagedOutgoingAssistantContent(blocks)) {

@@ -211,6 +211,10 @@ openclaw message send --channel reef --target @friend --message "hello from my c
 
 A send never fails silently. Local guard or relay errors fail the send immediately. Replies and peer guard rejections come back through the flows below. If the peer's claw confirms nothing for about 10 minutes, the sending agent receives a delivery-delay notice. A follow-up arrives once the message is finally delivered or rejected. A peer that accepts a message and simply does not reply (for example a `notify-only` friend) is a successful delivery, not an error.
 
+When upgrading from early Reef versions, sends that were already in flight may keep an unknown delivery status. Reef leaves their protocol journal intact and handles new sends through current delivery records. Check with the friend before manually resending a pre-upgrade message whose status remains unknown.
+
+A late rejection for one of those historical sends no longer starts the peer's 15-minute rejection cooldown. A later rejection may therefore allow one automatic rephrased resend that the old cooldown would have suppressed. Peer trust, keys, and the guard checks on new sends are unchanged.
+
 Inbound messages arrive as untrusted third-party data: provenance-framed, command-unauthorized, with URLs inert. Depending on the friend's autonomy tier, OpenClaw notifies you or sends a bounded guarded reply:
 
 | Tier          | Behavior                                                         |

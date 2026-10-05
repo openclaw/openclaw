@@ -30,10 +30,10 @@ import {
   type InternalRealtimeVoiceBrowserSessionCreateRequest,
 } from "../../../talk/provider-internal.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../../talk/provider-resolver.js";
-import { resolveSandboxedSessionCreation } from "../../operator-role-policy.js";
-import { resolveOperatorSessionCreation } from "../../server-methods/session-creation-provenance.js";
+import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
+import { resolveOperatorSessionCreation } from "../../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../../session-sharing.js";
 import { formatForLog } from "../../ws-log.js";
 import { createTalkClientAgentConsultRunner } from "../client-agent-consult.js";

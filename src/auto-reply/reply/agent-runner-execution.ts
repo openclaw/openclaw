@@ -22,6 +22,7 @@ import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
@@ -40,6 +41,7 @@ import {
 import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
+import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
 import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
@@ -175,6 +177,7 @@ async function executeAgentTurnInternalLoop(
   }
   let replyMediaContext: ReplyMediaContext;
   let currentTurnImages: CurrentTurnImages;
+  let modelPatch: Awaited<ReturnType<typeof createAgentPatchedSessionModelRunGuard>>;
   try {
     replyMediaContext =
       params.replyMediaContext ??
@@ -223,58 +226,129 @@ async function executeAgentTurnInternalLoop(
       params = { ...params, mcpAppContextLease: modelContextLease };
     }
     ({ params, currentTurnImages } = applyMcpAppModelContext(params, currentTurnImages));
+    modelPatch = await createAgentPatchedSessionModelRunGuard({
+      cfg: runtimeConfig,
+      agentId: params.followupRun.run.agentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      assertReadCurrent: () => {
+        params.replyOperation?.abortSignal?.throwIfAborted();
+        params.opts?.abortSignal?.throwIfAborted();
+        preparedRunAdmission.assertSourceCurrent();
+      },
+      onError: (error) =>
+        logVerbose(`agent model patch reconciliation failed: ${formatErrorMessage(error)}`),
+    });
   } catch (error) {
     clearAgentRunContext(runId, lifecycleGeneration);
     throw error;
   }
   let didNotifyAgentRunStart = false;
   let lastRunStartupPhase: ReturnType<typeof resolveRunStartupPhase>;
-  const notifyAgentRunStart = () => {
-    if (didNotifyAgentRunStart) {
-      return;
-    }
-    didNotifyAgentRunStart = true;
-    if (params.replyOperation) {
-      markReplyOperationExecutionStarted(params.replyOperation);
-    }
-    params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
-  };
-  const signalExecutionPhaseForTyping = (
-    info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
-  ) => {
-    agentTurnTiming.logExecutionPhaseIfSlow({
-      runId,
-      sessionId: params.followupRun.run.sessionId,
-      sessionKey: params.sessionKey,
-      phase: info.phase,
-    });
-    const startupPhase = resolveRunStartupPhase(info.phase);
-    if (startupPhase && startupPhase !== lastRunStartupPhase) {
-      lastRunStartupPhase = startupPhase;
-      emitAgentRunStatusEvent({ runId, phase: startupPhase });
-    }
-    if (
-      info.phase === "turn_accepted" ||
-      info.phase === "model_call_started" ||
-      info.phase === "process_spawned"
-    ) {
-      params.mcpAppContextLease?.commit();
-    }
-    const isUserVisibleExecutionActivity =
-      info.phase === "turn_accepted" ||
-      info.phase === "process_spawned" ||
-      info.phase === "model_call_started" ||
-      info.phase === "tool_execution_started" ||
-      info.phase === "assistant_output_started";
-    if (!isUserVisibleExecutionActivity) {
-      return;
-    }
-    notifyAgentRunStart();
-    void (
-      params.typingSignals.signalExecutionActivity?.() ?? params.typingSignals.signalRunStart()
-    ).catch((err: unknown) => {
-      logVerbose(`execution phase typing signal failed: ${String(err)}`);
-    });
+  // Failed candidates cannot lend prepared facts or late callbacks to their successor.
+  const createAgentRunStartCallbacks = () => {
+    let active = true;
+    let preparedTranscriptStart: PreparedReplyTranscriptStart | null | undefined =
+      params.opts?.onAgentRunStart && params.sessionKey ? undefined : null;
+    let transcriptStartPreparation: Promise<void> | undefined;
+    const prepareAgentRunStart = () => {
+      if (
+        !active ||
+        didNotifyAgentRunStart ||
+        preparedTranscriptStart !== undefined ||
+        !params.sessionKey
+      ) {
+        return undefined;
+      }
+      if (transcriptStartPreparation) {
+        return transcriptStartPreparation;
+      }
+      const target = {
+        agentId: effectiveRun.agentId,
+        sessionId: params.replyOperation?.sessionId ?? effectiveRun.sessionId,
+        sessionKey: params.sessionKey,
+        storePath:
+          params.storePath ??
+          resolveSessionStorePathCore(runtimeConfig.session?.store, {
+            agentId: effectiveRun.agentId,
+          }),
+      };
+      return (transcriptStartPreparation = (async () => {
+        const { readSessionTranscriptStartAsync } =
+          await import("../../config/sessions/session-transcript-watermark.js");
+        const prepared = await readSessionTranscriptStartAsync(target);
+        preparedRunAdmission.assertSourceCurrent();
+        params.opts?.abortSignal?.throwIfAborted();
+        params.replyOperation?.abortSignal?.throwIfAborted();
+        if (active && !didNotifyAgentRunStart) {
+          preparedTranscriptStart = prepared;
+        }
+      })());
+    };
+    const notifyAgentRunStart = (transcriptStart?: PreparedReplyTranscriptStart | null) => {
+      const prepared = transcriptStart === undefined ? preparedTranscriptStart : transcriptStart;
+      if (!active || didNotifyAgentRunStart || prepared === undefined) {
+        return;
+      }
+      didNotifyAgentRunStart = true;
+      if (params.replyOperation) {
+        markReplyOperationExecutionStarted(params.replyOperation);
+      }
+      params.opts?.onAgentRunStart?.(
+        runId,
+        admittedRunContext.current?.executionIdentityToken,
+        undefined,
+        prepared,
+      );
+    };
+    const signalExecutionPhaseForTyping = (
+      info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
+    ) => {
+      if (!active) {
+        return;
+      }
+      agentTurnTiming.logExecutionPhaseIfSlow({
+        runId,
+        sessionId: params.followupRun.run.sessionId,
+        sessionKey: params.sessionKey,
+        phase: info.phase,
+      });
+      const startupPhase = resolveRunStartupPhase(info.phase);
+      if (startupPhase && startupPhase !== lastRunStartupPhase) {
+        lastRunStartupPhase = startupPhase;
+        emitAgentRunStatusEvent({ runId, phase: startupPhase });
+      }
+      if (
+        info.phase === "turn_accepted" ||
+        info.phase === "model_call_started" ||
+        info.phase === "process_spawned"
+      ) {
+        params.mcpAppContextLease?.commit();
+      }
+      const isUserVisibleExecutionActivity =
+        info.phase === "turn_accepted" ||
+        info.phase === "process_spawned" ||
+        info.phase === "model_call_started" ||
+        info.phase === "tool_execution_started" ||
+        info.phase === "assistant_output_started";
+      if (!isUserVisibleExecutionActivity) {
+        return;
+      }
+      notifyAgentRunStart();
+      void (
+        params.typingSignals.signalExecutionActivity?.() ?? params.typingSignals.signalRunStart()
+      ).catch((err: unknown) => {
+        logVerbose(`execution phase typing signal failed: ${String(err)}`);
+      });
+    };
+    return {
+      prepareAgentRunStart,
+      notifyAgentRunStart,
+      signalExecutionPhaseForTyping,
+      close: () => {
+        active = false;
+      },
+    };
   };
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
   let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
@@ -283,14 +357,6 @@ async function executeAgentTurnInternalLoop(
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let fallbackExhausted = false;
   let terminalRunFailed = false;
-  const modelPatch = createAgentPatchedSessionModelRunGuard({
-    cfg: runtimeConfig,
-    agentId: params.followupRun.run.agentId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    onError: (error) =>
-      logVerbose(`agent model patch reconciliation failed: ${formatErrorMessage(error)}`),
-  });
   let liveModelSwitchRetries = 0;
   const fallbackCycleState: AgentFallbackCycleState = {
     deferredLifecycle,
@@ -337,8 +403,7 @@ async function executeAgentTurnInternalLoop(
         state: fallbackCycleState,
         presentation,
         directBlockDeliveries,
-        notifyAgentRunStart,
-        signalExecutionPhaseForTyping,
+        createAgentRunStartCallbacks,
         notifyUserAboutCompaction,
         timing: agentTurnTiming,
         modelPatch,
@@ -456,24 +521,27 @@ async function executeAgentTurnInternalLoop(
   }
 
   return {
-    kind: "completed",
+    kind: "settled",
     maintenanceAuthProfile: fallbackCycleState.maintenanceAuthProfile,
     compactionRequestBudget: fallbackCycleState.compactionRequestBudget,
     result: runResult,
-    fallbackProvider,
-    fallbackModel,
-    ...(fallbackExhausted ? { fallbackExhausted: true as const } : {}),
-    fallbackAttempts,
+    resolved: { provider: fallbackProvider, model: fallbackModel },
+    fallback: { exhausted: fallbackExhausted, attempts: fallbackAttempts },
     didLogHeartbeatStrip: heartbeatState.didLogStrip,
     autoCompactionCount: compaction.count,
     hasDirectlySentBlockReply:
       directBlockDeliveries.some((delivery) => delivery.terminalDeliveryConfirmed === true) ||
       undefined,
     directBlockDeliveries,
-    ...(terminalFailurePayload ? { terminalFailurePayload } : {}),
-    ...(terminalRunFailed && fallbackCycleState.postCompactionModelAttempted
-      ? { postCompactionModelFailure: true as const }
-      : {}),
+    ...(terminalFailurePayload
+      ? {
+          status: "failed" as const,
+          terminalFailurePayload,
+          ...(fallbackCycleState.postCompactionModelAttempted
+            ? { postCompactionModelFailure: true as const }
+            : {}),
+        }
+      : { status: "ok" as const }),
   };
 }
 
@@ -616,42 +684,9 @@ async function executeAgentTurnOutcome(
         },
       };
     }
-    const provider =
-      internal.fallbackProvider ??
-      internal.result.meta?.agentMeta?.provider ??
-      executionParams.followupRun.run.provider;
-    const model =
-      internal.fallbackModel ??
-      internal.result.meta?.agentMeta?.model ??
-      executionParams.followupRun.run.model;
-    const terminalStatus = internal.terminalFailurePayload
-      ? {
-          status: "failed" as const,
-          terminalFailurePayload: internal.terminalFailurePayload,
-          ...(internal.postCompactionModelFailure
-            ? { postCompactionModelFailure: internal.postCompactionModelFailure }
-            : {}),
-        }
-      : { status: "ok" as const };
     return {
       runId,
-      outcome: {
-        kind: "settled",
-        maintenanceAuthProfile: internal.maintenanceAuthProfile,
-        compactionRequestBudget: internal.compactionRequestBudget,
-        ...terminalStatus,
-        result: internal.result,
-        resolved: { provider, model },
-        fallback: {
-          exhausted: internal.fallbackExhausted === true,
-          attempts: internal.fallbackAttempts,
-        },
-        autoCompactionCount: internal.autoCompactionCount,
-        ...completedCompaction(),
-        didLogHeartbeatStrip: internal.didLogHeartbeatStrip,
-        hasDirectlySentBlockReply: internal.hasDirectlySentBlockReply,
-        directBlockDeliveries: internal.directBlockDeliveries,
-      },
+      outcome: { ...internal, ...completedCompaction() },
     };
   } catch (error) {
     const abortReason = resolveReplyOperationAbortReason(executionParams.replyOperation, error);
@@ -677,10 +712,10 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   try {
     const result = await executeAgentTurnOutcome(executionParams, runId);
-    recordAgentTurnExecutionOutcome(executionParams, result);
+    await recordAgentTurnExecutionOutcome(executionParams, result);
     return result;
   } catch (error) {
-    recordAgentTurnExecutionOutcome(executionParams, undefined);
+    await recordAgentTurnExecutionOutcome(executionParams, undefined);
     throw error;
   }
 }

@@ -8,7 +8,6 @@ import {
   normalizeNullableString as nonEmptyStringField,
   normalizeOptionalString as normalizeRunId,
 } from "@openclaw/normalization-core/string-coerce";
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -21,6 +20,7 @@ import {
 } from "./tool-loop-argument-churn.js";
 import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
+import { digestToolOutcome } from "./tool-loop-outcome-hash.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
 import { getComputerToolOutcome } from "./tools/computer-tool-outcome.js";
@@ -73,27 +73,6 @@ export function hashToolCall(toolName: string, params: unknown): string {
     return `${toolName}:${sha256Hex(stableStringify(execution))}`;
   }
   return `${toolName}:${sha256Hex(stableStringify(params))}`;
-}
-
-function digestToolOutcome(value: unknown): string {
-  // Canonical IDs retain valid envelope syntax; malformed markers and JSON field
-  // boundaries remain meaningful. Literal/copied envelopes share this syntax rule;
-  // it grants no trust and never changes arguments or delivered content.
-  const canonicalMarkerId = "0000000000000000";
-  const serialized = stableStringify(value, (text) =>
-    text.replace(
-      /(<<<EXTERNAL_UNTRUSTED_CONTENT id=(\\*)")([a-f0-9]{16})(\2">>>(?:(?!<<<(?:END_)?EXTERNAL_UNTRUSTED_CONTENT)[\s\S])*<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\2")\3(\2">>>)/g,
-      // Repeated JSON encoding produces 2^n - 1 backslashes before marker quotes.
-      (match, start: string, escapes: string, _id: string, middle: string, end: string) =>
-        (escapes.length & (escapes.length + 1)) !== 0 ||
-        [...middle.matchAll(/(?<!\\)\\*"/g)].some(
-          (quote) => quote[0].length % (escapes.length + 1) !== 0,
-        )
-          ? match
-          : start + canonicalMarkerId + middle + canonicalMarkerId + end,
-    ),
-  );
-  return sha256Hex(serialized);
 }
 
 function extractTextContent(result: unknown): string {
@@ -327,9 +306,9 @@ function hashToolOutcome(
     }
   }
   if (toolName === "exec" || toolName === "wait") {
-    const outcome = getCodeModeToolOutcome(result);
-    if (outcome !== undefined) {
-      return { resultHash: digestToolOutcome(outcome) };
+    const resultHash = getCodeModeToolOutcome(result);
+    if (resultHash !== undefined) {
+      return { resultHash };
     }
   }
   if (toolName === "exec") {
@@ -440,31 +419,14 @@ function getPingPongStreak(
     return { count: 0, noProgressEvidence: false };
   }
 
-  let otherSignature: string | undefined;
-  let otherToolName: string | undefined;
-  for (let i = history.length - 2; i >= 0; i -= 1) {
-    const call = history[i];
-    if (!call) {
-      continue;
-    }
-    if (call.argsHash !== last.argsHash) {
-      otherSignature = call.argsHash;
-      otherToolName = call.toolName;
-      break;
-    }
-  }
-
-  if (!otherSignature || !otherToolName) {
+  const other = history.findLast((call) => call.argsHash !== last.argsHash);
+  if (!other?.argsHash || !other.toolName || currentSignature !== other.argsHash) {
     return { count: 0, noProgressEvidence: false };
   }
 
   let alternatingTailCount = 0;
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    const call = history[i];
-    if (!call) {
-      continue;
-    }
-    const expected = alternatingTailCount % 2 === 0 ? last.argsHash : otherSignature;
+  for (const call of history.toReversed()) {
+    const expected = alternatingTailCount % 2 === 0 ? last.argsHash : other.argsHash;
     if (call.argsHash !== expected) {
       break;
     }
@@ -475,40 +437,22 @@ function getPingPongStreak(
     return { count: 0, noProgressEvidence: false };
   }
 
-  if (currentSignature !== otherSignature) {
-    return { count: 0, noProgressEvidence: false };
-  }
-
-  const tailStart = Math.max(0, history.length - alternatingTailCount);
   const resultHashes = new Map<string, string>();
-  let noProgressEvidence = true;
-  for (let i = tailStart; i < history.length; i += 1) {
-    const call = history[i];
-    if (!call) {
-      continue;
-    }
-    if (!call.resultHash || (call.argsHash !== last.argsHash && call.argsHash !== otherSignature)) {
-      noProgressEvidence = false;
-      break;
-    }
+  const stableOutcomes = history.slice(-alternatingTailCount).every((call) => {
     const previousHash = resultHashes.get(call.argsHash);
-    if (previousHash && previousHash !== call.resultHash) {
-      noProgressEvidence = false;
-      break;
+    if (!call.resultHash || (previousHash && previousHash !== call.resultHash)) {
+      return false;
     }
     resultHashes.set(call.argsHash, call.resultHash);
-  }
-
-  // Need repeated stable outcomes on both sides before treating ping-pong as no-progress.
-  if (resultHashes.size !== 2) {
-    noProgressEvidence = false;
-  }
+    return true;
+  });
 
   return {
     count: alternatingTailCount + 1,
     pairedToolName: last.toolName,
     pairedSignature: last.argsHash,
-    noProgressEvidence,
+    // Both sides must have a stable outcome before alternation counts as no progress.
+    noProgressEvidence: stableOutcomes && resultHashes.size === 2,
   };
 }
 
@@ -520,12 +464,8 @@ export function detectToolCallLoop(
   state: SessionState,
   toolName: string,
   params: unknown,
-  config?: ToolLoopDetectionConfig,
   scope?: ToolLoopDetectionScope,
 ): LoopDetectionResult {
-  if (!config?.enabled) {
-    return { stuck: false };
-  }
   const history = selectHistoryForScope(state.toolCallHistory ?? [], scope);
   const currentHash = hashToolCall(toolName, params);
   const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
@@ -667,7 +607,6 @@ export function recordToolCall(
   toolName: string,
   params: unknown,
   toolCallId?: string,
-  _config?: ToolLoopDetectionConfig,
   scope?: ToolLoopDetectionScope,
 ): void {
   const runId = normalizeRunId(scope?.runId);
@@ -696,7 +635,6 @@ export function recordToolCallOutcome(
     toolCallId?: string;
     result?: unknown;
     error?: unknown;
-    config?: ToolLoopDetectionConfig;
     runId?: string;
   },
 ): ToolCallRecord | undefined {
@@ -721,31 +659,24 @@ export function recordToolCallOutcome(
       call.resultHash === undefined &&
       call.outcomeKind === undefined,
   );
-  if (recordedOutcome) {
-    recordedOutcome.outcomeKind = outcome.outcomeKind;
-    recordedOutcome.resultHash = outcome.resultHash;
-    recordedOutcome.failureIdentityHash = outcome.failureIdentityHash;
-    if (outcome.noProgress) {
-      recordedOutcome.noProgress = true;
-    } else {
-      delete recordedOutcome.noProgress;
-    }
-    recordedOutcome.unknownToolName = outcome.unknownToolName;
-  } else {
-    const record: ToolCallRecord = {
+  if (!recordedOutcome) {
+    recordedOutcome = {
       toolName: params.toolName,
       argsHash,
       toolCallId: params.toolCallId,
       ...(runId && { runId }),
-      outcomeKind: outcome.outcomeKind,
-      resultHash: outcome.resultHash,
-      failureIdentityHash: outcome.failureIdentityHash,
-      ...(outcome.noProgress ? { noProgress: true as const } : {}),
-      unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
     };
-    state.toolCallHistory.push(record);
-    recordedOutcome = record;
+    state.toolCallHistory.push(recordedOutcome);
+  }
+  recordedOutcome.outcomeKind = outcome.outcomeKind;
+  recordedOutcome.resultHash = outcome.resultHash;
+  recordedOutcome.failureIdentityHash = outcome.failureIdentityHash;
+  recordedOutcome.unknownToolName = outcome.unknownToolName;
+  if (outcome.noProgress) {
+    recordedOutcome.noProgress = true;
+  } else {
+    delete recordedOutcome.noProgress;
   }
 
   if (state.toolCallHistory.length > TOOL_CALL_HISTORY_SIZE) {

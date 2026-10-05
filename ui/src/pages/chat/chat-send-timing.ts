@@ -142,7 +142,6 @@ export function registerChatSendTiming(
     sendAttempts: item.sendAttempts ?? 0,
     sendState: item.sendState,
     submittedAtMs: item.sendSubmittedAtMs ?? requestStartedAtMs,
-    requestStartedAtMs,
   });
 }
 
@@ -161,12 +160,10 @@ export function updateChatSendAckTiming(
       sendAttempts: item.sendAttempts ?? 0,
       sendState: item.sendState,
       submittedAtMs,
-      requestStartedAtMs,
     }),
     runId: ack.runId,
     sessionKey: existing?.sessionKey ?? item.sessionKey,
     agentId: existing?.agentId ?? item.agentId,
-    ackAtMs: controlUiNowMs(),
     ackStatus: ack.status,
   };
   if (ack.runId !== requestedRunId) {

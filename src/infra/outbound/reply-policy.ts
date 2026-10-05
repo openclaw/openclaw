@@ -61,10 +61,7 @@ export function createReplyToDeliveryPolicy(params: {
   replyToMode?: ReplyToMode;
 }): {
   resolveCurrentReplyTo: (payload: ReplyPayload) => ReplyToResolution;
-  applyReplyToConsumption: <T extends ReplyToOverride>(
-    overrides: T,
-    options?: { consumeImplicitReply?: boolean },
-  ) => T;
+  applyReplyToConsumption: <T extends ReplyToOverride>(overrides: T) => T;
 } {
   const reply = normalizeOutboundReplyFacts(params);
   const singleUseReplyTo = reply?.source === "implicit" && isSingleUseReplyToMode(reply.mode);
@@ -85,11 +82,8 @@ export function createReplyToDeliveryPolicy(params: {
       : { replyToId: reply.replyToId, source: reply.source };
   };
 
-  const applyReplyToConsumption = <T extends ReplyToOverride>(
-    overrides: T,
-    options?: { consumeImplicitReply?: boolean },
-  ): T => {
-    if (!options?.consumeImplicitReply || !overrides.replyToId || !singleUseReplyTo) {
+  const applyReplyToConsumption = <T extends ReplyToOverride>(overrides: T): T => {
+    if (overrides.replyToIdSource !== "implicit" || !overrides.replyToId || !singleUseReplyTo) {
       return overrides;
     }
     if (replyToConsumed) {

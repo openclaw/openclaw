@@ -10,6 +10,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { once } from "node:events";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
+import type { IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import type { LookupFunction } from "node:net";
@@ -105,33 +106,7 @@ type TrustedPackageSource = {
 
 type PackageLookupHost = (hostname: string) => Promise<unknown>;
 
-type WebResponseBody = {
-  cancel(reason?: unknown): Promise<unknown>;
-  getReader(): {
-    cancel(reason?: unknown): Promise<unknown>;
-    read(): Promise<ReadableStreamReadResult<string | Uint8Array>>;
-    releaseLock(): void;
-  };
-};
-
-type NodeResponseBody = {
-  destroy(error?: Error): void;
-  [Symbol.asyncIterator](): AsyncIterator<string | Uint8Array>;
-};
-type PackageResponseBody = WebResponseBody | NodeResponseBody;
-type PackageDownloadResponse = {
-  body: PackageResponseBody | null;
-  headers: { get(name: string): string | null };
-  status: number;
-};
-type PackageFetch = (
-  input: URL,
-  init?: RequestInit,
-) => PackageDownloadResponse | Promise<PackageDownloadResponse>;
 type PackageDownloadOptions = {
-  addresses?: string[];
-  fetchImpl?: PackageFetch;
-  headers?: Record<string, string>;
   lookupHost?: PackageLookupHost;
   maxBytes?: number;
   maxRedirects?: number;
@@ -603,9 +578,7 @@ export async function readArtifactPackageCandidateMetadata(dir: string) {
     );
   }
   if (typeof parsed.packageSourceSha === "string") {
-    return packageSourceSha
-      ? { ...parsed, packageSourceSha: packageSourceSha.toLowerCase() }
-      : { ...parsed, packageSourceSha: "" };
+    return { ...parsed, packageSourceSha: packageSourceSha.toLowerCase() };
   }
   return parsed;
 }
@@ -1264,117 +1237,26 @@ async function resolvePackageDownloadAddresses(
   return [...new Set(results.map((entry) => entry.address))];
 }
 
-function responseStatus(response: PackageDownloadResponse) {
-  return response.status;
-}
-
-function responseOk(response: PackageDownloadResponse) {
-  const status = responseStatus(response);
-  return status >= 200 && status < 300;
-}
-
-function responseHeader(response: PackageDownloadResponse, name: string) {
-  return response.headers?.get?.(name) ?? null;
-}
-
-function createPackageDownloadTimeoutError(parsed: URL, timeoutMs: number) {
-  return Object.assign(
-    new Error(`package_url download timed out after ${timeoutMs}ms: ${parsed.toString()}`),
-    {
-      code: "ETIMEDOUT",
-    },
-  );
-}
-
-async function closeResponseBody(body: PackageResponseBody | null) {
-  if (!body) {
-    return;
-  }
-  if (isWebResponseBody(body)) {
-    await body.cancel().catch(() => {});
-    return;
-  }
-  body.destroy();
-}
-
-async function openFetchPackageDownloadResponse(
-  parsed: URL,
-  options: Required<Pick<PackageDownloadOptions, "fetchImpl">> &
-    Pick<PackageDownloadOptions, "headers"> & { timeoutMs: number },
-) {
-  const controller = new AbortController();
-  const timeoutError = createPackageDownloadTimeoutError(parsed, options.timeoutMs);
-  let timeout!: TimerHandle;
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => {
-      controller.abort(timeoutError);
-      reject(timeoutError);
-    }, options.timeoutMs);
-    timeout.unref?.();
-  });
-  timeoutPromise.catch(() => {});
-  const response = await Promise.resolve(
-    options.fetchImpl(parsed, {
-      headers: options.headers,
-      redirect: "manual",
-      signal: controller.signal,
-    }),
-  ).catch((error: unknown) => {
-    clearTimeout(timeout);
-    if (errorName(error) === "AbortError") {
-      throw Object.assign(timeoutError, { cause: error });
-    }
-    throw error;
-  });
-  return {
-    close: async () => closeResponseBody(response.body),
-    response,
-    timeout,
-    timeoutPromise,
-    timeoutMs: options.timeoutMs,
-  };
-}
-
 async function openHttpsPackageDownloadResponse(
   parsed: URL,
-  options: Required<Pick<PackageDownloadOptions, "addresses">> &
-    Pick<PackageDownloadOptions, "headers"> & { timeoutMs: number },
+  options: { addresses: string[]; headers?: Record<string, string>; timeoutMs: number },
 ) {
   const controller = new AbortController();
-  const timeoutError = createPackageDownloadTimeoutError(parsed, options.timeoutMs);
-  let timeout!: TimerHandle;
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => {
-      controller.abort(timeoutError);
-      reject(timeoutError);
-    }, options.timeoutMs);
-    timeout.unref?.();
-  });
-  timeoutPromise.catch(() => {});
-  const lookup = createPinnedLookup(parsed.hostname, options.addresses);
-  const response = await new Promise<PackageDownloadResponse>((resolve, reject) => {
+  const timeoutError = Object.assign(
+    new Error(`package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`),
+    { code: "ETIMEDOUT" },
+  );
+  const timeout = setTimeout(() => controller.abort(timeoutError), options.timeoutMs);
+  timeout.unref();
+  const response = await new Promise<IncomingMessage>((resolve, reject) => {
     const request = httpsRequest(
       parsed,
       {
         headers: options.headers,
-        lookup,
+        lookup: createPinnedLookup(parsed.hostname, options.addresses),
         signal: controller.signal,
       },
-      (message) => {
-        resolve({
-          body: message,
-          headers: {
-            get(name) {
-              const value = message.headers[name.toLowerCase()];
-              if (Array.isArray(value)) {
-                return value[0] ?? null;
-              }
-              return value ?? null;
-            },
-          },
-          status: message.statusCode ?? 0,
-        });
-      },
+      resolve,
     );
     request.on("error", reject);
     request.end();
@@ -1385,13 +1267,7 @@ async function openHttpsPackageDownloadResponse(
     }
     throw error;
   });
-  return {
-    close: async () => closeResponseBody(response.body),
-    response,
-    timeout,
-    timeoutPromise,
-    timeoutMs: options.timeoutMs,
-  };
+  return { response, timeout, timeoutMs: options.timeoutMs };
 }
 
 async function openPackageDownloadResponse(url: string, options: PackageDownloadOptions) {
@@ -1412,22 +1288,16 @@ async function openPackageDownloadResponse(url: string, options: PackageDownload
     }
     const addresses = await resolvePackageDownloadAddresses(parsed, lookupHost, trustedSource);
     const headers = createTrustedPackageAuthHeaders(trustedSource, parsed, initialOrigin);
-    const opened = options.fetchImpl
-      ? await openFetchPackageDownloadResponse(parsed, {
-          fetchImpl: options.fetchImpl,
-          headers,
-          timeoutMs,
-        })
-      : await openHttpsPackageDownloadResponse(parsed, {
-          addresses,
-          headers,
-          timeoutMs,
-        });
-    const status = responseStatus(opened.response);
+    const opened = await openHttpsPackageDownloadResponse(parsed, {
+      addresses,
+      headers,
+      timeoutMs,
+    });
+    const status = opened.response.statusCode ?? 0;
     if ([301, 302, 303, 307, 308].includes(status)) {
       clearTimeout(opened.timeout);
-      await opened.close();
-      const location = responseHeader(opened.response, "location");
+      opened.response.destroy();
+      const location = opened.response.headers.location;
       if (!location) {
         throw new Error(`package_url redirect missing Location header: HTTP ${status}`);
       }
@@ -1439,55 +1309,7 @@ async function openPackageDownloadResponse(url: string, options: PackageDownload
   throw new Error(`package_url exceeded ${maxRedirects} redirects: ${url}`);
 }
 
-async function* limitWebResponseBody(
-  body: WebResponseBody,
-  maxBytes: number,
-  timeoutPromise: Promise<never> | undefined,
-): AsyncGenerator<string | Uint8Array> {
-  let downloaded = 0;
-  const reader = body.getReader();
-  let timedOut = false;
-  let timeoutFailure: unknown;
-  const timeoutRead = timeoutPromise?.catch((error: unknown) => {
-    timedOut = true;
-    timeoutFailure = error;
-    void reader.cancel().catch(() => {});
-    throw error;
-  });
-  try {
-    for (;;) {
-      const next = reader.read();
-      const { done, value } = timeoutRead ? await Promise.race([next, timeoutRead]) : await next;
-      if (timedOut) {
-        throw toErrorObject(timeoutFailure, "package_url download timed out");
-      }
-      if (done) {
-        return;
-      }
-      const size = typeof value === "string" ? Buffer.byteLength(value) : value.byteLength;
-      downloaded += size;
-      if (downloaded > maxBytes) {
-        await reader.cancel().catch(() => {});
-        throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
-      }
-      yield value;
-    }
-  } finally {
-    if (!timedOut) {
-      reader.releaseLock();
-    }
-  }
-}
-
-async function* limitResponseBody(
-  body: PackageResponseBody,
-  maxBytes: number,
-  timeoutPromise: Promise<never> | undefined,
-): AsyncGenerator<string | Uint8Array> {
-  if (isWebResponseBody(body)) {
-    yield* limitWebResponseBody(body, maxBytes, timeoutPromise);
-    return;
-  }
+async function* limitResponseBody(body: IncomingMessage, maxBytes: number) {
   let downloaded = 0;
   for await (const chunk of body as AsyncIterable<string | Uint8Array>) {
     const size = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
@@ -1505,17 +1327,15 @@ export async function downloadUrl(
   typedOptions: PackageDownloadOptions = {},
 ) {
   const maxBytes = typedOptions.maxBytes ?? PACKAGE_URL_MAX_BYTES;
-  const { close, response, timeout, timeoutMs, timeoutPromise } = await openPackageDownloadResponse(
-    urlText,
-    typedOptions,
-  );
+  const { response, timeout, timeoutMs } = await openPackageDownloadResponse(urlText, typedOptions);
   const tempTarget = `${targetPath}.tmp`;
   let waitForOutputClose: (() => Promise<void>) | undefined;
   try {
-    if (!responseOk(response) || !response.body) {
-      throw new Error(`failed to download package_url: HTTP ${responseStatus(response)}`);
+    const status = response.statusCode ?? 0;
+    if (status < 200 || status >= 300) {
+      throw new Error(`failed to download package_url: HTTP ${status}`);
     }
-    const rawContentLength = responseHeader(response, "content-length");
+    const rawContentLength = response.headers["content-length"];
     const contentLength =
       rawContentLength && /^\d+$/u.test(rawContentLength) ? Number(rawContentLength) : undefined;
     if (
@@ -1531,7 +1351,7 @@ export async function downloadUrl(
         await once(output, "close").catch(() => {});
       }
     };
-    await pipeline(limitResponseBody(response.body, maxBytes, timeoutPromise), output);
+    await pipeline(limitResponseBody(response, maxBytes), output);
     await fs.rename(tempTarget, targetPath);
   } catch (error) {
     if (errorCode(error) === "ETIMEDOUT") {
@@ -1545,7 +1365,7 @@ export async function downloadUrl(
     throw error;
   } finally {
     clearTimeout(timeout);
-    await close();
+    response.destroy();
     await waitForOutputClose?.();
     await fs.rm(tempTarget, { force: true });
   }
@@ -1841,8 +1661,4 @@ function errorName(value: unknown) {
 
 function isPropertyContainer(value: unknown): value is { code?: unknown; name?: unknown } {
   return (typeof value === "object" && value !== null) || typeof value === "function";
-}
-
-function isWebResponseBody(body: PackageResponseBody): body is WebResponseBody {
-  return "getReader" in body && typeof body.getReader === "function";
 }

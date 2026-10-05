@@ -3,17 +3,7 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import "../../styles/channels.css";
-import type {
-  ChannelsStatusSnapshot,
-  DiscordStatus,
-  GoogleChatStatus,
-  IMessageStatus,
-  NostrStatus,
-  SignalStatus,
-  SlackStatus,
-  TelegramStatus,
-  WhatsAppStatus,
-} from "../../api/types.ts";
+import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/openclaw-mascot.ts";
@@ -34,7 +24,7 @@ import {
   renderChannelRefreshAction,
   resolveChannelDisplayState,
 } from "./view.shared.ts";
-import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
+import type { ChannelKey, ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
 type ChannelCardState = "running" | "configured" | "attention";
@@ -64,7 +54,6 @@ export function renderChannels(props: ChannelsProps) {
     props.channels.channelsSnapshot?.warnings
       ?.filter((warning) => warning.trim())
       .map((warning) => formatUiExternalText(warning)) ?? [];
-  const data = buildChannelData(props);
   const selected = props.selectedChannel;
 
   return html`
@@ -141,7 +130,6 @@ export function renderChannels(props: ChannelsProps) {
             label: resolveChannelLabel(props, selected),
             pluginIconUrl: props.presentation.pluginIconUrls[selected],
             props,
-            data,
             onClose: () => props.onCloseDetail(),
             onSetup: () => props.onStartSetup(selected),
           })
@@ -172,21 +160,6 @@ export function renderChannels(props: ChannelsProps) {
     }
     ${renderChannelPairingPrompt(props)}
   `;
-}
-
-function buildChannelData(props: ChannelsProps): ChannelsChannelData {
-  const channels = props.channels.channelsSnapshot?.channels as Record<string, unknown> | null;
-  return {
-    whatsapp: (channels?.whatsapp ?? undefined) as WhatsAppStatus | undefined,
-    telegram: (channels?.telegram ?? undefined) as TelegramStatus | undefined,
-    discord: (channels?.discord ?? null) as DiscordStatus | null,
-    googlechat: (channels?.googlechat ?? null) as GoogleChatStatus | null,
-    slack: (channels?.slack ?? null) as SlackStatus | null,
-    signal: (channels?.signal ?? null) as SignalStatus | null,
-    imessage: (channels?.imessage ?? null) as IMessageStatus | null,
-    nostr: (channels?.nostr ?? null) as NostrStatus | null,
-    channelAccounts: props.channels.channelsSnapshot?.channelAccounts ?? null,
-  };
 }
 
 export function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {

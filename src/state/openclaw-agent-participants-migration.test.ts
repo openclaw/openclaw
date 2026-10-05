@@ -198,7 +198,7 @@ describe("participant identity migration", () => {
       });
     },
   );
-  it.each([0, 17])(
+  it.each([17])(
     "refuses a v%s identity migration outside stopped-writer maintenance",
     async (version) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

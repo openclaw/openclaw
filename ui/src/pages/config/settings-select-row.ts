@@ -1,5 +1,6 @@
 // Shared labeled select rendering for compact Control UI preference rows.
 import { html } from "lit";
+import { live } from "lit/directives/live.js";
 import { renderSettingsRow } from "../../components/settings-ui.ts";
 
 export function renderSettingsSelectRow<T extends string>(params: {
@@ -29,7 +30,7 @@ export function renderSettingsSelectRow<T extends string>(params: {
       >
         ${params.options.map(
           (option) => html`
-            <option value=${option.value} ?selected=${params.value === option.value}>
+            <option value=${option.value} .selected=${live(params.value === option.value)}>
               ${option.label}
             </option>
           `,

@@ -2,6 +2,7 @@ import path from "node:path";
 import { resolveTestBunSourceArgs } from "../../src/test-utils/bun-process.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.ts";
 import { resolveRepoRoot } from "./repo-root.mjs";
+import { resolveTestRuntime } from "./test-runtime.mts";
 import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
 
 type VitestTestCommand = {
@@ -39,12 +40,8 @@ export function resolveVitestTestCommand(
   args: string[],
   env: NodeJS.ProcessEnv = process.env,
 ): VitestTestCommand {
-  const runtime = env.OPENCLAW_VITEST_RUNTIME?.trim() || "node";
-  if (runtime === "node") {
+  if (resolveTestRuntime(env) === "node") {
     return { command: process.execPath, args };
-  }
-  if (runtime !== "bun") {
-    throw new Error(`Invalid OPENCLAW_VITEST_RUNTIME: ${runtime}; expected node or bun`);
   }
   const cliIndex = args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
   if (cliIndex < 0) {

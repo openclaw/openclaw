@@ -57,7 +57,7 @@ describe("ClickClack native agent progress", () => {
         id: "item:tool_1",
         kind: "tool",
         tool_name: "search",
-        text: "🧩 Search: Done",
+        text: "Search: Done",
         status: "completed",
       },
     });
@@ -92,7 +92,7 @@ describe("ClickClack native agent progress", () => {
     expect(publishEphemeral).toHaveBeenCalledTimes(3);
     expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
       op: "finalize",
-      line: { id: "item:tool:read-1", text: "📖 Read: Done", status: "completed" },
+      line: { id: "item:tool:read-1", text: "Read: Done", status: "completed" },
     });
   });
 
@@ -114,7 +114,7 @@ describe("ClickClack native agent progress", () => {
 
     expect(JSON.stringify(publishEphemeral.mock.calls)).not.toContain("private-sentinel");
     expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
-      line: { text: "🧩 Server.exec" },
+      line: { text: "Server.exec" },
     });
   });
 

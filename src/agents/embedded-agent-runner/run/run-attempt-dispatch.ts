@@ -28,6 +28,7 @@ import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
+import { resolveEmbeddedAttemptMemoryAudience } from "./attempt-memory-audience.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE } from "./attempt-stage-timing.js";
 import { prepareAttemptSystemPromptAdditions } from "./attempt-system-prompt-additions.js";
@@ -40,6 +41,7 @@ import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparatio
 import { CODEX_HARNESS_ID, resolveAttemptTrajectoryAttribution } from "./runtime-resolution.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 
+/** Prepares the selected runtime and dispatches an attempt under its admitted lifecycle. */
 export async function prepareAndDispatchEmbeddedRunAttempt(
   input: PreparedEmbeddedAttemptDispatchInput,
 ) {
@@ -163,11 +165,22 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     provider,
     runtimePlan,
   });
+  if (!params.admittedRunContext) {
+    throw new Error("embedded attempt reached dispatch without an admitted run context");
+  }
+  const admittedRunContext = params.admittedRunContext;
+  const assertTrajectoryCurrent = resolveAdmittedRunActiveAssertion(
+    admittedRunContext,
+    params.abortSignal,
+  );
+  if (!assertTrajectoryCurrent) {
+    throw new Error("embedded attempt reached dispatch without an active admitted run");
+  }
   const trajectoryRecorder =
     runtime.agentHarness.id === CODEX_HARNESS_ID &&
     !params.disableTrajectory &&
     params.sessionPersistence !== "detached"
-      ? createTrajectoryRuntimeRecorder({
+      ? await createTrajectoryRuntimeRecorder({
           cfg: params.config,
           env: process.env,
           runId: params.runId,
@@ -193,6 +206,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
           workspaceDir,
         })
       : undefined;
+  assertTrajectoryCurrent();
   let startupStagesEmitted = input.startupStagesEmitted;
   if (!startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
@@ -246,10 +260,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     modelMaxTokens: effectiveModel.maxTokens,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
   });
-  if (!params.admittedRunContext) {
-    throw new Error("embedded attempt reached dispatch without an admitted run context");
-  }
-  const admittedRunContext = params.admittedRunContext;
   const assertActiveRun = resolveAdmittedRunActiveAssertion(
     admittedRunContext,
     attemptAbortController.signal,
@@ -350,6 +360,18 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     };
     skillReferencePaths = prepared.skillUsagePaths;
   }
+  // Resolve after the last fallible preparation so the attempt's finally owns the leases.
+  const { memoryAudience, release: releaseMemoryAudience } =
+    await resolveEmbeddedAttemptMemoryAudience({
+      memoryAudience: params.memoryAudience,
+      config: params.config,
+      agentId: workspaceResolution.agentId,
+      sessionKey: resolvedSessionKey,
+      sessionId,
+      senderIsOwner: params.senderIsOwner,
+      admission: runInput.sessionAdmission,
+      assertCallerCurrent: assertActiveRun,
+    });
   const attemptControls = createAttemptControls({
     admittedRunContext,
     abortSignal: attemptAbortController.signal,
@@ -379,6 +401,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     operation: "attempt",
     sessionId,
     sessionKey: resolvedSessionKey,
+    memoryAudience,
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
     sandboxSessionKey: params.sandboxSessionKey,
@@ -386,6 +409,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     trigger: params.trigger,
     terminalReplyExpectation: resolveReplyExpectation(params),
     memoryFlushWritePath: params.memoryFlushWritePath,
+    memoryFlushTools: params.memoryFlushTools,
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
@@ -589,6 +613,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
     gitCoauthorPrompt,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
@@ -642,6 +667,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     forceMessageTool: params.forceMessageTool,
     enableHeartbeatTool: params.enableHeartbeatTool,
     forceHeartbeatTool: params.forceHeartbeatTool,
+    continuesConversation: params.continuesConversation,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     internalEvents: params.internalEvents,
     runtimeContextFragments: params.runtimeContextFragments,
@@ -672,6 +698,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     })
     .finally(() => {
       attemptControls.close();
+      releaseMemoryAudience();
       input.clearPostCompactionAbortController(attemptAbortController);
     });
 

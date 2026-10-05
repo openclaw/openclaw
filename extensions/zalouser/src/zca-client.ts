@@ -50,6 +50,11 @@ export type Message = {
   data: Record<string, unknown>;
 };
 
+type LoginQRActions = {
+  retry: () => unknown;
+  abort: () => unknown;
+};
+
 export type LoginQRCallbackEvent =
   | {
       type: 0;
@@ -57,19 +62,12 @@ export type LoginQRCallbackEvent =
         code: string;
         image: string;
       };
-      actions: {
-        saveToFile: (qrPath?: string) => Promise<unknown>;
-        retry: () => unknown;
-        abort: () => unknown;
-      };
+      actions: LoginQRActions & { saveToFile: (qrPath?: string) => Promise<unknown> };
     }
   | {
       type: 1;
       data: null;
-      actions: {
-        retry: () => unknown;
-        abort: () => unknown;
-      };
+      actions: LoginQRActions;
     }
   | {
       type: 2;
@@ -77,20 +75,14 @@ export type LoginQRCallbackEvent =
         avatar: string;
         display_name: string;
       };
-      actions: {
-        retry: () => unknown;
-        abort: () => unknown;
-      };
+      actions: LoginQRActions;
     }
   | {
       type: 3;
       data: {
         code: string;
       };
-      actions: {
-        retry: () => unknown;
-        abort: () => unknown;
-      };
+      actions: LoginQRActions;
     }
   | {
       type: 4;
@@ -226,10 +218,8 @@ type ZaloCtor = new (options?: {
   ): Promise<API>;
 };
 
-export async function createZalo(
-  options?: ConstructorParameters<ZaloCtor>[0],
-): Promise<InstanceType<ZaloCtor>> {
+export async function createZalo(): Promise<InstanceType<ZaloCtor>> {
   const zcaJs = await loadZcaJsRuntime();
   const Zalo = zcaJs.Zalo as ZaloCtor;
-  return new Zalo({ ...options, polyfill: fetchWithZaloSendContext });
+  return new Zalo({ logging: false, selfListen: false, polyfill: fetchWithZaloSendContext });
 }

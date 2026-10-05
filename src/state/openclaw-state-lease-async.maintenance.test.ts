@@ -384,89 +384,77 @@ describe("async lease maintenance ownership", () => {
     }
   });
 
-  it("retries retained heartbeat cleanup before actor close without replaying a rejected callback", async () => {
-    const callbackError = new Error("Synthetic callback failed");
-    const cleanupError = new Error("Synthetic heartbeat cleanup failed once");
-    const f = fixture({ firstCleanupError: cleanupError });
-    const write = vi.fn();
-    const callback = vi.fn(async (lease: OpenClawStateAsyncLeaseContext) => {
-      await withOpenClawStateLeaseWorkerAdmission(
-        lease,
-        f.context.admission.databasePath,
-        async (scope) => {
-          scope.assertCurrent();
-          write();
-        },
+  it.each(["heartbeat", "release"] as const)(
+    "retries retained %s cleanup before actor close without replaying the callback",
+    async (phase) => {
+      const callbackError = new Error("Synthetic callback failed");
+      const cleanupError = new Error("Synthetic cleanup failed once");
+      const f = fixture(
+        phase === "heartbeat"
+          ? { firstCleanupError: cleanupError }
+          : { firstReleaseError: cleanupError },
       );
-      throw callbackError;
-    });
-    const observed = observe(withOpenClawStateLeaseAsync(f.options, f.context, callback));
-    try {
-      await f.started.promise;
-      f.ready.resolve();
-      await f.cleanupStarted.promise;
-      f.allowCleanup.resolve();
-      expect(await observed.outcome).toMatchObject({
-        ok: false,
-        error: { cause: callbackError, errors: [callbackError, { errors: [cleanupError] }] },
+      const write = vi.fn();
+      const callback = vi.fn(async (lease: OpenClawStateAsyncLeaseContext) => {
+        if (phase === "heartbeat") {
+          await withOpenClawStateLeaseWorkerAdmission(
+            lease,
+            f.context.admission.databasePath,
+            async (scope) => {
+              scope.assertCurrent();
+              write();
+            },
+          );
+          throw callbackError;
+        }
+        return "completed";
       });
-      expect(f.registered.size).toBe(1);
-      expect(f.released).toEqual([]);
-      const closing = observe(f.maintenance.close());
-      await f.retryStarted.promise;
-      expect(closing.settled()).toBe(false);
-      expect(f.closeActor).not.toHaveBeenCalled();
-      expect(f.released).toEqual([]);
-      f.allowRetry.resolve();
-      expect(await closing.outcome).toEqual({ ok: true, value: undefined });
-      await f.maintenance.close();
-      expect(callback).toHaveBeenCalledOnce();
-      expect(write).toHaveBeenCalledOnce();
-      expect(f.acquired).toHaveLength(1);
-      expect(f.released).toEqual(f.acquired);
-      expect(f.closeActor).toHaveBeenCalledOnce();
-      expect(f.registered.size).toBe(0);
-      expect(f.events).toEqual([
-        "register",
-        "acquire",
-        "heartbeat-cleanup-failed",
-        "heartbeat-cleanup-complete",
-        "release",
-        "actor-close",
-      ]);
-    } finally {
-      await f.dispose(observed.outcome);
-    }
-  });
-
-  it("retains a failed exact-owner release for cleanup retry without replaying the callback", async () => {
-    const releaseError = new Error("Synthetic known release failure");
-    const f = fixture({ firstReleaseError: releaseError });
-    const callback = vi.fn(async () => "completed");
-    f.allowCleanup.resolve();
-    const observed = observe(withOpenClawStateLeaseAsync(f.options, f.context, callback));
-    try {
-      await f.started.promise;
-      f.ready.resolve();
-      expect(await observed.outcome).toEqual({ ok: false, error: releaseError });
-      expect(f.registered.size).toBe(1);
-      expect(f.released).toEqual([]);
-      await f.maintenance.close();
-      expect(callback).toHaveBeenCalledOnce();
-      expect(f.released).toEqual(f.acquired);
-      expect(f.registered.size).toBe(0);
-      expect(f.events).toEqual([
-        "register",
-        "acquire",
-        "heartbeat-cleanup-complete",
-        "release",
-        "release",
-        "actor-close",
-      ]);
-    } finally {
-      await f.dispose(observed.outcome);
-    }
-  });
+      const observed = observe(withOpenClawStateLeaseAsync(f.options, f.context, callback));
+      try {
+        await f.started.promise;
+        f.ready.resolve();
+        await f.cleanupStarted.promise;
+        f.allowCleanup.resolve();
+        if (phase === "heartbeat") {
+          expect(await observed.outcome).toMatchObject({
+            ok: false,
+            error: { cause: callbackError, errors: [callbackError, { errors: [cleanupError] }] },
+          });
+        } else {
+          expect(await observed.outcome).toEqual({ ok: false, error: cleanupError });
+        }
+        expect(f.registered.size).toBe(1);
+        expect(f.released).toEqual([]);
+        const closing = observe(f.maintenance.close());
+        if (phase === "heartbeat") {
+          await f.retryStarted.promise;
+          expect(closing.settled()).toBe(false);
+          expect(f.closeActor).not.toHaveBeenCalled();
+          expect(f.released).toEqual([]);
+          f.allowRetry.resolve();
+        }
+        expect(await closing.outcome).toEqual({ ok: true, value: undefined });
+        await f.maintenance.close();
+        expect(callback).toHaveBeenCalledOnce();
+        expect(write).toHaveBeenCalledTimes(phase === "heartbeat" ? 1 : 0);
+        expect(f.acquired).toHaveLength(1);
+        expect(f.released).toEqual(f.acquired);
+        expect(f.closeActor).toHaveBeenCalledOnce();
+        expect(f.registered.size).toBe(0);
+        expect(f.events).toEqual([
+          "register",
+          "acquire",
+          ...(phase === "heartbeat" ? ["heartbeat-cleanup-failed"] : []),
+          "heartbeat-cleanup-complete",
+          "release",
+          ...(phase === "release" ? ["release"] : []),
+          "actor-close",
+        ]);
+      } finally {
+        await f.dispose(observed.outcome);
+      }
+    },
+  );
 
   it.each(["all", "identity", "replacement"] as const)(
     "registers before acquisition so an external canonical close can drain the pending lease (%s)",

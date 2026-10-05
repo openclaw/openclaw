@@ -43,6 +43,9 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: state.runCommandWithTimeout,
 }));
 
+const { runCommandWithTimeout: runRealCommandWithTimeout } =
+  await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+
 let ensureControlUiAssetsBuilt: typeof import("./control-ui-assets.js").ensureControlUiAssetsBuilt;
 let inspectControlUiRootAssets: typeof import("./control-ui-assets.js").inspectControlUiRootAssets;
 let resolveControlUiAssetHealth: typeof import("./control-ui-assets.js").resolveControlUiAssetHealth;
@@ -315,9 +318,7 @@ if (process.exitCode === 0) {
 }
 `,
     );
-    const { runCommandWithTimeout } =
-      await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
-    state.runCommandWithTimeout.mockImplementationOnce(runCommandWithTimeout);
+    state.runCommandWithTimeout.mockImplementationOnce(runRealCommandWithTimeout);
 
     const result = await ensureControlUiAssetsBuilt(undefined, { root });
 
@@ -619,25 +620,42 @@ if (process.exitCode === 0) {
     expect(resolveControlUiRootSync({ moduleUrl })).toBe(uiDir);
   });
 
-  it("resolves control-ui root for symlinked argv1 via realpath", () => {
-    const pkgRoot = abs("fixtures/bun-global/openclaw");
-    const wrapperArgv1 = abs("fixtures/bin/openclaw");
-    const realEntrypoint = path.join(pkgRoot, "dist", "index.js");
-    const uiDir = path.join(pkgRoot, "dist", "control-ui");
+  it.each(["wrapper", "target", "cwd"] as const)(
+    "preserves symlinked launcher discovery precedence with %s assets",
+    async (available) => {
+      const pkgRoot = abs("fixtures/bun-global/openclaw");
+      const wrapperArgv1 = abs("fixtures/bin/openclaw");
+      const realEntrypoint = path.join(pkgRoot, "dist", "index.js");
+      const targetUi = path.join(pkgRoot, "dist", "control-ui");
+      const wrapperUi = path.join(path.dirname(wrapperArgv1), "control-ui");
+      const cwd = abs("fixtures/cwd");
+      const cwdUi = path.join(cwd, "dist", "control-ui");
 
-    setFile(realEntrypoint);
-    fs.mkdirSync(path.dirname(wrapperArgv1), { recursive: true });
-    fs.symlinkSync(realEntrypoint, wrapperArgv1, "file");
-    setFile(path.join(uiDir, "index.html"), "<html></html>\n");
+      setFile(realEntrypoint);
+      fs.mkdirSync(path.dirname(wrapperArgv1), { recursive: true });
+      fs.symlinkSync(realEntrypoint, wrapperArgv1, "file");
+      setFile(path.join(cwdUi, "index.html"));
+      if (available !== "cwd") {
+        setFile(path.join(targetUi, "index.html"));
+      }
+      if (available === "wrapper") {
+        setFile(path.join(wrapperUi, "index.html"));
+      }
 
-    expect(
-      resolveControlUiRootSync({
-        argv1: wrapperArgv1,
-        cwd: abs("fixtures/cwd"),
-        execPath: abs("fixtures/runtime/node"),
-      }),
-    ).toBe(uiDir);
-  });
+      expect(
+        resolveControlUiRootSync({
+          argv1: wrapperArgv1,
+          cwd,
+          execPath: abs("fixtures/runtime/node"),
+        }),
+      ).toBe(available === "wrapper" ? wrapperUi : available === "target" ? targetUi : cwdUi);
+      // Health checks retain the dist entrypoint's own bundle, even when root discovery falls back.
+      await expect(resolveControlUiAssetHealth({ argv1: wrapperArgv1 })).resolves.toMatchObject({
+        kind: available === "cwd" ? "missing-index" : "ready",
+        indexPath: path.join(targetUi, "index.html"),
+      });
+    },
+  );
 
   it("detects package-proven control-ui roots", () => {
     const pkgRoot = abs("fixtures/openclaw-package-root");

@@ -116,7 +116,7 @@ async function run(...args: string[]) {
 const stdout = () => mocks.defaultRuntime.writeStdout.mock.lastCall?.[0].trimEnd();
 async function configureAgentDirectory() {
   const agentDir = await tempDirs.make("skills-cli-agent-");
-  mocks.config = { agents: { entries: { main: { default: true, agentDir } } } };
+  mocks.config = { agents: { entries: { main: { agentDir } } } };
 }
 
 describe("skills workshop CLI", () => {
@@ -207,18 +207,46 @@ describe("skills workshop CLI", () => {
     expect(newSession.skills.map((skill) => skill.name)).toContain("gateway-visible");
   });
 
-  it("does not replay a dispatched gateway apply failure in the CLI process", async () => {
-    const proposal = await propose();
-    mocks.callGateway
-      .mockResolvedValueOnce(await inspectProposal(proposal.record.id))
-      .mockRejectedValueOnce(new Error("gateway apply failed"));
-    await expect(run("apply", proposal.record.id)).rejects.toThrow("__exit__:1");
-    expect(mocks.callGateway.mock.calls.map(([request]) => request.method)).toEqual([
-      "skills.proposals.inspect",
-      "skills.proposals.apply",
-    ]);
-    await expectStatus(proposal.record.id, "pending");
-  });
+  it.each(["apply failure", "inspection timeout", "owned Gateway", "remote Gateway"])(
+    "does not apply locally after %s",
+    async (failure) => {
+      const proposal = await propose();
+      const error =
+        failure === "apply failure"
+          ? new Error("gateway apply failed")
+          : failure === "inspection timeout"
+            ? new GatewayProtocolRequestTimeoutError({
+                method: "skills.proposals.inspect",
+                timeoutMs: 1_500,
+                requestSent: true,
+              })
+            : credentialsError();
+      if (failure === "apply failure") {
+        mocks.callGateway.mockResolvedValueOnce(await inspectProposal(proposal.record.id));
+      } else if (failure === "owned Gateway") {
+        mocks.acquireGatewayLock.mockRejectedValueOnce(new Error("gateway lock is owned"));
+      } else if (failure === "remote Gateway") {
+        mocks.config.gateway = { mode: "remote" };
+      }
+      mocks.callGateway.mockRejectedValueOnce(error);
+      const result = run("apply", proposal.record.id);
+      if (failure === "apply failure" || failure === "inspection timeout") {
+        await expect(result).rejects.toThrow("__exit__:1");
+      } else {
+        await expect(result).rejects.toBe(error);
+      }
+      expect(mocks.callGateway.mock.calls.map(([request]) => request.method)).toEqual([
+        "skills.proposals.inspect",
+        ...(failure === "apply failure" ? ["skills.proposals.apply"] : []),
+      ]);
+      if (failure === "inspection timeout") {
+        expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(error.message);
+      }
+      expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(failure === "owned Gateway" ? 1 : 0);
+      expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
+      await expectStatus(proposal.record.id, "pending");
+    },
+  );
 
   it("preserves configless offline apply after missing credentials", async () => {
     const proposal = await propose();
@@ -233,44 +261,6 @@ describe("skills workshop CLI", () => {
     });
     expect(mocks.releaseGatewayLock).toHaveBeenCalledOnce();
     await expectStatus(proposal.record.id, "applied");
-  });
-
-  it("does not bypass Gateway ownership after a dispatched inspection times out", async () => {
-    const proposal = await propose();
-    const error = new GatewayProtocolRequestTimeoutError({
-      method: "skills.proposals.inspect",
-      timeoutMs: 1_500,
-      requestSent: true,
-    });
-    mocks.callGateway.mockRejectedValueOnce(error);
-    await expect(run("apply", proposal.record.id)).rejects.toThrow("__exit__:1");
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(error.message);
-    expect(mocks.callGateway).toHaveBeenCalledOnce();
-    expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
-    expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
-    await expectStatus(proposal.record.id, "pending");
-  });
-
-  it("does not bypass Gateway ownership when CLI credentials are missing", async () => {
-    const proposal = await propose();
-    const error = credentialsError();
-    mocks.callGateway.mockRejectedValueOnce(error);
-    mocks.acquireGatewayLock.mockRejectedValueOnce(new Error("gateway lock is owned"));
-    await expect(run("apply", proposal.record.id)).rejects.toBe(error);
-    expect(mocks.callGateway).toHaveBeenCalledOnce();
-    expect(mocks.acquireGatewayLock).toHaveBeenCalledOnce();
-    expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
-    await expectStatus(proposal.record.id, "pending");
-  });
-
-  it("does not apply locally after an explicitly configured remote Gateway fails", async () => {
-    const proposal = await propose();
-    mocks.config.gateway = { mode: "remote" };
-    const error = credentialsError();
-    mocks.callGateway.mockRejectedValueOnce(error);
-    await expect(run("apply", proposal.record.id)).rejects.toBe(error);
-    expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
-    await expectStatus(proposal.record.id, "pending");
   });
 
   it("evaluates the exact inspected draft through the gateway plugin registry", async () => {
@@ -348,16 +338,20 @@ describe("skills workshop CLI", () => {
     }
   });
 
-  it("gives the leaf --agent precedence when listing proposals", async () => {
-    await run("--agent", "parent-agent", "list", "--agent", "leaf-agent");
-    expect(mocks.resolvedAgentIds.at(-1)).toBe("leaf-agent");
-  });
-
-  it("uses the leaf --agent when inspecting a proposal", async () => {
-    await expect(
-      run("--agent", "parent-agent", "inspect", "missing-proposal", "--agent", "leaf-agent"),
-    ).rejects.toThrow("__exit__:1");
-
+  it.each(["list", "inspect"])("gives the leaf --agent precedence for %s", async (command) => {
+    const result = run(
+      "--agent",
+      "parent-agent",
+      command,
+      ...(command === "inspect" ? ["missing-proposal"] : []),
+      "--agent",
+      "leaf-agent",
+    );
+    if (command === "inspect") {
+      await expect(result).rejects.toThrow("__exit__:1");
+    } else {
+      await result;
+    }
     expect(mocks.resolvedAgentIds.at(-1)).toBe("leaf-agent");
   });
 

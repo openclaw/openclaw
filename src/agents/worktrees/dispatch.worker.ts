@@ -2,7 +2,9 @@ import type {
   WorkerOperationHandlers,
   WorkerOperations,
 } from "../../state/worker-operation-registry.js";
+import { writeProvisionedSnapshotInDatabase } from "./provisioned-snapshot.worker.js";
 import {
+  findLiveRegistryWorktreeByOwnerInDatabase,
   getRegistryWorktreeInDatabase,
   getRegistryWorktreeProvisionedChunkInDatabase,
   getRegistryWorktreeProvisionedPathsInDatabase,
@@ -15,14 +17,37 @@ import {
   retireMissingWorktreeInWorker,
   deferWorktreeCleanupInWorker,
 } from "./registry-retirement.worker.js";
+import {
+  worktreeRunEndMutation,
+  claimWorktreeRemovalInDatabase,
+  finalizeWorktreeRemovalInDatabase,
+  abortWorktreeRemovalInDatabase,
+} from "./registry-run-end.worker.js";
 import { reapWorktreeRunLeasesInDatabase } from "./run-lease-owner.js";
 import {
   admitWorktreeRunLeaseInDatabase,
   releaseWorktreeRunLeaseInDatabase,
 } from "./run-lease-store.kernel.js";
 import { worktreeRunLeaseOperation } from "./run-lease-store.worker.js";
+import type { ManagedWorktreeOwnerKind } from "./types.js";
 
 export const worktreeOperations = {
+  "worktrees.claimRemoval": worktreeRunEndMutation(
+    "worktrees.claimRemoval",
+    claimWorktreeRemovalInDatabase,
+  ),
+  "worktrees.finalizeRemoval": worktreeRunEndMutation(
+    "worktrees.finalizeRemoval",
+    finalizeWorktreeRemovalInDatabase,
+  ),
+  "worktrees.abortRemoval": worktreeRunEndMutation(
+    "worktrees.abortRemoval",
+    abortWorktreeRemovalInDatabase,
+  ),
+  "worktrees.findLiveByOwner": (
+    { ownerKind, ownerId }: { ownerKind: ManagedWorktreeOwnerKind; ownerId: string },
+    { open },
+  ) => findLiveRegistryWorktreeByOwnerInDatabase(open().db, ownerKind, ownerId),
   "worktrees.get": ({ id }: { id: string }, { open }) =>
     getRegistryWorktreeInDatabase(open().db, id),
   "worktrees.list": (input: WorktreeRegistryListOptions, { open }) =>
@@ -37,6 +62,10 @@ export const worktreeOperations = {
     input: Parameters<typeof getRegistryWorktreeProvisionedChunkInDatabase>[1],
     { open },
   ) => getRegistryWorktreeProvisionedChunkInDatabase(open().db, input),
+  "worktrees.writeProvisionedSnapshot": worktreeRunEndMutation(
+    "worktrees.writeProvisionedSnapshot",
+    writeProvisionedSnapshotInDatabase,
+  ),
   "worktrees.retireMissing": (
     input: Parameters<typeof retireMissingWorktreeInWorker>[0],
     { open, stateOptions },

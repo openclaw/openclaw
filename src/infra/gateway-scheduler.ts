@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 
 export type GatewaySchedulerClock = {
   now: () => number;
@@ -25,7 +26,10 @@ type ScheduleParams = {
 export type GatewaySchedulerScope = Pick<
   GatewayScheduler,
   "signal" | "now" | "schedule" | "beginClose" | "stop"
->;
+> & {
+  /** Preserve synchronous retirement when this owner has no running work. */
+  close: () => Promise<void> | undefined;
+};
 
 type ScheduleOwner = {
   signal: AbortSignal;
@@ -111,14 +115,19 @@ export class GatewayScheduler {
         this.cancel(job);
       }
     };
+    const close = () => {
+      beginClose();
+      const running = [...owner.jobs].flatMap((job) => job.running ?? []);
+      return running.length > 0 ? Promise.all(running).then(() => undefined) : undefined;
+    };
     return {
       signal: owner.signal,
       now: () => this.now(),
       schedule: (params) => this.scheduleOwned(params, owner),
       beginClose,
+      close,
       stop: async () => {
-        beginClose();
-        await Promise.all([...owner.jobs].flatMap((job) => job.running ?? []));
+        await close();
       },
     };
   }
@@ -227,9 +236,11 @@ export class GatewayScheduler {
       const nowMs = this.now();
       // Node clamps larger delays to 1ms. Long deadlines retain their absolute due time.
       const delayMs = Math.min(2_147_483_647, Math.max(0, next - nowMs));
-      this.cancelTimer = this.clock.arm(
-        () => (generation === this.timerGeneration ? this.wake(nowMs + delayMs) : undefined),
-        delayMs,
+      this.cancelTimer = runInDetachedAsyncContext(() =>
+        this.clock.arm(
+          () => (generation === this.timerGeneration ? this.wake(nowMs + delayMs) : undefined),
+          delayMs,
+        ),
       );
     }
   }

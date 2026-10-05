@@ -17,19 +17,9 @@ import {
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { normalizeElevenLabsRealtimeBaseUrl } from "./shared.js";
 
-type ElevenLabsRealtimeTranscriptionProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  modelId?: string;
-  audioFormat?: string;
-  sampleRate?: number;
-  languageCode?: string;
-  commitStrategy?: "manual" | "vad";
-  vadSilenceThresholdSecs?: number;
-  vadThreshold?: number;
-  minSpeechDurationMs?: number;
-  minSilenceDurationMs?: number;
-};
+type ElevenLabsRealtimeTranscriptionProviderConfig = Partial<
+  ReturnType<typeof normalizeProviderConfig>
+>;
 
 type ElevenLabsRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey: string;
@@ -57,11 +47,6 @@ const ELEVENLABS_REALTIME_DEFAULT_MODEL = "scribe_v2_realtime";
 const ELEVENLABS_REALTIME_DEFAULT_AUDIO_FORMAT = "ulaw_8000";
 const ELEVENLABS_REALTIME_DEFAULT_SAMPLE_RATE = 8000;
 const ELEVENLABS_REALTIME_DEFAULT_COMMIT_STRATEGY: "manual" | "vad" = "vad";
-const ELEVENLABS_REALTIME_CONNECT_TIMEOUT_MS = 10_000;
-const ELEVENLABS_REALTIME_CLOSE_TIMEOUT_MS = 5_000;
-const ELEVENLABS_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
-const ELEVENLABS_REALTIME_RECONNECT_DELAY_MS = 1000;
-const ELEVENLABS_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 
 function readNestedElevenLabsConfig(rawConfig: RealtimeTranscriptionProviderConfig) {
   const raw = readRecord(rawConfig);
@@ -90,14 +75,12 @@ function normalizeFiniteRange(value: unknown, min: number, max: number): number 
   return asFiniteNumberInRange(parsed, { min, max });
 }
 
-function normalizeIntegerRange(value: unknown, min: number, max: number): number | undefined {
+function normalizeMinimumDurationMs(value: unknown): number | undefined {
   const parsed = readFiniteNumber(value);
-  return asSafeIntegerInRange(parsed, { min, max });
+  return asSafeIntegerInRange(parsed, { min: 50, max: 2_000 });
 }
 
-function normalizeProviderConfig(
-  config: RealtimeTranscriptionProviderConfig,
-): ElevenLabsRealtimeTranscriptionProviderConfig {
+function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   const raw = readNestedElevenLabsConfig(config);
   return {
     apiKey: normalizeResolvedSecretInputString({
@@ -116,15 +99,11 @@ function normalizeProviderConfig(
       3,
     ),
     vadThreshold: normalizeFiniteRange(raw.vadThreshold ?? raw.vad_threshold, 0.1, 0.9),
-    minSpeechDurationMs: normalizeIntegerRange(
+    minSpeechDurationMs: normalizeMinimumDurationMs(
       raw.minSpeechDurationMs ?? raw.min_speech_duration_ms,
-      50,
-      2_000,
     ),
-    minSilenceDurationMs: normalizeIntegerRange(
+    minSilenceDurationMs: normalizeMinimumDurationMs(
       raw.minSilenceDurationMs ?? raw.min_silence_duration_ms,
-      50,
-      2_000,
     ),
   };
 }
@@ -227,11 +206,6 @@ function createElevenLabsRealtimeTranscriptionSession(
     callbacks: config,
     url: () => toElevenLabsRealtimeWsUrl(config),
     headers: { "xi-api-key": config.apiKey },
-    connectTimeoutMs: ELEVENLABS_REALTIME_CONNECT_TIMEOUT_MS,
-    closeTimeoutMs: ELEVENLABS_REALTIME_CLOSE_TIMEOUT_MS,
-    maxReconnectAttempts: ELEVENLABS_REALTIME_MAX_RECONNECT_ATTEMPTS,
-    reconnectDelayMs: ELEVENLABS_REALTIME_RECONNECT_DELAY_MS,
-    maxQueuedBytes: ELEVENLABS_REALTIME_MAX_QUEUED_BYTES,
     connectTimeoutMessage: "ElevenLabs realtime transcription connection timeout",
     reconnectLimitMessage: "ElevenLabs realtime transcription reconnect limit reached",
     sendAudio: sendAudioChunk,

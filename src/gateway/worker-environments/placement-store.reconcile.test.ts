@@ -34,19 +34,19 @@ it("filters reconciliation by exact session key across agents while preserving s
     });
     await store.releaseTurn(localClaim);
     const active = await advanceToActive({ ...SESSION, sessionId: "reclaimed" });
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: active.generation,
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: draining.generation,
     });
-    store.transition({
+    await store.transition({
       sessionId: active.sessionId,
       from: "reconciling",
       to: "reclaimed",
@@ -66,7 +66,7 @@ it("filters reconciliation by exact session key across agents while preserving s
     }
     nowMs = 4_000;
     await store.startDispatch({ ...SESSION, sessionId: "failed" });
-    store.fail({ sessionId: "failed", recoveryError: "dispatch failed" });
+    await store.fail({ sessionId: "failed", recoveryError: "dispatch failed" });
 
     expect(
       store.listForReconcile(SESSION.sessionKey).map(({ sessionId, state }) => [sessionId, state]),

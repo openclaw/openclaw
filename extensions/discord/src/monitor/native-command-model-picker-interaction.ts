@@ -442,9 +442,19 @@ async function handleDiscordModelPickerInteraction(params: {
     return;
   }
 
-  if (parsed.action === "model") {
-    const selectedModel = resolveModelPickerSelectionValue(interaction);
+  if (parsed.action === "model" || parsed.action === "pick") {
+    const selectedValue = resolveModelPickerSelectionValue(interaction);
     const provider = parsedProvider;
+    // Keep raw values from already-rendered menus distinct from new token values.
+    const selectedModel =
+      parsed.action === "pick"
+        ? resolveDiscordModelPickerModelSelection({
+            data: pickerData,
+            provider: provider ?? "",
+            modelToken: selectedValue ?? undefined,
+            requireModelToken: true,
+          })
+        : selectedValue;
     if (!provider || !selectedModel) {
       await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
       return;

@@ -10,7 +10,7 @@ import {
 } from "../config/config.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
@@ -321,7 +321,7 @@ export function applySecretRefHeaderSentinels<T extends Model>(
   const runtimeProvider = resolveMergedModelProviderConfig(runtimeConfig, model.provider);
   const replacements = new Map<string, { value: string; replacement: string }>();
   const isManagedSecret = (value: unknown) =>
-    coerceSecretRef(value) !== null ||
+    parseSecretRef(value) !== null ||
     (typeof value === "string" && isSecretRefHeaderValueMarker(value));
   const addReplacement = (name: string, value: string, replacement?: string) => {
     replacements.set(name.trim().toLowerCase(), {

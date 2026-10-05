@@ -76,9 +76,7 @@ export type ModelProviderConfig = Omit<
 export type ModelProviderDeclarationConfig = ModelProviderConfig;
 
 /** User config input shape before provider defaults/models are materialized. */
-export type ModelProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
-  models?: ModelDefinitionConfig[];
-};
+export type ModelProviderConfigInput = Partial<ModelProviderConfig>;
 
 export type BedrockDiscoveryConfig = {
   /** Enable AWS Bedrock model discovery. */

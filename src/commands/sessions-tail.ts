@@ -42,23 +42,12 @@ type SqliteFollowState = {
   selection: TailSelection;
 };
 
-type TrajectorySnapshot = {
-  events: TrajectoryEvent[];
-  maxStorageSeq: number;
-};
 type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM";
 
 const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
 const EVENT_TYPE_PAD = 16;
 const FOLLOW_INTERVAL_MS = 1_000;
-
-function parseTailCount(value: string | number | undefined): number | null {
-  if (value === undefined) {
-    return DEFAULT_TAIL_COUNT;
-  }
-  return parseStrictNonNegativeInteger(value) ?? null;
-}
 
 function formatTimestamp(ts: string): string {
   const date = new Date(ts);
@@ -144,19 +133,6 @@ function formatProgressLine(event: TrajectoryEvent): string {
   return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
 }
 
-function readTailSnapshot(selection: TailSelection, tailEvents: number): TrajectorySnapshot {
-  const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
-    agentId: selection.agentId,
-    sessionId: selection.sessionId,
-    storePath: selection.storePath,
-    tailEvents,
-  });
-  return {
-    events: rows.map((row) => row.event),
-    maxStorageSeq: rows.at(-1)?.seq ?? -1,
-  };
-}
-
 function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
   for (const event of events) {
     runtime.log(formatProgressLine(event));
@@ -182,16 +158,6 @@ function isRunningSession(selection: TailSelection): boolean {
 
 function compareSelectionsByUpdatedAt(a: TailSelection, b: TailSelection): number {
   return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
-}
-
-function buildTailSelection(params: {
-  agentId: string;
-  entry: SessionEntry;
-  key: string;
-  storePath: string;
-}): TailSelection | null {
-  const sessionId = params.entry.sessionId?.trim();
-  return sessionId ? { ...params, sessionId } : null;
 }
 
 function selectSessionsToTail(selections: TailSelection[], sessionKey?: string): TailSelection[] {
@@ -225,18 +191,9 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
 }
 
 function followSelections(
-  selections: TailSelection[],
+  states: SqliteFollowState[],
   runtime: RuntimeEnv,
-  initialSnapshots: Map<TailSelection, TrajectorySnapshot>,
 ): Promise<FollowOutcome> {
-  const states = selections.map((selection): SqliteFollowState => {
-    const snapshot = initialSnapshots.get(selection);
-    return {
-      lastStorageSeq: snapshot?.maxStorageSeq ?? -1,
-      selection,
-    };
-  });
-
   return new Promise((resolve) => {
     let finished = false;
     const interval = setInterval(() => {
@@ -286,8 +243,9 @@ export async function sessionsTailCommand(
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const tailCount = parseTailCount(opts.tail);
-  if (tailCount === null) {
+  const tailCount =
+    opts.tail === undefined ? DEFAULT_TAIL_COUNT : parseStrictNonNegativeInteger(opts.tail);
+  if (tailCount == null) {
     runtime.error("--tail must be a non-negative integer, for example --tail 25.");
     runtime.exit(1);
     return;
@@ -316,14 +274,9 @@ export async function sessionsTailCommand(
       storePath: target.storePath,
       projection: "list",
     })) {
-      const selection = buildTailSelection({
-        agentId: target.agentId,
-        entry,
-        key: sessionKey,
-        storePath: target.storePath,
-      });
-      if (selection) {
-        selections.push(selection);
+      const sessionId = entry.sessionId?.trim();
+      if (sessionId) {
+        selections.push({ ...target, entry, key: sessionKey, sessionId });
       }
     }
   }
@@ -340,15 +293,20 @@ export async function sessionsTailCommand(
     return;
   }
 
-  const followSnapshots = new Map<TailSelection, TrajectorySnapshot>();
+  const followStates: SqliteFollowState[] = [];
   for (const selection of selected) {
-    const snapshot = readTailSnapshot(selection, Math.max(tailCount, opts.follow ? 1 : 0));
-    followSnapshots.set(selection, snapshot);
-    renderEvents(tailCount > 0 ? snapshot.events.slice(-tailCount) : [], runtime);
+    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
+      agentId: selection.agentId,
+      sessionId: selection.sessionId,
+      storePath: selection.storePath,
+      tailEvents: Math.max(tailCount, opts.follow ? 1 : 0),
+    });
+    followStates.push({ selection, lastStorageSeq: rows.at(-1)?.seq ?? -1 });
+    renderEvents(tailCount > 0 ? rows.slice(-tailCount).map((row) => row.event) : [], runtime);
   }
 
   if (opts.follow) {
-    const outcome = await followSelections(selected, runtime, followSnapshots);
+    const outcome = await followSelections(followStates, runtime);
     runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
   }
 }

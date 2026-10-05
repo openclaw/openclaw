@@ -10,7 +10,6 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
@@ -20,11 +19,6 @@ import {
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
-import { createClosedSessionTranscriptSource } from "../session-end-transcript-reader.js";
-import {
-  emitGatewaySessionEndPluginHook,
-  emitGatewaySessionStartPluginHook,
-} from "../session-reset-service.js";
 import { loadSessionEntry, resolveDeletedAgentIdFromSessionKey } from "../session-utils.js";
 
 export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
@@ -153,57 +147,6 @@ export function cronContinuationHasReusableRuntime(params: {
 export function withoutCronRunContinuation(entry: SessionEntry): SessionEntry {
   const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = entry;
   return baseEntry;
-}
-
-export function emitAgentSendSessionLifecycleTransition(
-  transition:
-    | {
-        cfg: OpenClawConfig;
-        sessionKey: string;
-        sessionId: string;
-        storePath: string;
-        sessionFile?: string;
-        agentId: string;
-        workspaceDir?: string;
-        previousSessionId?: string;
-        previousSessionFile?: string;
-        previousEndReason?: PluginHookSessionEndReason;
-      }
-    | undefined,
-): void {
-  if (!transition) {
-    return;
-  }
-  if (transition.previousSessionId) {
-    emitGatewaySessionEndPluginHook({
-      cfg: transition.cfg,
-      sessionKey: transition.sessionKey,
-      sessionId: transition.previousSessionId,
-      storePath: transition.storePath,
-      sessionFile: transition.previousSessionFile,
-      agentId: transition.agentId,
-      workspaceDir: transition.workspaceDir,
-      reason: transition.previousEndReason ?? "unknown",
-      nextSessionId: transition.sessionId,
-      nextSessionKey: transition.sessionKey,
-      endedTranscript: createClosedSessionTranscriptSource({
-        agentId: transition.agentId,
-        sessionId: transition.previousSessionId,
-        sessionKey: transition.sessionKey,
-        storePath: transition.storePath,
-        ...(transition.previousSessionFile ? { sessionFile: transition.previousSessionFile } : {}),
-      }),
-    });
-  }
-  emitGatewaySessionStartPluginHook({
-    cfg: transition.cfg,
-    sessionKey: transition.sessionKey,
-    sessionId: transition.sessionId,
-    resumedFrom: transition.previousSessionId,
-    storePath: transition.storePath,
-    sessionFile: transition.sessionFile,
-    agentId: transition.agentId,
-  });
 }
 
 export function shouldSuppressAgentPromptPersistence(params: {

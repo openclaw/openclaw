@@ -43,7 +43,7 @@ async function initializeLeaseDatabase() {
 
 describe("startup lease integrity and admission", () => {
   it.each([false, true])(
-    "allows WAL writers during verification and discards invalidated proof (corrupt=%s)",
+    "retries invalidated WAL verification before starting the lease lifetime (corrupt=%s)",
     async (corrupt) => {
       await initializeLeaseDatabase();
       const competing = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
@@ -54,6 +54,7 @@ describe("startup lease integrity and admission", () => {
       `);
       const assertIntegrity = sqliteIntegrity.assertSqliteIntegrity;
       let committed = false;
+      let nowMs = Date.now();
       const checker = vi
         .spyOn(sqliteIntegrity, "assertSqliteIntegrity")
         .mockImplementation((db, label, check) => {
@@ -72,13 +73,16 @@ describe("startup lease integrity and admission", () => {
             }
             return prepare(sql);
           });
-          return assertIntegrity(db, label, check);
+          const verified = assertIntegrity(db, label, check);
+          nowMs += STARTUP_MIGRATION_LEASE_TTL_MS + 1;
+          return verified;
         });
       let lease: StartupMigrationLease | undefined;
       try {
         const operation = acquireStartupMigrationLeaseWithWait({
           ...parameters(),
           timeoutMs: 1000,
+          now: () => nowMs,
         });
         if (corrupt) {
           await expect(operation).rejects.toThrow("foreign_key_check failed");
@@ -90,6 +94,11 @@ describe("startup lease integrity and admission", () => {
         } else {
           lease = await operation;
           expect(lease).toBeDefined();
+          expect(
+            competing
+              .prepare("SELECT expires_at FROM state_leases WHERE owner = ?")
+              .get(lease.owner)?.expires_at,
+          ).toBeGreaterThan(nowMs);
           await expect(acquireStartupMigrationLeaseWithWait(parameters())).rejects.toThrow(
             "already running",
           );
@@ -165,48 +174,6 @@ describe("startup lease integrity and admission", () => {
       }
     },
   );
-
-  it("starts lease lifetime after slow verification and a stale-snapshot retry", async () => {
-    await initializeLeaseDatabase();
-    const pathname = resolveOpenClawStateSqlitePath(env);
-    const peer = new DatabaseSync(pathname);
-    peer.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 0;");
-    let nowMs = Date.now();
-    let committed = false;
-    const assertIntegrity = sqliteIntegrity.assertSqliteIntegrity;
-    const checker = vi
-      .spyOn(sqliteIntegrity, "assertSqliteIntegrity")
-      .mockImplementation((db, label, check) => {
-        const result = assertIntegrity(db, label, check);
-        // Advance the injected lease clock, not real timers, after native verification.
-        nowMs += STARTUP_MIGRATION_LEASE_TTL_MS + 1;
-        if (!committed) {
-          peer.exec(
-            "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'",
-          );
-          committed = true;
-        }
-        return result;
-      });
-    let lease: StartupMigrationLease | undefined;
-    try {
-      lease = await acquireStartupMigrationLeaseWithWait({
-        ...parameters(),
-        timeoutMs: 1000,
-        now: () => nowMs,
-      });
-      expect(lease).toBeDefined();
-      const row = peer
-        .prepare("SELECT expires_at FROM state_leases WHERE owner = ?")
-        .get(lease!.owner);
-      expect(row?.expires_at).toBeGreaterThan(nowMs);
-      expect(committed).toBe(true);
-    } finally {
-      checker.mockRestore();
-      lease?.release();
-      peer.close();
-    }
-  });
 
   it("rechecks schema repair and rolls back damage", async () => {
     await initializeLeaseDatabase();

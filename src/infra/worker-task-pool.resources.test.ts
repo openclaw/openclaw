@@ -28,15 +28,24 @@ function fixture() {
   return { pool, run };
 }
 
-it("acknowledges path cleanup on an idle worker while retaining its other resources", async () => {
-  const { pool, run } = fixture();
-  const first = await run({ retain: "first" });
-  await run({ retain: "second" });
-  await pool.closeResources("first");
-  expect(await run({})).toEqual({ keys: ["second"], threadId: first.threadId });
-  await pool.closeResources();
-  expect(await run({})).toEqual({ keys: [], threadId: first.threadId });
-});
+it.each(["first", "fail-once"])(
+  "cleans %s without retiring its worker or sibling resources",
+  async (key) => {
+    const { pool, run } = fixture();
+    const first = await run({ retain: key });
+    if (key === "fail-once") {
+      await expect(pool.closeResources(key)).rejects.toThrow("Worker resource cleanup failed");
+    } else {
+      await run({ retain: "second" });
+    }
+    await pool.closeResources(key);
+    if (key === "first") {
+      expect(await run({})).toEqual({ keys: ["second"], threadId: first.threadId });
+      await pool.closeResources();
+    }
+    expect(await run({})).toEqual({ keys: [], threadId: first.threadId });
+  },
+);
 
 it("serializes resource cleanup after an asynchronous task without cancelling it", async () => {
   const { pool, run } = fixture();
@@ -64,13 +73,5 @@ it("serializes resource cleanup after an asynchronous task without cancelling it
     await task.close();
     await cleanup;
   }
-  expect(await run({})).toEqual({ keys: [], threadId: first.threadId });
-});
-
-it("preserves failed resource cleanup for retry without retiring the healthy worker", async () => {
-  const { pool, run } = fixture();
-  const first = await run({ retain: "fail-once" });
-  await expect(pool.closeResources("fail-once")).rejects.toThrow("Worker resource cleanup failed");
-  await pool.closeResources("fail-once");
   expect(await run({})).toEqual({ keys: [], threadId: first.threadId });
 });

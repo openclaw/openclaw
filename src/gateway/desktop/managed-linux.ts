@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { sleepWithAbort } from "@openclaw/retry";
+import { raceWithTimeout, sleepWithAbort } from "../../../packages/retry/src/index.js";
 import { tryListenOnPort } from "../../infra/ports-probe.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { runCommandBuffered } from "../../process/exec.js";
@@ -258,15 +258,12 @@ export function createManagedLinuxDesktop(
   const prepareResources = async (): Promise<ManagedResources> => {
     const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-managed-desktop-"));
     await fs.chmod(tempDir, 0o700);
-    const plaintextFile = path.join(tempDir, "password.txt");
     const passwordFile = path.join(tempDir, "passwd");
     try {
       const password = randomBytes(12).toString("base64url").slice(0, 8);
       registerSecretValueForRedaction(password);
-      await fs.writeFile(plaintextFile, password, { mode: 0o600, flag: "wx" });
-      const passwordInput = await fs.readFile(plaintextFile);
       const filtered = await runPasswordTool(["tigervncpasswd", "-f"], {
-        input: passwordInput,
+        input: Buffer.from(password),
         maxOutputBytes: { stdout: 64, stderr: 4_096 },
         timeoutMs: 10_000,
       });
@@ -275,7 +272,6 @@ export function createManagedLinuxDesktop(
         throw binaryError("tigervncpasswd", detail || `exit code ${filtered.code ?? "none"}`);
       }
       await fs.writeFile(passwordFile, filtered.stdout, { mode: 0o600, flag: "wx" });
-      await fs.rm(plaintextFile, { force: true });
       const port = await pickPort({ port: 0, host: "127.0.0.1", exclusive: true });
       const display = chooseDisplayNumber(await readDisplaySocketNames(x11SocketDir));
       const env: NodeJS.ProcessEnv = {
@@ -478,13 +474,8 @@ export function createManagedLinuxDesktop(
         },
       );
       const busExit = waitForRun(bus);
-      const busTimeout = setTimeout(
-        () =>
-          busReady.reject(new Error("managed Linux desktop D-Bus session did not become ready")),
-        readinessTimeoutMs,
-      );
-      try {
-        await Promise.race([
+      await raceWithTimeout(
+        Promise.race([
           busReady.promise,
           busExit.then((exit) => {
             throw new Error(describeExit("dbus-daemon", exit));
@@ -492,10 +483,12 @@ export function createManagedLinuxDesktop(
           vncExit.then((exit) => {
             throw new Error(describeExit("Xtigervnc", exit));
           }),
-        ]);
-      } finally {
-        clearTimeout(busTimeout);
-      }
+        ]),
+        readinessTimeoutMs,
+        () => {
+          throw new Error("managed Linux desktop D-Bus session did not become ready");
+        },
+      );
       const session = await spawnRun("startxfce4", ["startxfce4"], activeEpoch, env);
       const nextPair: ManagedPair = {
         current: true,

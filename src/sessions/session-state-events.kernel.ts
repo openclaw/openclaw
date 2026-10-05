@@ -23,6 +23,7 @@ import {
   type SessionStateActorType,
   type SessionStateEventKind,
 } from "./session-state-event-kinds.js";
+import type { SessionStateEventRecord } from "./session-state-events.types.js";
 import {
   rowToSessionUpstreamLink,
   type SessionUpstreamLink,
@@ -49,19 +50,6 @@ type SessionStateDatabase = Pick<
 >;
 type SessionStateEventsTable = OpenClawStateKyselyDatabase["session_state_events"];
 export type SessionStateEventRow = Selectable<SessionStateEventsTable>;
-export type SessionStateEventRecord = {
-  sequence: number;
-  sessionKey: string;
-  sessionId?: string;
-  agentId: string;
-  kind: SessionStateEventKind;
-  actorType: SessionStateActorType;
-  actorId?: string;
-  runId?: string;
-  occurredAt: number;
-  summary: string;
-  payload?: Record<string, unknown>;
-};
 
 export function rowToSessionStateEvent(row: SessionStateEventRow): SessionStateEventRecord {
   const payload = row.payload_json ? safeParseJsonRecord(row.payload_json) : undefined;

@@ -119,21 +119,29 @@ it("keeps source secret markers when the same runtime is republished before cont
   );
 });
 
-it("refuses a cold read after its config selector changes", async () => {
-  const { agentDir, state } = await fixture();
-  const pending = ensureOpenClawModelsJson(undefined, agentDir);
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(state, "replaced.json"));
-  await expect(pending).rejects.toThrow("Runtime config source changed");
-  expect(getRuntimeConfigSnapshot()).toBeNull();
-  await expect(fs.access(path.join(agentDir, "models.json"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-});
-
-it("retains its default agent directory after captured environment changes", async () => {
-  const { config, agentDir, state } = await fixture();
-  setRuntimeConfigSnapshot(config);
-  const pending = ensureOpenClawModelsJson();
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(state, "replacement-state"));
-  expect((await pending).agentDir).toBe(agentDir);
-});
+it.each(["cold selector", "pinned directory"] as const)(
+  "retains captured model-config authority after an environment change: %s",
+  async (mode) => {
+    const { config, agentDir, state } = await fixture();
+    if (mode === "pinned directory") {
+      setRuntimeConfigSnapshot(config);
+    }
+    const pending = ensureOpenClawModelsJson(
+      undefined,
+      mode === "cold selector" ? agentDir : undefined,
+    );
+    vi.stubEnv(
+      mode === "cold selector" ? "OPENCLAW_CONFIG_PATH" : "OPENCLAW_STATE_DIR",
+      path.join(state, mode === "cold selector" ? "replaced.json" : "replacement-state"),
+    );
+    if (mode === "pinned directory") {
+      expect((await pending).agentDir).toBe(agentDir);
+    } else {
+      await expect(pending).rejects.toThrow("Runtime config source changed");
+      expect(getRuntimeConfigSnapshot()).toBeNull();
+      await expect(fs.access(path.join(agentDir, "models.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+  },
+);

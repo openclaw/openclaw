@@ -8,12 +8,14 @@ import {
   parseSqliteSessionFileMarker,
 } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntriesReadOnly,
-  loadSessionEntry,
-  loadSessionEntryReadOnly,
   patchSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import {
+  readSessionEntryInWorker,
+  readSessionEntryReadOnlyInWorker,
+  readSessionEntrySummariesInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -42,7 +44,7 @@ export async function resolveContextEngineCompactionSuccessor(params: {
   currentTarget: SessionTranscriptRuntimeTarget;
   result: CompactResult;
 }) {
-  const current = params.currentTarget;
+  const current = { ...params.currentTarget };
   const result = params.result.result;
   const target = result?.sessionTarget;
   const successorId = target?.sessionId ?? result?.sessionId;
@@ -86,7 +88,7 @@ export async function resolveContextEngineCompactionSuccessor(params: {
     }
     const isSessionKey = successorFile.startsWith("agent:");
     const keyedEntry = isSessionKey
-      ? loadSessionEntryReadOnly({
+      ? await readSessionEntryReadOnlyInWorker({
           agentId: current.agentId,
           sessionKey: successorFile,
           storePath: current.storePath,
@@ -101,19 +103,18 @@ export async function resolveContextEngineCompactionSuccessor(params: {
       throw new Error("Legacy context-engine successor identity is inconsistent");
     }
     const keyedSessionId = isSessionKey ? (successorId ?? keyedEntry?.sessionId) : undefined;
-    const retainedMarkerEntry = marker
-      ? loadSessionEntryReadOnly({
+    const markerEntries = marker
+      ? await readSessionEntrySummariesInWorker({
           agentId: marker.agentId,
-          sessionKey: current.sessionKey,
           storePath: marker.storePath,
         })
-      : undefined;
-    const markerMatches = marker
-      ? listSessionEntriesReadOnly({
-          agentId: marker.agentId,
-          storePath: marker.storePath,
-        }).filter(({ entry }) => entry.sessionId === marker.sessionId)
       : [];
+    const retainedMarkerEntry = markerEntries.find(
+      ({ sessionKey }) => sessionKey === current.sessionKey,
+    )?.entry;
+    const markerMatches = markerEntries.filter(
+      ({ entry }) => entry.sessionId === marker?.sessionId,
+    );
     const preferredMarkerSessionKey = marker
       ? resolvePreferredSessionKeyForSessionIdMatches(
           markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
@@ -221,12 +222,13 @@ export async function acceptCompactionSuccessor(params: {
   });
   params.assertActive();
   const previousEntry = requireCompactionWriterEntry(
-    loadSessionEntry({
-      ...currentTarget,
-      readConsistency: "latest",
-    }),
+    await readSessionEntryInWorker(
+      { ...currentTarget, readConsistency: "latest" },
+      params.assertActive,
+    ),
     expected,
   );
+  params.assertActive();
   if (successor.sessionId === currentTarget.sessionId) {
     return { ...successor, entry: previousEntry };
   }

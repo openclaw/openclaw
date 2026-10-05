@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { raceWithTimeout } from "@openclaw/retry";
 import { clampNumber } from "../utils.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
-import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
 import type {
   CodeModeExecutorContinuation,
@@ -68,14 +68,28 @@ export function createHeadlessDeadlineScope(
   return {
     deadline,
     signal: controller.signal,
-    wait: <T>(promise: Promise<T>) =>
-      awaitCodeModeDeadline({
-        operation: () => promise,
-        remainingMs: Math.ceil(deadline - performance.now()),
-        signal: controller.signal,
-        createTimeoutError: timeoutError,
-        createAbortError: headlessAbortError,
-      }),
+    wait: async <T>(promise: Promise<T>): Promise<T> => {
+      const remainingMs = Math.ceil(deadline - performance.now());
+      if (remainingMs <= 0) {
+        throw timeoutError();
+      }
+      if (controller.signal.aborted) {
+        throw headlessAbortError(controller.signal);
+      }
+      return await raceWithTimeout(
+        promise,
+        remainingMs,
+        () => {
+          throw timeoutError();
+        },
+        {
+          signal: controller.signal,
+          onAbort: (abortedSignal) => {
+            throw headlessAbortError(abortedSignal);
+          },
+        },
+      );
+    },
     cleanup: () => {
       controller.abort(new CodeModeHeadlessAbortError());
       clearTimeout(timer);
@@ -316,10 +330,15 @@ export async function runCodeModeScriptHeadless(params: {
           return { kind: "checkpoint" };
         }
         let onPressure: (() => void) | undefined;
+        const settlement = new AbortController();
         try {
           const ready = await abortScope.wait(
             Promise.race([
-              waitForPendingBridgeSettlement(pending, boundary.settlementMode).then(() => true),
+              waitForPendingBridgeSettlement(
+                pending,
+                boundary.settlementMode,
+                settlement.signal,
+              ).then(() => true),
               new Promise<false>((resolve) => {
                 onPressure = () => resolve(false);
                 context.yieldSignal.addEventListener("abort", onPressure, { once: true });
@@ -346,6 +365,7 @@ export async function runCodeModeScriptHeadless(params: {
             onConsumed: delivery.release,
           };
         } finally {
+          settlement.abort();
           if (onPressure) {
             context.yieldSignal.removeEventListener("abort", onPressure);
           }
@@ -407,7 +427,9 @@ export async function runCodeModeScriptHeadless(params: {
           toolCallCount,
         });
       }
-      await abortScope.wait(waitForPendingBridgeSettlement(pending, settlementMode));
+      await abortScope.wait(
+        waitForPendingBridgeSettlement(pending, settlementMode, abortScope.signal),
+      );
       const delivery = takeSettledBridgeRequests(pending);
       pending = pending.filter((entry) => !entry.settled);
       try {

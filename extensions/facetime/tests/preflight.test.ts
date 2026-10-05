@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/realtime-voice")>()),
@@ -88,52 +88,33 @@ describe("FaceTime preflight", () => {
     ]);
   });
 
+  afterEach(() => vi.unstubAllEnvs());
+
   it("fails provider readiness for an unresolved configured SecretRef", async () => {
     const missingKey = "OPENCLAW_FACETIME_TEST_MISSING_KEY";
-    const previous = process.env[missingKey];
-    delete process.env[missingKey];
-    try {
-      const result = await preflight({
-        config: resolveFaceTimeConfig({
-          ownerHandles: ["omar@example.com"],
-          realtime: {
-            providers: {
-              openai: {
-                apiKey: { source: "env", provider: "default", id: missingKey },
-              },
-            },
-          },
-        }),
-        fullConfig: {
-          secrets: { providers: { default: { source: "env" } } },
+    vi.stubEnv(missingKey, undefined);
+    const result = await preflight({
+      config: resolveFaceTimeConfig({
+        ownerHandles: ["omar@example.com"],
+        realtime: {
+          providers: { openai: { apiKey: { source: "env", provider: "default", id: missingKey } } },
         },
-      });
-
-      expect(result.checks.find((check) => check.id === "realtime-provider")?.ok).toBe(false);
-      expect(result.ok).toBe(false);
-    } finally {
-      if (previous === undefined) {
-        delete process.env[missingKey];
-      } else {
-        process.env[missingKey] = previous;
-      }
-    }
+      }),
+      fullConfig: { secrets: { providers: { default: { source: "env" } } } },
+    });
+    expect(result.checks.find((check) => check.id === "realtime-provider")?.ok).toBe(false);
+    expect(result.ok).toBe(false);
   });
 
   it("reports actionable readiness failures", async () => {
-    const runCommandWithTimeout = vi.fn().mockResolvedValue({
-      code: 1,
-      stdout: "",
-      stderr: "ENOENT",
-    });
-
     const result = await preflight({
       config: resolveFaceTimeConfig({ ownerHandles: ["omar@example.com"] }),
-      runtime: runtimeWithCommands(runCommandWithTimeout),
+      runtime: runtimeWithCommands(
+        vi.fn().mockResolvedValue({ code: 1, stdout: "", stderr: "ENOENT" }),
+      ),
       helperConnected: false,
       captureBinary: "/missing/capture",
     });
-
     expect(result.ok).toBe(false);
     expect(
       result.checks.filter((check) => check.required && !check.ok).map((check) => check.id),
@@ -177,20 +158,10 @@ describe("FaceTime preflight", () => {
         SPAudioDataType: [
           {
             _name: "coreaudio_device",
-            _items: [
-              {
-                _name: "OpenClaw-Mic",
-                coreaudio_device_transport: "coreaudio_device_type_virtual",
-              },
-              {
-                _name: "OpenClaw-Feed",
-                coreaudio_device_transport: "coreaudio_device_type_virtual",
-              },
-              {
-                _name: output.name,
-                coreaudio_device_transport: "coreaudio_device_type_virtual",
-              },
-            ],
+            _items: ["OpenClaw-Mic", "OpenClaw-Feed", output.name].map((_name) => ({
+              _name,
+              coreaudio_device_transport: "coreaudio_device_type_virtual",
+            })),
           },
         ],
       }),

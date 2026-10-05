@@ -354,7 +354,6 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
   const authContext = {
     agentId: readNonEmptyString(params.agentId),
     agentDir: readNonEmptyString(params.agentDir),
-    workspaceDir: readNonEmptyString(params.workspaceDir),
     copilotHome: readNonEmptyString(params.copilotHome),
   };
   const auth =

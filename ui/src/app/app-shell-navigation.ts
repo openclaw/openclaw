@@ -172,7 +172,7 @@ export class ShellNavigationOwner {
     return true;
   }
 
-  recoverDeletedActiveSession(_sessionState: ApplicationContext["sessions"]["state"]): void {
+  recoverDeletedActiveSession(): void {
     const context = this.host.context;
     const routeId = this.host.routeState.routeId;
     const sessionKey = this.host.activeSessionKey.trim();

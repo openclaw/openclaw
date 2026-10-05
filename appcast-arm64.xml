@@ -3,6 +3,81 @@
     <channel>
         <title>OpenClaw</title>
         <item>
+            <title>2026.9.8</title>
+            <pubDate>Sat, 03 Oct 2026 07:01:49 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast-arm64.xml</link>
+            <sparkle:version>2609000890</sparkle:version>
+            <sparkle:shortVersionString>2026.9.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<h2>OpenClaw 2026.9.8</h2>
+<h3>Highlights</h3>
+<ul>
+<li><strong>Safer updates and Doctor recovery:</strong> preserve plugin settings, tolerate transient SQLite contention, prevent unsafe Windows schema upgrades, unblock verified-empty Telegram migrations, and keep deep and large-fleet repairs bounded. (#160344, #160702, #160718, #161832, #162290, #162321, #162394) Thanks @EndeavorPioneer, @RomneyDa, @ericcaiwx-star, @PennyVibe, @jasdeepohri-max, @609NFT, @VACInc, @obviyus, and @NickM83.</li>
+<li><strong>Gateway availability:</strong> prevent duplicate container Gateways, restore managed-proxy TLS health probes, and avoid Windows compile-cache startup hangs. (#160193, #161946, #162841) Thanks @grtninja, @obviyus, @saizero-dr, @NickM83, @VACInc, @ericcaiwx-star, @EndeavorPioneer, @jasdeepohri-max, and @609NFT.</li>
+<li><strong>Reliable agent turns:</strong> prevent stuck Anthropic background-command turns so later messages continue normally. (#161260) Thanks @VACInc, @obviyus, @ericcaiwx-star, @EndeavorPioneer, @jasdeepohri-max, @NickM83, and @609NFT.</li>
+<li><strong>Codex reliability:</strong> keep Computer Use native-app readiness independent of browser authentication and prevent large agent fleets from exhausting Gateway memory during Codex session discovery. (#162467, #162912) Thanks @RomneyDa, @obviyus, @609NFT, @WG-Mojo, @hailongguo0530-alt, @VACInc, @ericcaiwx-star, @EndeavorPioneer, @jasdeepohri-max, and @NickM83.</li>
+<li><strong>Windows sessions:</strong> restore cron setup and session admission across case-insensitive environment proxies. (#160075) Thanks @WG-Mojo and @hailongguo0530-alt.</li>
+<li><strong>Sandbox and Telegram correctness:</strong> repair read-only skill refreshes without EACCES failures and prevent stale queued Telegram previews from crossing writer-authority boundaries. (#160137, #162304) Thanks @VACInc, @obviyus, @ericcaiwx-star, @EndeavorPioneer, @jasdeepohri-max, @NickM83, and @609NFT.</li>
+</ul>
+<h3>Changes</h3>
+<ul>
+<li>No intentional capability changes; this release is a focused reliability and recovery hotfix.</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li><strong>Update and repair safety:</strong> preserve local-plugin configuration through recovery, refuse unsafe Windows 2026.9.4 schema transitions, retain maintenance leases through transient SQLite contention, archive only verified-empty retired Telegram bindings, and keep deep owner-chain and large-fleet Doctor checks bounded. (#160344, #160702, #160718, #161832, #162290, #162321, #162394) Thanks @EndeavorPioneer, @RomneyDa, @ericcaiwx-star, @PennyVibe, @jasdeepohri-max, @609NFT, @VACInc, @obviyus, and @NickM83.</li>
+<li><strong>Gateway and onboarding:</strong> enforce single-owner Gateway startup in containers, keep local TLS health checks working with managed proxies, and shorten Windows compile-cache paths. (#160193, #161946, #162841) Thanks @grtninja, @obviyus, @saizero-dr, @NickM83, @VACInc, @ericcaiwx-star, @EndeavorPioneer, @jasdeepohri-max, and @609NFT.</li>
+<li><strong>Windows sessions:</strong> restore cron setup and session admission across case-insensitive environment proxies. (#160075) Thanks @WG-Mojo and @hailongguo0530-alt.</li>
+<li><strong>Agent replies:</strong> finish Anthropic turns after background Bash completion so later messages are not silently skipped. (#161260) Thanks @VACInc, @obviyus, @ericcaiwx-star, @EndeavorPioneer, @jasdeepohri-max, @NickM83, and @609NFT.</li>
+<li><strong>Codex:</strong> avoid unrelated browser authentication during native Computer Use readiness and share captured fleet configuration during session discovery to prevent Gateway heap exhaustion. (#162467, #162912) Thanks @RomneyDa, @obviyus, @609NFT, @WG-Mojo, @hailongguo0530-alt, @VACInc, @ericcaiwx-star, @EndeavorPioneer, @jasdeepohri-max, and @NickM83.</li>
+<li><strong>Sandbox and Telegram:</strong> restore skill refreshes on read-only installs and recheck queued preview writer authority before Telegram edits. (#160137, #162304) Thanks @VACInc, @obviyus, @ericcaiwx-star, @EndeavorPioneer, @jasdeepohri-max, @NickM83, and @609NFT.</li>
+</ul>
+<h3>Complete contribution record</h3>
+This audited record covers the complete v2026.9.7..45369e8428643a9c00e4e30c32afb9238a016935 history: 35 in-range PRs + 0 retained seed-only PRs = 35 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+<h4>Pull requests</h4>
+<ul>
+<li><strong>PR #160224</strong></li>
+<li><strong>PR #161256</strong></li>
+<li><strong>PR #161291</strong></li>
+<li><strong>PR #161079</strong></li>
+<li><strong>PR #161418</strong></li>
+<li><strong>PR #161463</strong></li>
+<li><strong>PR #161520</strong></li>
+<li><strong>PR #161516</strong></li>
+<li><strong>PR #161515</strong></li>
+<li><strong>PR #161754</strong></li>
+<li><strong>PR #161632</strong></li>
+<li><strong>PR #161633</strong></li>
+<li><strong>PR #161635</strong> Related #161550.</li>
+<li><strong>PR #161713</strong></li>
+<li><strong>PR #161404</strong></li>
+<li><strong>PR #157954</strong> Thanks @fuller-stack-dev.</li>
+<li><strong>PR #161876</strong></li>
+<li><strong>PR #161968</strong></li>
+<li><strong>PR #161985</strong></li>
+<li><strong>PR #160075</strong> Related #157067, #159339. Thanks @WG-Mojo and @hailongguo0530-alt.</li>
+<li><strong>PR #162467</strong> Related #157067, #159339. Thanks @RomneyDa and @WG-Mojo and @hailongguo0530-alt.</li>
+<li><strong>PR #160344</strong> Related #159477, #161979, #162821, #162802, #161869. Thanks @VACInc and @obviyus and @ericcaiwx-star and @EndeavorPioneer and @jasdeepohri-max and @NickM83 and @609NFT.</li>
+<li><strong>PR #160193</strong> Related #159941, #159477, #161979, #162821, #162802, #161869. Thanks @VACInc and @obviyus and @ericcaiwx-star and @grtninja and @EndeavorPioneer and @jasdeepohri-max and @NickM83 and @609NFT.</li>
+<li><strong>PR #160718</strong> Related #159477, #161979, #162821, #162802, #161869. Thanks @VACInc and @obviyus and @ericcaiwx-star and @EndeavorPioneer and @jasdeepohri-max and @NickM83 and @609NFT.</li>
+<li><strong>PR #161260</strong> Related #159477, #161979, #162821, #162802, #161869. Thanks @VACInc and @obviyus and @ericcaiwx-star and @EndeavorPioneer and @jasdeepohri-max and @NickM83 and @609NFT.</li>
+<li><strong>PR #160702</strong> Related #159477, #161979, #162821, #162802, #161869. Thanks @RomneyDa and @VACInc and @obviyus and @ericcaiwx-star and @EndeavorPioneer and @jasdeepohri-max and @NickM83 and @609NFT.</li>
+<li><strong>PR #161946</strong> Related #161929, #159477, #161979, #162821, #162802, #161869. Thanks @obviyus and @VACInc and @ericcaiwx-star and @saizero-dr and @EndeavorPioneer and @jasdeepohri-max and @NickM83 and @609NFT.</li>
+<li><strong>PR #161832</strong> Related #161795, #159477, #161979, #162821, #162802, #161869. Thanks @ericcaiwx-star and @VACInc and @obviyus and @PennyVibe and @EndeavorPioneer and @jasdeepohri-max and @NickM83 and @609NFT.</li>
+<li><strong>PR #162321</strong> Related #161979, #159477, #162821, #162802, #161869. Thanks @VACInc and @obviyus and @ericcaiwx-star and @jasdeepohri-max and @EndeavorPioneer and @NickM83 and @609NFT.</li>
+<li><strong>PR #162841</strong> Related #162821, #159477, #161979, #162802, #161869. Thanks @VACInc and @obviyus and @ericcaiwx-star and @NickM83 and @EndeavorPioneer and @jasdeepohri-max and @609NFT.</li>
+<li><strong>PR #162912</strong> Related #162802, #159477, #161979, #162821, #161869. Thanks @obviyus and @VACInc and @ericcaiwx-star and @609NFT and @EndeavorPioneer and @jasdeepohri-max and @NickM83.</li>
+<li><strong>PR #160137</strong> Related #159477, #161979, #162821, #162802, #161869. Thanks @VACInc and @obviyus and @ericcaiwx-star and @EndeavorPioneer and @jasdeepohri-max and @NickM83 and @609NFT.</li>
+<li><strong>PR #162290</strong> Related #159477, #161979, #162821, #162802, #161869. Thanks @VACInc and @obviyus and @ericcaiwx-star and @EndeavorPioneer and @jasdeepohri-max and @NickM83 and @609NFT.</li>
+<li><strong>PR #162304</strong> Related #159477, #161979, #162821, #162802, #161869. Thanks @VACInc and @obviyus and @ericcaiwx-star and @EndeavorPioneer and @jasdeepohri-max and @NickM83 and @609NFT.</li>
+<li><strong>PR #162394</strong> Related #161869, #159477, #161979, #162821, #162802. Thanks @VACInc and @obviyus and @ericcaiwx-star and @609NFT and @EndeavorPioneer and @jasdeepohri-max and @NickM83.</li>
+</ul>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.9.8/OpenClaw-2026.9.8-arm64.zip" length="251254969" type="application/octet-stream" sparkle:edSignature="2tQRDCX7jBo9o8c+z1qCQsROzsDiG5Q9cfA9VOERL5S02sojmGDRF2q4JVos/NPf62/iFjA9QSCHHd1XPHuLDw=="/>
+        </item>
+        <item>
             <title>2026.9.7</title>
             <pubDate>Wed, 30 Sep 2026 18:56:31 +0000</pubDate>
             <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast-arm64.xml</link>

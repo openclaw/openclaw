@@ -1,6 +1,106 @@
 #!/bin/bash
 # Shared by both installer profiles; only function definitions belong here.
 
+detect_downloader() {
+    if command -v curl &> /dev/null; then
+        DOWNLOADER="curl"
+        return 0
+    fi
+    if command -v wget &> /dev/null; then
+        DOWNLOADER="wget"
+        return 0
+    fi
+    installer_error "Missing downloader (curl or wget required)"
+    exit 1
+}
+
+download_file() {
+    local url="$1"
+    local output="$2"
+    local redirect_mode="${3:-follow}"
+    if [[ -z "$DOWNLOADER" ]]; then
+        detect_downloader
+    fi
+    if [[ "$DOWNLOADER" == "curl" ]]; then
+        if [[ "$redirect_mode" == "deny" ]]; then
+            curl -fsSL --max-redirs 0 --proto '=https' --tlsv1.2 \
+                --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
+                --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
+                --retry 3 --retry-delay 1 --retry-connrefused \
+                -o "$output" "$url"
+            return
+        fi
+        # Bound connection and transfer stalls without a total download duration.
+        curl -fsSL --proto '=https' --tlsv1.2 \
+            --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
+            --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
+            --retry 3 --retry-delay 1 --retry-connrefused \
+            -o "$output" "$url"
+        return
+    fi
+    if [[ "$redirect_mode" == "deny" ]]; then
+        wget -q --max-redirect=0 --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
+        return
+    fi
+    wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
+}
+
+node_binary_has_safe_sqlite() {
+    local node_bin="$1"
+    "$node_bin" -e '
+        const { DatabaseSync } = require("node:sqlite");
+        const db = new DatabaseSync(":memory:");
+        try {
+            const value = db.prepare("SELECT sqlite_version() AS version").get()?.version;
+            const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null;
+            const major = Number(match?.[1]);
+            const minor = Number(match?.[2]);
+            const patch = Number(match?.[3]);
+            const safe =
+                major > 3 ||
+                (major === 3 &&
+                    (minor > 51 ||
+                        (minor === 51 && patch >= 3) ||
+                        (minor === 50 && patch >= 7) ||
+                        (minor === 44 && patch >= 6)));
+            const text = "a\u0000b\u0000";
+            const bytes = Buffer.from(text, "utf8");
+            const json = JSON.stringify({ value: text });
+            db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
+            db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
+            const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
+            const textSafe = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
+            const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
+            const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
+            if (!textSafe) {
+                console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
+            } else if (!blobSafe || !jsonSafe) {
+                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
+            } else if (!safe) {
+                console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
+            }
+            if (!safe || !textSafe || !blobSafe || !jsonSafe) process.exitCode = 1;
+        } finally {
+            db.close();
+        }
+    ' --no-warnings >/dev/null
+}
+
+node_binary_sqlite_version() {
+    local node_bin="$1"
+    local version
+    version="$("$node_bin" -e '
+        const { DatabaseSync } = require("node:sqlite");
+        const db = new DatabaseSync(":memory:");
+        try {
+            process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? "unknown"));
+        } finally {
+            db.close();
+        }
+    ' 2>/dev/null || true)"
+    printf '%s\n' "${version:-unavailable}"
+}
+
 resolve_npm_config_path() {
     local raw="$1"
     if [[ -z "$raw" || "$raw" == "null" || "$raw" == "undefined" ]]; then
@@ -84,6 +184,23 @@ npm_config_has_raw_key() {
         fi
     done
     return 1
+}
+
+npm_freshness_flag() {
+    local npm_cmd="$1"
+    local freshness_flag="--min-release-age=0"
+    local min_release_age=""
+    min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$npm_cmd" config get min-release-age --global 2>/dev/null || true)"
+    if npm_config_has_raw_key "$npm_cmd" "min-release-age"; then
+        freshness_flag="--min-release-age=0"
+    elif [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+        local before_value=""
+        before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" config get before --global 2>/dev/null || true)"
+        if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
+            freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+        fi
+    fi
+    printf '%s\n' "$freshness_flag"
 }
 
 npm_lifecycle_allow_arg() {
@@ -204,6 +321,99 @@ verify_git_rebase_recovery() {
     [[ "$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)" == "$expected_head" ]] &&
         [[ "$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)" == "$expected_status" ]] &&
         [[ ! -d "$git_dir/rebase-merge" && ! -d "$git_dir/rebase-apply" ]]
+}
+
+checkout_git_openclaw_ref() {
+    local repo_dir="$1"
+    local ref="$2"
+    local original_head=""
+    local original_status=""
+    local namespaces=(heads tags)
+
+    GIT_REF_KIND=""
+
+    if [[ -z "$ref" ]]; then
+        return 0
+    fi
+
+    # Full commit IDs pin source bytes, even when a remote ref has the same name.
+    # Bundled/existing checkouts already have the object and need no remote lookup.
+    if [[ "$ref" =~ ^[[:xdigit:]]{40}$ ]]; then
+        if ! git -C "$repo_dir" cat-file -e "$ref" 2>/dev/null; then
+            if ! installer_step "Fetching requested commit" git -C "$repo_dir" fetch --no-tags origin "$ref"; then
+                installer_error "Could not fetch requested git commit: ${ref}"
+                return 1
+            fi
+        fi
+        if ! git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
+            installer_error "Requested git version is not a commit: ${ref}"
+            return 1
+        fi
+        installer_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
+        GIT_REF_KIND="immutable"
+        return 0
+    fi
+
+    if [[ "$ref" == "main" ]]; then
+        installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
+        installer_step "Checking out main" git -C "$repo_dir" checkout main
+        if [[ "$GIT_UPDATE" == "1" ]]; then
+            if ! original_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
+                installer_error "Could not record repository state before updating from origin/main"
+                return 1
+            fi
+            if ! original_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
+                installer_error "Could not record repository state before updating from origin/main"
+                return 1
+            fi
+            if ! installer_step "Updating repository" git -C "$repo_dir" rebase origin/main; then
+                if verify_git_rebase_recovery "$repo_dir" "$original_head" "$original_status"; then
+                    installer_error "Could not update repository from origin/main; the checkout was restored to its pre-update state"
+                else
+                    installer_error "Could not update repository from origin/main; checkout recovery was not verified. Run git -C \"$repo_dir\" rebase --abort and inspect the checkout before retrying"
+                fi
+                return 1
+            fi
+        fi
+        GIT_REF_KIND="moving"
+        return 0
+    fi
+
+    # Normalized release selectors prefer immutable tags. A same-name branch
+    # remains a fallback for operator-supplied v-prefixed branch names.
+    if [[ "$ref" == v[0-9]* ]]; then
+        namespaces=(tags heads)
+    fi
+
+    local namespace=""
+    local probe_status=0
+    for namespace in "${namespaces[@]}"; do
+        if git -C "$repo_dir" ls-remote --exit-code origin "refs/${namespace}/${ref}" >/dev/null 2>&1; then
+            if [[ "$namespace" == "heads" ]]; then
+                installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
+                installer_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
+                GIT_REF_KIND="moving"
+            else
+                installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"
+                if ! git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
+                    installer_error "Requested git version is not a commit: ${ref}"
+                    return 1
+                fi
+                installer_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "refs/tags/${ref}"
+                GIT_REF_KIND="immutable"
+            fi
+            return 0
+        else
+            probe_status=$?
+        fi
+        if (( probe_status != 2 )); then
+            installer_error "Could not resolve requested git ref: ${ref}"
+            return 1
+        fi
+    done
+
+    installer_error "Requested git version not found: ${ref}"
+    return 1
 }
 
 git_install_lockfile_flag() {

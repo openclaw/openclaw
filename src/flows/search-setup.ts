@@ -204,7 +204,7 @@ function buildSearchEnvRef(config: OpenClawConfig, provider: SearchProvider): Se
   return { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: resolvedEnvVar };
 }
 
-export function applySearchKey(
+function applySearchKey(
   config: OpenClawConfig,
   provider: SearchProvider,
   key: SecretInput,
@@ -243,7 +243,7 @@ function applySearchProviderSelectionConfig(
   return next;
 }
 
-export function applySearchProviderSelection(
+function applySearchProviderSelection(
   config: OpenClawConfig,
   provider: SearchProvider,
 ): OpenClawConfig {

@@ -287,7 +287,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
     );
 
     const result = await repairStaleOAuthProfileShadows({
-      cfg: { agents: { entries: { telegram: { default: true } } } } satisfies OpenClawConfig,
+      cfg: { agents: { entries: { telegram: {} } } } satisfies OpenClawConfig,
       env,
       now,
     });
@@ -459,11 +459,12 @@ describe("stale OAuth profile shadow doctor repair", () => {
   it("rechecks stale OAuth shadows against the locked store before removal", () => {
     const profileId = "anthropic:default";
     const now = Date.now();
-    const result = testing.removeStaleProfilesFromStore({
-      store: storeWith(profileId, {
-        expires: now + 60 * 60 * 1000,
-        accountId: "acct-shared",
-      }),
+    const store = storeWith(profileId, {
+      expires: now + 60 * 60 * 1000,
+      accountId: "acct-shared",
+    });
+    const removedProfileIds = testing.removeStaleProfilesFromStore({
+      store,
       mainStore: storeWith(profileId, {
         expires: now + 30 * 60 * 1000,
         accountId: "acct-shared",
@@ -472,8 +473,8 @@ describe("stale OAuth profile shadow doctor repair", () => {
       now,
     });
 
-    expect(result.removedProfileIds).toEqual([]);
-    expect(result.store.profiles[profileId]).toBeDefined();
+    expect(removedProfileIds).toEqual([]);
+    expect(store.profiles[profileId]).toBeDefined();
   });
 
   it("does not recreate a child auth store that disappeared before repair", async () => {
@@ -490,7 +491,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
       now,
     });
 
-    expect(repair.status).toBe("missing");
+    expect(repair).toEqual([]);
     await expect(fs.stat(resolveAuthStorePath(childAgentDir))).rejects.toMatchObject({
       code: "ENOENT",
     });

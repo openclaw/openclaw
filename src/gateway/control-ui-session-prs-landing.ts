@@ -93,7 +93,7 @@ export async function gitOutput(cwd: string, args: string[]): Promise<string | n
   }
 }
 
-async function readRemoteRevisions(
+export async function readRemoteRevisions(
   root: string,
   refs: string[],
   head: ReturnType<typeof readCheckoutHead>,

@@ -9,14 +9,6 @@ import {
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 
-function resolveDebugQuery(params: { targetId?: unknown; clear?: unknown; filter?: unknown }) {
-  return {
-    targetId: normalizeOptionalString(params.targetId),
-    filter: normalizeOptionalString(params.filter),
-    clear: Boolean(params.clear),
-  };
-}
-
 export function registerBrowserDebugCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -48,10 +40,10 @@ export function registerBrowserDebugCommands(
         parent: parentOpts(cmd),
         method: "GET",
         path: "/errors",
-        query: resolveDebugQuery({
-          targetId: opts.targetId,
-          clear: opts.clear,
-        }),
+        query: {
+          targetId: normalizeOptionalString(opts.targetId),
+          clear: Boolean(opts.clear),
+        },
         print: (result) => {
           if (!result.errors.length) {
             defaultRuntime.log("No page errors.");
@@ -77,11 +69,11 @@ export function registerBrowserDebugCommands(
         parent: parentOpts(cmd),
         method: "GET",
         path: "/requests",
-        query: resolveDebugQuery({
-          targetId: opts.targetId,
-          filter: opts.filter,
-          clear: opts.clear,
-        }),
+        query: {
+          targetId: normalizeOptionalString(opts.targetId),
+          filter: normalizeOptionalString(opts.filter),
+          clear: Boolean(opts.clear),
+        },
         print: (result) => {
           if (!result.requests.length) {
             defaultRuntime.log("No requests recorded.");

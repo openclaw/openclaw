@@ -132,9 +132,9 @@ export async function probeTelegram(
       const options = resolveProbeOptions(proxyOrOptions);
       const abortSignal = options?.abortSignal;
       const includeWebhookInfo = options?.includeWebhookInfo !== false;
+      const apiBase = resolveTelegramApiBase(options?.apiRoot);
       const transport = resolveProbeTransport(token, options);
       const fetcher = transport.fetch;
-      const apiBase = resolveTelegramApiBase(options?.apiRoot);
       const base = `${apiBase}/bot${token}`;
       const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
       const resolveRemainingBudgetMs = () => Math.max(0, deadlineMs - Date.now());

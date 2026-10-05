@@ -50,9 +50,7 @@ describe("Mattermost send authority lifecycle", () => {
     const retirement = new Error("Mattermost sender aborted");
     retirement.name = "AbortError";
     let current = true;
-    const onRetry = vi.fn(() => {
-      current = false;
-    });
+    const retryLog = vi.fn();
 
     await withServer(
       (request, response) => {
@@ -61,6 +59,9 @@ describe("Mattermost send authority lifecycle", () => {
           const requestPath = request.url ?? "";
           requests.push(requestPath);
           const isDm = requestPath === "/api/v4/channels/direct";
+          if (isDm) {
+            current = false;
+          }
           response.writeHead(isDm ? 503 : 200, { "content-type": "application/json" });
           response.end(
             JSON.stringify(
@@ -72,19 +73,31 @@ describe("Mattermost send authority lifecycle", () => {
         });
       },
       async (baseUrl) => {
+        const options = sendOptions(baseUrl);
+        const runtime = createPluginRuntimeMock();
+        const logger = runtime.logging.getChildLogger({ module: "mattermost" });
+        runtime.logging.shouldLogVerbose = () => true;
+        runtime.logging.getChildLogger = () => ({ ...logger, warn: retryLog });
+        setMattermostRuntime(runtime);
+        options.cfg.channels!.mattermost!.dmChannelRetry = {
+          maxRetries: 3,
+          initialDelayMs: 0,
+          maxDelayMs: 0,
+        };
         const outcome = await observeSend(
           sendMessageMattermost("user:bbbbbbbbbbbbbbbbbbbbbbbbbb", "retired DM", {
-            ...sendOptions(baseUrl),
+            ...options,
             assertDirectAdapterHandoff: () => {
               if (!current) {
                 throw retirement;
               }
             },
-            dmRetryOptions: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1, onRetry },
           }),
         );
         expect(requests).toEqual(["/api/v4/users/me", "/api/v4/channels/direct"]);
-        expect(onRetry).toHaveBeenCalledOnce();
+        expect(retryLog).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("DM channel creation retry 1 after 0ms:"),
+        );
         expect(outcome.error).toBeInstanceOf(PlatformMessageNotDispatchedError);
         expect(outcome.error).toMatchObject({ retryable: false, cause: retirement });
       },

@@ -234,39 +234,10 @@ function resolveMatrixQaStreamingMode(
   if (value === "quiet") {
     return "quiet";
   }
-  if (isMatrixQaStreamingConfig(value)) {
-    if (value.mode === "partial" || value.mode === "quiet") {
-      return value.mode;
-    }
+  if (isRecord(value) && (value.mode === "partial" || value.mode === "quiet")) {
+    return value.mode;
   }
   return "off";
-}
-
-function isMatrixQaStreamingConfig(
-  value: MatrixQaConfigOverrides["streaming"],
-): value is MatrixQaStreamingConfig {
-  return isRecord(value);
-}
-
-function resolveMatrixQaAutoJoinAllowlist(params: { overrides?: MatrixQaConfigOverrides }) {
-  if (params.overrides?.autoJoin !== "allowlist") {
-    return [];
-  }
-  return normalizeMatrixQaAllowlist(params.overrides.autoJoinAllowlist);
-}
-
-function resolveMatrixQaRoleAllowlist(params: {
-  roles?: MatrixQaActorRole[];
-  driverUserId: string;
-  observerUserId: string;
-  sutUserId: string;
-}) {
-  const roleToUserId = {
-    driver: params.driverUserId,
-    observer: params.observerUserId,
-    sut: params.sutUserId,
-  } satisfies Record<MatrixQaActorRole, string>;
-  return (params.roles ?? []).map((role) => roleToUserId[role]);
 }
 
 function resolveMatrixQaGroupAllowFrom(params: {
@@ -276,12 +247,9 @@ function resolveMatrixQaGroupAllowFrom(params: {
   sutUserId: string;
 }) {
   const explicitAllowFrom = params.overrides?.groupAllowFrom;
-  const roleAllowFrom = resolveMatrixQaRoleAllowlist({
-    roles: params.overrides?.groupAllowRoles,
-    driverUserId: params.driverUserId,
-    observerUserId: params.observerUserId,
-    sutUserId: params.sutUserId,
-  });
+  const roleAllowFrom = (params.overrides?.groupAllowRoles ?? []).map(
+    (role) => params[`${role}UserId`],
+  );
   if (explicitAllowFrom !== undefined || params.overrides?.groupAllowRoles !== undefined) {
     return normalizeMatrixQaAllowlist([...(explicitAllowFrom ?? []), ...roleAllowFrom]);
   }
@@ -472,13 +440,14 @@ function buildMatrixQaConfigSnapshot(params: {
   sutUserId: string;
   topology: MatrixQaProvisionedTopology;
 }) {
-  const streaming = isMatrixQaStreamingConfig(params.overrides?.streaming)
-    ? params.overrides.streaming
-    : undefined;
+  const streaming = isRecord(params.overrides?.streaming) ? params.overrides.streaming : undefined;
   return {
     allowBots: params.overrides?.allowBots,
     autoJoin: params.overrides?.autoJoin ?? "off",
-    autoJoinAllowlist: resolveMatrixQaAutoJoinAllowlist(params),
+    autoJoinAllowlist:
+      params.overrides?.autoJoin === "allowlist"
+        ? normalizeMatrixQaAllowlist(params.overrides.autoJoinAllowlist)
+        : [],
     blockStreaming: params.overrides?.blockStreaming ?? false,
     chunkMode: params.overrides?.chunkMode,
     dm: resolveMatrixQaDmConfigSnapshot(params),

@@ -115,7 +115,7 @@ export function registerDetachedCleanupAuthorityTest({
         withOwnedSessionTranscriptWrites(
           { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
           async () => {
-            expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+            expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
           },
         ),
     );

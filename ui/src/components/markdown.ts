@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import { CONTROL_UI_ROOT_PUBLIC_ASSETS } from "../../../src/gateway/control-ui-root-assets.js";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
@@ -631,12 +632,7 @@ export function toSanitizedMarkdownHtml(
     markdownCache.get(cacheKey) ?? renderSanitizedMarkdown(renderInput, renderOptions);
   markdownCache.delete(cacheKey);
   markdownCache.set(cacheKey, sanitized);
-  if (markdownCache.size > MARKDOWN_CACHE_LIMIT) {
-    const oldest = markdownCache.keys().next().value;
-    if (oldest) {
-      markdownCache.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(markdownCache, MARKDOWN_CACHE_LIMIT);
   return sanitized;
 }
 

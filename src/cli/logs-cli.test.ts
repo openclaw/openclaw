@@ -40,6 +40,7 @@ const { MockGatewayTransportError } = vi.hoisted(() => ({
 
 const callGatewayFromCli = vi.fn();
 const readConfiguredLogTail = vi.fn();
+const readGatewayDispatchConfig = vi.fn(() => ({}));
 const readSystemdServiceRuntime = vi.fn();
 const execFileUtf8Tail = vi.fn();
 const buildGatewayConnectionDetails = vi.fn(
@@ -67,6 +68,10 @@ vi.mock("../logging/log-tail.js", () => ({
   readConfiguredLogTail: (
     ...args: Parameters<typeof import("../logging/log-tail.js").readConfiguredLogTail>
   ) => readConfiguredLogTail(...args),
+}));
+
+vi.mock("../config/gateway-dispatch-config.js", () => ({
+  readGatewayDispatchConfig: () => readGatewayDispatchConfig(),
 }));
 
 vi.mock("./logs-cli.runtime.js", () => ({
@@ -173,6 +178,7 @@ function captureStderrWrites() {
 
 describe("logs cli", () => {
   beforeEach(() => {
+    readGatewayDispatchConfig.mockReset().mockReturnValue({});
     readSystemdServiceRuntime.mockResolvedValue({ status: "stopped" });
     execFileUtf8Tail.mockResolvedValue({ stdout: "", stderr: "", code: 1, truncated: false });
   });
@@ -430,6 +436,35 @@ describe("logs cli", () => {
     });
     expect(stdoutWrites.join("")).toContain("local fallback line");
     expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
+  });
+
+  it("reads local logs and warns when broken config prevents Gateway target resolution", async () => {
+    readGatewayDispatchConfig.mockImplementationOnce(() => {
+      throw new SyntaxError("Invalid JSON5");
+    });
+    buildGatewayConnectionDetails.mockImplementationOnce((options) => {
+      if (options?.config === undefined) {
+        throw new SyntaxError("Invalid JSON5");
+      }
+      return { url: "ws://127.0.0.1:18789", urlSource: "local loopback", message: "" };
+    });
+    readConfiguredLogTail.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 5,
+      size: 5,
+      lines: ["Gateway startup failed"],
+      truncated: false,
+      reset: false,
+    });
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
+
+    await runLogsCli(["logs", "--json"]);
+
+    expect(stdoutWrites.join("")).toContain("Gateway startup failed");
+    expect(stderrWrites.join("")).toContain("Configuration could not be read");
+    expect(stderrWrites.join("")).toContain("openclaw doctor --fix");
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 
   describe("--follow retry behavior", () => {

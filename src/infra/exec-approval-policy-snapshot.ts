@@ -1,15 +1,13 @@
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 // Canonicalizes the portable policy snapshot carried with delayed exec approvals.
-type ExecApprovalPolicyRule = {
-  pattern: string;
-  argPattern?: string;
-  source?: "allow-always";
-};
+import type { ExecApprovalRequestParams } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 
-export type ExecApprovalPolicySnapshot = {
-  security: "deny" | "allowlist" | "full";
-  ask: "off" | "on-miss" | "always";
-  askFallback: "deny" | "allowlist" | "full";
-  autoAllowSkills: boolean;
+type PolicySnapshot = SchemaContract<
+  NonNullable<NonNullable<ExecApprovalRequestParams["systemRunPlan"]>["policySnapshot"]>
+>;
+type ExecApprovalPolicyRule = PolicySnapshot["allowlistRules"][number];
+
+export type ExecApprovalPolicySnapshot = Omit<PolicySnapshot, "allowlistRules"> & {
   allowlistRules: readonly ExecApprovalPolicyRule[];
 };
 

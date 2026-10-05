@@ -80,7 +80,7 @@ export function refreshSessionPlannerStatisticsInDatabase(database: OpenClawAgen
 
 export function emptySessionEntryMaintenancePlan(): SessionEntryMaintenancePlan {
   return {
-    archivedSessionKeys: [],
+    archivedEntries: [],
     entryRemovals: [],
     stateDeletePlans: [],
     archived: 0,
@@ -112,7 +112,7 @@ function canSkipSessionEntryMaintenanceInDatabase(
   );
 }
 
-/** Inline callers already hold their transaction; workers prepare before write admission. */
+/** Inline callers already hold their transaction; workers prepare before the write transaction. */
 export function applySessionEntryMaintenanceInDatabase(
   database: OpenClawAgentDatabase,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
@@ -127,7 +127,7 @@ export function applySessionEntryMaintenanceInDatabase(
   )(database, onArchived);
 }
 
-/** Prepare outside write admission; compare only selected rows and protection dependencies inside it. */
+/** Prepare before the write transaction; compare selected rows and protection dependencies inside it. */
 export function prepareSessionEntryMaintenanceInDatabase(
   reader: Pick<OpenClawAgentDatabase, "db">,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
@@ -175,7 +175,6 @@ export function prepareSessionEntryMaintenanceInDatabase(
   };
   const { store, archived, capArchived, modelRunPruned, pruned, capped } =
     planSessionEntryMaintenance({
-      profile: "write",
       maintenance,
       initialUnarchivedCount: entryCount,
       forceMaintenance: params.forceMaintenance,
@@ -276,8 +275,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
         );
       }
     }
-    const archivedSessionKeys: string[] = [];
-    const archivedWorktrees: NonNullable<SessionEntryMaintenancePlan["archivedWorktrees"]> = [];
+    const archivedEntries: SessionEntryMaintenancePlan["archivedEntries"] = [];
     for (const key of archivedKeys) {
       const previousEntry = selectedEntries[key];
       const planned = store[key];
@@ -292,14 +290,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
       delete entry.archivedBy;
       writeSessionEntry(database, key, entry, { canonicalPreviousEntry: previousEntry });
       onArchived?.(key, previousEntry, entry);
-      archivedSessionKeys.push(key);
-      if (entry.worktree) {
-        archivedWorktrees.push({
-          entry: structuredClone(entry),
-          sessionKey: key,
-          storePath: params.storePath,
-        });
-      }
+      archivedEntries.push({ sessionKey: key, sessionId: entry.sessionId });
     }
     const removals = [...removalReasons].flatMap(([sessionKey, maintenanceReason]) => {
       const expectedEntry = selectedEntries[sessionKey];
@@ -308,8 +299,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
     stageSessionEntryMaintenanceAgeFact(database.db, ageFact);
     if (removals.length === 0) {
       return {
-        archivedSessionKeys,
-        ...(archivedWorktrees.length ? { archivedWorktrees } : {}),
+        archivedEntries,
         entryRemovals: [],
         stateDeletePlans: [],
         archived,
@@ -351,8 +341,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
       }
     }
     return {
-      archivedSessionKeys,
-      ...(archivedWorktrees.length ? { archivedWorktrees } : {}),
+      archivedEntries,
       entryRemovals: removals,
       stateDeletePlans: deletePlans,
       archived,

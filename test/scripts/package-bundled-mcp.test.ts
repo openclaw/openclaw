@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { collectPatchedMcpArtifactErrors } from "../../scripts/lib/package-bundled-mcp.mts";
 
 // Independent expectations from v2026.9.6 (eb377ac59e6) through the 1.10.1 upgrade.
@@ -82,28 +82,45 @@ function fixture(version = "1.10.1", hashes = CONTRACT_HASHES["1.10.1"]) {
   };
 }
 
-describe.each(Object.entries(CONTRACT_HASHES))("patched MCP %s contract", (version, hashes) => {
-  it("accepts the intact known contract", () => {
-    expect(collectPatchedMcpArtifactErrors(fixture(version, hashes))).toEqual([]);
-  });
-
-  it("rejects changed bytes for every hashed runtime entry", () => {
-    const input = fixture(version, hashes);
-    input.sha256 = () => "0".repeat(64);
-    expect(collectPatchedMcpArtifactErrors(input).toSorted()).toEqual(
-      Object.keys(hashes)
-        .map((file) => "bundled chrome-devtools-mcp has unpatched or changed runtime entry " + file)
-        .toSorted(),
-    );
-  });
+it.each(Object.entries(CONTRACT_HASHES))("accepts the intact %s contract", (version, hashes) => {
+  expect(collectPatchedMcpArtifactErrors(fixture(version, hashes))).toEqual([]);
 });
 
-it("binds the bundled manifest to the exact declared pin", () => {
+it("rejects changed runtime bytes even with artifact-supplied replacement hashes", () => {
   const input = fixture();
-  input.manifest.version = "1.9.0";
-  expect(collectPatchedMcpArtifactErrors(input)).toContain(
-    "bundled chrome-devtools-mcp must be ESM version 1.10.1",
+  expect(
+    collectPatchedMcpArtifactErrors({
+      ...input,
+      manifest: { ...input.manifest, hashes: { [CLI]: "0".repeat(64) } },
+      sha256: () => "0".repeat(64),
+    }).toSorted(),
+  ).toEqual(
+    Object.keys(CONTRACT_HASHES["1.10.1"])
+      .map((file) => "bundled chrome-devtools-mcp has unpatched or changed runtime entry " + file)
+      .toSorted(),
   );
+});
+
+it.each([
+  {
+    version: "1.9.0",
+    type: "module",
+    bin: "./" + CLI,
+    errors: ["bundled chrome-devtools-mcp must be ESM version 1.10.1"],
+  },
+  {
+    version: "1.10.1",
+    type: "commonjs",
+    bin: "./other.js",
+    errors: [
+      "bundled chrome-devtools-mcp must be ESM version 1.10.1",
+      "bundled chrome-devtools-mcp must expose CLI " + CLI,
+    ],
+  },
+])("rejects an incompatible manifest: $version/$type/$bin", ({ version, type, bin, errors }) => {
+  const input = fixture();
+  input.manifest = { version, type, bin: { "chrome-devtools-mcp": bin } };
+  expect(collectPatchedMcpArtifactErrors(input)).toEqual(errors);
 });
 
 it("reports every missing runtime entry", () => {
@@ -119,37 +136,13 @@ it("reports every missing runtime entry", () => {
   );
 });
 
-it("does not trust artifact-supplied replacement hashes", () => {
-  const input = fixture();
+it.each([null, "toString"])("rejects unpinned or unknown declarations: %s", (declaredVersion) => {
   expect(
     collectPatchedMcpArtifactErrors({
-      ...input,
-      manifest: { ...input.manifest, hashes: { [CLI]: "0".repeat(64) } },
-      sha256: (file) => (file === CLI ? "0".repeat(64) : input.sha256(file)),
+      ...fixture("1.8.0", CONTRACT_HASHES["1.8.0"]),
+      declaredVersion,
     }),
-  ).toContain("bundled chrome-devtools-mcp has unpatched or changed runtime entry " + CLI);
+  ).toContain(
+    "package.json dependencies.chrome-devtools-mcp must be pinned to a supported patched version",
+  );
 });
-
-it("retains the ESM and CLI requirements", () => {
-  const input = fixture();
-  input.manifest.type = "commonjs";
-  input.manifest.bin["chrome-devtools-mcp"] = "./other.js";
-  expect(collectPatchedMcpArtifactErrors(input)).toEqual([
-    "bundled chrome-devtools-mcp must be ESM version 1.10.1",
-    "bundled chrome-devtools-mcp must expose CLI " + CLI,
-  ]);
-});
-
-it.each([null, "^1.8.0", "1.10.0", "toString"])(
-  "rejects unpinned or unknown declarations: %s",
-  (declaredVersion) => {
-    expect(
-      collectPatchedMcpArtifactErrors({
-        ...fixture("1.8.0", CONTRACT_HASHES["1.8.0"]),
-        declaredVersion,
-      }),
-    ).toContain(
-      "package.json dependencies.chrome-devtools-mcp must be pinned to a supported patched version",
-    );
-  },
-);

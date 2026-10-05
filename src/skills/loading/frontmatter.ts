@@ -68,15 +68,10 @@ function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
   if (!value || /\s/.test(value)) {
     return undefined;
   }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return parsed.toString();
-  } catch {
-    return undefined;
-  }
+  const parsed = URL.parse(value);
+  return parsed?.protocol === "http:" || parsed?.protocol === "https:"
+    ? parsed.toString()
+    : undefined;
 }
 
 function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {

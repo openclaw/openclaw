@@ -199,7 +199,10 @@ vi.mock("commander", () => {
 
 vi.mock("./route.js", () => ({ tryRouteCli: tryRouteCliMock }));
 
-vi.mock("./gateway-cli/run-command.js", () => ({ addGatewayRunCommand: addGatewayRunCommandMock }));
+vi.mock("./gateway-cli/run-command.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-cli/run-command.js")>()),
+  addGatewayRunCommand: addGatewayRunCommandMock,
+}));
 
 vi.mock("../daemon/launchd.js", () => ({
   parkCurrentLaunchAgentForMaintenance: parkCurrentLaunchAgentForMaintenanceMock,
@@ -467,7 +470,6 @@ export {
   outputRootHelpMock,
   outputPrecomputedRootHelpTextMock,
   outputPrecomputedNodesHelpTextMock,
-  outputPrecomputedSubcommandHelpTextMock,
   loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
   tryOutputSetupOnboardConfigureHelpMock,
   buildProgramMock,

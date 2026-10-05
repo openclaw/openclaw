@@ -248,7 +248,10 @@ function formatTuiAssistantContent(message: unknown, contentText: string): strin
     const code = attachment?.code;
     const kind = attachment?.kind;
     if (
-      (code === "file-not-found" || code === "unsupported-format" || code === "delivery-failed") &&
+      (code === "file-not-found" ||
+        code === "unsupported-format" ||
+        code === "delivery-failed" ||
+        code === "invalid-reference") &&
       (kind === "image" || kind === "audio" || kind === "video" || kind === "document")
     ) {
       // Assistant attachment labels can contain private paths or capability URLs.
@@ -284,7 +287,7 @@ function formatAssistantErrorFromRecord(record: Record<string, unknown>): string
   return formatRawAssistantErrorForUi(errorMessage);
 }
 
-function collectBlockStrings(content: unknown, type: "text" | "thinking"): string[] {
+function collectBlockStrings(content: unknown, type: string, key = type): string[] {
   if (!Array.isArray(content)) {
     return [];
   }
@@ -294,7 +297,7 @@ function collectBlockStrings(content: unknown, type: "text" | "thinking"): strin
       continue;
     }
     const rec = block as Record<string, unknown>;
-    const value = rec[type];
+    const value = rec[key];
     if (rec.type === type && typeof value === "string") {
       parts.push(value);
     }
@@ -348,27 +351,10 @@ function extractAssistantRenderableContent(record: Record<string, unknown>): str
 }
 
 function extractPairingQrTerminalText(record: Record<string, unknown>): string {
-  const content = record.content;
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const blockRecord = block as Record<string, unknown>;
-    if (
-      blockRecord.type === "openclaw_pairing_qr" &&
-      typeof blockRecord.terminalText === "string"
-    ) {
-      const text = sanitizeRenderableText(blockRecord.terminalText).trim();
-      if (text) {
-        parts.push(text);
-      }
-    }
-  }
-  return parts.join("\n\n").trim();
+  return collectBlockStrings(record.content, "openclaw_pairing_qr", "terminalText")
+    .map((text) => sanitizeRenderableText(text).trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {

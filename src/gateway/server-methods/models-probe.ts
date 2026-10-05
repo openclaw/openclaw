@@ -2,7 +2,6 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   ErrorCodes,
   errorShape,
-  type ModelsProbeParams,
   type ModelsProbeResult,
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -137,10 +136,9 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateModelsProbeParams, "models.probe", respond)) {
       return;
     }
-    const request = params as ModelsProbeParams;
-    const provider = normalizeProviderId(request.provider);
-    const profileId = request.profileId?.trim();
-    if (!provider || (request.profileId !== undefined && !profileId)) {
+    const provider = normalizeProviderId(params.provider);
+    const profileId = params.profileId?.trim();
+    if (!provider || (params.profileId !== undefined && !profileId)) {
       respond(
         false,
         undefined,
@@ -150,11 +148,11 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
     }
     const timeoutMs = Math.min(
       MAX_TIMEOUT_MS,
-      Math.max(MIN_TIMEOUT_MS, request.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      Math.max(MIN_TIMEOUT_MS, params.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     );
     try {
       const cfg = context.getRuntimeConfig();
-      const scope = resolveModelAuthAgentScope(cfg, request.agentId);
+      const scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
         respond(false, undefined, scope.error);
         return;

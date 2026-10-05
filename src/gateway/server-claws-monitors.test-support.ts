@@ -261,7 +261,7 @@ export function useClawMonitorFixture() {
       withDeletion: <T>(run: (deletion: AgentDeletionOperation) => Promise<T>) =>
         withAgentDeletion("worker", async (begin) =>
           run(
-            begin({
+            await begin({
               agentId: "worker",
               agentDir: state.agentDir("worker"),
               workspaceDir,

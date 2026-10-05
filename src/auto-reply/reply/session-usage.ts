@@ -203,15 +203,15 @@ export async function persistSessionUsageUpdate(params: {
                 },
               }
             : {}),
-          ...(authorize
-            ? {
-                assertCommitAllowed: () => {
+          workerGuard: {
+            assertCurrent: authorize
+              ? () => {
                   if (!authorize()) {
                     throw new Error("session usage accounting authority revoked");
                   }
-                },
-              }
-            : {}),
+                }
+              : undefined,
+          },
         },
       );
     } catch (err) {

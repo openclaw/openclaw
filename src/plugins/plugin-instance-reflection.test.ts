@@ -222,7 +222,7 @@ describe("managed plugin proxy exports", () => {
         },
       });
       const source: object = testCase.placement === "direct" ? proxy : Object.create(proxy);
-      const view = instance.wrap(() => source)();
+      const view = instance.wrap(source);
       admissions.length = 0;
       expect(testCase.operation.read(view)).toEqual(testCase.operation.expected);
       expect(admissions.length).toBeGreaterThan(0);

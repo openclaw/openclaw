@@ -90,7 +90,7 @@ async function createFixture(option: CiAutomationOption) {
   const config = {
     agents: {
       defaults: { skipBootstrap: true, workspace: stateDir },
-      list: [{ id: "main", workspace: stateDir }],
+      entries: { main: { workspace: stateDir } },
     },
     plugins: { enabled: false },
   };

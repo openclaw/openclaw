@@ -47,7 +47,7 @@ function corpusTool(
 ) {
   return createMemorySearchToolOrThrow({
     config: {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       memory: { citations: "off", search },
       tools: { sessions: { visibility } },
       ...(dmScope ? { session: { dmScope } } : {}),

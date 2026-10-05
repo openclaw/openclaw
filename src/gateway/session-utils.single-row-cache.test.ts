@@ -46,7 +46,7 @@ async function withSingleRowCacheStore(
   await withStateDirEnv("openclaw-single-row-", async () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: MAIN_AGENT_ID, default: true, workspace: "/tmp/openclaw-single-row" }],
+        entries: { [MAIN_AGENT_ID]: { workspace: "/tmp/openclaw-single-row" } },
         defaults: { model: { primary: TEST_MODEL } },
       },
     };
@@ -134,7 +134,7 @@ describe("single gateway session row child projections", () => {
         session: { scope: "global" },
         agents: {
           entries: {
-            main: { default: true, model: { primary: "openai/gpt-5.4" } },
+            main: { model: { primary: "openai/gpt-5.4" } },
             research: { model: { primary: "openai/gpt-5.5" } },
           },
         },

@@ -1,3 +1,4 @@
+import type { TranscriptRedactionSnapshot } from "../../agents/transcript-redact-text.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
@@ -8,13 +9,14 @@ import type {
   ReadSessionMessagesAroundIdResult,
   ReadSessionMessagesResult,
   SessionTranscriptReader,
-} from "../../gateway/session-transcript-read-kernel.js";
+} from "../../gateway/session-transcript-read.types.js";
 import type {
   SessionTranscriptSummaryQuery,
   SessionTranscriptSummaryResult,
 } from "../../gateway/session-transcript-summary.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import type { ConversationRecord } from "./conversation-registry.types.js";
+import type { LegacyCompactionMetrics } from "./legacy-compaction-history.js";
 import type {
   SessionTranscriptDisplayDeltaResult,
   SessionTranscriptMessageByIdOptions,
@@ -44,18 +46,16 @@ export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = un
   nextOffset?: number;
   hasMore?: boolean;
   totalMessages?: number;
-  completeSnapshot?: true;
 };
 
 export type ChatHistoryPage = {
-  encodedResponse?: ChatHistoryResponsePage<Uint8Array>;
+  encodedResponse?: ChatHistoryResponsePage<Uint8Array<ArrayBuffer>>;
   windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
   messages: unknown[];
   activity?: AgentHistoryActivity[];
   responseOffset?: number;
-  completeCliImport?: true;
   // Absent only for anchored (messageId) reads: the anchor may resolve a
   // reset-archive transcript that numeric offset cursors cannot address, so
   // anchored responses expose no paging metadata.
@@ -63,12 +63,13 @@ export type ChatHistoryPage = {
     offset: number;
     totalMessages: number;
     rawPageMessages: number;
-    exhausted?: true;
+    messageSequences?: Record<string, number>;
   };
 };
 
 export type ChatHistoryPageParams = {
   encodeResponse?: boolean;
+  compactionMetrics?: LegacyCompactionMetrics;
   entry: InternalSessionEntry | undefined;
   provider: string | undefined;
   sessionId: string | undefined;
@@ -81,6 +82,8 @@ export type ChatHistoryPageParams = {
   offset: number | undefined;
   messageId: string | undefined;
   ignoreCliSessionImports?: boolean;
+  cliHistoryHomeDir?: string;
+  cliHistoryRedaction?: TranscriptRedactionSnapshot;
 };
 
 type SessionHistoryTranscriptMeta = {
@@ -145,6 +148,17 @@ export type SessionConversationBinding = Pick<
   ConversationRecord,
   "channel" | "accountId" | "target" | "threadId" | "nativeChannelId"
 >;
+
+export type ChatHistoryMessageParams = ChatHistoryPageParams & {
+  sessionId: string;
+  messageId: string;
+};
+export type ChatHistoryDisplayRequest =
+  | { kind: "rpc"; params: ChatHistoryPageParams }
+  | { kind: "rpc-message"; params: ChatHistoryMessageParams };
+export type ChatHistoryDisplayResult =
+  | { kind: "rpc"; page: ChatHistoryPage }
+  | { kind: "rpc-message"; result: ReadSessionMessageByIdResult };
 
 export type SessionHistoryWorkerRequest =
   | {
@@ -211,6 +225,7 @@ export type SessionHistoryWorkerRequest =
       params: { target: SessionTranscriptReadScope };
     }
   | { kind: "rpc"; params: ChatHistoryPageParams & { sessionId: string; storePath: string } }
+  | { kind: "rpc-message"; params: ChatHistoryMessageParams & { storePath: string } }
   | { kind: "message-lookup"; params: { target: SessionTranscriptReadScope; messageId: string } }
   | {
       kind: "message-by-id";
@@ -248,7 +263,7 @@ export type SessionHistoryWorkerResult =
   | { kind: "around-id"; result: ReadSessionMessagesAroundIdResult }
   | { kind: "source-messages"; result: ReadSessionMessagesResult }
   | { kind: "transcript-binding"; binding: SessionHistoryTranscriptBinding | undefined }
-  | { kind: "rpc"; page: ChatHistoryPage }
+  | ChatHistoryDisplayResult
   | { kind: "message-lookup"; messages: unknown[] }
   | { kind: "message-by-id"; result: ReadSessionMessageByIdResult }
   | { kind: "message-count"; count: number }

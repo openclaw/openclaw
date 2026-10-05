@@ -763,6 +763,14 @@
   line-height: inherit;
 }
 
+.chat-yield-marker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
 .chat-notice__body,
 .chat-notice__collapse {
   width: min(560px, 100%);

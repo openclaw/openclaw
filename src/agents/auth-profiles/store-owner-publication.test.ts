@@ -3,10 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { prepareSecretsRuntimeFastPathSnapshot } from "../../secrets/runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -661,8 +658,8 @@ describe("auth publication owner receipts", () => {
     const laterCwd = path.join(tempDirs.make("openclaw-auth-scope-later-cwd-"), "nested");
     fs.mkdirSync(laterCwd);
     const result = await runNodeScript(
-      [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(authProfileScopeCwdEntrypoint)),
+      (workerArgv) => [
+        ...workerArgv(resolveRuntimeWorkerUrl(authProfileScopeCwdEntrypoint)),
         stateDir,
         agentDir,
         laterCwd,

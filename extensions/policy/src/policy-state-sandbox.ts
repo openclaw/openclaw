@@ -25,7 +25,6 @@ export function scanPolicySandboxPosture(
     sandbox: defaultSandbox,
     inheritedSandbox: {},
     sourceBase: "oc://openclaw.config/agents/defaults/sandbox",
-    inheritedSourceBase: "oc://openclaw.config/agents/defaults/sandbox",
   });
 
   collectPolicyConfiguredAgents(agents).forEach((configured) => {
@@ -42,7 +41,6 @@ export function scanPolicySandboxPosture(
       inheritedSandbox: defaultSandbox,
       sharedSandboxScope: sandboxScopeIsShared(sandbox, defaultSandbox),
       sourceBase: `${configured.sourceBase}/sandbox`,
-      inheritedSourceBase: "oc://openclaw.config/agents/defaults/sandbox",
     });
   });
 
@@ -58,7 +56,6 @@ type SandboxPostureParams = {
   readonly inheritedSandbox: Record<string, unknown>;
   readonly sharedSandboxScope?: boolean;
   readonly sourceBase: string;
-  readonly inheritedSourceBase: string;
 };
 
 function pushSandboxPostureEvidence(
@@ -143,7 +140,7 @@ function pushSandboxBindPosture(
     entries.push({
       id: `${params.id}-${bindParams.surface}-bind-${index}`,
       kind: "containerMount",
-      source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/${bindParams.sourceSuffix}/#${
+      source: `${inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/${bindParams.sourceSuffix}/#${
         inherited ? index : index - inheritedBinds.length
       }`,
       scope: params.scope,
@@ -172,7 +169,7 @@ function pushSandboxDockerProfilePosture(
   entries.push({
     id: `${params.id}-docker-${profile}-profile`,
     kind: "containerSecurityProfile",
-    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/docker/${key}`,
+    source: `${inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/docker/${key}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     profile,
@@ -196,7 +193,7 @@ function pushSandboxBrowserPosture(
       entries.push({
         id: `${params.id}-browser-cdp-source-range`,
         kind: "browserCdpSourceRange",
-        source: `${disabledInherited ? params.inheritedSourceBase : params.sourceBase}/browser/enabled`,
+        source: `${disabledInherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/browser/enabled`,
         scope: params.scope,
         ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
         value: false,
@@ -213,7 +210,7 @@ function pushSandboxBrowserPosture(
   entries.push({
     id: `${params.id}-browser-cdp-source-range`,
     kind: "browserCdpSourceRange",
-    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/browser/cdpSourceRange`,
+    source: `${inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/browser/cdpSourceRange`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     ...(value === undefined ? {} : { value }),
@@ -276,7 +273,7 @@ function pushSandboxPostureValue(
   entries.push({
     id: `${params.id}-${entry.suffix.replaceAll("/", "-")}`,
     kind: entry.kind,
-    source: `${entry.inherited ? params.inheritedSourceBase : params.sourceBase}/${entry.suffix}`,
+    source: `${entry.inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/${entry.suffix}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     ...(entry.value === undefined ? {} : { value: entry.value }),

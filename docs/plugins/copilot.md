@@ -305,7 +305,7 @@ Permission enforcement for bridged OpenClaw tools happens **inside the tool
 wrapper**, not via the SDK's `onPermissionRequest` callback. The same
 `wrapToolWithBeforeToolCallHook` that PI uses
 (`src/agents/agent-tools.before-tool-call.ts`) is applied by
-`createOpenClawCodingTools` to every coding tool: loop detection, trusted
+`createOpenClawCodingToolsAsync` to every coding tool: loop detection, trusted
 plugin policies, before-tool-call hooks, and two-phase plugin approvals via
 the gateway (`plugin.approval.request`) all run through the exact same code
 path as native PI attempts.
@@ -340,7 +340,7 @@ and the device allowed to review approvals. This keeps those facts intact
 when selecting a backend or recovering a turn. The Copilot bridge in
 `extensions/copilot/src/tool-bridge.ts` adds its own session and workspace
 mapping, authentication, model context, and execution callbacks before
-calling `createOpenClawCodingTools`.
+awaiting `hostCapabilities.createToolSurfaceAsync`.
 `runAttempt` resolves sandbox context through the shared
 `resolveSandboxContext` seam, passes the SDK an effective working directory,
 and forwards `sandbox` plus the subagent-spawn workspace into the tool

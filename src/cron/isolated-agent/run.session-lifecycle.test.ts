@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it, vi, assert } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolvePreparedRunAdmission } from "../../agents/admitted-run-context.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { createAttemptNestedToolActivityState } from "../../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import { prepareEmbeddedAttemptStream } from "../../agents/embedded-agent-runner/run/attempt-stream-prepare.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { clearActiveEmbeddedRun } from "../../agents/embedded-agent-runner/runs.js";
@@ -260,17 +261,20 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         };
       });
       const patchWithAbort: typeof accessor.patchSessionEntryCore = (scope, update, options) => {
-        const assertCommitAllowed = options?.assertCommitAllowed;
+        const assertCommitAllowed = options?.workerGuard?.assertCurrent;
         return accessor.patchSessionEntryCore(scope, update, {
           ...options,
           ...(assertCommitAllowed
             ? {
-                assertCommitAllowed: () => {
-                  const isBase = scope.sessionKey === target.sessionKey;
-                  if ((failurePoint !== "continuation") === isBase) {
-                    interrupt();
-                  }
-                  assertCommitAllowed();
+                workerGuard: {
+                  ...options?.workerGuard,
+                  assertCurrent: () => {
+                    const isBase = scope.sessionKey === target.sessionKey;
+                    if ((failurePoint !== "continuation") === isBase) {
+                      interrupt();
+                    }
+                    assertCommitAllowed();
+                  },
                 },
               }
             : {}),
@@ -423,7 +427,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     const run = runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey));
     await runnerStarted.promise;
     let mutationCommitted = false;
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("patch", {
       ...admissionScope,
       prepare: async () => {
         await interruptSessionWorkAdmissions(admissionScope);
@@ -806,6 +810,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             coreBuiltinToolNames: new Set(),
             replaySafeToolNames: new Set(),
             codeModeExecToolNames: new Set(),
+            sourceReplyCapableToolNames: new Set(),
             sideEffectToolOwners: new Map(),
             trustedLocalMediaToolNames: new Set(),
           },
@@ -816,7 +821,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             sessionKey,
             runId: runParams.runId,
           }),
-          nestedToolActivities: [],
+          nestedToolActivityState: createAttemptNestedToolActivityState(),
           isReplaySafeTool: () => false,
           runAbortController: new AbortController(),
           abortRun: vi.fn(),

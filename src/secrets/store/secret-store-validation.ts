@@ -8,13 +8,9 @@ import {
   SECRET_STORE_VALUE_MAX_BYTES,
   SecretStoreValidationError,
 } from "./secret-store-validation-error.js";
+import type { SecretStoreKind } from "./secret-store.types.js";
 
-export type SecretStoreScope = { kind: "team" };
-export type SecretStoreKind = "secret" | "env";
-
-export function normalizeScope(_scope: SecretStoreScope): { scopeKind: "team"; scopeId: "" } {
-  return { scopeKind: "team", scopeId: "" };
-}
+export type { SecretStoreKind, SecretStoreScope } from "./secret-store.types.js";
 
 export function assertSecretStoreEnvName(name: string): void {
   if (!ENV_SECRET_REF_ID_RE.test(name)) {

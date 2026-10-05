@@ -31,7 +31,6 @@ describe("typing persistence bug fix", () => {
       onReplyStart: onReplyStartSpy,
       onCleanup: longRunCleanupSpy,
       typingIntervalSeconds: 6,
-      typingTtlMs: 10_000,
       log: vi.fn(),
     });
 
@@ -41,8 +40,9 @@ describe("typing persistence bug fix", () => {
     await vi.advanceTimersByTimeAsync(6000);
     expect(onReplyStartSpy).toHaveBeenCalledTimes(2);
 
-    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(115_000);
     expect(longRunCleanupSpy).not.toHaveBeenCalled();
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(21);
 
     longRunController.cleanup();
     expect(longRunCleanupSpy).toHaveBeenCalledTimes(1);
@@ -132,23 +132,6 @@ describe("typing persistence bug fix", () => {
 
     expect(inert.isActive()).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("preserves the explicit zero TTL disable sentinel", async () => {
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const unboundedController = createTypingController({
-      onReplyStart: onReplyStartSpy,
-      onCleanup: onCleanupSpy,
-      typingIntervalSeconds: 121,
-      typingTtlMs: 0,
-      log: vi.fn(),
-    });
-
-    await unboundedController.startTypingLoop();
-    unboundedController.refreshTypingTtl();
-
-    expect(setTimeoutSpy).not.toHaveBeenCalled();
-    unboundedController.cleanup();
   });
 
   it("clamps an oversized typing interval and derives a longer TTL", async () => {

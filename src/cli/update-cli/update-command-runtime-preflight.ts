@@ -15,7 +15,7 @@ import {
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { capturePackageActivationRuntime } from "../../infra/package-update-activation-paths.js";
-import type { PackageActivationRuntime } from "../../infra/package-update-swap-contract.js";
+import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import {

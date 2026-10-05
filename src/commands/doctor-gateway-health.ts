@@ -489,6 +489,17 @@ export async function probeGatewayMemoryStatus(params: {
       timeoutMs,
       config: params.cfg,
     });
+    if (payload.health) {
+      return {
+        checked: true,
+        ready: payload.health.status === "ready",
+        error:
+          payload.health.status === "ready"
+            ? undefined
+            : (payload.health.message ?? `memory provider health is ${payload.health.status}`),
+        skipped: false,
+      };
+    }
     // An intentional shallow skip must not look like an embedding-readiness failure.
     const gatewayChecked = payload.embedding.checked !== false;
     return {

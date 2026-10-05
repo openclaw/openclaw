@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexAppPolicyContextEntry } from "./plugin-thread-config.js";
+import type { CodexAppPolicyContextEntry } from "./session-binding-record-codec.js";
 
 export type CodexAppToolApprovalMode = "auto" | "prompt" | "writes" | "approve";
 export type CodexScheduledAppTool = {

@@ -443,9 +443,8 @@ describe("TTS runtime per-agent config", () => {
         },
       },
       agents: {
-        list: [
-          {
-            id: "reader",
+        entries: {
+          reader: {
             tts: {
               persona: "jarvis",
               providers: {
@@ -455,7 +454,7 @@ describe("TTS runtime per-agent config", () => {
               },
             },
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
 

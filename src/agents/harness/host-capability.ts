@@ -28,7 +28,10 @@ import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
-import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
+import {
+  createOpenClawCodingToolsInternal,
+  createOpenClawCodingToolsInternalAsync,
+} from "../agent-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
@@ -407,6 +410,53 @@ export function createAgentHarnessHostCapabilities(params: {
     nativeModelPolicySupported
       ? (model) => bindHarnessModelExecution(attempt.admittedRunContext, model, assertActive)
       : undefined;
+  const toolConstructionInputs = (
+    options: Parameters<NonNullable<AgentHarnessHostCapabilities["createToolSurfaceAsync"]>>[0],
+  ) => {
+    assertActive();
+    const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
+    return {
+      options: {
+        ...effectiveOptions,
+        // Availability belongs to this prepared host, not mutable plugin inputs.
+        githubPublicationAvailable,
+        runtimePluginToolGrant,
+        skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
+        installedSkills: getInstalledSkills(
+          effectiveOptions.sandbox,
+          effectiveOptions.sessionPermissionPolicy?.root,
+        ),
+        skillUsagePaths: options?.skillUsagePaths ?? skillUsagePaths,
+        operationalRunInstance,
+      },
+      // Sandboxes use their materialized snapshot paths, never host library pins.
+      skillReadResources:
+        !requiredWorkspace &&
+        !hostSandboxEnabled &&
+        !options?.sandbox?.enabled &&
+        options?.includeCoreTools !== false &&
+        options?.toolConstructionPlan?.includeBaseCodingTools !== false
+          ? resolveSkillResourceCandidates(skillsSnapshot)
+          : undefined,
+    };
+  };
+  const bindCreatedTools = (
+    sourceTools: AnyAgentTool[],
+    bindingOptions?: Readonly<{ cwd?: string }>,
+  ) => {
+    // Only host-created core tools can seed TTS provenance. Plugin-bound tools
+    // must not replay a retained core result into this attempt's authority set.
+    const tools = bindTools(sourceTools, bindingOptions, observeCoreTtsToolResult);
+    for (const tool of tools) {
+      if (tool.name === "exec" || tool.name === "process") {
+        scheduledToolSources.set(
+          tool,
+          Object.freeze({ targetTool: tool.name, execute: tool.execute }),
+        );
+      }
+    }
+    return tools;
+  };
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
@@ -450,50 +500,37 @@ export function createAgentHarnessHostCapabilities(params: {
     },
     bindToolSurface,
     createToolSurface: (options, bindingOptions) => {
-      assertActive();
-      const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
-      // Only host-created core tools can seed TTS provenance. Plugin-bound tools
-      // must not replay a retained core result into this attempt's authority set.
-      const tools = bindTools(
+      const inputs = toolConstructionInputs(options);
+      return bindCreatedTools(
         withAgentQuestionAnswerAuthority(resolveAgentQuestionAnswerAuthority(capabilities), () =>
           withInstallationTarget(installationTarget, () =>
-            createOpenClawCodingToolsInternal(
-              {
-                ...effectiveOptions,
-                // Availability belongs to this prepared host, not mutable plugin inputs.
-                githubPublicationAvailable,
-                runtimePluginToolGrant,
-                skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
-                installedSkills: getInstalledSkills(
-                  effectiveOptions.sandbox,
-                  effectiveOptions.sessionPermissionPolicy?.root,
-                ),
-                skillUsagePaths: options?.skillUsagePaths ?? skillUsagePaths,
-                operationalRunInstance,
-              },
-              // Sandboxes use their materialized snapshot paths, never host library pins.
-              !requiredWorkspace &&
-                !hostSandboxEnabled &&
-                !options?.sandbox?.enabled &&
-                options?.includeCoreTools !== false &&
-                options?.toolConstructionPlan?.includeBaseCodingTools !== false
-                ? resolveSkillResourceCandidates(skillsSnapshot)
-                : undefined,
-            ),
+            createOpenClawCodingToolsInternal(inputs.options, inputs.skillReadResources),
           ),
         ),
         bindingOptions,
-        observeCoreTtsToolResult,
       );
-      for (const tool of tools) {
-        if (tool.name === "exec" || tool.name === "process") {
-          scheduledToolSources.set(
-            tool,
-            Object.freeze({ targetTool: tool.name, execute: tool.execute }),
-          );
-        }
-      }
-      return tools;
+    },
+    createToolSurfaceAsync: async (options, bindingOptions) => {
+      const inputs = toolConstructionInputs(options);
+      const sourceTools = await withAgentQuestionAnswerAuthority(
+        resolveAgentQuestionAnswerAuthority(capabilities),
+        () =>
+          withInstallationTarget(installationTarget, () =>
+            createOpenClawCodingToolsInternalAsync(
+              inputs.options,
+              inputs.skillReadResources,
+              undefined,
+              undefined,
+              {
+                assertCurrent: assertActive,
+                signal: attemptSignal
+                  ? AbortSignal.any([attemptSignal, capabilityAbortController.signal])
+                  : capabilityAbortController.signal,
+              },
+            ),
+          ),
+      );
+      return bindCreatedTools(sourceTools, bindingOptions);
     },
     prepareMutableFileApproval: async (request) => {
       assertActive();

@@ -274,7 +274,7 @@ final class GatewayProcessManager {
         runtimeForUpdate: BundledRuntime? = nil,
         runtimeEnvironment: [String: String]? = nil,
         nodeMigration: ManagedNodeGatewayMigration.Candidate? = nil,
-        serviceForRestoration: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
+        serviceForRestoration: ServiceRestoration? = nil,
         expectedServiceAuthority: GatewayLaunchAgentManager.ServiceAuthority? = nil,
         mutationCheck: (@MainActor @Sendable () async throws -> Void)? = nil) async -> LaunchAgentEnableResult
     {
@@ -362,7 +362,8 @@ final class GatewayProcessManager {
         if let candidate = request.nodeMigration {
             return await self.performManagedNodeMigration(candidate, generation: request.generation)
         }
-        if let cli = request.serviceForRestoration {
+        if let restoration = request.serviceForRestoration {
+            let cli = restoration.retained
             do { try await request.mutationCheck?() } catch { return .failed(error.localizedDescription) }
             guard self.isCurrentGatewayStart(request.generation), let bun = cli.prefix.first else { return .skipped }
             let runtime = BundledRuntime(root: URL(fileURLWithPath: bun)
@@ -373,7 +374,8 @@ final class GatewayProcessManager {
                     allowUnconfigured: request.allowUnconfigured,
                     runtime: runtime,
                     launchAgentExists: false),
-                installedCLI: cli,
+                runtime: restoration.installer,
+                restoring: cli,
                 expectedServiceAuthority: request.expectedServiceAuthority,
                 checkCurrent: request.mutationCheck)
             {
@@ -638,7 +640,8 @@ final class GatewayProcessManager {
         self.launchAgentEnablePendingRequest = nil
         let enableTask = self.launchAgentEnableTask
         self.status = .stopped
-        self.logger.info("gateway stop requested")
+        self.logger.info(
+            "gateway stop requested (profile \(AppProfile.current.name ?? "default"), \(hosting.rawValue) hosting)")
         let priorDisableTask = self.launchAgentDisableTask
         let disableTask = Task { @MainActor in
             _ = await priorDisableTask?.value

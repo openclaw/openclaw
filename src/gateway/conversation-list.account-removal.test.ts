@@ -89,7 +89,7 @@ function createConversationStore(channels: OpenClawConfig["channels"]) {
   const storePath = path.join(stateDir, "main.sqlite");
   openOpenClawAgentDatabase({ agentId: "main", path: storePath });
   const config: OpenClawConfig = {
-    agents: { entries: { main: { default: true } } },
+    agents: { entries: { main: {} } },
     channels,
     session: { store: storePath },
   };

@@ -224,17 +224,14 @@ export type SDKError = {
 };
 
 /** Parameters for direct tool invocation through the SDK. */
-type SDKToolInvokeParams = Omit<GatewayToolsInvokeParamsType, "name" | "conversationReadOrigin">;
+export type ToolInvokeParams = Omit<
+  GatewayToolsInvokeParamsType,
+  "name" | "conversationReadOrigin"
+>;
 
-/** Compatibility name retained for the SDK tool invocation projection. */
-export type ToolInvokeParams = SDKToolInvokeParams;
-
-type SDKToolInvokeResult = Omit<GatewayToolsInvokeResultType, "error"> & {
+export type ToolInvokeResult = Omit<GatewayToolsInvokeResultType, "error"> & {
   error?: SDKError;
 };
-
-/** Compatibility name retained for the SDK tool result projection. */
-export type ToolInvokeResult = SDKToolInvokeResult;
 
 /** Normalized result returned by Run.wait. */
 export type RunResult = {
@@ -336,15 +333,12 @@ type SDKSessionCreateKeys =
   | "attachments";
 
 /** SDK session-create projection with transport-neutral attachment inputs. */
-type SDKSessionCreateParams = Omit<
+export type SessionCreateParams = Omit<
   Pick<GatewaySessionsCreateParamsType, SDKSessionCreateKeys>,
   "attachments"
 > & {
   attachments?: unknown[];
 };
-
-/** Compatibility name retained for the SDK session-create projection. */
-export type SessionCreateParams = SDKSessionCreateParams;
 
 type SDKSessionSendKeys =
   | "key"
@@ -355,15 +349,12 @@ type SDKSessionSendKeys =
   | "idempotencyKey";
 
 /** SDK session-send projection with transport-neutral attachment inputs. */
-type SDKSessionSendParams = Omit<
+export type SessionSendParams = Omit<
   Pick<GatewaySessionsSendParamsType, SDKSessionSendKeys>,
   "attachments"
 > & {
   attachments?: unknown[];
 };
-
-/** Compatibility name retained for the SDK session-send projection. */
-export type SessionSendParams = SDKSessionSendParams;
 
 export type SessionTarget = {
   key: string;

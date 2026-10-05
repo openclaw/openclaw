@@ -1,11 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  isFallbackCandidateSkipped,
-  markFallbackCandidateSkipped,
-} from "../fallback-skip-cache.js";
+import { markFallbackCandidateSkipped } from "../fallback-skip-cache.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "../model-ref-shared.js";
-import { modelKey } from "../model-ref-shared.js";
 import { buildModelAliasIndex, resolveModelRefFromString } from "../model-selection-resolve.js";
 import { hasCommittedOutboundDeliveryEvidence } from "./delivery-evidence.js";
 import { hasVisibleAgentPayload } from "./message-visibility.js";
@@ -82,10 +78,6 @@ export function isEmbeddedModelSelectionStrict(selection: {
   return selection.fallbacksOverride !== undefined && selection.fallbacksOverride.length === 0;
 }
 
-export function isSameEmbeddedCyberFailoverTarget(current: ModelRef, target: ModelRef): boolean {
-  return modelKey(current.provider, current.model) === modelKey(target.provider, target.model);
-}
-
 export function isEmbeddedCyberFailoverTargetUsable(result: EmbeddedAgentRunResult): boolean {
   const hasErrorPayload = (result.payloads ?? []).some((payload) => payload.isError === true);
   return (
@@ -105,19 +97,6 @@ export function isEmbeddedCyberFailoverTargetUsable(result: EmbeddedAgentRunResu
 // Keep that retry's evidence instead of replacing it with the original refusal.
 export function didEmbeddedCyberFailoverTargetCommitWork(result: EmbeddedAgentRunResult): boolean {
   return result.meta.replayInvalid === true || hasCommittedOutboundDeliveryEvidence(result);
-}
-
-export function isEmbeddedCyberFailoverTargetSkipped(params: {
-  sessionId: string;
-  target: ModelRef;
-  authScope?: string;
-}): boolean {
-  return isFallbackCandidateSkipped({
-    sessionId: params.sessionId,
-    provider: params.target.provider,
-    model: params.target.model,
-    authScope: params.authScope,
-  });
 }
 
 export function recordEmbeddedCyberFailoverTargetUnavailable(params: {

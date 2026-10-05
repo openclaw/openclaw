@@ -142,17 +142,11 @@ function createOutboundContext(params: {
 }) {
   const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
   const assertDirectAdapterHandoff = params.assertDirectAdapterHandoff;
-  const fetcher = fetch;
   const client = createClickClackClient({
     baseUrl: account.apiEndpoint,
     token: account.token,
     correlationId: params.correlationId,
-    fetch: assertDirectAdapterHandoff
-      ? (input, init) => {
-          assertDirectAdapterHandoff();
-          return fetcher(input, init);
-        }
-      : undefined,
+    beforeRequest: assertDirectAdapterHandoff,
   });
   return { account, client };
 }

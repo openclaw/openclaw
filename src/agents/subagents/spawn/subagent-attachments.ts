@@ -80,16 +80,6 @@ type PreparedSubagentAttachment = {
   bytes: number;
 };
 
-type SubagentAttachmentRequest =
-  | {
-      status: "ok";
-      attachments: SubagentInlineAttachment[];
-      limits: AttachmentLimits;
-    }
-  | { status: "none" }
-  | { status: "forbidden"; error: string }
-  | { status: "error"; error: string };
-
 function resolveAttachmentLimits(config: OpenClawConfig): AttachmentLimits {
   const attachmentsCfg = config.tools?.sessions_spawn?.attachments;
   return {
@@ -104,28 +94,28 @@ function resolveAttachmentLimits(config: OpenClawConfig): AttachmentLimits {
 function resolveSubagentAttachmentRequest(params: {
   config: OpenClawConfig;
   attachments?: SubagentInlineAttachment[];
-}): SubagentAttachmentRequest {
+}) {
   const requestedAttachments = Array.isArray(params.attachments) ? params.attachments : [];
   if (requestedAttachments.length === 0) {
-    return { status: "none" };
+    return null;
   }
 
   const limits = resolveAttachmentLimits(params.config);
   if (!limits.enabled) {
     return {
-      status: "forbidden",
+      status: "forbidden" as const,
       error:
         "attachments are disabled for sessions_spawn (enable tools.sessions_spawn.attachments.enabled)",
     };
   }
   if (requestedAttachments.length > limits.maxFiles) {
     return {
-      status: "error",
+      status: "error" as const,
       error: `attachments_file_count_exceeded (maxFiles=${limits.maxFiles})`,
     };
   }
 
-  return { status: "ok", attachments: requestedAttachments, limits };
+  return { status: "ok" as const, attachments: requestedAttachments, limits };
 }
 
 function sanitizeMountPathHint(value?: string): string | undefined {
@@ -182,29 +172,6 @@ function validateAttachmentName(name: string, opts?: { promptSafe?: boolean }): 
   }
 }
 
-function decodeAttachmentContent(params: {
-  name: string;
-  content: string;
-  encoding: "utf8" | "base64";
-  limits: AttachmentLimits;
-}): Buffer {
-  if (params.encoding === "base64") {
-    const strictBuf = decodeStrictBase64(params.content, params.limits.maxFileBytes);
-    if (strictBuf === null) {
-      throw new Error("attachments_invalid_base64_or_too_large");
-    }
-    return strictBuf;
-  }
-
-  const estimatedBytes = Buffer.byteLength(params.content, "utf8");
-  if (estimatedBytes > params.limits.maxFileBytes) {
-    throw new Error(
-      `attachments_file_bytes_exceeded (name=${params.name} bytes=${estimatedBytes} maxFileBytes=${params.limits.maxFileBytes})`,
-    );
-  }
-  return Buffer.from(params.content, "utf8");
-}
-
 function prepareSubagentAttachments(params: {
   attachments: SubagentInlineAttachment[];
   limits: AttachmentLimits;
@@ -234,12 +201,22 @@ function prepareSubagentAttachments(params: {
       );
     }
 
-    const buf = decodeAttachmentContent({
-      name,
-      content,
-      encoding,
-      limits: params.limits,
-    });
+    let buf: Buffer;
+    if (encoding === "base64") {
+      const decoded = decodeStrictBase64(content, params.limits.maxFileBytes);
+      if (decoded === null) {
+        throw new Error("attachments_invalid_base64_or_too_large");
+      }
+      buf = decoded;
+    } else {
+      const estimatedBytes = Buffer.byteLength(content, "utf8");
+      if (estimatedBytes > params.limits.maxFileBytes) {
+        throw new Error(
+          `attachments_file_bytes_exceeded (name=${name} bytes=${estimatedBytes} maxFileBytes=${params.limits.maxFileBytes})`,
+        );
+      }
+      buf = Buffer.from(content, "utf8");
+    }
     const bytes = buf.byteLength;
 
     totalBytes += bytes;
@@ -264,7 +241,7 @@ export function resolveAcpSessionsSpawnImageAttachments(params: {
   | { status: "error"; error: string }
   | null {
   const request = resolveSubagentAttachmentRequest(params);
-  if (request.status === "none") {
+  if (!request) {
     return null;
   }
   if (request.status !== "ok") {
@@ -302,7 +279,7 @@ export async function materializeSubagentAttachments(params: {
   mountPathHint?: string;
 }): Promise<MaterializeSubagentAttachmentsResult | null> {
   const request = resolveSubagentAttachmentRequest(params);
-  if (request.status === "none") {
+  if (!request) {
     return null;
   }
   if (request.status !== "ok") {

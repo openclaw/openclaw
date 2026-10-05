@@ -19,9 +19,78 @@ const fixturePath = path.join(evidenceRoot, "fixture.json");
 const requestPath = path.join(evidenceRoot, "registry-requests.jsonl");
 const migrationId = "deferred-plugin-migration:codex";
 const bindingNamespace = "app-server-thread-bindings";
+const setupFixtures = [
+  { id: "public-setup-complete", detector: "setup" },
+  { id: "public-setup-ambiguous", detector: "full" },
+];
 
 function digest(file) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+function installSetupFixture({ id, detector }) {
+  const root = path.join(runtimeRoot, "setup-plugins", id);
+  const setupWitness = path.join(evidenceRoot, `${id}-setup-loaded`);
+  const fullDetectorWitness = path.join(evidenceRoot, `${id}-full-detector-called`);
+  fs.mkdirSync(root, { recursive: true });
+  writeJson(path.join(root, "package.json"), {
+    name: `@fixture/${id}`,
+    version: "1.0.0",
+    type: "module",
+    openclaw: { extensions: ["./index.js"], setupEntry: "./setup-entry.js" },
+  });
+  writeJson(path.join(root, "openclaw.plugin.json"), {
+    id,
+    channels: [id],
+    channelConfigs: {
+      [id]: {
+        schema: { type: "object", properties: {}, additionalProperties: false },
+      },
+    },
+    configSchema: {
+      type: "object",
+      properties: { region: { type: "string" }, retained: { type: "string" } },
+      additionalProperties: false,
+    },
+  });
+  write(
+    path.join(root, "setup-entry.js"),
+    `import fs from "node:fs";\n` +
+      `import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";\n` +
+      `fs.writeFileSync(${JSON.stringify(setupWitness)}, "loaded\\n");\n` +
+      `export default defineSetupPluginEntry({ id: ${JSON.stringify(id)}${
+        detector === "setup" ? ", lifecycle: { detectLegacyStateMigrations: () => [] }" : ""
+      } });\n`,
+  );
+  write(
+    path.join(root, "index.js"),
+    `import fs from "node:fs";\n` +
+      `import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";\n` +
+      `const plugin = {\n` +
+      `  id: ${JSON.stringify(id)},\n` +
+      `  meta: { id: ${JSON.stringify(id)}, label: ${JSON.stringify(id)}, selectionLabel: ${JSON.stringify(id)}, docsPath: "/channels/${id}", blurb: "Upgrade survivor fixture." },\n` +
+      `  capabilities: { chatTypes: ["direct"] },\n` +
+      `  config: { listAccountIds: () => [], resolveAccount: () => ({ accountId: "default" }), isEnabled: () => false, isConfigured: () => false },\n` +
+      (detector === "full"
+        ? `  lifecycle: { detectLegacyStateMigrations: () => { fs.writeFileSync(${JSON.stringify(fullDetectorWitness)}, "called\\n"); return []; } },\n`
+        : "") +
+      `};\n` +
+      `export default definePluginEntry({ id: ${JSON.stringify(id)}, name: ${JSON.stringify(id)}, register(api) { api.registerChannel({ plugin }); } });\n`,
+  );
+  return { id, root, setupWitness, fullDetectorWitness };
+}
+
+function seedDeferredObligation(db, pluginId) {
+  const report = {
+    pluginId,
+    reason: "The configured plugin package is missing or has not converged.",
+    command: "openclaw update repair",
+    configPaths: [["plugins", "entries", pluginId, "config"]],
+  };
+  db.prepare(
+    `INSERT INTO migration_runs (id, started_at, finished_at, status, report_json)
+     VALUES (?, ?, NULL, 'pending', ?)`,
+  ).run(`deferred-plugin-migration:${pluginId}`, Date.now(), JSON.stringify(report));
 }
 
 function seed() {
@@ -77,11 +146,42 @@ function seed() {
     enabled: true,
     config: { codexDynamicToolsProfile: "openclaw-compat" },
   };
+  const installedSetupFixtures = setupFixtures.map(installSetupFixture);
+  config.plugins.allow = [
+    ...new Set([...config.plugins.allow, ...installedSetupFixtures.map(({ id }) => id)]),
+  ];
+  config.plugins.load ??= {};
+  config.plugins.load.paths = [
+    ...new Set([
+      ...(config.plugins.load.paths ?? []),
+      ...installedSetupFixtures.map(({ root }) => root),
+    ]),
+  ];
+  for (const { id } of installedSetupFixtures) {
+    config.plugins.entries[id] = {
+      enabled: true,
+      config: { region: "us-en", retained: `setting-${id}` },
+    };
+  }
   config.session = { ...config.session, store: storePattern };
   const logPath = path.join(runtimeRoot, "logs", "missing-plugin.jsonl");
   config.logging = { ...config.logging, file: logPath, level: "warn" };
   writeJson(configPath, config);
-  writeJson(fixturePath, { storePattern, logPath, specimens });
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  const db = new DatabaseSync(databasePath);
+  try {
+    for (const { id } of installedSetupFixtures) {
+      seedDeferredObligation(db, id);
+    }
+  } finally {
+    db.close();
+  }
+  writeJson(fixturePath, {
+    storePattern,
+    logPath,
+    specimens,
+    setupFixtures: installedSetupFixtures,
+  });
 }
 
 function withDatabase(read) {
@@ -142,6 +242,74 @@ function pending(stage) {
       path.join(evidenceRoot, "pending-doctor.log"),
     );
   }
+}
+
+function assertSetupMigrationOutcomes() {
+  const fixture = readJson(fixturePath);
+  const config = readJson(configPath);
+  const receipts = withDatabase((db) =>
+    Object.fromEntries(
+      fixture.setupFixtures.map(({ id }) => [
+        id,
+        db
+          .prepare("SELECT status, report_json FROM migration_runs WHERE id = ?")
+          .get(`deferred-plugin-migration:${id}`),
+      ]),
+    ),
+  );
+  const completed = fixture.setupFixtures.find(({ id }) => id === "public-setup-complete");
+  const ambiguous = fixture.setupFixtures.find(({ id }) => id === "public-setup-ambiguous");
+  assert(completed && ambiguous, "Setup fixture inventory changed");
+  assert.equal(receipts[completed.id]?.status, "completed", "Public detector did not clear debt");
+  assert.equal(receipts[ambiguous.id]?.status, "pending", "Ambiguous setup debt was cleared");
+  assert.equal(
+    JSON.parse(receipts[ambiguous.id].report_json).requiresDoctorInspection,
+    true,
+    "Ambiguous setup debt lost its inspection requirement",
+  );
+  for (const item of fixture.setupFixtures) {
+    assert(fs.existsSync(item.setupWitness), `Doctor did not load ${item.id}'s public setup entry`);
+    assert.deepEqual(config.plugins.entries[item.id].config, {
+      region: "us-en",
+      retained: `setting-${item.id}`,
+    });
+  }
+  assert.equal(
+    fs.existsSync(ambiguous.fullDetectorWitness),
+    false,
+    "Doctor used the full runtime entry to discharge setup-entry debt",
+  );
+  writeJson(path.join(evidenceRoot, "public-setup-migrations.json"), {
+    completed: completed.id,
+    pending: JSON.parse(receipts[ambiguous.id].report_json),
+    settings: Object.fromEntries(
+      fixture.setupFixtures.map(({ id }) => [id, config.plugins.entries[id].config]),
+    ),
+  });
+}
+
+function assertLegacyDriverRefusal([updateJson, updateErr, expectedVersion, packageRoot]) {
+  assert(
+    updateJson && updateErr && expectedVersion && packageRoot,
+    "Missing refusal evidence paths",
+  );
+  const evidence = `${fs.readFileSync(updateJson, "utf8")}\n${fs.readFileSync(updateErr, "utf8")}`;
+  assert(
+    evidence.includes("driver PID and host not recorded, liveness: not observed"),
+    "Published updater did not hit the expected identityless-driver refusal",
+  );
+  assert.equal(readJson(path.join(packageRoot, "package.json")).version, expectedVersion);
+  const latest = withDatabase((db) =>
+    db
+      .prepare(
+        "SELECT status, phase, finished_at_ms FROM update_runs ORDER BY created_at_ms DESC LIMIT 1",
+      )
+      .get(),
+  );
+  assert(latest, "Published updater did not record an update run");
+  assert.notEqual(latest.status, "running", "Published updater retained live authority after exit");
+  assert.equal(latest.phase, "finished", "Published updater did not terminalize its run");
+  assert.equal(typeof latest.finished_at_ms, "number");
 }
 
 function cli(name, argv) {
@@ -212,10 +380,45 @@ function resumed(expectedVersion) {
   const config = readJson(configPath);
   assert.equal(config.plugins.entries.codex.config.codexDynamicToolsProfile, undefined);
   const status = cli("update-status-resumed", ["update", "status", "--json"]);
+  const warnings = status.migrationWarnings;
+  assert(Array.isArray(warnings), "Pending ambiguous setup debt lost its update warning");
   assert.equal(
-    status.migrationWarnings,
-    undefined,
-    "Completed migrations still have active warnings",
+    warnings.filter((warning) =>
+      warning.startsWith('Plugin "public-setup-ambiguous" data/settings upgrade is unfinished:'),
+    ).length,
+    1,
+    "Ambiguous setup debt did not retain exactly one owner warning",
+  );
+  assert.equal(
+    warnings.some((warning) =>
+      warning.startsWith('Plugin "codex" data/settings upgrade is unfinished:'),
+    ),
+    false,
+    "Completed Codex migration retained its owner warning",
+  );
+  const retainedSourceWarnings = warnings.filter((warning) =>
+    warning.includes("[plugin_migration_source_retained]"),
+  );
+  assert.equal(
+    retainedSourceWarnings.length,
+    fixture.specimens.length,
+    "Ambiguous setup debt did not retain every protected migration source warning",
+  );
+  assert(
+    retainedSourceWarnings.every((warning) => warning.includes("public-setup-ambiguous")),
+    "Protected source warnings omitted the pending ambiguous owner",
+  );
+  for (const specimen of fixture.specimens) {
+    const storePath = Object.keys(specimen.files).find((file) => file.endsWith("/sessions.json"));
+    assert(
+      storePath && retainedSourceWarnings.some((warning) => warning.startsWith(`${storePath}:`)),
+      `Protected source warning omitted ${specimen.agentId}'s session store`,
+    );
+  }
+  assert.equal(
+    warnings.length,
+    retainedSourceWarnings.length + 1,
+    "Resumed update retained an unexpected migration warning",
   );
   assert.equal(
     status.migrationWarningsError,
@@ -296,6 +499,10 @@ if (command === "seed") {
   diagnostics();
 } else if (command === "resumed") {
   resumed(args[0]);
+} else if (command === "setup-outcomes") {
+  assertSetupMigrationOutcomes();
+} else if (command === "legacy-driver-refusal") {
+  assertLegacyDriverRefusal(args);
 } else if (command === "serve") {
   await serve(args);
 } else if (command === "available") {

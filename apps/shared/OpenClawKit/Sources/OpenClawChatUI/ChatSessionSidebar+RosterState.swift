@@ -11,24 +11,52 @@ extension ChatSessionSidebar {
         observedOrder: ChatSessionSidebarModel.ObservedOrder) -> [ChatSessionSidebarModel.Section]
     {
         let data = self.rosterData
+        let owner = self.viewModel.sidebarData
+        let adopted = self.showsAllAgents || self.catalogData.agentID != self.viewModel.selectedAgentID ? [] :
+            self.catalogData.adoptedKeys(archived: data?.query.status == .archived)
         let rows = data?.rowsIncludingLoadedDescendants ?? self.viewModel.sessions
-        return ChatSessionSidebarModel.sections(
+        var options = self.filterOptions
+        options.selectedAgentID = self.viewModel.selectedAgentID
+        if self.showsAllAgents { options.grouping = .none }
+        var sections = ChatSessionSidebarModel.sections(
             sessions: rows,
             currentSessionKey: self.viewModel.sessionKey,
             mainSessionKey: self.viewModel.selectedAgentMainSessionKey,
             activeAgentID: data?.query.agentID ?? (data == nil ? self.viewModel.selectedAgentID : nil),
             groups: self.groups,
-            excludesMainSession: self.viewModel.selectedAgent != nil,
+            excludesMainSession: self.showsAllAgents ? !self.viewModel.agentChoices.isEmpty :
+                self.viewModel.selectedAgent != nil,
             query: data == nil ? self.query : "",
             rankedSearch: data?.query.search.isEmpty == false,
             sessionRoutingContract: self.viewModel.agentCatalog?.sessionRoutingContract ??
                 self.viewModel.sessionRoutingContract,
-            viewOptions: self.filterOptions,
+            viewOptions: options,
             observedOrder: observedOrder,
             owners: data?.owners,
             selfOwnerID: self.ownership().selfID,
             sectionOrder: self.sectionOrder,
+            supplementalSessions: owner.map { self.sidebarChildren.supplementaryRows(owner: $0) } ?? [],
+            lineageRootKey: owner.flatMap { self.sidebarChildren.lineageRootKey(owner: $0) },
+            childMembership: owner.map { self.sidebarChildren.childrenKeysByParent(owner: $0) } ?? [:],
+            allowedAgentIDs: self.showsAllAgents ? Set(self.viewModel.agentChoices.map(\.id)) : nil,
             now: now)
+        if self.catalogData.isRendered {
+            sections = ChatSidebarCatalogPresentation.ordinarySections(
+                sections,
+                excluding: adopted,
+                rankedSearch: data?.query.search.isEmpty == false,
+                currentKey: self.viewModel.sessionKey,
+                currentIsKnown: self.viewModel.rosterEntry(
+                    key: self.viewModel.sessionKey, agentID: self.viewModel.selectedAgentID) != nil)
+        }
+        guard self.showsAgentRoster else { return sections }
+        // ui/src/components/sidebar-projection-memo.ts:155 partitions the sorted forest, without category ordering.
+        let roots = sections.filter { $0.id != "pinned" }.flatMap(\.nodes)
+        return sections.filter { $0.id == "pinned" } + self.viewModel.agentChoices.map { agent in
+            .init(id: "agent:\(agent.id):recent", title: agent.displayName, nodes: roots.filter {
+                self.sessionAgentID($0.session) == agent.id
+            })
+        }
     }
 }
 

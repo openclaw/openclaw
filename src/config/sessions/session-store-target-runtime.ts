@@ -1,14 +1,18 @@
+import { isDeepStrictEqual } from "node:util";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
   AgentDatabaseRegistryChangedError,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   type AgentDatabaseRegistryChange,
 } from "../../state/openclaw-agent-db-registry-listing.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
-import type {
-  SessionStoreTargetInventoryRequest,
-  SessionStoreTargetInventoryResult,
-  SessionStoreTargetReadRequest,
-  SessionStoreTargetReadResult,
+import {
+  createSessionStoreRegistryMutationFilter,
+  type SessionStoreTargetInventoryRequest,
+  type SessionStoreTargetInventoryResult,
+  type SessionStoreTargetReadRequest,
+  type SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
 import {
   withSessionHistoryWorkerReadCandidates,
@@ -23,19 +27,83 @@ type StoreTargetReadOwner = {
   revalidateTarget: () => Promise<void>;
 };
 
+function prepareSessionStoreRegistryRead(
+  request: Pick<SessionStoreTargetInventoryRequest, "env" | "candidates" | "registryDiscovery">,
+  selectedTarget?: () => PreparedStoreTarget | undefined,
+) {
+  const captured = request.candidates.map((candidate) => {
+    try {
+      const identity = readDatabasePathIdentitySync(candidate.path);
+      return { candidate, identity: identity.key, birthtime: identity.birthtime };
+    } catch {
+      // Retain path fencing; the worker owns an unreadable candidate's diagnostic.
+      return { candidate, identity: "unavailable" };
+    }
+  });
+  const preparedSources: Array<
+    Parameters<typeof createSessionStoreRegistryMutationFilter>[0]["preparedSources"][number]
+  > = [];
+  const unchangedBy = createSessionStoreRegistryMutationFilter({
+    captured,
+    preparedSources,
+    registryDiscovery: request.registryDiscovery,
+  });
+  return prepareOpenClawAgentDatabaseRegistrySnapshotRead(
+    { env: request.env },
+    (mutation, entries) => {
+      const target = selectedTarget?.();
+      if (target && mutation.kind === "upsert" && preparedSources.length === 0) {
+        for (const source of mutation.sources) {
+          const absent = captured.find(
+            ({ candidate, identity }) =>
+              !candidate.scope &&
+              identity.startsWith("path:") &&
+              candidate.physicalPath === target.database.path,
+          );
+          if (
+            !absent ||
+            source.agentId !== target.database.agentId ||
+            source.physicalPath !== target.database.path ||
+            source.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION
+          ) {
+            continue;
+          }
+          try {
+            const current = readDatabasePathIdentitySync(absent.candidate.path);
+            if (current.key === source.identity && current.birthtime !== undefined) {
+              // First registration preserves the selected absent owner; later changes keep its generation.
+              absent.identity = current.key;
+              absent.birthtime = current.birthtime;
+              preparedSources.push({
+                ...target.database,
+                identity: current.key,
+                birthtime: current.birthtime,
+              });
+              break;
+            }
+          } catch {
+            // An unreadable or replaced source remains a registry invalidation.
+          }
+        }
+      }
+      return unchangedBy(mutation, entries);
+    },
+  );
+}
+
 /** Capture registry admission now; retain its witness independently of discovery custody. */
 export function prepareSessionStoreTargetInventoryRead(
   request: Omit<SessionStoreTargetInventoryRequest, "registeredDatabases">,
   unchangedBy?: Parameters<typeof prepareOpenClawAgentDatabaseRegistrySnapshotRead>[1],
 ) {
   const { candidates, ...prepared } = request;
-  const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
-    { env: request.env },
-    unchangedBy,
-  );
+  const captureRegistry = () =>
+    prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: request.env }, unchangedBy);
+  let registry = captureRegistry();
   let registryStarted = false;
   const assertRegistryCurrent = () => {
-    // Scoped publications need their witness even when discovery needs no registry rows.
+    // Explicit publication scopes retain their witness before discovery; other
+    // inventories depend on registry currency only after requesting its rows.
     if (registryStarted || unchangedBy) {
       registry.assertCurrent();
     }
@@ -62,8 +130,18 @@ export function prepareSessionStoreTargetInventoryRead(
         assertCurrent();
         if (inventory.kind === "session-target-registry-required") {
           registryStarted = true;
-          const current = await registry.read();
+          let current;
+          try {
+            current = await registry.read();
+          } catch (error) {
+            if (!(error instanceof AgentDatabaseRegistryChangedError)) {
+              throw error;
+            }
+            registry = captureRegistry();
+            current = await registry.read();
+          }
           assertCurrent();
+          registry = unchangedBy ? registry : prepareSessionStoreRegistryRead(request);
           inventory = await discovery.readTargetInventory({
             ...prepared,
             registeredDatabases:
@@ -91,17 +169,15 @@ export async function withSessionStoreTarget<T>(
 ): Promise<T> {
   assertCallerCurrent?.();
   const { candidates, ...targetRequest } = request;
-  const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: targetRequest.env });
+  let selectedTarget: PreparedStoreTarget | undefined;
+  let registryRead = prepareSessionStoreRegistryRead(request, () => selectedTarget);
   return withSessionHistoryWorkerReadCandidates(
     candidates,
     async (discovery) => {
-      let registryStarted = false;
       const assertDiscoveryCurrent = () => {
         assertCallerCurrent?.();
         discovery.assertCurrent();
-        if (registryStarted) {
-          registryRead.assertCurrent();
-        }
+        registryRead.assertCurrent();
       };
       const failedRead = async (error: unknown): Promise<T> => {
         assertDiscoveryCurrent();
@@ -120,12 +196,9 @@ export async function withSessionStoreTarget<T>(
       let resolved = read.value;
       let registry: Awaited<ReturnType<typeof registryRead.read>> | undefined;
       if (resolved.kind === "session-target-registry-required") {
-        registryStarted = true;
         registryRead.assertCurrent();
         registry = await registryRead.read();
-        registry.assertCurrent();
-        discovery.assertCurrent();
-        assertCallerCurrent?.();
+        assertDiscoveryCurrent();
         read = await discovery.readStoreTargetResult({
           ...targetRequest,
           registeredDatabases:
@@ -141,8 +214,8 @@ export async function withSessionStoreTarget<T>(
           throw new Error("Session store target requested registry rows twice");
         }
       }
-      registry?.assertCurrent();
       const target = resolved;
+      selectedTarget = target;
       const assertSourceCurrent = () => {
         assertCallerCurrent?.();
         discovery.assertCurrent();
@@ -150,13 +223,13 @@ export async function withSessionStoreTarget<T>(
       };
       const assertCurrent = () => {
         assertSourceCurrent();
-        assertDiscoveryCurrent();
-        registry?.assertCurrent();
+        registryRead.assertCurrent();
       };
       let registrationChanged = false;
       const verifyCurrentTarget = async (assertRetainedCurrent: () => void) => {
         assertRetainedCurrent();
-        const currentRegistry = await registryRead.read();
+        const currentRead = prepareSessionStoreRegistryRead(request);
+        const currentRegistry = await currentRead.read();
         assertRetainedCurrent();
         currentRegistry.assertCurrent();
         const current = await discovery.readStoreTargetResult({
@@ -171,15 +244,10 @@ export async function withSessionStoreTarget<T>(
         }
         assertRetainedCurrent();
         currentRegistry.assertCurrent();
-        if (
-          current.value.kind !== "session-store-target" ||
-          current.value.logicalAgentId !== target.logicalAgentId ||
-          current.value.sourcePath !== target.sourcePath ||
-          current.value.database.agentId !== target.database.agentId ||
-          current.value.database.path !== target.database.path
-        ) {
+        if (!isDeepStrictEqual(current.value, target)) {
           throw new Error("Session store registration changed its selected target");
         }
+        registryRead = currentRead;
         registry = currentRegistry;
         registrationChanged = false;
       };
@@ -209,10 +277,9 @@ export async function withSessionStoreTarget<T>(
         },
         async revalidateTarget() {
           assertCurrent();
-          if (!registrationChanged) {
-            return;
+          if (registrationChanged) {
+            await verifyCurrentTarget(assertCurrent);
           }
-          await verifyCurrentTarget(assertCurrent);
         },
       });
       if (registrationChanged) {

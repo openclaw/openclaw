@@ -16,13 +16,12 @@ import {
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../../test-utils/database-cleanup.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -102,8 +101,9 @@ describe("parent runtime facts from retained completion obligations", () => {
       receipt.complete(buildAgentRunTerminalOutcome({ status: "ok" }));
       receipt.finish("interrupted");
       await resetSubagentRegistryForTests({ persist: false });
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
+      await closeStateDatabaseForTest();
       const shared = openOpenClawStateDatabase().db;
       const agent = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope))).db;
       const rows = () => shared.prepare("SELECT * FROM subagent_runs ORDER BY run_id").all();
