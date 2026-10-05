@@ -24,6 +24,10 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  prepareIncognitoSessionHistoryRead,
+  type IncognitoSessionHistoryBinding,
+} from "./session-incognito-history-read.js";
 import { hasSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -54,8 +58,52 @@ function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]
 export async function searchSessionTranscripts(
   params: SessionTranscriptSearchParams,
   preparedDatabase?: { agentId: string; path: string },
+  incognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTranscriptSearchResult> {
   validateSearchQuery(params.query);
+  if (incognito) {
+    if (
+      params.sessionKeys &&
+      (params.sessionKeys.length !== 1 || params.sessionKeys[0] !== incognito.target.sessionKey)
+    ) {
+      throw new Error("Incognito search requires its captured session selection");
+    }
+    const prepared = prepareIncognitoSessionHistoryRead(incognito, {
+      ...params,
+      sessionId: params.sessionId ?? incognito.target.sessionId,
+      storePath: preparedDatabase?.path ?? params.storePath,
+    });
+    const { actor, target } = prepared;
+    const projection = { actor, authority: incognito.authority };
+    const database = captureLifecycleDatabaseScope({
+      agentId: actor.agentId,
+      path: actor.path,
+      env: params.env,
+    });
+    const result = await actor.sessions.history(prepared.authority, {
+      type: "session.history.search",
+      input: {
+        ...target,
+        query: params.query,
+        limit: params.limit,
+        match: params.match,
+        role: params.role,
+        order: params.order,
+      },
+    });
+    prepared.authority.assertCurrent();
+    if (result.result.indexing) {
+      startSessionTranscriptIndexReconcile(
+        { ...database, preferredSessionId: target.sessionId },
+        projection,
+      );
+    }
+    return {
+      ...result.result,
+      indexing:
+        result.result.indexing || isSessionTranscriptIndexReconcileRunning(database, projection),
+    };
+  }
   const scope = captureLifecycleDatabaseScope(
     preparedDatabase
       ? {

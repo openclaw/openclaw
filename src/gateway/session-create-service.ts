@@ -132,7 +132,6 @@ export async function createGatewaySession(
   }
   // Fresh account authority covers title generation and resource preparation,
   // not just the final row. An inherited parent pin is not a new selection.
-  let selectedDefaultProfile: string | undefined;
   let validateRuntimeSelection: (() => ErrorShape | undefined) | undefined;
   const commitGuard =
     personalModelSelection ||
@@ -158,8 +157,6 @@ export async function createGatewaySession(
             personalModelSelection,
             personalAccountDefaults,
           ],
-          personalAccountDefaults,
-          readDefaultProfile: () => selectedDefaultProfile,
           validateSelection: () => validateRuntimeSelection?.(),
         })
       : params.commitGuard;
@@ -985,7 +982,6 @@ export async function createGatewaySession(
             }
             validateAccountModel = account.validate;
             validateRuntimeSelection = account.validate;
-            selectedDefaultProfile = account.profileId;
             commitGuard?.();
             if (account.profileId) {
               // Pin before the first turn; later default changes must not claim this session.

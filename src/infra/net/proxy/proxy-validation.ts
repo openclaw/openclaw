@@ -200,22 +200,6 @@ function parseApnsErrorReason(body: string): string | undefined {
   }
 }
 
-function hasApnsReachabilityProof(result: ProxyValidationApnsCheckResult): boolean {
-  if (result.apnsId) {
-    return true;
-  }
-  // APNs returns InvalidProviderToken for the intentionally invalid probe. That
-  // body proves the CONNECT tunnel reached Apple even without an apns-id header.
-  return result.status === 403 && result.apnsReason === APNS_REACHABILITY_REASON;
-}
-
-function normalizeTimeoutMs(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_PROXY_VALIDATION_TIMEOUT_MS;
-  }
-  return Math.floor(value);
-}
-
 type ProxyValidationDeniedTarget = {
   url: string;
   expectedCanaryToken?: string;
@@ -294,28 +278,6 @@ export async function probeManagedProxyLoopback(
   }
 }
 
-async function resolveDeniedTargets(
-  deniedUrls: readonly string[] | undefined,
-): Promise<{ targets: ProxyValidationDeniedTarget[]; close: () => Promise<void> }> {
-  if (deniedUrls !== undefined) {
-    return {
-      targets: deniedUrls.map((url) => ({ url })),
-      close: async () => undefined,
-    };
-  }
-
-  const canary = await createLoopbackValidationCanary();
-  return {
-    targets: [
-      {
-        url: canary.url,
-        expectedCanaryToken: canary.token,
-      },
-    ],
-    close: canary.close,
-  };
-}
-
 async function runValidationCheck(
   kind: ProxyValidationCheckKind,
   url: string,
@@ -337,7 +299,10 @@ export async function runProxyValidation(
   }
 
   const proxyUrl = config.proxyUrl;
-  const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
+  const timeoutMs =
+    options.timeoutMs === undefined || !Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0
+      ? DEFAULT_PROXY_VALIDATION_TIMEOUT_MS
+      : Math.floor(options.timeoutMs);
   let proxyTls: ManagedProxyTlsOptions | undefined;
   try {
     proxyTls = await loadManagedProxyTlsOptions(config.proxyCaFile);
@@ -355,7 +320,14 @@ export async function runProxyValidation(
   const apnsCheck = options.apnsCheck ?? defaultProxyValidationApnsCheck;
   const apnsAuthority = options.apnsAuthority ?? DEFAULT_PROXY_VALIDATION_APNS_AUTHORITY;
   const allowedUrls = options.allowedUrls ?? DEFAULT_PROXY_VALIDATION_ALLOWED_URLS;
-  const deniedTargets = await resolveDeniedTargets(options.deniedUrls);
+  let canary: LoopbackValidationCanary | undefined;
+  let deniedTargets: ProxyValidationDeniedTarget[];
+  if (options.deniedUrls !== undefined) {
+    deniedTargets = options.deniedUrls.map((url) => ({ url }));
+  } else {
+    canary = await createLoopbackValidationCanary();
+    deniedTargets = [{ url: canary.url, expectedCanaryToken: canary.token }];
+  }
   const checks: ProxyValidationCheck[] = [];
   const checkDestination = (kind: "allowed" | "denied", target: ProxyValidationDeniedTarget) =>
     runValidationCheck(kind, target.url, async () => {
@@ -417,7 +389,7 @@ export async function runProxyValidation(
     for (const url of allowedUrls) {
       checks.push(await checkDestination("allowed", { url }));
     }
-    for (const target of deniedTargets.targets) {
+    for (const target of deniedTargets) {
       checks.push(await checkDestination("denied", target));
     }
     if (options.apnsReachability === true) {
@@ -429,7 +401,9 @@ export async function runProxyValidation(
             authority: apnsAuthority,
             timeoutMs,
           });
-          return hasApnsReachabilityProof(result)
+          // The invalid-token response proves the tunnel reached Apple without an apns-id header.
+          return result.apnsId ||
+            (result.status === 403 && result.apnsReason === APNS_REACHABILITY_REASON)
             ? { ok: true, status: result.status }
             : {
                 ok: false,
@@ -441,7 +415,7 @@ export async function runProxyValidation(
       );
     }
   } finally {
-    await deniedTargets.close();
+    await canary?.close();
   }
 
   return {

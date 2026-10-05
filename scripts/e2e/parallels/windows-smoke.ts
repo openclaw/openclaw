@@ -375,7 +375,6 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
         ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id],
         {
           check: false,
-          quiet: true,
           timeoutMs: this.phases.remainingTimeoutMs(),
         },
       );
@@ -407,13 +406,12 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     while (Date.now() < deadline) {
       const status = run("prlctl", ["status", this.options.vmName], {
         check: false,
-        quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(30_000),
       }).stdout;
       if (!status.includes(" restoring")) {
         return;
       }
-      run("sleep", ["5"], { quiet: true });
+      run("sleep", ["5"]);
     }
     throw new Error(`VM ${this.options.vmName} did not leave restoring state`);
   }
@@ -426,14 +424,13 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
         ["exec", this.options.vmName, "--current-user", "cmd.exe", "/d", "/s", "/c", "echo ready"],
         {
           check: false,
-          quiet: true,
           timeoutMs: this.phases.remainingTimeoutMs(),
         },
       );
       if (result.status === 0) {
         return;
       }
-      run("sleep", ["3"], { quiet: true });
+      run("sleep", ["3"]);
     }
     throw new Error("Windows guest did not become ready");
   }
@@ -646,7 +643,7 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
       }
       warn(`gateway-reachable retry ${attempt}`);
       attempt++;
-      run("sleep", ["5"], { quiet: true });
+      run("sleep", ["5"]);
     }
     throw new Error("gateway did not become reachable");
   }

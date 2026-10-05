@@ -219,7 +219,6 @@ class DeviceHandler internal constructor(
         .orEmpty()
     val locale = Locale.getDefault().toLanguageTag().trim()
     val appVersion = BuildConfig.VERSION_NAME.trim()
-    val appBuild = BuildConfig.VERSION_CODE.toString()
 
     return buildJsonObject {
       put("deviceName", JsonPrimitive(model.ifEmpty { "Android" }))
@@ -230,7 +229,7 @@ class DeviceHandler internal constructor(
       put("systemName", JsonPrimitive("Android"))
       put("systemVersion", JsonPrimitive(systemVersion.ifEmpty { Build.VERSION.SDK_INT.toString() }))
       put("appVersion", JsonPrimitive(appVersion.ifEmpty { "dev" }))
-      put("appBuild", JsonPrimitive(appBuild.ifEmpty { "0" }))
+      put("appBuild", JsonPrimitive(BuildConfig.VERSION_CODE.toString()))
       put("locale", JsonPrimitive(locale.ifEmpty { Locale.getDefault().toString() }))
     }.toString()
   }

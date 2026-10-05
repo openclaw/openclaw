@@ -23,6 +23,7 @@ import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
+import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../worker/node-bundle-install-protocol.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -46,6 +47,7 @@ import {
   classifyNodeWorkspaceTransferPath,
   classifyWorkerGatewayPath,
   classifyWorkerBootstrapArtifactTransferPath,
+  WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH,
 } from "./gateway-http-route-contracts.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import {
@@ -105,13 +107,14 @@ import {
 import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
-import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
-import { handleNodeWorkerBundleTransferHttpRequest } from "./worker-environments/node-worker-bundle-transfer-http.js";
+import {
+  handleArtifactTransferHttpRequest,
+  type ArtifactTransferHttpCallback,
+} from "./worker-environments/artifact-transfer-http.js";
 import {
   handleNodeWorkspaceTransferHttpRequest,
   type NodeWorkspaceTransferHttpCallback,
 } from "./worker-environments/node-workspace-transfer-http.js";
-import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 
 type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -410,34 +413,35 @@ export function createGatewayHttpServer(opts: {
         return true;
       });
 
+      const transferRequest = {
+        req,
+        res,
+        clientIp: ingressAttribution.rateLimit.subject.key,
+        rateLimiter: joinRateLimiter,
+      };
       addAdmittedStage(
         classifyWorkerBootstrapArtifactTransferPath(scopedRequestPath) !== "outside",
         () =>
-          handleWorkerBootstrapArtifactTransferHttpRequest({
-            req,
-            res,
-            clientIp: ingressAttribution.rateLimit.subject.key,
-            rateLimiter: joinRateLimiter,
+          handleArtifactTransferHttpRequest({
+            classifyPath: classifyWorkerBootstrapArtifactTransferPath,
+            routePrefix: `${WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH}/artifacts/`,
+            ...transferRequest,
             callback: opts.handleWorkerBootstrapArtifactTransferRequest,
           }),
       );
 
       addAdmittedStage(classifyNodeWorkerBundleTransferPath(scopedRequestPath) !== "outside", () =>
-        handleNodeWorkerBundleTransferHttpRequest({
-          req,
-          res,
-          clientIp: ingressAttribution.rateLimit.subject.key,
-          rateLimiter: joinRateLimiter,
+        handleArtifactTransferHttpRequest({
+          classifyPath: classifyNodeWorkerBundleTransferPath,
+          routePrefix: `${NODE_WORKER_BUNDLE_TRANSFER_PATH}/bundles/`,
+          ...transferRequest,
           callback: opts.handleNodeWorkerBundleTransferRequest,
         }),
       );
 
       addAdmittedStage(classifyNodeWorkspaceTransferPath(scopedRequestPath) !== "outside", () =>
         handleNodeWorkspaceTransferHttpRequest({
-          req,
-          res,
-          clientIp: ingressAttribution.rateLimit.subject.key,
-          rateLimiter: joinRateLimiter,
+          ...transferRequest,
           callback: opts.handleNodeWorkspaceTransferRequest,
         }),
       );

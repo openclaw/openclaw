@@ -496,9 +496,18 @@ function readCorpusSessionEntries(
 export async function listSessionTranscriptCorpusEntriesForAgent(
   agentId: string,
   options: SessionTranscriptCorpusOptions = {},
+  source?: {
+    memoryCorpus(
+      scope: SessionTranscriptCorpusScope,
+      options: SessionTranscriptCorpusOptions,
+    ): Promise<SessionTranscriptCorpusEntry[]>;
+  },
 ): Promise<SessionTranscriptCorpusEntry[]> {
   const scope = resolveSessionTranscriptCorpusScope(agentId);
   const capturedOptions = { ...options };
+  if (source) {
+    return source.memoryCorpus(scope, capturedOptions);
+  }
   const artifactDirs = new Map<string, string>();
   for (const dir of scope.artifactDirs) {
     artifactDirs.set(await normalizeRealComparablePathAsync(dir), dir);

@@ -69,7 +69,7 @@ function stripEnvelopeFromContentWithRole(content: unknown[], role: string): unk
 }
 
 /** Strips OpenClaw envelope metadata from one display message without mutating it. */
-export function stripEnvelopeFromMessage(message: unknown): unknown {
+function stripEnvelopeFromMessage(message: unknown): unknown {
   if (!message || typeof message !== "object") {
     return message;
   }

@@ -481,6 +481,9 @@ function withIncognitoForkWorkers<T>(
         if (crossActor && owner === destination) {
           sourceClaim.authorize(source.authority, stage);
         }
+        if (crossActor) {
+          return owner.authority.authorize?.(stage, facts);
+        }
         return facts.sessionKey === scopes.source.sessionKey
           ? source.authority.authorize?.(stage, facts)
           : destination.authority.authorize?.(stage, facts);

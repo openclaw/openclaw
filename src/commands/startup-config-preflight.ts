@@ -1,11 +1,15 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../config/io.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
+import { RetiredStateFormatError } from "../infra/state-migrations.retired-files.js";
+import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
+import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import {
   assertPreflightConfigUnchanged,
   needsRefreshedPluginIndexPersistence,
@@ -51,6 +55,24 @@ export async function runStartupConfigPreflight(
   }
 }
 
+function readStartupStateWarnings(env: NodeJS.ProcessEnv): string[] {
+  let warnings: string[] = [];
+  try {
+    warnings = listAgentDatabaseAdmissionRefusals({ env }).map(
+      (refusal) => `${refusal.reason}\n${refusal.repairHint}`,
+    );
+    assertNoRetiredRuntimeStateFiles(resolveStateDir(env), env);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    warnings.push(
+      error instanceof RetiredStateFormatError && error.cause === undefined
+        ? `Retired runtime state was left unchanged for Doctor; no import was attempted. ${message}`
+        : `Could not inspect retired runtime state: ${message}; run openclaw doctor`,
+    );
+  }
+  return warnings;
+}
+
 async function prepareStartupConfig(
   options: StartupConfigPreflightOptions,
 ): Promise<StartupConfigPreflightResult> {
@@ -78,6 +100,7 @@ async function prepareStartupConfig(
     if (read.snapshot.valid && options.observe !== false) {
       await cleanupStartupPluginSourceCaptures(env);
     }
+    recordStartupMigrationWarnings(readStartupStateWarnings(env));
     return result(read);
   }
 
@@ -191,6 +214,7 @@ async function prepareStartupConfig(
     });
     setActiveDegradedPlugins(verification.quarantinedPlugins);
     recordStartupMigrationWarnings([
+      ...readStartupStateWarnings(env),
       ...(verification.warnings ?? []),
       ...(verification.deferredPlugins ?? []).map(
         (plugin) => `Plugin "${plugin.pluginId}": ${plugin.reason}. Run \`${plugin.command}\`.`,
