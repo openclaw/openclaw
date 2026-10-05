@@ -121,7 +121,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     "not a url",
     "file:///private/voice",
     "ftp://voice.example.test/realtime",
-    "https://user:secret@voice.example.test/realtime",
+    "https://user@voice.example.test/realtime",
     "wss://voice.example.test/realtime#secret",
     123,
   ])("rejects invalid realtime baseUrl without opening a socket (%s)", (baseUrl) => {
