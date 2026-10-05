@@ -77,6 +77,33 @@ struct GatewayEnvironmentTests {
         #expect(version == nil)
     }
 
+    @Test func `gateway version probe preserves home for node shims`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let node = root.appendingPathComponent("node")
+        let gateway = root.appendingPathComponent("openclaw")
+        try """
+        #!/bin/sh
+        if [ -z "${HOME:-}" ]; then
+          echo 'error loading config: $HOME is not defined' >&2
+          exit 1
+        fi
+        echo OpenClaw 2026.9.3
+        """.write(to: node, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nexec node \"$@\"\n"
+            .write(to: gateway, atomically: true, encoding: .utf8)
+        for executable in [node, gateway] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        }
+
+        let version = await GatewayEnvironment.installedGatewayVersion(
+            gatewayBin: gateway.path,
+            projectRoot: root,
+            searchPaths: [root.path, "/usr/bin", "/bin"])
+
+        #expect(version == "2026.9.3")
+    }
+
     @Test func `broken global gateway remains an actionable error beside a valid checkout`() async throws {
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }

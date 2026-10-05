@@ -123,6 +123,12 @@ For an existing app-managed Gateway using the app's exact-version policy,
 it. Failed updates remain retryable; channel policies and operator runtime pins
 keep their existing update path.
 
+Existing asdf-managed Node installations can be reused. The app preserves its
+inherited environment, including `HOME`, when checking the Node and CLI versions.
+For pnpm installations, it searches both `~/Library/pnpm` and
+`~/Library/pnpm/bin` for the CLI. After changing a manual installation, choose
+**Check again** to repeat discovery.
+
 ## Launchd (Gateway as LaunchAgent)
 
 Label: `ai.openclaw.gateway` (default profile), or `ai.openclaw.<profile>`
