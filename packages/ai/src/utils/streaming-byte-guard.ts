@@ -9,10 +9,18 @@ export type ReadSseStreamWithLimitOptions = {
   onOverflow?: (params: SseStreamOverflow) => Error;
 };
 
+export type SseByteGuard = {
+  read(): Promise<ReadableStreamReadResult<Uint8Array>>;
+  cancel(reason?: unknown): Promise<void>;
+  totalBytes(): number;
+  overflowed(): boolean;
+  cancelled(): boolean;
+};
+
 export function createSseByteGuard(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   opts: ReadSseStreamWithLimitOptions,
-) {
+): SseByteGuard {
   if (!Number.isFinite(opts.maxBytes) || opts.maxBytes < 0) {
     throw new RangeError(`maxBytes must be a non-negative finite number: ${opts.maxBytes}`);
   }
@@ -28,7 +36,7 @@ export function createSseByteGuard(
     void reader.cancel(reason).catch(() => undefined);
   };
   return {
-    read: async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    read: async () => {
       if (overflowedFlag || cancelledFlag) {
         return { done: true, value: undefined };
       }

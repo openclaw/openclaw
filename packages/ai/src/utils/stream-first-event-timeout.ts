@@ -19,6 +19,12 @@ export type FirstStreamEventInternalOptions = {
   onFirstEventTimeout?: (reason: Error) => void;
 };
 
+export type FirstStreamEventAbortController = {
+  signal: AbortSignal;
+  abort: (reason: Error) => void;
+  dispose: () => void;
+};
+
 export function getFirstStreamEventTimeoutMs(options: unknown): number | undefined {
   return (options as FirstStreamEventInternalOptions | undefined)?.firstEventTimeoutMs;
 }
@@ -46,7 +52,9 @@ export function createFirstStreamEventTimeoutError(context: FirstStreamEventTime
   );
 }
 
-export function createFirstStreamEventAbortController(parentSignal?: AbortSignal) {
+export function createFirstStreamEventAbortController(
+  parentSignal?: AbortSignal,
+): FirstStreamEventAbortController {
   const controller = new AbortController();
   const abortFromParent = () => {
     controller.abort(parentSignal?.reason);
@@ -58,10 +66,10 @@ export function createFirstStreamEventAbortController(parentSignal?: AbortSignal
   }
   return {
     signal: controller.signal,
-    abort(this: void, reason: Error) {
+    abort(reason: Error) {
       controller.abort(reason);
     },
-    dispose(this: void) {
+    dispose() {
       parentSignal?.removeEventListener("abort", abortFromParent);
     },
   };
