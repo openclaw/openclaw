@@ -3,6 +3,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerXAllowlistMethods } from "./admin.js";
+import { openXSpend, XBudgetExceededError } from "./spend.js";
 
 const getUserByUsername = vi.hoisted(() => vi.fn());
 vi.mock("./client.js", async (importOriginal) => ({
@@ -12,6 +13,7 @@ vi.mock("./client.js", async (importOriginal) => ({
 
 type Handler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
 type Request = Parameters<Handler>[0];
+let gatewaySequence = 0;
 
 function memoryStore<T>(beforeWrite?: () => Promise<void>): PluginStateKeyedStore<T> {
   const rows = new Map<string, T>();
@@ -67,14 +69,26 @@ function gateway(beforeWrite?: () => Promise<void>, configOverride?: OpenClawCon
       },
     },
   };
-  registerXAllowlistMethods({
-    runtime: {
-      state: {
-        openKeyedStore: () => memoryStore(beforeWrite),
-        resolveStateDir: () => "synthetic-x-admin",
+  const stateDir = `synthetic-x-admin-${gatewaySequence++}`;
+  const stores = new Map<string, PluginStateKeyedStore<unknown>>();
+  const runtime = {
+    state: {
+      openKeyedStore<T>(options: { namespace: string }): PluginStateKeyedStore<T> {
+        let store = stores.get(options.namespace);
+        if (!store) {
+          store = memoryStore(beforeWrite);
+          stores.set(options.namespace, store);
+        }
+        // Each namespace fixes its value type, matching the plugin-state contract.
+        return store as PluginStateKeyedStore<T>;
       },
+      resolveStateDir: () => stateDir,
     },
-    logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
+  };
+  const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() };
+  registerXAllowlistMethods({
+    runtime,
+    logger,
     registerGatewayMethod(method, handler, options) {
       handlers.set(method, handler);
       scopes.set(method, options?.scope);
@@ -105,7 +119,7 @@ function gateway(beforeWrite?: () => Promise<void>, configOverride?: OpenClawCon
     } as Request);
     return respond;
   }
-  return { invoke, scopes };
+  return { invoke, scopes, runtime, logger };
 }
 
 beforeEach(() => {
@@ -114,6 +128,21 @@ beforeEach(() => {
 });
 
 describe("X allowlist Gateway methods", () => {
+  it("reports budget refusals without duplicating the ledger's warning", async () => {
+    const { invoke, logger } = gateway();
+    const refusal = new XBudgetExceededError("X API daily budget reached; resumes tomorrow", 1);
+    getUserByUsername.mockRejectedValue(refusal);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await invoke("x.allowlist.add", { username: "maintainer" })).toHaveBeenCalledWith(
+        false,
+        undefined,
+        { code: "UNAVAILABLE", message: refusal.message },
+      );
+    }
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("selects a named account when no default account exists", async () => {
     const { invoke } = gateway(undefined, {
       channels: {
@@ -129,6 +158,13 @@ describe("X allowlist Gateway methods", () => {
       accountId: "maintainers",
       accounts: [{ accountId: "maintainers", username: "maintainers_bot" }],
       entries: [{ userId: "40", configured: true, editable: false }],
+      spend: {
+        dayUsd: 0,
+        cycleUsd: 0,
+        dailyLimitUsd: 100,
+        monthlyLimitUsd: 1000,
+        cycleStart: expect.any(String),
+      },
     });
   });
 
@@ -158,6 +194,13 @@ describe("X allowlist Gateway methods", () => {
           editable: true,
         },
       ],
+      spend: {
+        dayUsd: 0,
+        cycleUsd: 0,
+        dailyLimitUsd: 100,
+        monthlyLimitUsd: 1000,
+        cycleStart: expect.any(String),
+      },
     });
     const sibling = await invoke("x.allowlist.list", { accountId: "second" });
     expect(sibling).toHaveBeenCalledWith(true, expect.objectContaining({ entries: [] }));
@@ -189,6 +232,46 @@ describe("X allowlist Gateway methods", () => {
         entries: expect.arrayContaining([{ userId: "10", configured: true, editable: false }]),
       }),
     );
+  });
+
+  it("includes the selected account's recorded spend and limits without an X API lookup", async () => {
+    const { invoke, runtime } = gateway(undefined, {
+      channels: {
+        x: {
+          accounts: {
+            small: {
+              userId: "101",
+              username: "small_bot",
+              costLimits: { dailyUsd: 5, monthlyUsd: 25, cycleStartDay: 20 },
+            },
+            other: { userId: "102", username: "other_bot" },
+          },
+        },
+      },
+    });
+    await openXSpend(runtime, "small", () => ({
+      dailyUsd: 5,
+      monthlyUsd: 25,
+      cycleStartDay: 20,
+    })).charge(250_000);
+    expect(await invoke("x.allowlist.list", { accountId: "small" })).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        accountId: "small",
+        spend: {
+          dayUsd: 0.25,
+          cycleUsd: 0.25,
+          dailyLimitUsd: 5,
+          monthlyLimitUsd: 25,
+          cycleStart: expect.stringMatching(/^\d{4}-\d{2}-20$/),
+        },
+      }),
+    );
+    expect(await invoke("x.allowlist.list", { accountId: "other" })).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ spend: expect.objectContaining({ dayUsd: 0, cycleUsd: 0 }) }),
+    );
+    expect(getUserByUsername).not.toHaveBeenCalled();
   });
 
   it.each(["list", "add", "remove"])("requires administrator authority for %s", async (method) => {

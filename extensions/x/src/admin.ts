@@ -1,5 +1,6 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { listXAccountIds, resolveDefaultXAccountId, resolveXAccount } from "./accounts.js";
 import {
   mergeXAllowlist,
@@ -8,6 +9,7 @@ import {
   type XEffectiveAllowlistEntry,
 } from "./allowlist.js";
 import { getXApi } from "./client.js";
+import { openXSpend, XBudgetExceededError, type XSpendStatus } from "./spend.js";
 
 type Request = Parameters<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>[0];
 
@@ -15,6 +17,7 @@ export type XAllowlistSnapshot = {
   accountId: string;
   accounts: Array<{ accountId: string; username: string }>;
   entries: XEffectiveAllowlistEntry[];
+  spend: XSpendStatus;
 };
 
 class XAdminError extends Error {
@@ -76,7 +79,13 @@ export function registerXAllowlistMethods(
   };
   const snapshot = async (request: Request): Promise<XAllowlistSnapshot> => {
     const { cfg, account } = accountFor(request);
+    const readConfig = createRuntimeConfigReader(cfg);
     const entries = await getAllowlist().list(account.accountId);
+    const spend = await openXSpend(
+      api.runtime,
+      account.accountId,
+      () => resolveXAccount(readConfig(), account.accountId).costLimits,
+    ).status();
     assertAdmin(request);
     return {
       accountId: account.accountId,
@@ -85,6 +94,7 @@ export function registerXAllowlistMethods(
         username: resolveXAccount(cfg, accountId).username,
       })),
       entries: mergeXAllowlist(account.config.allowFrom ?? [], entries),
+      spend,
     };
   };
   const handlers: Record<string, (request: Request) => Promise<unknown>> = {
@@ -139,6 +149,8 @@ export function registerXAllowlistMethods(
         } catch (error) {
           if (error instanceof XAdminError) {
             request.respond(false, undefined, { code: error.code, message: error.message });
+          } else if (error instanceof XBudgetExceededError) {
+            request.respond(false, undefined, { code: "UNAVAILABLE", message: error.message });
           } else {
             api.logger.error(
               `X allowlist operation failed (${method}): ${error instanceof Error ? error.message : String(error)}`,

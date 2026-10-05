@@ -11,6 +11,7 @@ import { resolveXIngress } from "./ingress.js";
 import { resolveXRecipient } from "./recipient.js";
 import { sendXReply, XPartialReplyError, type XVisibleWorkSession } from "./reply.js";
 import { getXRuntime } from "./runtime.js";
+import { XBudgetExceededError } from "./spend.js";
 import { normalizeXReplyTarget } from "./target.js";
 
 function rethrowReplyAuthorizationError(cause: unknown): never {
@@ -110,7 +111,7 @@ export async function sendXDelivery(params: {
     }
     throw new PlatformMessageNotDispatchedError(
       cause instanceof Error ? cause.message : "X reply preparation failed",
-      { cause, retryable: !params.signal?.aborted },
+      { cause, retryable: !(cause instanceof XBudgetExceededError) && !params.signal?.aborted },
     );
   }
   const { account, api, mention } = prepared;
