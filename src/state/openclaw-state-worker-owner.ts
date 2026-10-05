@@ -146,8 +146,7 @@ function createSharedStateWorkerOwner() {
     ) {
       return;
     }
-    const store = entry.store;
-    const generation = entry.operationGeneration;
+    const { store, operationGeneration: generation } = entry;
     const deadline = performance.now() + SQLITE_IDLE_HANDLE_TTL_MS;
     const arm = (delay: number, inspect: boolean) => {
       const isCurrentIdle = () =>
@@ -422,21 +421,22 @@ function createSharedStateWorkerOwner() {
   });
   function retireIdleWorkers() {
     for (const entry of stores) {
-      if (
-        entry.idleTimer &&
-        entry.store &&
-        !entry.context.maintenanceScope &&
-        !hasActiveActorOperations(entry)
-      ) {
-        void runInDetachedAsyncContext(() => retire(entry)).catch((error: unknown) => {
-          log.warn("Idle shared-state worker retirement failed", {
-            path: entry.context.admission.databasePath,
-            error,
-          });
+      void runInDetachedAsyncContext(() => retireIdle(entry))?.catch((error: unknown) => {
+        log.warn("Idle shared-state worker retirement failed", {
+          path: entry.context.admission.databasePath,
+          error,
         });
-      }
+      });
     }
   }
+  const retireIdle = (entry: Entry) =>
+    entry.idleTimer &&
+    entry.store &&
+    stores.has(entry) &&
+    !entry.context.maintenanceScope &&
+    !hasActiveActorOperations(entry)
+      ? retire(entry)
+      : undefined;
   return {
     close,
     retainOperation,
@@ -617,6 +617,7 @@ function createSharedStateWorkerOwner() {
               {
                 maintenanceScope: context.maintenanceScope,
                 preparation,
+                retireIdle: retireIdle.bind(undefined, admitted),
                 retainCleanup: (cleanup) => {
                   admitted.cleanup = cleanup;
                 },
@@ -634,10 +635,10 @@ function createSharedStateWorkerOwner() {
           existingOnly,
           activeOperations: 0,
           operationGeneration: 0,
-          // Maintenance may already be draining an accepted callback; its native
-          // opening must retain that callback's live admission through settlement.
-          opening: context.maintenanceScope ? open() : runInDetachedAsyncContext(open),
+          opening: Promise.resolve(undefined),
         };
+        // Initialize the entry before binding retirement without retaining the opening caller.
+        admitted.opening = context.maintenanceScope ? open() : runInDetachedAsyncContext(open);
         entry = admitted;
         admitted.opening = admitted.opening.then((store) => {
           if (store) {

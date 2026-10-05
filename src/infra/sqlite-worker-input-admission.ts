@@ -8,6 +8,7 @@ import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 /** Retained inputs share the broker budget before they become queued jobs. */
 export class SqliteWorkerInputAdmission {
   private bytes = 0;
+  private opens = 0;
   private inputPreparationGeneration = {};
   private readonly inputPreparations = new Set<Promise<void>>();
   private openTail: Promise<void> = Promise.resolve();
@@ -19,6 +20,7 @@ export class SqliteWorkerInputAdmission {
       maxQueuedBytes: number;
       maxQueuedInputBytes: number;
       maxMessageBytes: number;
+      maxPendingOpens: number;
     },
   ) {}
 
@@ -39,6 +41,7 @@ export class SqliteWorkerInputAdmission {
 
   open<T>(bytes: number, dispatch: () => Promise<T>): Promise<T> {
     if (
+      this.opens >= this.owner.maxPendingOpens ||
       bytes > this.owner.maxMessageBytes ||
       this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes
     ) {
@@ -47,11 +50,13 @@ export class SqliteWorkerInputAdmission {
       );
     }
     const previous = this.openTail;
+    this.opens += 1;
     const settled = createDeferredCore();
     this.openTail = settled.promise;
     const release = this.retain(bytes);
     // Physical-file identity must be published before admitting another open alias.
     return previous.then(dispatch).finally(() => {
+      this.opens -= 1;
       release();
       settled.resolve();
     });
