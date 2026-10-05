@@ -18,6 +18,10 @@ export function isIngressAdoptionLostError(error: unknown): error is IngressAdop
 
 export type ChannelIngressDrainDispatchResult =
   | { kind: "completed" }
+  /** The dispatch owner already committed this claim to its durable receipt. */
+  | { kind: "transferred" }
+  /** Normal admission backpressure; the caller owns the next wake. */
+  | { kind: "pending" }
   | { kind: "deferred" }
   | { kind: "failed-retryable"; error: unknown };
 

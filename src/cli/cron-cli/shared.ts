@@ -556,6 +556,9 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
     return `stream ${schedule.command.join(" ")}${cwd}${suffix}`;
   }
+  if (schedule?.kind === "event") {
+    return `event ${schedule.source}`;
+  }
   if (schedule?.kind !== "cron") {
     return "-";
   }

@@ -166,6 +166,8 @@ export default {
     automationAt: "At {time}",
     automationOnExit: "On exit: {command}",
     automationStream: "Stream: {command}",
+    automationEvent: "Event: {source}",
+    automationWaitingForEvent: "Waiting for event",
     viewPresetCountOne: "1 card",
     editCardHelp: "Update queue metadata and session handoff.",
     newCard: "New card",

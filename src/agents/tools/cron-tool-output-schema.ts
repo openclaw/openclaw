@@ -33,6 +33,7 @@ const CompactCronJobSchema = Type.Object(
       Type.Literal("cron"),
       Type.Literal("on-exit"),
       Type.Literal("stream"),
+      Type.Literal("event"),
     ]),
     schedule: Type.Optional(
       Type.Union(

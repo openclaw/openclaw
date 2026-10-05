@@ -18,6 +18,7 @@ const SCHEDULE_KIND_FILTER_LABELS: Record<CronJobsScheduleKindFilter, string> = 
   cron: "cron.form.cronOption",
   "on-exit": "cron.form.repeatOnExit",
   stream: "cron.form.repeatStream",
+  event: "cron.events.label",
 };
 
 function renderJobsFilter(

@@ -1925,6 +1925,7 @@
                     ]
                   },
                   "automation/imap",
+                  "automation/mcp-events",
                   "automation/standing-orders",
                   "automation/hooks",
                   {

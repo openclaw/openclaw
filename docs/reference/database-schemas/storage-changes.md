@@ -1236,6 +1236,33 @@ then rereads the exact unexpired owner from current committed state. Host schedu
 does not pin the WAL; writes and renewals retain their transaction-held checks.
 Schemas, retention, durability, and update behavior are unchanged.
 
+MCP Events retains a non-secret authorization incarnation from the same OAuth
+credential owner. Existing OAuth JSON rows gain `authorizationId` through the
+leased writer when first observed by an event consumer; no new table or schema
+version is introduced. Successful token refresh preserves the ID. Logout,
+current-token terminal rejection, and authorization-code replacement retire it.
+The writer fences retained observations before granting commit and publishes
+only non-secret lifetime facts through native commit receipts. Known rollback
+restores the previous observation; unknown settlement remains unavailable until
+the database lifecycle is retired. Fresh read-worker observations detect
+credential changes made outside this process. No lease spans a subscription
+request or its synchronous webhook verification. These facts authorize neither
+tool execution nor a replacement account: event admission still requires the
+original Automation and caller authority. Remove event jobs before downgrading
+to a runtime without this lifetime contract.
+
+Auth-profile-backed event sources use private `authorizationLifetimes` metadata
+in their existing credential JSON rows. Only explicitly observed profile IDs are
+enrolled, through credential-preserving worker transactions. Missing-profile
+incarnations remain as non-secret selection tombstones so a local override or
+removal followed by identical-byte reconnection cannot revive an inherited
+subscription. Explicit upserts replace the incarnation; the refresh owner
+carries continuity through its existing claim, settlement, rollback, and peer
+inheritance operations. Incoming serialized metadata cannot grant continuity.
+Canonical reads bypass the runtime row cache; final synchronous guards consume
+the credential writer's token-free publication. This adds no credential store,
+table, scheduler, or credential-bearing run history.
+
 Doctor imports retired MCP OAuth JSON through the same shared-state worker.
 The host retains exclusive maintenance ownership, the retired runtime's file lock,
 and the original source claim while the worker reads receipts, atomically imports

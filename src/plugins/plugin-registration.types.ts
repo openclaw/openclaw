@@ -371,6 +371,18 @@ export type OpenClawPluginServiceContext = {
   /** Gateway-owned scheduler access, revoked when this service stops. */
   getCron?: () =>
     | (import("./hook-gateway.types.js").PluginHookGatewayCronService & {
+        /** Only this plugin's event sources, without credentials or creator authority. */
+        readEventSources?: () => Promise<
+          import("../cron/event-source.js").CronEventSourceSnapshot[]
+        >;
+        /** Transfer a durable ingress claim into this plugin's bound Automation. */
+        runEvent?: (
+          id: string,
+          input: Omit<import("../cron/event-source.js").CronEventRunOptions, "commitGuard"> & {
+            /** Additional current source/account authority; never replaces the host guard. */
+            assertCurrent: () => void;
+          },
+        ) => Promise<import("../cron/event-source.js").CronEventRunResult>;
         /** Admit service-owned work through the scheduler's normal run queue. */
         enqueueRun?: (
           id: string,
@@ -378,6 +390,29 @@ export type OpenClawPluginServiceContext = {
         ) => Promise<import("../cron/service-contract.js").CronServiceRunResult>;
       })
     | undefined;
+  /** Host-authenticated MCP Events requests bound to this plugin's persisted event source. */
+  mcpEvents?: {
+    /** One binding lifetime, including exact finite cleanup across benign policy refresh. */
+    prepareSource: (input: {
+      jobId: string;
+      sourceIdentity: string;
+      serverName: string;
+    }) => Promise<{
+      accountId: string;
+      principalId: string;
+      assertCurrent: () => void;
+      /** Refresh current policy and credential-owner facts; retired authorization never revives. */
+      revalidate: () => Promise<void>;
+      request: (
+        method: "server/discover" | "events/list" | "events/subscribe",
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+      ) => Promise<unknown>;
+      /** Close subscribe admission and clean up this handle’s captured webhook identity. */
+      unsubscribe: (signal: AbortSignal) => Promise<unknown>;
+      dispose: () => void;
+    }>;
+  };
   /** Service-owned node calls for this plugin's commands; normal node policy still applies. */
   invokeNode?: (
     params: Omit<

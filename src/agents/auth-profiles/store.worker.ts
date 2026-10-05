@@ -11,6 +11,10 @@ import {
   updateUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
+import {
+  enrollAuthProfileAuthorizationInDatabase,
+  type AuthProfileAuthorizationEnrollment,
+} from "./authorization-enrollment.js";
 import { readAuthProfileRows, SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import { isMissingDatabasePath } from "./sqlite-read-pool.js";
 import type { AuthProfileUsageInput, AuthProfileUsageResult } from "./store.worker-contract.js";
@@ -24,6 +28,21 @@ import { reduceAuthProfileFailure } from "./usage-reduction.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 
 export const authProfileOperations = {
+  "authProfiles.enrollAuthorization": (
+    input: AuthProfileAuthorizationEnrollment,
+    { open, stateOptions },
+  ) => {
+    const database = open();
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const result = enrollAuthProfileAuthorizationInDatabase(db, "shared-state", input);
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        return result;
+      },
+      { ...stateOptions(), database },
+    );
+  },
   "authProfiles.usage": (input: AuthProfileUsageInput, { stateOptions }): AuthProfileUsageResult =>
     runOpenClawStateWriteTransaction(
       ({ db, path }) => {

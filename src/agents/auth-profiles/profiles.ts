@@ -8,6 +8,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { removePersistedPluginModelCatalogCredentials } from "../plugin-model-catalog-credentials.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { replaceAuthProfileAuthorization } from "./authorization-lifetime.js";
 import {
   listCandidateAuthProfileStores,
   loadCandidateAuthProfileStore,
@@ -176,7 +177,7 @@ export function upsertAuthProfile(params: {
 }): void {
   const credential = normalizeAuthProfileCredential(params.credential);
   const store = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
-  store.profiles[params.profileId] = credential;
+  store.profiles[params.profileId] = replaceAuthProfileAuthorization(credential);
   saveAuthProfileStore(store, params.agentDir, {
     filterExternalAuthProfiles: false,
     sharedStoreWrite: true,

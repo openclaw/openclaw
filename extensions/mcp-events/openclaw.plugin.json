@@ -1,0 +1,47 @@
+{
+  "id": "mcp-events",
+  "name": "MCP Events",
+  "description": "Subscribe to events from configured MCP accounts and trigger authored automations.",
+  "categories": [
+    "scheduling",
+    "integrations"
+  ],
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "callbackOrigin"
+    ],
+    "properties": {
+      "callbackOrigin": {
+        "type": "string",
+        "description": "Public HTTPS origin forwarding only /plugins/mcp-events/callback/* to the Gateway. No automatic tunnel or admin exposure."
+      },
+      "maxPendingEvents": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100000,
+        "default": 10000,
+        "description": "Pending ingress budget; rejects new deliveries instead of evicting unfinished events."
+      }
+    }
+  },
+  "uiHints": {
+    "callbackOrigin": {
+      "label": "Public HTTPS callback origin"
+    },
+    "maxPendingEvents": {
+      "label": "Pending event limit",
+      "advanced": true
+    }
+  },
+  "contracts": {
+    "tools": [
+      "mcp_events"
+    ]
+  }
+}

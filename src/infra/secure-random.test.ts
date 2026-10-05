@@ -82,6 +82,19 @@ describe("secure-random", () => {
     const publicId = generateSecureToken(18);
     expect(redactRegisteredSecretValues(publicId, () => "hidden")).toBe(publicId);
     expect(() => generateSecureToken({ bytes: 0, redact: true })).toThrow("at least 16 bytes");
+    cryptoMocks.randomBytes.mockReturnValueOnce(Buffer.alloc(32, 0xff));
+    const signingKey = generateSecureToken({
+      bytes: 32,
+      redact: true,
+      encoding: "base64",
+      prefix: "whsec_",
+    });
+    expect(signingKey).toMatch(/^whsec_[A-Za-z0-9+/]+=$/);
+    expect(Buffer.from(signingKey.slice(6), "base64")).toEqual(Buffer.alloc(32, 0xff));
+    expect(redactRegisteredSecretValues("secret=" + signingKey, () => "hidden")).toBe(
+      "secret=hidden",
+    );
+    expect(redactRegisteredSecretValues(signingKey.slice(6), () => "hidden")).toBe("hidden");
   });
 
   it("generates secure hex strings", () => {

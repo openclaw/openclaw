@@ -469,6 +469,60 @@ when the service stops or the scheduler is replaced, including while waiting for
 admission. This optional method is absent on older hosts; it has no caller-scoped
 fallback.
 
+Current service handles also expose `readEventSources()` and `runEvent(id, input)`
+for plugin-owned Automation event sources. The source namespace is bound to the
+service's plugin ID; a plugin cannot select another source owner. Snapshots contain
+`jobId`, `sourceIdentity`, `enabled`, and the source `options`, not credentials or
+creator authority. `runEvent` takes the immutable event envelope and an existing
+ingress claim token. It returns `transferred` with a run receipt, `pending` when
+busy/paused/stopped, or `invalidated` for a retired source. The host rechecks the
+source generation during admission and atomically transfers the claim to the run.
+Do not mark a pending event complete or turn a busy result into an acknowledgment
+of execution. These optional capabilities have no direct-agent fallback.
+
+For MCP-backed sources, `ctx.mcpEvents?.prepareSource({ jobId, sourceIdentity,
+serverName })` resolves the persisted creator and configured MCP account. The job
+must belong to the calling plugin's event-source namespace and reference that
+server in `options.server`. This capability is available to external plugins as
+well as the bundled adapter; callers cannot supply a principal or credentials.
+Keep one prepared handle per webhook binding. It exposes opaque account/principal
+IDs, `revalidate()`, `assertCurrent()`, bounded profile requests,
+`unsubscribe(signal)`, and `dispose()`. Await `revalidate()` before accepting a
+callback or dispatching a queued event, then pass its synchronous current-source
+assertion into authorized ingress and `runEvent`. Revalidation reads the canonical
+credential owner, including other-process changes, and refreshes benign
+policy/session changes without replacing the handle. Successful credential refresh
+preserves the authorization lifetime; logout, terminal authorization loss, and
+replacement do not. Requests acquire fresh resolver credentials under that same
+lifetime and pinned MCP endpoint. A changed resolved URL retires the binding rather
+than redirecting renewals or cleanup, even if the resolver reuses its grant ID.
+
+The first subscribe attempt captures one exact webhook identity and bounded cleanup
+authority, even if its remote outcome is unknown. Renewals must use that identity.
+`unsubscribe(signal)` closes subscribe admission, waits for its in-flight request,
+and cleans up only the captured identity. Cleanup survives benign revalidation and
+source removal, but cannot borrow a replacement credential lifetime or be restored
+from persisted binding facts after restart. Dispose the handle after cleanup
+settles; otherwise the finite remote lease must expire.
+
+Requester connection resolvers receive `requireLiveAuthority: true` for these
+consumers. Return an `authority` observation alongside `url` and `headers`, with
+a non-secret `authorizationId`, `assertCurrent()`, async `revalidate()`, and
+`dispose()`. The ID must survive refresh and restart but change after disconnect
+or replacement, even when the same requester reconnects. Assertions must belong
+to the credential owner, not a snapshot of resolved headers. Disposal releases
+the observation, not the account. Use error code `MCP_AUTHORIZATION_RETIRED` for
+known lifetime loss and `MCP_AUTHORIZATION_UNAVAILABLE` for a temporary inability
+to establish authority. Temporary failures retain pending work without admitting
+it. A retired binding must not reacquire a later authorization. Credential-only
+resolvers remain supported for ordinary tools but cannot authorize durable Events. Missing host support is an explicit
+capability gap, not permission to use operator or shared-credential fallbacks.
+
+Use [version 2 service scheduling](/plugins/sdk-runtime/gateway-and-nodes#service-scheduling)
+for subscription renewal and backoff. Keep deadlines reconstructible from the
+owning durable state; protocol maintenance must not create a second scheduler
+or invoke a model.
+
 Current Gateway service handles also provide `await cron.isEnabled()` to observe
 whether automatic scheduling is enabled, including the `OPENCLAW_SKIP_CRON`
 override. It returns only a boolean, not storage metadata or permission to mutate

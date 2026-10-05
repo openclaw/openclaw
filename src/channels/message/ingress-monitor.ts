@@ -327,6 +327,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             }
             throw error;
           }
+          if (result?.kind === "transferred" || result?.kind === "pending") {
+            // Receipt transfer owns completion, including after cancellation.
+            settleDeferredClaim();
+            return result;
+          }
           if (result?.kind === "failed-retryable") {
             if (deferredHandoff && deferredClaim && !deferredClaimSettled) {
               await wrappedLifecycle.onFailed?.(result.error);

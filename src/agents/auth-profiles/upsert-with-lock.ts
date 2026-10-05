@@ -1,6 +1,7 @@
 /** Locked auth profile writes and attempt-scoped compensation. */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { replaceAuthProfileAuthorization } from "./authorization-lifetime.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
@@ -227,7 +228,7 @@ export async function persistAuthProfileBatch(
               );
             }
             previousProfiles.set(profileId, next.profiles[profileId]);
-            next.profiles[profileId] = entry.credential;
+            next.profiles[profileId] = replaceAuthProfileAuthorization(entry.credential);
             const existingStats = next.usageStats?.[profileId];
             if (params.resetFailureState && existingStats) {
               next.usageStats![profileId] = resetAuthProfileFailureState(existingStats);
@@ -405,9 +406,12 @@ export async function upsertAuthProfileWithLock(
           normalizeProviderId(existing.provider) === normalizeProviderId(credential.provider)
         ) {
           const { key: _key, keyRef: _keyRef, ...metadata } = existing;
-          store.profiles[params.profileId] = { ...metadata, ...credential };
+          store.profiles[params.profileId] = replaceAuthProfileAuthorization({
+            ...metadata,
+            ...credential,
+          });
         } else {
-          store.profiles[params.profileId] = credential;
+          store.profiles[params.profileId] = replaceAuthProfileAuthorization(credential);
         }
         return true;
       },

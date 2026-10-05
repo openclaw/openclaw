@@ -48,6 +48,33 @@ function outcomeFixture(
 }
 
 describe("cron timer outcome and failure policy regressions", () => {
+  it.each([false, true])("never invents an event retry slot during outcome replay=%s", (replay) => {
+    const startedAt = Date.parse("2026-10-05T00:00:00.000Z");
+    const { state, job } = outcomeFixture(startedAt, {
+      schedule: { kind: "event", source: "mcp-events", options: {} },
+      state: { sourceIdentity: "source-generation" },
+    });
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: "rate limit",
+        startedAt,
+        endedAt: startedAt + 1,
+      },
+      {
+        deferredNotifications: [],
+        ...(replay ? { replay: true, replaySchedule: { nextRunAtMs: startedAt + 60_000 } } : {}),
+      },
+    );
+    expect(job.enabled).toBe(true);
+    expect(job.state.lastRunStatus).toBe("error");
+    expect(job.state.consecutiveErrors).toBe(1);
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.state.sourceIdentity).toBe("source-generation");
+  });
+
   it("preserves every cadence after a transient recurring retry succeeds", () => {
     const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");
     const everyTwelveHoursMs = 12 * 60 * 60 * 1_000;

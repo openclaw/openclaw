@@ -1576,6 +1576,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/mcp-events:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/memory-core:
     dependencies:
       '@openclaw/fs-safe':

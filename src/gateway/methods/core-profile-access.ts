@@ -7,6 +7,7 @@ const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   // Wait for post-hello identity enrichment so an identified caller does not
   // cache a shared-only catalog before their personal accounts are available.
   "models.list",
+  "mcp.events.list",
   "presence.query",
   "webSearch.status",
   "webSearch.test",

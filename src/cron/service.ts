@@ -1,3 +1,4 @@
+import type { CronEventRunOptions } from "./event-source.js";
 /** Stateful CronService facade around the locked service operation helpers. */
 import type {
   CronServiceContract,
@@ -5,6 +6,7 @@ import type {
   CronServiceRunResult,
 } from "./service-contract.js";
 import type { CronListPageOptions } from "./service/list-page-types.js";
+import * as eventOps from "./service/ops-event.js";
 import * as lifecycleOps from "./service/ops-lifecycle.js";
 import * as mutationOps from "./service/ops-mutations.js";
 import * as readOps from "./service/ops-read.js";
@@ -100,6 +102,14 @@ export class CronService implements CronServiceContract {
 
   getSuspensionBlockerCount() {
     return this.startInProgress;
+  }
+
+  async readEventSources(source: string) {
+    return await eventOps.readEventSources(this.state, source);
+  }
+
+  async runEvent(id: string, opts: CronEventRunOptions) {
+    return await eventOps.runEvent(this.state, id, opts);
   }
 
   async status() {

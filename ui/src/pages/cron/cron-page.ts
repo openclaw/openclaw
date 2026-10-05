@@ -1,7 +1,7 @@
 import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { AgentsListResult, CronJob, CronScratchGetResult } from "../../api/types.ts";
+import type { AgentsListResult, CronJob } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -51,11 +51,14 @@ import {
   requiresDirectoryReload,
 } from "./delivery-conversations.ts";
 import { CronEditorClearance } from "./editor-clearance.ts";
+import { CronEventEditorController } from "./event-editor.ts";
+import { validateCronEventSelection } from "./event-source.ts";
 import {
   buildCronSuggestions,
   resolveConversationTargetSuggestions,
   THINKING_SUGGESTIONS,
 } from "./form-suggestions.ts";
+import { CronHeartbeatScratchController } from "./heartbeat-scratch.ts";
 import { resolveCronRouteData } from "./route-model.ts";
 import { CronRunTranscript } from "./run-transcript.ts";
 import type { CronDetailTab, CronListTab } from "./view-types.ts";
@@ -79,7 +82,6 @@ class CronPage extends OpenClawLightDomElement {
   @state() private modelSuggestionsError: string | null = null;
   @state() private listTab: CronListTab = "tasks";
   @state() private detailTab: CronDetailTab = "settings";
-  @state() private heartbeatScratch = "";
 
   private readonly runTranscript = new CronRunTranscript(this, () => {
     const scope = this.gateway.capture();
@@ -104,7 +106,23 @@ class CronPage extends OpenClawLightDomElement {
     isCurrentConnection: (scope) => this.gateway.isCurrent(scope),
     notify: (cronState) => this.requestCronUpdate(cronState),
   });
-  private heartbeatScratchRequest = 0;
+  private readonly eventSource = new CronEventEditorController({
+    currentCronState: () => this.cron,
+    context: () => this.context,
+    canManage: () => this.canManageCron,
+    isConnected: () => this.isConnected,
+    captureConnection: () => this.gateway.capture(),
+    isCurrentConnection: (scope) => this.gateway.isCurrent(scope),
+    notify: () => this.requestCronUpdate(),
+  });
+
+  private readonly heartbeatScratch = new CronHeartbeatScratchController({
+    currentCronState: () => this.cron,
+    canManage: () => this.canManageCron,
+    captureConnection: () => this.gateway.capture(),
+    isCurrentConnection: (scope) => this.gateway.isCurrent(scope),
+    notify: (cronState) => this.requestCronUpdate(cronState),
+  });
   private pageHidden = document.visibilityState === "hidden";
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -113,7 +131,7 @@ class CronPage extends OpenClawLightDomElement {
       if (change.initial) {
         this.resetGatewayState(change.snapshot);
       } else if (!readGatewayOperatorAccess(change.snapshot).canAdmin) {
-        this.clearHeartbeatScratch();
+        this.heartbeatScratch.reset();
         this.deliveryDirectory.clear();
       }
     },
@@ -189,12 +207,14 @@ class CronPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
+    this.eventSource.reset();
     super.disconnectedCallback();
   }
 
   private resetGatewayState(snapshot?: ApplicationContext["gateway"]["snapshot"]) {
     this.runTranscript.close();
-    this.clearHeartbeatScratch();
+    this.heartbeatScratch.reset();
+    this.eventSource.reset();
     invalidateCronRefresh(this.cron);
     const connected = snapshot?.phase === "connected";
     const cron = createInitialCronState({
@@ -278,6 +298,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   override updated() {
+    this.eventSource.sync();
     const routeData = this.pendingRouteData;
     const client = this.cron.client;
     if (routeData?.session && this.cron.cronJobsSnapshotRevision && !this.cron.cronLoading) {
@@ -394,7 +415,13 @@ class CronPage extends OpenClawLightDomElement {
       return;
     }
     const current = this.cron.cronForm;
-    const resolvedPatch = invalidateStaleDeliveryRoute(current, patch);
+    const eventPatch =
+      patch.eventServer !== undefined && patch.eventServer !== current.eventServer
+        ? { ...patch, eventName: "", eventArguments: "{}" }
+        : patch.eventName !== undefined && patch.eventName !== current.eventName
+          ? { ...patch, eventArguments: "{}" }
+          : patch;
+    const resolvedPatch = invalidateStaleDeliveryRoute(current, eventPatch);
     const next = normalizeCronFormState({ ...this.cron.cronForm, ...resolvedPatch }, resolvedPatch);
     this.cron.cronForm = next;
     this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
@@ -405,7 +432,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private selectJob(job: CronJob, runId: string | null = null) {
-    this.clearHeartbeatScratch();
+    this.heartbeatScratch.reset();
     this.pendingRouteData = null;
     this.highlightedRunId = runId;
     this.pendingRunScroll = Boolean(runId);
@@ -417,7 +444,7 @@ class CronPage extends OpenClawLightDomElement {
     this.deliveryDirectory.openEditor();
     this.requestCronUpdate();
     if (job.payload?.kind === "heartbeat") {
-      void this.loadHeartbeatScratch(this.cron, job.id, this.heartbeatScratchRequest);
+      void this.heartbeatScratch.load(this.cron, job.id);
     }
     void this.runCronTask(async (cronState) => {
       updateCronRunsFilter(cronState, { cronRunsScope: "job" });
@@ -429,47 +456,11 @@ class CronPage extends OpenClawLightDomElement {
     });
   }
 
-  private clearHeartbeatScratch() {
-    this.heartbeatScratchRequest += 1;
-    this.heartbeatScratch = "";
-  }
-
-  private async loadHeartbeatScratch(cronState: CronState, jobId: string, requestId: number) {
-    const client = cronState.client;
-    if (!this.canManageCron || !client || !cronState.connected) {
-      return;
-    }
-    const connectionScope = this.gateway.capture();
-    if (!connectionScope) {
-      return;
-    }
-    // Scratch is admin-only and selection-owned. Revalidate every owner after
-    // the request so a stale response cannot survive a scope or panel change.
-    const isCurrent = () =>
-      this.cron === cronState &&
-      this.heartbeatScratchRequest === requestId &&
-      this.gateway.isCurrent(connectionScope) &&
-      this.canManageCron &&
-      cronState.cronEditingJob?.id === jobId &&
-      cronState.cronForm.payloadKind === "heartbeat";
-    try {
-      const result = await client.request<CronScratchGetResult>("cron.scratch.get", { id: jobId });
-      if (isCurrent()) {
-        this.heartbeatScratch = result.scratch?.content ?? "";
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        cronState.cronError = formatUiError(error);
-        this.requestCronUpdate(cronState);
-      }
-    }
-  }
-
   private openCreate(patch?: Partial<CronFormState>) {
     if (!this.canManageCron) {
       return;
     }
-    this.clearHeartbeatScratch();
+    this.heartbeatScratch.reset();
     this.pendingRouteData = null;
     // Opening the create form exits whatever editor was open, so the outgoing
     // editor's directory retires with it and a delete or save still awaiting
@@ -488,7 +479,7 @@ class CronPage extends OpenClawLightDomElement {
     if (!this.canManageCron) {
       return;
     }
-    this.clearHeartbeatScratch();
+    this.heartbeatScratch.reset();
     this.pendingRouteData = null;
     // A clone is a prefilled create: the editor submits cron.add, not update.
     startCronClone(this.cron, job);
@@ -562,7 +553,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private closePanel() {
-    this.clearHeartbeatScratch();
+    this.heartbeatScratch.reset();
     this.pendingRouteData = null;
     // Back is a confirmed editor exit: retire discovery so a pending or
     // published directory failure cannot surface on the overview.
@@ -578,6 +569,12 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private submitForm(options: { runNow?: boolean } = {}) {
+    const eventErrors = validateCronEventSelection(this.cron.cronForm, this.eventSource.view);
+    if (hasCronFormErrors(eventErrors)) {
+      this.cron.cronFieldErrors = { ...validateCronForm(this.cron.cronForm), ...eventErrors };
+      this.requestCronUpdate();
+      return;
+    }
     const connectionScope = this.gateway.capture();
     const editorGeneration = this.deliveryDirectory.generation;
     this.runCronAdminTask(async (cronState) => {
@@ -617,6 +614,11 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   override render() {
+    const eventSource = this.eventSource.view;
+    const fieldErrors = {
+      ...this.cron.cronFieldErrors,
+      ...validateCronEventSelection(this.cron.cronForm, eventSource),
+    };
     const channels = this.context.channels.state;
     const suggestions = buildCronSuggestions({
       channels,
@@ -683,7 +685,7 @@ class CronPage extends OpenClawLightDomElement {
             this.modelSuggestionsError,
           busy: this.cron.cronBusy,
           form: this.cron.cronForm,
-          heartbeatScratch: canManage ? this.heartbeatScratch : "",
+          heartbeatScratch: canManage ? this.heartbeatScratch.content : "",
           channels: channels.channelsSnapshot?.channelMeta?.length
             ? channels.channelsSnapshot.channelMeta.map((entry) => entry.id)
             : (channels.channelsSnapshot?.channelOrder ?? []),
@@ -698,8 +700,9 @@ class CronPage extends OpenClawLightDomElement {
           runsDeliveryStatuses: this.cron.cronRunsDeliveryStatuses,
           runsQuery: this.cron.cronRunsQuery,
           runsSortDir: this.cron.cronRunsSortDir,
-          fieldErrors: this.cron.cronFieldErrors,
-          canSubmit: !hasCronFormErrors(this.cron.cronFieldErrors),
+          eventSource,
+          fieldErrors,
+          canSubmit: !hasCronFormErrors(fieldErrors),
           agentSuggestions: suggestions.agentSuggestions,
           modelSuggestions: suggestions.modelSuggestions,
           thinkingSuggestions: THINKING_SUGGESTIONS,

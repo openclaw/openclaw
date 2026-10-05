@@ -60,6 +60,7 @@ import {
 } from "./runtime-read.js";
 import { assertPersonalAuthProfileRuntime, authProfileRuntimeMode } from "./runtime-scope.js";
 import {
+  withCredentialSources,
   captureRuntimeAuthProfileLegacyCandidates,
   pruneAuthProfileStoreReferences,
   createEmptyAuthProfileStore,
@@ -113,26 +114,7 @@ import {
   buildLocalAuthProfileStoreForSave,
   type SaveAuthProfileStoreOptions,
 } from "./store-save.js";
-import type {
-  AuthProfileCredentialSource,
-  AuthProfileStore,
-  RuntimeAuthProfileStore,
-} from "./types.js";
-
-function withCredentialSources(
-  store: AuthProfileStore,
-  databasePath: string,
-): RuntimeAuthProfileStore {
-  return {
-    ...store,
-    runtimeCredentialSources: Object.fromEntries(
-      Object.entries(store.profiles).map(([profileId, credential]) => [
-        profileId,
-        { databasePath, provider: credential.provider },
-      ]),
-    ),
-  };
-}
+import type { AuthProfileCredentialSource, AuthProfileStore } from "./types.js";
 
 /** Run a bounded operation without persisted or external CLI auth profiles. */
 export function withEnvOnlyAuthProfileStore<T>(run: () => T): T {
@@ -179,7 +161,7 @@ export function applyScopedAuthReadThrough(store: AuthProfileStore): AuthProfile
   );
 }
 
-function isEnvOnlyAuthProfileRuntime(): boolean {
+export function isEnvOnlyAuthProfileRuntime(): boolean {
   return authProfileRuntimeMode.getStore()?.kind === "env-only";
 }
 

@@ -121,6 +121,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["tools.catalog", "tools-catalog", "operator.read", "<=2026.7"],
   ["tools.effective", "tools-effective", "operator.read", "<=2026.7", { startup: true }],
   ["tools.invoke", "tools-invoke", "operator.write", "<=2026.7"],
+  ["mcp.events.list", "mcp-events", "operator.read", "2026.9"],
   ["mcp.app.view", "mcp-app", "operator.read", "<=2026.7"],
   ["mcp.app.listTools", "mcp-app", "operator.read", "<=2026.7"],
   ["mcp.app.listResources", "mcp-app", "operator.read", "<=2026.7"],

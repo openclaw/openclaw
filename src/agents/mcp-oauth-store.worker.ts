@@ -1,7 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { ensureMcpOAuthPendingSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -12,6 +15,10 @@ import type {
   WorkerOperationHandlers,
   WorkerOperations,
 } from "../state/worker-operation-registry.js";
+import {
+  projectMcpOAuthAuthorization,
+  type McpOAuthAuthorizationReceipt,
+} from "./mcp-oauth-authorization-facts.js";
 import {
   readMcpOAuthStoreInDatabase,
   replaceMcpOAuthStoreInDatabase,
@@ -87,6 +94,11 @@ export const mcpOAuthOperations = {
         input.mutation,
       );
       replaceMcpOAuthStoreInDatabase(database, input.storeKey, result.store, assertOwned);
+      deferSqliteWorkerCommitReceipt(database, {
+        kind: "mcp-oauth-authorization",
+        storeKey: input.storeKey,
+        authorization: projectMcpOAuthAuthorization(result.store),
+      } satisfies McpOAuthAuthorizationReceipt);
       return result;
     },
   ),
@@ -142,6 +154,11 @@ export const mcpOAuthOperations = {
       assertOwned,
     );
     deletePending(database, input.storeKey, assertOwned);
+    deferSqliteWorkerCommitReceipt(database, {
+      kind: "mcp-oauth-authorization",
+      storeKey: input.storeKey,
+      authorization: { authorizationId: null },
+    } satisfies McpOAuthAuthorizationReceipt);
   }, true),
   "mcpOAuth.clearPendingPrefix": (input: string, { open }): void => {
     const database = open();

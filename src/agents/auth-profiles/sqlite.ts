@@ -9,6 +9,7 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
+import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   assertExistingAgentSchemaOwner,
@@ -28,6 +29,12 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
+import {
+  prepareAuthProfileAuthorizationWrite,
+  readAuthProfileAuthorizationLifetimes,
+} from "./authorization-lifetime.js";
+import { publishAuthProfileAuthorization } from "./authorization-observation.js";
+import { AUTH_STORE_VERSION } from "./constants.js";
 import {
   resolveSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
@@ -333,8 +340,21 @@ export function writePersistedAuthProfileStoreRaw(
   database?: AuthProfileDatabase,
 ): void {
   const kind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const write = (target: AuthProfileDatabase) =>
-    writeAuthProfileJsonCell(target.db, "store", kind, payload);
+  const write = (target: AuthProfileDatabase) => {
+    const previous = inspectAuthProfileJsonCell(target.db, "store", kind);
+    if (previous.status === "unreadable") {
+      throw new Error("Auth profile credential store is unreadable");
+    }
+    const next = prepareAuthProfileAuthorizationWrite(
+      previous.status === "readable" ? previous.raw : undefined,
+      payload,
+    );
+    writeAuthProfileJsonCell(target.db, "store", kind, next);
+    const publish = () => publishAuthProfileAuthorization(target.path, next);
+    if (!deferSqlitePostCommitPublication(target.db, publish)) {
+      publish();
+    }
+  };
   if (database) {
     write(database);
   } else {
@@ -348,8 +368,29 @@ export function deletePersistedAuthProfileStoreRaw(
   database?: AuthProfileDatabase,
 ): void {
   const kind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const remove = (target: AuthProfileDatabase) =>
+  const remove = (target: AuthProfileDatabase) => {
+    const previous = inspectAuthProfileJsonCell(target.db, "store", kind);
+    if (previous.status === "unreadable") {
+      throw new Error("Auth profile credential store is unreadable");
+    }
+    if (
+      previous.status === "readable" &&
+      Object.keys(readAuthProfileAuthorizationLifetimes(previous.raw)).length
+    ) {
+      // Credential removal retains only enrolled selection tombstones; it cannot restore inheritance ABA.
+      writePersistedAuthProfileStoreRaw(
+        { version: AUTH_STORE_VERSION, profiles: {} },
+        agentDir,
+        target,
+      );
+      return;
+    }
     deleteAuthProfileJsonCell(target.db, "store", kind);
+    const publish = () => publishAuthProfileAuthorization(target.path, undefined);
+    if (!deferSqlitePostCommitPublication(target.db, publish)) {
+      publish();
+    }
+  };
   if (database) {
     remove(database);
   } else {

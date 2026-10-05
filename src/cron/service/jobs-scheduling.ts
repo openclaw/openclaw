@@ -7,11 +7,17 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
+import {
+  cronSourceIdentity,
+  cronSourceScheduleKey,
+  createCronSourceIdentity,
+  setCronSourceIdentity,
+} from "../source-schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
 import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import { CRON_STUCK_RUN_MS } from "../store/run-receipt-store.js";
 import type { CronScheduleMaintenanceOptions } from "../store/runtime-worker.types.js";
-import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
+import { resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
 import {
@@ -332,7 +338,11 @@ export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
 }
 
 export function isTimeScheduledJob(job: Pick<CronJob, "schedule">): boolean {
-  return job.schedule.kind !== "on-exit" && job.schedule.kind !== "stream";
+  return (
+    job.schedule.kind !== "on-exit" &&
+    job.schedule.kind !== "stream" &&
+    job.schedule.kind !== "event"
+  );
 }
 
 /** Computes the next run timestamp for enabled jobs across every/at/cron schedules. */
@@ -447,12 +457,12 @@ function normalizeJobTickState(params: {
     changed = true;
   }
 
-  if (job.schedule.kind === "stream" && !job.state.streamSourceIdentity?.trim()) {
+  if (cronSourceScheduleKey(job.schedule) !== undefined && !cronSourceIdentity(job)?.trim()) {
     // Identity is store-owned state. A hand-imported or pre-identity row must
     // not reach the watcher (which fails closed on a missing identity) or
     // admission (which would reject every batch); assign one like any other
     // repairable tick state.
-    job.state.streamSourceIdentity = createCronStreamSourceIdentity();
+    setCronSourceIdentity(job, createCronSourceIdentity());
     changed = true;
   }
 

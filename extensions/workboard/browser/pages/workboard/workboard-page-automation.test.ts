@@ -36,6 +36,19 @@ function mountAutomation(
 }
 
 describe("Workboard automation lifecycle", () => {
+  it("renders an event-backed board without assuming a stream command or timed next run", async () => {
+    const page = mountAutomation([{ id: "planning", automationJobId: "job-events" }], () => ({
+      ...automationJob("job-events", "Review incoming events"),
+      schedule: { kind: "event", source: "mcp-events", options: { name: "comment.created" } },
+      state: {},
+    }));
+    await vi.waitFor(() => expect(page.heading()?.textContent).toContain("Review incoming events"));
+    const info = page.container.querySelector(".workboard-automation-info");
+    expect(info?.textContent).toContain("Event: mcp-events");
+    expect(info?.textContent).toContain("Waiting for event");
+    expect(info?.textContent).not.toContain("Not scheduled");
+  });
+
   it("omits the automation link when none is attached", async () => {
     const page = mountAutomation([{ id: "planning" }], () =>
       automationJob("job-planning", "Planning job"),

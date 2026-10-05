@@ -57,6 +57,7 @@ const CronJobsScheduleKindFilterSchema = Type.Union([
   Type.Literal("cron"),
   Type.Literal("on-exit"),
   Type.Literal("stream"),
+  Type.Literal("event"),
 ]);
 const CronJobsLastRunStatusFilterSchema = Type.Union([
   Type.Literal("all"),
@@ -154,6 +155,11 @@ const CronRunLogJobIdSchema = Type.String({
 
 /** Schedule expression for one-time, interval, or cron-expression jobs. */
 const CronScheduleSchema = Type.Union([
+  closedObject({
+    kind: Type.Literal("event"),
+    source: Type.String({ minLength: 1, pattern: "^[a-z0-9][a-z0-9._-]*$" }),
+    options: Type.Record(Type.String(), Type.Unknown()),
+  }),
   closedObject({
     kind: Type.Literal("at"),
     at: NonEmptyString,
@@ -466,6 +472,8 @@ export const CronJobStateSchema = closedObject({
   // reported for diagnostics but intentionally absent from the writable patch
   // schema so external callers cannot spoof source ownership.
   streamSourceIdentity: Type.Optional(Type.String()),
+  /** Store-owned event-source generation; excluded from job patches. */
+  sourceIdentity: Type.Optional(Type.String()),
   streamDroppedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamCoalescedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamLastStartedAtMs: Type.Optional(CronDateTimestampMsSchema),

@@ -16,8 +16,81 @@ import type {
   McpServerConnectionResolveContext,
   OpenClawPluginMcpServerConnectionResolver,
 } from "../plugins/types.js";
+import { McpConnectionAuthorityError } from "./mcp-connection-authority-error.js";
+import type { McpConnectionAuthority } from "./mcp-connection-authority.types.js";
 
 export type { McpServerConnectionResolved };
+
+function isLiveConnectionAuthority(value: unknown): value is McpConnectionAuthority {
+  return (
+    isRecord(value) &&
+    typeof value.authorizationId === "string" &&
+    value.authorizationId.length > 0 &&
+    value.authorizationId.length <= 2048 &&
+    typeof value.assertCurrent === "function" &&
+    typeof value.revalidate === "function" &&
+    typeof value.dispose === "function"
+  );
+}
+
+function retainResolverObservation(
+  authority: McpConnectionAuthority,
+  issuer: { pluginId: string; serverName: string },
+): McpConnectionAuthority {
+  const authorizationId = authority.authorizationId;
+  let disposed = false;
+  const assertCurrent = () => {
+    if (disposed || authority.authorizationId !== authorizationId) {
+      throw new McpConnectionAuthorityError("retired");
+    }
+    try {
+      authority.assertCurrent();
+    } catch (error) {
+      // The live assertion can run inside admission diagnostics; never leak provider credentials.
+      throw new McpConnectionAuthorityError(
+        isRecord(error) && error.code === "MCP_AUTHORIZATION_RETIRED" ? "retired" : "unavailable",
+      );
+    }
+  };
+  return {
+    // An opaque grant is unique only within its issuing connector, not across plugins.
+    authorizationId: JSON.stringify([issuer.pluginId, issuer.serverName, authorizationId]),
+    assertCurrent,
+    revalidate: async () => {
+      if (disposed || authority.authorizationId !== authorizationId) {
+        throw new McpConnectionAuthorityError("retired");
+      }
+      try {
+        await raceWithTimeout(
+          Promise.resolve(authority.revalidate()),
+          MCP_CONNECTION_RESOLVER_TIMEOUT_MS,
+          () => {
+            throw new McpResolverTimeoutError();
+          },
+          { ref: false },
+        );
+        assertCurrent();
+      } catch (error) {
+        // Resolver errors may contain credentials. Preserve only the public authority disposition.
+        throw new McpConnectionAuthorityError(
+          isRecord(error) && error.code === "MCP_AUTHORIZATION_RETIRED" ? "retired" : "unavailable",
+        );
+      }
+    },
+    dispose: () => {
+      if (!disposed) {
+        disposed = true;
+        authority.dispose();
+      }
+    },
+  };
+}
+
+function releaseResolverObservation(value: McpServerConnectionResolved | null): void {
+  if (typeof value?.authority?.dispose === "function") {
+    value.authority.dispose();
+  }
+}
 
 type McpServerConnectionResolverEntry = OpenClawPluginMcpServerConnectionResolver & {
   pluginId: string;
@@ -172,7 +245,12 @@ export async function resolveRequesterScopedMcpConnections(params: {
   requesterSenderId?: string | null;
   agentAccountId?: string | null;
   messageChannel?: string | null;
+  /** Explicit ownership transfer for event consumers; ordinary tool callers retain no handle. */
+  retainAuthority?: boolean;
 }): Promise<Map<string, McpServerConnectionResolved>> {
+  if (params.retainAuthority && params.serverNames.length !== 1) {
+    throw new Error("Live MCP authority must resolve one exact server");
+  }
   const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
   const resolved = new Map<string, McpServerConnectionResolved>();
   if (!requesterSenderId || params.serverNames.length === 0) {
@@ -185,6 +263,7 @@ export async function resolveRequesterScopedMcpConnections(params: {
     requesterSenderId,
     ...(agentAccountId ? { agentAccountId } : {}),
     ...(messageChannel ? { messageChannel } : {}),
+    ...(params.retainAuthority ? { requireLiveAuthority: true as const } : {}),
   };
   const timeoutMs = MCP_CONNECTION_RESOLVER_TIMEOUT_MS;
   const sortedNames = [...params.serverNames].toSorted((a, b) => a.localeCompare(b));
@@ -192,33 +271,67 @@ export async function resolveRequesterScopedMcpConnections(params: {
     sortedNames.map(async (serverName) => {
       const entry = resolvers.get(serverName);
       if (!entry) {
+        if (params.retainAuthority) {
+          throw new McpConnectionAuthorityError("unavailable");
+        }
         return null;
       }
+      let result: McpServerConnectionResolved | null = null;
+      let transferred = false;
       try {
-        const result = await raceWithTimeout(
-          Promise.resolve(entry.resolve(ctx)),
-          timeoutMs,
-          () => {
-            throw new McpResolverTimeoutError();
-          },
-          { ref: false },
-        );
+        const resolving = Promise.resolve(entry.resolve(ctx));
+        try {
+          result = await raceWithTimeout(
+            resolving,
+            timeoutMs,
+            () => {
+              throw new McpResolverTimeoutError();
+            },
+            { ref: false },
+          );
+        } catch (error) {
+          // A timed-out resolver may still create an observation; its eventual result owns cleanup.
+          if (error instanceof McpResolverTimeoutError) {
+            void resolving.then(releaseResolverObservation).catch(() => {
+              logWarn("bundle-mcp: late resolver authority cleanup failed");
+            });
+          }
+          throw error;
+        }
         if (!result || typeof result.url !== "string" || result.url.trim().length === 0) {
+          if (params.retainAuthority) {
+            throw new McpConnectionAuthorityError(result === null ? "retired" : "unavailable");
+          }
           return null;
         }
+        const authority = params.retainAuthority ? result.authority : undefined;
+        if (params.retainAuthority && !isLiveConnectionAuthority(authority)) {
+          throw new McpConnectionAuthorityError("unavailable");
+        }
+        authority?.assertCurrent();
         const filteredHeaders = filterStringRecord(result.headers);
         const headers = filteredHeaders
           ? Object.fromEntries(
               Object.entries(filteredHeaders).toSorted(([a], [b]) => a.localeCompare(b)),
             )
           : undefined;
-        const connection = {
+        const connection: McpServerConnectionResolved = {
           url: result.url.trim(),
           ...(headers ? { headers } : {}),
-        } satisfies McpServerConnectionResolved;
+          ...(authority ? { authority: retainResolverObservation(authority, entry) } : {}),
+        };
         registerResolvedConnectionSecrets(connection);
+        transferred = Boolean(authority);
         return { serverName, connection };
       } catch (error) {
+        if (params.retainAuthority) {
+          // Resolver errors may contain credentials; do not retain the untrusted cause.
+          throw new McpConnectionAuthorityError(
+            isRecord(error) && error.code === "MCP_AUTHORIZATION_RETIRED"
+              ? "retired"
+              : "unavailable",
+          );
+        }
         // External plugin boundary: never fail the whole MCP run for one resolver.
         // Fixed classification only — no dynamic error text (plugin-controlled / secret-bearing).
         const kind =
@@ -227,6 +340,14 @@ export async function resolveRequesterScopedMcpConnections(params: {
           `bundle-mcp: connection resolver for server "${serverName}" (plugin "${entry.pluginId}") failed with ${kind}`,
         );
         return null;
+      } finally {
+        if (!transferred) {
+          try {
+            releaseResolverObservation(result);
+          } catch {
+            logWarn("bundle-mcp: resolver authority cleanup failed");
+          }
+        }
       }
     }),
   );

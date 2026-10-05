@@ -1,13 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
+import { createCronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
 import type { CronExternalStateChange } from "../store/runtime-worker.types.js";
-import {
-  CronStreamSourceRetirementError,
-  createCronStreamSourceIdentity,
-  ownsStreamSource,
-} from "../stream-schedule.js";
+import { CronStreamSourceRetirementError } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState, resolveFailureAlert } from "./failure-alerts.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
@@ -40,7 +37,7 @@ async function mutateExternalState(
       const job = findJobOrThrow(state, jobId);
       if (
         change.source &&
-        !ownsStreamSource(job, change.source.scheduleKey, change.source.identity)
+        !ownsCronSource(job, change.source.scheduleKey, change.source.identity)
       ) {
         return undefined;
       }
@@ -199,7 +196,7 @@ export async function retireExternalStreamSource(
   const job = await mutateExternalState(state, id, {
     kind: "retire",
     source: { scheduleKey, identity },
-    nextIdentity: createCronStreamSourceIdentity(),
+    nextIdentity: createCronSourceIdentity(),
   });
   return job?.state.streamSourceIdentity;
 }

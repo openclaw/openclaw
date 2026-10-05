@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
+import type { AuthProfileAuthorizationOperations } from "./authorization-enrollment.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { mergePersistedAuthProfileState } from "./persisted.js";
 import { inspectAuthProfileJsonCell, writeAuthProfileJsonCell } from "./sqlite-json.js";
@@ -37,7 +38,7 @@ export type InlineAuthFailureResult =
   | { ok: true; receipt: InlineAuthFailureReceipt }
   | { ok: false; error: OpenClawStateWorkerErrorPayload };
 
-export type InlineAuthFailureOperations = {
+export type InlineAuthFailureOperations = AuthProfileAuthorizationOperations & {
   "authProfiles.inlineSnapshot": {
     input: undefined;
     output: import("./types.js").AuthProfileRowRead;

@@ -131,6 +131,10 @@ export function resolveMcpTransport(
     agentDir?: string;
     prepareDataDir?: string;
     requesterScope?: SessionMcpRequesterScope;
+    /** Protocol-owned headers for a single stateless request, not credential overrides. */
+    requestHeaders?: Record<string, string>;
+    /** Recheck the owning operation after asynchronous auth and before HTTP effects. */
+    beforeRequest?: () => void;
   },
 ): ResolvedMcpTransport | null {
   const resolved = resolveMcpTransportConfig(serverName, rawServer);
@@ -177,6 +181,7 @@ export function resolveMcpTransport(
     clientCert: resolved.clientCert,
     clientKey: resolved.clientKey,
     resourceUrl: resolved.url,
+    beforeRequest: options?.beforeRequest,
   });
   const headers =
     resolved.auth === "oauth" || authProfileId
@@ -210,6 +215,7 @@ export function resolveMcpTransport(
             clientKey: resolved.clientKey,
             resourceUrl: resolved.url,
             timeoutMs: resolved.requestTimeoutMs,
+            beforeRequest: options?.beforeRequest,
             headers,
           }),
           identity: oauthIdentity,
@@ -217,9 +223,18 @@ export function resolveMcpTransport(
         })
       : baseFetch;
   if (resolved.transportType === "streamable-http") {
+    let requestInit: RequestInit | undefined =
+      resolved.auth === "oauth" || !headers ? undefined : { headers };
+    if (options?.requestHeaders) {
+      const requestHeaders = new Headers(requestInit?.headers);
+      for (const [name, value] of Object.entries(options.requestHeaders)) {
+        requestHeaders.set(name, value);
+      }
+      requestInit = { headers: requestHeaders };
+    }
     return {
       transport: new OpenClawStreamableHTTPClientTransport(new URL(resolved.url), {
-        requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
+        requestInit,
         fetch: httpFetch,
       }),
       ...metadata,

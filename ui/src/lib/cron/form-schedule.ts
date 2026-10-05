@@ -1,3 +1,5 @@
+import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveDefaultCronStaggerMs } from "../../../../src/cron/stagger.js";
 import type { CronJob } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -72,6 +74,20 @@ export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boo
   if (form.scheduleKind !== schedule.kind) {
     return false;
   }
+  if (schedule.kind === "event") {
+    if (schedule.source !== "mcp-events") {
+      return true;
+    }
+    try {
+      return (
+        form.eventServer.trim() === schedule.options.server &&
+        form.eventName.trim() === schedule.options.name &&
+        jsonSchemaValuesEqual(JSON.parse(form.eventArguments), schedule.options.arguments ?? {})
+      );
+    } catch {
+      return false;
+    }
+  }
   if (schedule.kind === "at") {
     return form.scheduleAt === formatDateTimeLocal(schedule.at);
   }
@@ -92,6 +108,21 @@ export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boo
 }
 
 export function buildCronSchedule(form: CronFormState, previous?: CronJob["schedule"]) {
+  if (form.scheduleKind === "event") {
+    const args: unknown = JSON.parse(form.eventArguments);
+    if (!isRecord(args)) {
+      throw new Error(t("cron.events.eventArgumentsInvalid"));
+    }
+    return {
+      kind: "event" as const,
+      source: "mcp-events",
+      options: {
+        server: form.eventServer.trim(),
+        name: form.eventName.trim(),
+        arguments: args,
+      },
+    };
+  }
   if (form.scheduleKind === "at") {
     const ms = Date.parse(form.scheduleAt);
     if (!Number.isFinite(ms)) {

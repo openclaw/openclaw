@@ -2,6 +2,7 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobEffectiveAgentId, tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { CronEventClaimInvalidatedError, type CronEventAdmission } from "../event-source.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { projectCronReceiptAuthorityJobFacts } from "../store/receipt-authority-facts.js";
@@ -43,6 +44,7 @@ export async function reserveCronRuns(params: {
   immediateJobIds?: ReadonlySet<string>;
   reservedAtMs: number;
   requestRunId?: string;
+  event?: CronEventAdmission;
   preserveSchedule: boolean;
   scheduleOwnershipAtMs: number;
   onExit: boolean;
@@ -72,6 +74,7 @@ export async function reserveCronRuns(params: {
         preserveSchedule: params.preserveSchedule,
         scheduleOwnershipAtMs: params.scheduleOwnershipAtMs,
         onExit: params.onExit,
+        event: params.event,
       },
       assertCurrent: params.assertCurrent,
       prepare(facts) {
@@ -178,6 +181,8 @@ export async function activateReservedCronRun(params: {
   startedAtMs: number;
   commitGuard?: () => void;
   onExitSchedule?: Extract<CronJob["schedule"], { kind: "on-exit" }>;
+  event?: CronEventAdmission;
+  onEventTransferred?: (receipt: CronRunReceiptHandle) => void;
 }): Promise<CronRuntimeMutationContracts["cron.activateRun"]["outcome"]["activation"]> {
   const { state } = params;
   const reservation = state.queuedRunReservationsByJobId.get(params.job.id);
@@ -196,6 +201,7 @@ export async function activateReservedCronRun(params: {
       storeKey,
       handle: { ...runReceipt },
       startedAtMs: params.startedAtMs,
+      event: params.event,
       onExitSchedule: params.onExitSchedule ? { ...params.onExitSchedule } : undefined,
     },
     assertCurrent() {
@@ -223,9 +229,15 @@ export async function activateReservedCronRun(params: {
       };
     },
     publish(committed) {
+      if (committed.eventInvalidated) {
+        throw new CronEventClaimInvalidatedError();
+      }
       activation = committed.activation;
       if (!activation) {
         return;
+      }
+      if (params.event) {
+        params.onEventTransferred?.(activation.receipt);
       }
       publishCronReceiptAuthorityAdmission(
         context,

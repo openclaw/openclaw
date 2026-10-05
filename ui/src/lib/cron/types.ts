@@ -30,6 +30,10 @@ export type CronFormState = {
   // Process-backed schedules are read-only because the form cannot edit their commands.
   // Preserve their schedule verbatim on save instead of rebuilding it.
   scheduleKind: CronJob["schedule"]["kind"];
+  eventServer: string;
+  eventName: string;
+  eventArguments: string;
+  eventSource: string;
   scheduleAt: string;
   everyAmount: string;
   everyUnit: "seconds" | "minutes" | "hours" | "days";
@@ -71,6 +75,9 @@ export type CronFormState = {
 
 export type CronFieldKey =
   | "name"
+  | "eventServer"
+  | "eventName"
+  | "eventArguments"
   | "scheduleAt"
   | "everyAmount"
   | "cronExpr"

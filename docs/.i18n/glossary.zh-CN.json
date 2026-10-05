@@ -1,5 +1,21 @@
 [
   {
+    "source": "MCP Events",
+    "target": "MCP Events"
+  },
+  {
+    "source": "Mcp Events plugin reference",
+    "target": "MCP Events 插件参考"
+  },
+  {
+    "source": "MCP connections",
+    "target": "MCP 连接"
+  },
+  {
+    "source": "Plugin service runtime",
+    "target": "插件服务运行时"
+  },
+  {
     "source": "X / Twitter",
     "target": "X / Twitter"
   },

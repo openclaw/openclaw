@@ -90,6 +90,7 @@ export type CronRuntimeMutationContracts = {
     };
     outcome: {
       reservations: Array<{ job: CronJob; runReceipt: CronRunReceiptHandle }>;
+      eventInvalidated?: boolean;
       replacedReceipts: CronRunReceiptHandle[];
     };
   };
@@ -105,6 +106,7 @@ export type CronRuntimeMutationContracts = {
     preparation: { markerAtMs: number; defaultAgentId?: string };
     outcome: {
       activation?: { job: CronJob; receipt: CronRunReceiptHandle; previousLastError?: string };
+      eventInvalidated?: boolean;
     };
   };
   "cron.releaseReservations": {

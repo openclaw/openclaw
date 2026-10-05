@@ -1,10 +1,10 @@
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
+import { createCronSourceIdentity } from "../source-schedule.js";
 import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
 } from "../store/delivery-codec.js";
-import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type {
   CronJob,
   CronDeliveryTrace,
@@ -90,7 +90,7 @@ export function applyTriggerRunResult(
     result.status === "ok"
   ) {
     if (job.schedule.kind === "stream") {
-      job.state.streamSourceIdentity = createCronStreamSourceIdentity();
+      job.state.streamSourceIdentity = createCronSourceIdentity();
     }
     job.enabled = false;
     job.state.nextRunAtMs = undefined;

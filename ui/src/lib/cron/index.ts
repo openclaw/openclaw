@@ -5,9 +5,6 @@ import {
   readNonEmptyStringPreservingWhitespace,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
-import { hasCanonicalCronDeliveryMode } from "../../../../src/cron/store/delivery-codec.js";
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
-import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronRunResult, CronStatus, CronPayload } from "../../api/types.ts";
@@ -19,14 +16,13 @@ import {
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import { parseCronDurationMs } from "./decimal.ts";
+import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts";
 import {
-  formatDateTimeLocal,
-  parseEverySchedule,
-  durationMsToSecondsString,
-  parseStaggerSchedule,
-  hasUnchangedCronSchedule,
-  buildCronSchedule,
-} from "./form-schedule.ts";
+  DEFAULT_CRON_FORM,
+  isReadOnlyCronPayload,
+  jobToForm,
+  normalizeCronFormState,
+} from "./form.ts";
 import { loadCronJobsPage } from "./jobs.ts";
 import { getCronJobPayload } from "./payload.ts";
 import { cronRunNotStartedMessage } from "./run-feedback.ts";
@@ -34,67 +30,13 @@ import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.t
 import type { CronFieldErrors, CronFormState, CronState } from "./types.ts";
 import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 
+export { normalizeCronFormState } from "./form.ts";
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs.ts";
 export { getCronJobPayload } from "./payload.ts";
 export { resolveConfiguredCronModelSuggestions } from "./model-suggestions.ts";
 
 const CRON_CHANNEL_LAST = "last";
-
-function isCronFormSessionTarget(value: string): value is CronFormState["sessionTarget"] {
-  return (
-    value === "main" ||
-    value === "isolated" ||
-    value === "current" ||
-    (value.startsWith("session:") && value.length > "session:".length)
-  );
-}
-
-const DEFAULT_CRON_FORM: CronFormState = {
-  name: "",
-  description: "",
-  agentId: "",
-  sessionKey: "",
-  clearAgent: false,
-  enabled: true,
-  deleteAfterRun: false,
-  scheduleKind: "every",
-  scheduleAt: "",
-  everyAmount: "30",
-  everyUnit: "minutes",
-  cronExpr: "0 7 * * *",
-  cronTz: "",
-  scheduleExact: false,
-  staggerAmount: "",
-  staggerUnit: "seconds",
-  triggerEnabled: false,
-  triggerScript: "",
-  triggerOnce: false,
-  sessionTarget: "isolated",
-  wakeMode: "now",
-  payloadKind: "agentTurn",
-  payloadLocked: false,
-  payloadText: "",
-  payloadModel: "",
-  payloadThinking: "",
-  payloadLightContext: false,
-  deliveryMode: "none",
-  deliveryChannel: "last",
-  deliveryTo: "",
-  deliveryAccountId: "",
-  deliveryBestEffort: false,
-  deliveryThreadId: undefined,
-  deliveryCompletionDestination: undefined,
-  deliveryFailureDestination: undefined,
-  failureAlertMode: "inherit",
-  failureAlertAfter: "",
-  failureAlertCooldownSeconds: "",
-  failureAlertChannel: "last",
-  failureAlertTo: "",
-  failureAlertDeliveryMode: "",
-  failureAlertAccountId: "",
-  timeoutSeconds: "",
-};
 
 export function createInitialCronState<Row = CronJob>(
   snapshot: Partial<Pick<CronState, "client" | "connected">> = {},
@@ -148,44 +90,29 @@ export function createInitialCronState<Row = CronJob>(
   };
 }
 
-function supportsAnnounceDelivery(
-  form: Pick<CronFormState, "sessionTarget" | "payloadKind" | "payloadLocked">,
-) {
-  return form.sessionTarget !== "main" && (form.payloadKind === "agentTurn" || form.payloadLocked);
-}
-
-export function normalizeCronFormState(
-  form: CronFormState,
-  changed: Partial<CronFormState> = {},
-): CronFormState {
-  let normalized = form;
-  if (!form.payloadLocked) {
-    if (changed.sessionTarget !== undefined) {
-      const payloadKind = form.sessionTarget === "main" ? "systemEvent" : "agentTurn";
-      if (form.payloadKind !== payloadKind) {
-        normalized = { ...normalized, payloadKind };
-      }
-    } else if (form.payloadKind === "systemEvent" && form.sessionTarget !== "main") {
-      normalized = { ...normalized, sessionTarget: "main" };
-    } else if (form.payloadKind === "agentTurn" && form.sessionTarget === "main") {
-      normalized = { ...normalized, sessionTarget: "isolated" };
-    }
-  }
-  if (normalized.deliveryMode !== "announce" || supportsAnnounceDelivery(normalized)) {
-    return normalized;
-  }
-  return {
-    ...normalized,
-    deliveryMode: "none",
-  };
-}
-
 export function validateCronForm(form: CronFormState): CronFieldErrors {
   const errors: CronFieldErrors = {};
   if (!form.name.trim()) {
     errors.name = "cron.errors.nameRequired";
   }
-  if (form.scheduleKind === "at") {
+  if (form.scheduleKind === "event" && form.payloadKind !== "agentTurn") {
+    errors.payloadText = "cron.events.agentTurnRequired";
+  }
+  if (form.scheduleKind === "event" && form.eventSource === "mcp-events") {
+    if (!form.eventServer.trim()) {
+      errors.eventServer = "cron.events.eventServerRequired";
+    }
+    if (!form.eventName.trim()) {
+      errors.eventName = "cron.events.eventNameRequired";
+    }
+    try {
+      if (!isRecord(JSON.parse(form.eventArguments))) {
+        errors.eventArguments = "cron.events.eventArgumentsInvalid";
+      }
+    } catch {
+      errors.eventArguments = "cron.events.eventArgumentsInvalid";
+    }
+  } else if (form.scheduleKind === "at") {
     const ms = Date.parse(form.scheduleAt);
     if (!Number.isFinite(ms)) {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
@@ -461,102 +388,6 @@ function resetCronFormToDefaults(state: CronState, agentId: string | null) {
   // A fresh form starts visually clean; validation re-arms on the first change
   // or submit so required-field errors do not greet the user immediately.
   state.cronFieldErrors = {};
-}
-
-function isReadOnlyCronPayload(payload: CronPayload | null, declarationKey?: string): boolean {
-  return (
-    payload?.kind === "command" ||
-    payload?.kind === "script" ||
-    isSystemOwnedCronPayloadKind(payload?.kind) ||
-    isSystemMonitorDeclaration(declarationKey)
-  );
-}
-
-function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
-  const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
-  const payload = getCronJobPayload(job);
-  const payloadLocked = isReadOnlyCronPayload(payload, job.declarationKey);
-  if (!isCronFormSessionTarget(job.sessionTarget)) {
-    throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
-  }
-  const next: CronFormState = {
-    ...prev,
-    name: job.name,
-    description: job.description ?? "",
-    agentId: job.agentId ?? "",
-    sessionKey: job.sessionKey ?? "",
-    clearAgent: false,
-    enabled: job.enabled,
-    deleteAfterRun: job.deleteAfterRun ?? job.schedule.kind === "at",
-    scheduleKind: job.schedule.kind,
-    scheduleAt: "",
-    cronTz: "",
-    scheduleExact: false,
-    staggerAmount: "",
-    staggerUnit: "seconds",
-    triggerEnabled: job.trigger !== undefined,
-    triggerScript: job.trigger?.script ?? "",
-    triggerOnce: job.trigger?.once === true,
-    sessionTarget: job.sessionTarget,
-    wakeMode: job.wakeMode,
-    payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
-    payloadLocked,
-    payloadText:
-      payload?.kind === "systemEvent"
-        ? payload.text
-        : payload?.kind === "agentTurn"
-          ? payload.message
-          : payload?.kind === "command"
-            ? payload.argv.join(" ")
-            : payload?.kind === "script"
-              ? payload.script
-              : "",
-    payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
-    payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
-    payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
-    deliveryMode: hasCanonicalCronDeliveryMode(job.delivery) ? (job.delivery?.mode ?? "none") : "",
-    deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
-    deliveryTo: job.delivery?.to ?? "",
-    deliveryAccountId: job.delivery?.accountId ?? "",
-    deliveryBestEffort: job.delivery?.bestEffort ?? false,
-    deliveryThreadId: job.delivery?.threadId,
-    deliveryCompletionDestination:
-      job.delivery?.mode === "announce" ? job.delivery.completionDestination : undefined,
-    deliveryFailureDestination: job.delivery?.failureDestination,
-    failureAlertMode: job.failureAlert === false ? "disabled" : failureAlert ? "custom" : "inherit",
-    failureAlertAfter: typeof failureAlert?.after === "number" ? String(failureAlert.after) : "",
-    failureAlertCooldownSeconds:
-      typeof failureAlert?.cooldownMs === "number"
-        ? durationMsToSecondsString(failureAlert.cooldownMs)
-        : "",
-    failureAlertChannel: failureAlert?.channel ?? CRON_CHANNEL_LAST,
-    failureAlertTo: failureAlert?.to ?? "",
-    failureAlertDeliveryMode: failureAlert?.mode ?? "",
-    failureAlertAccountId: failureAlert?.accountId ?? "",
-    timeoutSeconds:
-      payload?.kind === "agentTurn" && typeof payload.timeoutSeconds === "number"
-        ? String(payload.timeoutSeconds)
-        : "",
-  };
-
-  if (job.schedule.kind === "at") {
-    next.scheduleAt = formatDateTimeLocal(job.schedule.at);
-  } else if (job.schedule.kind === "every") {
-    const parsed = parseEverySchedule(job.schedule.everyMs);
-    next.everyAmount = parsed.everyAmount;
-    next.everyUnit = parsed.everyUnit;
-  } else if (job.schedule.kind === "cron") {
-    next.cronExpr = job.schedule.expr;
-    next.cronTz = job.schedule.tz ?? "";
-    const staggerFields = parseStaggerSchedule(job.schedule.staggerMs);
-    next.scheduleExact = staggerFields.scheduleExact;
-    next.staggerAmount = staggerFields.staggerAmount;
-    next.staggerUnit = staggerFields.staggerUnit;
-  }
-  // Process-backed schedule kinds are shown read-only in the list and have no
-  // editable schedule form fields; leave the cron/at/every fields at their defaults.
-
-  return normalizeCronFormState(next);
 }
 
 function buildCronPayload(form: CronFormState, source: CronPayload | null, isUpdate: boolean) {

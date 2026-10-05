@@ -36,7 +36,7 @@ const CRON_ACTIONS = [
 
 const CRON_SELF_ACTIONS = ["status", "list", "get", "remove", "runs", "next_check"] as const;
 
-const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream"] as const;
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 // When cron.triggers.enabled is explicitly false, the scheduler rejects
 // stream schedules, script payloads, and condition triggers, so the
 // model-facing schema must not advertise them.
@@ -88,6 +88,18 @@ function createCronScheduleSchema(params: {
           ],
           { description: "Schedule kind" },
         ),
+        ...(params.triggersEnabled
+          ? {
+              source: Type.Optional(
+                Type.String({ description: "Installed event-source plugin ID (kind=event)" }),
+              ),
+              options: Type.Optional(
+                Type.Record(Type.String(), Type.Unknown(), {
+                  description: "Event source options from its plugin catalog (kind=event)",
+                }),
+              ),
+            }
+          : {}),
         at: Type.Optional(Type.String({ description: "ISO-8601 time (kind=at)" })),
         everyMs: optionalPositiveIntegerSchema({
           description: "Interval ms (kind=every)",

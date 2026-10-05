@@ -1,4 +1,5 @@
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { CronEventClaimInvalidatedError, type CronEventAdmission } from "../event-source.js";
 import { captureCronMutationCommit } from "../mutation-completion.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { cronStoreKey } from "../store/key.js";
@@ -200,6 +201,7 @@ export async function persistQueuedCronRunReservations(params: {
   reservedAtMs: number;
   scheduleMode?: "advance" | "preserve";
   manualRun?: {
+    event?: CronEventAdmission;
     runId?: string;
     commitGuard?: () => void;
     terminalTracker?: { emitted: boolean };
@@ -298,11 +300,15 @@ export async function persistQueuedCronRunReservations(params: {
         immediateJobIds: params.immediateJobIds,
         reservedAtMs: params.reservedAtMs,
         requestRunId: params.manualRun?.runId,
+        event: params.manualRun?.event,
         preserveSchedule: params.scheduleMode === "preserve",
         scheduleOwnershipAtMs: params.manualRun?.scheduleOwnershipAtMs ?? params.reservedAtMs,
         onExit: params.manualRun?.onExit !== undefined,
         assertCurrent,
         onCommitted(outcome) {
+          if (outcome.eventInvalidated) {
+            throw new CronEventClaimInvalidatedError();
+          }
           reservationCommitted = true;
           committedReservations = outcome.reservations.map((reservation) => ({
             ...reservation,
@@ -406,6 +412,8 @@ export async function activateQueuedCronRun(params: {
   reservationIdentity: object;
   commitGuard?: () => void;
   onExitSchedule?: Extract<CronJob["schedule"], { kind: "on-exit" }>;
+  event?: CronEventAdmission;
+  onEventTransferred?: (receipt: CronRunReceiptHandle) => void;
   onUnavailable?: () => void;
   onUnavailableRollbackError?: () => Promise<void>;
 }): Promise<

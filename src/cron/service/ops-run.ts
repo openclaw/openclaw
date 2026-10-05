@@ -239,7 +239,7 @@ export async function enqueueRun(
   state: CronServiceState,
   id: string,
   mode?: CronRunMode,
-  opts?: { commitGuard?: () => void },
+  opts?: Pick<ManualRunOptions, "commitGuard" | "event" | "onEventTransferred" | "runId">,
 ) {
   const disposition = await inspectManualRunDisposition(state, id, mode, opts);
   if (!disposition.ok || !("runnable" in disposition && disposition.runnable)) {
@@ -247,7 +247,7 @@ export async function enqueueRun(
   }
 
   const scheduleOwnershipAtMs = state.deps.nowMs();
-  const runId = `manual:${id}:${scheduleOwnershipAtMs}:${nextManualRunId++}`;
+  const runId = opts?.runId ?? `manual:${id}:${scheduleOwnershipAtMs}:${nextManualRunId++}`;
   const terminalTracker: ManualRunTerminalTracker = { emitted: false };
   const releaseCallerAuthority = retainGatewayDeviceRevocation(opts?.commitGuard);
   const acceptance = createDeferredCore<
@@ -256,7 +256,12 @@ export async function enqueueRun(
   const trackCallerWork = captureCronRunAdmissionTracker();
   const activationSettled = createDeferredCore();
   let accepted = false;
+  let eventTransferred = false;
   const acceptQueue = () => {
+    // Event ingress remains recoverable until activation and tombstone commit together.
+    if (opts?.event && !eventTransferred) {
+      return;
+    }
     if (!accepted && trackCallerWork) {
       // Retain the existing caller resources after the durable reservation and
       // before acknowledging it. Genuine aborts and all commit guards stay live.
@@ -280,6 +285,14 @@ export async function enqueueRun(
           runId,
           scheduleOwnershipAtMs,
           terminalTracker,
+          event: opts?.event,
+          onEventTransferred: opts?.event
+            ? (receipt) => {
+                eventTransferred = true;
+                opts.onEventTransferred?.(receipt);
+                acceptQueue();
+              }
+            : undefined,
           commitGuard: opts?.commitGuard,
         });
         if (!prepared.ok || !prepared.ran) {
@@ -300,6 +313,9 @@ export async function enqueueRun(
                 mode,
                 activationSettled.resolve,
               );
+              if (!accepted && !result.ran) {
+                acceptance.resolve(result);
+              }
               if (result.ok && "ran" in result && !result.ran) {
                 if (result.reason !== "invalid-spec" && result.reason !== "ownerless") {
                   const finishedAt = state.deps.nowMs();

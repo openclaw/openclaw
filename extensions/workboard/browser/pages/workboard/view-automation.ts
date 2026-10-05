@@ -39,6 +39,9 @@ function automationSchedule(job: CronJob): string {
       time: formatUpdatedTime(Date.parse(schedule.at)) || schedule.at,
     });
   }
+  if (schedule.kind === "event") {
+    return t("workboard.automationEvent", { source: schedule.source });
+  }
   if (schedule.kind === "on-exit") {
     return t("workboard.automationOnExit", { command: schedule.command });
   }
@@ -101,9 +104,11 @@ export function renderBoardAutomationHeading(automation: BoardAutomationState | 
                   <dt>${t("workboard.automationNextRunLabel")}</dt>
                   <dd>
                     ${
-                      job.enabled && job.state.nextRunAtMs
-                        ? formatUpdatedTime(job.state.nextRunAtMs)
-                        : t("workboard.automationNotScheduled")
+                      job.enabled && job.schedule.kind === "event"
+                        ? t("workboard.automationWaitingForEvent")
+                        : job.enabled && job.state.nextRunAtMs
+                          ? formatUpdatedTime(job.state.nextRunAtMs)
+                          : t("workboard.automationNotScheduled")
                     }
                   </dd>
                   <dt>${t("workboard.detailUpdated")}</dt>

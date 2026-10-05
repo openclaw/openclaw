@@ -145,6 +145,17 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
       laneKey?: string;
     },
   ): Promise<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>;
+  /** Current-authority enqueue; absence is unsupported, never fall back to unguarded intake. */
+  enqueueAuthorized?: (
+    id: string,
+    payload: TPayload,
+    options: {
+      metadata?: TMetadata;
+      receivedAt?: number;
+      laneKey?: string;
+      assertCurrent: () => void;
+    },
+  ) => Promise<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>;
   listPending(options?: {
     limit?: number | "all";
     orderBy?: "received" | "id";

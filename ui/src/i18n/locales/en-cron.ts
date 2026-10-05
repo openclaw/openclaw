@@ -3,6 +3,43 @@ import { en } from "./en.ts";
 
 const enCron = {
   cron: {
+    events: {
+      label: "Event",
+      server: "MCP server",
+      serverHelp: "Use a configured MCP server that supports event subscriptions.",
+      chooseServer: "Choose a server",
+      noServers: "No enabled MCP servers. Configure a server in Settings → MCP first.",
+      name: "Event",
+      chooseEvent: "Choose an event",
+      arguments: "Subscription arguments (JSON)",
+      argumentsHelp:
+        "Filters sent when subscribing, not the event payload. Arguments must match the event’s input schema.",
+      schema: "View input schema",
+      refresh: "Refresh events and status",
+      loading: "Loading event source…",
+      noEvents: "This server advertises no supported events.",
+      unavailable:
+        "MCP Events is unavailable. Enable and configure the plugin to manage this source.",
+      discoveryFailed: "Event discovery failed. Refresh the catalog before saving.",
+      catalogMismatch: "The event catalog returned a different server. Refresh and try again.",
+      catalogCursor: "The event catalog repeated a page. Check the MCP server and refresh.",
+      catalogLimit:
+        "The event catalog exceeds the supported size. Narrow the server catalog and refresh.",
+      summary: "When {name} arrives from {server}",
+      readOnlySource:
+        "The {source} event source is managed by its plugin. Its schedule is preserved when saving.",
+      subscription: "Subscription",
+      pending: "Waiting for subscription status. Refresh to check activation.",
+      paused: "Paused — events do not start runs.",
+      gap: "Replay gap: the server could not replay every event. Some events may be missing.",
+      retryAt: "Next attempt: {at}",
+      agentTurnRequired:
+        "Event automations require an assistant task with an isolated or existing session.",
+      eventServerRequired: "Choose an MCP server.",
+      eventNameRequired: "Choose an event from the current catalog.",
+      eventArgumentsInvalid: "Enter a valid JSON object for subscription arguments.",
+      eventArgumentsSchema: "Subscription arguments do not match the event’s input schema.",
+    },
     suggestions: {
       title: "Starter automations",
       schedules: {

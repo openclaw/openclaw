@@ -1,4 +1,5 @@
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
+import type { AuthProfileAuthorizationOperations } from "./authorization-enrollment.js";
 import type {
   AuthProfileCredential,
   AuthProfileRowRead,
@@ -50,7 +51,7 @@ export type AuthProfileUsageResult =
   | { ok: true; receipt: AuthProfileUsageReceipt }
   | { ok: false; error: OpenClawStateWorkerErrorPayload };
 
-export type AuthProfileWorkerOperations = {
+export type AuthProfileWorkerOperations = AuthProfileAuthorizationOperations & {
   "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
   "authProfiles.personalUsage": {
     input: { profileId: string; reduction: PersonalAuthProfileUsageReduction };

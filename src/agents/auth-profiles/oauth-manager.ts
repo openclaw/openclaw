@@ -11,6 +11,7 @@ import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import { continueAuthProfileAuthorization } from "./authorization-lifetime.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS, authProfilesLog } from "./constants.js";
 import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
@@ -55,7 +56,7 @@ import {
   type OAuthRefreshPeerClaim,
 } from "./oauth-refresh-peers.js";
 import {
-  hasMatchingOAuthIdentity,
+  canReuseOAuthCredentialAfterRefreshFailure,
   isSafeOAuthOwnerRefreshResult,
   isSafeOAuthPostClaimSettlement,
   isSafeToAdoptBootstrapOAuthIdentity,
@@ -95,19 +96,6 @@ type ResolvedOAuthAccess = {
 };
 
 const oauthRefreshRecoveryBuildFailures = new WeakSet<Error>();
-
-function canReuseOAuthCredentialAfterRefreshFailure(params: {
-  forceRefresh?: boolean;
-  attempted: OAuthCredential;
-  candidate: OAuthCredential;
-}): boolean {
-  return (
-    !params.forceRefresh ||
-    (params.attempted.provider === params.candidate.provider &&
-      params.attempted.access !== params.candidate.access &&
-      hasMatchingOAuthIdentity(params.attempted, params.candidate))
-  );
-}
 
 function loadStoredOAuthRefreshStore(agentDir?: string, profileId?: string): AuthProfileStore {
   return loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
@@ -334,7 +322,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           return false;
         }
         if (isExactOAuthCredential(existing, params.fence)) {
-          store.profiles[params.profileId] = { ...params.refreshed };
+          store.profiles[params.profileId] = continueAuthProfileAuthorization(existing, {
+            ...params.refreshed,
+          });
           credential = params.refreshed;
           persisted = true;
           return true;
@@ -386,7 +376,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         if (!isExactOAuthCredential(existing, params.fence)) {
           return false;
         }
-        store.profiles[params.profileId] = { ...params.original };
+        store.profiles[params.profileId] = continueAuthProfileAuthorization(params.fence, {
+          ...params.original,
+        });
         restored = true;
         return true;
       },
@@ -643,7 +635,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               if (!isExactOAuthCredential(existing, cred)) {
                 return false;
               }
-              authoritative.profiles[params.profileId] = fence;
+              authoritative.profiles[params.profileId] = continueAuthProfileAuthorization(
+                cred,
+                fence,
+              );
               claimed = true;
               return true;
             },

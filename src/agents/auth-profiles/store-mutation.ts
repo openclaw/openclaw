@@ -1,5 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  prepareAuthProfileAuthorizationWrite,
+  copyAuthProfileAuthorizationIntent,
+  copyAuthProfileAuthorizationInheritance,
+} from "./authorization-lifetime.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import { captureOAuthRefreshClaimPublication } from "./oauth-refresh-marker.js";
 import { buildPersistedAuthProfileSecretsStore } from "./persisted.js";
@@ -48,10 +53,12 @@ function preserveLegacyOAuthRefsOnSave(params: {
     // Preserve legacy oauthRef ownership when current save data did not replace
     // inline OAuth material; otherwise older credential references would be lost.
     nextProfiles ??= { ...params.payload.profiles };
+    copyAuthProfileAuthorizationInheritance(params.payload.profiles, nextProfiles);
     nextProfiles[profileId] = {
       ...credential,
       oauthRef: existingCredential.oauthRef,
     };
+    copyAuthProfileAuthorizationIntent(credential, nextProfiles[profileId]);
   }
   return nextProfiles ? { ...params.payload, profiles: nextProfiles } : params.payload;
 }
@@ -64,10 +71,13 @@ export function prepareAuthProfileStoreMutation(params: {
   selectionProfiles: AuthProfileStore["profiles"];
 }) {
   const { existingRaw, existingState, store, selectionProfiles } = params;
-  const payload = preserveLegacyOAuthRefsOnSave({
-    payload: buildPersistedAuthProfileSecretsStore(store),
+  const payload = prepareAuthProfileAuthorizationWrite(
     existingRaw,
-  });
+    preserveLegacyOAuthRefsOnSave({
+      payload: buildPersistedAuthProfileSecretsStore(store),
+      existingRaw,
+    }),
+  );
   const existingProfiles =
     isRecord(existingRaw) && isRecord(existingRaw.profiles) ? existingRaw.profiles : {};
   const changedProfileIds = [

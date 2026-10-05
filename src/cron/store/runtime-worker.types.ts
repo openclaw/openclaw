@@ -1,3 +1,4 @@
+import type { CronEventAdmission } from "../event-source.js";
 import type { CronJobScratchWriteInput } from "../scratch-contract.js";
 import type {
   CronFailureNotificationDelivery,
@@ -137,6 +138,7 @@ export type CronRuntimeMutationInputs = {
     agentId?: string;
   };
   "cron.reserveRuns": {
+    event?: CronEventAdmission;
     storeKey: string;
     proposals: Array<{
       jobId: string;
@@ -154,6 +156,7 @@ export type CronRuntimeMutationInputs = {
   };
   "cron.maintainHistory": Record<string, never>;
   "cron.activateRun": {
+    event?: CronEventAdmission;
     storeKey: string;
     handle: CronRunReceiptHandle;
     startedAtMs: number;

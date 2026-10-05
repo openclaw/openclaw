@@ -18,7 +18,7 @@ export class AuthProfileRuntimeReadStaleError extends Error {
 
 // Include WAL and rollback-journal writes from other processes, without opening
 // SQLite (which could release a host writer's POSIX locks).
-function readIdentity(databasePath: string): string {
+export function readAuthProfileRowsIdentity(databasePath: string): string {
   return ["", "-wal", "-journal"]
     .map((suffix) => {
       const stat = fs.statSync(databasePath + suffix, { bigint: true, throwIfNoEntry: false });
@@ -84,7 +84,7 @@ export function createRuntimeAuthProfileRowsCache(
             capturedRows = entry.rows;
             return entry.rows;
           }
-          const identity = readIdentity(databasePath);
+          const identity = readAuthProfileRowsIdentity(databasePath);
           if (entry?.identity === identity && entry.revision === revision.rows) {
             entry.checkedAt = checkedAt;
             capturedRows = entry.rows;
@@ -100,7 +100,7 @@ export function createRuntimeAuthProfileRowsCache(
             rows.store.status !== "unreadable" &&
             rows.state.status !== "unreadable" &&
             revisionAtPath(databasePath).rows === revision.rows &&
-            readIdentity(databasePath) === identity
+            readAuthProfileRowsIdentity(databasePath) === identity
           ) {
             freezeJsonSnapshot(rows);
             entries.set(databasePath, { identity, checkedAt, revision: revision.rows, rows });

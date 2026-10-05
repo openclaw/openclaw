@@ -5,7 +5,14 @@ import type { CronJob, CronRunStatus } from "../types.js";
 export type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
 
 /** Schedule-kind filter accepted by paginated cron listing. */
-export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit" | "stream";
+export type CronJobsScheduleKindFilter =
+  | "all"
+  | "at"
+  | "every"
+  | "cron"
+  | "on-exit"
+  | "stream"
+  | "event";
 
 /** Last-run status filter, including jobs that have not produced a status yet. */
 export type CronJobsLastRunStatusFilter = "all" | CronRunStatus | "unknown";

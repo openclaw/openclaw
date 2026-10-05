@@ -173,7 +173,9 @@ function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter
 
 function resolveScheduleKindFilter(opts?: CronListPageOptions): CronJobsScheduleKindFilter {
   const kind = opts?.scheduleKind;
-  return kind && ["all", "at", "every", "cron", "on-exit", "stream"].includes(kind) ? kind : "all";
+  return kind && ["all", "at", "every", "cron", "on-exit", "stream", "event"].includes(kind)
+    ? kind
+    : "all";
 }
 
 function resolveLastRunStatusFilter(opts?: CronListPageOptions): CronJobsLastRunStatusFilter {

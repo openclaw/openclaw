@@ -159,3 +159,16 @@ export function shouldPersistRuntimeExternalOAuthProfile(params: {
   }
   return true;
 }
+
+export function canReuseOAuthCredentialAfterRefreshFailure(params: {
+  forceRefresh?: boolean;
+  attempted: OAuthCredential;
+  candidate: OAuthCredential;
+}): boolean {
+  return (
+    !params.forceRefresh ||
+    (params.attempted.provider === params.candidate.provider &&
+      params.attempted.access !== params.candidate.access &&
+      hasMatchingOAuthIdentity(params.attempted, params.candidate))
+  );
+}
