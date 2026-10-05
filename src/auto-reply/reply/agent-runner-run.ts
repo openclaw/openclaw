@@ -193,7 +193,6 @@ export async function runReplyAgent(
     // Durable source ownership identifies provider redelivery even if the run
     // became terminal before its claim cleanup committed.
     if (
-      restartRecoveryEntry?.status !== "running" &&
       sessionKey &&
       storePath &&
       hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId)

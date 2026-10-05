@@ -28,7 +28,7 @@ import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
@@ -59,6 +59,7 @@ async function seedYieldedParent() {
     });
   }
   const startedAt = Date.now() - 100;
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
   for (const data of [
     { phase: "start", startedAt },
     {
@@ -73,7 +74,7 @@ async function seedYieldedParent() {
     await persistGatewaySessionLifecycleEvent({
       sessionKey: parentKey,
       agentId: "main",
-      event: { runId: parentRunId, sessionId: parentId, ts: Date.now(), data },
+      event: { runId: parentRunId, sessionId: parentId, lifecycleGeneration, ts: Date.now(), data },
     });
   }
   await registerSubagentRun({
@@ -106,7 +107,7 @@ async function seedYieldedParent() {
     }),
   ).toBe(true);
   expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
-    status: "running",
+    status: "done",
     lifecycleRunId: parentRunId,
     endedAt: startedAt + 50,
     abortedLastRun: false,
@@ -178,6 +179,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
           event: {
             runId: "new-parent-run",
             sessionId: parentId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
             ts: Date.now(),
             data: { phase: "start", startedAt: Date.now() },
           },
@@ -230,10 +232,10 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
       if (race === "new turn") {
         await replacementPersistence;
         expect(acknowledgment.entry).toMatchObject({
-          status: "running",
           lifecycleRunId: "new-parent-run",
           abortedLastRun: false,
         });
+        expect(acknowledgment.entry?.status).toBeUndefined();
         expect(acknowledgment.entry?.lastRunId).toBeUndefined();
         return;
       }

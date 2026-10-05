@@ -1,6 +1,5 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
-import type { SessionEntryStatusSelection } from "./session-accessor.sqlite-contract.js";
 import type { SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 import type {
   SessionEntryReplacementSelection,
@@ -70,7 +69,6 @@ export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelectio
   /** Omitted retains the complete entry; an empty selection reads metadata only. */
   snapshotFields?: readonly SessionEntrySnapshotField[];
   env: NodeJS.ProcessEnv;
-  statusSelection?: SessionEntryStatusSelection;
   lifecycleSessionKey?: string;
   /** Reply initialization reads the current row's model parent in this same snapshot. */
   replyInitializationSessionKey?: string;
@@ -88,7 +86,6 @@ export type SessionExactEntriesWorkerResult = {
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
   pendingArchives?: boolean;
-  statusFound?: boolean;
   databaseIdentity?: {
     identity: string;
     incarnation: string;

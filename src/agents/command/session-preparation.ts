@@ -50,6 +50,10 @@ export function prepareCommandSessionRecoveryEntry(
       ...entry,
       sessionId,
       updatedAt: now,
+      status: undefined,
+      abortedLastRun: false,
+      endedAt: undefined,
+      lastRunError: undefined,
       sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
       lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
       ...buildCurrentRunRestartRecoveryClaim({

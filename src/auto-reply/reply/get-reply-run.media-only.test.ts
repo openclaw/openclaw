@@ -109,7 +109,8 @@ vi.mock("../../agents/main-session-recovery/main-session-recovery-owner-release.
   scheduleMainSessionRecoveryPendingTarget: vi.fn(),
 }));
 
-vi.mock("../../agents/main-session-recovery/main-session-recovery-state.js", () => ({
+vi.mock("../../config/sessions/restart-recovery-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/restart-recovery-state.js")>()),
   isMainRestartRecoveryCandidate: vi.fn().mockReturnValue(false),
 }));
 

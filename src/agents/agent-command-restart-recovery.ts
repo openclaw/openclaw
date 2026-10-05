@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
+import { hasMainSessionRecoveryClaim } from "../config/sessions/restart-recovery-state.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidenceResult,
@@ -306,7 +307,10 @@ export function shouldPersistRestartRecoveryContextClaim(
   if (!current) {
     return allowCreate;
   }
-  if (!shouldPersistCurrentRunSessionCleanup(current, sessionId)) {
+  if (
+    current.sessionId !== sessionId ||
+    (current.abortedLastRun === true && hasMainSessionRecoveryClaim(current))
+  ) {
     return false;
   }
   return (
@@ -394,8 +398,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       createsScopedDeliveryClaim && params.disableMessageTool === true ? true : undefined,
     restartRecoverySuppressTextDelivery:
       createsScopedDeliveryClaim && params.suppressTextDelivery === true ? true : undefined,
-    restartRecoveryDeliveryRunId:
-      params.deliveryContext || createsScopedDeliveryClaim ? params.runId : undefined,
+    restartRecoveryDeliveryRunId: params.runId,
     restartRecoveryDeliverySourceRunId: params.sourceRunId,
     restartRecoverySourceIngress: createsScopedDeliveryClaim ? params.sourceIngress : undefined,
     restartRecoverySourceReplyDeliveryMode: params.sourceRunId

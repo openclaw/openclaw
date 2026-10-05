@@ -10,7 +10,6 @@ function recoveryEntry(params?: {
   return {
     sessionId: "session-1",
     updatedAt: 100,
-    status: "running",
     abortedLastRun: false,
     ...(params?.ownsDelivery ? { restartRecoveryDeliveryRunId: "recovery" } : {}),
     restartRecoveryRuns: [
@@ -38,7 +37,7 @@ describe("main-session recovery run ownership", () => {
     const entry: SessionEntry = {
       sessionId: "session-1",
       updatedAt: 100,
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       restartRecoveryRuns: [{ runId: "drain-run", lifecycleGeneration: "generation-current" }],
       mainRestartRecovery: {

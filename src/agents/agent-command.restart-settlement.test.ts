@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
   agentCommandFromGatewayIngress,
   compactionTestRuntime,
@@ -11,7 +12,7 @@ import {
   registerAgentCommandCompactionTestHooks,
   requireCompactionStorePath,
 } from "./agent-command.compaction.test-support.js";
-import { clearCommandRecoveryClaim } from "./command/cleanup.js";
+import { finishAgentCommandCleanup } from "./command/cleanup.js";
 import { markSessionCompletedAfterRecoveryCheckpoint } from "./main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-recovery/main-session-restart-recovery-marking.js";
 import { recoverStore } from "./main-session-recovery/main-session-restart-recovery-store.js";
@@ -27,6 +28,7 @@ it.each(["unknown", "delivered"] as const)(
     const sessionId = "settled-session";
     const sessionKey = "agent:main:restart-settlement";
     const runId = "interrupted-recovery";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const sourceRunId = "interrupted-source";
     const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
     const stateDir = path.dirname(target.storePath);
@@ -40,13 +42,13 @@ it.each(["unknown", "delivered"] as const)(
       sessionId,
       updatedAt: Date.now(),
       startedAt: Date.now() - 100,
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       lifecycleRunId: runId,
       restartRecoveryDeliveryRunId: runId,
       restartRecoveryDeliverySourceRunId: sourceRunId,
       restartRecoverySourceIngress: "control-ui",
-      restartRecoveryRuns: [{ runId, lifecycleGeneration: "previous-process" }],
+      restartRecoveryRuns: [{ runId, lifecycleGeneration }],
       restartRecoveryTerminalRunIds: ["previous-source"],
       restartRecoveryTerminalDeliveryEvidence: [previousEvidence],
       pendingFinalDelivery: {
@@ -136,10 +138,14 @@ it.each(["unknown", "delivered"] as const)(
     expect(completed?.mainRestartRecovery).toBeUndefined();
     expect(completed?.restartRecoveryRuns).toBeUndefined();
     expect(completed?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(completed?.restartRecoveryTerminalRunIds).toEqual(["previous-source", sourceRunId]);
+    expect(completed?.restartRecoveryTerminalRunIds).toEqual([
+      "previous-source",
+      sourceRunId,
+      "next-instruction",
+    ]);
     expect(completed?.restartRecoveryTerminalDeliveryEvidence).toContainEqual(previousEvidence);
 
-    await clearCommandRecoveryClaim({
+    await finishAgentCommandCleanup({
       prepared: {
         ...target,
         runId,
@@ -151,6 +157,13 @@ it.each(["unknown", "delivered"] as const)(
       sessionReboundDuringRun: false,
       trackedRestartRecoveryDeliveryClaim: true,
       terminalEvent: { data: { phase: "end" } },
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      beforeTerminalDelivery: undefined,
+      reportCommitted: () => {},
+      preparedRunAdmission: undefined,
+      sessionWorkAdmission: undefined,
+      cleanupInternalModelRunTargets: async () => {},
+      releaseForeground: undefined,
     });
     expect(loadSessionEntry(target)).toEqual(completed);
   },

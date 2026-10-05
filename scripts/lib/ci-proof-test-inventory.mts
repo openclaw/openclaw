@@ -5061,7 +5061,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/gateway/session-repository-materialization.test.ts",
   "src/gateway/session-row-projection.deleted-agent.test.ts",
   "src/gateway/session-row-projection.membership.test.ts",
-  "src/gateway/session-startup-orphan-races.test.ts",
   "src/gateway/session-transcript-preview.hydration.test.ts",
   "src/gateway/session-transcript-readers.markers.test.ts",
   "src/gateway/session-utils.subagent-payloads.test.ts",

@@ -1,8 +1,13 @@
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
-import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
+import {
+  clearAgentRunContext,
+  getAgentRunLifecycleGeneration,
+  registerAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -685,8 +690,18 @@ describe("trusted plugin session facts", () => {
       const queuedKey = "agent:main:queued-change";
       await fixture.seed(privateKey, fixture.other.id, { visibility: "draft" });
       await fixture.seed(queuedKey, fixture.profile.id, {
-        status: "queued",
         worktree: { id: "queued-worktree", branch: "queued", repoRoot: "/synthetic/repository" },
+      });
+      const runId = "session-facts-queued-run";
+      registerAgentRunContext(runId, {
+        agentId: "main",
+        sessionKey: queuedKey,
+        projectSessionActive: true,
+      });
+      const releaseWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+      onTestFinished(() => {
+        releaseWait?.();
+        clearAgentRunContext(runId);
       });
       fixture.load.mockResolvedValueOnce({
         pullRequests: [
@@ -740,6 +755,10 @@ describe("trusted plugin session facts", () => {
           { key: queuedKey, run: "active" },
         ],
       });
+      releaseWait?.();
+      expect((await read(fixture, [queuedKey])).sessions[0]?.run).toBe("active");
+      clearAgentRunContext(runId);
+      expect((await read(fixture, [queuedKey])).sessions[0]?.run).toBe("idle");
       const listener = vi.fn();
       const unsubscribe = runtime.gateway.subscribeSessionChanges(listener);
       try {
@@ -777,29 +796,40 @@ describe("trusted plugin session facts", () => {
       expect(fixture.load).toHaveBeenCalledTimes(2);
     }));
 
-  it("uses live run liveness instead of a persisted running status", () =>
+  it("derives live run facts independently of persisted outcomes", () =>
     withFixture(async (fixture) => {
-      const staleKey = "agent:main:stale-running";
+      const idleKey = "agent:main:idle-outcome";
       const activeKey = "agent:main:live-running";
       const queuedKey = "agent:main:queued-input";
-      await fixture.seed(staleKey, fixture.profile.id, { status: "running" });
+      await fixture.seed(idleKey, fixture.profile.id, { status: "done" });
       await fixture.seed(activeKey, fixture.profile.id, {
         status: "failed",
         lastRunError: "Old failure",
       });
-      await fixture.seed(queuedKey, fixture.profile.id, { status: "queued" });
+      await fixture.seed(queuedKey, fixture.profile.id);
       registerAgentRunContext("facts-live-run", {
         agentId: "main",
         sessionKey: activeKey,
         projectSessionActive: true,
       });
+      registerAgentRunContext("facts-queued-run", {
+        agentId: "main",
+        sessionKey: queuedKey,
+        projectSessionActive: true,
+      });
+      const releaseWait = registerAgentRunCapacityWait(
+        "facts-queued-run",
+        getAgentRunLifecycleGeneration(),
+      );
       try {
-        expect((await read(fixture, [staleKey, activeKey, queuedKey])).sessions).toMatchObject([
-          { key: staleKey, run: "idle" },
+        expect((await read(fixture, [idleKey, activeKey, queuedKey])).sessions).toMatchObject([
+          { key: idleKey, run: "idle" },
           { key: activeKey, run: "active" },
           { key: queuedKey, run: "active" },
         ]);
       } finally {
+        releaseWait?.();
+        clearAgentRunContext("facts-queued-run");
         clearAgentRunContext("facts-live-run");
       }
       expect((await read(fixture, [activeKey])).sessions[0]?.run).toBe("failed");

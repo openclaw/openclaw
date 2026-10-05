@@ -31,7 +31,7 @@ describe("restart recovery claim successors", () => {
         restartRecoveryDeliverySourceRunId: "interrupted-run",
         restartRecoverySourceIngress: "control-ui",
         sessionId: "session",
-        status: "running",
+        status: "interrupted",
         updatedAt: 1,
       };
       await replaceSessionEntry(scope, entry);
@@ -78,8 +78,8 @@ describe("restart recovery claim successors", () => {
           restartRecoveryDeliverySourceRunId: "queued-run",
           restartRecoverySourceIngress: "control-ui",
           restartRecoveryTerminalRunIds: ["interrupted-run"],
-          status: "running",
         });
+        expect(loadSessionEntry(scope)?.status).toBeUndefined();
       }
     },
   );
@@ -99,7 +99,7 @@ describe("restart recovery claim successors", () => {
       restartRecoveryDeliverySourceRunId: "interrupted-control-ui-run",
       restartRecoverySourceIngress: "control-ui",
       sessionId,
-      status: "running",
+      status: "interrupted",
       updatedAt: 1,
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
@@ -138,6 +138,7 @@ describe("restart recovery claim successors", () => {
     await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
     const admittedRunId = loadSessionEntry({ storePath, sessionKey })?.restartRecoveryDeliveryRunId;
     expect(admittedRunId).toEqual(expect.any(String));
+    expect(loadSessionEntry({ storePath, sessionKey })?.status).toBeUndefined();
     await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
     await controller.checkpointBeforeAgentReply({
       state: "handled-reply",

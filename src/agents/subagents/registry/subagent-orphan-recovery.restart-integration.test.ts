@@ -171,7 +171,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
           sessionId: entry.runId,
           lifecycleRevision: entry.runId,
           lifecycleRunId: entry.runId,
-          status: "running",
+          status: undefined,
           startedAt,
           updatedAt: startedAt,
         },
@@ -203,7 +203,12 @@ describe("subagent orphan recovery — faithful restart path", () => {
         for (const entry of records) {
           expect(
             loadExactSessionEntry({ agentId: "main", sessionKey: entry.childSessionKey })?.entry,
-          ).toMatchObject({ status: "interrupted", endedAt: expect.any(Number) });
+          ).toMatchObject({
+            status: "interrupted",
+            abortedLastRun: true,
+            endedAt: expect.any(Number),
+            lastRunError: "Run interrupted by a Gateway restart.",
+          });
           expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.execution).toMatchObject({
             status: "terminal",
             outcome: { status: "error" },
@@ -211,9 +216,6 @@ describe("subagent orphan recovery — faithful restart path", () => {
         }
         expect(dispatchAgent).not.toHaveBeenCalled();
         expect(log.warn.mock.calls).toEqual([]);
-        expect(log.info).toHaveBeenCalledWith(
-          expect.stringContaining("5 retained by run/task owners"),
-        );
       });
     } finally {
       await fixture.settle();
@@ -260,7 +262,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
           updatedAt: startedAt,
           startedAt,
           lifecycleRunId: runId,
-          status: "running",
+          status: undefined,
         },
       );
       await fixture.settle();
@@ -518,7 +520,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       await patchSessionEntryCore({ storePath, sessionKey: childSessionKey }, (entry) => ({
         ...entry,
         lifecycleRunId: owner === "run" ? "fresh-execution" : runId,
-        status: owner === "run" ? "running" : "failed",
+        status: owner === "run" ? undefined : "failed",
       }));
       if (owner === "missing") {
         await removeSubagentSessionEntry({
@@ -533,7 +535,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
             sessionId: "replacement-session",
             lifecycleRevision: "replacement-revision",
             lifecycleRunId: "replacement-run",
-            status: "running",
+            status: undefined,
             updatedAt: now,
           },
         );

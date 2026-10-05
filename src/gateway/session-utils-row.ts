@@ -322,7 +322,7 @@ export function resolveGatewaySessionActiveModel(params: {
     sessionId: params.sessionId,
     index: params.projectedAgentRuns,
   });
-  if (params.active ?? (liveModel !== undefined || params.entry?.status === "running")) {
+  if (params.active ?? liveModel !== undefined) {
     return liveModel ?? undefined;
   }
   if (!params.entry?.fallbackNotice) {

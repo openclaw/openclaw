@@ -113,7 +113,6 @@ function makeParams() {
 function makeFailClosedEntry() {
   return {
     sessionId: "session-1",
-    status: "running",
     restartRecoveryDeliveryRunId: "recovery-1",
     restartRecoveryDeliverySourceRunId: "source-1",
     restartRecoveryDeliveryReceiptState: "terminal-pending",
@@ -384,7 +383,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     // inbound falls back to follow-up dispatch (#128971).
     vi.mocked(loadSessionEntry).mockReturnValueOnce({
       sessionId: "session-1",
-      status: "running",
       restartRecoveryDeliveryRunId: "recovery-1",
       restartRecoveryDeliverySourceRunId: "source-1",
       restartRecoveryDeliveryReceiptState: "delivered-terminal",
@@ -415,7 +413,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
         sourceTurnIdOrigin: "active-run",
         sessionKey: "agent:main:dashboard:s",
         sessionId: "session-1",
-        sessionStatus: "running",
+        sessionStatus: undefined,
         recoveryRunId: "recovery-1",
         recoverySourceTurnId: "source-1",
       },
@@ -461,7 +459,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     // fence must follow the latest state and allow the steer.
     vi.mocked(loadSessionEntry).mockReturnValueOnce({
       sessionId: "session-1",
-      status: "running",
       updatedAt: 2,
     } as never);
     const queuedAttempt = {
@@ -521,7 +518,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     // prior source must not fence the active source into follow-up mode.
     vi.mocked(loadSessionEntry).mockReturnValueOnce({
       sessionId: "session-1",
-      status: "running",
       restartRecoveryTerminalRunIds: ["source-old"],
       updatedAt: 2,
     } as never);
@@ -536,7 +532,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
       },
     );
     const params = makeStarterParams({
-      entry: { sessionId: "session-1", status: "running", updatedAt: 1 } as never,
+      entry: { sessionId: "session-1", updatedAt: 1 } as never,
     });
     params.target = {
       ...expectDefined(params.target, "injection target"),
@@ -555,7 +551,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     // would resolve to already-delivered, so the fence must reject.
     vi.mocked(loadSessionEntry).mockReturnValueOnce({
       sessionId: "session-1",
-      status: "running",
       restartRecoveryTerminalRunIds: ["source-1"],
       updatedAt: 2,
     } as never);
@@ -584,7 +579,6 @@ describe("gateway steer contract after the injection-start fence", () => {
     // second dispatch = inbound double delivery).
     vi.mocked(loadSessionEntry).mockReturnValueOnce({
       sessionId: "session-1",
-      status: "running",
       restartRecoveryDeliveryRunId: "recovery-1",
       restartRecoveryDeliverySourceRunId: "source-1",
       restartRecoveryDeliveryReceiptState: "terminal-pending",
@@ -673,7 +667,6 @@ describe("createChatSendMessageInjectionStarter", () => {
     params.session.entry = {
       sessionId: "steer-test-session",
       updatedAt: 1,
-      status: "running",
       restartRecoveryDeliveryRunId: "active-recovery",
       restartRecoveryDeliverySourceRunId: "active-source",
     };

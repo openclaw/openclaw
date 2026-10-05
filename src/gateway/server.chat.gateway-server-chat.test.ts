@@ -1096,7 +1096,6 @@ describe("gateway server chat", () => {
             sessionId: "sess-main",
             sessionFile: path.join(dir, "sess-main.jsonl"),
             updatedAt: 1_000,
-            status: "running",
             startedAt: 900,
           },
         },

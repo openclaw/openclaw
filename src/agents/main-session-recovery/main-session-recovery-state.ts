@@ -7,14 +7,16 @@ import type {
   MainRestartRecoveryState,
   RestartRecoveryRun,
 } from "../../config/sessions.js";
-import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import {
-  isAcpSessionKey,
-  isCronSessionKey,
-  isSubagentSessionKey,
-} from "../../routing/session-key.js";
+  hasMainSessionRecoveryClaim,
+  isMainRestartRecoveryCandidate,
+  hasRestartRecoveryTerminalRun,
+  isRetryableUnadoptedChatClaim,
+} from "../../config/sessions/restart-recovery-state.js";
+import { isTerminalSessionStatus } from "../../config/sessions/types.js";
 import {
   buildMainSessionRecoveryClearPatch,
+  buildMainSessionRecoverySettlementPatch,
   removeMainSessionRecoveryForegroundClaim,
 } from "./main-session-recovery-clear.js";
 import type {
@@ -108,7 +110,7 @@ function validateRecoveryAdmission(
   if (entry.sessionId !== command.sessionId) {
     return "session_replaced";
   }
-  if (entry.status !== "running" || entry.abortedLastRun !== true || !state) {
+  if (entry.abortedLastRun !== true || !state) {
     return "not_interrupted";
   }
   if (
@@ -129,7 +131,10 @@ export function normalizeMainSessionRecoveryRunFences(
   );
 }
 
-function recordLifecycleFence(entry: SessionEntry, run: RestartRecoveryRun): void {
+export function recordLifecycleFence(
+  entry: Pick<SessionEntry, "restartRecoveryRuns">,
+  run: RestartRecoveryRun,
+): void {
   // A resumed run keeps its id across Gateway generations. Leaving its old fence
   // behind makes terminal settlement preserve a dead owner and blocks every later turn.
   entry.restartRecoveryRuns = normalizeMainSessionRecoveryRunFences([
@@ -138,24 +143,10 @@ function recordLifecycleFence(entry: SessionEntry, run: RestartRecoveryRun): voi
   ]);
 }
 
-export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: string): boolean {
-  if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
-    return false;
-  }
-  if (entry.subagentRole != null) {
-    return false;
-  }
-  return (
-    !isSubagentSessionKey(sessionKey) &&
-    !isCronSessionKey(sessionKey) &&
-    !isAcpSessionKey(sessionKey)
-  );
-}
-
 export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: string): boolean {
   const state = entry.mainRestartRecovery;
   return (
-    entry.status === "running" &&
+    hasMainSessionRecoveryClaim(entry) &&
     entry.abortedLastRun === true &&
     isMainRestartRecoveryCandidate(entry, sessionKey) &&
     !state?.foregroundClaims &&
@@ -167,10 +158,10 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
 /** Failed foreground admission can leave an unfinished recovery cycle behind. */
 export function isMainSessionRecoveryReconciliationCandidate(entry: SessionEntry): boolean {
   return (
-    (entry.status === undefined || entry.status === "running" || entry.status === "failed") &&
     entry.abortedLastRun !== true &&
-    entry.mainRestartRecovery !== undefined &&
-    !entry.mainRestartRecovery.tombstone
+    hasMainSessionRecoveryClaim(entry) &&
+    !isRetryableUnadoptedChatClaim(entry) &&
+    !entry.mainRestartRecovery?.tombstone
   );
 }
 
@@ -203,18 +194,14 @@ export function inspectMainRestartRecoveryRolloverEligibility(
   return { eligible: true };
 }
 
-// A recovery aggregate stops owning work once every recorded run has a durable
-// terminal fact and no reservation, foreground claim, tombstone, or delivery
-// claim remains. Such terminal-only residue previously stayed authoritative
-// forever, failing every later admission with "changed while starting work"
-// (#118873). A live admitted recovery run always holds
-// restartRecoveryDeliveryRunId, so that gate keeps active work authoritative.
-export function isMainRestartRecoveryAggregateTerminalOnly(entry: SessionEntry): boolean {
+// Retire only proven terminal fences without remaining execution or delivery
+// custody; treating unfinished fences as residue loses crash recovery (#118873).
+export function isMainRestartRecoveryTerminalOnly(entry: SessionEntry): boolean {
   const state = entry.mainRestartRecovery;
-  if (!state || state.tombstone || state.reservation || state.foregroundClaims) {
+  if (state?.tombstone || state?.reservation || state?.foregroundClaims) {
     return false;
   }
-  if (entry.restartRecoveryDeliveryRunId !== undefined) {
+  if (entry.restartRecoveryDeliveryRunId !== undefined || entry.pendingFinalDelivery) {
     return false;
   }
   const runs = entry.restartRecoveryRuns;
@@ -222,31 +209,6 @@ export function isMainRestartRecoveryAggregateTerminalOnly(entry: SessionEntry):
     runs !== undefined &&
     runs.length > 0 &&
     runs.every((run) => hasRestartRecoveryTerminalRun(entry, run.runId))
-  );
-}
-
-// A healthy session can retain lifecycle fences after its final recovery owner
-// clears. With no active delivery or aggregate, those fences no longer own work.
-function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: string): boolean {
-  if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
-    return false;
-  }
-  return (
-    (entry.status === "running" &&
-      entry.abortedLastRun !== true &&
-      entry.restartRecoveryDeliveryRunId === undefined &&
-      ((entry.restartRecoveryRuns !== undefined && entry.mainRestartRecovery === undefined) ||
-        // Terminal-only aggregate: every run settled, nothing owns work (#118873).
-        isMainRestartRecoveryAggregateTerminalOnly(entry))) ||
-    // Sessions that are not running were permanently unadmittable while holding
-    // recovery residue, returning "changed while starting work" forever
-    // (production incident 2026-07-26). A row whose status is absent never
-    // reached an active run either, so it carries residue the same way a
-    // terminal row does. A pending delivery claim may coexist with the residue,
-    // so it must not gate the cleanup the way it does for the running case above.
-    (entry.status !== "running" &&
-      entry.mainRestartRecovery === undefined &&
-      (entry.restartRecoveryRuns !== undefined || entry.abortedLastRun === true))
   );
 }
 
@@ -264,7 +226,6 @@ function inspectMainSessionRecovery(params: {
     return { status: "blocked" };
   }
   if (
-    entry.status === "running" &&
     entry.abortedLastRun !== true &&
     state &&
     entry.restartRecoveryRuns?.some((run) => run.lifecycleGeneration === params.lifecycleGeneration)
@@ -274,7 +235,6 @@ function inspectMainSessionRecovery(params: {
     return { status: "blocked" };
   }
   if (
-    entry.status !== "running" ||
     entry.abortedLastRun !== true ||
     !isMainRestartRecoveryCandidate(entry, params.sessionKey) ||
     !state
@@ -312,11 +272,10 @@ function inspectMainSessionRecoveryForAdmission(params: {
   sessionKey: string;
 }): MainSessionRecoveryView {
   if (
-    params.entry.status === "running" &&
     params.entry.abortedLastRun !== true &&
     params.entry.mainRestartRecovery &&
     params.entry.restartRecoveryRuns?.length &&
-    !isMainRestartRecoveryAggregateTerminalOnly(params.entry)
+    !isMainRestartRecoveryTerminalOnly(params.entry)
   ) {
     // Standalone callers may use another process generation. An admitted
     // recovery fence remains authoritative until Gateway lifecycle settlement —
@@ -325,13 +284,12 @@ function inspectMainSessionRecoveryForAdmission(params: {
     return { status: "blocked" };
   }
   if (
-    params.entry.status === "running" &&
+    hasMainSessionRecoveryClaim(params.entry) &&
     params.entry.abortedLastRun === true &&
     isMainRestartRecoveryCandidate(params.entry, params.sessionKey) &&
     !params.entry.mainRestartRecovery
   ) {
-    // Older interrupted rows still quarantine foreground work, but only the
-    // Gateway startup owner may assign their durable recovery cycle.
+    // Only the Gateway owner may assign a cycle to an interrupted admission claim.
     return { status: "blocked" };
   }
   return inspectMainSessionRecovery(params);
@@ -343,6 +301,12 @@ export function transitionMainSessionRecovery(
 ): MainSessionRecoveryTransitionResult {
   switch (command.kind) {
     case "mark_interrupted": {
+      const startedAt = entry.lifecycleRunId ? entry.startedAt : undefined;
+      const preserveOutcome =
+        (entry.status === undefined && entry.endedAt !== undefined) ||
+        (isTerminalSessionStatus(entry.status) &&
+          entry.status !== "interrupted" &&
+          Boolean(entry.restartRecoveryDeliveryRunId || entry.pendingFinalDelivery));
       // Queued announcements add fences too. Retain the executing turn before
       // releasing its lifecycle identity so retries can join this recovery.
       entry.restartRecoveryDeliverySourceRunId ??=
@@ -358,15 +322,19 @@ export function transitionMainSessionRecovery(
           reservation: undefined,
         });
       }
-      entry.status = "running";
       entry.activeWriterRunId = undefined;
       entry.lifecycleRunId = undefined;
-      entry.lastRunId = undefined;
       entry.abortedLastRun = true;
-      if (command.resetRuntime) {
-        entry.startedAt = undefined;
-        entry.endedAt = undefined;
-        entry.runtimeMs = undefined;
+      if (!preserveOutcome) {
+        entry.status = "interrupted";
+        entry.lastRunId = undefined;
+        entry.startedAt = startedAt;
+        entry.endedAt = command.now;
+        entry.runtimeMs =
+          typeof entry.startedAt === "number"
+            ? Math.max(0, command.now - entry.startedAt)
+            : undefined;
+        entry.lastRunError = "Run interrupted by Gateway restart or loss.";
       }
       for (const run of command.runs ?? []) {
         recordLifecycleFence(entry, run);
@@ -386,7 +354,7 @@ export function transitionMainSessionRecovery(
     }
     case "observe": {
       if (
-        entry.status === "running" &&
+        hasMainSessionRecoveryClaim(entry) &&
         entry.abortedLastRun === true &&
         isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
         !entry.mainRestartRecovery
@@ -414,13 +382,22 @@ export function transitionMainSessionRecovery(
       ) {
         // A process restart makes dispatch outcome unknowable: retain the charge,
         // but release the stale slot so the next bounded attempt can proceed.
-        updateRecoveryState(entry, state, { reservation: undefined });
+        state = updateRecoveryState(entry, state, { reservation: undefined });
       }
-      if (entry.abortedLastRun !== true && isMainRestartRecoveryAggregateTerminalOnly(entry)) {
-        // The scan owns retiring dead residue: heal the row durably here so
-        // later admissions — including standalone inspect-only callers — never
-        // meet the stale aggregate (#118873).
-        Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
+      if (
+        isMainRestartRecoveryTerminalOnly(entry) ||
+        (isTerminalSessionStatus(entry.status) &&
+          entry.status !== "interrupted" &&
+          !isRetryableUnadoptedChatClaim(entry) &&
+          !entry.pendingFinalDelivery &&
+          !state?.tombstone &&
+          !state?.reservation &&
+          !(state && hasCurrentForegroundClaim(state, command.lifecycleGeneration)))
+      ) {
+        Object.assign(
+          entry,
+          buildMainSessionRecoverySettlementPatch({ entry, recordTerminalSource: true }),
+        );
       }
       return {
         kind: "observed",
@@ -437,7 +414,7 @@ export function transitionMainSessionRecovery(
         return { kind: "rejected", reason: conflict };
       }
       const state = entry.mainRestartRecovery!;
-      if (entry.status !== "running" || entry.abortedLastRun !== true) {
+      if (entry.abortedLastRun !== true) {
         return { kind: "rejected", reason: "not_interrupted" };
       }
       if (state.tombstone) {
@@ -547,6 +524,10 @@ export function transitionMainSessionRecovery(
         foregroundClaims: undefined,
       });
       entry.abortedLastRun = false;
+      entry.status = undefined;
+      entry.endedAt = undefined;
+      entry.runtimeMs = undefined;
+      entry.lastRunError = undefined;
       entry.lifecycleRunId = command.runId;
       entry.lastRunId = undefined;
       recordLifecycleFence(entry, {
@@ -593,19 +574,19 @@ export function transitionMainSessionRecovery(
       if (entry.lifecycleRunId !== command.runId) {
         // A committed restoration may lose its response. Only that exact pending
         // attempt is repeatable; retained run fences do not authorize newer work.
-        return entry.status === "running" &&
-          entry.abortedLastRun === true &&
+        return entry.abortedLastRun === true &&
           entry.lifecycleRunId === undefined &&
           entry.restartRecoveryDeliveryRunId === undefined
           ? { kind: "no_change" }
           : { kind: "rejected", reason: "stale_reservation" };
       }
-      entry.status = "running";
+      entry.status = "interrupted";
       entry.lifecycleRunId = undefined;
       entry.lastRunId = undefined;
       entry.abortedLastRun = true;
       entry.startedAt = undefined;
-      entry.endedAt = undefined;
+      entry.endedAt = command.now;
+      entry.lastRunError = "Run interrupted before restart recovery could start.";
       entry.runtimeMs = undefined;
       if (entry.restartRecoveryDeliveryRunId === command.runId) {
         // Rotate the failed RPC id on retry so dedupe cannot replay its terminal failure.
@@ -617,14 +598,15 @@ export function transitionMainSessionRecovery(
     case "claim_foreground": {
       if (
         entry.sessionId === command.sessionId &&
-        hasOrphanedMainRestartRecoveryFences(entry, command.sessionKey)
+        isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
+        isMainRestartRecoveryTerminalOnly(entry)
       ) {
         Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
         return { kind: "applied" };
       }
       if (
         entry.sessionId !== command.sessionId ||
-        entry.status !== "running" ||
+        !hasMainSessionRecoveryClaim(entry) ||
         entry.abortedLastRun !== true ||
         !isMainRestartRecoveryCandidate(entry, command.sessionKey)
       ) {
