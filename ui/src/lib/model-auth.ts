@@ -5,6 +5,7 @@ import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "../api/type
 import { authReads, type ModelAuthRequest } from "./model-auth-request-state.ts";
 import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
 
+const EMPTY_AUTH_STATUS: ModelAuthStatusResult = { ts: 0, providers: [] };
 const authRefreshDeadlines = new WeakMap<ModelAuthStatusResult, number | undefined>();
 /** Map credential-runtime aliases onto the provider card/attention identity. */
 export function canonicalModelAuthProviderId(provider: string): string {
@@ -16,6 +17,9 @@ export function canonicalModelAuthProviderId(provider: string): string {
 export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
   if (p.status === "missing") {
     return true;
+  }
+  if (!Array.isArray(p.profiles)) {
+    return false;
   }
   return p.profiles.some((prof) => prof.type === "oauth" || prof.type === "token");
 }
@@ -95,8 +99,12 @@ export async function loadModelAuthStatus(
     const result = signal
       ? await client.request<ModelAuthStatusResult>("models.authStatus", params, { signal })
       : await client.request<ModelAuthStatusResult>("models.authStatus", params);
-    authRefreshDeadlines.set(result, authStatusRefreshAt(result, requestedAt));
-    return result;
+    // RPC result types do not validate payloads; keep malformed auth data out of the cache.
+    const snapshot = result ?? EMPTY_AUTH_STATUS;
+    if (Array.isArray(snapshot.providers)) {
+      authRefreshDeadlines.set(snapshot, authStatusRefreshAt(snapshot, requestedAt));
+    }
+    return snapshot;
   };
   let state = authReads.get(client);
   if (!state) {
@@ -135,7 +143,7 @@ export async function loadModelAuthStatus(
       }
     };
     void shared.promise.then((result) => {
-      if (result.unavailable) {
+      if (result === EMPTY_AUTH_STATUS || result.unavailable || !Array.isArray(result.providers)) {
         finish();
       } else if (requests.get(agentId) === shared) {
         shared.refreshAt = nextModelAuthStatusRefreshAt(result);
