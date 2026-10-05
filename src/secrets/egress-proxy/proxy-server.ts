@@ -695,7 +695,7 @@ export async function startSecretEgressProxyServer(params: {
         new Promise<void>((resolve) => {
           proxy.close(() => resolve());
         }),
-        certificates.waitForPreparations(),
+        certificates.close(),
       ]).then(() => {});
       return stopPromise;
     },
