@@ -372,7 +372,11 @@ describe("post-activation failure settlement without inference", () => {
         const actual = await vi.importActual<typeof import("./update-command-rollback.js")>(
           "./update-command-rollback.js",
         );
-        mocks.rollback.mockImplementation(actual.rollbackFailedUpdate);
+        mocks.rollback.mockImplementation(async (rollbackParams) => {
+          // Real rollback must inspect the restored generation, not the candidate-phase fixture.
+          mocks.revalidate.mockImplementation(revalidateManagedGatewayServiceAfterUpdate);
+          return await actual.rollbackFailedUpdate(rollbackParams);
+        });
         mocks.stop.mockResolvedValue({
           ...params.preManagedServiceStop!,
           windowsTaskAutoStartRecovery: {

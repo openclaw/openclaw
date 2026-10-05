@@ -165,7 +165,8 @@ export function buildToolPluginManifest(params: {
     ...(toolMetadata ? { toolMetadata } : {}),
   };
   // Runtime schema options can contain undefined fields that the manifest writer drops.
-  return JSON.parse(JSON.stringify(manifest)) as JsonObject;
+  const serialized = JSON.stringify(manifest);
+  return JSON.parse(serialized) as JsonObject;
 }
 
 function buildToolPluginToolMetadata(

@@ -227,7 +227,8 @@ function resolveClawHubTargetWorkspace(
 }
 
 function shouldFailSkillVerification(result: ClawHubSkillVerificationResponse): boolean {
-  return result.ok !== true || result.decision !== "pass";
+  const envelope = result as { ok: unknown; decision: unknown };
+  return envelope.ok !== true || envelope.decision !== "pass";
 }
 
 function buildSkillVerificationOutput(
