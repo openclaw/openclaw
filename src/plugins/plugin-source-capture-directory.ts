@@ -28,6 +28,7 @@ import {
   resolvePluginSourceCaptureStorage,
   runInPluginSourceCaptureContext,
 } from "./plugin-source-capture-context.js";
+import { assertPluginSourceCaptureDiskHeadroom } from "./plugin-source-capture-low-disk.js";
 import { createPluginNativeCaptureCustody } from "./plugin-source-capture-native-loads.js";
 import {
   isLegacyPluginSourceCaptureName,
@@ -447,6 +448,7 @@ function createCaptureDirectory(instance: Instance, prefix: string, kind = "capt
   const { stateDir, placement } = instance.storage;
   if (instance.root) {
     const captures = path.join(instance.root, kind);
+    assertPluginSourceCaptureDiskHeadroom(captures);
     try {
       return fs.mkdtempSync(path.join(captures, prefix));
     } catch (error) {
@@ -459,6 +461,9 @@ function createCaptureDirectory(instance: Instance, prefix: string, kind = "capt
     }
   }
   const prepare = (fallback: boolean): string => {
+    assertPluginSourceCaptureDiskHeadroom(
+      fallback ? tmpdir() : resolvePluginSourceCapturesDirectory(stateDir),
+    );
     let directory: string | undefined;
     let token: SqliteStagingToken | undefined;
     try {

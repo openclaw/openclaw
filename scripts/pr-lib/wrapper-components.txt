@@ -1375,6 +1375,7 @@ src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-cleanup.ts
 src/plugins/plugin-source-capture-directory.ts
+src/plugins/plugin-source-capture-low-disk.ts
 src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
 src/plugins/plugin-source-file.ts
