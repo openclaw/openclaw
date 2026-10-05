@@ -61,6 +61,11 @@ type DispatchCase = {
   realManagedWorkspace?: boolean;
   hostMedia?: "allowed" | "outside";
   retirePlacement?: boolean;
+  authProfileCase?: {
+    lastProfileId: string | undefined;
+    lockedProfileId: string | undefined;
+    expectedSource: "auto" | "user" | undefined;
+  };
 };
 
 const dispatchCases: DispatchCase[] = [
@@ -70,6 +75,11 @@ const dispatchCases: DispatchCase[] = [
     remoteSkills: false,
     skillCatalog: "host" as const,
     oneShotCliRun: undefined,
+    authProfileCase: {
+      lastProfileId: "fixture:selected",
+      lockedProfileId: "fixture:selected",
+      expectedSource: "user",
+    },
   },
   {
     agentId: "work",
@@ -77,6 +87,11 @@ const dispatchCases: DispatchCase[] = [
     remoteSkills: false,
     skillCatalog: "sandbox" as const,
     oneShotCliRun: true,
+    authProfileCase: {
+      lastProfileId: "fixture:auto",
+      lockedProfileId: "fixture:selected",
+      expectedSource: "auto",
+    },
   },
   {
     agentId: "work",
@@ -84,6 +99,11 @@ const dispatchCases: DispatchCase[] = [
     remoteSkills: false,
     skillCatalog: "none" as const,
     oneShotCliRun: false,
+    authProfileCase: {
+      lastProfileId: undefined,
+      lockedProfileId: undefined,
+      expectedSource: undefined,
+    },
   },
   {
     agentId: "main",
@@ -91,6 +111,11 @@ const dispatchCases: DispatchCase[] = [
     remoteSkills: true,
     skillCatalog: "none" as const,
     oneShotCliRun: true,
+    authProfileCase: {
+      lastProfileId: undefined,
+      lockedProfileId: "fixture:selected",
+      expectedSource: undefined,
+    },
   },
   {
     agentId: "work",
@@ -140,6 +165,7 @@ const dispatchCases: DispatchCase[] = [
 it.each(dispatchCases)(
   "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, host media $hostMedia, retired placement $retirePlacement",
   async ({
+    authProfileCase,
     agentId,
     sandboxSessionKey,
     remoteSkills,
@@ -387,6 +413,7 @@ it.each(dispatchCases)(
           },
         },
         preparedRuntime: {
+          lockedProfileId: authProfileCase?.lockedProfileId,
           requestedModelId: "fixture-model",
           nativeModelOwned: true,
           attemptAuthProfileStore: authProfileStore,
@@ -394,6 +421,7 @@ it.each(dispatchCases)(
           snapshot: () => ({
             agentHarness: { id: "owner-fixture" },
             pluginHarnessOwnsTransport: true,
+            lastProfileId: authProfileCase?.lastProfileId,
             effectiveModel: {
               id: "fixture-model",
               provider: "fixture",
@@ -576,6 +604,14 @@ it.each(dispatchCases)(
             gitCoauthorPrompt,
           }),
         );
+        if (authProfileCase) {
+          const dispatchedAttempt = runAttempt.mock.calls[0]?.[0];
+          if (!dispatchedAttempt) {
+            throw new Error("Expected owner harness to capture the dispatched attempt");
+          }
+          expect(dispatchedAttempt.authProfileId).toBe(authProfileCase.lastProfileId);
+          expect(dispatchedAttempt.authProfileIdSource).toBe(authProfileCase.expectedSource);
+        }
         expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
           config,
           agentId,

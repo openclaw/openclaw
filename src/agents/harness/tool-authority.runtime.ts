@@ -65,6 +65,8 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     run: {
       ...attempt,
       model: attempt.modelId,
+      // Match reply-dispatch authority using the execution settings the attempt owns.
+      elevatedLevel: attempt.bashElevated?.defaultLevel,
       runtimePolicySessionKey: attempt.sandboxSessionKey,
       traceAuthorized: false,
       spawnedBy: attempt.spawnedBy ?? undefined,

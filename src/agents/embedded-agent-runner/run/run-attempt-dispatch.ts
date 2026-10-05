@@ -234,8 +234,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     params.modelRoutingProvenance?.stage === "fallback" ||
     Boolean(fallbackReason);
   const attemptContextEngine = nativeModelOwned ? undefined : contextEngine;
-  const authProfileIdSource =
-    runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "user" : "auto";
+  const authProfileIdSource = runtime.lastProfileId
+    ? runtime.lastProfileId === lockedProfileId
+      ? "user"
+      : "auto"
+    : undefined;
   const attemptAbortController = new AbortController();
   input.setPostCompactionAbortController(attemptAbortController);
   const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({

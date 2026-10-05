@@ -97,9 +97,11 @@ export async function runActiveReplySteer(
   const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
   // Capture exact injection authority before parking or awaiting admission.
   // A same-key successor must never inherit this turn's steer or abort.
+  // An admitted direct attempt may own a guarded target without a reply operation.
+  const injectionKey = activeReplyOperation?.key ?? queueKey;
   const injectionTarget =
-    activeReplyOperation && replyRunRegistry.get(activeReplyOperation.key) === activeReplyOperation
-      ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeReplyOperation.key)
+    replyRunRegistry.get(injectionKey) === activeReplyOperation
+      ? replyRunRegistry.resolveCurrentMessageInjectionTarget(injectionKey)
       : undefined;
   const parked = parkSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
