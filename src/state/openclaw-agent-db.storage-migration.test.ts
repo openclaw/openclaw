@@ -294,167 +294,173 @@ describe("agent schema 22 storage cutover", () => {
     });
   });
 
-  it("atomically publishes all new formats from a genuine UTF-16le historical database", async () => {
-    const encoding = "UTF-16le";
-    expect(sha256Hex(OPENCLAW_AGENT_SCHEMA_V22_SQL)).toBe(
-      "23f2a1e85494a512bce3f32623aed2beaf4e82bbeeb4362f6cc33d5dd3b8a6ea",
-    );
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const pathname = state.path("legacy21.sqlite");
-      let db = new DatabaseSync(pathname);
-      let observer: DatabaseSync | undefined;
-      try {
-        db.exec(`PRAGMA encoding = '${encoding}'; PRAGMA journal_mode = WAL`);
-        seedOpenClawAgentSchemaV22(db);
-        const { event, usage } = seedHistoricalData(db);
-        db.close();
-        db = new DatabaseSync(pathname);
-        const before = legacySnapshot(db);
-        // These entries have no cold fields: migration only adds their initial revision.
-        const expectedPreserved = {
-          ...before.preserved,
-          session_nodes: db
-            .prepare("SELECT *, 0 AS snapshot_revision FROM session_nodes ORDER BY rowid")
-            .all(),
-        };
-        expect(
-          db
+  it.each(["UTF-8", "UTF-16le"] as const)(
+    "atomically publishes all new formats from a genuine %s historical database",
+    async (encoding) => {
+      expect(sha256Hex(OPENCLAW_AGENT_SCHEMA_V22_SQL)).toBe(
+        "23f2a1e85494a512bce3f32623aed2beaf4e82bbeeb4362f6cc33d5dd3b8a6ea",
+      );
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const pathname = state.path("legacy21.sqlite");
+        let db = new DatabaseSync(pathname);
+        let observer: DatabaseSync | undefined;
+        try {
+          db.exec(`PRAGMA encoding = '${encoding}'; PRAGMA journal_mode = WAL`);
+          seedOpenClawAgentSchemaV22(db);
+          const { event, usage } = seedHistoricalData(db);
+          db.close();
+          db = new DatabaseSync(pathname);
+          const before = legacySnapshot(db);
+          // These entries have no cold fields: migration only adds their initial revision.
+          const expectedPreserved = {
+            ...before.preserved,
+            session_nodes: db
+              .prepare("SELECT *, 0 AS snapshot_revision FROM session_nodes ORDER BY rowid")
+              .all(),
+          };
+          expect(
+            db
+              .prepare(
+                `SELECT type, "notnull" AS not_null FROM pragma_table_info('transcript_events') WHERE name = 'event_json'`,
+              )
+              .get(),
+          ).toEqual({ type: "TEXT", not_null: 1 });
+          expect(
+            db
+              .prepare(
+                "SELECT name FROM pragma_table_info('transcript_events') WHERE name = 'event_zstd'",
+              )
+              .get(),
+          ).toBeUndefined();
+          observer = new DatabaseSync(pathname, { readOnly: true });
+          const reader = observer;
+          let observedPublication = false;
+          const exec = db.exec.bind(db);
+          const write = vi.spyOn(db, "exec").mockImplementation((sql) => {
+            exec(sql);
+            if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`) {
+              observedPublication = true;
+              expect(legacySnapshot(reader)).toEqual(before);
+            }
+          });
+          await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+            ensureOpenClawAgentDatabaseSchema(db, {
+              agentId: "main",
+              path: pathname,
+              env: state.env,
+            });
+          });
+          write.mockRestore();
+          expect(observedPublication).toBe(true);
+          expect(reader.prepare("PRAGMA user_version").get()).toEqual({
+            user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+          });
+          expect(reader.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+            schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+          });
+          expect(preservedRows(reader)).toEqual(expectedPreserved);
+          expect(reader.prepare("SELECT * FROM session_entry_snapshots").all()).toEqual([]);
+          const fts = reader.prepare("SELECT rowid, * FROM session_transcript_fts ORDER BY rowid");
+          fts.setReadBigInts(true);
+          expect(fts.all()).toEqual(before.fts);
+          expect(ftsStorage(reader)).toEqual(before.ftsStorage);
+          const matches = reader.prepare(
+            "SELECT rowid FROM session_transcript_fts WHERE session_transcript_fts MATCH 'saffronquasar' ORDER BY rank",
+          );
+          matches.setReadBigInts(true);
+          expect(matches.all()).toEqual(before.matches);
+          const identities = reader.prepare(
+            "SELECT id, session_id, message_id FROM session_transcript_fts_rows ORDER BY id",
+          );
+          identities.setReadBigInts(true);
+          expect(identities.all()).toEqual(
+            before.fts.map((row) => ({
+              id: row.rowid,
+              session_id: row.session_id,
+              message_id: row.message_id,
+            })),
+          );
+          expect(
+            reader
+              .prepare("SELECT * FROM session_transcript_index_state ORDER BY session_id")
+              .all(),
+          ).toEqual(
+            before.indexState.map((row) => {
+              const { fts_row_count: _count, ...preserved } = row;
+              return {
+                ...preserved,
+                needs_rebuild: dirtyV22Sessions.has(String(row.session_id)) ? 1 : row.needs_rebuild,
+              };
+            }),
+          );
+          const rows = reader
             .prepare(
-              `SELECT type, "notnull" AS not_null FROM pragma_table_info('transcript_events') WHERE name = 'event_json'`,
+              "SELECT rowid, seq, event_json, event_zstd, event_utf8_bytes, hex(CAST(event_json AS BLOB)) AS bytes FROM transcript_events ORDER BY rowid",
             )
-            .get(),
-        ).toEqual({ type: "TEXT", not_null: 1 });
-        expect(
-          db
-            .prepare(
-              "SELECT name FROM pragma_table_info('transcript_events') WHERE name = 'event_zstd'",
-            )
-            .get(),
-        ).toBeUndefined();
-        observer = new DatabaseSync(pathname, { readOnly: true });
-        const reader = observer;
-        let observedPublication = false;
-        const exec = db.exec.bind(db);
-        const write = vi.spyOn(db, "exec").mockImplementation((sql) => {
-          exec(sql);
-          if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`) {
-            observedPublication = true;
-            expect(legacySnapshot(reader)).toEqual(before);
+            .all();
+          expect(rows.map((row) => [row.rowid, row.seq])).toEqual([
+            [41, 7],
+            [52, 90],
+            [63, 99],
+          ]);
+          for (const [index, row] of rows.entries()) {
+            if (row.event_zstd instanceof Uint8Array) {
+              const codec = resolveZstdCodec();
+              expect(codec).not.toBeNull();
+              expect(
+                codec!.decompress(row.event_zstd, Number(row.event_utf8_bytes)).toString("utf8"),
+              ).toBe(event);
+              expect(row.event_json).toBeNull();
+            } else {
+              expect(row.bytes).toBe(before.events[index]?.bytes);
+            }
           }
-        });
-        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+          expect(rows[0]?.event_zstd instanceof Uint8Array).toBe(
+            encoding === "UTF-8" && resolveZstdCodec() !== null,
+          );
+          const chunk = reader
+            .prepare("SELECT chunk_rowid, embedding FROM memory_index_chunks WHERE id = 'chunk'")
+            .get()!;
+          expect(chunk.chunk_rowid).toBe(17);
+          if (!(chunk.embedding instanceof Uint8Array)) {
+            throw new Error("Expected binary chunk vector");
+          }
+          expect(decodeMemoryEmbedding(chunk.embedding)).toEqual([1 + Number.EPSILON, 0.1]);
+          const vector = reader
+            .prepare("SELECT rowid, embedding, dims, updated_at FROM memory_embedding_cache")
+            .get()!;
+          expect(vector).toMatchObject({ rowid: 23, dims: 2, updated_at: 20 });
+          if (!(vector.embedding instanceof Uint8Array)) {
+            throw new Error("Expected binary cached vector");
+          }
+          expect(decodeMemoryEmbedding(vector.embedding)).toEqual([1 + Number.EPSILON, 0.1]);
+          const cached = reader
+            .prepare(
+              "SELECT scope, value_json, blob, updated_at FROM cache_entries WHERE key = 'usage'",
+            )
+            .get()!;
+          expect(cached).toMatchObject({ scope: "session-cost-usage-rollup-v3", updated_at: 31 });
+          if (typeof cached.value_json !== "string" || !(cached.blob instanceof Uint8Array)) {
+            throw new Error("Expected migrated usage envelope/body");
+          }
+          expect(decodeUsageCostRollup(cached.value_json, "synthetic", cached.blob)).toEqual(usage);
+          expect(reader.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+          expect(reader.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+          expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+          const migrated = legacySnapshot(db);
           ensureOpenClawAgentDatabaseSchema(db, {
             agentId: "main",
             path: pathname,
             env: state.env,
           });
-        });
-        write.mockRestore();
-        expect(observedPublication).toBe(true);
-        expect(reader.prepare("PRAGMA user_version").get()).toEqual({
-          user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-        });
-        expect(reader.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-          schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-        });
-        expect(preservedRows(reader)).toEqual(expectedPreserved);
-        expect(reader.prepare("SELECT * FROM session_entry_snapshots").all()).toEqual([]);
-        const fts = reader.prepare("SELECT rowid, * FROM session_transcript_fts ORDER BY rowid");
-        fts.setReadBigInts(true);
-        expect(fts.all()).toEqual(before.fts);
-        expect(ftsStorage(reader)).toEqual(before.ftsStorage);
-        const matches = reader.prepare(
-          "SELECT rowid FROM session_transcript_fts WHERE session_transcript_fts MATCH 'saffronquasar' ORDER BY rank",
-        );
-        matches.setReadBigInts(true);
-        expect(matches.all()).toEqual(before.matches);
-        const identities = reader.prepare(
-          "SELECT id, session_id, message_id FROM session_transcript_fts_rows ORDER BY id",
-        );
-        identities.setReadBigInts(true);
-        expect(identities.all()).toEqual(
-          before.fts.map((row) => ({
-            id: row.rowid,
-            session_id: row.session_id,
-            message_id: row.message_id,
-          })),
-        );
-        expect(
-          reader.prepare("SELECT * FROM session_transcript_index_state ORDER BY session_id").all(),
-        ).toEqual(
-          before.indexState.map((row) => {
-            const { fts_row_count: _count, ...preserved } = row;
-            return {
-              ...preserved,
-              needs_rebuild: dirtyV22Sessions.has(String(row.session_id)) ? 1 : row.needs_rebuild,
-            };
-          }),
-        );
-        const rows = reader
-          .prepare(
-            "SELECT rowid, seq, event_json, event_zstd, event_utf8_bytes, hex(CAST(event_json AS BLOB)) AS bytes FROM transcript_events ORDER BY rowid",
-          )
-          .all();
-        expect(rows.map((row) => [row.rowid, row.seq])).toEqual([
-          [41, 7],
-          [52, 90],
-          [63, 99],
-        ]);
-        for (const [index, row] of rows.entries()) {
-          if (row.event_zstd instanceof Uint8Array) {
-            const codec = resolveZstdCodec();
-            expect(codec).not.toBeNull();
-            expect(
-              codec!.decompress(row.event_zstd, Number(row.event_utf8_bytes)).toString("utf8"),
-            ).toBe(event);
-            expect(row.event_json).toBeNull();
-          } else {
-            expect(row.bytes).toBe(before.events[index]?.bytes);
-          }
+          expect(legacySnapshot(db)).toEqual(migrated);
+        } finally {
+          observer?.close();
+          db.close();
         }
-        expect(rows[0]?.event_zstd instanceof Uint8Array).toBe(false);
-        const chunk = reader
-          .prepare("SELECT chunk_rowid, embedding FROM memory_index_chunks WHERE id = 'chunk'")
-          .get()!;
-        expect(chunk.chunk_rowid).toBe(17);
-        if (!(chunk.embedding instanceof Uint8Array)) {
-          throw new Error("Expected binary chunk vector");
-        }
-        expect(decodeMemoryEmbedding(chunk.embedding)).toEqual([1 + Number.EPSILON, 0.1]);
-        const vector = reader
-          .prepare("SELECT rowid, embedding, dims, updated_at FROM memory_embedding_cache")
-          .get()!;
-        expect(vector).toMatchObject({ rowid: 23, dims: 2, updated_at: 20 });
-        if (!(vector.embedding instanceof Uint8Array)) {
-          throw new Error("Expected binary cached vector");
-        }
-        expect(decodeMemoryEmbedding(vector.embedding)).toEqual([1 + Number.EPSILON, 0.1]);
-        const cached = reader
-          .prepare(
-            "SELECT scope, value_json, blob, updated_at FROM cache_entries WHERE key = 'usage'",
-          )
-          .get()!;
-        expect(cached).toMatchObject({ scope: "session-cost-usage-rollup-v3", updated_at: 31 });
-        if (typeof cached.value_json !== "string" || !(cached.blob instanceof Uint8Array)) {
-          throw new Error("Expected migrated usage envelope/body");
-        }
-        expect(decodeUsageCostRollup(cached.value_json, "synthetic", cached.blob)).toEqual(usage);
-        expect(reader.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-        expect(reader.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-        expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
-        const migrated = legacySnapshot(db);
-        ensureOpenClawAgentDatabaseSchema(db, {
-          agentId: "main",
-          path: pathname,
-          env: state.env,
-        });
-        expect(legacySnapshot(db)).toEqual(migrated);
-      } finally {
-        observer?.close();
-        db.close();
-      }
-    });
-  });
+      });
+    },
+  );
 
   it("rolls every conversion back when maintenance authority is lost", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
