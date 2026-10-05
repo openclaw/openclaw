@@ -4,14 +4,12 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
-import { comparePackageDistContentInventory } from "../../scripts/lib/package-dist-inventory-contract.mts";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  collectPackageDistContentInventory,
+  comparePackageDistContentInventory,
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  readPackageDistContentInventoryIfPresent,
-  readPackageDistInventoryIfPresent,
-} from "./package-dist-inventory.js";
+} from "../../scripts/lib/package-dist-inventory-contract.mts";
 import {
   packageActivationIdentity,
   resolvePackageActivationHelper,
@@ -21,22 +19,8 @@ import { decodePackageActivationLauncher } from "./package-update-activation-lau
 import {
   createPackageIntegrityReader,
   packageLauncherDifferences,
+  packageStatUnchanged,
 } from "./package-update-integrity.js";
-
-function fileObservation(file: string): string {
-  const stat = fs.lstatSync(file, { bigint: true });
-  return [
-    stat.dev,
-    stat.ino,
-    stat.mode,
-    stat.uid,
-    stat.gid,
-    stat.nlink,
-    stat.size,
-    stat.mtimeNs,
-    stat.ctimeNs,
-  ].join(":");
-}
 
 /** Verify the installed candidate without republishing it or trusting its old tree fingerprint. */
 export async function verifyPackagePublicationSettlement(
@@ -53,28 +37,33 @@ export async function verifyPackagePublicationSettlement(
       : path.join(retained, "recovery.mjs");
   assertCurrent();
   const helperPath = helper();
-  const helperBefore = fileObservation(helperPath);
+  const helperBefore = fs.lstatSync(helperPath, { bigint: true });
   if (
     packageActivationIdentity(helperPath, false) !== descriptor.helperIdentity ||
     createHash("sha256")
       .update(await fsp.readFile(helperPath))
       .digest("hex") !== descriptor.helperDigest ||
-    fileObservation(helperPath) !== helperBefore
+    !packageStatUnchanged(helperBefore, fs.lstatSync(helperPath, { bigint: true }))
   ) {
     throw new Error("Sealed package recovery helper changed.");
   }
   let helperVerified = helperBefore;
-  const observed = new Map<string, string>();
-  const remember = (file: string) => observed.set(file, fileObservation(file));
-  remember(live);
-  remember(path.join(live, "dist"));
+  const observed = new Map<string, fs.BigIntStats>();
   for (const relative of [
+    "",
+    "dist",
     "package.json",
     PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
     PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   ]) {
-    remember(path.join(live, relative));
+    const file = path.join(live, relative);
+    observed.set(file, fs.lstatSync(file, { bigint: true }));
   }
+  const {
+    collectPackageDistContentInventory,
+    readPackageDistContentInventoryIfPresent,
+    readPackageDistInventoryIfPresent,
+  } = await import("./package-dist-inventory.js");
   const expected = await readPackageDistContentInventoryIfPresent(live);
   const inventory = await readPackageDistInventoryIfPresent(live);
   if (!expected?.length || !inventory) {
@@ -93,7 +82,7 @@ export async function verifyPackagePublicationSettlement(
     let file = path.join(live, relative);
     while (file !== live) {
       if (!observed.has(file)) {
-        remember(file);
+        observed.set(file, fs.lstatSync(file, { bigint: true }));
       }
       file = path.dirname(file);
     }
@@ -109,15 +98,12 @@ export async function verifyPackagePublicationSettlement(
       `Package settlement refused: inventoried dist files changed: ${mismatches.join(", ")}.`,
     );
   }
-  const buildInfo: unknown = JSON.parse(
-    await fsp.readFile(path.join(live, "dist/build-info.json"), "utf8"),
+  const buildInfo = asOptionalRecord(
+    JSON.parse(await fsp.readFile(path.join(live, "dist/build-info.json"), "utf8")),
   );
   if (
     !inventoried.includes("dist/build-info.json") ||
-    !buildInfo ||
-    typeof buildInfo !== "object" ||
-    !("version" in buildInfo) ||
-    buildInfo.version !== descriptor.candidate.version
+    buildInfo?.version !== descriptor.candidate.version
   ) {
     throw new Error(
       `Package settlement requires build-info version ${descriptor.candidate.version}.`,
@@ -126,7 +112,7 @@ export async function verifyPackagePublicationSettlement(
   const reader = createPackageIntegrityReader();
   for (const entry of descriptor.launchers) {
     const launcher = path.join(descriptor.binDir, entry.name);
-    remember(launcher);
+    observed.set(launcher, fs.lstatSync(launcher, { bigint: true }));
     if (
       packageLauncherDifferences(
         decodePackageActivationLauncher(entry.candidate),
@@ -146,8 +132,8 @@ export async function verifyPackagePublicationSettlement(
     ) {
       throw new Error("Package settlement identity changed.");
     }
-    const helperNow = fileObservation(helper());
-    if (helperNow !== helperVerified) {
+    const helperNow = fs.lstatSync(helper(), { bigint: true });
+    if (!packageStatUnchanged(helperVerified, helperNow)) {
       // Archival can change ctime. Recheck the seal, including on a resumed rename.
       if (
         createHash("sha256").update(fs.readFileSync(helper())).digest("hex") !==
@@ -158,7 +144,7 @@ export async function verifyPackagePublicationSettlement(
       helperVerified = helperNow;
     }
     for (const [file, before] of observed) {
-      if (fileObservation(file) !== before) {
+      if (!packageStatUnchanged(before, fs.lstatSync(file, { bigint: true }))) {
         throw new Error(`Package settlement observation changed: ${path.relative(live, file)}.`);
       }
     }

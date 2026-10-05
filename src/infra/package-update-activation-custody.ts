@@ -10,7 +10,6 @@ import {
   resolvePackageActivationControl,
   type PackageActivationJournal,
   type PackageActivationRecord,
-  type PackageActivationIntent,
 } from "./package-update-activation-journal.js";
 
 export function packageActivationIdentityOrAbsent(file: string, directory: boolean | "launcher") {
@@ -188,10 +187,7 @@ export async function supersedePackageActivationCustody(
   initial: PackageActivationRecord,
   assertion: () => void,
   settlement:
-    | Pick<
-        Extract<PackageActivationIntent, { kind: "publication-settled-external-change" }>,
-        "kind" | "detail"
-      >
+    | { kind: "publication-settled-external-change"; detail: string }
     | {
         kind:
           | "superseded-by-manual-install"

@@ -272,26 +272,6 @@ export async function settlePendingPackageActivation(installKey: string) {
       if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
         throw new Error("The installed package changed before recovery settlement.");
       }
-      if (externalPublication) {
-        const verified = await verifyPackagePublicationSettlement(
-          anchor,
-          initial,
-          fence.assertCurrent,
-        );
-        const detail =
-          initial.intent?.kind === "publication-settled-external-change"
-            ? initial.intent.detail
-            : verified.detail;
-        const kind = "publication-settled-external-change";
-        const retained = await supersedePackageActivationCustody(
-          anchor,
-          journal,
-          initial,
-          verified.assertUnchanged,
-          { kind, detail },
-        );
-        return { operationId: initial.descriptor.operationId, reason: kind, retained, detail };
-      }
       if (publicationNotStarted) {
         const assertPrevious = () => {
           fence.assertCurrent();
@@ -311,20 +291,30 @@ export async function settlePendingPackageActivation(installKey: string) {
           operationId: initial.descriptor.operationId,
           reason: "publication-not-started",
           retained: undefined,
+          detail: undefined,
         };
       }
+      const verified = externalPublication
+        ? await verifyPackagePublicationSettlement(anchor, initial, fence.assertCurrent)
+        : undefined;
+      const settlement: Parameters<typeof supersedePackageActivationCustody>[4] = verified
+        ? {
+            kind: "publication-settled-external-change",
+            detail: receipt?.detail ?? verified.detail,
+          }
+        : { kind: reason, detail: receipt?.detail };
       const retained = await supersedePackageActivationCustody(
         anchor,
         journal,
         initial,
-        fence.assertCurrent,
-        { kind: reason, ...(receipt ? { detail: receipt.detail } : {}) },
+        verified?.assertUnchanged ?? fence.assertCurrent,
+        settlement,
       );
       return {
         operationId: initial.descriptor.operationId,
         retained,
-        reason,
-        ...(receipt ? { detail: receipt.detail } : {}),
+        reason: settlement.kind,
+        detail: settlement.detail,
       };
     },
     { existingAuthority: { ...originalAuthority, ...currentDatabase } },

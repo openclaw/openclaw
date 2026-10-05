@@ -83,13 +83,14 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (opts.channel === undefined || normalizeUpdateChannel(opts.channel)) {
     const settled = await settlePendingPackageActivation(resolveUpdateInstallRoot(discoveredRoot));
     if (settled) {
-      const message = `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
-        settled.retained
-          ? `Recovery evidence retained at ${settled.retained}.`
-          : "The original package and launchers remain unchanged."
-      }${"detail" in settled && settled.detail ? ` ${settled.detail}` : ""}`;
-      defaultRuntime.error(message);
-      if ("detail" in settled && settled.detail) {
+      defaultRuntime.error(
+        `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
+          settled.retained
+            ? `Recovery evidence retained at ${settled.retained}.`
+            : "The original package and launchers remain unchanged."
+        }${settled.detail ? ` ${settled.detail}` : ""}`,
+      );
+      if (settled.detail) {
         // The operation UUID identifies this repair receipt, not the original failed run.
         // Replaying it after interrupted reporting preserves the original update outcome.
         createUpdateRun(
