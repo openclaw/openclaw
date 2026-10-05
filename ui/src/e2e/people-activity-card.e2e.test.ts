@@ -212,7 +212,11 @@ suite.define(() => {
         await gateway.emitGatewayEvent("presence", {
           presence: [
             {
-              user: { id: "gateway-owner", identity: { type: "profile", id: "gateway-owner" } },
+              user: {
+                id: "gateway-owner",
+                identity: { type: "profile", id: "gateway-owner" },
+                name: "Synthetic operator",
+              },
               platform: "macOS 27.0.0",
               deviceFamily: "Mac",
               clientId: "openclaw-macos",
@@ -228,9 +232,11 @@ suite.define(() => {
         const card = page.locator(".person-activity-hovercard");
         await card.waitFor({ state: "visible" });
         await capturePeopleCard(page, "shared-owner.png");
-        expect(await owner.textContent()).toContain("Shared owner");
-        expect(await card.getAttribute("aria-label")).toBe("Activity for Shared owner");
-        expect(await card.locator("h2").textContent()).toBe("Shared owner");
+        expect(await owner.textContent()).toContain("Synthetic operator · Shared owner");
+        expect(await card.getAttribute("aria-label")).toBe(
+          "Activity for Synthetic operator · Shared owner",
+        );
+        expect(await card.locator("h2").textContent()).toBe("Synthetic operator · Shared owner");
         expect(await card.textContent()).toContain(
           "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
         );
@@ -246,7 +252,7 @@ suite.define(() => {
           await page
             .locator('.chat-pane__presence [data-viewer-id="gateway-owner"]')
             .getAttribute("aria-label"),
-        ).toBe("Shared owner");
+        ).toBe("Synthetic operator · Shared owner");
       },
     );
   });
