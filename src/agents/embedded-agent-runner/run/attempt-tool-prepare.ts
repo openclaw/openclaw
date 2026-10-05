@@ -330,6 +330,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             skillInstructionDeliveryCache,
             registerRunCleanup: (cleanup) => generationCleanups.push(cleanup),
             inboundEventKind: attempt.currentInboundEventKind,
+            inputProvenance: attempt.inputProvenance,
             disableMessageTool: attempt.disableMessageTool,
             forceMessageTool: attempt.forceMessageTool,
             enableHeartbeatTool: attempt.enableHeartbeatTool,
