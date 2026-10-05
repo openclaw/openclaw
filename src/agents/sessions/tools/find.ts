@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
 import { waitForCommandSpawn } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
@@ -103,20 +102,21 @@ function buildFindResult(params: {
   limitNotice: string;
 }) {
   const resultLimitReached = params.paths.length > params.effectiveLimit;
-  const rawOutput = params.paths
-    .slice(0, params.effectiveLimit)
-    .map((foundPath) => {
-      // Backends may return search-relative paths; only absolute paths need relativizing.
-      // Preserve directory markers and filename whitespace when formatting either backend.
-      const normalized = normalizeNativePathSeparators(foundPath);
-      const relativePath = path.isAbsolute(foundPath)
-        ? normalizeNativePathSeparators(path.relative(params.searchPath, foundPath) || ".")
-        : normalized;
-      return normalized.endsWith("/") && !relativePath.endsWith("/")
-        ? `${relativePath}/`
-        : relativePath;
-    })
-    .join("\n");
+  const outputPaths = params.paths.slice(0, params.effectiveLimit).map((foundPath) => {
+    // Backends may return search-relative paths; only absolute paths need relativizing.
+    // Preserve directory markers and filename whitespace when formatting either backend.
+    const normalized = normalizeNativePathSeparators(foundPath);
+    const relativePath = path.isAbsolute(foundPath)
+      ? normalizeNativePathSeparators(path.relative(params.searchPath, foundPath) || ".")
+      : normalized;
+    return normalized.endsWith("/") && !relativePath.endsWith("/")
+      ? `${relativePath}/`
+      : relativePath;
+  });
+  // JSON Lines keeps each newline-containing path distinct and independently truncatable.
+  const rawOutput = outputPaths.some((foundPath) => /[\r\n]/.test(foundPath))
+    ? outputPaths.map((foundPath) => JSON.stringify(foundPath)).join("\n")
+    : outputPaths.join("\n");
   const { content, ...truncation } = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
   const details: FindToolDetails = { content };
   const notices: string[] = [];
@@ -231,7 +231,7 @@ export function createFindToolDefinition(
               return;
             }
 
-            const args: string[] = ["--glob", "--color=never", "--hidden"];
+            const args: string[] = ["--glob", "--color=never", "--hidden", "--print0"];
             // Outside a repo, fd needs this flag to honor standalone ignore files.
             // Inside a repo, default git-aware traversal preserves nested repo boundaries.
             if (!isInsideGitRepository(searchPath)) {
@@ -274,13 +274,22 @@ export function createFindToolDefinition(
               const result = await child;
               throw result instanceof Error ? result : new Error("fd stdout is unavailable");
             }
-            const rl = createInterface({ input: child.stdout });
             let stderr = "";
             let stderrDroppedBytes = 0;
             const lines: string[] = [];
+            let pendingPath = "";
 
+            const onStdoutData = (chunk: string) => {
+              pendingPath += chunk;
+              let separator = pendingPath.indexOf("\0");
+              while (separator >= 0) {
+                lines.push(pendingPath.slice(0, separator));
+                pendingPath = pendingPath.slice(separator + 1);
+                separator = pendingPath.indexOf("\0");
+              }
+            };
             const cleanup = () => {
-              rl.close();
+              child.stdout?.removeListener("data", onStdoutData);
             };
             const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
               if (settled) {
@@ -299,15 +308,12 @@ export function createFindToolDefinition(
               stderr = appended.tail;
               stderrDroppedBytes += appended.droppedBytes;
             });
-            // Readline re-emits input failures, while the stream listener also catches
-            // implementations that do not. settle() keeps the shared failure path one-shot.
-            rl.on("error", (error) => onStreamError("stdout", error));
             child.stdout?.on("error", (error) => onStreamError("stdout", error));
             child.stderr?.on("error", (error) => onStreamError("stderr", error));
 
-            rl.on("line", (line) => {
-              lines.push(line);
-            });
+            // fd's NUL-delimited output keeps valid newline-containing filenames atomic.
+            child.stdout?.setEncoding("utf8");
+            child.stdout?.on("data", onStdoutData);
 
             child.nodeChildProcess.on("error", (error) => {
               cleanup();
@@ -316,6 +322,9 @@ export function createFindToolDefinition(
 
             child.nodeChildProcess.on("close", (code) => {
               cleanup();
+              if (pendingPath.length > 0) {
+                lines.push(pendingPath);
+              }
               if (signal?.aborted) {
                 settle(() => reject(new Error("Operation aborted")));
                 return;
