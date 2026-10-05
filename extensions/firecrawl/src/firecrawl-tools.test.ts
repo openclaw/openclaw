@@ -423,7 +423,7 @@ describe("firecrawl tools", () => {
     });
 
     expect(result.truncated).toBe(true);
-    expect(String(result.text).length).toBeLessThan(50_200);
+    expect(result.text.length).toBeLessThan(50_200);
     expect(String(result.title).length + String(result.warning).length).toBeLessThan(4_300);
     expect(JSON.stringify(result)).not.toContain("<s>");
   });
@@ -442,7 +442,7 @@ describe("firecrawl tools", () => {
     });
 
     expect(result.truncated).toBe(true);
-    expect(String(result.text).length).toBeLessThan(1_500);
+    expect(result.text.length).toBeLessThan(1_500);
   });
 
   it("normalizes Firecrawl authorization headers before requests", async () => {
