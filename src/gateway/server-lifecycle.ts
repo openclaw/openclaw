@@ -457,7 +457,7 @@ export async function prepareGatewayLifecycle(params: {
       step("health-work", () => healthWork.drain()),
       step("mention-inbox", () => mentionInbox.dispose()),
       step("worktree-run-end", () => worktreeRunEnd.drain()),
-      sandboxRegistry.drain(),
+      step("sandbox-registry", () => sandboxRegistry.drain()),
     ]);
   };
   const runClosePrelude = async () => {
