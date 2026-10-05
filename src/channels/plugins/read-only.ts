@@ -146,10 +146,6 @@ function getChannelConfigRecord(cfg: OpenClawConfig, channelId: string): Record<
   return (channels && asOptionalRecord(readOwnRecordValue(channels, channelId))) ?? {};
 }
 
-function normalizeManifestAccountConfigKey(accountId: string): string {
-  return normalizeOptionalAccountId(accountId) ?? "";
-}
-
 function listManifestChannelAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
   const channelConfig = getChannelConfigRecord(cfg, channelId);
   const accounts = channelConfig.accounts;
@@ -190,7 +186,7 @@ function resolveManifestChannelAccount(params: {
         ? resolveNormalizedAccountEntry(
             accounts,
             accountId,
-            normalizeManifestAccountConfigKey,
+            (candidateId) => normalizeOptionalAccountId(candidateId) ?? "",
             params.accountKeyPolicy,
           )
         : undefined,

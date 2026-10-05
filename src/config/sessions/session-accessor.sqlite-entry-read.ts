@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { sql, type Selectable } from "kysely";
 import {
@@ -56,7 +55,9 @@ type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">
 type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_nodes"]> &
   SessionEntrySnapshotRow;
 
-function prepareExactSessionEntryQueries(database: DatabaseSync) {
+// Compile fixed reads once per connection; the shared executor still owns fresh
+// bindings, statement invalidation, and schema-driven SELECT * repreparation.
+const getExactSessionEntryQueries = createSqliteQueryCache((database) => {
   const rowQueries = new Map<string, (key: string) => ResolvedSessionEntryRow["row"] | undefined>();
   const canonicalQueries = new Map<
     string,
@@ -101,11 +102,7 @@ function prepareExactSessionEntryQueries(database: DatabaseSync) {
       return query(key);
     },
   };
-}
-
-// Compile fixed reads once per connection; the shared executor still owns fresh
-// bindings, statement invalidation, and schema-driven SELECT * repreparation.
-const getExactSessionEntryQueries = createSqliteQueryCache(prepareExactSessionEntryQueries);
+});
 
 export type ResolvedSessionEntryRow = {
   entry: SessionEntry;

@@ -10,15 +10,15 @@ import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-even
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  type SessionEntryLifecycleUpsert,
-  SessionEntryLifecycleUpsertConflictError,
-} from "./session-accessor.lifecycle-types.js";
+import type { SessionEntryLifecycleUpsert } from "./session-accessor.lifecycle-types.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-commit.js";
-import { SessionMaintenancePreservationConflictError } from "./session-mutation-conflict-error.js";
+import {
+  SessionEntryLifecycleUpsertConflictError,
+  SessionMaintenancePreservationConflictError,
+} from "./session-mutation-conflict-error.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", async (importOriginal) => ({
