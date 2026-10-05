@@ -109,6 +109,7 @@ export function ensureUserProfilesSchema(
     ({ db }) => {
       db.exec(USER_PROFILES_SCHEMA_SQL); // sqlite-allow-raw -- Canonical feature-local additive DDL.
       ensureColumn(db, "user_profile_identities", "canonical_login TEXT");
+      ensureColumn(db, "user_profile_identities", "verified_email_json TEXT");
       ensureColumn(db, "user_profile_identities", "authorization_id TEXT");
       ensureColumn(db, "user_profile_identities", "authorization_basis_json TEXT");
       // sqlite-allow-raw -- Canonical first-use channel-link indexes after additive columns.

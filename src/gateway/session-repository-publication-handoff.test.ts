@@ -45,8 +45,13 @@ vi.mock("../process/exec.js", async (original) => ({
   runCommandBuffered: mocked.run,
   runCommandWithTimeout: mocked.timed,
 }));
-vi.mock("./worker-environments/worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: async () => undefined,
+vi.mock("./worker-environments/worker-github-binding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./worker-environments/worker-github-binding.js")>()),
+  prepareWorkerRepositoryGitHubIdentity: async () => ({
+    token: undefined,
+    assertSelected: () => {},
+    revalidate: async () => {},
+  }),
 }));
 afterEach(() => vi.restoreAllMocks());
 it.each([

@@ -13,18 +13,25 @@ import {
   validateUsersSetDisplayNameParams,
   validateUsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveVerifiedSystemNativeGitHubAccount } from "../../agents/github-tool-identity.js";
 import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isGatewayReadonlyWork } from "../../process/gateway-work-admission.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
+import { resolveFactoryGitHubCoauthorEligibility } from "../../state/user-profile-github-identity.js";
 import { profileCatalogPath } from "../../state/user-profile-identity.read.js";
 import {
   projectUserProfileDisplay,
   readResidentUserProfileRevision,
 } from "../../state/user-profile-list.js";
-import { readUserProfileSnapshot } from "../../state/user-profile-reads.js";
+import {
+  readCanonicalUserProfileListItem,
+  readUserProfileSnapshot,
+} from "../../state/user-profile-reads.js";
 import {
   linkCanonicalUserProfileEmail,
   mergeCanonicalUserProfiles,
@@ -33,11 +40,7 @@ import {
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
 import { UserProfileMergeError, UserProfileOwnerError } from "../../state/user-profiles-schema.js";
-import {
-  getUserProfileListItem,
-  listProfiles,
-  UserProfileNotFoundError,
-} from "../../state/user-profiles.js";
+import { listProfiles, UserProfileNotFoundError } from "../../state/user-profiles.js";
 import {
   invalidateOperatorRolePolicy,
   resolveOperatorRoleSelection,
@@ -153,8 +156,12 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     try {
       let syncError: unknown;
+      const readonly = isGatewayReadonlyWork();
+      const readerAccountId = client.authenticatedFactoryGitHubAccountId;
+      const readerRequester = readonly ? await prepareAuthenticatedProfile(options) : undefined;
       let factoryIdentity: { accountId: number; login: string; avatarUrl?: string } | undefined;
-      if (client.authenticatedGitHubIdentitySync) {
+      // Only the trusted Factory sync has an existing-profile-only reader branch.
+      if (client.authenticatedGitHubIdentitySync && (!readonly || readerAccountId)) {
         try {
           factoryIdentity = (await client.authenticatedGitHubIdentitySync()).factory;
         } catch (error) {
@@ -162,8 +169,11 @@ export const usersHandlers: GatewayRequestHandlers = {
           syncError = error;
         }
       }
-      const requester = await prepareAuthenticatedProfile(options);
+      const requester = readerRequester ?? (await prepareAuthenticatedProfile(options));
       requester.assertCurrent();
+      if (readonly && client.authenticatedFactoryGitHubAccountId !== readerAccountId) {
+        throw new Error("Gateway requester GitHub identity changed");
+      }
       const profileId = requester.profileId;
       if (!profileId) {
         respond(false, undefined, authenticatedProfileUnavailableError(syncError));
@@ -177,12 +187,14 @@ export const usersHandlers: GatewayRequestHandlers = {
         config.gateway.auth.trustedProxy?.userHeader?.toLowerCase() === "x-factory-principal"
           ? factoryIdentity?.accountId === accountId
             ? factoryIdentity
-            : await resolveVerifiedSystemNativeGitHubAccount({
-                config,
-                sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
-                accountId,
-                host: "microsoft.ghe.com",
-              }).catch(() => null)
+            : readonly
+              ? null
+              : await resolveVerifiedSystemNativeGitHubAccount({
+                  config,
+                  sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
+                  accountId,
+                  host: "microsoft.ghe.com",
+                }).catch(() => null)
           : null;
       requester.assertCurrent();
       if (client.authenticatedFactoryGitHubAccountId !== accountId) {

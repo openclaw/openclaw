@@ -29,6 +29,10 @@ type GitHubGraphQLUnavailableError = ControlUiGitHubError;
 export type ControlUiGitHubPreviewIdentity = {
   token: string | undefined;
   cacheScope: string;
+  /** Trusted host admission for one currently visible repository session. */
+  repository?: { owner: string; repo: string };
+  host?: string;
+  apiBaseUrl?: string;
   /** Host service/env credentials may retry a stale HTTP 401 anonymously. */
   optionalAuth?: true;
   revalidate: () => Promise<void>;
@@ -80,7 +84,7 @@ type GitHubPublicApi = {
     fetchImpl: typeof fetch,
     token?: string,
     beforeRedirect?: (url: URL) => Promise<void>,
-    identity?: Pick<ControlUiGitHubPreviewIdentity, "revalidate" | "assertSelected">,
+    identity?: Pick<ControlUiGitHubPreviewIdentity, "revalidate" | "assertSelected" | "repository">,
     etag?: string,
     signal?: AbortSignal,
     graphql?: { query: string; variables: Record<string, string> },
@@ -105,6 +109,7 @@ type GitHubPublicApi = {
     token?: string,
     maxBytes?: number,
     apiBaseUrl?: string,
+    identity?: ControlUiGitHubPreviewIdentity,
   ) => Promise<unknown>;
   parseControlUiGitHubPreviewTarget: (params: unknown) => ControlUiGitHubPreviewTarget | null;
   parseGitHubTarget: (params: unknown) => GitHubDetailTarget | null;
@@ -213,6 +218,9 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
     identity: ControlUiGitHubPreviewIdentity | undefined,
   ): ControlUiGitHubPreviewIdentity => {
     if (identity) {
+      if (identity.repository) {
+        return identity;
+      }
       return resolveConfiguredGitHubHost(getRuntimeConfigSnapshot()) === "github.com"
         ? identity
         : { ...identity, token: undefined, cacheScope: "public:anonymous" };

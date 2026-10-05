@@ -102,6 +102,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       this.sessionPullRequestsBranch !== result?.branch ||
       this.githubRepo?.owner !== repository?.owner ||
       this.githubRepo?.repo !== repository?.repo ||
+      this.githubRepo?.host !== repository?.host ||
       this.sessionPullRequestsStatus !== status ||
       this.dismissedSessionPullRequestIds.size !== dismissed.size ||
       [...dismissed].some((id) => !this.dismissedSessionPullRequestIds.has(id));
@@ -167,7 +168,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const repositoryChanged =
       this.githubRepo != null &&
       repository !== null &&
-      (this.githubRepo.owner !== repository.owner || this.githubRepo.repo !== repository.repo);
+      (this.githubRepo.owner !== repository.owner ||
+        this.githubRepo.repo !== repository.repo ||
+        this.githubRepo.host !== repository.host);
     this.applyPullRequestPresentation(result, listDismissedChatPullRequests(sessionKey));
     if (!result.rateLimited || result.pullRequests.length > 0 || repositoryChanged) {
       const previousSummary = scope.context.sessions.pullRequestSummary(sessionKey);

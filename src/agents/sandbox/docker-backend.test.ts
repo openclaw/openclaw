@@ -676,7 +676,11 @@ process.stdout.write(JSON.stringify({
           "--env",
           "GH_TOKEN",
           "--env",
+          "GH_ENTERPRISE_TOKEN",
+          "--env",
           "GITHUB_TOKEN",
+          "--env",
+          "GITHUB_ENTERPRISE_TOKEN",
         ]);
         expect(delivered.staged).toContain("GH_CONFIG_DIR=/openclaw/github\n");
         expect(delivered.staged).toContain("GIT_AUTHOR_NAME=Release Agent\n");

@@ -25,9 +25,12 @@ export function parseGitHubItemPath(url: URL): GitHubItemTarget | null {
   return match ? itemTarget(match) : null;
 }
 
-export function parseGitHubLinkTarget(href: string): GitHubLinkTarget | null {
+export function parseGitHubLinkTarget(
+  href: string,
+  verifiedHosts: readonly string[] = [],
+): GitHubLinkTarget | null {
   // Anchors resolve relative links; the stream scanner supplies absolute URLs.
   const url = URL.parse(href);
-  const match = url ? matchGitHubItemUrl(url) : null;
+  const match = url ? matchGitHubItemUrl(url, verifiedHosts) : null;
   return match && url ? { ...itemTarget(match), href: url.href } : null;
 }

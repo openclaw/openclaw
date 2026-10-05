@@ -1,14 +1,24 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { quoteCliArg } from "../../cli/quote-cli-arg.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { withInstallationTarget } from "../../infra/installation-target-context.js";
 import * as gatewayCliShim from "../../infra/openclaw-cli-shim.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import * as localGitHub from "../github-local-environment.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  clearRuntimeConfigSnapshot();
   setActiveNodeContexts([]);
   resetAgentRunRegistryForTest();
 });
@@ -69,6 +79,133 @@ describe("prepared harness tool environment", () => {
     } finally {
       host.closeHost();
       host.closeAdmission();
+    }
+  });
+
+  it("carries the run-owned GitHub profile into real Gateway exec without using another account", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "host-github-exec-"));
+    await fs.chmod(root, 0o700);
+    await fs.writeFile(
+      path.join(root, "hosts.yml"),
+      "microsoft.ghe.com:\n  oauth_token: synthetic-selected-A\n",
+      { mode: 0o600 },
+    );
+    setRuntimeConfigSnapshot({ gateway: { github: { host: "microsoft.ghe.com" } } });
+    vi.stubEnv("GH_TOKEN", "synthetic-other-B");
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("run GitHub authority closed");
+      }
+    };
+    const prepared = {
+      env: {
+        GH_HOST: "microsoft.ghe.com",
+        GH_CONFIG_DIR: root,
+        OPENCLAW_GATEWAY_PASSWORD: "",
+        GITHUB_APP_PRIVATE_KEY: "",
+        OPENCLAW_GITHUB_APP_PRIVATE_KEY: "",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+        GIT_TERMINAL_PROMPT: "0",
+        GH_PROMPT_DISABLED: "1",
+        GH_NO_UPDATE_NOTIFIER: "1",
+        GH_NO_EXTENSION_UPDATE_NOTIFIER: "1",
+        GH_TOKEN: "",
+        GH_ENTERPRISE_TOKEN: "",
+        GITHUB_TOKEN: "",
+        GITHUB_ENTERPRISE_TOKEN: "",
+      },
+      assertCurrent,
+      instructions: "run scoped",
+      dispose: async () => {
+        current = false;
+        await fs.rm(root, { recursive: true, force: true });
+      },
+    };
+    const prepare = vi
+      .spyOn(localGitHub, "prepareLocalGitHubEnvironment")
+      .mockResolvedValue(prepared);
+    const host = await createAdmittedHostCapabilityTestFixture({
+      runId: "gh-command-handoff",
+      agentId: "main",
+      sessionKey: "agent:main:gh-command-handoff",
+      workspaceDir: root,
+      config: { tools: { exec: { host: "gateway", security: "full", ask: "off" } } },
+    });
+    try {
+      await host.hostCapabilities.prepareLocalGitHubEnvironment?.({
+        assertCurrent: () => {},
+        signal: new AbortController().signal,
+      });
+      const tools = host.hostCapabilities.createToolSurface?.({
+        config: {},
+        agentId: "main",
+        workspaceDir: root,
+        exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: false },
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: true,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: false,
+        },
+      });
+      const exec = tools?.find((tool) => tool.name === "exec");
+      expect(exec).toBeDefined();
+      const command = `${quoteCliArg(process.execPath)} -e 'process.stdout.write(process.env.GH_ENTERPRISE_TOKEN === "synthetic-selected-A" && !process.env.GH_TOKEN && process.env.GH_HOST === "microsoft.ghe.com" ? "selected-A" : "unavailable")'`;
+      const result = await exec!.execute("selected-gh-read", { command, yieldMs: 10_000 });
+      expect(JSON.stringify(result)).toContain("selected-A");
+      expect(JSON.stringify(result)).not.toContain("synthetic-selected-A");
+      await fs.writeFile(
+        path.join(root, "hosts.yml"),
+        "github.com:\n  oauth_token: synthetic-other-B\n",
+        { mode: 0o600 },
+      );
+      const wrongHost = await exec!.execute("wrong-host-gh-read", { command, yieldMs: 10_000 });
+      expect(JSON.stringify(wrongHost)).toContain("credential is unavailable");
+      expect(JSON.stringify(wrongHost)).not.toContain("synthetic-other-B");
+      await prepared.dispose();
+      expect(() =>
+        host.hostCapabilities.createToolSurface?.({ config: {}, agentId: "main" }),
+      ).toThrow("run GitHub authority closed");
+    } finally {
+      host.closeHost();
+      host.closeAdmission();
+      prepare.mockRestore();
+      await prepared.dispose();
+    }
+  });
+
+  it("binds local GitHub preparation to the exact admitted host lifetime", async () => {
+    const prepare = vi
+      .spyOn(localGitHub, "prepareLocalGitHubEnvironment")
+      .mockImplementation(async (params) => {
+        params.assertCurrent();
+        return undefined;
+      });
+    const host = await createAdmittedHostCapabilityTestFixture({
+      runId: "local-github",
+      agentId: "main",
+      sessionKey: "agent:main:local-github",
+      config: {},
+    });
+    try {
+      const request = { assertCurrent: vi.fn(), signal: new AbortController().signal };
+      await host.hostCapabilities.prepareLocalGitHubEnvironment?.(request);
+      const captured = prepare.mock.calls[0]![0];
+      expect(captured.admittedRunContext).toBe(host.admittedRunContext);
+      expect(request.assertCurrent).toHaveBeenCalledTimes(2);
+      host.closeHost();
+      expect(captured.signal.aborted).toBe(true);
+      expect(() => captured.assertCurrent()).toThrow("no longer active");
+      await expect(host.hostCapabilities.prepareLocalGitHubEnvironment?.(request)).rejects.toThrow(
+        "no longer active",
+      );
+    } finally {
+      host.closeHost();
+      host.closeAdmission();
+      prepare.mockRestore();
     }
   });
 

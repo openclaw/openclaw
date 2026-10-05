@@ -219,7 +219,14 @@ function renderPublicationEffect(effect: NonNullable<GitHubPublicationView["resu
 function publicationHeadline(publication: GitHubPublicationView, busy: boolean) {
   const { result, error, locked } = publication;
   if (error) {
-    return { text: t("githubPublication.statusUnavailable"), alert: true };
+    return {
+      text: t(
+        publication.errorMethod === "sessions.github.options"
+          ? "githubPublication.optionsUnavailable"
+          : "githubPublication.statusUnavailable",
+      ),
+      alert: true,
+    };
   }
   switch (result?.status) {
     case "failed":

@@ -13,7 +13,11 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
-import type { ControlUiSessionPrReadContext } from "./control-ui-session-pr-read.js";
+import {
+  prepareControlUiSessionGitHubIdentity,
+  readControlUiSessionIssueReferences,
+  type ControlUiSessionPrReadContext,
+} from "./control-ui-session-pr-read.js";
 import {
   createGitHubReadGroup,
   prepareSessionPullRequestGitHubRead,
@@ -22,7 +26,7 @@ import {
   fetchSessionPullRequestCheckRollup,
   sessionPullRequestRepositoryApiUrl,
 } from "./control-ui-session-prs-checks.js";
-import { gitHubPublicApi } from "./github-public-api.js";
+import { gitHubPublicApi, type ControlUiGitHubPreviewIdentity } from "./github-public-api.js";
 import { resolveGitHubForkParent } from "./github-repository-target.js";
 
 const SUCCESS_CACHE_MS = 90_000;
@@ -113,6 +117,7 @@ type LoadSessionPullRequestDeps = {
   read: ControlUiSessionPrReadContext;
   cacheSignal?: AbortSignal;
   fetchImpl?: typeof fetch;
+  githubIdentity?: ControlUiGitHubPreviewIdentity;
   resolveGitRoot?: (params: ControlUiSessionPullRequestsParams) => Promise<string | null>;
   resolveGitContext?: (
     params: ControlUiSessionPullRequestsParams,
@@ -338,7 +343,7 @@ async function fetchBranchPullRequests(
         sessionPullRequestRepositoryApiUrl({ ...context, apiBaseUrl: read.apiBaseUrl }),
       ),
     );
-    if (parent) {
+    if (parent && !read.repository) {
       items = parsePullList(
         await read.request(pullsByHeadUrl(parent.owner, parent.repo, head, read.apiBaseUrl)),
         read.host,
@@ -386,7 +391,11 @@ async function refreshBranchPullRequests(
   read: ReturnType<typeof prepareSessionPullRequestGitHubRead>,
   entry: CacheEntry,
 ): Promise<BranchPullRequestsSnapshot> {
-  const repository = { owner: context.owner, repo: context.repo };
+  const repository = {
+    owner: context.owner,
+    repo: context.repo,
+    ...(read.host !== "github.com" ? { host: read.host } : {}),
+  };
   try {
     const result = {
       ...(await fetchBranchPullRequests(context, read)),
@@ -439,7 +448,14 @@ async function refreshBranchPullRequests(
         rateLimited: true,
       };
     }
-    if (entry.lastGood) {
+    if (
+      entry.lastGood &&
+      !(
+        read.repository &&
+        error instanceof gitHubPublicApi.ControlUiGitHubError &&
+        [401, 403, 404, 409].includes(error.statusCode)
+      )
+    ) {
       return { ...entry.lastGood, rateLimited: false, status: "unavailable" };
     }
     throw error;
@@ -451,6 +467,7 @@ export async function loadControlUiSessionPullRequests(
   deps: LoadSessionPullRequestDeps,
 ): Promise<ControlUiSessionPullRequests> {
   const { target, assertCurrent, projection } = deps.read;
+  let unavailable: ControlUiSessionPullRequests | undefined;
   try {
     assertCurrent();
     const request = { ...params, ...target.params };
@@ -475,13 +492,33 @@ export async function loadControlUiSessionPullRequests(
       branchCache.release(deps.cacheSignal);
       return { pullRequests: [], rateLimited: false };
     }
+    const issues =
+      projection === "publication"
+        ? undefined
+        : await readControlUiSessionIssueReferences(deps.read, context).catch(() => undefined);
+    assertCurrent();
+    const issueProjection = issues === undefined ? {} : { issues };
+    const host = context.host ?? "github.com";
+    const repository = {
+      owner: context.owner,
+      repo: context.repo,
+      ...(host !== "github.com" ? { host } : {}),
+    };
+    unavailable = {
+      pullRequests: [],
+      repository,
+      ...issueProjection,
+      rateLimited: false,
+      status: "unavailable",
+    };
     // Conversation text is not evidence of session work. Only the checkout
     // selects PRs; publication receipts remain owned by the publication flow.
     if (!context.branch || context.branch === context.defaultBranch) {
       branchCache.release(deps.cacheSignal);
       return {
         pullRequests: [],
-        repository: { owner: context.owner, repo: context.repo },
+        repository,
+        ...issueProjection,
         rateLimited: false,
       };
     }
@@ -495,12 +532,7 @@ export async function loadControlUiSessionPullRequests(
     if (!result) {
       // Local repository identity survives a cold PR lookup failure, but an
       // unknown PR list must not enable a Create PR row.
-      return {
-        pullRequests: [],
-        repository: { owner: context.owner, repo: context.repo },
-        rateLimited: false,
-        status: "unavailable",
-      };
+      return unavailable;
     }
     const { publicationCandidates, mergedHeads, workingBranchHasLivePullRequest, ...snapshot } =
       result;
@@ -516,11 +548,17 @@ export async function loadControlUiSessionPullRequests(
     assertCurrent();
     return {
       ...snapshot,
+      repository,
+      ...issueProjection,
       pullRequests: projection === "publication" ? publicationCandidates : snapshot.pullRequests,
       ...(branch ? { branch } : {}),
     };
   } catch (error) {
     branchCache.release(deps.cacheSignal);
+    if (unavailable) {
+      assertCurrent();
+      return unavailable;
+    }
     throw error;
   }
 }
@@ -552,10 +590,13 @@ async function cachedBranchPullRequests(
 ): Promise<BranchPullRequestsSnapshot> {
   let read: ReturnType<typeof prepareSessionPullRequestGitHubRead>;
   try {
+    deps.githubIdentity ??= await prepareControlUiSessionGitHubIdentity(deps.read);
+    await deps.githubIdentity?.revalidate();
     read = prepareSessionPullRequestGitHubRead(
       context.host ?? "github.com",
       deps.fetchImpl ?? fetch,
       deps.read.assertCurrent,
+      { identity: deps.githubIdentity },
     );
   } catch (error) {
     branchCache.release(deps.cacheSignal);
@@ -581,12 +622,22 @@ async function cachedBranchPullRequests(
   if (entry.access.signal.aborted) {
     entry.access = createGitHubReadGroup();
   }
-  const release = entry.access.add(read.assertCurrent, deps.cacheSignal);
+  const release = entry.access.add(read.assertCurrent, deps.cacheSignal, deps.githubIdentity);
+  const sharedIdentity = deps.githubIdentity
+    ? {
+        ...deps.githubIdentity,
+        assertSelected: entry.access.assertCurrent,
+        revalidate: async () => {
+          await entry.access.identity()?.revalidate();
+          entry.access.assertCurrent();
+        },
+      }
+    : undefined;
   const transportRead = prepareSessionPullRequestGitHubRead(
     read.host,
     deps.fetchImpl ?? fetch,
     entry.access.assertCurrent,
-    { signal: entry.access.signal },
+    { signal: entry.access.signal, identity: sharedIdentity },
   );
   try {
     if (reusable) {

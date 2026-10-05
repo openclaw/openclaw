@@ -1,4 +1,14 @@
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+export function githubWebHost(): string {
+  const host =
+    getRuntimeConfigSnapshot()?.gateway?.github?.host?.trim().toLowerCase() || "github.com";
+  if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(host) || host.includes("..")) {
+    throw new Error("gateway.github.host must be a hostname");
+  }
+  return host;
+}
 
 export type GitHubItemTarget = {
   kind: "issue" | "pull";
@@ -80,6 +90,7 @@ export function parseGitHubLinkParams(value: unknown): {
   target: GitHubTarget;
   url: string;
   agentId?: string;
+  sessionKey?: string;
   refresh: boolean;
   filesExpanded: boolean;
 } | null {
@@ -88,7 +99,9 @@ export function parseGitHubLinkParams(value: unknown): {
     typeof value.url !== "string" ||
     value.url.length > 4096 ||
     (value.refresh !== undefined && typeof value.refresh !== "boolean") ||
-    (value.agentId !== undefined && (typeof value.agentId !== "string" || !value.agentId.trim()))
+    (value.agentId !== undefined && (typeof value.agentId !== "string" || !value.agentId.trim())) ||
+    (value.sessionKey !== undefined &&
+      (typeof value.sessionKey !== "string" || !value.sessionKey.trim()))
   ) {
     return null;
   }
@@ -96,7 +109,7 @@ export function parseGitHubLinkParams(value: unknown): {
     const url = new URL(value.url);
     if (
       url.protocol !== "https:" ||
-      url.hostname !== "github.com" ||
+      !new Set(["github.com", githubWebHost()]).has(url.hostname) ||
       url.username ||
       url.password ||
       url.port ||
@@ -116,6 +129,7 @@ export function parseGitHubLinkParams(value: unknown): {
           target,
           url: url.href,
           ...(typeof value.agentId === "string" ? { agentId: value.agentId.trim() } : {}),
+          ...(typeof value.sessionKey === "string" ? { sessionKey: value.sessionKey.trim() } : {}),
           refresh: value.refresh === true,
           filesExpanded: subpage === "files",
         }
@@ -125,7 +139,7 @@ export function parseGitHubLinkParams(value: unknown): {
   }
 }
 
-export function githubTargetUrl(target: GitHubTarget): string {
+export function githubTargetUrl(target: GitHubTarget, host = "github.com"): string {
   const id = target.kind === "commit" ? target.sha : target.number;
-  return `https://github.com/${target.owner}/${target.repo}/${target.kind === "issue" ? "issues" : target.kind}/${id}`;
+  return `https://${host}/${target.owner}/${target.repo}/${target.kind === "issue" ? "issues" : target.kind}/${id}`;
 }

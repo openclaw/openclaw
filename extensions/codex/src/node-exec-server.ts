@@ -1,13 +1,28 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { WorkerGitHubLaunchBinding } from "openclaw/plugin-sdk/github-worker-runtime";
 /** Declares the explicitly approved, lazily loaded node-backed Codex exec-server. */
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveCodexWorkerAppServerCommand } from "./node-app-server-command.js";
+import { CODEX_NODE_GITHUB_REFRESH_FEATURE } from "./node-github-refresh.js";
 
 const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
 
 const CODEX_NODE_EXEC_SERVER_CAPABILITY = "codex.exec-server";
+const CODEX_NODE_APP_SERVER_CAPABILITY = "codex.app-server";
+
+async function parseCodexNodeGitHubBinding(
+  value: unknown,
+): Promise<WorkerGitHubLaunchBinding | undefined> {
+  // Registration must not load Gateway credential and session runtime.
+  const { parseWorkerGitHubLaunchBinding } =
+    await import("openclaw/plugin-sdk/github-worker-runtime");
+  return parseWorkerGitHubLaunchBinding(value);
+}
 
 function parseCodexNodePlacementWorkspace(value: unknown) {
   if (
@@ -68,7 +83,7 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
       }
       if (
         !isRecord(request) ||
-        Object.keys(request).length !== 2 ||
+        ![2, 3].includes(Object.keys(request).length) ||
         (request.authorization !== "human-approved" && request.authorization !== "session-full")
       ) {
         throw new Error(
@@ -76,6 +91,12 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
         );
       }
       const placement = parseCodexNodePlacementWorkspace(request.placement);
+      const github: WorkerGitHubLaunchBinding | undefined = Object.hasOwn(request, "github")
+        ? await parseCodexNodeGitHubBinding(request.github)
+        : undefined;
+      if (Object.hasOwn(request, "github") && !github) {
+        throw new Error("Codex node exec-server received an invalid GitHub process binding.");
+      }
       if (
         !context?.acquireManagedWorkspaceAsync ||
         context.sessionKey !== placement.sessionKey ||
@@ -112,6 +133,7 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
         io: runtimeIo,
         activeProcesses,
         assertExecAuthorized,
+        github,
       });
     },
   };
@@ -133,8 +155,23 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
         };
       }
       let placement: ReturnType<typeof parseCodexNodePlacementWorkspace>;
+      const github =
+        isRecord(context.params) && Object.hasOwn(context.params, "github")
+          ? await parseCodexNodeGitHubBinding(context.params.github)
+          : undefined;
+      if (isRecord(context.params) && Object.hasOwn(context.params, "github") && !github) {
+        return {
+          ok: false,
+          code: "CODEX_NODE_EXEC_GITHUB_BINDING_INVALID",
+          message: "Codex node execution received an invalid GitHub process binding.",
+        };
+      }
       try {
-        placement = parseCodexNodePlacementWorkspace(context.params);
+        placement = parseCodexNodePlacementWorkspace(
+          isRecord(context.params)
+            ? Object.fromEntries(Object.entries(context.params).filter(([key]) => key !== "github"))
+            : context.params,
+        );
       } catch {
         return {
           ok: false,
@@ -151,7 +188,11 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
       };
       const fullLaunch = await context.invokeNodeWithSessionFull?.({
         workspace,
-        createParams: () => ({ placement, authorization: "session-full" }),
+        createParams: () => ({
+          placement,
+          authorization: "session-full",
+          ...(github ? { github } : {}),
+        }),
       });
       if (fullLaunch) {
         return fullLaunch;
@@ -189,7 +230,7 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
       }
       return await context.invokeNode({
         workspace,
-        params: { placement, authorization: "human-approved" },
+        params: { placement, authorization: "human-approved", ...(github ? { github } : {}) },
       });
     },
   };

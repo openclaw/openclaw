@@ -29,6 +29,7 @@ const GITHUB_CREDENTIAL_KIND = {
   native: "agentTools.githubKindNative",
   "managed-pat": "agentTools.githubKindPat",
   "managed-oauth": "agentTools.githubKindOAuth",
+  "app-installation": "agentTools.githubKindApp",
 } as const;
 
 const GITHUB_REFRESH_STATE = {

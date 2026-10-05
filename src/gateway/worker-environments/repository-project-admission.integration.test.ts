@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 
@@ -80,3 +82,70 @@ it("admits public source without a native CLI and fences later configured identi
   await expect(admitted.revalidate()).rejects.toThrow("credential is unavailable");
   expect(fetchMock).not.toHaveBeenCalled();
 });
+
+it.each(["broker", "private-output"] as const)(
+  "retains only safe %s credential failure through native repository admission",
+  async (kind) => {
+    const root = directories.make("repository-credential-denied-");
+    const executable = path.join(root, "gh.mjs");
+    const diagnostic = {
+      event: "github_credential_lookup_client",
+      lookupId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      stage: "broker",
+      code: "http_rejected",
+      httpStatus: 503,
+    };
+    await fs.writeFile(
+      executable,
+      `process.stderr.write(${JSON.stringify(
+        kind === "broker"
+          ? JSON.stringify(diagnostic) + "\n"
+          : "synthetic-private-provider-detail\n",
+      )}); process.exit(1);\n`,
+    );
+    for (const key of [
+      "GH_TOKEN",
+      "GITHUB_TOKEN",
+      "GH_ENTERPRISE_TOKEN",
+      "GITHUB_ENTERPRISE_TOKEN",
+    ]) {
+      vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("GH_CONFIG_DIR", path.join(root, "native"));
+    vi.stubEnv("OPENCLAW_GITHUB_IDENTITY_EXECUTABLE", process.execPath);
+    vi.stubEnv("NODE_OPTIONS", `--import=${pathToFileURL(executable).href}`);
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    const config = { agents: { entries: { "denied-source": { workspace: root } } } };
+    const admission = prepareRepositoryWorkerProjectSource({
+      repository: { agentId: "denied-source", url: "https://github.com/acme/private-project.git" },
+      namespace: "denied-source-test",
+      getConfig: () => config,
+      assertCurrent: () => {},
+    });
+    await expect(admission).rejects.toMatchObject(
+      kind === "broker"
+        ? {
+            name: "GitHubCredentialLookupError",
+            diagnostic: {
+              lookupId: diagnostic.lookupId,
+              clientStage: "broker",
+              clientCode: "http_rejected",
+              httpStatus: 503,
+            },
+          }
+        : { reason: "unverified" },
+    );
+    await expect(admission).rejects.not.toThrow("synthetic-private-provider-detail");
+    const message = await admission.catch((error: unknown) => formatErrorMessage(error));
+    if (kind === "broker") {
+      expect(message).toBe(
+        "GitHub credential broker rejected this lookup (HTTP 503); access was not established. Inspect the credential service diagnostic before retrying.",
+      );
+    }
+    expect(message).not.toContain("synthetic-private-provider-detail");
+    expect(message).not.toContain(diagnostic.lookupId);
+    expect(fetchMock).not.toHaveBeenCalled();
+  },
+);

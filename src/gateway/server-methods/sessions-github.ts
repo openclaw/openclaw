@@ -3,23 +3,37 @@ import {
   type GatewayCoreRequestParams,
   errorShape,
   validateSessionGitHubPublishParams,
+  validateSessionGitHubPullRequestReadParams,
   validateSessionGitHubOptionsParams,
   validateSessionGitHubStatusParams,
   validateSessionGitHubConfirmParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
-import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { resolveGitHubHost } from "../../agents/github-host-runtime.js";
+import type { GitHubIdentityPreparationObserver } from "../../agents/github-identity-preparation-timing.js";
+import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
+import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { prepareControlUiSessionPrRead } from "../control-ui-session-pr-read.js";
 import {
+  factoryPublicationPreflightCredential,
   prepareCurrentGitHubPublicationOptionsIdentity,
+  currentGitHubPublicationConfig,
   hasSupportedGitHubPublicationTarget,
   type PublicationSessionIdentity,
 } from "../github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
 import { captureGitHubPublicationRequester } from "../github-publication-requester.js";
+import { readBoundGitHubPullRequest } from "../github-pull-request-read.js";
+import { parseGitHubRemoteUrl } from "../github-remote.js";
+import { prepareGatewayProjectGitHubIdentity } from "../project-github-identity.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -35,21 +49,124 @@ import { defineValidatedGatewayMethod } from "./validation.js";
 type SessionGitHubMethod = Extract<keyof GatewayCoreRequestParams, `sessions.github.${string}`>;
 const GITHUB_OPTIONS_TIMEOUT_MS = 5_000;
 class GitHubOptionsTimeoutError extends Error {
-  constructor() {
-    super("GitHub publication options timed out after 5 seconds; retry the request.");
+  constructor(
+    readonly phase: string,
+    readonly requestId: string,
+  ) {
+    super(
+      phase === "shared_identity"
+        ? "GitHub account verification is still preparing; refresh publication options to retry. No publication was requested."
+        : "GitHub publication options timed out after 5 seconds; retry the request.",
+    );
   }
 }
 const sessionGitHubFailureMessages = {
   "sessions.github.publish": "GitHub publication request failed",
+  "sessions.github.pullRequest.read": "GitHub pull request read failed",
   "sessions.github.options": "GitHub publication options are unavailable.",
   "sessions.github.status": "GitHub publication status is unavailable.",
   "sessions.github.confirm": "GitHub publication confirmation failed.",
 };
 
+type ValidatedGitHubMethod<Method extends SessionGitHubMethod> = Parameters<
+  typeof defineValidatedGatewayMethod<Method>
+>;
 function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
-  ...[method, validate, handler]: Parameters<typeof defineValidatedGatewayMethod<Method>>
+  method: ValidatedGitHubMethod<Method>[0],
+  validate: ValidatedGitHubMethod<Method>[1],
+  handler: (
+    options: Parameters<ValidatedGitHubMethod<Method>[2]>[0],
+    nextPhase: (phase: string, session?: PublicationSessionIdentity) => void,
+    observePreparation: GitHubIdentityPreparationObserver,
+    onReadTimeout: () => void,
+  ) => ReturnType<ValidatedGitHubMethod<Method>[2]>,
 ) {
   return defineValidatedGatewayMethod(method, validate, async (options) => {
+    const started = performance.now();
+    let phase = "session_read";
+    const phases: Record<string, number> = {};
+    let session: PublicationSessionIdentity | undefined;
+    let phaseStarted = started;
+    const preparation = new Map<string, { started: number; durationMs: number; outcome: string }>();
+    let responded = false;
+    let deadlineExpired = false;
+    const observePreparation: GitHubIdentityPreparationObserver = (subphase, outcome) => {
+      if (responded) {
+        return;
+      }
+      const now = performance.now();
+      const prior = preparation.get(subphase);
+      const entry = {
+        started: prior?.started ?? now,
+        durationMs: Math.round(now - (prior?.started ?? now)),
+        outcome,
+      };
+      preparation.set(subphase, entry);
+      options.context.logGateway?.info("sessions.github.read.preparation", {
+        method,
+        requestId: options.req.id,
+        traceId: getActiveDiagnosticTraceContext()?.traceId,
+        sessionKey: session?.sessionKey ?? options.params.sessionKey,
+        sessionId: session?.sessionId,
+        lifecycleRevision: session?.lifecycleRevision,
+        subphase,
+        outcome,
+        durationMs: entry.durationMs,
+        elapsedMs: Math.round(now - started),
+      });
+    };
+    const nextPhase = (next: string, identity?: PublicationSessionIdentity) => {
+      session = identity ?? session;
+      const now = performance.now();
+      phases[phase] = Math.round(now - phaseStarted);
+      phase = next;
+      phaseStarted = now;
+    };
+    if (method === "sessions.github.options" || method === "sessions.github.status") {
+      const respond = options.respond;
+      // Keep the exact request object: its opaque authority is bound at admission.
+      options.respond = (...args) => {
+        responded = true;
+        const responsePhase = phase;
+        nextPhase("response");
+        options.context.logGateway?.info("sessions.github.read", {
+          method,
+          requestId: options.req.id,
+          sessionKey: options.params.sessionKey,
+          ...(session
+            ? { sessionId: session.sessionId, lifecycleRevision: session.lifecycleRevision }
+            : {}),
+          ...(method === "sessions.github.status" && "requestId" in options.params
+            ? { publicationRequestId: options.params.requestId }
+            : {}),
+          traceId: getActiveDiagnosticTraceContext()?.traceId,
+          elapsedMs: Math.round(performance.now() - started),
+          phase: responsePhase,
+          phases: { ...phases },
+          identityPreparation: Object.fromEntries(
+            [...preparation].map(([name, value]) => [
+              name,
+              {
+                durationMs:
+                  value.outcome === "started"
+                    ? Math.round(performance.now() - value.started)
+                    : value.durationMs,
+                outcome:
+                  value.outcome === "started"
+                    ? deadlineExpired
+                      ? "timeout"
+                      : options.signal?.aborted
+                        ? "aborted"
+                        : "interrupted"
+                    : value.outcome,
+              },
+            ]),
+          ),
+          outcome: args[0] ? "ready" : "unavailable",
+        });
+        respond(...args);
+      };
+    }
     const { agentId, sessionKey } = options.params;
     const key = sessionKey ?? getGatewayToolCallerIdentity()?.sessionKey;
     // Explicit public owners follow request admission, not private deleted-session remapping.
@@ -65,7 +182,9 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
       }
     }
     try {
-      return await handler(options);
+      return await handler(options, nextPhase, observePreparation, () => {
+        deadlineExpired = true;
+      });
     } catch (error) {
       const publishing = method === "sessions.github.publish";
       if (publishing && error instanceof SessionMutationAuthorizationChangedError) {
@@ -90,7 +209,12 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
                 details: { leaseAcquisition: acquisition },
               }
             : busy || timedOut
-              ? { retryable: true }
+              ? {
+                  retryable: true,
+                  ...(error instanceof GitHubOptionsTimeoutError
+                    ? { details: { phase: error.phase, requestId: error.requestId } }
+                    : {}),
+                }
               : publishing &&
                   error instanceof GitHubPublicationKnownFailure &&
                   "idempotencyKey" in options.params &&
@@ -145,6 +269,95 @@ async function isSessionPublicationSuperseded(
 }
 
 export const sessionsGitHubHandlers: GatewayRequestHandlers = {
+  "sessions.github.pullRequest.read": defineSessionGitHubMethod(
+    "sessions.github.pullRequest.read",
+    validateSessionGitHubPullRequestReadParams,
+    async (options) => {
+      const caller = getGatewayToolCallerIdentity();
+      if (
+        !caller?.sessionKey ||
+        !caller.agentId ||
+        caller.sessionKey !== options.params.sessionKey ||
+        (options.params.agentId &&
+          normalizeAgentId(options.params.agentId) !== normalizeAgentId(caller.agentId))
+      ) {
+        throw new Error("GitHub pull request reads require the current repository session.");
+      }
+      const assertCallerCurrent = captureGatewayToolCallerAssertion();
+      if (!assertCallerCurrent) {
+        throw new Error("GitHub pull request reads require an admitted Gateway run.");
+      }
+      assertCallerCurrent("sessions.github.pullRequest.read");
+      const admitted = loadGatewaySessionEntryReadOnly(caller.sessionKey, {
+        agentId: caller.agentId,
+      });
+      const admittedWorkspaceId = admitted.entry?.repositoryWorkspaceId;
+      if (!admittedWorkspaceId) {
+        throw new Error("The repository session is no longer bound to this run.");
+      }
+      const preparedWorkspace =
+        await getSessionRepositoryWorkspaceStore().prepare(admittedWorkspaceId);
+      const currentRepository = () => {
+        assertCallerCurrent("sessions.github.pullRequest.read");
+        const loaded = loadGatewaySessionEntryReadOnly(caller.sessionKey, {
+          agentId: caller.agentId,
+        });
+        const workspaceId = loaded.entry?.repositoryWorkspaceId;
+        const workspace =
+          workspaceId === admittedWorkspaceId ? preparedWorkspace.current() : undefined;
+        if (
+          loaded.canonicalKey !== caller.sessionKey ||
+          loaded.agentId !== caller.agentId ||
+          !loaded.entry?.sessionId ||
+          !workspace ||
+          workspace.agentId !== caller.agentId ||
+          workspace.sessionKey !== caller.sessionKey
+        ) {
+          throw new Error("The repository session is no longer bound to this run.");
+        }
+        const target = parseGitHubRemoteUrl(workspace.url, resolveGitHubHost());
+        if (!target) {
+          throw new Error("The repository session is not bound to the configured GitHub host.");
+        }
+        return { workspaceId, workspace, target };
+      };
+      const initial = currentRepository();
+      const assertRepositoryCurrent = () => {
+        const current = currentRepository();
+        if (
+          current.workspaceId !== initial.workspaceId ||
+          current.workspace.url !== initial.workspace.url
+        ) {
+          throw new Error("The repository session changed while reading the pull request.");
+        }
+      };
+      const identity = await prepareGatewayProjectGitHubIdentity({
+        agentId: caller.agentId,
+        assertActive: assertRepositoryCurrent,
+        config: options.context.getRuntimeConfig(),
+        context: options.context,
+      });
+      if (!identity) {
+        throw new Error("Authenticated repository reads are unavailable on this Gateway.");
+      }
+      const result = await identity.start(() =>
+        readBoundGitHubPullRequest({
+          target: { ...initial.target, number: options.params.pullRequest },
+          identity,
+        }),
+      );
+      identity.assertSelected();
+      const current = currentRepository();
+      if (
+        current.workspaceId !== initial.workspaceId ||
+        current.workspace.url !== initial.workspace.url ||
+        current.workspace.sessionKey !== initial.workspace.sessionKey
+      ) {
+        throw new Error("The repository session changed while reading the pull request.");
+      }
+      options.respond(true, result);
+    },
+  ),
   "sessions.github.publish": defineSessionGitHubMethod(
     "sessions.github.publish",
     validateSessionGitHubPublishParams,
@@ -224,32 +437,121 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
   "sessions.github.options": defineSessionGitHubMethod(
     "sessions.github.options",
     validateSessionGitHubOptionsParams,
-    async (options) => {
+    async (options, nextPhase, observePreparation, onReadTimeout) => {
       const deadline = new AbortController();
-      await raceWithTimeout(
-        async () => {
-          const read = await prepareGitHubPublicationOptionsRead(
+      let phase = "session_read";
+      const enter = (next: string) => {
+        phase = next;
+        nextPhase(next);
+      };
+      const boundedRead = <T>(run: () => Promise<T>, timeoutMs = GITHUB_OPTIONS_TIMEOUT_MS) =>
+        raceWithTimeout(
+          run,
+          timeoutMs,
+          () => {
+            const error = new GitHubOptionsTimeoutError(phase, options.req.id);
+            onReadTimeout();
+            deadline.abort(error);
+            throw error;
+          },
+          { ref: false },
+        );
+      // Cold requester admission must finish before credential access; each has a bounded budget.
+      let admitted: Awaited<ReturnType<typeof captureGitHubPublicationRequester>> | undefined;
+      try {
+        const read = await boundedRead(async () => {
+          const preparedRead = await prepareGitHubPublicationOptionsRead(
             options,
             options.params,
             deadline.signal,
           );
-          const coordinator = options.context.githubPublicationService;
-          if (!coordinator) {
-            options.respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.UNAVAILABLE,
-                "GitHub publication state is unavailable; retry after Gateway startup.",
-              ),
-            );
-            return;
+          nextPhase("requester", preparedRead.session);
+          if (
+            process.env.FACTORY_AUTH_MODE === "github" &&
+            options.context.githubPublicationService
+          ) {
+            enter("requester");
+            try {
+              const captured = await captureGitHubPublicationRequester(
+                options,
+                preparedRead.session,
+              );
+              try {
+                deadline.signal.throwIfAborted();
+                captured.requester.assertCurrent();
+                preparedRead.currentSession();
+                admitted = captured;
+              } catch (error) {
+                captured.release();
+                throw error;
+              }
+            } catch {
+              /* An unavailable shared account must not hide the caller's personal option. */
+            }
           }
+          deadline.signal.throwIfAborted();
+          preparedRead.currentSession();
+          return preparedRead;
+        });
+        const coordinator = options.context.githubPublicationService;
+        if (!coordinator) {
+          options.respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              "GitHub publication state is unavailable; retry after Gateway startup.",
+            ),
+          );
+          return;
+        }
+        const selected =
+          resolveConfiguredGitHubToolIdentity({
+            config: currentGitHubPublicationConfig(),
+            agentId: read.session.agentId,
+            scope: "agent",
+          }) ??
+          resolveConfiguredGitHubToolIdentity({
+            config: currentGitHubPublicationConfig(),
+            agentId: read.session.agentId,
+            scope: "system",
+          });
+        // App reads include the 15s broker admission and 10s issuer verification budgets.
+        const identityBudget =
+          selected?.kind === "app-installation" ? 25_000 : GITHUB_OPTIONS_TIMEOUT_MS;
+        await boundedRead(async () => {
           let shared = null;
+          const requester = admitted?.requester;
           try {
+            const profileId =
+              requester?.snapshot.actor.kind === "operator"
+                ? requester.snapshot.actor.profileId
+                : options.client?.authenticatedUserProfile?.profileId;
+            enter("shared_identity");
             const identity = await prepareCurrentGitHubPublicationOptionsIdentity(
               read.session.agentId,
-              () => deadline.signal.throwIfAborted(),
+              profileId
+                ? {
+                    profileId,
+                    sessionKey: read.session.sessionKey,
+                    assertCurrent: () => {
+                      deadline.signal.throwIfAborted();
+                      requester?.assertCurrent();
+                      read.currentSession();
+                    },
+                  }
+                : undefined,
+              requester
+                ? factoryPublicationPreflightCredential({
+                    ...read.session,
+                    assertCurrent: () => {
+                      deadline.signal.throwIfAborted();
+                      requester.assertCurrent();
+                      read.currentSession();
+                    },
+                  })
+                : undefined,
+              observePreparation,
             );
             shared = {
               source: identity.source,
@@ -260,14 +562,28 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             /* An unavailable shared account must not hide the caller's personal option. */
           }
           read.currentSession();
+          enter("personal_status");
           const service = options.context.githubOAuthService?.personal;
-          if (read.personal.kind === "eligible" && !service) {
+          const action = read.personal.kind === "eligible" ? read.personal.action : null;
+          const configuredBot = () =>
+            (["agent", "system"] as const).some((scope) =>
+              resolveConfiguredGitHubToolIdentity({
+                config: currentGitHubPublicationConfig(),
+                agentId: read.session.agentId,
+                scope,
+              }),
+            );
+          if (action && !configuredBot() && !service) {
             throw new Error("GitHub connections are unavailable; retry after Gateway startup.");
           }
-          const action = read.personal.kind === "eligible" ? read.personal.action : null;
-          let personal = action ? await service!.status(action) : null;
+          let personal = action && !configuredBot() ? await service!.status(action) : null;
           const session = read.currentSession();
-          const assertResponseCurrent = () => read.assertSessionUnchanged(session);
+          const assertResponseCurrent = () => {
+            deadline.signal.throwIfAborted();
+            admitted?.requester.assertCurrent();
+            read.assertSessionUnchanged(session);
+          };
+          enter("pending_receipts");
           const pendingPersonal = action
             ? await coordinator.personalPending(action, session)
             : null;
@@ -275,6 +591,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           if (action && personal) {
             personal = service!.revalidateStatus(action, personal);
           }
+          enter("shared_receipt");
           const latestShared = await coordinator.latestShared(
             session,
             options.params.idempotencyKey,
@@ -286,29 +603,28 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             personal = service!.revalidateStatus(action, personal);
           }
           if (shared && read.sessionScoped) {
+            enter("target_check");
             if (!(await hasSupportedGitHubPublicationTarget(session, assertResponseCurrent))) {
               shared = null;
             }
             assertResponseCurrent();
           }
+          if (configuredBot()) {
+            personal = null;
+          }
           options.respond(true, { personal, shared, pendingPersonal, latestShared });
-        },
-        GITHUB_OPTIONS_TIMEOUT_MS,
-        () => {
-          const error = new GitHubOptionsTimeoutError();
-          // Revoke this read only; OAuth owns and settles any token rotation already started.
-          deadline.abort(error);
-          throw error;
-        },
-        { ref: false },
-      );
+        }, identityBudget);
+      } finally {
+        admitted?.release();
+      }
     },
   ),
   "sessions.github.status": defineSessionGitHubMethod(
     "sessions.github.status",
     validateSessionGitHubStatusParams,
-    async (options) => {
+    async (options, nextPhase) => {
       const read = await prepareGitHubPublicationOptionsRead(options, options.params);
+      nextPhase("pending_receipts", read.session);
       const service = options.context.githubPublicationService;
       if (!service) {
         options.respond(
@@ -321,11 +637,13 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      nextPhase("pending_receipts");
       const prepared =
         read.personal.kind === "eligible"
           ? await service.preparePersonalStatus(options.params.requestId)
           : undefined;
       const session = read.currentSession();
+      nextPhase("shared_receipt");
       const shared = await service.sharedStatus(session, options.params.requestId);
       if (shared) {
         read.assertSessionUnchanged(session);

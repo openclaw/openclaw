@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getRuntimeConfig } from "../config/io.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { runGitWorkerOperation } from "../infra/git-worker.js";
 import {
   createSessionPullRequestsFixture,
@@ -95,6 +97,29 @@ describe("loadControlUiSessionPullRequests", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.useRealTimers();
+  });
+
+  it("retains the verified Enterprise origin when the PR lookup is unavailable", async () => {
+    const cfg = getRuntimeConfig();
+    setRuntimeConfigSnapshot({
+      ...cfg,
+      gateway: { ...cfg.gateway, github: { host: "microsoft.ghe.com" } },
+    });
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:enterprise-origin" },
+      {
+        resolveGitContext: async () => ({
+          ...context,
+          owner: "bic",
+          repo: "lobster",
+          host: "microsoft.ghe.com",
+        }),
+        fetchImpl: vi.fn(async () => {
+          throw new Error("Synthetic API unavailable");
+        }),
+      },
+    );
+    expect(result.repository).toEqual({ owner: "bic", repo: "lobster", host: "microsoft.ghe.com" });
   });
 
   it("returns chips with diff counts and check rollup for open PRs", async () => {

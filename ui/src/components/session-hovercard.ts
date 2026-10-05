@@ -482,6 +482,27 @@ function renderPullRequestDetails(snapshot: ControlUiSessionPullRequestSnapshot 
   </div>`;
 }
 
+function renderIssueDetails(snapshot: ControlUiSessionPullRequestSnapshot | undefined) {
+  if (!snapshot?.issues?.length) {
+    return nothing;
+  }
+  return html`<div class="session-hovercard__pr-list">
+    ${snapshot.issues.slice(0, 1).map(
+      (issue) => html`<a
+        class="session-hovercard__pr-row session-hovercard__issue-row"
+        href=${issue.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label=${t("sessionHovercard.issueLabel", { number: String(issue.number) })}
+        ><span class="session-hovercard__branch-icon" aria-hidden="true">${icons.link}</span>
+        <span class="session-hovercard__pr-title"
+          >${t("sessionHovercard.issueLabel", { number: String(issue.number) })}</span
+        >
+      </a>`,
+    )}
+  </div>`;
+}
+
 export function renderSessionHovercard(input: SessionHovercardInput) {
   const channelAttribution = input.row?.channelPresentation
     ? renderSessionAttribution(input)
@@ -495,6 +516,7 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
   const hasPullRequestDetails = Boolean(
     input.pullRequests &&
     (input.pullRequests.pullRequests.length > 0 ||
+      input.pullRequests.issues?.length ||
       input.pullRequests.branch ||
       input.pullRequests.status !== "ready"),
   );
@@ -529,6 +551,7 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
     ${
       hasPullRequestDetails
         ? html`<section class="session-hovercard__section session-hovercard__section--prs">
+            ${renderIssueDetails(input.pullRequests)}
             ${renderPullRequestDetails(input.pullRequests)}
             ${
               input.pullRequests?.status !== "ready"

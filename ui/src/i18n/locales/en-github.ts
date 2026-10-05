@@ -62,6 +62,7 @@ const enGitHub = {
     githubInheritedHere: "Inherited",
     githubKindNative: "Native GitHub CLI",
     githubKindPat: "Managed personal access token",
+    githubKindApp: "GitHub App installation",
     githubKindOAuth: "Managed GitHub authorization",
     githubRefreshAvailable: "Available",
     githubRefreshExpired: "Expired — reconnect required",

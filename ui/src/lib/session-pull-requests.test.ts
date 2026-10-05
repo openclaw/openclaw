@@ -108,7 +108,8 @@ describe("session pull request snapshot store", () => {
     const open = [{ number: 1, state: "open" }];
     type Snapshot = {
       pullRequests: Array<{ number: number; state?: string; branch?: string }>;
-      repository?: { owner: string; repo: string };
+      repository?: { owner: string; repo: string; host?: string };
+      issues?: Array<{ number: number; url: string }>;
       branch?: typeof branch & { additions?: number };
       rateLimited: boolean;
       status: string;
@@ -183,6 +184,7 @@ describe("session pull request snapshot store", () => {
         [
           { status: "unavailable", repository: { owner: "other", repo: "openclaw" } },
           { status: "rate-limited", repository: { owner: "openclaw", repo: "other" } },
+          { status: "unavailable", repository: { ...repository, host: "microsoft.ghe.com" } },
         ] as const
       ).map(({ status, repository: replacement }) => {
         const next = snapshot({
@@ -194,6 +196,52 @@ describe("session pull request snapshot store", () => {
           name: `repository replacement during ${status}`,
           initial: snapshot({ repository, branch, pullRequests: open }),
           updates: [{ received: next, expected: next, repository: replacement }],
+        };
+      }),
+      ...(["rate-limited", "unavailable"] as const).map((status) => {
+        const issues = [{ number: 17, url: "https://fixture.ghe.com/openclaw/openclaw/issues/17" }];
+        const failure = { rateLimited: status === "rate-limited", status };
+        const replacement = { owner: "example", repo: "other" };
+        const initial = snapshot({ repository, issues });
+        return {
+          name: `accepted issue retention during ${status} and authoritative replacements`,
+          initial,
+          updates: [
+            {
+              received: snapshot(failure),
+              expected: snapshot({ repository, issues, ...failure }),
+            },
+            {
+              received: snapshot({ repository, pullRequests: open, ...failure }),
+              expected: snapshot({ repository, issues, pullRequests: open, ...failure }),
+            },
+            {
+              received: snapshot({ repository, issues: [], pullRequests: open, ...failure }),
+              expected: snapshot({ repository, issues: [], pullRequests: open, ...failure }),
+            },
+            { received: initial, expected: initial },
+            {
+              received: snapshot({ repository: replacement, ...failure }),
+              expected: snapshot({ repository: replacement, ...failure }),
+              repository: replacement,
+            },
+            {
+              received: snapshot({ repository, branch, issues }),
+              expected: snapshot({ repository, branch, issues }),
+            },
+            {
+              received: snapshot({
+                repository,
+                pullRequests: [{ number: 2, state: "open", branch: "feature/new" }],
+                ...failure,
+              }),
+              expected: snapshot({
+                repository,
+                pullRequests: [{ number: 2, state: "open", branch: "feature/new" }],
+                ...failure,
+              }),
+            },
+          ],
         };
       }),
       {
@@ -780,5 +828,34 @@ describe("session pull request snapshot store", () => {
   it("scopes global aliases without changing canonical keys", () => {
     expect(scopedSessionArtifactKey("global", "Work")).toBe("agent:work:global");
     expect(scopedSessionArtifactKey("agent:work:main", "main")).toBe("agent:work:main");
+  });
+  it("retains Enterprise origin from an explicit PR URL and refuses mismatched fallback context", () => {
+    const item = {
+      owner: "bic",
+      repo: "lobster",
+      branch: "topic",
+      number: 17420,
+      title: "Synthetic",
+      url: "https://microsoft.ghe.com/bic/lobster/pull/17420",
+      state: "open" as const,
+    };
+    expect(sessionGitHubRepository({ pullRequests: [item], rateLimited: false })).toEqual({
+      owner: "bic",
+      repo: "lobster",
+      host: "microsoft.ghe.com",
+    });
+    expect(
+      sessionGitHubRepository({ pullRequests: [{ ...item, repo: "other" }], rateLimited: false }),
+    ).toBeNull();
+  });
+
+  it("preserves the repository's verified Enterprise host", () => {
+    expect(
+      sessionGitHubRepository({
+        repository: { owner: "bic", repo: "lobster", host: "microsoft.ghe.com" },
+        pullRequests: [],
+        rateLimited: false,
+      }),
+    ).toEqual({ owner: "bic", repo: "lobster", host: "microsoft.ghe.com" });
   });
 });

@@ -21,6 +21,8 @@ import type {
 } from "../control-ui-session-pr-check-details.js";
 import {
   prepareControlUiSessionPrRead,
+  prepareControlUiSessionGitHubIdentity,
+  resolveControlUiSessionGitHubRepository,
   resolveControlUiSessionPrTarget,
   type ControlUiSessionPrReadContext,
   type ControlUiSessionPrTarget,
@@ -51,13 +53,22 @@ class GitHubReadRequestInactiveError extends Error {
 }
 
 async function prepareControlUiGitHubIdentity(
-  { context, client, signal, hasCurrentClientAuthority }: GatewayRequestHandlerOptions,
+  { context, client, signal, hasCurrentClientAuthority, params }: GatewayRequestHandlerOptions,
   agentId: string,
 ): Promise<{
   identity: ControlUiGitHubPreviewIdentity | undefined;
   assertSelected: () => void;
+  readSource?: ControlUiSessionPrTarget["readSource"];
 }> {
   const config = context.getRuntimeConfig();
+  const requestedHost = params.githubHost;
+  if (
+    requestedHost !== undefined &&
+    requestedHost !== "github.com" &&
+    requestedHost !== resolveConfiguredGitHubHost(config)
+  ) {
+    throw new GitHubReadRequestInactiveError();
+  }
   const configuredIdentity = () => {
     const current = context.getRuntimeConfig();
     if (resolveConfiguredGitHubHost(current) !== "github.com") {
@@ -81,6 +92,86 @@ async function prepareControlUiGitHubIdentity(
     }
   };
   assertActive();
+  if (process.env.FACTORY_AUTH_MODE === "github" && params.sessionKey === undefined) {
+    throw new GitHubReadRequestInactiveError();
+  }
+  if (
+    params.sessionKey !== undefined &&
+    (process.env.FACTORY_AUTH_MODE === "github" || requestedHost !== "github.com")
+  ) {
+    if (!client || typeof params.sessionKey !== "string" || !params.sessionKey.trim()) {
+      throw new GitHubReadRequestInactiveError();
+    }
+    const read = await prepareControlUiSessionPrRead({
+      client,
+      sessionKey: params.sessionKey,
+      agentId,
+      getRuntimeConfig: context.getRuntimeConfig,
+      getSessionRowProjection: () => getSessionRowProjection(context),
+      isCurrentClient: () => {
+        try {
+          assertActive();
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+    const target = await read?.();
+    if (!target?.assertCurrent) {
+      throw new GitHubReadRequestInactiveError();
+    }
+    const assertCurrent = () => {
+      assertActive();
+      target.assertCurrent?.();
+    };
+    const repository = resolveControlUiSessionGitHubRepository(target, config);
+    if (
+      (process.env.FACTORY_AUTH_MODE === "github" ||
+        config.gateway?.projects?.nativeGitHubSearch === true) &&
+      repository &&
+      (repository.owner.toLowerCase() !== String(params.owner).toLowerCase() ||
+        repository.repo.toLowerCase() !== String(params.repo).toLowerCase())
+    ) {
+      throw new gitHubPublicApi.ControlUiGitHubError(
+        404,
+        "GitHub repository is outside the session",
+      );
+    }
+    const host = repository?.host ?? resolveConfiguredGitHubHost(config);
+    if (
+      requestedHost !== undefined &&
+      requestedHost !== host &&
+      (process.env.FACTORY_AUTH_MODE === "github" ||
+        config.gateway?.projects?.nativeGitHubSearch === true)
+    ) {
+      throw new gitHubPublicApi.ControlUiGitHubError(
+        404,
+        "GitHub repository is outside the session",
+      );
+    }
+    const identity = await prepareControlUiSessionGitHubIdentity(
+      { target, assertCurrent },
+      context.getRuntimeConfig,
+      `https://${host}/${encodeURIComponent(String(params.owner))}/${encodeURIComponent(String(params.repo))}/${params.kind === "pull" ? "pull" : params.kind === "commit" ? "commit" : "issues"}/${String(params.number ?? params.sha)}`,
+    );
+    if (identity) {
+      if (
+        (requestedHost !== undefined && identity.host !== requestedHost) ||
+        identity.repository.owner.toLowerCase() !== String(params.owner).toLowerCase() ||
+        identity.repository.repo.toLowerCase() !== String(params.repo).toLowerCase()
+      ) {
+        throw new gitHubPublicApi.ControlUiGitHubError(
+          404,
+          "GitHub repository is outside the session",
+        );
+      }
+      return { identity, assertSelected: identity.assertSelected, readSource: target.readSource };
+    }
+  }
+  if (requestedHost !== undefined && requestedHost !== "github.com") {
+    throw new GitHubReadRequestInactiveError();
+  }
   // Without a managed selection, retain service/env/anonymous access without
   // probing native gh. Both paths must still own the selection at delivery.
   const identity = configuredIdentity()
@@ -132,15 +223,34 @@ function createGitHubReadHandler<T>(
       return;
     }
     try {
-      const { identity, assertSelected } = await prepareControlUiGitHubIdentity(
+      const { identity, assertSelected, readSource } = await prepareControlUiGitHubIdentity(
         options,
         resolved.agentId,
       );
       assertSelected();
-      const result =
+      const read = (currentIdentity = identity) =>
         params.refresh === true
-          ? await load(target, identity, undefined, true)
-          : await load(target, identity);
+          ? load(target, currentIdentity, undefined, true)
+          : load(target, currentIdentity);
+      const result =
+        readSource && identity
+          ? await withControlUiSessionPrSource(readSource, async (assertSourceCurrent) => {
+              const document = await read({
+                ...identity,
+                assertSelected: () => {
+                  assertSourceCurrent();
+                  identity.assertSelected();
+                },
+                revalidate: async () => {
+                  assertSourceCurrent();
+                  await identity.revalidate();
+                  assertSourceCurrent();
+                },
+              });
+              assertSourceCurrent();
+              return document;
+            })
+          : await read();
       assertSelected();
       respond(true, result, undefined);
     } catch (error) {
@@ -363,6 +473,7 @@ const loadSessionCheckDetails: LoadSessionCheckDetails = async (params, deps) =>
   const { loadControlUiSessionPullRequests } = await import("../control-ui-session-prs.js");
   return loadControlUiSessionPullRequestChecks(params, {
     ...deps,
+    githubIdentity: await prepareControlUiSessionGitHubIdentity(deps.read),
     loadPullRequests: (request, options) =>
       loadControlUiSessionPullRequests(request, {
         ...options,
@@ -485,6 +596,15 @@ export function createControlUiHandlers(
           ? ((await reader?.()) ?? null)
           : await prepareCheckDetailsSession(parsed.sessionKey, context, client);
         if (!binding) {
+          throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
+        }
+        const selectedRepository = binding.source;
+        if (
+          selectedRepository &&
+          typeof selectedRepository !== "string" &&
+          (selectedRepository.owner.toLowerCase() !== parsed.owner.toLowerCase() ||
+            selectedRepository.repo.toLowerCase() !== parsed.repo.toLowerCase())
+        ) {
           throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
         }
         const assertCurrent = () => {

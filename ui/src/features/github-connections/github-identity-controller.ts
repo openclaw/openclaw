@@ -44,6 +44,7 @@ export class GitHubIdentityController {
   private requestRevision = 0;
   private displayedIdentityFingerprint: string | null = null;
   private verificationQueued = false;
+  private verificationInvalidated = false;
   private confirmationPending = false;
   private mutationOwner: RequestOwner | null = null;
   private mutationIdentityChanged = false;
@@ -57,7 +58,12 @@ export class GitHubIdentityController {
       ...host,
       isCurrent: (owner) => this.authorizable && this.isCurrent(owner),
       begin: (owner) => this.beginMutation(owner),
-      finish: (owner, succeeded) => this.finishMutation(owner, succeeded),
+      finish: (owner, succeeded) => {
+        this.finishMutation(owner, succeeded);
+        if (this.verificationInvalidated) {
+          this.queueVerification();
+        }
+      },
       applySuccess: (owner, result, refreshError) => {
         if (owner.target.kind === "personal" && "personal" in result) {
           this.personal = result.personal;
@@ -94,6 +100,8 @@ export class GitHubIdentityController {
   private queueVerification() {
     if (
       this.verificationQueued ||
+      this.loading ||
+      this.busy ||
       this.confirmationPending ||
       !this.statusReadable ||
       !this.connectionReady ||
@@ -107,6 +115,11 @@ export class GitHubIdentityController {
       this.verificationQueued = false;
       void this.verify();
     });
+  }
+
+  invalidateStatus() {
+    this.verificationInvalidated = true;
+    this.queueVerification();
   }
 
   sync(params: {
@@ -134,6 +147,7 @@ export class GitHubIdentityController {
       this.authorizable !== params.authorizable;
     const contextChanged = clientChanged || ownerChanged || scopeChanged || capabilityChanged;
     if (contextChanged) {
+      this.verificationInvalidated = false;
       this.deviceAuthorization.retire(true);
       this.requestRevision += 1;
       this.mutationOwner = null;
@@ -231,6 +245,7 @@ export class GitHubIdentityController {
   }
 
   dispose = () => {
+    this.verificationInvalidated = false;
     this.deviceAuthorization.retire(true);
     this.requestRevision += 1;
     this.client = null;
@@ -358,7 +373,7 @@ export class GitHubIdentityController {
       : null;
   }
 
-  async verify() {
+  async verify(options?: { resumeConnectedAuthorization?: boolean }) {
     if (
       !this.statusReadable ||
       this.loading ||
@@ -373,6 +388,7 @@ export class GitHubIdentityController {
       return;
     }
     this.loading = true;
+    this.verificationInvalidated = false;
     this.error = null;
     this.host.requestUpdate();
     try {
@@ -382,12 +398,16 @@ export class GitHubIdentityController {
           {},
         );
         // Status may restore a pending user code only while its exact profile and socket still own this view.
-        if (!this.isCurrent(owner)) {
+        if (!this.isCurrent(owner) || this.verificationInvalidated) {
           return;
         }
         this.personal = status.personal;
         this.system = status.system;
-        if (status.personal.pending && this.authorizable) {
+        if (
+          status.personal.pending &&
+          this.authorizable &&
+          (options?.resumeConnectedAuthorization !== false || status.personal.state !== "connected")
+        ) {
           this.deviceAuthorization.restore(owner, status.personal.pending);
         }
       } else {
@@ -395,18 +415,21 @@ export class GitHubIdentityController {
           agentId: owner.target.agentId,
           selectedScope: owner.target.scope,
         });
-        if (this.isCurrent(owner)) {
+        if (this.isCurrent(owner) && !this.verificationInvalidated) {
           this.acceptSharedStatus({ ...owner, target: owner.target }, status);
         }
       }
     } catch (error) {
-      if (this.isCurrent(owner)) {
+      if (this.isCurrent(owner) && !this.verificationInvalidated) {
         this.error = formatUiError(error);
       }
     } finally {
       if (this.isCurrent(owner)) {
         this.loading = false;
         this.host.requestUpdate();
+        if (this.verificationInvalidated) {
+          this.queueVerification();
+        }
       }
     }
   }

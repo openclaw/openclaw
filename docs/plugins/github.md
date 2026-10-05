@@ -13,6 +13,13 @@ The bundled GitHub plugin adds public-repository link previews and a read-only
 reader to the [Control UI](/web/control-ui). It is separate from the
 [GitHub Copilot model provider](/providers/github-copilot).
 
+On a Gateway configured for GitHub Enterprise, the same cards use its configured
+GitHub host and API origin. When protected native project access is enabled,
+a visible repository session can also preview and read PRs in that session's
+repository. The Gateway verifies the session and selected credential on each
+read; a pasted link does not grant access to another repository. Session cards
+keep the working branch distinct from PRs referenced for review in the conversation.
+
 ## Upgrading with an existing plugin allowlist
 
 GitHub previews that previously lived in core now belong to the bundled
@@ -92,14 +99,19 @@ hovercard, and GitHub links open externally.
 
 ## Limits and unavailable content
 
-- The reader is public-only and read-only. Use **Open on GitHub** for private
-  repositories, posting comments, or merging pull requests.
+- The reader is read-only. Private PR reads require the repository-session binding
+  described above; other reads remain public-only. Use **Open on GitHub** for
+  posting comments or merging pull requests.
 - Previews and reader documents use the selected agent’s managed GitHub identity,
   or the configured Control UI GitHub token and Gateway environment fallback when
   no managed identity is selected. Without credentials they use GitHub’s shared
-  anonymous IP quota. Authenticated documents remain public-only: the reader checks
+  anonymous IP quota. Outside an authorized repository session, authenticated documents remain public-only: the reader checks
   repository visibility and identity before returning fresh or cached content.
   Identity changes abort stale requests. Attachment images remain anonymous.
+- In Factory GitHub mode, a visible local session without its own repository
+  workspace can read items from the configured default repository. The same
+  session-bound identity proof and repository/host restrictions apply; a pasted
+  link cannot select another private repository.
 - Each comment collection is limited to 20 entries; PR discussion and inline
   review comments have separate limits. Up to 30 changed files are shown.
 - PR checks use at most one page each of check runs and commit statuses and show
@@ -108,7 +120,10 @@ hovercard, and GitHub links open externally.
   presented as a complete conversation or diff.
 - Uncached hover previews share a two-second upstream request budget. Slow avatars
   or co-author lookups are omitted; slow required metadata returns a retryable
-  unavailable error. The full reader keeps its longer request timeout.
+  unavailable error. The full reader allows eight seconds of API transport per
+  request, shared across redirects and response bodies. The transport deadline
+  starts after current credential verification and cooldown admission; those
+  prerequisites retain their existing authority and caller-cancellation bounds.
 - Hover previews are shared for one minute across readers using the same GitHub
   identity. Concurrent requests share a fetch, but each reader must still have
   access when the result arrives. **Refresh** bypasses the cached preview.

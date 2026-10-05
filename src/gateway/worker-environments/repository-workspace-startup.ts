@@ -9,7 +9,7 @@ import type {
   WorkerTunnelHandle,
   WorkerWorkspaceSyncRequest,
 } from "./tunnel-contract.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { prepareWorkerRepositoryGitHubIdentity } from "./worker-github-binding.js";
 
 /** Prepare source on the worker and durably accept its initial state before activation. */
 export async function syncSessionRepositoryWorkspace(params: {
@@ -54,41 +54,51 @@ export async function syncSessionRepositoryWorkspace(params: {
     );
   }
   params.assertCurrent();
-  const github = prepared
+  const needsCloneCredential = !prepared || preparedRefMode === "fetch";
+  const github = !needsCloneCredential
     ? undefined
-    : await prepareWorkerGitHubBinding({
+    : await prepareWorkerRepositoryGitHubIdentity({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
-        assertCurrent: () => {
-          params.assertCurrent();
-          return true;
-        },
+        assertCurrent: params.assertCurrent,
+        signal: params.signal,
+        operatorAuthority: params.operatorAuthority,
+        readNativeCredential: params.readNativeCredential,
       });
-  params.assertCurrent();
+  const assertCurrent = () => {
+    params.assertCurrent();
+    github?.assertSelected();
+  };
+  assertCurrent();
   const source: Extract<WorkerWorkspaceSyncRequest["source"], { kind: "repository" }> = {
     kind: "repository",
     url: repository.url,
     ref: repository.requestedRef ?? undefined,
     branch: repository.branch,
-    baseCommit: repository.baseCommit ?? prepared?.baseCommit,
+    // A new From-ref session resolves its selected head on the bound worker.
+    // The prepared commit attests the starting workspace, not the mutable ref.
+    baseCommit: repository.baseCommit ?? undefined,
+    ...(params.recoveryHeadCommit ? { recoveryHeadCommit: params.recoveryHeadCommit } : {}),
     ...(prepared ? { prepared } : {}),
+    ...(preparedRefMode ? { preparedRefMode } : {}),
     runSetupScript:
       !prepared &&
       !repository.checkpointRef &&
       repository.runSetupScript &&
       params.runSetupScript === true,
-    ...(github ? { gitToken: github.token } : {}),
+    ...(github?.token ? { gitToken: github.token } : {}),
   };
   const sync = async (checkpoint?: typeof source.checkpoint) => {
-    params.assertCurrent();
+    await github?.revalidate();
+    assertCurrent();
     return await params.tunnel.syncWorkspace({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       generation: params.generation,
       gitAuthor: params.gitAuthor,
       source: { ...source, ...(checkpoint ? { checkpoint } : {}) },
-      authorize: params.assertCurrent,
+      authorize: assertCurrent,
     });
   };
   const synced = repository.checkpointRef
@@ -115,9 +125,9 @@ export async function syncSessionRepositoryWorkspace(params: {
       expectedRevision: repository.revision,
       baseCommit: synced.baseCommit,
       baseManifestHash: synced.baseManifestRef,
-      assertCurrent: params.assertCurrent,
+      assertCurrent,
     });
-    params.assertCurrent();
+    assertCurrent();
   } else if (
     repository.baseCommit !== synced.baseCommit ||
     repository.baseManifestHash !== synced.baseManifestRef
@@ -133,29 +143,29 @@ export async function syncSessionRepositoryWorkspace(params: {
   const quiescence = await params.tunnel.quiesceWorkspace(synced.remoteWorkspaceDir);
   let reconciliation: Awaited<ReturnType<WorkerTunnelHandle["reconcileWorkspace"]>> | undefined;
   try {
-    params.assertCurrent();
+    assertCurrent();
     reconciliation = await params.tunnel.reconcileWorkspace({
       remoteWorkspaceDir: synced.remoteWorkspaceDir,
       baseManifestRef: synced.baseManifestRef,
       source: {
         kind: "repository",
-        authorize: params.assertCurrent,
+        authorize: assertCurrent,
         referenceManifestRef: synced.manifestRef,
         prepareCheckpoint: (payload) =>
           stageSessionRepositoryCheckpoint({
             ...payload,
             workspaceId: repository.workspaceId,
             expectedRevision: repository.revision,
-            assertCurrent: params.assertCurrent,
+            assertCurrent,
           }),
       },
     });
     await quiescence.assertActive();
     await reconciliation.verifyStable();
     await reconciliation.verifyLocalStable();
-    params.assertCurrent();
+    assertCurrent();
     await reconciliation.publishStagedResult();
-    params.assertCurrent();
+    assertCurrent();
     return { ...synced, manifestRef: reconciliation.manifestRef };
   } finally {
     try {

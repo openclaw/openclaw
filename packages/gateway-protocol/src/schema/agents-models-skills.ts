@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { AgentDatabaseAdmissionRefusalSchema } from "./agent-database-admission.js";
 import { closedObject } from "./closed-object.js";
+import { GitHubIdentityFactsSchema } from "./github-identity-facts.js";
 import {
   GatewayAgentRuntimeSchema,
   GatewayThinkingLevelOptionSchema,
@@ -834,50 +835,7 @@ export const GitHubAuthorSchema = closedObject({
   email: Type.Optional(GitHubAuthorValueSchema),
 });
 
-export const GitHubIdentityFactsSchema = closedObject({
-  source: GitHubIdentitySourceSchema,
-  credentialKind: Type.Union([
-    Type.Literal("native"),
-    Type.Literal("managed-pat"),
-    Type.Literal("managed-oauth"),
-  ]),
-  credentialState: Type.Union([
-    Type.Literal("available"),
-    Type.Literal("unavailable"),
-    Type.Literal("configured_unavailable"),
-    Type.Literal("unverified"),
-    Type.Literal("rate_limited"),
-  ]),
-  account: Type.Union([
-    closedObject({
-      login: NonEmptyString,
-    }),
-    Type.Null(),
-  ]),
-  gitAuthor: closedObject({
-    name: Type.Union([Type.String(), Type.Null()]),
-    email: Type.Union([Type.String(), Type.Null()]),
-  }),
-  evidence: Type.Union([
-    Type.Literal("github-api"),
-    Type.Literal("none"),
-    Type.Literal("unverified"),
-    Type.Literal("rate-limited"),
-  ]),
-  accessExpiresAtMs: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
-  refreshState: Type.Union([
-    Type.Literal("not_applicable"),
-    Type.Literal("available"),
-    Type.Literal("expired"),
-    Type.Literal("unavailable"),
-    Type.Literal("refreshing"),
-    Type.Literal("failed"),
-  ]),
-  oauthScopes: Type.Array(Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" }), {
-    maxItems: 32,
-  }),
-  repositoryGrants: Type.Literal("unknown"),
-});
+export { GitHubIdentityFactsSchema } from "./github-identity-facts.js";
 
 export const GitHubSelectedIdentitySchema = closedObject({
   scope: GitHubIdentityScopeSchema,

@@ -5,7 +5,7 @@ import { fetchPullChecks } from "./detail-checks.js";
 import {
   ControlUiGitHubError,
   fetchGitHubApi,
-  GITHUB_API_ORIGIN,
+  GITHUB_API_BASE_URL,
   githubRestApiPath,
   githubApiCredentialCacheScope,
   isRecord,
@@ -17,7 +17,7 @@ import {
 } from "./github-api.js";
 import {
   assertPublicGitHubRepository,
-  isPublicGitHubRepository,
+  isReadableGitHubRepository,
   parseControlUiGitHubPreviewResponse,
   type ControlUiGitHubPreviewIdentity,
 } from "./preview.js";
@@ -60,14 +60,14 @@ class GitHubDetailAccessError extends ControlUiGitHubError {
   }
 }
 
-function redirectedRepositoryUrl(url: URL, suffix: string): string {
+function redirectedRepositoryUrl(url: URL, suffix: string, apiBaseUrl: string): string {
   const match = /^(\/repos\/[^/]+\/[^/]+|\/repositories\/\d+)(\/.*)?$/u.exec(
-    githubRestApiPath(url, GITHUB_API_ORIGIN),
+    githubRestApiPath(url, apiBaseUrl),
   );
   if (!match || (match[2] ?? "") !== suffix) {
     throw new GitHubDetailAccessError();
   }
-  return GITHUB_API_ORIGIN + match[1];
+  return apiBaseUrl + match[1];
 }
 
 async function readPublicRepository(
@@ -82,18 +82,21 @@ async function readPublicRepository(
       fetchImpl,
       identity.token,
       async (redirect) => {
-        redirectedRepositoryUrl(redirect, "");
+        if (identity.repository) {
+          throw new GitHubDetailAccessError();
+        }
+        redirectedRepositoryUrl(redirect, "", identity.apiBaseUrl ?? GITHUB_API_BASE_URL);
       },
       identity,
       undefined,
       undefined,
       undefined,
-      GITHUB_API_ORIGIN,
+      identity?.apiBaseUrl ?? GITHUB_API_BASE_URL,
     ),
   );
   const id = isRecord(repository) ? optionalNumber(repository, "id") : undefined;
   if (
-    !isPublicGitHubRepository(repository) ||
+    !isReadableGitHubRepository(repository, identity) ||
     id === undefined ||
     !Number.isSafeInteger(id) ||
     id <= 0 ||
@@ -121,15 +124,15 @@ function commentPosition(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-function commentUrl(comment: Record<string, unknown>): string {
+function commentUrl(comment: Record<string, unknown>, host: string): string {
   const url = new URL(requiredString(comment, "html_url"));
-  if (url.origin !== "https://github.com" || url.username || url.password) {
+  if (url.origin !== `https://${host}` || url.username || url.password) {
     throw new ControlUiGitHubError(502, "GitHub comment returned an unsafe permalink");
   }
   return url.href;
 }
 
-function parseComments(value: unknown, kind: CommentKind): GitHubComment[] {
+function parseComments(value: unknown, kind: CommentKind, host: string): GitHubComment[] {
   if (!Array.isArray(value)) {
     throw new ControlUiGitHubError(502, "GitHub comments were not an array");
   }
@@ -142,7 +145,7 @@ function parseComments(value: unknown, kind: CommentKind): GitHubComment[] {
     const diffHunk =
       kind === "review" ? markdownBody(comment.diff_hunk, COMMENT_MAX_CHARS) : undefined;
     const id = requiredCount(comment, "id");
-    const url = commentUrl(comment);
+    const url = commentUrl(comment, host);
     const path = kind !== "discussion" ? readOptionalGitHubString(comment, "path") : undefined;
     const line = commentPosition(comment.line) ?? commentPosition(comment.original_line);
     const start =
@@ -200,6 +203,7 @@ async function fetchComments(
   kind: CommentKind,
   total: number,
   readPage: ReadDetailPage,
+  host: string,
 ): Promise<{
   comments: GitHubComment[];
   commentsTotal: number;
@@ -213,7 +217,7 @@ async function fetchComments(
     // published review threads. Never follow arbitrary Link URLs from GitHub.
     const sort = kind === "review" ? "&sort=created&direction=asc" : "";
     const page = await readPage(url + "?per_page=" + COMMENT_LIMIT + sort);
-    const comments = parseComments(page.value, kind);
+    const comments = parseComments(page.value, kind, host);
     return {
       comments,
       commentsTotal: total,
@@ -261,9 +265,11 @@ function parseFiles(value: unknown): GitHubFile[] {
 async function fetchDetail(
   target: GitHubTarget,
   readPage: ReadDetailPage,
+  host: string,
+  apiBaseUrl: string,
 ): Promise<GitHubDocument> {
   const repoPath = `/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
-  const repositoryUrl = GITHUB_API_ORIGIN + repoPath;
+  const repositoryUrl = apiBaseUrl + repoPath;
   const collection =
     target.kind === "commit" ? "commits" : target.kind === "pull" ? "pulls" : "issues";
   const id = target.kind === "commit" ? target.sha : target.number;
@@ -275,7 +281,7 @@ async function fetchDetail(
     throw new ControlUiGitHubError(502, "GitHub response was not an object");
   }
   const value = itemPage.value;
-  const url = githubTargetUrl(target);
+  const url = githubTargetUrl(target, host);
   if (target.kind === "commit") {
     const commit = isRecord(value.commit) ? value.commit : {};
     const author = isRecord(value.author) ? value.author : {};
@@ -287,6 +293,7 @@ async function fetchDetail(
       "commit",
       requiredCount(commit, "comment_count"),
       readPage,
+      host,
     );
     const files = value.files === undefined ? [] : parseFiles(value.files);
     const filesTruncated =
@@ -328,6 +335,7 @@ async function fetchDetail(
     "discussion",
     requiredCount(value, "comments"),
     readPage,
+    host,
   );
   const review =
     target.kind === "pull"
@@ -336,6 +344,7 @@ async function fetchDetail(
           "review",
           requiredCount(value, "review_comments"),
           readPage,
+          host,
         )
       : undefined;
   const comments = discussion.comments
@@ -413,10 +422,17 @@ async function loadGitHubDetailWithIdentity(
   if (!parsed) {
     throw new ControlUiGitHubError(400, "Invalid GitHub detail target");
   }
+  if (
+    identity?.repository &&
+    (parsed.owner.toLowerCase() !== identity.repository.owner.toLowerCase() ||
+      parsed.repo.toLowerCase() !== identity.repository.repo.toLowerCase())
+  ) {
+    throw new GitHubDetailAccessError();
+  }
   await identity?.revalidate();
   identity?.assertSelected();
   const id = parsed.kind === "commit" ? parsed.sha : parsed.number;
-  const key = `${parsed.kind}:${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}#${id}\0${identity?.cacheScope ?? "anonymous"}\0${githubApiCredentialCacheScope(identity?.token)}`;
+  const key = `${identity?.apiBaseUrl ?? GITHUB_API_BASE_URL}:${parsed.kind}:${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}#${id}\0${identity?.cacheScope ?? "anonymous"}\0${githubApiCredentialCacheScope(identity?.token)}`;
   const assertDelivery = async (result: CachedDocument) => {
     if (identity?.token) {
       for (const url of result.repositoryUrls) {
@@ -436,7 +452,7 @@ async function loadGitHubDetailWithIdentity(
   }
   detailCache.delete(key);
   const load = async (): Promise<CachedDocument> => {
-    const repositoryUrl = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}`;
+    const repositoryUrl = `${identity?.apiBaseUrl ?? GITHUB_API_BASE_URL}/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}`;
     const repositoryUrls = new Set([repositoryUrl]);
     const repositoryId = identity?.token
       ? await readPublicRepository(repositoryUrl, fetchImpl, identity)
@@ -452,7 +468,14 @@ async function loadGitHubDetailWithIdentity(
         identity?.token,
         identity?.token
           ? async (redirect) => {
-              const redirected = redirectedRepositoryUrl(redirect, suffix);
+              if (identity.repository) {
+                throw new GitHubDetailAccessError();
+              }
+              const redirected = redirectedRepositoryUrl(
+                redirect,
+                suffix,
+                identity.apiBaseUrl ?? GITHUB_API_BASE_URL,
+              );
               await readPublicRepository(redirected, fetchImpl, identity, repositoryId);
               repositoryUrls.add(redirected);
             }
@@ -461,14 +484,19 @@ async function loadGitHubDetailWithIdentity(
         undefined,
         undefined,
         undefined,
-        GITHUB_API_ORIGIN,
+        identity?.apiBaseUrl ?? GITHUB_API_BASE_URL,
       );
       return {
         hasNextPage: /;\s*rel="next"/u.test(response.headers.get("link") ?? ""),
         value: await readGitHubJsonResponse(response, DETAIL_JSON_MAX_BYTES),
       };
     };
-    const document = await fetchDetail(parsed, readPage);
+    const document = await fetchDetail(
+      parsed,
+      readPage,
+      identity?.host ?? "github.com",
+      identity?.apiBaseUrl ?? GITHUB_API_BASE_URL,
+    );
     const result = { document, repositoryId, repositoryUrls: [...repositoryUrls] };
     // Public-only delivery is checked after all awaited content reads, including
     // optional comments/files; a failed authority check cannot become partial data.

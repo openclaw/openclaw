@@ -46,7 +46,12 @@ export function renderIdentitySection(props: IdentitySectionProps) {
   const savedName = props.profile.displayName ?? "";
   const nameChanged = props.displayName.trim() !== savedName;
   const emails = props.profile.emails.join(", ");
-  const githubIdentity = props.profile.githubIdentity;
+  const githubIdentity = props.authenticatedGitHubIdentity
+    ? { ...props.authenticatedGitHubIdentity, avatarUrl: null }
+    : props.profile.githubIdentity;
+  const coauthorEligible = props.authenticatedGitHubIdentity
+    ? props.authenticatedGitHubIdentity.gitCoauthorEligible === true
+    : Boolean(props.profile.githubIdentity);
   const isOwnerProfile = props.profile.id === GATEWAY_OWNER_PROFILE_ID;
   return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
     ${renderSettingsSection(

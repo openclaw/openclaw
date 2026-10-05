@@ -2718,6 +2718,7 @@ CREATE TABLE IF NOT EXISTS user_profile_identities (
   subject TEXT NOT NULL,
   profile_id TEXT NOT NULL,
   canonical_login TEXT,
+  verified_email_json TEXT,
   created_at INTEGER NOT NULL,
   authorization_id TEXT,
   authorization_basis_json TEXT,

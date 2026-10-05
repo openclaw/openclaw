@@ -334,6 +334,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                             sessionKey: current.sessionKey,
                             agentId: current.agentId,
                             assertCurrent,
+                            readNativeCredential: request.readNativeCredential,
                           });
                           assertCurrent();
                         }

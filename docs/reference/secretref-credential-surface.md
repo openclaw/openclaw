@@ -24,6 +24,10 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 
 [//]: # "secretref-supported-list-start"
 
+- `agents.entries.*.tools.github.app.privateKey`
+
+- `tools.github.app.privateKey`
+
 #### `agents`
 
 - `agents.entries.*.memory.search.remote.apiKey`

@@ -77,12 +77,18 @@ export async function prepareAndAdmitChatSend(
     );
     return undefined;
   }
-  const loadedSession = await prepareChatSendSession({
-    request: normalizedRequest.value,
-    context,
-    client,
-    isDirectExternalUser: options?.isDirectExternalUser,
-  });
+  let loadedSession: Awaited<ReturnType<typeof prepareChatSendSession>>;
+  try {
+    loadedSession = await prepareChatSendSession({
+      request: normalizedRequest.value,
+      context,
+      client,
+      isDirectExternalUser: options?.isDirectExternalUser,
+    });
+  } catch (error) {
+    respondChatSendAdmissionError(error, respond);
+    return undefined;
+  }
   if (!loadedSession.ok) {
     respond(
       false,

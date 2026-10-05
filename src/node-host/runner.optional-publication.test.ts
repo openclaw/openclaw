@@ -17,10 +17,14 @@ function getPublications(client: CapturedClient, method = NODE_PLUGIN_TOOLS_UPDA
   return client.request.mock.calls.filter(([calledMethod]) => calledMethod === method);
 }
 
-function receiveHello(options: GatewayClientOptions | undefined, protocol = 4) {
+function receiveHello(
+  options: GatewayClientOptions | undefined,
+  protocol = 4,
+  capabilities?: string[],
+) {
   options?.onHelloOk?.({
     protocol,
-    features: { methods: [], events: [] },
+    features: { methods: [], events: [], ...(capabilities ? { capabilities } : {}) },
   } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
 }
 
@@ -65,6 +69,7 @@ async function withReadyNodeHost(
     client: CapturedClient;
     options: GatewayClientOptions | undefined;
   }) => Promise<void>,
+  runOptions: Partial<Parameters<typeof runNodeHost>[0]> = {},
 ): Promise<void> {
   mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
     ready: true,
@@ -77,7 +82,7 @@ async function withReadyNodeHost(
   const previousExitCode = process.exitCode;
   let running: Promise<void> | undefined;
   try {
-    running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
+    running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789, ...runOptions });
     await vi.waitFor(() => expect(mocks.availabilityChanged).toBeDefined());
     const client = mocks.capturedGatewayClients[0];
     if (!client) {
@@ -103,6 +108,74 @@ async function withReadyNodeHost(
 
 describe("runNodeHost connection and optional publications", () => {
   beforeEach(resetRunnerTestState);
+  it.each([
+    { supported: false, restricted: false },
+    { supported: true, restricted: false },
+    { supported: false, restricted: true },
+    { supported: true, restricted: true },
+  ])(
+    "publishes command features for supported=$supported, restricted=$restricted",
+    async ({ supported, restricted }) => {
+      const command = "codex.exec-server.stdio.v1";
+      mocks.nodeHostCommands = [command, "test.other"];
+      mocks.commandFeatures = {
+        [command]: ["github-profile-refresh"],
+        "test.other": ["other-feature"],
+      };
+      enableSkills();
+      if (restricted) {
+        const configure = mocks.configureNodeHost.getMockImplementation()!;
+        mocks.configureNodeHost.mockImplementationOnce(async (params) => ({
+          ...(await configure(params)),
+          commands: params.commands,
+        }));
+      }
+      await withReadyNodeHost(
+        async ({ client, options }) => {
+          client.request.mockClear();
+          receiveHello(options, 4, supported ? ["node-command-features"] : []);
+          await settlePublications();
+          const publications = client.request.mock.calls.filter(
+            ([method, params]) =>
+              method === "node.event" &&
+              typeof params === "object" &&
+              params !== null &&
+              "event" in params &&
+              params.event === "node.command.features",
+          );
+          expect(publications).toEqual(
+            supported
+              ? [
+                  [
+                    "node.event",
+                    {
+                      event: "node.command.features",
+                      payloadJSON: JSON.stringify({
+                        features: restricted
+                          ? { [command]: ["github-profile-refresh"] }
+                          : mocks.commandFeatures,
+                      }),
+                    },
+                  ],
+                ]
+              : [],
+          );
+          expect(options?.caps).not.toContain("github-profile-refresh");
+          if (restricted) {
+            expect(options?.commands).toEqual([command]);
+            for (const method of optionalMethods) {
+              expect(getPublications(client, method)).toEqual([]);
+            }
+            expect(client.request.mock.calls.filter(([method]) => method === "node.event")).toEqual(
+              publications,
+            );
+          }
+        },
+        restricted ? { commands: [command] } : {},
+      );
+    },
+  );
+
   afterEach(() => vi.restoreAllMocks());
 
   it("exits after three identical permanent Gateway upgrade rejections", async () => {

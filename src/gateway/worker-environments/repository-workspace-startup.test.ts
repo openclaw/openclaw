@@ -24,12 +24,16 @@ import type {
   WorkerWorkspaceReconcileRequest,
   WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { prepareWorkerRepositoryGitHubIdentity } from "./worker-github-binding.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
-vi.mock("./worker-github-binding.js", () => ({ prepareWorkerGitHubBinding: vi.fn() }));
+vi.mock("./worker-github-binding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./worker-github-binding.js")>()),
+  prepareWorkerRepositoryGitHubIdentity: vi.fn(),
+  prepareWorkerGitHubBindingGrant: vi.fn(),
+}));
 
 const session = {
   sessionId: "repository-session",
@@ -118,12 +122,16 @@ async function fixture(runSetupScript = false, preparedNode = false) {
     runSetupScript,
     assertCurrent,
   });
-  vi.mocked(prepareWorkerGitHubBinding).mockReset().mockResolvedValue({
-    token,
-    login: "repository-bot",
-    remoteUrl: repository.url,
-    branch: repository.branch,
-  });
+  vi.mocked(prepareWorkerRepositoryGitHubIdentity)
+    .mockReset()
+    .mockResolvedValue({
+      token,
+      selection: { source: "system-configured", accountId: 42 },
+      cacheScope: "synthetic",
+      assertSelected: () => {},
+      revalidate: async () => {},
+      start: (operation) => Promise.resolve(operation()),
+    });
   const syncWorkspace = vi.fn<WorkerTunnelHandle["syncWorkspace"]>(async (request) => {
     if (request.source.kind !== "repository") {
       throw new Error("Expected repository source");
@@ -245,14 +253,17 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
     await pending;
   }
   const result = await pending;
-  expect(prepareWorkerGitHubBinding).toHaveBeenCalledWith({
+  expect(prepareWorkerRepositoryGitHubIdentity).toHaveBeenCalledWith({
     sessionId: session.sessionId,
     sessionKey: session.sessionKey,
     agentId: session.agentId,
     assertCurrent: expect.any(Function),
+    signal: undefined,
+    operatorAuthority: undefined,
+    readNativeCredential: undefined,
   });
   expect(f.syncWorkspace).toHaveBeenCalledWith({
-    authorize: f.assertCurrent,
+    authorize: expect.any(Function),
     sessionId: session.sessionId,
     sessionKey: session.sessionKey,
     generation: session.generation,
@@ -304,7 +315,7 @@ it("does not run setup when the repository did not request it", async () => {
 it("refuses requested setup without fresh authority instead of saving an incomplete initial state", async () => {
   const f = await fixture(true);
   await expect(f.start({ runSetupScript: undefined })).rejects.toThrow("administrator");
-  expect(prepareWorkerGitHubBinding).not.toHaveBeenCalled();
+  expect(prepareWorkerRepositoryGitHubIdentity).not.toHaveBeenCalled();
   expect(f.syncWorkspace).not.toHaveBeenCalled();
   expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeNull();
 });
@@ -312,7 +323,7 @@ it("refuses requested setup without fresh authority instead of saving an incompl
 it("refuses interrupted setup recovery before credentials or worker commands are requested", async () => {
   const f = await fixture(true);
   await expect(f.start({ recovery: true, runSetupScript: true })).rejects.toThrow("administrator");
-  expect(prepareWorkerGitHubBinding).not.toHaveBeenCalled();
+  expect(prepareWorkerRepositoryGitHubIdentity).not.toHaveBeenCalled();
   expect(f.syncWorkspace).not.toHaveBeenCalled();
   expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
 });
@@ -476,13 +487,14 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
   }
   expect(f.syncWorkspace.mock.calls[0]?.[0].source).toMatchObject({
     prepared: preparedRepository,
-    baseCommit: f.baseCommit,
+    preparedRefMode: "recover",
+    baseCommit: undefined,
     runSetupScript: false,
   });
   for (const [request] of f.syncWorkspace.mock.calls) {
     expect(request.source).not.toHaveProperty("gitToken");
   }
-  expect(prepareWorkerGitHubBinding).not.toHaveBeenCalled();
+  expect(prepareWorkerRepositoryGitHubIdentity).not.toHaveBeenCalled();
   expect(await fs.readFile(path.join(f.remote, "setup.txt"), "utf8")).toBe("already prepared\n");
   expect(await f.store.get(f.repository.workspaceId)).toMatchObject({
     baseCommit: f.baseCommit,
@@ -496,7 +508,7 @@ it.each(["commit", "source manifest"] as const)(
   async (change) => {
     const f = await fixture();
     await f.start();
-    vi.mocked(prepareWorkerGitHubBinding).mockClear();
+    vi.mocked(prepareWorkerRepositoryGitHubIdentity).mockClear();
     f.syncWorkspace.mockClear();
     await expect(
       f.start({
@@ -510,7 +522,7 @@ it.each(["commit", "source manifest"] as const)(
         },
       }),
     ).rejects.toThrow(change === "commit" ? "pinned session commit" : "pinned source manifest");
-    expect(prepareWorkerGitHubBinding).not.toHaveBeenCalled();
+    expect(prepareWorkerRepositoryGitHubIdentity).not.toHaveBeenCalled();
     expect(f.syncWorkspace).not.toHaveBeenCalled();
   },
 );

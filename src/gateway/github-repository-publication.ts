@@ -25,6 +25,7 @@ import {
 } from "./github-personal-publication.js";
 import {
   assertExpectedSharedGitHubPublisher,
+  factoryPublicationPreflightCredential,
   prepareCurrentGitHubPublicationIdentity,
   sameGitHubPublicationWorkspace,
   type PublicationSessionIdentity as SessionIdentity,
@@ -47,6 +48,7 @@ import {
   executeRepositoryGitHubPublication,
   prepareRepositoryGitHubPublicationTarget,
 } from "./github-repository-publication-executor.js";
+import { createFactoryRepositoryPublicationIdentity } from "./github-repository-publication-proof.js";
 import {
   createRepositoryGitHubPublicationRecovery,
   matchesRepositoryGitHubPublicationClaim,
@@ -67,6 +69,7 @@ import {
 } from "./github-repository-publication-store.js";
 import {
   prepareRepositoryOwner,
+  advanceRepositoryPublishedHead,
   assertReceiptOwner,
   captureCheckpoint,
 } from "./github-repository-publication-workspace.js";
@@ -361,7 +364,17 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         throw new Error("GitHub publication idempotency key was reused by a different requester.");
       }
     }
-    const identity = await prepareCurrentGitHubPublicationIdentity(input.agentId);
+    const identity = await prepareCurrentGitHubPublicationIdentity(
+      input.agentId,
+      requester.snapshot.actor.kind === "operator"
+        ? {
+            profileId: requester.snapshot.actor.profileId,
+            sessionKey: input.sessionKey,
+            assertCurrent,
+          }
+        : undefined,
+      factoryPublicationPreflightCredential({ ...session, assertCurrent }),
+    );
     assertCurrent();
     assertExpectedSharedGitHubPublisher(
       expected,

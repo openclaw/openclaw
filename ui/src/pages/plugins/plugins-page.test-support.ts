@@ -231,7 +231,6 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
-    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
@@ -240,6 +239,7 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    loadSelfProfile: async () => null,
     subscribeEventLog: () => () => undefined,
     subscribeEvents: () => () => undefined,
   } satisfies ApplicationGateway;

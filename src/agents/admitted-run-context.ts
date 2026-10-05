@@ -40,9 +40,23 @@ export type AdmittedRunContext = Readonly<{
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
 }>;
 
+type FactoryGitHubDispatchTarget = {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  repositoryUrl: string;
+  assertCurrent: () => void;
+};
+
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
   scopes: readonly string[];
+  /** Original host ingress basis; private facts only, never execution authority. */
+  captureRestartRecoveryIssuer?: () => GoalRecoveryIssuerBasis | undefined;
+  /** Original live Factory transport only; never persisted or restored from issuer intent. */
+  createFactoryGitHubDispatchCredentialReader?: (
+    target: FactoryGitHubDispatchTarget,
+  ) => ((env: NodeJS.ProcessEnv) => Promise<string | undefined>) | undefined;
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   assertCurrent: () => void;
@@ -95,9 +109,42 @@ export function createAdmittedRunOperatorAuthority(
   });
   const readCurrentRoleAssignment = source.readCurrentRoleAssignment;
   const readCurrentGithubLogin = source.readCurrentGithubLogin;
+  const captureRestartRecoveryIssuer = source.captureRestartRecoveryIssuer;
+  const scopes = Object.freeze([...source.scopes]);
+  const createFactoryReader = source.createFactoryGitHubDispatchCredentialReader;
   const authority = Object.freeze({
     profileId: source.profileId,
-    scopes: Object.freeze([...source.scopes]),
+    scopes,
+    captureRestartRecoveryIssuer: captureRestartRecoveryIssuer
+      ? () => {
+          assertCurrent();
+          return captureRestartRecoveryIssuer();
+        }
+      : undefined,
+    createFactoryGitHubDispatchCredentialReader: createFactoryReader
+      ? (target: FactoryGitHubDispatchTarget) => {
+          assertCurrent();
+          if (!scopes.includes("operator.write") && !scopes.includes("operator.admin")) {
+            throw new Error("Factory GitHub dispatch requires operator write authority");
+          }
+          const checkTarget = target.assertCurrent;
+          const assertTargetCurrent = () => {
+            assertCurrent();
+            checkTarget();
+            assertCurrent();
+          };
+          const reader = createFactoryReader({ ...target, assertCurrent: assertTargetCurrent });
+          return (
+            reader &&
+            (async (env: NodeJS.ProcessEnv) => {
+              assertTargetCurrent();
+              const token = await reader(env);
+              assertTargetCurrent();
+              return token;
+            })
+          );
+        }
+      : undefined,
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
       : source.gatewayAccessGrant,

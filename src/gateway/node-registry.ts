@@ -9,7 +9,6 @@ import {
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
 import type { DesktopAvailability } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type {
-  NodeHostStatsPayload,
   NodePluginToolDescriptor,
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
@@ -36,7 +35,7 @@ import {
 } from "./node-command-policy.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { isSerializedEventPayload, type SerializedEventPayload } from "./node-event-payload.js";
-import { sendNodeWebSocketEvent } from "./node-event-send.js";
+import { sendNodeWebSocketEvent, type NodeEventSendResult } from "./node-event-send.js";
 import { serializeNodeEvent } from "./node-invoke-request.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
 import {
@@ -50,6 +49,7 @@ import {
   pairingBindingForSession,
   pairingStateMatchesBinding,
   isPublishedPairingCurrent,
+  resolvePublishedPairingCurrentness,
   type NodePairingLease,
   type NodePairingLeaseResolution,
 } from "./node-registry-pairing.js";
@@ -77,6 +77,12 @@ import {
   selectActiveNodesByProfile,
   type NodePresenceActivityUpdate,
 } from "./node-registry.presence.js";
+import {
+  updateNodeCommandFeatures,
+  updateNodeHostStats,
+  type NodeCommandFeaturesUpdate,
+  type NodeHostStatsUpdate,
+} from "./node-registry.publications.js";
 import { isNodeWorkerHostClientId } from "./node-runner-inventory-runtime.js";
 import type { NodeSession } from "./node-session.types.js";
 import { normalizeNodeSkillDescriptors } from "./node-skill-descriptors.js";
@@ -142,6 +148,41 @@ const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
 const FAILED_EVENT_LOG_INTERVAL_MS = 30_000;
 const log = createSubsystemLogger("gateway/nodes");
 const failedEventLogAtByNode = new WeakMap<NodeSession, number>();
+const pairingFailureLogAtByNode = new WeakMap<NodeSession, number>();
+
+function logPairingReadFailure(
+  node: NodeSession,
+  phase: "resolve" | "currentness",
+  error: unknown,
+): void {
+  const now = Date.now();
+  if (now - (pairingFailureLogAtByNode.get(node) ?? -Infinity) < FAILED_EVENT_LOG_INTERVAL_MS) {
+    return;
+  }
+  pairingFailureLogAtByNode.set(node, now);
+  const reportedPublicationState =
+    error instanceof Error && error.name === "DevicePairingPublicationUnavailableError"
+      ? Object.getOwnPropertyDescriptor(error, "publicationState")?.value
+      : undefined;
+  const publicationState =
+    reportedPublicationState === "absent" ||
+    reportedPublicationState === "blocked" ||
+    reportedPublicationState === "incomplete"
+      ? reportedPublicationState
+      : undefined;
+  const name =
+    error instanceof Error && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error.name)
+      ? error.name
+      : "unknown";
+  log.warn("node pairing state unavailable before dispatch", {
+    nodeId: node.nodeId,
+    phase,
+    cause: publicationState ? "publication" : "resolver",
+    publicationState,
+    errorName: name,
+  });
+}
+
 /** Event transport for nodes that cannot keep a WebSocket open, such as watchOS. */
 export type NodeEventTransport = {
   send: (event: string, payload: unknown) => boolean;
@@ -270,9 +311,12 @@ export class NodeRegistry {
       invokeStreams: this.invokeStreams,
       sendEventToSession: (node, event, payload) => {
         const current = this.nodesById.get(node.nodeId);
-        return current?.connId === node.connId
-          ? this.sendEventToSession(current, event, payload)
-          : false;
+        if (current?.connId !== node.connId) {
+          return { sent: false, reason: "connection_changed" };
+        }
+        const result = this.sendEventInternal(current, event, payload);
+        this.observeEventSend(current, event, result.sent);
+        return result;
       },
       rememberAuthorizedSystemRunEvent: (event) => this.rememberAuthorizedSystemRunEvent(event),
       publishActiveNodeContext: () => this.publishActiveNodeContext(),
@@ -335,7 +379,8 @@ export class NodeRegistry {
     let currentPairingState: PairedDeviceNodeBinding | undefined;
     try {
       currentPairingState = await resolveCurrentPairingState(lease.nodeId);
-    } catch {
+    } catch (error) {
+      logPairingReadFailure(lease.session, "resolve", error);
       return { status: "unavailable" };
     }
     let isCurrent = pairingStateMatchesBinding(lease.binding, currentPairingState);
@@ -343,7 +388,8 @@ export class NodeRegistry {
       if (isCurrent && this.options.isPairingStateCurrent) {
         isCurrent = this.options.isPairingStateCurrent(lease.nodeId, lease.binding);
       }
-    } catch {
+    } catch (error) {
+      logPairingReadFailure(lease.session, "currentness", error);
       return { status: "unavailable" };
     }
     return this.settlePairingLease({ lease, isCurrent, invalidateStale: options.invalidateStale });
@@ -791,21 +837,18 @@ export class NodeRegistry {
     return true;
   }
 
+  /** Feature metadata belongs to this exact connection and cannot widen its approved surface. */
+  updateCommandFeatures(params: NodeCommandFeaturesUpdate): Record<string, string[]> | null {
+    return updateNodeCommandFeatures(this.getRegisteredSession(params.nodeId), params);
+  }
+
   /** Stores the latest resource snapshot for the exact authenticated node connection. */
-  updateHostStats(params: {
-    nodeId: string;
-    connId?: string;
-    stats: NodeHostStatsPayload;
-    observedAtMs?: number;
-  }): NodeHostStats | null {
-    const node = this.getRegisteredSession(params.nodeId);
-    if (!node || node.connId !== params.connId) {
-      return null;
+  updateHostStats(params: NodeHostStatsUpdate): NodeHostStats | null {
+    const stats = updateNodeHostStats(this.getRegisteredSession(params.nodeId), params);
+    if (stats) {
+      invalidateNodeCatalog(this);
     }
-    // Resource snapshots are operator-facing; publishing active-node context would churn prompts.
-    node.hostStats = { ...params.stats, updatedAtMs: params.observedAtMs ?? Date.now() };
-    invalidateNodeCatalog(this);
-    return node.hostStats;
+    return stats;
   }
 
   /** Updates recent input activity for the exact authenticated node connection. */
@@ -1337,16 +1380,26 @@ export class NodeRegistry {
     });
   }
 
-  private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
-    if (
-      node.client.invalidated === true ||
-      !isPublishedPairingCurrent(node, this.options.isPairingStateCurrent)
-    ) {
-      return false;
+  private sendEventInternal(
+    node: NodeSession,
+    event: string,
+    payload: unknown,
+  ): NodeEventSendResult {
+    if (node.client.invalidated === true) {
+      return { sent: false, reason: "client_invalidated" };
+    }
+    const pairing = resolvePublishedPairingCurrentness(node, this.options.isPairingStateCurrent);
+    if (pairing !== "current") {
+      return {
+        sent: false,
+        reason: pairing === "unavailable" ? "pairing_state_unavailable" : "pairing_not_current",
+      };
     }
     const eventTransport = this.eventTransportsByConn.get(node.connId);
     if (eventTransport) {
-      return eventTransport.send(event, payload);
+      return eventTransport.send(event, payload)
+        ? { sent: true }
+        : { sent: false, reason: "event_transport_refused" };
     }
     return sendNodeWebSocketEvent(node.client.socket, () => serializeNodeEvent(event, payload));
   }
@@ -1376,11 +1429,11 @@ export class NodeRegistry {
     return sendNodeWebSocketEvent(node.client.socket, () => {
       const payloadFragment = payloadJSON ? `,"payload":${payloadJSON.json}` : "";
       return `{"type":"event","event":${JSON.stringify(event)}${payloadFragment}}`;
-    });
+    }).sent;
   }
 
   private sendEventToSession(node: NodeSession, event: string, payload: unknown): boolean {
-    return this.observeEventSend(node, event, this.sendEventInternal(node, event, payload));
+    return this.observeEventSend(node, event, this.sendEventInternal(node, event, payload).sent);
   }
 
   private observeEventSend(node: NodeSession, event: string, sent: boolean): boolean {

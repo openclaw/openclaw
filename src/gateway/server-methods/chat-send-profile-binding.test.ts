@@ -9,29 +9,130 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createExpectedProfileBinding } from "../expected-profile.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
+import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { admitChatSend } from "./chat-send-admission.js";
+import { handleChatSend } from "./chat-send-handler.js";
 import {
   setClientProfile,
   setNativeIosClient,
   useBrowserFollowupFixture,
 } from "./chat-send-pending-inputs.test-support.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
+import { registerNativeSteeringAdmissionCases } from "./chat-send-retained-profile.test-support.js";
 import { prepareChatSendSession, qualifyChatSendSession } from "./chat-send-session.js";
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("native profile-bound input admission", () => {
+  it.each(["current", "revoked", "replaced"] as const)(
+    "consumes current worker facts through registered chat admission: %s",
+    async (change) => {
+      const fixture = await createBrowserFollowupFixture({
+        active: false,
+        createdActor: { type: "human", source: "profile", id: "another-profile" },
+      });
+      const member = roleClient("view", "retained-worker-member");
+      Object.assign(fixture.client, member, { connId: "retained-worker-member" });
+      const cfg = { ...rolePolicyConfig(), session: { store: fixture.scope.storePath } };
+      fixture.context.getRuntimeConfig = () => cfg;
+      await patchSessionEntryCore(fixture.scope, (entry) => ({
+        ...entry,
+        visibility: "read-only",
+      }));
+      await addSessionMember(fixture.scope, {
+        identityId: member.authenticatedUserProfile!.profileId,
+        addedBy: "another-profile",
+      });
+      const before = loadTranscriptEventsSync(fixture.scope);
+      let consumption = 0;
+      const respond = vi.fn();
+      try {
+        await handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "retained-worker-admission",
+            method: "chat.send",
+            params: fixture.params,
+          },
+          client: fixture.client,
+          context: fixture.context,
+          respond,
+          isWebchatConnect: () => true,
+          extraHandlers: {
+            "chat.send": async (options) => {
+              const authorization = options.sessionMutationAuthorization;
+              if (!authorization?.withPreparedCurrent) {
+                throw new Error("Registered admission did not retain worker facts");
+              }
+              const withPreparedCurrent = authorization.withPreparedCurrent;
+              if (change === "revoked") {
+                await removeSessionMember(
+                  fixture.scope,
+                  member.authenticatedUserProfile!.profileId,
+                );
+              } else if (change === "replaced") {
+                await replaceSessionEntry(fixture.scope, {
+                  ...loadSessionEntry(fixture.scope)!,
+                  sessionId: "successor-session",
+                  lifecycleRevision: "successor-generation",
+                });
+              }
+              return handleChatSend({
+                ...options,
+                sessionMutationAuthorization: {
+                  ...authorization,
+                  withPreparedCurrent: (facts, consume, assertCurrent) => {
+                    consumption += 1;
+                    return withPreparedCurrent(facts, consume, assertCurrent);
+                  },
+                },
+              });
+            },
+          },
+        });
+        if (change === "current") {
+          expect(consumption).toBeGreaterThan(0);
+          await fixture.dispatchedRecorder;
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+          expect(respond.mock.calls[0]?.[0]).toBe(true);
+        } else {
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+          expect(respond.mock.calls[0]?.[0]).toBe(false);
+          expect(fixture.context.chatAbortControllers.size).toBe(0);
+          expect(
+            fixture.context.dedupe.has(
+              `${PENDING_CHAT_SEND_DEDUPE_PREFIX}${fixture.params.idempotencyKey}`,
+            ),
+          ).toBe(false);
+          expect(loadTranscriptEventsSync(fixture.scope)).toEqual(before);
+          if (change === "replaced") {
+            expect(
+              loadTranscriptEventsSync({ ...fixture.scope, sessionId: "successor-session" }),
+            ).toEqual([]);
+          }
+        }
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+  );
+
   it.each([
     { admin: true, mainAllowed: true },
     { admin: false, mainAllowed: true },
@@ -434,6 +535,12 @@ describe("native profile-bound input admission", () => {
       }
     },
   );
+
+  registerNativeSteeringAdmissionCases({
+    createBrowserFollowupFixture,
+    setClientProfile,
+    setNativeIosClient,
+  });
 
   it.each(["host", "session ACL", "lifecycle"] as const)(
     "retains original %s authority after committed browser custody and profile merge",

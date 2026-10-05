@@ -8,6 +8,8 @@ import {
 import { applyPathPrepend, findPathKey, normalizePathPrepend } from "../../infra/path-prepend.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { resolveSessionAgentIdStrict } from "../agent-scope.js";
+import type { OpenClawCodingToolsOptions } from "../agent-tools.options.js";
+import { prepareLocalGitHubEnvironment } from "../github-local-environment.js";
 import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
@@ -71,5 +73,68 @@ export function prepareAgentHarnessEnvironment(params: {
     managedLocalIdentity: identity.managedLocalIdentity,
     ...(localProcessEnv ? { localProcessEnv } : {}),
     ...(localToolEnv ? { localToolEnv, localToolPathPrepend } : {}),
+  });
+}
+
+/** Bind local credential preparation to this host capability and requesting operation. */
+export function bindLocalGitHubEnvironment(
+  input: Pick<
+    Parameters<typeof prepareLocalGitHubEnvironment>[0],
+    "admittedRunContext" | "agentId" | "config" | "sessionId" | "sessionKey"
+  >,
+  params: { assertActive: () => void; signal: AbortSignal },
+) {
+  const { admittedRunContext, agentId, config, sessionId, sessionKey } = input;
+  let prepared: Awaited<ReturnType<typeof prepareLocalGitHubEnvironment>>;
+  const prepare: NonNullable<
+    AgentHarnessHostCapabilities["prepareLocalGitHubEnvironment"]
+  > = async (request) => {
+    const candidate = await prepareLocalGitHubEnvironment({
+      admittedRunContext,
+      agentId,
+      config,
+      sessionId,
+      sessionKey,
+      assertCurrent: () => {
+        params.assertActive();
+        request.assertCurrent();
+      },
+      signal: AbortSignal.any([request.signal, params.signal]),
+    });
+    try {
+      params.assertActive();
+      request.assertCurrent();
+      candidate?.assertCurrent();
+      prepared = candidate;
+      return candidate;
+    } catch (error) {
+      await candidate?.dispose();
+      throw error;
+    }
+  };
+  return Object.assign(prepare, {
+    withExecEnvironment(
+      options: OpenClawCodingToolsOptions | undefined,
+      base: ReturnType<typeof prepareAgentHarnessEnvironment>,
+      local: boolean,
+    ): OpenClawCodingToolsOptions | undefined {
+      params.assertActive();
+      prepared?.assertCurrent();
+      if (!prepared || !local || options?.sandbox?.enabled) {
+        return options;
+      }
+      return {
+        ...options,
+        exec: {
+          ...options?.exec,
+          preparedRunEnvironment: {
+            ...base,
+            localIdentityEnv: { ...base.localIdentityEnv, ...prepared.env },
+            excludedStoreNames: Object.keys(base.credentialScrubEnv),
+            managedLocalIdentity: true,
+          },
+        },
+      };
+    },
   });
 }

@@ -1,8 +1,10 @@
 import type { MarkdownIt, Token } from "markdown-it";
 import {
   markdownGitHubAliases,
+  markdownGitHubHost,
   type MarkdownGitHubAliases,
   type MarkdownGitHubRepository,
+  type MarkdownGitHubRepositoryAliases,
 } from "./markdown-github-repositories.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
@@ -25,6 +27,24 @@ function qualifiedRepository(prefix: string) {
   };
 }
 
+function resolveQualifiedRepository(
+  repository: MarkdownGitHubRepository,
+  sources: readonly MarkdownGitHubRepositoryAliases[],
+  fallback?: MarkdownGitHubRepository | null,
+): MarkdownGitHubRepository | null {
+  const same = (candidate: MarkdownGitHubRepository) =>
+    candidate.owner.toLowerCase() === repository.owner.toLowerCase() &&
+    candidate.repo.toLowerCase() === repository.repo.toLowerCase();
+  const known = [...sources, fallback].filter((value): value is MarkdownGitHubRepository =>
+    Boolean(value?.owner && value.repo && same(value)),
+  );
+  const hosts = new Set(known.map(markdownGitHubHost));
+  if (hosts.size > 1 || hosts.has(undefined)) {
+    return null;
+  }
+  return known[0] ?? repository;
+}
+
 function knownAlias(prefix: string, aliases: MarkdownGitHubAliases, latestStart = prefix.length) {
   const normalized = prefix.toLowerCase();
   const lastStart = prefix.slice(0, latestStart).toLowerCase().length;
@@ -45,6 +65,7 @@ function referenceRepository(
   prefix: string,
   aliases: MarkdownGitHubAliases,
   fallback?: MarkdownGitHubRepository | null,
+  sources: readonly MarkdownGitHubRepositoryAliases[] = [],
 ): MarkdownGitHubRepository | null | undefined {
   const raw = prefix.trimEnd();
   const tail = raw.replace(/[,:\])]+$/u, "").trimEnd();
@@ -55,7 +76,7 @@ function referenceRepository(
   const qualifier = (name ?? tail).trim();
   const explicit = qualifiedRepository(qualifier);
   if (explicit && (name === undefined || explicit.length === qualifier.length)) {
-    return explicit.repository;
+    return resolveQualifiedRepository(explicit.repository, sources, fallback);
   }
   // Prefer complete known names before treating their punctuation as a wrapper.
   // A known suffix inside a quoted/introduced unknown name is not that identity.
@@ -161,19 +182,28 @@ export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
               ) {
                 return null;
               }
-              const repository =
-                direct?.repository ??
-                (keyword
+              const repository = direct
+                ? resolveQualifiedRepository(
+                    direct.repository,
+                    env?.githubRepositories ?? [],
+                    env?.githubRepo,
+                  )
+                : keyword
                   ? referenceRepository(
                       preceding.slice(0, -prefix![0].length),
                       aliases,
                       env?.githubRepo,
+                      env?.githubRepositories,
                     )
-                  : env?.githubRepo);
+                  : env?.githubRepo;
               if (!repository) {
                 return null;
               }
-              const base = `https://github.com/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
+              const host = markdownGitHubHost(repository);
+              if (!host) {
+                return null;
+              }
+              const base = `https://${host}/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
               const path = keyword && /^(?:pr|pull)/i.test(keyword) ? "pull" : "issues";
               const open = new state.Token("link_open", "a", 1);
               open.attrSet("href", `${base}/${path}/${number}`);

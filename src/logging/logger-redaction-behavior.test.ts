@@ -3,6 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearGitHubCredentialVerificationCache,
+  verifyGitHubCredential,
+} from "../agents/github-oauth-client.js";
+import { readNativeGitHubToken } from "../agents/github-read-identity.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
@@ -14,6 +19,7 @@ import {
   capturePluginStateWorkerFailure,
   restorePluginStateWorkerFailure,
 } from "../plugin-state/plugin-state-worker-errors.js";
+import * as commandExec from "../process/exec.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import {
@@ -56,6 +62,103 @@ afterAll(async () => {
 });
 
 describe("file log redaction", () => {
+  it("preserves GitHub identity diagnostics after file log redaction", async () => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    const token = "synthetic-github-log-credential";
+    const privateBody = "synthetic-private-github-response";
+    const lookupId = "78c48f4b-af18-4a1a-9ed3-719b6c0b5d62";
+    vi.spyOn(commandExec, "runCommandBuffered").mockResolvedValue({
+      stdout: Buffer.from(token),
+      stderr: Buffer.from(
+        `${JSON.stringify({ event: "github_credential_lookup_client", lookupId, stage: "payload", code: "accepted", httpStatus: 200 })}\n`,
+      ),
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const outcomes = [
+      {
+        diagnosticCode: "accepted",
+        httpStatus: 200,
+        status: "available",
+        response: () => new Response(JSON.stringify({ id: 202, login: "synthetic-user" })),
+      },
+      {
+        diagnosticCode: "http_unverified",
+        httpStatus: 500,
+        status: "unverified",
+        response: () => new Response(privateBody, { status: 500 }),
+      },
+      {
+        diagnosticCode: "transport_unavailable",
+        status: "unverified",
+        response: () => {
+          throw new Error(privateBody);
+        },
+      },
+      {
+        diagnosticCode: "response_unreadable",
+        httpStatus: 200,
+        status: "unverified",
+        response: () => new Response(privateBody),
+      },
+    ];
+    try {
+      expect(
+        await readNativeGitHubToken(
+          {
+            GH_TOKEN: undefined,
+            GITHUB_TOKEN: undefined,
+            GH_ENTERPRISE_TOKEN: undefined,
+            GITHUB_ENTERPRISE_TOKEN: undefined,
+          },
+          false,
+          "microsoft.ghe.com",
+        ),
+      ).toBe(token);
+      for (const outcome of outcomes) {
+        fetchMock.mockImplementation(async () => outcome.response());
+        expect(
+          (
+            await verifyGitHubCredential(`${token}-${outcome.diagnosticCode}`, {
+              apiBaseUrl: "https://api.microsoft.ghe.com",
+            })
+          ).status,
+        ).toBe(outcome.status);
+      }
+      const content = await readLogFile(logPath);
+      const records = content
+        .trim()
+        .split("\n")
+        .map((line): unknown => JSON.parse(line));
+      expect(records).toEqual(
+        [
+          {
+            stage: "command",
+            diagnosticCode: "token_accepted",
+            lookupId,
+            clientStage: "payload",
+            clientCode: "accepted",
+            httpStatus: 200,
+          },
+          ...outcomes.map(({ diagnosticCode, httpStatus }) =>
+            Object.assign(
+              { stage: "api_verification", diagnosticCode },
+              httpStatus === undefined ? {} : { httpStatus },
+            ),
+          ),
+        ].map((metadata) => expect.objectContaining({ "1": metadata })),
+      );
+      expect(content).not.toContain(token);
+      expect(content).not.toContain(privateBody);
+    } finally {
+      clearGitHubCredentialVerificationCache();
+    }
+  });
+
   it.each([
     { canonical: false, aggregate: false },
     { canonical: true, aggregate: false },

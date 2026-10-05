@@ -321,6 +321,21 @@ export async function prepareSessionWorkspaceForRun(params: {
             assertActive: assertRunOwnership,
             config: cfg,
             context,
+            client,
+            sessionKey,
+            factoryCredential: {
+              claim: {
+                purpose: "session-create-project",
+                binding: {
+                  kind: "session-create",
+                  agentId,
+                  sessionKey,
+                  sessionId: entry.sessionId,
+                  requestDigest: factoryGitHubRequestDigest(gitUrl),
+                },
+              },
+              assertCurrent: assertRunOwnership,
+            },
           })
         : undefined;
     const projectToken = configuredToken ?? projectIdentity?.token;

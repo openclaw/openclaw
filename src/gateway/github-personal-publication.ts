@@ -5,7 +5,10 @@ import type {
   SessionGitHubPublishParams,
   SessionGitHubStatusResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import { preparePersonalGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
+import {
+  preparePersonalGitHubPublicationIdentity,
+  resolveConfiguredGitHubToolIdentity,
+} from "../agents/github-tool-identity.js";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
@@ -24,6 +27,7 @@ import {
   type PersonalGitHubPublicationRow,
 } from "./github-personal-publication-store.js";
 import {
+  currentGitHubPublicationConfig,
   resolveGitHubPublicationWorktreeOwner,
   readGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity as SessionIdentity,
@@ -215,6 +219,20 @@ export function bindPersonalGitHubPublicationSelection(
 ) {
   const assertCurrent = () => {
     action.assertCurrent();
+    if (
+      (["agent", "system"] as const).some((scope) =>
+        resolveConfiguredGitHubToolIdentity({
+          config: currentGitHubPublicationConfig(),
+          agentId: action.agentId,
+          scope,
+        }),
+      )
+    ) {
+      rejectGitHubPublicationSelection(
+        "The configured GitHub bot owns publication; refresh options and select the shared account.",
+        preparation,
+      );
+    }
     const record = readUserGitHubConnection(action.owner);
     if (
       record?.generation !== selected.generation ||

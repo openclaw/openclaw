@@ -598,6 +598,8 @@ For a GitHub Enterprise deployment, configure `gateway.github.host` and `gateway
 }
 ```
 
+Native lookup uses `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` for an Enterprise host only when `GH_HOST` matches the selected host. An Enterprise token bound to another host fails verification. Without an ambient credential, lookup asks GitHub CLI for the exact selected host with ambient token variables removed. An absent native credential permits anonymous search without falling back to another ambient or service credential. Search keeps its selected host, API, and requester authority through credential lookup, network dispatch, and result delivery; canceled or replaced requests cannot publish results. A configured default repository is returned only to clients allowed to create sessions.
+
 Use the Effort menu to choose Fast Mode before creating a session. New Session persists that choice before the first local or remote turn starts.
 
 Refreshing sessions after an initial `/think` command finishes updates chat's Effort setting.

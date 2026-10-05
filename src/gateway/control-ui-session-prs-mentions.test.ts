@@ -8,6 +8,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import * as sessionPrRead from "./control-ui-session-pr-read.js";
 import {
   githubJson,
   loadTestSessionPullRequests,
@@ -31,8 +32,60 @@ describe("session PR mention isolation", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await state.cleanup();
+  });
+
+  it("retains accepted issue links from older history when GitHub identity fails", async () => {
+    const issue = "https://github.com/openclaw/openclaw/issues/101";
+    await appendTranscriptMessage(scope, {
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `Read ${issue} and https://github.com/other/repository/issues/102`,
+          },
+        ],
+      },
+    });
+    for (let index = 0; index < 30; index++) {
+      await appendTranscriptMessage(scope, {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `Accepted update ${index}` }],
+        },
+      });
+    }
+    vi.spyOn(sessionPrRead, "prepareControlUiSessionGitHubIdentity").mockRejectedValueOnce(
+      new Error("identity unavailable"),
+    );
+    const fetchImpl = vi.fn<typeof fetch>();
+    const snapshot = await loadTestSessionPullRequests(scope, {
+      resolveGitContext: async () => ({ owner: "openclaw", repo: "openclaw", branch: "feature" }),
+      fetchImpl,
+    });
+    expect(snapshot).toMatchObject({
+      issues: [{ number: 101, url: issue }],
+      pullRequests: [],
+      repository: { owner: "openclaw", repo: "openclaw" },
+      status: "unavailable",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(
+      await loadTestSessionPullRequests(scope, {
+        resolveGitContext: async () => ({
+          owner: "other",
+          repo: "repository",
+          branch: "main",
+          defaultBranch: "main",
+        }),
+        fetchImpl,
+      }),
+    ).toMatchObject({
+      issues: [{ number: 102, url: "https://github.com/other/repository/issues/102" }],
+    });
   });
 
   it.each(["feature", "main", null])(

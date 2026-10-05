@@ -21,26 +21,20 @@ import {
   type ExpectedWorkerBuild,
   type WorkerConnectionIdentity,
 } from "./admission.js";
-import type { WorkerInstallationArtifact } from "./bundle.js";
 import { workerInferencePlacement } from "./inference-placement.js";
-import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
-import type { WorkerLiveEventReceiver } from "./live-events.js";
+import type { WorkerInferenceSink } from "./inference.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   acknowledgeWorkerTurnFinishing,
   getWorkerTurnToolSurface,
   type WorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
-import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import type { WorkerEnvironmentStore } from "./store.js";
-import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
 import type { WorkerGatewayToolSink } from "./worker-gateway-tool-contract.js";
 import { workerSessionToolErrorResult } from "./worker-session-tool-result.js";
-import {
-  createWorkerComputerRpc,
-  type WorkerComputerExecutor,
-} from "./worker-turn-computer-rpc.js";
+import { createWorkerComputerRpc } from "./worker-turn-computer-rpc.js";
+import { refreshWorkerGitHubBinding } from "./worker-turn-rpc-authority.js";
 import type {
+  WorkerTurnRpcOptions,
   WorkerProcessTurnBinding,
   WorkerTerminalTurnFence,
   WorkerPendingTerminalTurnFence,
@@ -57,21 +51,6 @@ class WorkerTranscriptAuthorityError extends Error {
     super("Worker transcript authority closed");
   }
 }
-
-type WorkerTurnRpcOptions = {
-  store: WorkerEnvironmentStore;
-  prepareInstallation: (
-    install: WorkerInstallationArtifact["install"],
-  ) => Promise<WorkerInstallationArtifact>;
-  applyTranscriptCommit?: WorkerTranscriptCommitApplication;
-  liveEvents?: Pick<WorkerLiveEventReceiver, "apply">;
-  placementStore?: WorkerSessionPlacementGate;
-  executeComputer?: WorkerComputerExecutor;
-  inference: ReturnType<typeof createWorkerInferenceManager>;
-  isStopping: () => boolean;
-  now: () => number;
-  withLock: <T>(environmentId: string, task: () => Promise<T>) => Promise<T>;
-};
 
 export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
   const { store } = options;
@@ -261,6 +240,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       : undefined;
     if (turnBinding && terminalFence && matchesTurnBinding(terminalFence, turnBinding)) {
       const isReplay =
+        request.kind === "heartbeat" ||
         (request.kind === "transcript" && request.seq <= terminalFence.transcriptSeq) ||
         (request.kind === "live" && request.seq <= terminalFence.liveSeq);
       if (!isReplay) {
@@ -627,7 +607,21 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     });
   };
 
+  const refreshGitHubBinding = (identity: WorkerConnectionIdentity, generation?: number) =>
+    refreshWorkerGitHubBinding({
+      identity,
+      generation,
+      source: sourceFor(identity),
+      validate: () =>
+        validateAttachedWorkerRequest(identity, identity.ownerEpoch, { kind: "heartbeat" }),
+      isTerminal: () => {
+        const turn = processTurnBinding(identity);
+        const fence = identity.sessionId ? terminalTurnFences.get(identity.sessionId) : undefined;
+        return Boolean(turn && fence && matchesTurnBinding(turn, fence));
+      },
+    });
   return {
+    refreshGitHubBinding,
     admitWorker: async (admission: WorkerConnectParams["admission"]) => {
       const claim =
         admission.sessionId === null || admission.runId === null

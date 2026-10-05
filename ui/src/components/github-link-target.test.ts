@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { parseGitHubLinkTarget } from "./github-link-target.ts";
 
 describe("GitHub issue and pull-request preview targets", () => {
+  it("classifies Enterprise items only with verified host context", () => {
+    const href = "https://microsoft.ghe.com/bic/lobster/pull/17420";
+    expect(parseGitHubLinkTarget(href)).toBeNull();
+    expect(parseGitHubLinkTarget(href, ["other.ghe.com"])).toBeNull();
+    expect(parseGitHubLinkTarget(href, ["microsoft.ghe.com"])).toEqual({
+      kind: "pull",
+      owner: "bic",
+      repo: "lobster",
+      number: 17420,
+      href,
+    });
+    expect(
+      parseGitHubLinkTarget("https://user@microsoft.ghe.com/bic/lobster/pull/17420", [
+        "microsoft.ghe.com",
+      ]),
+    ).toBeNull();
+    expect(
+      parseGitHubLinkTarget("https://microsoft.ghe.com:8443/bic/lobster/pull/17420", [
+        "microsoft.ghe.com",
+      ]),
+    ).toBeNull();
+  });
+
   it.each([
     ["https://github.com/acme/project/issues/42/#issuecomment-7", "issue"],
     ["https://github.com/acme/project/pull/42", "pull"],

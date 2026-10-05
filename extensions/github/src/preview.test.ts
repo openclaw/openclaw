@@ -114,6 +114,73 @@ describe("loadControlUiGitHubPreview", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each([false, true])(
+    "starts the Enterprise upstream budget after slow admission (revoked=%s)",
+    async (revoked) => {
+      vi.useFakeTimers();
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+        return controller.signal;
+      });
+      let current = true;
+      let validations = 0;
+      const identity: ControlUiGitHubPreviewIdentity = {
+        ...managedIdentity(`slow-enterprise-${revoked}`),
+        repository: { owner: "acme", repo: "private" },
+        host: "ghe.example.test",
+        apiBaseUrl: "https://ghe.example.test/api/v3",
+        assertSelected: () => {
+          if (!current) {
+            throw new Error("Original repository authority was revoked");
+          }
+        },
+        revalidate: async () => {
+          if (++validations === 2 || validations === 3) {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 2_500);
+            });
+            current = !revoked;
+          }
+          identity.assertSelected();
+        },
+      };
+      const repositoryUrl = `${identity.apiBaseUrl}/repos/acme/private`;
+      const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+        init?.signal?.throwIfAborted();
+        return requestUrl(input) === repositoryUrl
+          ? githubJson({ private: true, full_name: "acme/private" })
+          : githubJson(
+              previewPayload({ repository_url: repositoryUrl, user: { login: "reader" } }),
+            );
+      });
+      const pending = loadPluginPreview(
+        { kind: "issue", owner: "acme", repo: "private", number: 930310 },
+        identity,
+        fetchMock,
+      ).then(
+        (preview) => ({ preview }),
+        (error: unknown) => ({ error }),
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      if (revoked) {
+        expect(await pending).toEqual({
+          error: expect.objectContaining({ message: "Original repository authority was revoked" }),
+        });
+        expect(fetchMock).not.toHaveBeenCalled();
+      } else {
+        expect(await pending).toEqual({
+          preview: expect.objectContaining({ owner: "acme", repo: "private", login: "reader" }),
+        });
+        expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+          repositoryUrl,
+          `${repositoryUrl}/issues/930310`,
+          repositoryUrl,
+        ]);
+      }
+    },
+  );
+
   it.each(["repository", "body", "commits", "co-author avatar"])(
     "bounds slow %s reads with the preview deadline and reuses the settled cache",
     async (stage) => {
@@ -184,7 +251,9 @@ describe("loadControlUiGitHubPreview", () => {
           (error: unknown) => ({ error: formatControlUiGitHubPreviewError(error) }),
         );
       const pending = load().then(settled);
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
       expect(settled).toHaveBeenCalledOnce();
       if (["repository", "item", "body"].includes(stage)) {
         expect(settled).toHaveBeenCalledWith({
@@ -236,6 +305,69 @@ describe("loadControlUiGitHubPreview", () => {
       loadControlUiGitHubPreview(fixtureTarget, secondIdentity, fetchMock),
     ).rejects.toMatchObject({ reason: "changed" });
     expect(fetchMock).toHaveBeenCalledTimes(6);
+  });
+
+  it("reads only a trusted session repository and retires cached private previews with its authority", async () => {
+    const target = { kind: "pull" as const, number: 16225, owner: "bic", repo: "lobster" };
+    let active = true;
+    const identity = {
+      ...managedIdentity("private-session", () => {
+        if (!active) {
+          throw new Error("session retired");
+        }
+      }),
+      repository: { owner: "bic", repo: "lobster" },
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/commits?per_page=100")) {
+        return githubJson([]);
+      }
+      if (url.includes("/check-runs?")) {
+        return githubJson({
+          total_count: 1,
+          check_runs: [
+            {
+              id: 1,
+              name: "build",
+              head_sha: "a".repeat(40),
+              status: "completed",
+              conclusion: "success",
+            },
+          ],
+        });
+      }
+      if (url.includes("/status?")) {
+        return githubJson({ sha: "a".repeat(40), total_count: 0, statuses: [] });
+      }
+      if (url.endsWith("/pulls/16225")) {
+        return githubJson(
+          previewPayload({
+            base: { repo: { url: "https://api.github.com/repos/bic/lobster" } },
+            head: { ref: "reviewed-branch", sha: "a".repeat(40) },
+            state: "open",
+            merged_at: null,
+            user: { login: "reviewer" },
+          }),
+        );
+      }
+      return githubJson({ full_name: "bic/lobster", private: true, visibility: "private" });
+    });
+    expect(await loadPluginPreview(target, identity, fetchMock)).toMatchObject({
+      number: 16225,
+      login: "reviewer",
+      additions: 101,
+      branch: "reviewed-branch",
+      checksSummary: "1 passed",
+    });
+    const calls = fetchMock.mock.calls.length;
+    await expect(
+      loadPluginPreview({ ...target, repo: "unrelated" }, identity, fetchMock),
+    ).rejects.toThrow("outside the session");
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
+    active = false;
+    await expect(loadPluginPreview(target, identity, fetchMock)).rejects.toThrow("session retired");
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
   });
 
   it.each(["final visibility check", "repository redirect", "commits redirect"])(

@@ -61,6 +61,13 @@ async function fixture(linked: false | "linked" | "linked-config" = false) {
 }
 
 describe("repository publication checkpoint capture", () => {
+  it("preserves an observed branch containing an internal NBSP", async () => {
+    const f = await fixture();
+    const branch = "fix/a\u00a0b";
+    f.git("checkout", "-b", branch);
+    const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, f.capture());
+    expect(snapshot.branch).toBe(branch);
+  });
   it.each(["full", "split", "linked", "linked-config"] as const)(
     "preserves committed CRLF bytes when capturing clean and edited workspaces (%s index)",
     async (format) => {
@@ -95,6 +102,11 @@ describe("repository publication checkpoint capture", () => {
         const local = await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd });
         const digest = f.capture(head);
         const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
+        expect(snapshot.branch).toBe(
+          format === "linked" || format === "linked-config"
+            ? undefined
+            : f.git("branch", "--show-current"),
+        );
         expect(local.sourceHeadCommit).toBe(head);
         expect(local.sourceIndexTree).toBe(tree);
         expect(local.workspaceTree).toBe(snapshot.workspaceTree);

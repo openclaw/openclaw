@@ -39,6 +39,31 @@ afterEach(() => {
 });
 
 describe("Gateway self-profile ownership", () => {
+  it("publishes changed coauthor eligibility for the same authenticated person", async () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const identity = {
+      host: "fixture.ghe.com",
+      accountId: 101,
+      login: "enterprise-person",
+      profileUrl: "https://fixture.ghe.com/enterprise-person",
+    };
+    current().request.mockResolvedValue({
+      profile,
+      authenticatedGitHubIdentity: { ...identity, gitCoauthorEligible: false },
+    });
+    current().opts.onHello?.(hello());
+    await gateway.loadSelfProfile();
+    expect(gateway.snapshot.selfUser?.authenticatedGitHubIdentity?.gitCoauthorEligible).toBe(false);
+    current().request.mockResolvedValue({
+      profile,
+      authenticatedGitHubIdentity: { ...identity, gitCoauthorEligible: true },
+    });
+    await gateway.loadSelfProfile();
+    expect(gateway.snapshot.selfUser?.authenticatedGitHubIdentity?.gitCoauthorEligible).toBe(true);
+    gateway.stop();
+  });
+
   it.each([
     "operator.sessions.read",
     "operator.sessions.write",

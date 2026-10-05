@@ -175,6 +175,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
         sessionKey,
         operationalRunInstance: instance,
         personalToolParticipants,
+        operatorAuthority: readAdmittedRunOperatorAuthority(admitted),
         embeddedRunToolAuthorityBinding: (registration) => {
           assertActive();
           const { handle } = registration;

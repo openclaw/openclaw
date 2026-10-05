@@ -29,6 +29,7 @@ import {
 } from "./failover/error.js";
 import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
+import { GitHubCredentialLookupError } from "./github-credential-lookup-error.js";
 import {
   AgentHarnessSessionSupersededError,
   isAgentHarnessPreflightError,
@@ -323,6 +324,7 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
 function hasRuntimeCoordinationFailure(err: unknown): boolean {
   return collectErrorGraphCandidates(err, resolveNestedErrors).some(
     (candidate) =>
+      candidate instanceof GitHubCredentialLookupError ||
       RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
       resolveExecutionApprovalFailureMessage(readDirectErrorMessage(candidate)) !== undefined,
   );

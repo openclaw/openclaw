@@ -38,6 +38,9 @@ export type PlacementRecoveryDeps = {
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   prepareGatewayMove?: (
-    params: WorkerSessionPlacementIdentity & { assertCurrent: () => void },
+    params: WorkerSessionPlacementIdentity & {
+      assertCurrent: () => void;
+      readNativeCredential?: (env: NodeJS.ProcessEnv) => Promise<string | undefined>;
+    },
   ) => Promise<void>;
 };

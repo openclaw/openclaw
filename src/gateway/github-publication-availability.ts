@@ -1,10 +1,21 @@
-import type { GitHubPublicationPublisher } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
+import { resolveGitHubHost } from "../agents/github-host-runtime.js";
+import {
+  measureGitHubIdentityPreparation,
+  observeGitHubIdentityPreparation,
+  type GitHubIdentityPreparationObserver,
+} from "../agents/github-identity-preparation-timing.js";
 import {
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
   prepareGitHubPublicationOptionsIdentity,
   type PreparedGitHubPublicationIdentity,
+  resolveConfiguredGitHubToolIdentity,
 } from "../agents/github-tool-identity.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   readLiveRegistryWorktreeByOwner,
   readRegistryWorktree,
@@ -19,12 +30,12 @@ import {
   getSessionRepositoryWorkspaceStore,
   type PreparedRepositoryWorkspace,
 } from "../state/session-repository-workspaces.js";
+import type { FactoryGitHubProofClaim } from "./factory-github-proof.js";
 import { requestCurrentGitHubOAuthRefresh } from "./github-oauth-lifecycle.js";
+import { withFactoryPublicationIdentity } from "./github-publication-factory-identity.js";
 import {
   GitHubPublicationWorkspaceChangedError,
   GitHubPublicationSessionChangedError,
-  rejectGitHubPublicationSelection,
-  type GitHubPublicationPreparation,
 } from "./github-publication-failure.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
@@ -39,55 +50,181 @@ function publicationConfigSnapshot() {
   return { config, sourceConfig: config };
 }
 
-export function assertExpectedSharedGitHubPublisher(
-  expected: GitHubPublicationPublisher | undefined,
-  actual: GitHubPublicationPublisher,
-  preparation?: GitHubPublicationPreparation,
-): void {
-  if (
-    actual.source === "personal" ||
-    (expected &&
-      (expected.source !== actual.source ||
-        expected.accountId !== actual.accountId ||
-        expected.login.toLowerCase() !== actual.login.toLowerCase()))
-  ) {
-    rejectGitHubPublicationSelection(
-      "GitHub publication identity changed; review the current shared account and try again.",
-      preparation,
-    );
-  }
-}
-
 export function currentGitHubPublicationConfig() {
   return publicationConfigSnapshot().config;
 }
 
+export type FactoryPublicationActor = {
+  profileId: string;
+  sessionKey: string;
+  assertCurrent?: () => void;
+};
+
+export type FactoryPublicationCredential = {
+  claim: FactoryGitHubProofClaim;
+  assertCurrent: () => void;
+};
+
+export function factoryPublicationPreflightCredential(params: {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision: string | null;
+  requestDigest?: string;
+  assertCurrent: () => void;
+}): FactoryPublicationCredential {
+  return {
+    claim: {
+      purpose: "publication-preflight",
+      binding: {
+        kind: "session",
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        lifecycleRevision: params.lifecycleRevision,
+        ...(params.requestDigest ? { requestDigest: params.requestDigest } : {}),
+      },
+    },
+    assertCurrent: params.assertCurrent,
+  };
+}
+
+/** Each bounded native read borrows the current Factory proof owner's lifetime. */
+export function factoryPublicationNativeReader(
+  actor: FactoryPublicationActor | undefined,
+  credential: FactoryPublicationCredential | undefined,
+) {
+  if (process.env.FACTORY_AUTH_MODE !== "github") {
+    return undefined;
+  }
+  if (!actor || !credential) {
+    throw new Error("GitHub publication requires current actor and credential authority.");
+  }
+  return async (
+    env: NodeJS.ProcessEnv,
+    admission?: import("../agents/github-credential-reader.js").GitHubRepositoryAdmissionRequest,
+  ) =>
+    await withFactoryPublicationIdentity(
+      actor,
+      credential,
+      async (proofEnv, readNativeCredential) => {
+        if (!readNativeCredential) {
+          throw new Error("Factory GitHub credential authority is unavailable.");
+        }
+        return await readNativeCredential({ ...env, ...proofEnv }, admission);
+      },
+    );
+}
+
 export async function prepareCurrentGitHubPublicationIdentity(
   agentId: string,
+  actor?: FactoryPublicationActor,
+  credential?: FactoryPublicationCredential,
 ): Promise<PreparedGitHubPublicationIdentity> {
+  actor?.assertCurrent?.();
+  credential?.assertCurrent();
   await requestCurrentGitHubOAuthRefresh(agentId);
+  actor?.assertCurrent?.();
   const snapshot = publicationConfigSnapshot();
-  return await prepareGitHubPublicationIdentity({
-    config: snapshot.config,
-    sourceConfig: snapshot.sourceConfig,
-    agentId,
-  });
+  const managedExecution = (["agent", "system"] as const).some((scope) =>
+    resolveConfiguredGitHubToolIdentity({ config: snapshot.config, agentId, scope }),
+  );
+  const appExecution =
+    (
+      resolveConfiguredGitHubToolIdentity({ config: snapshot.config, agentId, scope: "agent" }) ??
+      resolveConfiguredGitHubToolIdentity({ config: snapshot.config, agentId, scope: "system" })
+    )?.kind === "app-installation";
+  const assertCurrent = () => {
+    actor?.assertCurrent?.();
+    credential?.assertCurrent();
+    if (currentGitHubPublicationConfig() !== snapshot.config) {
+      throw new Error("GitHub publication identity changed.");
+    }
+    if (process.env.FACTORY_AUTH_MODE === "github" && (!actor || !credential)) {
+      throw new Error("GitHub publication requires current actor and credential authority.");
+    }
+  };
+  assertCurrent();
+  const prepare = (
+    env?: NodeJS.ProcessEnv,
+    readNativeCredential?: import("../agents/github-credential-reader.js").GitHubCredentialReader,
+  ) =>
+    prepareGitHubPublicationIdentity({
+      config: snapshot.config,
+      sourceConfig: snapshot.sourceConfig,
+      agentId,
+      env,
+      readNativeCredential,
+      assertCurrent,
+    });
+  const identity =
+    managedExecution && !appExecution
+      ? await prepare()
+      : await withFactoryPublicationIdentity(actor, credential, prepare);
+  assertCurrent();
+  return identity;
 }
 
 export async function prepareCurrentGitHubPublicationOptionsIdentity(
   agentId: string,
-  assertCurrent?: () => void,
+  actor?: FactoryPublicationActor,
+  credential?: FactoryPublicationCredential,
+  observePreparation?: GitHubIdentityPreparationObserver,
 ) {
-  assertCurrent?.();
-  await requestCurrentGitHubOAuthRefresh(agentId);
-  assertCurrent?.();
+  actor?.assertCurrent?.();
+  await measureGitHubIdentityPreparation(observePreparation, "oauth_refresh", () =>
+    requestCurrentGitHubOAuthRefresh(agentId),
+  );
+  actor?.assertCurrent?.();
   const snapshot = publicationConfigSnapshot();
-  return await prepareGitHubPublicationOptionsIdentity({
-    config: snapshot.config,
-    sourceConfig: snapshot.sourceConfig,
-    agentId,
-    assertCurrent,
+  observeGitHubIdentityPreparation(observePreparation, "credential_proof", "started");
+  let proofPrepared = false;
+  const prepare = (
+    env?: NodeJS.ProcessEnv,
+    readNativeCredential?: import("../agents/github-credential-reader.js").GitHubCredentialReader,
+  ) => {
+    proofPrepared = true;
+    observeGitHubIdentityPreparation(observePreparation, "credential_proof", "resolved");
+    return prepareGitHubPublicationOptionsIdentity({
+      config: snapshot.config,
+      sourceConfig: snapshot.sourceConfig,
+      agentId,
+      env,
+      readNativeCredential,
+      observePreparation,
+      assertCurrent,
+    });
+  };
+  const managed = (["agent", "system"] as const).some((scope) =>
+    resolveConfiguredGitHubToolIdentity({ config: snapshot.config, agentId, scope }),
+  );
+  const assertCurrent = () => {
+    actor?.assertCurrent?.();
+    credential?.assertCurrent();
+    if (currentGitHubPublicationConfig() !== snapshot.config) {
+      throw new Error("GitHub publication identity changed.");
+    }
+    if (process.env.FACTORY_AUTH_MODE === "github" && (!actor || !credential)) {
+      throw new Error("GitHub publication requires current actor and credential authority.");
+    }
+  };
+  assertCurrent();
+  const identity = await (
+    managed &&
+    (
+      resolveConfiguredGitHubToolIdentity({ config: snapshot.config, agentId, scope: "agent" }) ??
+      resolveConfiguredGitHubToolIdentity({ config: snapshot.config, agentId, scope: "system" })
+    )?.kind !== "app-installation"
+      ? prepare()
+      : withFactoryPublicationIdentity(actor, credential, prepare)
+  ).catch((error: unknown) => {
+    if (!proofPrepared) {
+      observeGitHubIdentityPreparation(observePreparation, "credential_proof", "rejected");
+    }
+    throw error;
   });
+  assertCurrent();
+  return identity;
 }
 
 export function matchesCurrentGitHubPublicationIdentity(params: {
@@ -239,7 +376,32 @@ function resolveGitHubPublicationWorkspaceOwner(
   return { kind: "repository" as const, loaded, workspace };
 }
 
-export async function prepareGitHubPublicationWorkspaceOwner(params: PublicationSessionIdentity) {
+type GitHubPublicationWorkspace = ReturnType<typeof resolveGitHubPublicationWorkspaceOwner>;
+type GitHubCredentialOnlyWorkspace = {
+  kind: "none";
+  loaded: ReturnType<typeof readPublicationSessionOwner>;
+};
+type PreparedGitHubPublicationWorkspaceOwner<Workspace> = {
+  initial: Workspace;
+  read: () => Promise<Workspace>;
+  current: () => Workspace;
+};
+
+export function prepareGitHubPublicationWorkspaceOwner(
+  params: PublicationSessionIdentity,
+): Promise<PreparedGitHubPublicationWorkspaceOwner<GitHubPublicationWorkspace>>;
+export function prepareGitHubPublicationWorkspaceOwner(
+  params: PublicationSessionIdentity,
+  options: { allowMissingWorkspace: true },
+): Promise<
+  PreparedGitHubPublicationWorkspaceOwner<
+    GitHubPublicationWorkspace | GitHubCredentialOnlyWorkspace
+  >
+>;
+export async function prepareGitHubPublicationWorkspaceOwner(
+  params: PublicationSessionIdentity,
+  options?: { allowMissingWorkspace: true },
+) {
   const context = captureOpenClawStateWorkerContext();
   const loaded = requirePublicationSessionOwner(
     params,
@@ -257,33 +419,47 @@ export async function prepareGitHubPublicationWorkspaceOwner(params: Publication
   const prepared = workspaceId
     ? await getSessionRepositoryWorkspaceStore().prepare(workspaceId)
     : undefined;
-  const validate = (owner: ReturnType<typeof resolveGitHubPublicationWorkspaceOwner>) => {
+  const credentialOnly = (current: ReturnType<typeof readPublicationSessionOwner>) =>
+    options?.allowMissingWorkspace &&
+    !current.entry.repositoryWorkspaceId &&
+    !current.entry.worktree;
+  const validate = (owner: GitHubPublicationWorkspace | GitHubCredentialOnlyWorkspace) => {
     context.admission.assertCurrent();
     if (owner.loaded.entry.repositoryWorkspaceId !== workspaceId) {
       throw new GitHubPublicationSessionChangedError();
     }
     return owner;
   };
-  const read = async () =>
-    validate(
-      workspaceId
-        ? resolveGitHubPublicationWorkspaceOwner(identity, prepared)
-        : { kind: "worktree", ...(await readWorktree()) },
+  const current = () => {
+    const currentSession = readPublicationSessionOwner(identity);
+    return validate(
+      credentialOnly(currentSession)
+        ? { kind: "none", loaded: currentSession }
+        : resolveGitHubPublicationWorkspaceOwner(identity, prepared),
     );
-  return {
-    initial: await read(),
-    read,
-    // Effect guards retain live authority; prepared reads only select their inputs.
-    current: () => validate(resolveGitHubPublicationWorkspaceOwner(identity, prepared)),
   };
+  const read = async () => {
+    const currentSession = readPublicationSessionOwner(identity);
+    return validate(
+      credentialOnly(currentSession)
+        ? { kind: "none", loaded: currentSession }
+        : workspaceId
+          ? resolveGitHubPublicationWorkspaceOwner(identity, prepared)
+          : { kind: "worktree", ...(await readWorktree()) },
+    );
+  };
+  return { initial: await read(), read, current };
 }
 
 export function sameGitHubPublicationWorkspace(
-  first: ReturnType<typeof resolveGitHubPublicationWorkspaceOwner>,
-  current: ReturnType<typeof resolveGitHubPublicationWorkspaceOwner>,
+  first: GitHubPublicationWorkspace | GitHubCredentialOnlyWorkspace,
+  current: GitHubPublicationWorkspace | GitHubCredentialOnlyWorkspace,
 ): boolean {
   if (first.loaded.entry?.lifecycleRevision !== current.loaded.entry?.lifecycleRevision) {
     return false;
+  }
+  if (first.kind === "none" || current.kind === "none") {
+    return first.kind === current.kind;
   }
   return first.kind === "repository"
     ? current.kind === "repository" &&
@@ -338,22 +514,77 @@ export function readLocalGitHubPublicationWorktreeOwner(
   return readGitHubPublicationWorktreeOwner(localGitHubPublicationSessionIdentity(row));
 }
 
-export async function prepareGitHubPublicationAvailability(params: {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  assertCurrent?: () => boolean;
-}): Promise<boolean> {
+export async function prepareGitHubPublicationAvailability(
+  params: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+    assertCurrent?: () => boolean;
+    operatorAuthority?: AdmittedRunOperatorAuthority;
+  },
+  preparation?: {
+    workspace: Awaited<ReturnType<typeof prepareGitHubPublicationWorkspaceOwner>>;
+    identity: PreparedGitHubPublicationIdentity;
+    assertCurrent: () => void;
+  },
+): Promise<boolean> {
   try {
     if (params.assertCurrent?.() === false) {
       return false;
     }
-    const prepared = await prepareGitHubPublicationWorkspaceOwner(params);
+    preparation?.assertCurrent();
+    const prepared =
+      preparation?.workspace ?? (await prepareGitHubPublicationWorkspaceOwner(params));
     const initial = prepared.initial;
+    if (initial.kind === "none") {
+      return false;
+    }
     if (params.assertCurrent?.() === false) {
       return false;
     }
-    const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId);
+    const caller = getGatewayToolCallerIdentity();
+    const authority =
+      params.operatorAuthority ??
+      (caller?.agentId === params.agentId && caller.sessionKey === params.sessionKey
+        ? caller.operatorAuthority
+        : undefined);
+    if (authority) {
+      assertAdmittedRunOperatorAuthority(authority);
+    }
+    if (process.env.FACTORY_AUTH_MODE === "github" && !authority) {
+      return false;
+    }
+    const assertActorCurrent = () => {
+      preparation?.assertCurrent();
+      authority?.assertCurrent();
+      if (
+        params.assertCurrent?.() === false ||
+        !sameGitHubPublicationWorkspace(initial, prepared.current())
+      ) {
+        throw new Error("GitHub publication session changed during availability.");
+      }
+    };
+    const equivalent = preparation;
+    const identity = equivalent
+      ? preparation.identity
+      : await prepareCurrentGitHubPublicationIdentity(
+          params.agentId,
+          authority
+            ? {
+                profileId: authority.profileId,
+                sessionKey: params.sessionKey,
+                assertCurrent: assertActorCurrent,
+              }
+            : undefined,
+          factoryPublicationPreflightCredential({
+            agentId: params.agentId,
+            sessionKey: initial.loaded.canonicalKey,
+            sessionId: params.sessionId,
+            lifecycleRevision: initial.loaded.entry.lifecycleRevision ?? null,
+            assertCurrent: assertActorCurrent,
+          }),
+        );
+    assertActorCurrent();
     if (params.assertCurrent?.() === false) {
       return false;
     }
@@ -464,4 +695,32 @@ export async function hasSupportedGitHubPublicationTarget(
   return Boolean(
     remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo),
   );
+}
+
+/** The PR reader is exposed only to an authenticated repository session. */
+export async function prepareGitHubPullRequestReadAvailability(
+  params: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+    githubPublicationAvailable: boolean;
+  },
+  preparation?: Awaited<ReturnType<typeof prepareGitHubPublicationWorkspaceOwner>>,
+): Promise<boolean> {
+  if (
+    !params.githubPublicationAvailable ||
+    currentGitHubPublicationConfig().gateway?.projects?.nativeGitHubSearch !== true
+  ) {
+    return false;
+  }
+  try {
+    const prepared = preparation ?? (await prepareGitHubPublicationWorkspaceOwner(params));
+    const owner = prepared.current();
+    return (
+      owner.kind === "repository" &&
+      parseGitHubRemoteUrl(owner.workspace.url, resolveGitHubHost()) !== null
+    );
+  } catch {
+    return false;
+  }
 }

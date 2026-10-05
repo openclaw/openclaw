@@ -379,8 +379,13 @@ export type OpenClawStateReadResult =
       snapshot: SessionGroupCatalogSnapshot;
     }
   | {
-      type: "userProfiles.email.resolve";
+      type: "userProfiles.authenticationAlias.resolve";
       profileId: string | undefined;
+      updatedAt?: number;
+    }
+  | {
+      type: "userProfiles.self";
+      profile: ReturnType<typeof import("./user-profiles.js").readUserProfileListItemInDatabase>;
     }
   | {
       type: "githubPublication.lifecycle";

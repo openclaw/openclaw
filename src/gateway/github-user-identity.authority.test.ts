@@ -107,6 +107,7 @@ it("keeps public sign-in, durable roles and privileged dispatch independent of c
             const admission = await resolveGatewayConnectProfileAdmission({
               context: {
                 configSnapshot: cfg,
+                connectParams: createOperatorWsClient().connect,
                 handler: {
                   connId: login,
                   logWsControl,

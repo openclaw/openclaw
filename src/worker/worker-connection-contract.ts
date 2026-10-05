@@ -7,6 +7,8 @@ import type {
 } from "../../packages/gateway-client/src/websocket.js";
 import type {
   WorkerConnectParams,
+  WorkerHeartbeatParams,
+  WorkerHeartbeatResult,
   WorkerHelloOk,
   WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -51,6 +53,9 @@ export type WorkerConnectionOptions = {
   admissionDeadlineMs?: number;
   requestTimeoutMs?: number;
   createSocket?: (url: string, options: GatewayWebSocketClientOptions) => WebSocket;
+  heartbeatStatus?: () => WorkerHeartbeatParams["status"];
+  heartbeatParams?: () => Pick<WorkerHeartbeatParams, "githubGeneration">;
+  onHeartbeat?: (result: WorkerHeartbeatResult, assertCurrent: () => void) => Promise<void>;
   onConnectionFailure?: (error: Error | undefined) => void;
 };
 

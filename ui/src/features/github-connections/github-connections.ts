@@ -20,6 +20,7 @@ import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../../pages/config/settings-targets.ts";
+import { onPersonalGitHubConnectionChanged } from "./github-connection-events.ts";
 import { GitHubIdentityController } from "./github-identity-controller.ts";
 import {
   renderGitHubConnectionError,
@@ -63,6 +64,11 @@ export class GitHubConnections extends OpenClawLightDomElement {
       this.context.agents.subscribe(() => this.syncControllers()),
       this.context.settingsAgentSelection.subscribe(() => this.syncControllers()),
       this.context.runtimeConfig.subscribe(() => this.syncControllers()),
+      onPersonalGitHubConnectionChanged(({ client, profileId }) => {
+        if (this.snapshot?.client === client && this.profileId === profileId) {
+          this.personal.invalidateStatus();
+        }
+      }),
     ];
     this.applySnapshot(this.context.gateway.snapshot);
   }

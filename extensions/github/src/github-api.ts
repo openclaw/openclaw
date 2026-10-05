@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import {
+  createDiagnosticTraceContextFromActiveScope,
+  createSubsystemLogger,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import {
@@ -8,6 +12,7 @@ import {
   parseStrictNonNegativeInteger,
   readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createStageTimingTracker } from "openclaw/plugin-sdk/time-runtime";
 
 export { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -53,14 +58,20 @@ const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_API_MAX_REDIRECTS = 3;
 const GITHUB_QUOTA_CACHE_LIMIT = 200;
 const GITHUB_QUOTA_RETRY_MS = 60_000;
+const apiLog = createSubsystemLogger("github/api");
 
 // Normal Gateway callers share global fetch; injected transports own separate
 // API environments and release their cooldown state with that transport.
 const transportCooldowns = new WeakMap<typeof fetch, Map<string, ControlUiGitHubError>>();
 // Body-reported quotas belong to the admitted request even after API configuration changes.
+export type GitHubUpstreamRequestScope = { signal: AbortSignal; release: () => void };
 const responseRequestScopes = new WeakMap<
   Response,
   { credentialScope: string; fetchImpl: typeof fetch; resource: string }
+>();
+const responseCredentialScopes = new WeakMap<
+  Response,
+  { credentialScope: string; upstream?: GitHubUpstreamRequestScope }
 >();
 
 export class ControlUiGitHubError extends Error {
@@ -266,13 +277,19 @@ export async function fetchGitHubApi(
   fetchImpl: typeof fetch,
   token?: string,
   beforeRedirect?: (url: URL) => Promise<void>,
-  identity?: { revalidate: () => Promise<void>; assertSelected: () => void },
+  identity?: {
+    revalidate: () => Promise<void>;
+    assertSelected: () => void;
+    repository?: { owner: string; repo: string };
+  },
   etag?: string,
-  callerSignal?: AbortSignal,
+  callerSignal?: AbortSignal | (() => GitHubUpstreamRequestScope),
   graphql?: { query: string; variables: Record<string, string> },
   apiBaseUrl = GITHUB_API_BASE_URL,
 ): Promise<Response> {
-  callerSignal?.throwIfAborted();
+  if (typeof callerSignal !== "function") {
+    callerSignal?.throwIfAborted();
+  }
   const baseUrl = resolveGitHubApiBaseUrl(apiBaseUrl);
   const apiBase = new URL(baseUrl);
   const graphqlUrl = githubGraphqlUrl(baseUrl);
@@ -288,16 +305,35 @@ export async function fetchGitHubApi(
   const cooldowns = transportCooldowns.get(fetchImpl) ?? new Map<string, ControlUiGitHubError>();
   transportCooldowns.set(fetchImpl, cooldowns);
 
-  const timeout = AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS);
-  const signal = callerSignal ? AbortSignal.any([timeout, callerSignal]) : timeout;
+  let timeout: AbortSignal | undefined;
+  const trace = createDiagnosticTraceContextFromActiveScope();
+  const timing = createStageTimingTracker(undefined, (phase) => {
+    apiLog.info("github api phase", {
+      traceId: trace.traceId,
+      requestSpanId: trace.spanId,
+      apiHost: apiBase.host,
+      api: graphql ? "graphql" : "rest",
+      ...phase,
+    });
+  });
   for (let redirects = 0; ; redirects += 1) {
+    if (identity?.repository) {
+      const repositoryPath =
+        `/repos/${encodeURIComponent(identity.repository.owner)}/${encodeURIComponent(identity.repository.repo)}`.toLowerCase();
+      const pathname = githubRestApiPath(url, baseUrl).toLowerCase();
+      if (!token || (pathname !== repositoryPath && !pathname.startsWith(repositoryPath + "/"))) {
+        throw new ControlUiGitHubError(404, "GitHub repository is outside the session");
+      }
+    }
     // Recheck every dispatch, including redirects and auxiliary metadata reads.
     // Selection must still be current after the asynchronous credential read.
     if (identity) {
-      await identity.revalidate();
+      await timing.measure("credentialRevalidation", () => identity.revalidate());
       identity.assertSelected();
     }
-    callerSignal?.throwIfAborted();
+    if (typeof callerSignal !== "function") {
+      callerSignal?.throwIfAborted();
+    }
     const resource = githubApiResource(url, baseUrl, graphqlUrl);
     const sharedCooldown = activeGitHubCooldown(cooldowns, `${credentialScope}:*`);
     const resourceCooldown = activeGitHubCooldown(cooldowns, `${credentialScope}:${resource}`);
@@ -308,24 +344,53 @@ export async function fetchGitHubApi(
     if (cooldown) {
       throw cooldown;
     }
+    // Admission and cooldown use their existing caller/authority bounds. One
+    // transport deadline starts at first dispatch and survives redirects and body reads.
+    const upstream = typeof callerSignal === "function" ? callerSignal() : undefined;
+    const requestSignal =
+      upstream?.signal ?? (typeof callerSignal === "function" ? undefined : callerSignal);
+    timeout ??= AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS);
+    const signal = requestSignal ? AbortSignal.any([timeout, requestSignal]) : timeout;
     let response: Response;
     try {
-      response = await fetchImpl(url.href, {
-        headers: {
-          ...githubApiHeaders(token),
-          ...(etag ? { "If-None-Match": etag } : {}),
-          ...(graphql ? { "Content-Type": "application/json" } : {}),
-        },
-        ...(graphql ? { method: "POST", body: JSON.stringify(graphql) } : {}),
-        redirect: "manual",
-        signal,
-      });
+      signal.throwIfAborted();
+      response = await timing.measure("responseHeaders", () =>
+        fetchImpl(url.href, {
+          headers: {
+            ...githubApiHeaders(token),
+            ...(etag ? { "If-None-Match": etag } : {}),
+            ...(graphql ? { "Content-Type": "application/json" } : {}),
+          },
+          ...(graphql ? { method: "POST", body: JSON.stringify(graphql) } : {}),
+          redirect: "manual",
+          signal,
+        }),
+      );
     } catch (error) {
+      upstream?.release();
       const timedOut = signal.aborted || (error instanceof Error && error.name === "TimeoutError");
+      try {
+        apiLog.info("github api failed", {
+          traceId: trace.traceId,
+          requestSpanId: trace.spanId,
+          apiHost: apiBase.host,
+          api: graphql ? "graphql" : "rest",
+          diagnosticCode: timeout.aborted
+            ? "deadline_expired"
+            : requestSignal?.aborted
+              ? "caller_aborted"
+              : timedOut
+                ? "transport_timeout"
+                : "transport_error",
+        });
+      } catch {
+        // Failure observation cannot replace transport settlement or its safe error.
+      }
       throw new ControlUiGitHubTransportError(
         timedOut ? "GitHub request timed out" : "Could not reach GitHub",
       );
     }
+    responseCredentialScopes.set(response, { credentialScope, upstream });
     if (isGitHubRateLimitResponse(response)) {
       const retained = retainGitHubCooldown(
         fetchImpl,
@@ -362,7 +427,16 @@ export async function fetchGitHubApi(
 }
 
 export async function discardResponse(response: Response): Promise<void> {
-  await response.body?.cancel().catch(() => {});
+  try {
+    await response.body?.cancel().catch(() => {});
+  } finally {
+    const scope = responseCredentialScopes.get(response);
+    const upstream = scope?.upstream;
+    if (scope) {
+      scope.upstream = undefined;
+    }
+    upstream?.release();
+  }
 }
 
 export async function readBoundedResponse(response: Response, maxBytes: number): Promise<Buffer> {
@@ -591,7 +665,21 @@ export function fetchGitHubJson(
   token?: string,
   maxBytes?: number,
   apiBaseUrl = GITHUB_API_BASE_URL,
+  identity?: Parameters<typeof fetchGitHubApi>[4],
 ): Promise<unknown> {
+  if (identity) {
+    return fetchGitHubApi(
+      rawUrl,
+      fetchImpl,
+      token,
+      undefined,
+      identity,
+      undefined,
+      undefined,
+      undefined,
+      apiBaseUrl,
+    ).then((response) => readGitHubJsonResponse(response, maxBytes));
+  }
   return withOptionalGitHubAuth(token, async (requestToken) =>
     readGitHubJsonResponse(
       await fetchGitHubApi(

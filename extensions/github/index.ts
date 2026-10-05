@@ -1,5 +1,9 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { GITHUB_COMMIT_PATH_PATTERN, GITHUB_ITEM_PATH_PATTERN } from "./src/targets.js";
+import {
+  GITHUB_COMMIT_PATH_PATTERN,
+  GITHUB_ITEM_PATH_PATTERN,
+  githubWebHost,
+} from "./src/targets.js";
 
 export default definePluginEntry({
   id: "github",
@@ -17,7 +21,7 @@ export default definePluginEntry({
         label: "GitHub",
         icon: "github",
         linkReader: {
-          hosts: ["github.com"],
+          hosts: [...new Set(["github.com", githubWebHost()])],
           pathPattern: reader.pathPattern,
           detailMethod: "github.detail",
           imageMethod: "github.image",

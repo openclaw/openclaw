@@ -316,7 +316,6 @@ suite.define(() => {
       );
       await expect(section.getByRole("button", { name: "Change System GitHub" })).toHaveCount(0);
       await expect(section.locator('[data-github-connection="agent"]')).toHaveCount(0);
-      expect(await gateway.getRequests("users.self")).toHaveLength(1);
       const configReads = (await gateway.getRequests("config.get")).length;
       const configWrites = (await gateway.getRequests("config.set")).length;
       await section.getByRole("button", { name: "Connect My GitHub" }).click();
@@ -384,123 +383,229 @@ suite.define(() => {
     });
   });
 
-  it("defaults an identified admin to For me and preserves verified identity and credit", async () => {
-    await suite.withPage(pageOptions(), async ({ page }) => {
-      const avatarUrl = "https://avatars.githubusercontent.com/u/1?v=4";
-      await page.route(avatarUrl, (route) =>
-        route.fulfill({
-          contentType: "image/svg+xml",
-          body: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="12" fill="gray"/></svg>',
-        }),
-      );
-      const profile = {
-        id: profileId,
-        displayName: "Test Person",
-        avatarMime: null,
-        mergedInto: null,
-        createdAt: 1,
-        updatedAt: 2,
-        emails: [],
-        hasAvatar: false,
-        githubIdentity: {
-          login: "signin-octocat",
-          profileUrl: "https://github.com/signin-octocat",
-          avatarUrl,
-        },
-      };
-      const gateway = await installMockGateway(page, {
-        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
-        presenceUsers,
-        methodResponses: {
-          "config.get": configResponse,
-          "users.self": { profile },
-          "users.prefs.get": { status: "ok", entries: {} },
-          "users.github.status": { personal: disconnected, system: systemOAuth },
-          "tools.github.status": systemStatus,
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}settings/profile`);
-      const section = page.locator("#settings-profile-github-connections");
-      const signIn = page.locator("#settings-profile-identity");
-      await expect(signIn).toContainText("@signin-octocat");
-      await section.getByRole("button", { name: "Manage connections", exact: true }).click();
-      await expect(section.getByRole("radio", { name: "For me", exact: true })).toBeChecked();
-      await gateway.deferNext("users.github.authorize.start");
-      await section.getByRole("button", { name: "Continue with GitHub" }).click();
-      await gateway.deferNext("users.github.authorize.poll");
-      await gateway.resolveDeferred("users.github.authorize.start", device);
-      await expect(section.getByRole("radio", { name: "For me", exact: true })).toBeChecked();
-      await capture(page, "10-admin-for-me.png");
-      await gateway.waitForRequest("users.github.authorize.poll");
-      await gateway.resolveDeferred("users.github.authorize.poll", { status: "success", personal });
-      await expect(section.locator('[data-github-connection="personal"]')).toContainText(
-        "@personal-octocat",
-      );
-      await expect(signIn).toContainText("@signin-octocat");
-      await expect(
-        signIn.getByRole("button", { name: /Link GitHub|Change|Disconnect/ }),
-      ).toHaveCount(0);
-      expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
-      await section.getByRole("button", { name: "Change System GitHub" }).click();
-      await expect(
-        section.getByRole("radio", { name: "For the system", exact: true }),
-      ).toBeChecked();
-      await capture(page, "11-admin-explicit-system.png");
-    });
-  });
-
-  it("invalidates an old personal flow when the authenticated profile changes", async () => {
-    await suite.withPage(pageOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        operatorScopes: ["operator.read"],
-        presenceUsers,
-        methodResponses: { "users.github.status": { personal: disconnected, system: systemOAuth } },
-      });
-      await page.goto(`${suite.server.baseUrl}settings/profile`);
-      const section = page.locator("#settings-profile-github-connections");
-      await section.getByRole("button", { name: "Connect My GitHub" }).click();
-      await gateway.deferNext("users.github.authorize.start");
-      await section.getByRole("button", { name: "Continue with GitHub" }).click();
-      await gateway.waitForRequest("users.github.authorize.start");
-      await gateway.resolveDeferred("users.github.authorize.start", {
-        ...device,
-        pollAfterMs: 60_000,
-      });
-      await expect(section.getByText(device.userCode, { exact: true })).toBeVisible();
-      const connect = await gateway.waitForRequest("connect");
-      const instanceId = (connect.params as { client: { instanceId: string } }).client.instanceId;
-      const reads = (await gateway.getRequests("users.github.status")).length;
-      await gateway.setMethodResponse("users.self", {
-        profile: {
-          id: "55555555-5555-4555-8555-555555555555",
-          displayName: "Second Person",
-          emails: [],
+  it.each([
+    "disconnected",
+    "connected",
+    "connected-pending",
+    "connected-elsewhere",
+    "dismissed",
+  ] as const)(
+    "handles %s personal credentials after verified sign-in without changing shared execution or credit",
+    async (state) => {
+      const captureTransition = captureUiProof && state === "disconnected";
+      await suite.withPage(pageOptions(), async ({ page }) => {
+        const avatarUrl = "https://avatars.githubusercontent.com/u/1?v=4";
+        await page.route(avatarUrl, (route) =>
+          route.fulfill({
+            contentType: "image/svg+xml",
+            body: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="12" fill="gray"/></svg>',
+          }),
+        );
+        const profile = {
+          id: profileId,
+          displayName: "Test Person",
           avatarMime: null,
-          hasAvatar: false,
-          githubIdentity: null,
           mergedInto: null,
           createdAt: 1,
           updatedAt: 2,
-        },
-      });
-      await gateway.emitGatewayEvent("presence", {
-        presence: [
-          {
-            instanceId,
-            mode: "webchat",
-            reason: "connect",
-            user: { id: "55555555-5555-4555-8555-555555555555", name: "Second Person" },
-            watchedSessions: [],
+          emails: [],
+          hasAvatar: false,
+          githubIdentity: {
+            login: "signin-octocat",
+            profileUrl: "https://github.com/signin-octocat",
+            avatarUrl,
           },
-        ],
+        };
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+          presenceUsers,
+          deferredMethods: [
+            "users.github.authorize.start",
+            "users.github.authorize.poll",
+            ...(captureTransition ? ["users.github.status", "users.github.status"] : []),
+          ],
+          methodResponses: {
+            "config.get": configResponse,
+            "users.self": { profile },
+            "users.prefs.get": { status: "ok", entries: {} },
+            "users.github.status": {
+              personal:
+                state === "connected-pending"
+                  ? { ...personal, pending: device }
+                  : state === "connected"
+                    ? personal
+                    : disconnected,
+              system: systemOAuth,
+            },
+            "tools.github.status": systemStatus,
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/profile`);
+        const section = page.locator("#settings-profile-github-connections");
+        const signIn = page.locator("#settings-profile-identity");
+        await expect(signIn).toContainText("@signin-octocat");
+        if (captureTransition) {
+          await gateway.waitForRequest("users.github.status", { after: 1 });
+          await capture(page, "10-signin-before-consent.png");
+          for (let index = 0; index < 2; index++) {
+            await gateway.resolveDeferred("users.github.status", {
+              personal: disconnected,
+              system: systemOAuth,
+            });
+          }
+        }
+        if (state !== "connected" && state !== "connected-pending") {
+          expect((await gateway.waitForRequest("users.github.authorize.start")).params).toEqual({});
+          const consent = page.locator("[data-github-signin-consent]");
+          await gateway.resolveDeferred("users.github.authorize.start", device);
+          await expect(consent.getByText(device.userCode, { exact: true })).toBeVisible();
+          if (captureUiProof) {
+            await writeFile(
+              path.join(proofDir, "10-signin-personal-consent.png"),
+              await takeControlUiViewportScreenshot(page, consent, [
+                consent.getByText(device.userCode, { exact: true }),
+              ]),
+            );
+          }
+          if (state === "dismissed") {
+            await consent.getByRole("button", { name: "Close", exact: true }).click();
+            await gateway.waitForRequest("users.github.authorize.cancel");
+            await expect(consent).toHaveCount(0);
+            await expect(section.locator('[data-github-connection="personal"]')).toContainText(
+              "Not connected",
+            );
+            expect(await gateway.getRequests("tools.github.authorize.start")).toHaveLength(0);
+            expect(await gateway.getRequests("users.github.disconnect")).toHaveLength(0);
+            return;
+          }
+          await gateway.waitForRequest("users.github.authorize.poll");
+          await gateway.setMethodResponse("users.github.status", { personal, system: systemOAuth });
+          if (state === "connected-elsewhere") {
+            await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+            await gateway.waitForRequest("users.github.authorize.cancel");
+            await expect(consent).toHaveCount(0);
+            await gateway.resolveDeferred("users.github.authorize.poll", { status: "expired" });
+          } else {
+            await gateway.resolveDeferred("users.github.authorize.poll", {
+              status: "success",
+              personal,
+            });
+          }
+          await expect(consent).toHaveCount(0);
+        }
+        await expect(section.locator('[data-github-connection="personal"]')).toContainText(
+          "@personal-octocat",
+        );
+        await expect(signIn).toContainText("@signin-octocat");
+        expect(await gateway.getRequests("users.github.authorize.start")).toHaveLength(
+          state === "connected" || state === "connected-pending" ? 0 : 1,
+        );
+        await expect(
+          signIn.getByRole("button", { name: /Link GitHub|Change|Disconnect/ }),
+        ).toHaveCount(0);
+        if (state === "connected" || state === "connected-pending") {
+          expect(await gateway.getRequests("users.github.authorize.cancel")).toHaveLength(0);
+        }
+        expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
+        expect(await gateway.getRequests("tools.github.authorize.start")).toHaveLength(0);
+        expect(await gateway.getRequests("tools.github.configure")).toHaveLength(0);
+        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+        if (state === "connected-pending") {
+          return;
+        }
+        await section.getByRole("button", { name: "Manage connections", exact: true }).click();
+        await expect(section.getByRole("radio", { name: "For me", exact: true })).toBeChecked();
+        await section.getByRole("button", { name: "Change System GitHub" }).click();
+        await expect(
+          section.getByRole("radio", { name: "For the system", exact: true }),
+        ).toBeChecked();
+        await capture(page, "11-admin-explicit-system.png");
       });
-      await gateway.waitForRequest("users.github.status", { after: reads });
-      await gateway.waitForRequest("users.github.authorize.cancel");
-      await expect(section.getByText(device.userCode, { exact: true })).toHaveCount(0);
-      await expect(section.locator('[data-github-connection="personal"]')).toContainText(
-        "Not connected",
-      );
-      await capture(page, "12-profile-switch-fenced.png");
-    });
-  });
+    },
+  );
+
+  it.each(["manual", "sign-in"] as const)(
+    "invalidates %s personal consent when the authenticated profile changes",
+    async (flow) => {
+      await suite.withPage(pageOptions(), async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.read"],
+          presenceUsers,
+          deferredMethods: ["users.github.authorize.start"],
+          methodResponses: {
+            "users.github.status": { personal: disconnected, system: systemOAuth },
+            ...(flow === "sign-in"
+              ? {
+                  "users.self": {
+                    profile: {
+                      id: profileId,
+                      displayName: "Test Person",
+                      emails: [],
+                      avatarMime: null,
+                      hasAvatar: false,
+                      mergedInto: null,
+                      createdAt: 1,
+                      updatedAt: 2,
+                      githubIdentity: {
+                        login: "signin-octocat",
+                        profileUrl: "https://github.com/signin-octocat",
+                        avatarUrl: "",
+                      },
+                    },
+                  },
+                }
+              : {}),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/profile`);
+        const section = page.locator("#settings-profile-github-connections");
+        const consent = page.locator("[data-github-signin-consent]");
+        const setup = flow === "sign-in" ? consent : section;
+        if (flow === "manual") {
+          await section.getByRole("button", { name: "Connect My GitHub" }).click();
+          await section.getByRole("button", { name: "Continue with GitHub" }).click();
+        }
+        await gateway.waitForRequest("users.github.authorize.start");
+        await gateway.resolveDeferred("users.github.authorize.start", {
+          ...device,
+          pollAfterMs: 60_000,
+        });
+        await expect(setup.getByText(device.userCode, { exact: true })).toBeVisible();
+        const connect = await gateway.waitForRequest("connect");
+        const instanceId = (connect.params as { client: { instanceId: string } }).client.instanceId;
+        const reads = (await gateway.getRequests("users.github.status")).length;
+        await gateway.setMethodResponse("users.self", {
+          profile: {
+            id: "55555555-5555-4555-8555-555555555555",
+            displayName: "Second Person",
+            emails: [],
+            avatarMime: null,
+            hasAvatar: false,
+            githubIdentity: null,
+            mergedInto: null,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        });
+        await gateway.emitGatewayEvent("presence", {
+          presence: [
+            {
+              instanceId,
+              mode: "webchat",
+              reason: "connect",
+              user: { id: "55555555-5555-4555-8555-555555555555", name: "Second Person" },
+              watchedSessions: [],
+            },
+          ],
+        });
+        await gateway.waitForRequest("users.github.status", { after: reads });
+        await gateway.waitForRequest("users.github.authorize.cancel");
+        await expect(page.getByText(device.userCode, { exact: true })).toHaveCount(0);
+        await expect(section.locator('[data-github-connection="personal"]')).toContainText(
+          "Not connected",
+        );
+        await capture(page, "12-profile-switch-fenced.png");
+      });
+    },
+  );
 });

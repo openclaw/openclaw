@@ -70,6 +70,32 @@ afterEach(() => {
 });
 
 describe("personal GitHub connection ownership", () => {
+  it("reconciles a connection invalidation after a stale status read settles", async () => {
+    const old = deferred<UsersGitHubStatusResult>();
+    const fresh = deferred<UsersGitHubStatusResult>();
+    let reads = 0;
+    const { controller, request } = setup((method) => {
+      if (method !== "users.github.status") {
+        throw new Error(`unexpected method ${method}`);
+      }
+      return ++reads === 1 ? old.promise : fresh.promise;
+    });
+    try {
+      const reading = controller.verify();
+      controller.invalidateStatus();
+      controller.invalidateStatus();
+      old.resolve({ personal: disconnected, system });
+      await reading;
+      expect(controller.personal).toBeNull();
+      expect(request).toHaveBeenCalledTimes(2);
+      fresh.resolve({ personal: connected, system });
+      await fresh.promise;
+      expect(controller.personal).toEqual(connected);
+    } finally {
+      controller.dispose();
+    }
+  });
+
   it("lets an identified reader connect, reconnect and disconnect only their own OAuth account", async () => {
     vi.useFakeTimers();
     let personal = disconnected;

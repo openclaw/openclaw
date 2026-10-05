@@ -14,6 +14,8 @@ type ControlUiGitHubPreviewCoAuthor = {
 };
 
 export type ControlUiGitHubPreview = GitHubItemTarget & {
+  branch?: string;
+  checksSummary?: string;
   additions?: number;
   avatarDataUrl?: string;
   /** Bounded to the faces the card renders; `coAuthorCount` carries the true total. */
@@ -42,7 +44,7 @@ export function isControlUiGitHubPreview(value: unknown): value is ControlUiGitH
     ["createdAt", "login", "state", "title", "updatedAt"].every(
       (key) => typeof value[key] === "string",
     ) &&
-    ["avatarDataUrl", "closedAt", "mergedAt", "stateReason"].every(
+    ["avatarDataUrl", "closedAt", "mergedAt", "stateReason", "branch", "checksSummary"].every(
       (key) => value[key] === undefined || typeof value[key] === "string",
     ) &&
     ["additions", "changedFiles", "comments", "deletions", "coAuthorCount"].every(

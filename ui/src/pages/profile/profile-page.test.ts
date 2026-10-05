@@ -15,6 +15,8 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import * as avatarProcessing from "./avatar-processing.ts";
 import type { ModelAccounts } from "./model-accounts.ts";
 import {
+  stubProfileAvatarProcessing,
+  selectProfileAvatar,
   createConnectedContext,
   modelAccountProfile,
   mountProfilePage,
@@ -67,37 +69,6 @@ function createContext(
     settingsAgentSelection: { state: { selectedId: null, scopeId: null }, subscribe },
     agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
   } as unknown as ApplicationContext;
-}
-
-function stubProfileAvatarProcessing(decode = vi.fn<() => Promise<void>>(async () => undefined)) {
-  class StubUrl extends URL {
-    static override createObjectURL = vi.fn(() => "blob:avatar");
-    static override revokeObjectURL = vi.fn();
-  }
-  class StubImage {
-    decoding = "auto";
-    src = "";
-    naturalWidth = 512;
-    naturalHeight = 256;
-    decode = decode;
-  }
-  vi.stubGlobal("URL", StubUrl);
-  vi.stubGlobal("Image", StubImage);
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-    drawImage: vi.fn(),
-  } as unknown as CanvasRenderingContext2D);
-  vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback, type) => {
-    callback(new Blob([new Uint8Array([1, 2, 3])], { type: type ?? "image/png" }));
-  });
-}
-
-function selectProfileAvatar(page: ParentNode) {
-  const avatarInput = page.querySelector<HTMLInputElement>('input[type="file"]')!;
-  Object.defineProperty(avatarInput, "files", {
-    configurable: true,
-    value: [new File(["avatar"], "avatar.png", { type: "image/png" })],
-  });
-  avatarInput.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 async function startProfileSignIn(page: ParentNode) {
@@ -218,6 +189,109 @@ it("shows the authenticated user in the profile hero when the default agent diff
     expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada Lovelace"),
   );
 });
+
+it("shows the verified Factory person without exposing the raw principal in Profile", async () => {
+  const principal = "github:microsoft.ghe.com:1358766";
+  const profile: UserProfile = {
+    ...modelAccountProfile,
+    id: "factory-profile",
+    displayName: "Galin-Iliev",
+    emails: [],
+    githubIdentity: null,
+    hasAvatar: false,
+  };
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return {
+        profile,
+        authenticatedGitHubIdentity: {
+          host: "microsoft.ghe.com",
+          accountId: 1358766,
+          login: "Galin-Iliev",
+          profileUrl: "https://microsoft.ghe.com/Galin-Iliev",
+        },
+      };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    email: principal,
+    name: principal,
+    authenticatedGitHubIdentity: {
+      host: "microsoft.ghe.com",
+      accountId: 1358766,
+      login: "Galin-Iliev",
+      profileUrl: "https://microsoft.ghe.com/Galin-Iliev",
+    },
+  });
+  const page = mountProfilePage(harness.context);
+  await waitForFast(() =>
+    expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Galin-Iliev"),
+  );
+  expect(page.querySelector(".profile-hero__handle")?.textContent).toContain("@Galin-Iliev");
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
+    "Galin-Iliev",
+  );
+  expect(page.textContent).not.toContain(principal);
+  expect(page.textContent).not.toContain("Linked emails");
+});
+
+it.each(["initial", "same-person refresh"] as const)(
+  "requires explicit Enterprise consent through the authenticated self setter after %s eligibility",
+  async (source) => {
+    let eligible = source === "initial";
+    const identity = {
+      host: "fixture.ghe.com",
+      accountId: 700001,
+      login: "enterprise-human",
+      profileUrl: "https://fixture.ghe.com/enterprise-human",
+    };
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "users.self") {
+        return {
+          profile: { ...modelAccountProfile, githubIdentity: null },
+          authenticatedGitHubIdentity: { ...identity, gitCoauthorEligible: eligible },
+        };
+      }
+      if (method === "users.prefs.get") {
+        return { status: "ok", entries: {} };
+      }
+      if (method === "users.prefs.set") {
+        return { status: "ok", entries: params?.entries };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+      id: modelAccountProfile.id,
+      name: "Enterprise Person",
+    });
+    const page = mountProfilePage(harness.context);
+    if (source === "same-person refresh") {
+      await waitForFast(() =>
+        expect(page.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true),
+      );
+      expect(request.mock.calls.some(([method]) => method === "users.prefs.get")).toBe(false);
+      eligible = true;
+      harness.context.gateway.updateSelfUser?.({
+        authenticatedGitHubIdentity: { ...identity, gitCoauthorEligible: true },
+      });
+    }
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("users.prefs.get", { keys: ["git.coauthor.enabled"] }),
+    );
+    const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch")!;
+    await waitForFast(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    expect(toggle.checked).toBe(false);
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("users.prefs.set", {
+        entries: { "git.coauthor.enabled": true },
+      }),
+    );
+  },
+);
 
 it.each(["operator.read", "operator.sessions.write"])(
   "loads a read-only profile with %s without enabling mutations",

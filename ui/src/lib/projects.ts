@@ -54,13 +54,34 @@ function projectGitHubRepositories(
   return projects.map(({ displayName, originUrl }) => {
     // projects.list removes Git usernames. Restore only known default GitHub shapes,
     // never arbitrary credentials/hosts, paths, project IDs, or guessed owners.
-    const origin = originUrl
-      ?.replace(/^github\.com:/iu, "git@github.com:")
-      .replace(/^ssh:\/\/github\.com(?::22)?\//iu, "ssh://git@github.com/");
-    const parsed = origin ? parseProjectGitUrl(origin) : null;
+    const scpHost = /^(?:git@)?([a-z0-9.-]+):((?!\/\/)[^\s]+)$/iu.exec(originUrl ?? "")?.[1];
+    let host = scpHost?.toLowerCase();
+    if (!host) {
+      try {
+        host = originUrl ? new URL(originUrl).hostname.toLowerCase() : undefined;
+      } catch {}
+    }
+    const githubHost = host === "github.com" || host?.endsWith(".ghe.com") ? host : undefined;
+    const origin = githubHost
+      ? originUrl
+          ?.replace(
+            new RegExp(`^${githubHost.replaceAll(".", "\\.")}:`, "iu"),
+            `git@${githubHost}:`,
+          )
+          .replace(
+            new RegExp(`^ssh://` + githubHost.replaceAll(".", "\\.") + `(?::22)?/`, "iu"),
+            `ssh://git@${githubHost}/`,
+          )
+      : undefined;
+    const parsed = origin && githubHost ? parseProjectGitUrl(origin, githubHost) : null;
     const [owner, repo] = parsed ? new URL(parsed.url).pathname.slice(1, -4).split("/") : [];
     if (owner && repo) {
-      return { owner, repo, aliases: [displayName] };
+      return {
+        owner,
+        repo,
+        ...(githubHost !== "github.com" ? { host: githubHost } : {}),
+        aliases: [displayName],
+      };
     }
     const basename = unresolvedOriginBasename(originUrl);
     return {

@@ -1,10 +1,15 @@
-import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
+import {
+  resolveConfiguredGitHubApiBaseUrl,
+  resolveConfiguredGitHubHost,
+} from "../agents/github-host.js";
+import { getRuntimeConfig as readRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitCheckoutContext } from "../infra/git-read-operations.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
-import { resolveUserProfileId } from "../state/user-profiles.js";
+import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
+import { configuredDefaultRepository } from "./configured-default-repository.js";
+import { factoryGitHubRequestDigest } from "./factory-github-proof.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import {
@@ -12,6 +17,7 @@ import {
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
 import { READ_SCOPE } from "./operator-scopes.js";
+import { prepareGatewayProjectGitHubIdentity } from "./project-github-identity.js";
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
@@ -29,6 +35,9 @@ type SelectedSession = Pick<
 >;
 
 export type ControlUiSessionPrTarget = {
+  sessionId: string;
+  lifecycleRevision?: string;
+  client?: GatewayClient;
   params: { sessionKey: string; agentId: string };
   identity: string;
   readSource: { agentId: string; path: string };
@@ -45,6 +54,107 @@ export type ControlUiSessionPrReadContext = {
   projection?: "publication";
   assertCurrent: () => void;
 };
+
+export function resolveControlUiSessionGitHubRepository(
+  target: ControlUiSessionPrTarget,
+  config: OpenClawConfig,
+): { owner: string; repo: string; host: string } | null {
+  if (target.source && typeof target.source !== "string") {
+    return { ...target.source, host: target.source.host ?? "github.com" };
+  }
+  if (process.env.FACTORY_AUTH_MODE !== "github") {
+    return null;
+  }
+  const host = resolveConfiguredGitHubHost(config);
+  const selected = configuredDefaultRepository(config);
+  const remote = selected && parseGitHubRemoteUrl(selected.url, host);
+  return remote ? { ...remote, host } : null;
+}
+
+/** Private reads inherit the visible session's repository, never the pasted URL. */
+export async function prepareControlUiSessionGitHubIdentity(
+  read: Pick<ControlUiSessionPrReadContext, "target" | "assertCurrent">,
+  getConfig: () => OpenClawConfig = readRuntimeConfig,
+  requestUrl?: string,
+) {
+  const config = getConfig();
+  const repository = resolveControlUiSessionGitHubRepository(read.target, config);
+  if (!repository) {
+    if (process.env.FACTORY_AUTH_MODE === "github") {
+      throw new Error("Factory GitHub session repository is unavailable");
+    }
+    return undefined;
+  }
+  const host = repository.host;
+  const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(config);
+  if (resolveConfiguredGitHubHost(config) !== host) {
+    if (process.env.FACTORY_AUTH_MODE === "github") {
+      throw new Error("Factory GitHub repository host does not match the configured issuer");
+    }
+    return undefined;
+  }
+  const assertCurrent = () => {
+    read.assertCurrent();
+    read.target.assertCurrent?.();
+    const current = getConfig();
+    if (
+      resolveConfiguredGitHubHost(current) !== host ||
+      resolveConfiguredGitHubApiBaseUrl(current) !== apiBaseUrl ||
+      JSON.stringify(resolveControlUiSessionGitHubRepository(read.target, current)) !==
+        JSON.stringify(repository)
+    ) {
+      throw new Error("GitHub repository selection changed during the session read.");
+    }
+  };
+  assertCurrent();
+  if (process.env.FACTORY_AUTH_MODE === "github" && !read.target.sessionId) {
+    throw new Error("Factory GitHub item read requires its exact session and target");
+  }
+  const targetUrl =
+    requestUrl ??
+    `https://${host}/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
+  const identity = await prepareGatewayProjectGitHubIdentity({
+    agentId: read.target.params.agentId,
+    config,
+    context: { getRuntimeConfig: getConfig },
+    assertActive: assertCurrent,
+    client: read.target.client,
+    sessionKey: read.target.params.sessionKey,
+    factoryCredential: {
+      claim: {
+        purpose: "session-item-read",
+        binding: {
+          kind: "session",
+          agentId: read.target.params.agentId,
+          sessionKey: read.target.params.sessionKey,
+          sessionId: read.target.sessionId,
+          lifecycleRevision: read.target.lifecycleRevision ?? null,
+          requestDigest: factoryGitHubRequestDigest(targetUrl),
+        },
+      },
+      assertCurrent,
+    },
+  });
+  assertCurrent();
+  if (process.env.FACTORY_AUTH_MODE === "github" && !identity) {
+    throw new Error("Factory GitHub session identity is unavailable");
+  }
+  return identity
+    ? {
+        ...identity,
+        host,
+        apiBaseUrl,
+        cacheScope: JSON.stringify([
+          repository.host,
+          repository.owner,
+          repository.repo,
+          read.target.identity,
+          identity.cacheScope,
+        ]),
+        repository: { owner: repository.owner, repo: repository.repo },
+      }
+    : undefined;
+}
 
 /** Git facts and cached snapshots belong to the recorded session and workspace source. */
 export function resolveControlUiSessionPrTarget(
@@ -70,6 +180,8 @@ export function resolveControlUiSessionPrTarget(
     source = resolveSessionWorkspaceRoots(cfg, agentId, entry).diffCwd ?? null;
   }
   return {
+    sessionId: entry.sessionId,
+    lifecycleRevision: entry.lifecycleRevision,
     params: { sessionKey: canonicalKey, agentId },
     githubHost,
     readSource,
@@ -175,6 +287,7 @@ export async function prepareControlUiSessionPrRead(params: {
   const actorProfile = actor?.kind === "operator" ? actor.profileId : undefined;
   const profileInput = client.authenticatedUserProfile?.profileId;
   const userInput = client.authenticatedUserId;
+  const factoryActorInput = client.authenticatedFactoryGitHubAccountId;
   const scopes = [...(client.connect.scopes ?? [])].toSorted().join("\0");
   const access = client.internal?.operatorAccessAuthority;
   const connectionSignal = client.connectionSignal;
@@ -182,7 +295,7 @@ export async function prepareControlUiSessionPrRead(params: {
   if (!projection) {
     return undefined;
   }
-  let aliasRevision = -1;
+  let profileAccess: ReturnType<typeof captureResidentUserProfileAccess> | undefined;
   const captureCurrent = () => {
     try {
       const currentActor = resolveGatewayOperatorRoleActor(client);
@@ -195,6 +308,7 @@ export async function prepareControlUiSessionPrRead(params: {
         isGatewayClientProfilePending(client) ||
         client.authenticatedUserProfile?.profileId !== profileInput ||
         client.authenticatedUserId !== userInput ||
+        client.authenticatedFactoryGitHubAccountId !== factoryActorInput ||
         currentActor?.kind !== actorKind ||
         (currentActor?.kind === "operator" ? currentActor.profileId : undefined) !== actorProfile ||
         [...(client.connect.scopes ?? [])].toSorted().join("\0") !== scopes ||
@@ -203,12 +317,11 @@ export async function prepareControlUiSessionPrRead(params: {
       ) {
         return undefined;
       }
-      const currentAliasRevision = readUserProfileAliasRevision();
-      if (currentAliasRevision !== aliasRevision) {
-        if (actorProfile && resolveUserProfileId(actorProfile) !== actorProfile) {
+      if (actorProfile) {
+        profileAccess ??= captureResidentUserProfileAccess(actorProfile);
+        if (profileAccess.assertCurrent().id !== actorProfile) {
           return undefined;
         }
-        aliasRevision = currentAliasRevision;
       }
       const cfg = getRuntimeConfig();
       if (
@@ -306,6 +419,7 @@ export async function prepareControlUiSessionPrRead(params: {
       return target
         ? {
             ...target.target,
+            client,
             assertCurrent: () => {
               const current = captureCurrent();
               const original = target.privateSource;
@@ -356,4 +470,26 @@ export async function prepareControlUiSessionPrRead(params: {
     }
   };
   return (await readCurrent()) ? readCurrent : undefined;
+}
+
+/** Conversation links stay available independently of GitHub credential verification. */
+export async function readControlUiSessionIssueReferences(
+  read: ControlUiSessionPrReadContext,
+  repository: { owner: string; repo: string; host?: string },
+) {
+  read.assertCurrent();
+  const { readSessionTranscriptSummaryAsync } = await import("./session-transcript-readers.js");
+  read.assertCurrent();
+  const result = await readSessionTranscriptSummaryAsync(
+    {
+      agentId: read.target.readSource.agentId,
+      sessionKey: read.target.params.sessionKey,
+      sessionId: read.target.sessionId,
+      storePath: read.target.readSource.path,
+      sessionEntry: { sessionId: read.target.sessionId },
+    },
+    { kind: "github-issue-references", host: repository.host ?? "github.com", repository },
+  );
+  read.assertCurrent();
+  return result.issues;
 }

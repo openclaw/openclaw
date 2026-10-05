@@ -78,6 +78,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/health/collector.channel-discovery.test.ts",
   "src/gateway/health/collector.deadline.test.ts",
   "src/gateway/health/collector.legacy-owner.test.ts",
+  "src/gateway/github-user-identity.coauthor.test.ts",
   "src/gateway/health/collector.queue-health.test.ts",
   "src/gateway/health/collector.session-store-path.test.ts",
   "src/gateway/http-auth-utils.paired-device.test.ts",

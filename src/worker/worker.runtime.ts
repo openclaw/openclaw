@@ -166,9 +166,48 @@ export async function runWorkerDescriptor(
   let turnStarted = false;
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
+  let githubGeneration: number | undefined;
+  let githubRefresh: Awaited<
+    ReturnType<typeof import("./github-binding.runtime.js").prepareWorkerGitHubEnvironment>
+  >;
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
+    heartbeatParams: () => (githubGeneration === undefined ? {} : { githubGeneration }),
+    onHeartbeat: async (result, assertCurrent) => {
+      assertCurrent();
+      if (
+        !turnStarted ||
+        resultFenceAcked ||
+        !result.github ||
+        !githubRefresh ||
+        result.github.generation <= (githubGeneration ?? 0)
+      ) {
+        return;
+      }
+      const current = githubRefresh;
+      const retired = new Error("Worker GitHub refresh retired after terminal acknowledgment");
+      const assertRefreshCurrent = () => {
+        assertCurrent();
+        abortController.signal.throwIfAborted();
+        if (!turnStarted || resultFenceAcked || githubRefresh !== current) {
+          throw retired;
+        }
+      };
+      try {
+        await current.refresh(result.github, assertRefreshCurrent);
+      } catch (error) {
+        assertCurrent();
+        if (error === retired) {
+          return;
+        }
+        throw error;
+      }
+      assertCurrent();
+      if (!resultFenceAcked) {
+        githubGeneration = result.github.generation;
+      }
+    },
     onConnectionFailure: (error) => {
       options.onConnectionFailure?.(error?.message);
     },
@@ -269,6 +308,10 @@ export async function runWorkerDescriptor(
           }),
         )
       : undefined;
+    githubRefresh = github;
+    if (github) {
+      githubGeneration = 0;
+    }
     try {
       turnStarted = true;
       const {
@@ -315,6 +358,7 @@ export async function runWorkerDescriptor(
             emitTerminal: async (event) => {
               await live.emitTerminal(descriptor.assignment.runId, event);
               resultFenceAcked = true;
+              githubGeneration = undefined;
             },
           },
           gatewayTools: connection,
@@ -388,6 +432,7 @@ export async function runWorkerDescriptor(
     inference.dispose();
     live.dispose();
     await connection.stop();
+    githubRefresh = undefined;
     await environment?.close();
   }
 }

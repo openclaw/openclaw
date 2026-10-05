@@ -116,8 +116,19 @@ export function getUserProfileListItem(
   const database = openOpenClawStateDatabase(options);
   ensureUserProfilesSchema(options, database);
   const { db } = database;
+  return readUserProfileListItemInDatabase(db, profileId);
+}
+
+/** Existing-only worker reads share presentation without admitting or migrating a database. */
+export function readUserProfileListItemInDatabase(
+  db: DatabaseSync,
+  profileId: string,
+): UserProfileListItem {
   const profile = requireResolvedUserProfileMetadataById(db, profileId);
-  return selectUserProfileListItemById(db, profile.id);
+  return {
+    ...selectUserProfileListItemById(db, profile.id),
+    ...(profile.role ? { role: profile.role } : {}),
+  };
 }
 
 /** Reads the role assigned to an existing profile's current merge head. */

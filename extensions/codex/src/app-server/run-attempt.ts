@@ -172,5 +172,6 @@ export async function runCodexAppServerAttempt(
     // Preparation can fail before the active turn installs its terminal freeze.
     connection.cancellation.dispose();
     connection.releaseModelExecution();
+    await connection.releaseLocalGitHub();
   }
 }

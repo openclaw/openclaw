@@ -1,4 +1,5 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
@@ -91,7 +92,10 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
       assertCurrent();
       const knownPullRequestUrls = await readKnownRepositoryGitHubPublicationPullRequestUrls(row);
       assertCurrent();
+      const currentIdentity = await refreshIdentity();
+      assertCurrent();
       url = await reconcileGitHubPublicationPullRequest({
+        host: currentIdentity.host ?? resolveGitHubHost(),
         requestId: row.request_id,
         pushRepository: row.push_repository,
         repository: row.repository,

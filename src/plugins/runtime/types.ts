@@ -101,6 +101,7 @@ type RuntimeNodeListResult = {
     connectedAtMs?: number;
     lastSeenAtMs?: number;
     caps?: string[];
+    commandFeatures?: Record<string, string[]>;
     commands?: string[];
     /** True only for the node host installed alongside this Gateway. */
     gatewayLocal?: boolean;
@@ -210,6 +211,9 @@ export type PluginRuntime = PluginRuntimeCore & {
     /** Open a connection-scoped binary node command inside the trusted Gateway runtime. */
     openDuplex: (
       params: RuntimeNodeInvokeParams & {
+        /** Host-local authority checked before dispatch and each retained channel effect. */
+        assertCurrent?: () => void;
+        requiredCommandFeatures?: readonly string[];
         maxMessageBytes?: number;
         maxOutstandingDeliveryBytes?: number;
       },

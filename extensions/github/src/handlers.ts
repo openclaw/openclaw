@@ -7,7 +7,7 @@ import {
 import { ControlUiGitHubError, formatControlUiGitHubPreviewError, isRecord } from "./github-api.js";
 import { loadGitHubImage, parseGitHubImageParams } from "./image.js";
 import { isControlUiGitHubPreview } from "./preview-contract.js";
-import { githubTargetUrl, parseGitHubLinkParams } from "./targets.js";
+import { githubTargetUrl, githubWebHost, parseGitHubLinkParams } from "./targets.js";
 import { githubPreviewView } from "./view-model.js";
 
 type ReaderMethod = "github.preview" | "github.detail";
@@ -25,12 +25,15 @@ async function handleGitHubRequest(
     );
     return;
   }
+  const host = new URL(parsed.url).hostname;
   try {
     const result = await dispatchGatewayMethod(
       method === "github.preview" ? "controlUi.githubPreview" : "controlUi.githubDetail",
       {
         ...parsed.target,
+        ...(githubWebHost() !== "github.com" ? { githubHost: host } : {}),
         ...(parsed.agentId ? { agentId: parsed.agentId } : {}),
+        ...(parsed.sessionKey ? { sessionKey: parsed.sessionKey } : {}),
         ...(parsed.refresh ? { refresh: true } : {}),
       },
     );
@@ -43,14 +46,14 @@ async function handleGitHubRequest(
       // adapter alone selects/revalidates managed identities and caller lifetime.
       if (
         !isControlUiGitHubPreview(result.payload) ||
-        githubTargetUrl(result.payload).toLowerCase() !==
-          githubTargetUrl(parsed.target).toLowerCase()
+        githubTargetUrl(result.payload, host).toLowerCase() !==
+          githubTargetUrl(parsed.target, host).toLowerCase()
       ) {
         throw new ControlUiGitHubError(502, "GitHub preview returned an invalid response");
       }
       respond(
         true,
-        { ...githubPreviewView(result.payload), url: parsed.url },
+        { ...githubPreviewView(result.payload, host), url: parsed.url },
         undefined,
         result.meta,
       );
@@ -61,7 +64,7 @@ async function handleGitHubRequest(
         typeof document.title !== "string" ||
         typeof document.body !== "string" ||
         typeof document.url !== "string" ||
-        document.url.toLowerCase() !== githubTargetUrl(parsed.target).toLowerCase()
+        document.url.toLowerCase() !== githubTargetUrl(parsed.target, host).toLowerCase()
       ) {
         throw new ControlUiGitHubError(502, "GitHub document returned a different resource");
       }

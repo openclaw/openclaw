@@ -20,9 +20,35 @@ import { uiSessionEventMatches } from "./sessions/session-key.ts";
 
 export function sessionGitHubRepository(
   snapshot: ControlUiSessionPullRequests | undefined,
-): { owner: string; repo: string } | null {
+): { owner: string; repo: string; host?: string } | null {
   const repository = snapshot?.repository ?? snapshot?.branch ?? snapshot?.pullRequests[0];
-  return repository ? { owner: repository.owner, repo: repository.repo } : null;
+  let host = snapshot?.repository?.host;
+  if (!snapshot?.repository && repository) {
+    const url = snapshot?.branch ? snapshot.branch.createUrl : snapshot?.pullRequests[0]?.url;
+    if (url) {
+      try {
+        const parsed = new URL(url);
+        const [owner, repo] = parsed.pathname.split("/").filter(Boolean);
+        if (
+          parsed.protocol !== "https:" ||
+          parsed.username ||
+          parsed.password ||
+          owner?.toLowerCase() !== repository.owner.toLowerCase() ||
+          repo?.toLowerCase() !== repository.repo.toLowerCase()
+        ) {
+          return null;
+        }
+        if (parsed.host !== "github.com") {
+          host = parsed.host;
+        }
+      } catch {
+        return null;
+      }
+    }
+  }
+  return repository
+    ? { owner: repository.owner, repo: repository.repo, ...(host ? { host } : {}) }
+    : null;
 }
 
 export function summarizeSessionPullRequests(
@@ -309,23 +335,29 @@ export function sessionPullRequestsForGateway(
       const repository = sessionGitHubRepository(snapshot);
       const currentRepository = sessionGitHubRepository(current);
       const currentBranch = current?.branch?.branch ?? current?.pullRequests[0]?.branch;
+      const incomingBranch = snapshot.branch?.branch ?? snapshot.pullRequests[0]?.branch;
       const canRetainCurrent =
         (!repository ||
           (repository.owner === currentRepository?.owner &&
-            repository.repo === currentRepository?.repo)) &&
-        (!snapshot.branch || !currentBranch || snapshot.branch.branch === currentBranch);
+            repository.repo === currentRepository?.repo &&
+            repository.host === currentRepository?.host)) &&
+        (!incomingBranch || !currentBranch || incomingBranch === currentBranch);
       let next = snapshot;
       if (
         current &&
         canRetainCurrent &&
-        (snapshot.status === "rate-limited" || snapshot.status === "unavailable") &&
-        snapshot.pullRequests.length === 0
+        (snapshot.status === "rate-limited" || snapshot.status === "unavailable")
       ) {
         next = {
           ...snapshot,
-          pullRequests: current.pullRequests,
-          branch: snapshot.branch ?? current.branch,
-          repository: snapshot.repository ?? current.repository,
+          ...(snapshot.pullRequests.length === 0
+            ? {
+                pullRequests: current.pullRequests,
+                branch: snapshot.branch ?? current.branch,
+                repository: snapshot.repository ?? current.repository,
+              }
+            : {}),
+          ...(snapshot.issues === undefined && current.issues ? { issues: current.issues } : {}),
         };
       }
       snapshots.set(sessionKey, next);

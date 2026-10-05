@@ -23,7 +23,7 @@ import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { invalidateUserPreferences, saveUserPreferences } from "../../app/user-prefs-cache.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
+import { resolveCurrentSelfUser, sameSelfUser } from "../../app/user-profile.ts";
 import {
   renderLearnMoreLink,
   renderSettingsEmpty,
@@ -152,11 +152,24 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (identitySourceChanged) {
       this.identityRequestId += 1;
       this.ownProfile = null;
+      this.authenticatedGitHubIdentity = undefined;
       this.displayName = "";
       this.gitCoauthorEnabled = true;
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
+    } else if (nextSelfUser && nextSelfUser.id === this.ownProfile?.id) {
+      const identityChanged = !sameSelfUser(
+        { ...nextSelfUser, authenticatedGitHubIdentity: this.authenticatedGitHubIdentity },
+        nextSelfUser,
+      );
+      this.authenticatedGitHubIdentity = nextSelfUser.authenticatedGitHubIdentity;
+      if (identityChanged) {
+        this.gitCoauthorEnabled = false;
+        if (!this.identityLoading && !this.identityBusy) {
+          void this.loadIdentity();
+        }
+      }
     }
     if (!nextConnected || !snapshot.client) {
       return;
@@ -211,7 +224,9 @@ export class ProfilePage extends OpenClawLightDomElement {
         }
         this.gitCoauthorEnabled =
           preferences.status === "ok" &&
-          isGitCoauthorCreditEnabled(preferences.entries[GIT_COAUTHOR_PREFERENCE_KEY]);
+          (this.authenticatedGitHubIdentity
+            ? preferences.entries[GIT_COAUTHOR_PREFERENCE_KEY] === true
+            : isGitCoauthorCreditEnabled(preferences.entries[GIT_COAUTHOR_PREFERENCE_KEY]));
       }
     } catch (error) {
       if (requestId === this.identityRequestId) {
@@ -233,7 +248,10 @@ export class ProfilePage extends OpenClawLightDomElement {
       !this.canWrite ||
       this.identityBusy ||
       this.identityLoading ||
-      (change.kind === "git-coauthor" && !profile.githubIdentity)
+      (change.kind === "git-coauthor" &&
+        !(this.authenticatedGitHubIdentity
+          ? this.authenticatedGitHubIdentity.gitCoauthorEligible === true
+          : profile.githubIdentity))
     ) {
       return;
     }

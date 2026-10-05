@@ -18,6 +18,7 @@ type PlacementSandboxEnvironmentService = Pick<WorkerEnvironmentService, "get"> 
 
 type RemoteExecPlacementSandbox = SandboxContext & {
   placementExecutionMode: "remote-exec";
+  placementAgentId: string;
 } & (
     | {
         backendId: "node";
@@ -109,6 +110,7 @@ export async function createRemoteExecPlacementSandbox(params: {
   const common = {
     enabled: true,
     placementExecutionMode: "remote-exec" as const,
+    placementAgentId: placement.agentId,
     sessionKey: placement.sessionKey,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.workspaceDir,

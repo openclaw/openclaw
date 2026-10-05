@@ -472,7 +472,8 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     command.type === "userProfiles.reconcile" ||
     command.type === "userProfiles.avatar.inspect" ||
     command.type === "userProfiles.channelIdentity.list" ||
-    command.type === "userProfiles.authority.resolve"
+    command.type === "userProfiles.authority.resolve" ||
+    command.type === "userProfiles.self"
   ) {
     return bytes + Buffer.byteLength(command.profileId, "utf8");
   }

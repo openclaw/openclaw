@@ -5,8 +5,10 @@ export type GitHubItemMatch = readonly [
   pull: string | undefined,
 ];
 
-export function isGitHubHost(hostname: string): boolean {
-  return /^(?:www\.)?github\.com\.?$/i.test(hostname);
+export function isGitHubHost(hostname: string, verifiedHosts: readonly string[] = []): boolean {
+  return (
+    /^(?:www\.)?github\.com\.?$/i.test(hostname) || verifiedHosts.includes(hostname.toLowerCase())
+  );
 }
 
 function decodeRepository(ownerPath: string, repoPath: string): readonly [string, string] | null {
@@ -53,6 +55,16 @@ export function matchGitHubItemPath(url: URL): GitHubItemMatch | null {
 }
 
 /** Match a prepared URL without pulling Markdown label formatting into startup. */
-export function matchGitHubItemUrl(url: URL): GitHubItemMatch | null {
-  return url.href.startsWith("https://github.com/") ? matchGitHubItemPath(url) : null;
+export function matchGitHubItemUrl(
+  url: URL,
+  verifiedHosts: readonly string[] = [],
+): GitHubItemMatch | null {
+  return url.href.startsWith("https://github.com/") ||
+    (url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      !url.port &&
+      verifiedHosts.includes(url.hostname.toLowerCase()))
+    ? matchGitHubItemPath(url)
+    : null;
 }

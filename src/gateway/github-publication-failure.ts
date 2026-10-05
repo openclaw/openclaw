@@ -2,7 +2,10 @@ import {
   GatewayErrorDetailCodes,
   type GitHubPublicationSelectionRejectedErrorDetails,
 } from "../../packages/gateway-protocol/src/gateway-error-details.js";
-import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import type {
+  GitHubPublicationPublisher,
+  SessionGitHubPublicationResult,
+} from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 
 type PublicationFailure = Pick<
   Extract<SessionGitHubPublicationResult, { status: "failed" }>,
@@ -48,6 +51,25 @@ export function rejectGitHubPublicationSelection(
     { code: "identity_changed", nextAction: identityNextAction },
     rejection,
   );
+}
+
+export function assertExpectedSharedGitHubPublisher(
+  expected: GitHubPublicationPublisher | undefined,
+  actual: GitHubPublicationPublisher,
+  preparation?: GitHubPublicationPreparation,
+): void {
+  if (
+    actual.source === "personal" ||
+    (expected &&
+      (expected.source !== actual.source ||
+        expected.accountId !== actual.accountId ||
+        expected.login.toLowerCase() !== actual.login.toLowerCase()))
+  ) {
+    rejectGitHubPublicationSelection(
+      "GitHub publication identity changed; review the current shared account and try again.",
+      preparation,
+    );
+  }
 }
 
 export class GitHubPublicationWorkspaceChangedError extends GitHubPublicationKnownFailure {

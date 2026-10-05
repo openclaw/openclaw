@@ -1,3 +1,4 @@
+import { isGatewayProtocolResponseError } from "../../packages/gateway-client/src/protocol-request.js";
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../infra/node-commands.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -84,21 +85,44 @@ export async function openGatewayNodeDuplex(options: {
 export async function openOwnedGatewayNodeDuplex(options: {
   params: Parameters<PluginRuntime["nodes"]["openDuplex"]>[0];
   invokeNode: Parameters<typeof openGatewayNodeDuplex>[0]["invokeNode"];
-  context: GatewayRequestContext;
+  context: Pick<GatewayRequestContext, "nodeRegistry">;
   signal: AbortSignal;
   assertCurrent: () => void;
 }): ReturnType<PluginRuntime["nodes"]["openDuplex"]> {
   const { params, invokeNode, context } = options;
+  const featureNode = params.requiredCommandFeatures?.length
+    ? context.nodeRegistry.get(params.nodeId)
+    : undefined;
   const controller = new AbortController();
   const signal = AbortSignal.any([controller.signal, options.signal]);
   let invokeId: string | undefined;
   let framedReady = false;
+  let closeOrigin:
+    | "owner_signal"
+    | "authority_check"
+    | "framing_error"
+    | "caller_close"
+    | undefined;
   const ready = createDeferredCore();
   const assertRuntimeCurrent = () => {
     try {
       signal.throwIfAborted();
       options.assertCurrent();
+      params.assertCurrent?.();
+      if (params.requiredCommandFeatures?.length) {
+        const current = context.nodeRegistry.get(params.nodeId);
+        if (
+          !featureNode ||
+          current !== featureNode ||
+          !params.requiredCommandFeatures.every((feature) =>
+            current.commandFeatures?.[params.command]?.includes(feature),
+          )
+        ) {
+          throw new Error("Node command features are no longer available for this connection");
+        }
+      }
     } catch (error) {
+      closeOrigin ??= options.signal.aborted ? "owner_signal" : "authority_check";
       controller.abort(error);
       throw error;
     }
@@ -173,7 +197,7 @@ export async function openOwnedGatewayNodeDuplex(options: {
       controller.abort(new Error("Node duplex command has closed."));
     });
   void closed.catch(ready.reject);
-  const observeClosed = (outcome: "resolved" | "rejected") => {
+  const observeClosed = (outcome: "resolved" | "rejected", error?: unknown) => {
     try {
       duplexLog.info("node duplex invocation closed", {
         nodeId: params.nodeId,
@@ -184,6 +208,15 @@ export async function openOwnedGatewayNodeDuplex(options: {
         framedReady,
         openedAtMs,
         lifetimeMs: Date.now() - openedAtMs,
+        ...(outcome === "rejected"
+          ? {
+              rejectionCategory: isGatewayProtocolResponseError(error)
+                ? "gateway_response"
+                : error instanceof Error
+                  ? "local_error"
+                  : "non_error",
+            }
+          : {}),
       });
     } catch {
       // Observation cannot change the invocation's original settlement or readiness.
@@ -191,7 +224,7 @@ export async function openOwnedGatewayNodeDuplex(options: {
   };
   void closed.then(
     () => observeClosed("resolved"),
-    () => observeClosed("rejected"),
+    (error: unknown) => observeClosed("rejected", error),
   );
   await ready.promise;
   return {
@@ -240,6 +273,17 @@ export function projectGatewayRuntimeNodes(
           allowlist,
         }).ok,
     );
-    return Object.assign({}, nodeRecord, { invocableCommands });
+    return Object.assign({}, nodeRecord, {
+      invocableCommands,
+      ...(liveNode.commandFeatures
+        ? {
+            commandFeatures: Object.fromEntries(
+              Object.entries(liveNode.commandFeatures)
+                .filter(([command]) => invocableCommands.includes(command))
+                .map(([command, features]) => [command, [...features]]),
+            ),
+          }
+        : {}),
+    });
   });
 }

@@ -409,6 +409,22 @@ column in state schema 9. Operator-role assignment lazily ensures the column on
 first use. Older readers ignore the column and can reopen the same database
 safely.
 
+Enterprise Git coauthor attribution adds bare nullable
+`user_profile_identities.verified_email_json TEXT` on first profile use, without a
+schema-version change. Only admitted Factory metadata writes this field on an
+issuer-qualified account row. The fact retains the email and its verified profile
+ID; moving an identity row cannot move verification to a different person.
+Generic email aliases and public GitHub identity
+rows do not establish Enterprise credit. Reads of an older shape yield no
+Enterprise eligibility and never migrate it. Email removal or replacement fences
+prepared credit; alias transfer and profile merge cannot transfer verification.
+Enterprise credit requires literal `true` in the existing self-only coauthor
+preference. Public GitHub defaults and noreply addresses stay unchanged. Older
+readers ignore the nullable column; older writers cannot refresh this provenance.
+After a downgrade, reconnect through the current verified issuer before using
+Enterprise credit again. Update uses the existing first-use schema and writer
+admission owners; no new store or inferred-email backfill is introduced.
+
 Web Push subscription ownership uses the same rule for nullable bare
 `web_push_subscriptions.device_id TEXT`, `user_profile_id TEXT`, and
 `preferences_json TEXT` columns. Web Push lazily ensures all three columns on

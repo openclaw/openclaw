@@ -538,6 +538,11 @@ export function createGitHubOAuthLifecycle(params: {
       const expectedIdentity = structuredClone(
         resolveConfiguredGitHubToolIdentity({ config: params.getConfig(), ...input }) ?? null,
       );
+      if (expectedIdentity?.kind === "app-installation") {
+        throw new Error(
+          "GitHub App execution is operator-configured; remove the App selection before starting human OAuth setup.",
+        );
+      }
       const agentLifecycleBinding =
         input.scope === "agent"
           ? captureAgentLifecycleBinding(params.getConfig(), input.agentId)

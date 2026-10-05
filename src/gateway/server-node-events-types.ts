@@ -32,6 +32,7 @@ export type NodeEventContext = Pick<
     params: Omit<Parameters<NodeRegistry["updateHostStats"]>[0], "observedAtMs">,
   ) => ReturnType<NodeRegistry["updateHostStats"]>;
   updateNodeDesktopAvailability?: NodeRegistry["updateDesktopAvailability"];
+  updateNodeCommandFeatures?: NodeRegistry["updateCommandFeatures"];
   logGateway: { warn: (msg: string) => void };
 };
 
@@ -39,4 +40,11 @@ export type NodeEventContext = Pick<
 export type NodeEvent = {
   event: string;
   payloadJSON?: string | null;
+};
+
+export type NodeEventHandleResult = {
+  ok: true;
+  event: string;
+  handled: boolean;
+  reason?: string;
 };

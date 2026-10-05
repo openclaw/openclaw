@@ -52,6 +52,18 @@ export function createConnectedContext(
           return null;
         }
         const result = await snapshot.client.request<UsersSelfResult>("users.self", {});
+        if (snapshot.selfUser?.id === result.profile.id) {
+          snapshot = {
+            ...snapshot,
+            selfUser: {
+              ...snapshot.selfUser,
+              authenticatedGitHubIdentity: result.authenticatedGitHubIdentity,
+            },
+          };
+          for (const listener of listeners) {
+            listener(snapshot);
+          }
+        }
         return result.profile;
       },
       updateSelfUser(patch: Partial<Omit<AuthenticatedUser, "id">>) {
@@ -143,4 +155,37 @@ export function mountProfilePage(context: ApplicationContext) {
   provider.append(page);
   document.body.append(provider);
   return page;
+}
+
+export function stubProfileAvatarProcessing(
+  decode = vi.fn<() => Promise<void>>(async () => undefined),
+) {
+  class StubUrl extends URL {
+    static override createObjectURL = vi.fn(() => "blob:avatar");
+    static override revokeObjectURL = vi.fn();
+  }
+  class StubImage {
+    decoding = "auto";
+    src = "";
+    naturalWidth = 512;
+    naturalHeight = 256;
+    decode = decode;
+  }
+  vi.stubGlobal("URL", StubUrl);
+  vi.stubGlobal("Image", StubImage);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    drawImage: vi.fn(),
+  } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback, type) => {
+    callback(new Blob([new Uint8Array([1, 2, 3])], { type: type ?? "image/png" }));
+  });
+}
+
+export function selectProfileAvatar(page: ParentNode) {
+  const avatarInput = page.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(avatarInput, "files", {
+    configurable: true,
+    value: [new File(["avatar"], "avatar.png", { type: "image/png" })],
+  });
+  avatarInput.dispatchEvent(new Event("change", { bubbles: true }));
 }

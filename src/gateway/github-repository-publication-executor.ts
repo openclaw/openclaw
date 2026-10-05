@@ -343,6 +343,7 @@ export async function executeRepositoryGitHubPublication(params: {
       row,
       storePath: params.storePath,
       accountId: identity.account.accountId,
+      host: identity.host ?? resolveGitHubHost(),
       assertCurrent: assertPublicationAction,
       description:
         row.body?.trim() || "Published by the Gateway from the accepted repository checkpoint.",

@@ -5,6 +5,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { notifyManagedGitHubProfileChanged } from "./github-managed-profile-events.js";
 import {
   clearGitHubCredentialVerificationCache,
   pollGitHubOAuthDeviceToken,
@@ -64,7 +65,10 @@ afterEach(() => {
 });
 
 describe("GitHub OAuth client", () => {
-  it("verifies a managed credential at a fixed origin and registers redaction", async () => {
+  it("verifies public OAuth at its fixed issuer despite Enterprise config and registers redaction", async () => {
+    setRuntimeConfigSnapshot({
+      gateway: { github: { apiBaseUrl: "https://api.ghe.example.test" } },
+    });
     const login = "managed-user_org";
     const token = `synthetic-bound-credential-${login}`;
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -152,6 +156,126 @@ describe("GitHub OAuth client", () => {
       status: "unavailable",
     });
     expect(probe).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([120_000, 600_000])(
+    "bounds reusable account facts by verified expiry %sms and an absolute five minutes",
+    async (lifetime) => {
+      clearGitHubCredentialVerificationCache();
+      const start = 1_000;
+      const now = vi.spyOn(Date, "now").mockReturnValue(start);
+      const options = {
+        apiBaseUrl: "https://api.github.com",
+        accessExpiresAtMs: start + lifetime,
+      };
+      const probe = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async () => jsonResponse({ id: 202, login: "bounded-account" }));
+      const first = await verifyGitHubCredential("synthetic-expiry-bound-token", options);
+      expect(first.status).toBe("available");
+      now.mockReturnValue(start + 90_000);
+      expect(await verifyGitHubCredential("synthetic-expiry-bound-token", options)).toEqual(first);
+      expect(probe).toHaveBeenCalledOnce();
+      const deadline = start + Math.min(300_000, lifetime);
+      now.mockReturnValue(deadline - 1);
+      expect(await verifyGitHubCredential("synthetic-expiry-bound-token", options)).toEqual(first);
+      expect(probe).toHaveBeenCalledOnce();
+      now.mockReturnValue(deadline);
+      if (lifetime < 300_000) {
+        expect(await verifyGitHubCredential("synthetic-expiry-bound-token", options)).toEqual({
+          status: "unavailable",
+        });
+        expect(probe).toHaveBeenCalledOnce();
+      } else {
+        expect(await verifyGitHubCredential("synthetic-expiry-bound-token", options)).toEqual(
+          first,
+        );
+        expect(probe).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
+  it("does not let absent expiry metadata borrow another caller's longer verification window", async () => {
+    clearGitHubCredentialVerificationCache();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const probe = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => jsonResponse({ id: 202, login: "bounded-account" }));
+    const options = { apiBaseUrl: "https://api.github.com", accessExpiresAtMs: 601_000 };
+    await verifyGitHubCredential("synthetic-mixed-validity-token", options);
+    now.mockReturnValue(61_000);
+    await verifyGitHubCredential("synthetic-mixed-validity-token");
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a concurrent caller whose claimed account differs from the verified credential", async () => {
+    clearGitHubCredentialVerificationCache();
+    const release = createDeferredCore();
+    const probe = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      await release.promise;
+      return jsonResponse({ id: 202, login: "original-account" });
+    });
+    const options = {
+      apiBaseUrl: "https://api.github.com",
+      accessExpiresAtMs: Date.now() + 600_000,
+    };
+    const first = verifyGitHubCredential("synthetic-concurrent-account-token", {
+      ...options,
+      expectedAccountId: 202,
+    });
+    const foreign = verifyGitHubCredential("synthetic-concurrent-account-token", {
+      ...options,
+      expectedAccountId: 303,
+    });
+    release.resolve();
+    expect((await first).status).toBe("available");
+    expect(await foreign).toEqual({ status: "unverified" });
+    expect(probe).toHaveBeenCalledOnce();
+  });
+
+  it.each(["cancelled", "expired"] as const)(
+    "does not publish verification facts after an awaited %s probe",
+    async (change) => {
+      clearGitHubCredentialVerificationCache();
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const release = createDeferredCore();
+      const abort = new AbortController();
+      const probe = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        await release.promise;
+        return jsonResponse({ id: 202, login: "bounded-account" });
+      });
+      const preparing = verifyGitHubCredential("synthetic-await-bound-token", {
+        signal: abort.signal,
+        accessExpiresAtMs: 2_000,
+      });
+      if (change === "cancelled") {
+        abort.abort();
+      } else {
+        now.mockReturnValue(2_000);
+      }
+      release.resolve();
+      expect((await preparing).status).not.toBe("available");
+      expect(
+        (await verifyGitHubCredential("synthetic-await-bound-token", { accessExpiresAtMs: 3_000 }))
+          .status,
+      ).toBe("available");
+      expect(probe).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("invalidates verified facts when the managed profile owner publishes a change", async () => {
+    clearGitHubCredentialVerificationCache();
+    const probe = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => jsonResponse({ id: 202, login: "bounded-account" }));
+    const options = {
+      apiBaseUrl: "https://api.github.com",
+      accessExpiresAtMs: Date.now() + 600_000,
+    };
+    await verifyGitHubCredential("synthetic-profile-change-token", options);
+    notifyManagedGitHubProfileChanged("/synthetic/profile");
+    await verifyGitHubCredential("synthetic-profile-change-token", options);
+    expect(probe).toHaveBeenCalledTimes(2);
   });
 
   it("re-probes an unavailable credential immediately so reconnects recover", async () => {

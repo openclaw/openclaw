@@ -19,6 +19,9 @@ function reader(
   environment: WorkerEnvironmentPlacementFacts | undefined,
 ) {
   return {
+    prepareRuntimeRefresh: vi.fn(async () => {
+      throw new Error("Unexpected Factory credential observation");
+    }),
     readProjection: async () => ({
       placements: new Map([[record.sessionId, record]]),
       environments: new Map(environment ? [[environment.environmentId, environment]] : []),

@@ -6,6 +6,8 @@ import {
 import { recordPairedNodeHostStats } from "../../infra/device-pairing-node.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { ApnsRegistrationPairingChangedError } from "../../infra/push-apns-store.errors.js";
+import { NODE_INVOKE_PROGRESS_DIAGNOSTIC_EVENT } from "../../shared/node-invoke-progress-diagnostic.js";
+import { observeNodeProgress } from "../node-registry-private.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
 import { resolveDispatchableNodeSession, respondPairingChanged } from "./nodes.shared.js";
 import { respondUnavailableOnThrow } from "./response.js";
@@ -43,6 +45,33 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         );
         return after?.connId === eventConnId;
       };
+      if (p.event === NODE_INVOKE_PROGRESS_DIAGNOSTIC_EVENT) {
+        let payload: unknown;
+        try {
+          if (!payloadJSON || payloadJSON.length > 4096) {
+            throw new Error("invalid diagnostic size");
+          }
+          payload = JSON.parse(payloadJSON);
+        } catch {
+          respond(true, { event: p.event, handled: false, reason: "invalid_diagnostic" });
+          return;
+        }
+        const current =
+          nodeSession?.client === client &&
+          (await isEventConnectionCurrent()) &&
+          context.nodeRegistry.get(nodeId)?.client === client;
+        const handled = Boolean(
+          current &&
+          eventConnId &&
+          observeNodeProgress(context.nodeRegistry, nodeId, eventConnId, payload),
+        );
+        respond(true, {
+          event: p.event,
+          handled,
+          reason: handled ? "recorded" : "diagnostic_refused",
+        });
+        return;
+      }
       const { handleNodeEvent } = await import("../server-node-events.js");
       const apnsGeneration =
         p.event === "push.apns.register" ? await captureNodePairingGeneration(nodeId) : null;
@@ -100,6 +129,8 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
           context.nodeRegistry.clearPresenceActivity(activity),
         updateNodeDesktopAvailability: (availability) =>
           context.nodeRegistry.updateDesktopAvailability(availability),
+        updateNodeCommandFeatures: (snapshot) =>
+          context.nodeRegistry.updateCommandFeatures(snapshot),
         updateNodeHostStats: (stats) => {
           const hostStats = context.nodeRegistry.updateHostStats(stats);
           if (hostStats && eventPairingGeneration) {

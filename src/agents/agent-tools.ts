@@ -182,13 +182,14 @@ function* assembleOpenClawCodingTools(
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
   const execRuntimeConfig = options?.exec?.config ?? options?.config;
   const preparedRunEnvironment =
-    preparedTools === undefined && execRuntimeConfig && executionAgentId
+    options?.exec?.preparedRunEnvironment ??
+    (preparedTools === undefined && execRuntimeConfig && executionAgentId
       ? prepareGitHubToolEnvironment({
           config: execRuntimeConfig,
           sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
           agentId: executionAgentId,
         })
-      : undefined;
+      : undefined);
   const sessionPermissionPolicy = options?.sessionPermissionPolicy;
   const coreToolPolicy =
     preparedSurface?.policy ?? prepareCoreToolPolicy({ ...options, agentId }, execConfig);

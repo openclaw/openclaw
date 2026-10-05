@@ -125,6 +125,11 @@ export type AgentHarnessHostCapabilities = Readonly<{
   }>;
   /** Closure-bound non-secret maps prepared before harness placement. */
   preparedEnvironment?: () => AgentHarnessPreparedEnvironment;
+  /** Run-owned local credentials; project only into admitted native command policy. */
+  prepareLocalGitHubEnvironment?: (params: {
+    assertCurrent: () => void;
+    signal: AbortSignal;
+  }) => ReturnType<typeof import("../github-local-environment.js").prepareLocalGitHubEnvironment>;
   /** Current bounded presence hint; physical activity does not identify the message source. */
   activeComputerContext?: () => string;
   /** Applies the exact host caller binding to a plugin-built tool surface. */

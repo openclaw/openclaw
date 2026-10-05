@@ -18,12 +18,15 @@ import {
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
 import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
+import { markdownGitHubHosts } from "./markdown-github-repositories.ts";
 import { installMarkdownHumanMentions } from "./markdown-human-mentions.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
 import { replaceMarkdownTextMatches } from "./markdown-text-replacements.ts";
+
+export const MARKDOWN_GITHUB_PREVIEW_CLASS = "markdown-github-preview";
 
 const DISALLOWED_LINK_SCHEME_RE = /^(?!(?:https?|mailto):)[a-z][a-z0-9+.-]*:/i;
 // Raw CJK suffixes delimit autolinks; percent-encoded URL content stays intact.
@@ -116,7 +119,7 @@ function formatGitHubLinkLabel(url: URL): string {
     }
   }
   const path = segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
-  return ["github.com", ...path].join("/");
+  return [url.host, ...path].join("/");
 }
 
 export function createMarkdownParser(): MarkdownItParser {
@@ -440,6 +443,9 @@ export function createMarkdownParser(): MarkdownItParser {
 
   // Give bare and code-span GitHub URLs the same label; image-only links get no mark.
   markdownParser.core.ruler.after("linkify", "web-link-classes", (state) => {
+    // SAFETY: markdown.ts supplies normalized, repository-scoped render options.
+    const env = state.env as Partial<MarkdownRenderEnv> | undefined;
+    const verifiedHosts = markdownGitHubHosts(env?.githubRepositories, env?.githubRepo);
     for (const blockToken of state.tokens) {
       if (blockToken.type !== "inline" || !blockToken.children) {
         continue;
@@ -457,7 +463,7 @@ export function createMarkdownParser(): MarkdownItParser {
           // CommonMark already removed symmetric code-span padding.
           const content = open.content;
           const codeUrl = CODE_SPAN_URL_BREAK_RE.test(content) ? null : parseWebLinkHref(content);
-          if (!codeUrl || !isGitHubHost(codeUrl.hostname)) {
+          if (!codeUrl || !isGitHubHost(codeUrl.hostname, verifiedHosts)) {
             continue;
           }
           const label = new state.Token("text", "", 0);
@@ -481,8 +487,11 @@ export function createMarkdownParser(): MarkdownItParser {
           open.markup === "autolink" ||
           open.markup === CODE_SPAN_LINK_MARKUP;
         const host = url.hostname.toLowerCase();
-        const githubLink = isGitHubHost(host);
-        const githubPreview = githubLink ? parseGitHubLinkTarget(href) : null;
+        const githubLink = isGitHubHost(host, verifiedHosts);
+        const githubPreview = githubLink ? parseGitHubLinkTarget(href, verifiedHosts) : null;
+        if (githubPreview) {
+          open.attrJoin("class", MARKDOWN_GITHUB_PREVIEW_CLASS);
+        }
         if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
         }

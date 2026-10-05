@@ -20,6 +20,7 @@ import {
   createGitHubReadIdentity,
   readCachedNativeGitHubToken,
   readNativeGitHubToken,
+  readGitAuthor,
 } from "./github-read-identity.js";
 import {
   prepareGitHubPublicationIdentity,
@@ -230,6 +231,44 @@ describe("native GitHub identity absence", () => {
     );
   });
 
+  it("uses an explicit protected executable for GitHub identity probes while preserving Git author lookup", async () => {
+    setRuntimeConfigSnapshot({ gateway: { github: { host: "microsoft.ghe.com" } } });
+    mocks.runCommandBuffered.mockResolvedValue(commandResult("enterprise-token", 0));
+    await expect(
+      readNativeGitHubToken({
+        GH_TOKEN: undefined,
+        GITHUB_TOKEN: undefined,
+        OPENCLAW_GITHUB_IDENTITY_EXECUTABLE: "/opt/teamclaw/bin/gh",
+      }),
+    ).resolves.toBe("enterprise-token");
+    expect(mocks.runCommandBuffered).toHaveBeenCalledWith(
+      ["/opt/teamclaw/bin/gh", "auth", "token", "--hostname", "microsoft.ghe.com"],
+      expect.any(Object),
+    );
+    mocks.runCommandBuffered.mockResolvedValue(
+      commandResult("user.name\nFixture Author\0user.email\nfixture@example.test\0"),
+    );
+    await expect(
+      readGitAuthor(
+        { OPENCLAW_GITHUB_IDENTITY_EXECUTABLE: "/opt/teamclaw/bin/gh" },
+        "/fixture/workspace",
+      ),
+    ).resolves.toEqual({
+      name: "Fixture Author",
+      email: "fixture@example.test",
+    });
+    expect(mocks.runCommandBuffered.mock.calls[1]?.[0][0]).toBe("git");
+  });
+
+  it("rejects a relative native identity executable", async () => {
+    await expect(
+      readNativeGitHubToken({
+        OPENCLAW_GITHUB_IDENTITY_EXECUTABLE: "relative/gh",
+      }),
+    ).rejects.toMatchObject({ reason: "unverified" });
+    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+  });
+
   it("preserves explicit undefined scrubs over inherited native environment tokens", async () => {
     vi.stubEnv("GH_TOKEN", "synthetic-preview-token");
     await expect(
@@ -337,6 +376,59 @@ describe("native GitHub identity absence", () => {
 });
 
 describe("prepared GitHub read authority", () => {
+  it("isolates verified read views from overlapping actions and closes retained views", async () => {
+    let token = "synthetic-operation-credential";
+    const readToken = vi.fn(async () => token);
+    const identity = createGitHubReadIdentity({
+      token,
+      selection: { source: "system-detected", accountId: 101 },
+      assertSelected: () => {},
+      readToken,
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const withVerifiedRead = identity.withVerifiedRead;
+    if (!withVerifiedRead) {
+      throw new Error("Prepared identity lacks read admission");
+    }
+    let retained: typeof identity | undefined;
+    const read = withVerifiedRead(async (view) => {
+      retained = view;
+      await view.revalidate();
+      entered.resolve();
+      await release.promise;
+      await view.revalidate();
+      return "read result";
+    });
+    await entered.promise;
+    if (!retained) {
+      throw new Error("Read admission did not supply its view");
+    }
+    expect(readToken).toHaveBeenCalledOnce();
+    await identity.start(() => "unrelated action");
+    await retained.start(() => "action cannot borrow read verification");
+    expect(readToken).toHaveBeenCalledTimes(3);
+    const validating = createDeferredCore<string>();
+    const validationStarted = createDeferredCore();
+    readToken.mockImplementationOnce(async () => {
+      validationStarted.resolve();
+      return await validating.promise;
+    });
+    const effect = vi.fn();
+    const pendingAction = retained.start(effect);
+    await validationStarted.promise;
+    release.resolve();
+    await expect(read).resolves.toBe("read result");
+    expect(readToken).toHaveBeenCalledTimes(5);
+    validating.resolve(token);
+    await expect(pendingAction).rejects.toMatchObject({ reason: "changed" });
+    expect(effect).not.toHaveBeenCalled();
+    await expect(retained.revalidate()).rejects.toMatchObject({ reason: "changed" });
+    token = "changed-synthetic-credential";
+    const consume = vi.fn(async () => "must not be admitted");
+    await expect(withVerifiedRead(consume)).rejects.toMatchObject({ reason: "changed" });
+    expect(consume).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     clearGitHubCredentialVerificationCache();
     mocks.runCommandBuffered.mockReset();

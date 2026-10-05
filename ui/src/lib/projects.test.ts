@@ -125,6 +125,35 @@ describe("registered project catalog", () => {
     expect(picker.snapshot.result?.recents).toEqual(recents);
   });
 
+  it("preserves an admitted Enterprise project origin without conflating public aliases", async () => {
+    const h = harness();
+    h.request.mockResolvedValue({
+      projects: [
+        {
+          ...project,
+          originUrl: "https://microsoft.ghe.com/bic/lobster.git",
+          displayName: "Lobster",
+        },
+        {
+          ...project,
+          id: "public",
+          originUrl: "https://github.com/bic/lobster.git",
+          displayName: "Lobster",
+        },
+      ],
+    });
+    await h.store.refresh(true);
+    expect(h.store.snapshot.repositories).toEqual([
+      { owner: "bic", repo: "lobster", host: "microsoft.ghe.com", aliases: ["Lobster"] },
+      { owner: "bic", repo: "lobster", aliases: ["Lobster"] },
+    ]);
+    expect(
+      markdownGitHubAliases(h.store.snapshot.repositories).find(
+        ([alias]) => alias === "lobster",
+      )?.[1],
+    ).toBeNull();
+  });
+
   it("retires aliases for every consumer before an invalidating refresh can fail", async () => {
     const h = harness();
     await h.store.refresh();

@@ -10,7 +10,6 @@ import {
   type ExecSecurity,
 } from "../infra/exec-approvals-core.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { MANAGED_GITHUB_PROFILE_ID_PATTERN } from "./github-identity-profile-id.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentEntryBaseSchema } from "./zod-schema.agent-entry-base.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
@@ -25,6 +24,10 @@ import {
   TypingModeSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
+import {
+  AgentGitHubToolIdentitySchema,
+  GitHubToolIdentitySchema,
+} from "./zod-schema.github-identity.js";
 import { MemorySearchSchema } from "./zod-schema.memory-search.js";
 import {
   SandboxBrowserSchema,
@@ -606,22 +609,6 @@ const MessageToolConfigSchema = z
   })
   .optional();
 
-const GitHubToolIdentitySchema = z
-  .strictObject({
-    /** Opaque generated directory version for atomic credential rotation. */
-    profileId: z.string().regex(MANAGED_GITHUB_PROFILE_ID_PATTERN),
-    /** OAuth generations retain a separate rotating refresh credential. */
-    kind: z.literal("oauth").optional(),
-    /** Optional process-local author identity for commits made by local tools. */
-    gitAuthor: z
-      .strictObject({
-        name: z.string().trim().min(1).optional(),
-        email: z.string().trim().min(1).optional(),
-      })
-      .optional(),
-  })
-  .optional();
-
 const AgentToolsSchema = z
   .strictObject({
     ...CommonToolPolicyFields,
@@ -633,12 +620,7 @@ const AgentToolsSchema = z
     elevated: ElevatedToolsSchema,
     exec: ToolExecSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
-    github: GitHubToolIdentitySchema.unwrap()
-      .extend({
-        /** Explicitly expose this agent's managed identity inside its own sandbox (default: false). */
-        allowInSandbox: z.boolean().optional(),
-      })
-      .optional(),
+    github: AgentGitHubToolIdentitySchema,
     /** Filesystem tool path guards. */
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,

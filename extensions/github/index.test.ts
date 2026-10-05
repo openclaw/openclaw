@@ -4,7 +4,10 @@ import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiGitHubPreview } from "./api.js";
 import plugin from "./index.js";
@@ -79,6 +82,48 @@ function expectFailure(respond: Awaited<ReturnType<typeof request>>, error: unkn
 
 describe("GitHub plugin ownership and RPC migration", () => {
   const fetchMock = vi.fn<typeof fetch>();
+  it("routes configured enterprise PR links with the session hint and rejects unrelated hosts", async () => {
+    setRuntimeConfigSnapshot({ gateway: { github: { host: "microsoft.ghe.com" } } });
+    const url = "https://microsoft.ghe.com/octocat/repo/pull/1";
+    vi.mocked(dispatchGatewayMethod).mockResolvedValue({
+      ok: true,
+      payload: preview({ branch: "reviewed-branch", checksSummary: "1 passed" }),
+    });
+    const respond = await request("github.preview", { url, sessionKey: "agent:main:enterprise" });
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith(
+      "controlUi.githubPreview",
+      expect.objectContaining({
+        sessionKey: "agent:main:enterprise",
+        owner: "octocat",
+        repo: "repo",
+        number: 1,
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        url,
+        authorUrl: "https://microsoft.ghe.com/octocat",
+        metadata: expect.arrayContaining([
+          { label: "Branch", value: "reviewed-branch" },
+          { label: "CI", value: "1 passed" },
+        ]),
+      }),
+      undefined,
+      undefined,
+    );
+    vi.mocked(dispatchGatewayMethod).mockClear();
+    const denied = await request("github.preview", {
+      url: url.replace("microsoft.ghe.com", "unrelated.example"),
+    });
+    expect(denied).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+      undefined,
+    );
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);

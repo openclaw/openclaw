@@ -48,6 +48,12 @@ export const SessionGitHubPublishParamsSchema = closedObject({
   selection: Type.Optional(GitHubPublicationSelectionSchema),
 });
 
+export const SessionGitHubPullRequestReadParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  pullRequest: Type.Integer({ minimum: 1, maximum: 2_147_483_647 }),
+});
+
 const SessionGitHubPublicationBaseSchema = {
   requestId: NonEmptyString,
   // Optional for responses from older shared workers; every current Gateway response includes it.
@@ -163,6 +169,9 @@ export type SessionGitHubConfirmParams = Static<typeof SessionGitHubConfirmParam
 export type SessionGitHubStatusResult = Static<typeof SessionGitHubStatusResultSchema>;
 
 export type SessionGitHubPublishParams = Static<typeof SessionGitHubPublishParamsSchema>;
+export type SessionGitHubPullRequestReadParams = Static<
+  typeof SessionGitHubPullRequestReadParamsSchema
+>;
 export type SessionGitHubPublicationRequested = Static<
   typeof SessionGitHubPublicationRequestedSchema
 >;

@@ -127,8 +127,10 @@ import {
   readUserProfileAuthorityInDatabase,
   readUserProfileSnapshotCommand,
   readUserProfileIdForEmail,
+  readUserProfileForAuthenticationAlias,
 } from "./user-profile-identity.read.js";
 import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
+import { readUserProfileListItemInDatabase } from "./user-profiles.js";
 
 serveOwnedWorkerTasks(
   async function read(input, channel, control): Promise<OpenClawStateReadReply> {
@@ -544,6 +546,14 @@ serveOwnedWorkerTasks(
               command.type === "userProfiles.avatar.read"
             ) {
               return readUserProfileAvatarCommand(db, command);
+            }
+            if (command.type === "userProfiles.self") {
+              return {
+                type: command.type,
+                profile: runSqliteDeferredTransactionSync(db, () =>
+                  readUserProfileListItemInDatabase(db, command.profileId),
+                ),
+              };
             }
             if (command.type === "userPreferences.values") {
               return {

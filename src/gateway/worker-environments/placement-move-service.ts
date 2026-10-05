@@ -76,7 +76,10 @@ export function createWorkerPlacementMoveService(options: {
     target: WorkerPlacementMoveTarget,
   ) => Promise<WorkerPlacementMoveDestination | undefined>;
   prepareGatewayMove?: (
-    params: WorkerSessionPlacementIdentity & { assertCurrent: () => void },
+    params: WorkerSessionPlacementIdentity & {
+      assertCurrent: () => void;
+      readNativeCredential?: import("../../agents/github-credential-reader.js").GitHubCredentialReader;
+    },
   ) => Promise<void>;
 }) {
   const recordError = (intent: WorkerPlacementMoveIntent, error: unknown): void => {
@@ -176,6 +179,7 @@ export function createWorkerPlacementMoveService(options: {
           sessionKey: request.sessionKey,
           agentId: request.agentId,
           ...destination,
+          readNativeCredential: request.readNativeCredential,
           idempotencyKey: `session-move:${intent.operationId}:dispatch`,
         },
         onTransition,

@@ -15,9 +15,49 @@ import {
   settled,
   shared,
 } from "./chat-github-publication.test-support.ts";
-import { renderGitHubPublicationAction } from "./components/chat-github-publication.ts";
+import {
+  renderGitHubPublicationAction,
+  renderGitHubPublicationDetails,
+} from "./components/chat-github-publication.ts";
 
 describe("explicit GitHub publication", () => {
+  it("reports retryable options preparation separately from publication status and records its exact read", async () => {
+    const { controller, request, scope } = setup();
+    const ready = await settled(controller);
+    const recordReadTiming = vi.fn();
+    controller.sync({ ...scope, recordReadTiming });
+    request.mockImplementationOnce(async (_method, _params, requestOptions) => {
+      requestOptions.onSent("options-cold-request");
+      throw new GatewayRequestError({
+        code: "UNAVAILABLE",
+        retryable: true,
+        message:
+          "GitHub account verification is still preparing; refresh publication options to retry. No publication was requested.",
+      });
+    });
+    ready.onRefresh();
+    const unavailable = await settled(controller);
+    expect(unavailable.errorMethod).toBe("sessions.github.options");
+    expect(unavailable.locked).toBe(false);
+    expect(unavailable.result).toBeNull();
+    expect(recordReadTiming).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        phase: "failed",
+        requestId: "options-cold-request",
+        method: "sessions.github.options",
+        publicationRequestId: null,
+        sessionKey: "agent:main:one",
+      }),
+    );
+    const container = document.createElement("div");
+    render(renderGitHubPublicationDetails(unavailable), container);
+    expect(container.textContent).toContain("Publication options unavailable; refresh to retry");
+    expect(container.textContent).not.toContain("Publication status unavailable");
+    render(null, container);
+    unavailable.onRefresh();
+    expect((await settled(controller)).error).toBeNull();
+    expect(request.mock.calls.every(([method]) => method === "sessions.github.options")).toBe(true);
+  });
   it("does not present an accepted publication status read as a new write", async () => {
     const { controller, request } = setup();
     (await settled(controller)).onSelect?.("personal");
@@ -38,11 +78,15 @@ describe("explicit GitHub publication", () => {
       render(renderGitHubPublicationAction(controller.view()!), container);
       expect(container.textContent).not.toContain("Publishing");
       expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.disabled).toBe(true);
-      expect(request).toHaveBeenLastCalledWith("sessions.github.status", {
-        sessionKey: "agent:main:one",
-        agentId: "main",
-        requestId,
-      });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.github.status",
+        {
+          sessionKey: "agent:main:one",
+          agentId: "main",
+          requestId,
+        },
+        expect.objectContaining({ onSent: expect.any(Function) }),
+      );
       expect(
         request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
       ).toHaveLength(1);
@@ -251,11 +295,15 @@ describe("explicit GitHub publication", () => {
     });
     unknown.onRefresh();
     const failed = await settled(controller);
-    expect(request).toHaveBeenLastCalledWith("sessions.github.status", {
-      sessionKey: "agent:main:one",
-      agentId: "main",
-      requestId,
-    });
+    expect(request).toHaveBeenLastCalledWith(
+      "sessions.github.status",
+      {
+        sessionKey: "agent:main:one",
+        agentId: "main",
+        requestId,
+      },
+      expect.objectContaining({ onSent: expect.any(Function) }),
+    );
     expect(failed.onConfirm).toBeUndefined();
     expect(failed.onNewAction).toBeTypeOf("function");
   });

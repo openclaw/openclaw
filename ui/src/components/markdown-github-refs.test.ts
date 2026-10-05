@@ -23,6 +23,86 @@ describe("github item references", () => {
     return htmlFragment(toSanitizedMarkdownHtml(source, options));
   }
 
+  it.each(["issue #17436", "PR #17420", "bic/lobster#17436"])(
+    "retains the verified Enterprise origin in streaming and final references: %s",
+    (source) => {
+      const options = { githubRepo: { owner: "bic", repo: "lobster", host: "microsoft.ghe.com" } };
+      const path = source.startsWith("PR") ? "pull/17420" : "issues/17436";
+      for (const html of [
+        toSanitizedMarkdownHtml(source, options),
+        toStreamingMarkdownParts(source, options).join(""),
+      ]) {
+        expect(htmlFragment(html).querySelector("a")?.getAttribute("href")).toBe(
+          `https://microsoft.ghe.com/bic/lobster/${path}`,
+        );
+      }
+    },
+  );
+
+  it("keeps explicit authored URLs and separates identical repository aliases by host", () => {
+    const source = "Lobster issue #17436";
+    const enterprise = {
+      owner: "bic",
+      repo: "lobster",
+      host: "microsoft.ghe.com",
+      aliases: ["Lobster"],
+    };
+    const publicRepo = { owner: "bic", repo: "lobster", aliases: ["Lobster"] };
+    expect(
+      htmlFragment(
+        toSanitizedMarkdownHtml(source, { githubRepositories: [enterprise, publicRepo] }),
+      ).querySelector("a"),
+    ).toBeNull();
+    expect(
+      htmlFragment(
+        toSanitizedMarkdownHtml("bic/lobster#17436", {
+          githubRepo: enterprise,
+          githubRepositories: [enterprise, publicRepo],
+        }),
+      ).querySelector("a"),
+    ).toBeNull();
+    const options = { githubRepo: enterprise, githubRepositories: [enterprise] };
+    const explicit = "[PR #17420](https://github.com/bic/lobster/pull/17420)";
+    for (const html of [
+      toSanitizedMarkdownHtml(explicit, options),
+      toStreamingMarkdownParts(explicit, options).join(""),
+    ]) {
+      expect(htmlFragment(html).querySelector("a")?.getAttribute("href")).toBe(
+        "https://github.com/bic/lobster/pull/17420",
+      );
+    }
+  });
+
+  it("uses known explicit repository origins instead of borrowing the current host", () => {
+    const options = {
+      githubRepo: { owner: "bic", repo: "lobster", host: "microsoft.ghe.com" },
+      githubRepositories: [{ owner: "openclaw", repo: "openclaw", aliases: ["OpenClaw"] }],
+    };
+    const source = "PR openclaw/openclaw#42; bic/lobster#17436";
+    const expected = [
+      "https://github.com/openclaw/openclaw/pull/42",
+      "https://microsoft.ghe.com/bic/lobster/issues/17436",
+    ];
+    for (const html of [
+      toSanitizedMarkdownHtml(source, options),
+      toStreamingMarkdownParts(source, options).join(""),
+    ]) {
+      expect(
+        [...htmlFragment(html).querySelectorAll("a")].map((a) => a.getAttribute("href")),
+      ).toEqual(expected);
+    }
+  });
+
+  it("does not link an invalid supplied origin", () => {
+    expect(
+      htmlFragment(
+        toSanitizedMarkdownHtml("issue #17436", {
+          githubRepo: { owner: "bic", repo: "lobster", host: "microsoft.ghe.com/other" },
+        }),
+      ).querySelector("a"),
+    ).toBeNull();
+  });
+
   it.each<[string, string, MarkdownRenderOptions]>([
     ["Original ClawSweeper PR **#1558 merged**", "openclaw/clawsweeper/pull/1558", resolved],
     ["Release.Tools issue **#42**", "other/release-tools/issues/42", resolved],

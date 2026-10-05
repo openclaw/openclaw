@@ -6,6 +6,7 @@ import {
   captureAgentLifecycleBinding,
   matchesAgentLifecycleBinding,
 } from "../../agents/agent-lifecycle-registry.js";
+import { GitHubCredentialLookupError } from "../../agents/github-read-identity.js";
 import {
   GitHubIdentityError,
   prepareGitHubReadIdentity,
@@ -111,11 +112,14 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       getCurrentConfig: getConfig,
       assertActive: assertAgent,
       refresh: () => requestCurrentGitHubOAuthRefresh(agent.agentId),
+      readNativeCredential: params.readNativeCredential,
       allowAnonymous: true,
     }).catch((error: unknown) => {
       assertAgent();
-      // Native credential subprocess diagnostics must never enter provider errors.
-      throw error instanceof GitHubIdentityError ? error : new GitHubIdentityError("unverified");
+      // Fixed lookup diagnostics are safe; arbitrary subprocess output stays private.
+      throw error instanceof GitHubIdentityError || error instanceof GitHubCredentialLookupError
+        ? error
+        : new GitHubIdentityError("unverified");
     });
     assertAgent();
     return identity;

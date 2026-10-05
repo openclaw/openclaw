@@ -93,6 +93,7 @@ describe("plugin node-host registry", () => {
         {
           ...browser,
           command: "browser.proxy",
+          features: ["profile-refresh"],
           agentTool: {
             name: "browser_inspect",
             description: "Inspect browser state",
@@ -124,6 +125,9 @@ describe("plugin node-host registry", () => {
         config: { browser: { enabled } },
         env: {},
       });
+      expect(listed.commandFeatures).toEqual(
+        enabled ? { "browser.proxy": ["profile-refresh"] } : undefined,
+      );
       expect(listed.caps).toEqual(
         enabled ? ["browser", "computer", "photos"] : ["computer", "photos"],
       );

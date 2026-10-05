@@ -19,6 +19,7 @@ type GitHubPublicationPresentation = {
   personalReady: boolean;
   isPresented: () => boolean;
   isCurrent: () => boolean;
+  recordReadTiming?: (payload: Record<string, unknown>) => void;
 };
 type PublicationOwner = {
   client: Pick<GatewayBrowserClient, "request">;
@@ -51,6 +52,7 @@ export type GitHubPublicationView = {
   result: SessionGitHubPublicationResult | null;
   confirmation: SessionGitHubStatusResult["confirmation"];
   error: string | null;
+  errorMethod?: "sessions.github.options" | "sessions.github.status";
   personalReady: boolean;
   onSelect?: (source: "shared" | "personal") => void;
   onPublish?: () => void;
@@ -91,6 +93,7 @@ export class GitHubPublicationController {
   result: SessionGitHubPublicationResult | null = null;
   private confirmation: SessionGitHubStatusResult["confirmation"] = null;
   private error: string | null = null;
+  private errorMethod: GitHubPublicationView["errorMethod"];
   private reviewedRequestId: string | null = null;
   private refreshPending = false;
 
@@ -114,6 +117,7 @@ export class GitHubPublicationController {
     this.result = null;
     this.confirmation = null;
     this.error = null;
+    this.errorMethod = undefined;
     this.reviewedRequestId = null;
     this.refreshPending = false;
   }
@@ -265,6 +269,7 @@ export class GitHubPublicationController {
     const current = () => this.version === version && this.owner.isCurrent();
     this.activity = activity;
     this.error = null;
+    this.errorMethod = undefined;
     this.changed();
     try {
       await action(this.owner, current);
@@ -305,13 +310,61 @@ export class GitHubPublicationController {
     current: () => boolean,
     requestId: string,
   ): Promise<void> {
-    const status = await scope.client.request<SessionGitHubStatusResult>("sessions.github.status", {
-      ...scope.target,
-      requestId,
-    });
+    const status = await this.read<SessionGitHubStatusResult>(
+      scope,
+      current,
+      "sessions.github.status",
+      {
+        ...scope.target,
+        requestId,
+      },
+    );
     if (current()) {
       this.applyResult(status.result);
       this.confirmation = status.confirmation;
+    }
+  }
+
+  private async read<T>(
+    scope: PublicationOwner,
+    current: () => boolean,
+    method: NonNullable<GitHubPublicationView["errorMethod"]>,
+    params: Record<string, unknown>,
+  ): Promise<T> {
+    const started = performance.now();
+    const version = this.version;
+    let requestId: string | null = null;
+    const record = (phase: "sent" | "ready" | "failed" | "stale") => {
+      for (const presentation of this.presentations) {
+        if (this.presented(presentation)) {
+          presentation.scope?.recordReadTiming?.({
+            method,
+            phase,
+            requestId,
+            presentationVersion: version,
+            sessionKey: scope.target.sessionKey,
+            agentId: scope.target.agentId,
+            publicationRequestId: method === "sessions.github.status" ? params.requestId : null,
+            elapsedMs: Math.round(performance.now() - started),
+          });
+        }
+      }
+    };
+    try {
+      const result = await scope.client.request<T>(method, params, {
+        onSent: (id) => {
+          requestId = id;
+          record("sent");
+        },
+      });
+      record(current() ? "ready" : "stale");
+      return result;
+    } catch (error) {
+      record(current() ? "failed" : "stale");
+      if (current()) {
+        this.errorMethod = method;
+      }
+      throw error;
     }
   }
 
@@ -323,7 +376,9 @@ export class GitHubPublicationController {
         return;
       }
       const sharedAttempt = this.attempt?.selection.source === "shared" ? this.attempt : null;
-      const options = await scope.client.request<GitHubPublicationOptions>(
+      const options = await this.read<GitHubPublicationOptions>(
+        scope,
+        current,
         "sessions.github.options",
         {
           ...scope.target,
@@ -495,6 +550,7 @@ export class GitHubPublicationController {
       result: this.result,
       confirmation: this.confirmation,
       error: this.error,
+      errorMethod: this.errorMethod,
       personalReady: scope.personalReady,
       onSelect:
         scope.canPublishPersonal && !this.result && !this.locked

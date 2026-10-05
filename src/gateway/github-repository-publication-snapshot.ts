@@ -14,6 +14,7 @@ export type GitHubRepositoryPublicationSnapshot = {
   baseCommit: string;
   baseTree: string;
   workspaceTree: string;
+  branch?: string;
   entries: Array<{
     path: string;
     mode: "100644" | "100755" | "120000" | "160000";
@@ -126,7 +127,9 @@ try {
     fs.writeFileSync(path.join(output, "blobs", sha), bytes, { mode: 0o600, flag: "wx" });
     blobs.add(sha);
   }
-  const snapshot = JSON.stringify({ version: 1, baseCommit, baseTree, workspaceTree, entries });
+  const branchResult = spawnSync("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd, env, encoding: "utf8", timeout: 60000 });
+  const branch = branchResult.status === 0 ? branchResult.stdout.trim() : undefined;
+  const snapshot = JSON.stringify({ version: 1, baseCommit, baseTree, workspaceTree, entries, ...(branch ? { branch } : {}) });
   fs.writeFileSync(path.join(output, "snapshot.json"), snapshot, { mode: 0o600, flag: "wx" });
   process.stdout.write("sha256:" + crypto.createHash("sha256").update(snapshot).digest("hex"));
 } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
@@ -152,6 +155,21 @@ export function parseGitHubRepositoryPublicationSnapshot(
     !gitObjectPattern.test(value.baseTree) ||
     typeof value.workspaceTree !== "string" ||
     !gitObjectPattern.test(value.workspaceTree) ||
+    (value.branch !== undefined &&
+      (typeof value.branch !== "string" ||
+        !value.branch ||
+        value.branch.length > 256 ||
+        /[~^:?*[\\]/u.test(value.branch) ||
+        value.branch.split("").some((character) => character.charCodeAt(0) <= 0x20) ||
+        value.branch.includes("..") ||
+        value.branch.includes("@{") ||
+        value.branch.startsWith("-") ||
+        value.branch.startsWith("/") ||
+        value.branch.endsWith("/") ||
+        value.branch.endsWith(".") ||
+        value.branch
+          .split("/")
+          .some((part) => !part || part.startsWith(".") || part.endsWith(".lock")))) ||
     !Array.isArray(value.entries) ||
     value.entries.length > MAX_RECONCILIATION_ENTRIES
   ) {
@@ -190,6 +208,7 @@ export function parseGitHubRepositoryPublicationSnapshot(
     baseCommit: value.baseCommit,
     baseTree: value.baseTree,
     workspaceTree: value.workspaceTree,
+    ...(typeof value.branch === "string" ? { branch: value.branch } : {}),
     entries,
   };
 }

@@ -25,6 +25,7 @@ import {
 } from "./github-user-identity.oidc.test-support.js";
 import { resolveAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { resolveGatewayConnectProfileAdmission } from "./server/ws-connection/connect-user-profile.js";
 
 function disposableAccessRequest(...args: Parameters<typeof accessRequest>) {
@@ -41,6 +42,7 @@ async function resolveWsProfileAdmission(request: ReturnType<typeof accessReques
   const admission = await resolveGatewayConnectProfileAdmission({
     context: {
       configSnapshot: request.cfg,
+      connectParams: createOperatorWsClient().connect,
       handler: {
         connId: "oidc-profile-admission",
         logWsControl: createSubsystemLogger("test/oidc-profile-admission"),

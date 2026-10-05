@@ -34,6 +34,7 @@ describe("recipient publication lifetimes", () => {
   });
 
   const target: ControlUiSessionPrTarget = {
+    sessionId: "shared-session",
     params: { sessionKey: "shared", agentId: "main" },
     identity: "shared",
     readSource: { agentId: "main", path: "unused" },

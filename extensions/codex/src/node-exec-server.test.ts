@@ -4,165 +4,24 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
-import type {
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicyContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
 import {
+  createCodexNodeAppServerInvokePolicy,
   createCodexNodeExecServerCommand,
   createCodexNodeExecServerInvokePolicy,
 } from "./node-exec-server.js";
+import {
+  createManagedWorkspaceInvocation,
+  createNodeFrames,
+  readNodeResponse,
+  readNodeProcessNotifications,
+} from "./node-exec-server.test-support.js";
 
-type JsonRpcRecord = Record<string, unknown>;
 const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
-
-function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
-  const placement = {
-    cwd,
-    environmentId: "paired-environment",
-    sessionId: "paired-session",
-    ownerEpoch: 1,
-    sessionKey: "agent:main:paired-session",
-  };
-  const release = vi.fn();
-  const acquireManagedWorkspaceAsync = vi.fn(
-    async (request: {
-      workspaceDir: string;
-      environmentId: string;
-      sessionId: string;
-      ownerEpoch: number;
-      sessionKey: string;
-    }) => {
-      if (
-        request.workspaceDir !== cwd ||
-        request.environmentId !== placement.environmentId ||
-        request.sessionId !== placement.sessionId ||
-        request.ownerEpoch !== placement.ownerEpoch ||
-        request.sessionKey !== placement.sessionKey
-      ) {
-        throw new Error("node placement does not own the requested workspace");
-      }
-      return { workspaceDir: cwd, ...(homeDir ? { homeDir } : {}), release };
-    },
-  );
-  const context = {
-    sessionKey: placement.sessionKey,
-    sendNodeEvent: async () => undefined,
-    acquireManagedWorkspaceAsync,
-    prepareExecAuthorization: () => () => {},
-  } satisfies NonNullable<Parameters<OpenClawPluginNodeHostCommand["handle"]>[2]>;
-  return { placement, context, acquireManagedWorkspaceAsync, release };
-}
-
-function createNodeFrames(testSignal?: AbortSignal) {
-  const controller = new AbortController();
-  const signal = testSignal ? AbortSignal.any([controller.signal, testSignal]) : controller.signal;
-  const messages = new EventEmitter();
-  let receive: ((message: Uint8Array) => void | Promise<void>) | undefined;
-  let signalReady = () => {};
-  const ready = new Promise<void>((resolve) => {
-    signalReady = resolve;
-  });
-  const outbound: JsonRpcRecord[] = [];
-  const io: OpenClawPluginNodeHostCommandIo = {
-    signal,
-    emitChunk: async () => undefined,
-    onInput: () => undefined,
-    frames: {
-      send: async (message) => {
-        outbound.push(JSON.parse(Buffer.from(message).toString("utf8")) as JsonRpcRecord);
-        messages.emit("frame");
-      },
-      onMessage: (listener) => {
-        receive = listener;
-        signalReady();
-        return () => {
-          if (receive === listener) {
-            receive = undefined;
-          }
-        };
-      },
-    },
-  };
-  return {
-    controller,
-    io,
-    outbound,
-    ready,
-    waitForMessage: async (matches: (message: JsonRpcRecord) => boolean) => {
-      // Retain frames before waking readers: responses may precede the waiter.
-      // The test's cancellation owns the wait, not an arbitrary RPC poll deadline.
-      for (;;) {
-        signal.throwIfAborted();
-        const message = outbound.find(matches);
-        if (message) {
-          return message;
-        }
-        await once(messages, "frame", { signal });
-      }
-    },
-    send: async (message: unknown) => {
-      if (!receive) {
-        throw new Error("Codex node command did not register a ready duplex receiver.");
-      }
-      await receive(Buffer.from(JSON.stringify(message)));
-    },
-    sendRaw: async (message: Uint8Array) => {
-      if (!receive) {
-        throw new Error("Codex node command did not register a ready duplex receiver.");
-      }
-      return await receive(message);
-    },
-  };
-}
-
-async function readNodeResponse(
-  frames: ReturnType<typeof createNodeFrames>,
-  id: number,
-): Promise<JsonRpcRecord> {
-  const response = await frames.waitForMessage(
-    (message) => message.id === id && ("result" in message || "error" in message),
-  );
-  if (response.error) {
-    throw new Error(`Codex exec-server request ${id} failed: ${JSON.stringify(response.error)}`);
-  }
-  return response.result as JsonRpcRecord;
-}
-
-async function readNodeProcessNotifications(
-  frames: ReturnType<typeof createNodeFrames>,
-  processId: string,
-  count: number,
-): Promise<JsonRpcRecord[]> {
-  const matching = () =>
-    frames.outbound.filter(
-      (message) =>
-        String(message.method).startsWith("process/") &&
-        (message.params as { processId?: string }).processId === processId,
-    );
-  // Codex records exit before asynchronously notifying; closed can arrive first.
-  // Wait for both facts, then reject extra notifications with the exact count.
-  await frames.waitForMessage(
-    (message) =>
-      message.method === "process/closed" &&
-      (message.params as { processId?: string }).processId === processId &&
-      matching().length >= count,
-  );
-  expect(matching()).toHaveLength(count);
-  const notifications = matching().toSorted(
-    (left, right) => (left.params as { seq: number }).seq - (right.params as { seq: number }).seq,
-  );
-  expect(notifications.map((message) => (message.params as { seq: number }).seq)).toEqual(
-    Array.from({ length: count }, (_, index) => index + 1),
-  );
-  expect(notifications.at(-1)?.method).toBe("process/closed");
-  return notifications;
-}
 
 let pendingNodeProof: Promise<void> | undefined;
 beforeEach(() => {
@@ -199,6 +58,50 @@ describe("Codex node exec-server", () => {
     expect(request).not.toHaveBeenCalled();
     expect(invokeNode).not.toHaveBeenCalled();
     expect(invokeNodeWithSessionFull).toHaveBeenCalledOnce();
+  });
+
+  it("carries a validated GitHub binding only through the approved node launch", async () => {
+    const { placement } = createManagedWorkspaceInvocation(process.cwd());
+    const github = {
+      token: "synthetic-node-installation-token",
+      login: "worker-bot",
+      branch: "openclaw/session-worker",
+      host: "microsoft.ghe.com",
+      remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+    };
+    const invokeNodeWithSessionFull = vi.fn(async ({ createParams }) => ({
+      ok: true as const,
+      payload: createParams(),
+    }));
+
+    await expect(
+      createCodexNodeExecServerInvokePolicy().handle({
+        nodeId: "paired-node",
+        command: CODEX_NODE_EXEC_SERVER_COMMAND,
+        params: { ...placement, github },
+        config: {},
+        risk: { level: "high", family: "codex.exec-server" },
+        invokeNode: vi.fn(),
+        invokeNodeWithSessionFull,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      payload: { placement, authorization: "session-full", github },
+    });
+    await expect(
+      createCodexNodeExecServerInvokePolicy().handle({
+        nodeId: "paired-node",
+        command: CODEX_NODE_EXEC_SERVER_COMMAND,
+        params: {
+          ...placement,
+          github: { ...github, remoteUrl: "https://outside.test/bic/lobster.git" },
+        },
+        config: {},
+        risk: { level: "high", family: "codex.exec-server" },
+        invokeNode: vi.fn(),
+        invokeNodeWithSessionFull,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "CODEX_NODE_EXEC_GITHUB_BINDING_INVALID" });
   });
 
   it("checks node-local authorization before starting the pinned process", async () => {
@@ -447,7 +350,9 @@ describe("Codex node exec-server", () => {
       "exactly one message",
     );
     await expect(frames.sendRaw(Uint8Array.of(0xff, 0xfe))).rejects.toThrow("malformed UTF-8");
-    await expect(frames.sendRaw(new Uint8Array(64 * 1024 * 1024 + 1))).rejects.toThrow("64 MiB");
+    const oversized = new Uint8Array(64 * 1024 * 1024 + 1);
+    oversized[0] = 0x7b;
+    await expect(frames.sendRaw(oversized)).rejects.toThrow("64 MiB");
     frames.controller.abort(new Error("malformed-frame fixture closed"));
     await expect(invocation).rejects.toThrow("malformed-frame fixture closed");
     expect(workspace.release).toHaveBeenCalledOnce();
@@ -467,13 +372,25 @@ describe("Codex node exec-server", () => {
         const frames = createNodeFrames(signal);
         const command = createCodexNodeExecServerCommand();
         const workspace = createManagedWorkspaceInvocation(cwd, homeDir);
+        const github = {
+          token: "synthetic-node-installation-token",
+          login: "worker-bot",
+          branch: "openclaw/session-worker",
+          host: "microsoft.ghe.com",
+          remoteUrl: "https://microsoft.ghe.com/bic/lobster.git",
+        };
         const invocation = command.handle(
-          JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
+          JSON.stringify({
+            placement: workspace.placement,
+            authorization: "human-approved",
+            github,
+          }),
           frames.io,
           workspace.context,
         );
         void invocation.catch((error: unknown) => frames.controller.abort(error));
         let isolatedCodexHome: string | undefined;
+        let isolatedGitHubProfile: string | undefined;
         try {
           await Promise.race([frames.ready, invocation]);
           await frames.send({
@@ -485,6 +402,8 @@ describe("Codex node exec-server", () => {
           await frames.send({ method: "initialized", params: {} });
           const script = `const fs = require('node:fs'); const path = require('node:path');
 process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.env.CODEX_HOME,
+  githubProfile: process.env.GH_CONFIG_DIR, githubHost: process.env.GH_HOST,
+  githubTokenEmpty: process.env.GH_TOKEN === '', enterpriseTokenEmpty: process.env.GH_ENTERPRISE_TOKEN === '',
   cached: fs.existsSync(path.join(process.env.HOME ?? '.', 'prepared-cache'))}) + '\\n');`;
           await frames.send({
             id: 2,
@@ -493,13 +412,18 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
               processId: "prepared-home",
               argv: [process.execPath, "-e", script],
               cwd: pathToFileURL(cwd).href,
-              env: {},
+              env: {
+                GH_CONFIG_DIR: "/synthetic-other-profile",
+                GH_HOST: "other-host.example",
+                GH_TOKEN: "synthetic-caller-token",
+                GH_ENTERPRISE_TOKEN: "synthetic-caller-enterprise-token",
+              },
               envPolicy: {
                 inherit: "all",
                 ignoreDefaultExcludes: true,
                 exclude: [],
                 set: {},
-                includeOnly: [],
+                includeOnly: ["HOME", "CODEX_HOME"],
               },
               tty: false,
               pipeStdin: false,
@@ -517,10 +441,23 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
           const observed: unknown = JSON.parse(
             Buffer.from(output.chunk, "base64").toString("utf8"),
           );
-          expect(observed).toMatchObject({ home: homeDir, cached: true });
+          expect(observed).toMatchObject({
+            home: homeDir,
+            cached: true,
+            githubHost: "microsoft.ghe.com",
+            githubTokenEmpty: true,
+            enterpriseTokenEmpty: true,
+          });
           if (!isRecord(observed) || typeof observed.codexHome !== "string") {
             throw new Error("Pinned exec-server omitted its private Codex home");
           }
+          if (typeof observed.githubProfile !== "string") {
+            throw new Error("Pinned exec-server omitted its private GitHub profile");
+          }
+          isolatedGitHubProfile = observed.githubProfile;
+          const hosts = await readFile(path.join(isolatedGitHubProfile, "hosts.yml"), "utf8");
+          expect(hosts).toContain(github.host);
+          expect(hosts).toContain(github.token);
           isolatedCodexHome = observed.codexHome;
           expect(isolatedCodexHome).not.toBe(path.join(homeDir, ".codex"));
         } finally {
@@ -536,6 +473,10 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
           throw new Error("Private Codex home was not observed");
         }
         await expect(access(isolatedCodexHome)).rejects.toMatchObject({ code: "ENOENT" });
+        if (!isolatedGitHubProfile) {
+          throw new Error("Private GitHub profile was not observed");
+        }
+        await expect(access(isolatedGitHubProfile)).rejects.toMatchObject({ code: "ENOENT" });
       },
     );
     await pendingNodeProof;

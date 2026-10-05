@@ -20,6 +20,7 @@ import {
   invalidateOperatorRolePolicy,
   publishOperatorRoleConfigChange,
 } from "./operator-role-policy.js";
+import { exerciseReclaimedFactoryCredential } from "./operator-run-authority.factory.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
@@ -430,3 +431,30 @@ it("rechecks current role and latched revocation after a source callback mutates
     }
   });
 });
+
+it.each([
+  "current",
+  "actor changed",
+  "missing",
+  "unattested",
+  "synthetic",
+  "restored without producer",
+  "narrowed",
+  "released",
+  "cancelled",
+  "wrong SID",
+  "wrong key",
+  "wrong agent",
+  "actor changed during lookup",
+  "profile changed during lookup",
+  "disconnected during lookup",
+  "cancelled during lookup",
+  "released during lookup",
+  "grant revoked during lookup",
+  "role revoked during lookup",
+  "placement replaced during lookup",
+  "workspace changed during lookup",
+] as const)(
+  "carries the retained Factory issuer through reclaimed intent: %s",
+  exerciseReclaimedFactoryCredential,
+);

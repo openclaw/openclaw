@@ -49,8 +49,17 @@ import {
 } from "./workspace-result-staging.js";
 
 // This fixture clones a local Git origin; no GitHub identity is involved.
-vi.mock("./worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: async () => undefined,
+vi.mock("./worker-github-binding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./worker-github-binding.js")>()),
+  prepareWorkerRepositoryGitHubIdentity: async () => ({
+    token: undefined,
+    selection: { source: "anonymous" },
+    cacheScope: "anonymous",
+    assertSelected: () => {},
+    revalidate: async () => {},
+    start: (operation: () => unknown) => Promise.resolve(operation()),
+  }),
+  prepareWorkerGitHubBindingGrant: async () => undefined,
 }));
 
 describe("repository workspace result ownership", () => {

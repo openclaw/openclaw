@@ -118,8 +118,10 @@ export type ControlUiSessionBranch = {
 
 export type ControlUiSessionPullRequests = {
   pullRequests: ControlUiSessionPullRequest[];
+  /** Explicit same-repository issue links from the current conversation. */
+  issues?: Array<{ number: number; url: string }>;
   /** GitHub remote identity, independent of whether a PR or branch row exists. */
-  repository?: { owner: string; repo: string };
+  repository?: { owner: string; repo: string; host?: string };
   /** Non-default branch with a creatable PR or local changed files. */
   branch?: ControlUiSessionBranch;
   /** GitHub quota exhausted; entries may be stale until the limit resets. */

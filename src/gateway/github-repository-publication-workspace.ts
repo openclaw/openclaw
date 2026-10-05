@@ -153,3 +153,29 @@ export async function captureCheckpoint<T>(
     },
   );
 }
+
+/** Advance only the exact checkpoint that produced this publication receipt. */
+export async function advanceRepositoryPublishedHead(
+  row: RepositoryGitHubPublicationRow,
+  headCommit: string,
+  assertCurrent: (prepared: PreparedRepositoryWorkspace) => void,
+): Promise<void> {
+  const repositories = getSessionRepositoryWorkspaceStore();
+  const prepared = await repositories.prepare(row.workspace_id);
+  assertCurrent(prepared);
+  const current = prepared.current();
+  if (
+    current?.agentId === row.agent_id &&
+    current.sessionKey === row.session_key &&
+    current.branch === row.branch &&
+    current.checkpointRef === row.checkpoint_ref
+  ) {
+    await repositories.advanceToPublishedHead({
+      workspaceId: current.workspaceId,
+      expectedRevision: current.revision,
+      branch: row.branch,
+      headCommit,
+      assertCurrent: () => assertCurrent(prepared),
+    });
+  }
+}

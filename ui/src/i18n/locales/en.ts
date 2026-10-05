@@ -285,6 +285,7 @@ export const en: TranslationMap & {
     changedFile: "{count} file",
     changedFiles: "{count} files",
     pullRequestLabel: "Pull request #{number}, {state}",
+    issueLabel: "GitHub issue #{number}",
     pullRequestAuthorLabel: "Opened by {login}",
     states: {
       open: "Open",

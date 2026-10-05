@@ -24,11 +24,13 @@ vi.mock("./github-oauth-records.js", () => ({
 import {
   installManagedGitHubProfile,
   prepareGitHubPublicationIdentity,
+  prepareGitHubReadIdentity,
   preparePersonalGitHubPublicationIdentity,
   prepareGitHubToolEnvironment,
   refreshManagedGitHubProfile,
   resolveGitHubToolIdentityStatus,
   resolveManagedGitHubProfileDir,
+  writeManagedGitHubProfileFiles,
 } from "./github-tool-identity.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -120,6 +122,16 @@ describe("managed credential isolation", () => {
       expectedAccountId: account.id,
     });
     clearGitHubCredentialVerificationCache();
+    const beforePublication = requests.length;
+    await expect(
+      preparePersonalGitHubPublicationIdentity({
+        profileId,
+        accountId: account.id,
+        assertCurrent: () => {},
+      }),
+    ).rejects.toThrow("public GitHub publication only");
+    expect(requests).toHaveLength(beforePublication);
+    setRuntimeConfigSnapshot({});
     const identity = await preparePersonalGitHubPublicationIdentity({
       profileId,
       accountId: account.id,
@@ -147,7 +159,7 @@ describe("managed credential isolation", () => {
       const profileId = "ghp_55555555555555555555555555555555";
       const config = {
         gateway: {
-          github: { host: "a.ghe.example.test", apiBaseUrl: "https://a.ghe.example.test/api/v3" },
+          github: { host: "github.com", apiBaseUrl: "https://api.github.com" },
         },
       };
       setRuntimeConfigSnapshot(config);
@@ -190,6 +202,98 @@ describe("managed credential isolation", () => {
       }
       release.resolve(new Response(JSON.stringify(account)));
       await outcome;
+    },
+  );
+
+  it("retains explicit Enterprise installation, status and publication authority", async () => {
+    setRuntimeConfigSnapshot({
+      gateway: {
+        github: { host: "microsoft.ghe.com", apiBaseUrl: "https://api.microsoft.ghe.com" },
+      },
+    });
+    vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("github-enterprise-issuer-"));
+    const profileId = "ghp_55555555555555555555555555555555";
+    const profileDir = resolveManagedGitHubProfileDir({
+      agentId: "main",
+      scope: "system",
+      profileId,
+    });
+    await installManagedGitHubProfile({
+      profileDir,
+      token: "synthetic-explicit-enterprise",
+      issuer: { host: "microsoft.ghe.com", apiBaseUrl: "https://api.microsoft.ghe.com" },
+      commitConfig: async () => {},
+    });
+    const config = { tools: { github: { profileId } } };
+    commands.run.mockImplementation(async () => result());
+    expect(
+      (await resolveGitHubToolIdentityStatus({ config, agentId: "main", selectedScope: "system" }))
+        .effective.account,
+    ).toEqual({ login: account.login });
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("authority revoked");
+      }
+    };
+    const identity = await prepareGitHubPublicationIdentity({
+      config,
+      agentId: "main",
+    });
+    expect(identity.host).toBe("microsoft.ghe.com");
+    expect(identity.env.GH_ENTERPRISE_TOKEN).toBe("synthetic-explicit-enterprise");
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "https://api.microsoft.ghe.com/user",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer synthetic-explicit-enterprise" }),
+      }),
+    );
+    current = false;
+    await expect(
+      prepareGitHubReadIdentity({
+        config,
+        agentId: "main",
+        assertActive: assertCurrent,
+        getCurrentConfig: () => config,
+        refresh: async () => {},
+      }),
+    ).rejects.toThrow("authority revoked");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["personal", "system"] as const)(
+    "refuses misbound public %s OAuth before an Enterprise bearer request",
+    async (scope) => {
+      setRuntimeConfigSnapshot({
+        gateway: {
+          github: { host: "microsoft.ghe.com", apiBaseUrl: "https://api.microsoft.ghe.com" },
+        },
+      });
+      vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("github-misbound-oauth-"));
+      const profileId = "ghp_66666666666666666666666666666666";
+      const profileDir = resolveManagedGitHubProfileDir({ agentId: "main", scope, profileId });
+      await writeManagedGitHubProfileFiles(profileDir, {
+        login: account.login,
+        token: "synthetic-misbound-public-oauth",
+        host: "microsoft.ghe.com",
+      });
+      if (scope === "personal") {
+        await expect(
+          preparePersonalGitHubPublicationIdentity({
+            profileId,
+            accountId: 202,
+            assertCurrent: () => {},
+          }),
+        ).rejects.toThrow(/public GitHub/);
+      } else {
+        await expect(
+          prepareGitHubPublicationIdentity({
+            config: { tools: { github: { profileId, kind: "oauth" } } },
+            agentId: "main",
+          }),
+        ).rejects.toThrow(/unavailable/);
+      }
+      expect(fetch).not.toHaveBeenCalled();
     },
   );
 

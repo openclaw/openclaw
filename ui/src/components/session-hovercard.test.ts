@@ -442,6 +442,48 @@ describe("renderSessionHovercard", () => {
     },
   );
 
+  it("shows an accepted issue through refresh failure without inventing a pull request", () => {
+    const container = document.createElement("div");
+    const issue = { number: 17400, url: "https://fixture.ghe.com/example/project/issues/17400" };
+    render(
+      renderSessionHovercard({
+        row: row(),
+        pullRequests: snapshot({ issues: [issue], status: "unavailable" }),
+      }),
+      container,
+    );
+    const link = container.querySelector<HTMLAnchorElement>(".session-hovercard__issue-row");
+    expect(link?.href).toBe(issue.url);
+    expect(link?.textContent).toContain("17400");
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toContain("noopener");
+    expect(container.textContent).toContain("could not be refreshed");
+    expect(
+      container.querySelectorAll(".session-hovercard__pr-row:not(.session-hovercard__issue-row)"),
+    ).toHaveLength(0);
+    const pull = {
+      number: 42,
+      title: "Actual associated pull request",
+      url: "https://fixture.ghe.com/example/project/pull/42",
+      owner: "example",
+      repo: "project",
+      branch: "accepted-work",
+      state: "open" as const,
+    };
+    render(
+      renderSessionHovercard({
+        row: row(),
+        pullRequests: snapshot({ issues: [issue], pullRequests: [pull], status: "unavailable" }),
+      }),
+      container,
+    );
+    expect(
+      [...container.querySelectorAll<HTMLAnchorElement>(".session-hovercard__pr-row")].map(
+        (anchor) => anchor.href,
+      ),
+    ).toEqual([issue.url, pull.url]);
+  });
+
   it.each([
     {
       workContext: {

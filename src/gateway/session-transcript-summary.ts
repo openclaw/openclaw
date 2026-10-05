@@ -3,11 +3,13 @@ import type { McpAppReconstructionData, McpAppTranscriptLookup } from "./mcp-app
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 
 export type SessionTranscriptSummaryQuery =
+  | { kind: "github-issue-references"; host: string; repository: { owner: string; repo: string } }
   | { kind: "usage" }
-  | { kind: "recovery-checkpoint" }
+  | { kind: "recovery-checkpoint"; verifiedToolCallId?: string; expectedSourceTurnId?: string }
   | { kind: "mcp-app"; lookup: McpAppTranscriptLookup };
 
 export type SessionTranscriptSummaryResult =
+  | { kind: "github-issue-references"; issues: Array<{ number: number; url: string }> }
   | { kind: "usage"; usage: SessionTranscriptUsageSnapshot | null }
   | {
       kind: "recovery-checkpoint";
@@ -21,12 +23,23 @@ type TranscriptVisit = (visit: (message: unknown) => void) => void;
 export async function prepareSessionTranscriptSummaryReader(
   query: SessionTranscriptSummaryQuery,
 ): Promise<(visit: TranscriptVisit) => SessionTranscriptSummaryResult> {
+  if (query.kind === "github-issue-references") {
+    const { selectSessionIssueReferences } = await import("./session-issue-references.js");
+    return (visit) => ({
+      kind: "github-issue-references",
+      issues: selectSessionIssueReferences(visit, query.repository, query.host),
+    });
+  }
   if (query.kind === "recovery-checkpoint") {
     const { selectMainSessionRecoveryCheckpoint } =
       await import("../agents/main-session-recovery/main-session-recovery-checkpoint.js");
     return (visit) => ({
       kind: "recovery-checkpoint",
-      checkpoint: selectMainSessionRecoveryCheckpoint(visit),
+      checkpoint: selectMainSessionRecoveryCheckpoint(
+        visit,
+        query.verifiedToolCallId,
+        query.expectedSourceTurnId,
+      ),
     });
   }
   if (query.kind === "mcp-app") {

@@ -6,13 +6,19 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { isIP } from "node:net";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  prepareWorkerGitHubBindingGrant,
+  type WorkerGitHubBindingGrant,
+} from "openclaw/plugin-sdk/github-worker-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import type { RawData, WebSocket } from "ws";
+import { CODEX_NODE_GITHUB_REFRESH_FEATURE } from "../node-github-refresh.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { getCodexNativeProcessClient } from "./native-process-authority.js";
 import type { CodexNativeProcessClient } from "./native-process-authority.js";
+import { bindCodexNodeGitHubRenewal } from "./sandbox-exec-server-github.js";
 import {
   createCodexNodeExecServerDisconnectError,
   startCodexNodeExecServerRelay,
@@ -189,24 +195,81 @@ async function acquireOpenClawExecServer(params: {
       }
       try {
         const placementIdentity = readCodexPlacementWorkspaceIdentity(sandbox);
-        // Capture the admitted caller's exact async scope before a detached WebSocket event.
-        const channel = await runtime.nodes.openDuplex({
-          nodeId: server.node.id,
-          command: "codex.exec-server.stdio.v1",
-          params: { cwd: sandbox.containerWorkdir, ...placementIdentity },
-          sessionKey: sandbox.sessionKey,
-          timeoutMs: 0,
-          maxMessageBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES,
-          maxOutstandingDeliveryBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES + 2 * 1024 * 1024,
-          signal,
-        });
+        const { agentId, ...nodePlacementIdentity } = placementIdentity;
+        let githubGrant: WorkerGitHubBindingGrant | undefined;
+        if (agentId) {
+          githubGrant = await prepareWorkerGitHubBindingGrant({
+            sessionId: placementIdentity.sessionId,
+            sessionKey: placementIdentity.sessionKey,
+            agentId,
+            assertCurrent: () => !signal.aborted && !server.closed,
+            signal,
+          });
+        }
+        const revokeGitHubGrant = async () => {
+          try {
+            await githubGrant?.revoke();
+          } catch {
+            embeddedAgentLog.warn(
+              "Codex node GitHub execution cleanup failed; its existing process cleanup remains active.",
+            );
+          }
+        };
+        let canRenew = false;
+        let channel: Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>>;
+        try {
+          const advertisedNode = githubGrant?.startRenewal
+            ? (await runtime.nodes.list()).nodes.find((node) => node.nodeId === server.node.id)
+            : undefined;
+          canRenew =
+            advertisedNode?.commandFeatures?.["codex.exec-server.stdio.v1"]?.includes(
+              CODEX_NODE_GITHUB_REFRESH_FEATURE,
+            ) === true;
+          githubGrant?.assertCurrent?.();
+          if (githubGrant?.startRenewal && !canRenew) {
+            throw new Error(
+              "This node does not advertise GitHub profile refresh. Update and reconnect the node before starting a GitHub-backed Codex turn.",
+            );
+          }
+          // Capture the admitted caller's exact async scope before a detached WebSocket event.
+          channel = await runtime.nodes.openDuplex({
+            nodeId: server.node.id,
+            command: "codex.exec-server.stdio.v1",
+            params: {
+              cwd: sandbox.containerWorkdir,
+              ...nodePlacementIdentity,
+              ...(githubGrant ? { github: githubGrant.binding } : {}),
+            },
+            sessionKey: sandbox.sessionKey,
+            timeoutMs: 0,
+            ...(canRenew ? { requiredCommandFeatures: [CODEX_NODE_GITHUB_REFRESH_FEATURE] } : {}),
+            maxMessageBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES,
+            maxOutstandingDeliveryBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES + 2 * 1024 * 1024,
+            signal: githubGrant?.signal ? AbortSignal.any([signal, githubGrant.signal]) : signal,
+            assertCurrent: () => {
+              signal.throwIfAborted();
+              githubGrant?.assertCurrent?.();
+              if (server.closed || sandboxExecServerRegistry.servers.get(key) !== promise) {
+                throw new Error("Codex node execution lease is no longer current.");
+              }
+            },
+          });
+        } catch (error) {
+          await revokeGitHubGrant();
+          throw error;
+        }
         if (
           signal.aborted ||
+          githubGrant?.signal?.aborted ||
           server.closed ||
           sandboxExecServerRegistry.servers.get(key) !== promise
         ) {
           channel.close();
+          await revokeGitHubGrant();
           throw new Error("Codex node execution retired before its channel was ready.");
+        }
+        if (canRenew && githubGrant) {
+          channel = bindCodexNodeGitHubRenewal(channel, githubGrant);
         }
         const nodeLease = {
           id: randomUUID(),
@@ -218,7 +281,24 @@ async function acquireOpenClawExecServer(params: {
         server.node.leases.set(nodeLease.id, nodeLease);
         // The approved child can exit before app-server claims its loopback socket.
         // Observe that lifetime immediately instead of losing its terminal fact.
-        void channel.closed
+        const closedAndRevoked = channel.closed.then(
+          async () => await revokeGitHubGrant(),
+          async (error: unknown) => {
+            await revokeGitHubGrant();
+            throw error;
+          },
+        );
+        // Lease retirement joins credential delivery even after the transport has closed.
+        // The execution observer below owns the channel outcome independently of this join.
+        if (githubGrant) {
+          const credentialCleanup = closedAndRevoked.then(
+            () => {},
+            () => {},
+          );
+          server.cleanupTasks.add(credentialCleanup);
+          void credentialCleanup.then(() => server.cleanupTasks.delete(credentialCleanup));
+        }
+        void closedAndRevoked
           .then(
             () => handleClosedCodexNodeExecServerLease(server, nodeLease, { failed: false }),
             (error: unknown) =>
@@ -378,13 +458,18 @@ function readCodexPlacementNodeId(sandbox: SandboxContext): string | undefined {
   return sandbox.placementNodeId;
 }
 
-function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
+export function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
+  agentId?: string;
   environmentId: string;
   sessionId: string;
   ownerEpoch: number;
   sessionKey: string;
 } {
   if (
+    ("placementAgentId" in sandbox &&
+      (typeof sandbox.placementAgentId !== "string" ||
+        !sandbox.placementAgentId ||
+        sandbox.placementAgentId.trim() !== sandbox.placementAgentId)) ||
     !("placementEnvironmentId" in sandbox) ||
     typeof sandbox.placementEnvironmentId !== "string" ||
     !sandbox.placementEnvironmentId ||
@@ -403,6 +488,9 @@ function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
     throw new Error("Codex node execution requires its exact placement workspace identity.");
   }
   return {
+    ...("placementAgentId" in sandbox && typeof sandbox.placementAgentId === "string"
+      ? { agentId: sandbox.placementAgentId }
+      : {}),
     environmentId: sandbox.placementEnvironmentId,
     sessionId: sandbox.placementSessionId,
     ownerEpoch: sandbox.placementOwnerEpoch,

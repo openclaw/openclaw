@@ -16,6 +16,7 @@ import {
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
   type WorkerHeartbeatRequestFrame,
+  type WorkerHeartbeatResult,
   WorkerHeartbeatRequestFrameSchema,
   type WorkerLiveEventParams,
   type WorkerLiveEventRequestFrame,
@@ -58,6 +59,7 @@ import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.
 import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
+import * as githubIdentity from "../agents/github-tool-identity.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
@@ -66,6 +68,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { prepareSkillBundle } from "../skills/library/bundle.js";
+import * as skillResources from "../skills/runtime/resources.js";
 import * as workerTranscriptRuntime from "./embedded-agent-transcript.runtime.js";
 import {
   buildWorkerConnectParams,
@@ -73,19 +77,13 @@ import {
   type WorkerLaunchDescriptor,
 } from "./launch-descriptor.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
-import {
-  WorkerAdmissionDeadlineExceededError,
-  WorkerConnectionStoppedError,
-} from "./worker-connection-contract.js";
+import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import {
   buildWorkerProcessTurn,
   parseWorkerProcessMessage,
   type WorkerProcessResult,
 } from "./worker-process-protocol.js";
-import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
-import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
-import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 import {
   registerWorkerBackgroundExecLifecycleTests,
   registerWorkerExecEnvironmentFinalizationTests,
@@ -98,6 +96,7 @@ import { registerWorkerGitHubFailureTests } from "./worker-runtime-github-failur
 import { registerWorkerNativeInferenceTests } from "./worker-runtime-native-inference.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { registerWorkerPromptTests } from "./worker-runtime-prompt.suite.js";
+import { registerWorkerReconnectTests } from "./worker-runtime-reconnect.suite.js";
 import { registerWorkerReplayWindowTests } from "./worker-runtime-replay.suite.js";
 import { createWorkerToolSurfaceForTest } from "./worker-tool-surface.test-support.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
@@ -168,6 +167,8 @@ type FakeGatewayOptions = {
   execCommand?: string;
   execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
+  inferenceRelease?: Promise<void>;
+  githubRefresh?: WorkerHeartbeatResult["github"];
   outageOnInferenceCancel?: boolean;
   ignoreFirstAdmission?: boolean;
   ignoreHeartbeat?: boolean;
@@ -444,7 +445,14 @@ class FakeWorkerGateway {
       type: "res",
       id: frame.id,
       ok: true,
-      payload: { receivedAtMs: Date.now(), status: "ok", ownerEpoch: OWNER_EPOCH },
+      payload: {
+        receivedAtMs: Date.now(),
+        status: "ok",
+        ownerEpoch: OWNER_EPOCH,
+        ...(frame.params.githubGeneration !== undefined && this.options.githubRefresh
+          ? { github: this.options.githubRefresh }
+          : {}),
+      },
     });
   }
 
@@ -677,7 +685,13 @@ class FakeWorkerGateway {
       this.sendEmptyTerminalTurn(socket, frame.params);
       return;
     }
-    this.sendTextTurn(socket, frame.params, plan === "length" ? "length" : "stop");
+    if (this.options.inferenceRelease) {
+      void this.options.inferenceRelease.then(() => {
+        this.sendTextTurn(socket, frame.params, plan === "length" ? "length" : "stop");
+      });
+    } else {
+      this.sendTextTurn(socket, frame.params, plan === "length" ? "length" : "stop");
+    }
   }
 
   private sendBurstTextTurn(
@@ -2142,6 +2156,114 @@ describe("worker runtime", () => {
 
   registerWorkerGitHubFailureTests({ setup, sessionId: SESSION_ID });
 
+  it("retires an in-flight GitHub profile write after terminal acknowledgment without losing the result", async () => {
+    const inferenceRelease = createDeferred();
+    const writeEntered = createDeferred();
+    const writeRelease = createDeferred();
+    const writeSettled = createDeferred();
+    const cleanupEntered = createDeferred();
+    const cleanupRelease = createDeferred();
+    const snapshot = {
+      generation: 1,
+      token: "synthetic-retired-renewal",
+      expiresAtMs: Date.now() + 3_600_000,
+    };
+    const { gateway, launch } = await setup({
+      inferenceRelease: inferenceRelease.promise,
+      githubRefresh: snapshot,
+      heartbeatIntervalMs: 1,
+    });
+    launch.assignment.github = {
+      token: "synthetic-current-token",
+      login: "x-access-token",
+      branch: "fixture",
+    };
+    const files = [{ path: "SKILL.md", content: "# Fixture\n", encoding: "utf8" as const }];
+    launch.assignment.skillResources = {
+      version: 1,
+      skills: [
+        {
+          name: "fixture",
+          description: "Fixture",
+          files,
+          revision: prepareSkillBundle(files).revision,
+        },
+      ],
+    };
+    const writeProfile = githubIdentity.writeManagedGitHubProfileFiles;
+    let profileDir: string | undefined;
+    const writer = vi
+      .spyOn(githubIdentity, "writeManagedGitHubProfileFiles")
+      .mockImplementation(async (...args) => {
+        if (args[1].token !== snapshot.token) {
+          return writeProfile(...args);
+        }
+        profileDir = args[0];
+        writeEntered.resolve();
+        await writeRelease.promise;
+        try {
+          await writeProfile(...args);
+        } finally {
+          writeSettled.resolve();
+        }
+      });
+    const materialize = skillResources.materializeSkillResources;
+    const resources = vi
+      .spyOn(skillResources, "materializeSkillResources")
+      .mockImplementation(async (...args) => {
+        const prepared = await materialize(...args);
+        return {
+          ...prepared,
+          cleanup: async () => {
+            cleanupEntered.resolve();
+            await cleanupRelease.promise;
+            await prepared.cleanup();
+          },
+        };
+      });
+    const environment = await createWorkerRuntimeEnvironment(SESSION_ID);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const operation = runWorkerDescriptor(launch, { environmentStateDir: environment.stateDir });
+    const settled = operation.catch(() => undefined);
+    const waitForStage = (stage: Promise<void>, label: string) =>
+      Promise.race([
+        stage,
+        operation.then(() => {
+          throw new Error(`Worker completed before ${label}`);
+        }),
+      ]);
+    try {
+      await gateway.waitForInferenceStart();
+      await vi.advanceTimersByTimeAsync(1);
+      await waitForStage(writeEntered.promise, "credential profile publication");
+      inferenceRelease.resolve();
+      await waitForStage(cleanupEntered.promise, "terminal cleanup");
+      expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+        kind: "lifecycle",
+        payload: { phase: "finishing" },
+      });
+      writeRelease.resolve();
+      await waitForStage(writeSettled.promise, "credential publication settlement");
+      if (!profileDir) {
+        throw new Error("Credential heartbeat did not reach the profile writer");
+      }
+      const hosts = await readFile(path.join(profileDir, "hosts.yml"), "utf8");
+      expect(hosts).toContain(launch.assignment.github.token);
+      expect(hosts).not.toContain(snapshot.token);
+      cleanupRelease.resolve();
+      await expect(operation).resolves.toMatchObject({ status: "completed" });
+    } finally {
+      inferenceRelease.resolve();
+      writeRelease.resolve();
+      cleanupRelease.resolve();
+      await settled;
+      vi.useRealTimers();
+      writer.mockRestore();
+      resources.mockRestore();
+      await environment.close();
+    }
+  });
+
   registerWorkerPermissionTests({ setup });
 
   it("canonicalizes an in-root worker workspace before enforcing containment", async () => {
@@ -2171,203 +2293,12 @@ describe("worker runtime", () => {
   registerWorkerReplayWindowTests({ setup, assistantMessage, modelRef: MODEL_REF });
 });
 
-describe("worker reconnect clients", () => {
-  it("isolates ready listener failures while admitting the worker and starting heartbeats", async () => {
-    const { gateway, launch } = await setup({ heartbeatIntervalMs: 1 });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
-    });
-    let healthyReadyCalls = 0;
-    connection.onReady(() => {
-      throw new Error("induced ready observer failure");
-    });
-    connection.onReady(() => {
-      healthyReadyCalls += 1;
-    });
-
-    try {
-      await expect(connection.start()).resolves.toMatchObject({ ownerEpoch: OWNER_EPOCH });
-      expect(healthyReadyCalls).toBe(1);
-      await waitForFast(() => expect(gateway.methods).toContain("worker.heartbeat"));
-    } finally {
-      await connection.stop();
-    }
-  });
-
-  it("fails closed when the overall admission deadline expires", async () => {
-    const { gateway, launch } = await setup({ admissionFailure: "gateway-unavailable" });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
-      admissionTimeoutMs: 25,
-      admissionDeadlineMs: 250,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-    });
-    try {
-      await expect(connection.start()).rejects.toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
-      expect(gateway.connectionCount).toBeGreaterThan(1);
-      expect(connection.state).toMatchObject({
-        kind: "failed",
-        error: expect.any(WorkerAdmissionDeadlineExceededError),
-      });
-      await expect(connection.waitForExit()).resolves.toMatchObject({
-        kind: "failed",
-        error: expect.any(WorkerAdmissionDeadlineExceededError),
-      });
-    } finally {
-      await connection.stop();
-    }
-  });
-
-  it("times out a silent admission attempt and admits on reconnect", async () => {
-    const { gateway, launch } = await setup({ ignoreFirstAdmission: true });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
-      admissionTimeoutMs: 25,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-    });
-    try {
-      await expect(connection.start()).resolves.toMatchObject({ ownerEpoch: OWNER_EPOCH });
-      expect(gateway.connectionCount).toBeGreaterThanOrEqual(2);
-    } finally {
-      await connection.stop();
-    }
-  });
-
-  it("times out a silent heartbeat and reconnects", async () => {
-    const { gateway, launch } = await setup({
-      ignoreHeartbeat: true,
-      heartbeatIntervalMs: 1,
-    });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
-      requestTimeoutMs: 25,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-    });
-    try {
-      await connection.start();
-      await waitForFast(() => expect(gateway.connectionCount).toBeGreaterThanOrEqual(2));
-    } finally {
-      await connection.stop();
-    }
-  });
-
-  it("replays exact RPC payloads after silent response timeouts", async () => {
-    const { gateway, launch } = await setup({
-      silenceFirstTranscript: true,
-      silenceFirstLiveEvent: true,
-      silenceFirstInference: true,
-    });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
-      requestTimeoutMs: 40,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-    });
-    const transcript = new WorkerTranscriptCommitClient(connection, {
-      runEpoch: OWNER_EPOCH,
-      baseLeafId: "leaf-base",
-      initialSeq: 8,
-    });
-    const live = new WorkerLiveEventClient(connection, { runEpoch: OWNER_EPOCH });
-    const inference = new WorkerInferenceProxyClient(connection);
-    try {
-      await connection.start();
-      await transcript.commit([
-        {
-          role: "user",
-          content: [{ type: "text", text: "silent transcript" }],
-          timestamp: 1,
-        },
-      ]);
-      live.enqueuePreview(RUN_ID, {
-        kind: "assistant",
-        payload: { text: "silent live event", delta: "silent live event" },
-      });
-      await waitForFast(() => expect(gateway.liveEventRequests).toHaveLength(2));
-      await live.emitTerminal(RUN_ID, {
-        kind: "lifecycle",
-        payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
-      });
-      await inference.start({
-        runEpoch: OWNER_EPOCH,
-        sessionId: SESSION_ID,
-        runId: RUN_ID,
-        turnId: "silent-inference",
-        modelRef: MODEL_REF,
-        context: { messages: [] },
-        options: {},
-      });
-
-      expect(gateway.transcriptRequests).toHaveLength(2);
-      expect(gateway.transcriptRequests[1]).toEqual(gateway.transcriptRequests[0]);
-      expect(gateway.liveEventRequests).toHaveLength(3);
-      expect(gateway.liveEventRequests[1]).toEqual(gateway.liveEventRequests[0]);
-      expect(gateway.inferenceRequests).toHaveLength(2);
-      expect(gateway.inferenceRequests[1]).toEqual(gateway.inferenceRequests[0]);
-      expect(gateway.connectionCount).toBeGreaterThanOrEqual(4);
-    } finally {
-      inference.dispose();
-      live.dispose();
-      await connection.stop();
-    }
-  });
-
-  it("settles an in-flight commit and a later live emit after stop", async () => {
-    const { gateway, launch } = await setup({ silenceFirstTranscript: true });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
-      requestTimeoutMs: 5_000,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-    });
-    const originalWaitForReady = connection.waitForReady.bind(connection);
-    const waitForReady = vi.spyOn(connection, "waitForReady").mockImplementation(() => {
-      if (waitForReady.mock.calls.length > 4) {
-        throw new Error("worker client retried after terminal stop");
-      }
-      return originalWaitForReady();
-    });
-    const transcript = new WorkerTranscriptCommitClient(connection, {
-      runEpoch: OWNER_EPOCH,
-      baseLeafId: "leaf-base",
-      initialSeq: 8,
-    });
-    let live: WorkerLiveEventClient | undefined;
-    try {
-      await connection.start();
-      const commit = transcript.commit([
-        {
-          role: "user",
-          content: [{ type: "text", text: "commit interrupted by stop" }],
-          timestamp: 1,
-        },
-      ]);
-      await waitForFast(() => expect(gateway.transcriptRequests).toHaveLength(1));
-
-      await connection.stop();
-      await expect(commit).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
-
-      live = new WorkerLiveEventClient(connection, { runEpoch: OWNER_EPOCH });
-      live.enqueuePreview(RUN_ID, {
-        kind: "assistant",
-        payload: { text: "late live event", delta: "late live event" },
-      });
-      await expect(
-        live.emitTerminal(RUN_ID, {
-          kind: "lifecycle",
-          payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
-        }),
-      ).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
-      expect(waitForReady.mock.calls.length).toBeLessThanOrEqual(2);
-      expect(gateway.liveEventRequests).toHaveLength(0);
-    } finally {
-      live?.dispose();
-      await connection.stop();
-    }
-  });
+registerWorkerReconnectTests({
+  setup,
+  waitForFast,
+  ownerEpoch: OWNER_EPOCH,
+  runId: RUN_ID,
+  sessionId: SESSION_ID,
+  modelRef: MODEL_REF,
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

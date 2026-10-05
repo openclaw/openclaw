@@ -2,6 +2,7 @@ import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
@@ -33,7 +34,9 @@ import { renderChatModelAccountControl } from "./components/chat-model-account-c
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.ts";
 import { getChatModelObservedRunId, getChatRunOwnerSessionKey } from "./history-merge.ts";
+import { recordControlUiPerformanceEvent } from "./performance.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
+import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 
 registerModelControlsEnglish();
 
@@ -115,9 +118,26 @@ export function readChatPublicationAccess(
   snapshot: ApplicationGatewaySnapshot,
   session: GatewaySessionRow,
   participationBlocked: boolean,
+  host: ChatPageHost,
+  workspaceConflict: boolean,
 ) {
   const canMutate = !session.archived && !participationBlocked;
   return {
+    personalReady:
+      !hasAbortableSessionRun(host) &&
+      (!isCloudWorkerPlacementState(session.placement?.state) ||
+        (Boolean(session.repositoryWorkspaceId) && session.placement?.state === "active")) &&
+      !workspaceConflict,
+    recordReadTiming: (payload: Record<string, unknown>) =>
+      recordControlUiPerformanceEvent(
+        host,
+        "github.publication_read",
+        {
+          ...payload,
+          sessionId: session.sessionId,
+        },
+        { maxBufferedEventsForType: 30 },
+      ),
     canPublishShared:
       canMutate &&
       readSessionMethodAccess(snapshot, {

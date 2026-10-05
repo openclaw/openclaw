@@ -7,6 +7,7 @@ import {
   prepareUserProfileGitHubAttribution,
   resolveUserProfileGitHubAttribution,
 } from "../state/user-profile-github-identity.js";
+import { resolveConfiguredGitHubHost } from "./github-host.js";
 import { resolveConfiguredGitHubToolIdentity } from "./github-tool-identity.js";
 
 type GitCoauthorAttribution = {
@@ -19,13 +20,15 @@ type GitCoauthorContributor = {
   contributionCount: number;
   firstPromptedAt: number | null;
   login: string;
+  email: string;
   inheritedOrder?: number;
 };
 
 type GitCoauthorAttributionParams = {
   agentId: string;
   config: OpenClawConfig;
-  excludeAccountId?: number;
+  excludeIdentity?: { host: string; accountId: number };
+  host?: string;
   env?: NodeJS.ProcessEnv;
   sessionKey?: string;
   sessionId?: string;
@@ -89,10 +92,17 @@ async function resolveAttribution(
   if (profileIds.length === 0) {
     return empty;
   }
+  const host = params.host ?? resolveConfiguredGitHubHost(params.config);
   const prepared = retainAuthority
-    ? await prepareUserProfileGitHubAttribution(profileIds, { env: params.env })
+    ? await prepareUserProfileGitHubAttribution(profileIds, {
+        env: params.env,
+        host,
+      })
     : {
-        identities: await resolveUserProfileGitHubAttribution(profileIds, { env: params.env }),
+        identities: await resolveUserProfileGitHubAttribution(profileIds, {
+          env: params.env,
+          host,
+        }),
         isCurrent: () => true,
       };
   const identities = prepared.identities;
@@ -100,22 +110,32 @@ async function resolveAttribution(
     resolveConfiguredGitHubToolIdentity({ ...params, scope: "agent" }) ??
     resolveConfiguredGitHubToolIdentity({ ...params, scope: "system" });
   const primaryEmail = primaryIdentity?.gitAuthor?.email?.trim().toLowerCase();
-  const contributors = new Map<number, GitCoauthorContributor>();
+  const contributors = new Map<string, GitCoauthorContributor>();
   for (const profileId of profileIds) {
     const record = profileRecords.get(profileId);
     const identity = identities.get(profileId);
     if (!identity) {
       continue;
     }
-    if (identity.accountId === params.excludeAccountId) {
+    const issuer = "host" in identity ? identity.host : "github.com";
+    if (
+      issuer !== host ||
+      (params.excludeIdentity !== undefined &&
+        identity.accountId === params.excludeIdentity.accountId &&
+        issuer === params.excludeIdentity.host)
+    ) {
       continue;
     }
-    const noreplyEmail = `${identity.accountId}+${identity.login}@users.noreply.github.com`;
+    const email =
+      "verifiedEmail" in identity
+        ? identity.verifiedEmail
+        : `${identity.accountId}+${identity.login}@users.noreply.github.com`;
     // An explicit publisher replaces the configured primary; the other account may deserve credit.
-    if (params.excludeAccountId === undefined && noreplyEmail.toLowerCase() === primaryEmail) {
+    if (params.excludeIdentity === undefined && email.toLowerCase() === primaryEmail) {
       continue;
     }
-    const contributor = contributors.get(identity.accountId);
+    const identityKey = `${issuer}:${identity.accountId}`;
+    const contributor = contributors.get(identityKey);
     if (contributor) {
       if (record) {
         contributor.contributionCount += record.contributionCount;
@@ -126,11 +146,12 @@ async function resolveAttribution(
       }
       continue;
     }
-    contributors.set(identity.accountId, {
+    contributors.set(identityKey, {
       accountId: identity.accountId,
       contributionCount: record?.contributionCount ?? 0,
       firstPromptedAt: record?.firstPromptedAt ?? null,
       login: identity.login,
+      email,
       ...(!record ? { inheritedOrder: inheritedProfileIds.indexOf(profileId) } : {}),
     });
   }
@@ -152,8 +173,7 @@ async function resolveAttribution(
   const visibleContributors = orderedContributors.slice(0, MAX_SESSION_PARTICIPANTS);
   const logins = visibleContributors.map(({ login }) => login);
   const trailers = visibleContributors.map(
-    ({ accountId, login }) =>
-      `Co-authored-by: ${login} <${accountId}+${login}@users.noreply.github.com>`,
+    ({ email, login }) => `Co-authored-by: ${login} <${email}>`,
   );
   return {
     attribution: trailers.length ? { trailers, logins } : undefined,

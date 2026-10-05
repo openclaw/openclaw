@@ -271,11 +271,20 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       nativeToolSurfaceEnabled = false;
       embeddedAgentLog.info("Codex managed-only hooks require sandbox-backed OpenClaw tools");
     } finally {
-      if (attemptClientFactory === createIsolatedCodexAppServerClient) {
+      if (connection.callerOwnedAttemptClient) {
         await client.closeAndWait();
       } else {
         releaseLeasedSharedCodexAppServerClient(client);
       }
+    }
+  }
+  if (nativeToolSurfaceEnabled) {
+    const github = await connection.prepareLocalGitHub();
+    if (github) {
+      // Per-run shell policy is separate from the shared app-server environment.
+      connection.shellEnvironment = { ...connection.shellEnvironment, ...github.env };
+      connection.disableLoginShell = true;
+      connection.localGitHubInstructions = github.instructions;
     }
   }
   const configuredMcpSurface =

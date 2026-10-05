@@ -20,11 +20,13 @@ import {
   readUserModelAccountSummary,
   readSelectedUserModelAccount,
 } from "./user-model-accounts.js";
+import { applyFactoryGitHubIdentity } from "./user-profile-factory-github-identity.js";
 import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,
 } from "./user-profile-github-identity.js";
 import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { runUserProfileWriteTransaction } from "./user-profile-mutation.js";
 import {
   createUserProfileWriteOperation,
   linkEmail,
@@ -111,6 +113,38 @@ const userProfileWriteOperations = {
         ...owned,
         expectedGitHubAccountId: input.expectedGitHubAccountId,
       }),
+  ),
+  "userProfiles.ensureFactoryGitHub": createUserProfileWriteOperation(
+    "userProfiles.ensureFactoryGitHub",
+    (
+      input: {
+        principal: string;
+        name: string;
+        verifiedMetadata?: { login: string; email?: string };
+      },
+      owned,
+    ) => {
+      const email = normalizeVerifiedEmail(input.verifiedMetadata?.email);
+      if (input.verifiedMetadata?.email !== undefined && !email) {
+        throw new Error("Factory verified email is invalid");
+      }
+      const profile = ensureFactoryGitHubProfile(input.principal, input.name, owned);
+      // A conflicting new alias must still revoke the previous issuer's credit evidence.
+      runUserProfileWriteTransaction(
+        ({ db }) =>
+          applyFactoryGitHubIdentity(db, {
+            profileId: profile.id,
+            principal: input.principal,
+            metadata: input.verifiedMetadata,
+            mutation: owned.mutation,
+          }),
+        owned,
+        { operationLabel: "user-profiles.factory-github-identity" },
+      );
+      return email
+        ? linkEmail(email, profile.id, { ...owned, preserveExistingBinding: true })
+        : profile;
+    },
   ),
   "userProfiles.ensureTailscale": createUserProfileWriteOperation(
     "userProfiles.ensureTailscale",

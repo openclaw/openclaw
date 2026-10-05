@@ -203,6 +203,13 @@ export async function prepareCodexAttemptTurnRequest(
         (tool) => tool.name === "session_status",
       ),
     });
+    // Codex retains omitted fragments; each turn replaces the previous run's credential guidance.
+    (turnStartParams.additionalContext ??= {}).openclaw_github_execution = {
+      kind: "application",
+      value:
+        connection.localGitHubInstructions ??
+        "Local run-scoped GitHub credential guidance is not active for this turn. Any earlier local run-scoped GitHub credential guidance has ended; use the current execution identity policy.",
+    };
     const serviceTier = await resolveCodexUltrafastServiceTier({
       enabled: fastMode === "ultrafast" && turnAppServer.enableUltrafast !== false,
       serviceTier: turnStartParams.serviceTier,

@@ -40,6 +40,7 @@ import {
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { readCurrentUserProfileAliases } from "../../state/user-profile-list.js";
 import { configuredDefaultRepository } from "../configured-default-repository.js";
+import { factoryGitHubActorEnvironment } from "../factory-github-actor.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
@@ -51,6 +52,7 @@ import {
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
 } from "../method-scopes.js";
+import { readFactoryProjectToken } from "../project-github-proof.js";
 import { searchRemoteProjects } from "../project-github-search.js";
 import {
   getSessionRowProjection,
@@ -487,17 +489,53 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       },
       projectCheckoutError,
     ),
-    "projects.add": async ({ params, respond, context, signal }) => {
+    "projects.add": async ({
+      params,
+      respond,
+      context,
+      client,
+      signal,
+      hasCurrentClientAuthority,
+    }) => {
       if (!assertValidParams(params, validateProjectsAddParams, "projects.add", respond)) {
         return;
       }
       try {
         const cfg = context.getRuntimeConfig();
+        const factoryEnv = factoryGitHubActorEnvironment(client, client?.connId ?? "");
+        const factoryProfileId = client?.authenticatedUserProfile?.profileId;
+        const assertCurrent = () => {
+          signal?.throwIfAborted();
+          if (hasCurrentClientAuthority?.() === false || context.getRuntimeConfig() !== cfg) {
+            throw new Error("Project requester authority changed during preparation");
+          }
+          if (
+            factoryEnv &&
+            (factoryGitHubActorEnvironment(client, client?.connId ?? "")
+              ?.OPENCLAW_FACTORY_ACTOR_ID !== factoryEnv.OPENCLAW_FACTORY_ACTOR_ID ||
+              client?.connId !== factoryEnv.OPENCLAW_FACTORY_SESSION_KEY ||
+              client?.authenticatedUserProfile?.profileId !== factoryProfileId)
+          ) {
+            throw new Error("Factory project requester changed during preparation");
+          }
+        };
+        assertCurrent();
+        const token = factoryEnv
+          ? await readFactoryProjectToken(
+              { client, context, signal, hasCurrentClientAuthority, assertCurrent },
+              "project-add",
+              params.gitUrl,
+            )
+          : githubApiToken(process.env, cfg);
+        assertCurrent();
+        if (factoryEnv && !token) {
+          throw new Error("Verified GitHub repository access is unavailable.");
+        }
         respond(
           true,
           await materializeProjectClone(
             { cfg, gitUrl: params.gitUrl, name: params.name },
-            { signal, token: githubApiToken(process.env, cfg) },
+            { signal, token, assertCurrent },
           ),
           undefined,
         );
@@ -557,17 +595,25 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           }
         };
         assertCurrent();
-        const nativeToken =
-          cfg.gateway?.projects?.nativeGitHubSearch === true
+        const nativeToken = factoryEnv
+          ? await readFactoryProjectToken(
+              { client, context, signal, hasCurrentClientAuthority, assertCurrent },
+              "project-search",
+              params.query,
+            )
+          : cfg.gateway?.projects?.nativeGitHubSearch === true
             ? await readCachedNativeGitHubToken(process.env)
             : undefined;
+        if (factoryEnv && !nativeToken) {
+          throw new Error("Verified GitHub repository access is unavailable.");
+        }
         assertCurrent();
         const result = await searchRemoteProjects(params.query, {
           assertCurrent,
           signal,
           host,
           apiBaseUrl,
-          ...(cfg.gateway?.projects?.nativeGitHubSearch === true
+          ...(factoryEnv || cfg.gateway?.projects?.nativeGitHubSearch === true
             ? { token: nativeToken ?? "" }
             : {}),
         });

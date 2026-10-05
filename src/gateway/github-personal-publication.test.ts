@@ -102,6 +102,26 @@ describe("personal publication authority and recovery", () => {
     vi.unstubAllGlobals();
   });
 
+  it("refuses personal publication when a bot is selected without rewriting historical receipts", async () => {
+    const result = await coordinator.requestPersonalForSession(request(), action);
+    expect(result.status).toBe("published");
+    const before = readPersonalGitHubPublication(owner, { requestId: result.requestId });
+    const commandsBefore = commandCalls.length;
+    setRuntimeConfigSnapshot({
+      ...config,
+      tools: { github: { profileId: "ghp_11111111111111111111111111111111" } },
+    });
+    await expect(
+      coordinator.requestPersonalForSession(
+        { ...request(), idempotencyKey: "personal-after-bot" },
+        action,
+      ),
+    ).rejects.toThrow("configured GitHub bot owns publication");
+    expect(status(result.requestId)?.result.status).toBe("published");
+    expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toEqual(before);
+    expect(commandCalls).toHaveLength(commandsBefore);
+  });
+
   it("rejects a pending personal confirmation after the real reset preserves its session ID", async () => {
     const workspace = await createRealPublicationWorkspace("push");
     const session = await persistPublicationTestSession();

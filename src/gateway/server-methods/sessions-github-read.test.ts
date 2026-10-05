@@ -4,6 +4,7 @@ import type { SessionGitHubStatusResult } from "../../../packages/gateway-protoc
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   updateUserGitHubConnection,
@@ -15,6 +16,7 @@ import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { personalGitHubStatus } from "../github-personal-oauth.js";
 import * as publicationAvailability from "../github-publication-availability.js";
 import * as relevance from "../github-publication-relevance.js";
+import * as requesterAuthority from "../github-publication-requester.js";
 import {
   publisher,
   receipt,
@@ -50,6 +52,191 @@ afterEach(() => {
 });
 
 describe("publication receipt reads", () => {
+  it.each([
+    "cold",
+    "requester timeout",
+    "credential timeout",
+    "revoked",
+    "app cold",
+    "app timeout",
+    "app revoked",
+  ] as const)(
+    "bounds admitted options separately from cold requester preparation: %s",
+    async (mode) => {
+      await withReadFixture(async (fixture) => {
+        vi.stubEnv("FACTORY_AUTH_MODE", "github");
+        const app = mode.startsWith("app ");
+        if (app) {
+          vi.spyOn(publicationAvailability, "currentGitHubPublicationConfig").mockReturnValue({
+            tools: {
+              github: {
+                profileId: "ghp_11111111111111111111111111111111",
+                kind: "app-installation",
+                app: {
+                  appId: 1,
+                  installationId: 2,
+                  accountId: 3,
+                  repositories: [{ id: 4, fullName: "synthetic/repo" }],
+                  permissions: { metadata: "read" },
+                  privateKey: { source: "env", provider: "default", id: "SYNTHETIC_KEY" },
+                  keyVersion: "synthetic",
+                },
+              },
+            },
+          });
+        }
+        const captured = createDeferredCore();
+        const requester = createDeferredCore();
+        const credential = createDeferredCore();
+        const lookup = createDeferredCore();
+        const release = vi.fn();
+        let current = true;
+        const assertCurrent = () => {
+          if (!current) {
+            throw new Error("Original requester revoked");
+          }
+        };
+        vi.spyOn(requesterAuthority, "captureGitHubPublicationRequester").mockImplementation(
+          async () => {
+            captured.resolve();
+            await requester.promise;
+            return {
+              requester: {
+                snapshot: {
+                  version: 1,
+                  actor: { kind: "system" },
+                  scopes: ["operator.admin"],
+                  grant: null,
+                },
+                assertCurrent,
+                assertInvocationCurrent: assertCurrent,
+              },
+              release,
+            };
+          },
+        );
+        vi.mocked(
+          publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
+        ).mockImplementation(async (_agent, actor, proof) => {
+          actor?.assertCurrent?.();
+          proof?.assertCurrent();
+          lookup.resolve();
+          await credential.promise;
+          actor?.assertCurrent?.();
+          proof?.assertCurrent();
+          return {
+            source: "system-detected",
+            account: { accountId: 7, login: "shared-bot", avatarUrl: null },
+          };
+        });
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const respond = vi.fn();
+        const request = fixture.invoke("sessions.github.options", { sessionKey }, respond);
+        try {
+          await awaitGateBeforeSettlement(
+            captured.promise,
+            request,
+            "Requester preparation not entered",
+          );
+          if (mode === "requester timeout") {
+            await vi.advanceTimersByTimeAsync(5_000);
+            await request;
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "UNAVAILABLE",
+                retryable: true,
+                details: { phase: "requester", requestId: "publication-read" },
+              }),
+            );
+            requester.resolve();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(release).toHaveBeenCalledOnce();
+            expect(
+              publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
+            ).not.toHaveBeenCalled();
+          } else {
+            await vi.advanceTimersByTimeAsync(2_576);
+            requester.resolve();
+            await awaitGateBeforeSettlement(
+              lookup.promise,
+              request,
+              "Credential preparation not entered",
+            );
+            await vi.advanceTimersByTimeAsync(
+              mode === "app timeout"
+                ? 25_000
+                : mode === "credential timeout"
+                  ? 5_000
+                  : app
+                    ? 6_000
+                    : 3_228,
+            );
+            if (mode === "credential timeout" || mode === "app timeout") {
+              await request;
+              expect(respond).toHaveBeenCalledExactlyOnceWith(
+                false,
+                undefined,
+                expect.objectContaining({
+                  code: "UNAVAILABLE",
+                  details: { phase: "shared_identity", requestId: "publication-read" },
+                }),
+              );
+            } else {
+              expect(respond).not.toHaveBeenCalled();
+              if (mode === "revoked" || mode === "app revoked") {
+                current = false;
+              }
+            }
+            credential.resolve();
+            await request;
+            await vi.advanceTimersByTimeAsync(0);
+            expect(respond).toHaveBeenCalledOnce();
+            if (mode === "cold" || mode === "app cold") {
+              expect(respond).toHaveBeenCalledWith(
+                true,
+                expect.objectContaining({ shared: { ...publisher, source: "system-detected" } }),
+              );
+            } else if (mode === "revoked" || mode === "app revoked") {
+              expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+            }
+            expect(release).toHaveBeenCalledOnce();
+          }
+          expect(fixture.requestForSession).not.toHaveBeenCalled();
+        } finally {
+          requester.resolve();
+          credential.resolve();
+          await vi.advanceTimersByTimeAsync(0);
+          await request;
+        }
+      });
+    },
+  );
+  it("records rejected credential preparation without exposing its private exception", async () => {
+    vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
+    vi.stubEnv("GH_TOKEN", undefined);
+    vi.stubEnv("GITHUB_TOKEN", undefined);
+    mocks.runCommandBuffered.mockRejectedValueOnce(new Error("synthetic-private-token-header"));
+    await withReadFixture(async (fixture) => {
+      const respond = await fixture.invoke("sessions.github.options", { sessionKey });
+      expect(respond).toHaveBeenCalledOnce();
+      expect(fixture.readDiagnostics).toHaveBeenCalledWith(
+        "sessions.github.read.preparation",
+        expect.objectContaining({
+          requestId: "publication-read",
+          sessionId,
+          sessionKey,
+          subphase: "credential_read",
+          outcome: "rejected",
+        }),
+      );
+      expect(JSON.stringify(fixture.readDiagnostics.mock.calls)).not.toContain(
+        "synthetic-private-token-header",
+      );
+      expect(fixture.requestForSession).not.toHaveBeenCalled();
+    });
+  });
   it("reuses native authentication for consecutive options requests and refreshes after invalidation", async () => {
     vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
     vi.stubEnv("GH_TOKEN", undefined);
@@ -106,6 +293,7 @@ describe("publication receipt reads", () => {
           workspace_tree: "2".repeat(40),
         };
         const target = {
+          sessionId,
           params: { sessionKey, agentId: "main" },
           identity: "pr-source",
           readSource: { agentId: "main", path: "/fixture" },
@@ -166,7 +354,7 @@ describe("publication receipt reads", () => {
     },
   );
 
-  it.each(["refresh", "personal", "receipt"] as const)(
+  it.each(["refresh", "native", "verification", "personal", "receipt"] as const)(
     "bounds a stalled %s read and prevents late work or a second response",
     async (phase) => {
       await withReadFixture(
@@ -177,11 +365,33 @@ describe("publication receipt reads", () => {
             entered.resolve();
             await pending.promise;
           };
-          if (phase === "refresh") {
+          if (phase === "refresh" || phase === "native" || phase === "verification") {
             vi.mocked(
               publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
             ).mockRestore();
-            vi.mocked(requestCurrentGitHubOAuthRefresh).mockImplementationOnce(hold);
+            if (phase === "refresh") {
+              vi.mocked(requestCurrentGitHubOAuthRefresh).mockImplementationOnce(hold);
+            } else {
+              vi.stubEnv("GH_TOKEN", undefined);
+              vi.stubEnv("GITHUB_TOKEN", undefined);
+              mocks.runCommandBuffered.mockImplementationOnce(async () => {
+                if (phase === "native") {
+                  await hold();
+                }
+                return {
+                  stdout: Buffer.from("synthetic-cold-native"),
+                  stderr: Buffer.alloc(0),
+                  code: 0,
+                  termination: "exit",
+                };
+              });
+              vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+                if (phase === "verification") {
+                  await hold();
+                }
+                return Response.json({ id: 7, login: "shared-bot", avatar_url: null });
+              });
+            }
             mocks.runCommandBuffered.mockClear();
           } else if (phase === "personal") {
             fixture.personalConnectionStatus.mockImplementationOnce(async (action) => {
@@ -196,7 +406,10 @@ describe("publication receipt reads", () => {
           }
           vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           const respond = vi.fn();
-          const request = fixture.invoke("sessions.github.options", { sessionKey }, respond);
+          const traceId = "a".repeat(32);
+          const request = runWithDiagnosticTraceContext({ traceId }, () =>
+            fixture.invoke("sessions.github.options", { sessionKey }, respond),
+          );
           try {
             await awaitGateBeforeSettlement(entered.promise, request, "Held read did not start");
             await vi.advanceTimersByTimeAsync(4_999);
@@ -207,14 +420,66 @@ describe("publication receipt reads", () => {
               undefined,
               expect.objectContaining({
                 code: "UNAVAILABLE",
-                message: "GitHub publication options timed out after 5 seconds; retry the request.",
+                message:
+                  phase === "refresh" || phase === "native" || phase === "verification"
+                    ? "GitHub account verification is still preparing; refresh publication options to retry. No publication was requested."
+                    : "GitHub publication options timed out after 5 seconds; retry the request.",
                 retryable: true,
+                details: {
+                  phase:
+                    phase === "refresh" || phase === "native" || phase === "verification"
+                      ? "shared_identity"
+                      : phase === "personal"
+                        ? "personal_status"
+                        : "shared_receipt",
+                  requestId: "publication-read",
+                },
               }),
             );
             await request;
+            if (phase === "refresh" || phase === "native" || phase === "verification") {
+              const subphase =
+                phase === "refresh"
+                  ? "oauth_refresh"
+                  : phase === "native"
+                    ? "credential_read"
+                    : "user_verification";
+              expect(fixture.readDiagnostics).toHaveBeenCalledWith(
+                "sessions.github.read.preparation",
+                expect.objectContaining({
+                  requestId: "publication-read",
+                  traceId,
+                  sessionId,
+                  sessionKey,
+                  subphase,
+                  outcome: "started",
+                }),
+              );
+              expect(fixture.readDiagnostics).toHaveBeenLastCalledWith(
+                "sessions.github.read",
+                expect.objectContaining({
+                  requestId: "publication-read",
+                  traceId,
+                  sessionId,
+                  sessionKey,
+                  identityPreparation: expect.objectContaining({
+                    [subphase]: expect.objectContaining({
+                      outcome: "timeout",
+                      durationMs: expect.any(Number),
+                    }),
+                  }),
+                }),
+              );
+              expect(JSON.stringify(fixture.readDiagnostics.mock.calls)).not.toContain(
+                "synthetic-cold-native",
+              );
+            }
+            const diagnosticCount = fixture.readDiagnostics.mock.calls.length;
             pending.resolve();
             await vi.advanceTimersByTimeAsync(0);
             expect(respond).toHaveBeenCalledOnce();
+            expect(fixture.readDiagnostics).toHaveBeenCalledTimes(diagnosticCount);
+            expect(fixture.requestForSession).not.toHaveBeenCalled();
             if (phase === "refresh") {
               expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
               expect(fixture.personalConnectionStatus).not.toHaveBeenCalled();

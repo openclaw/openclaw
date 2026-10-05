@@ -45,6 +45,40 @@ async function expectActiveGatewayPassword(config: unknown): Promise<void> {
 }
 
 describe("secrets runtime gateway local surfaces", () => {
+  it("resolves Gateway App keys through the canonical capability secret owner", async () => {
+    const github = {
+      profileId: "ghp_6128c113c0df8c1a366dfe690c062d8e",
+      kind: "app-installation",
+      app: {
+        appId: 13361,
+        installationId: 119386,
+        accountId: 185961,
+        repositories: [{ id: 1044511, fullName: "bic/lobster" }],
+        permissions: { contents: "write" },
+        privateKey: { source: "env", provider: "default", id: "CUSTOM_APP_KEY" },
+        keyVersion: "synthetic-v1",
+      },
+    };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({ tools: { github }, agents: { entries: { main: { tools: { github } } } } }),
+      env: { CUSTOM_APP_KEY: "synthetic-gateway-key" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+    expect(snapshot.config.tools?.github?.kind).toBe("app-installation");
+    expect(snapshot.config.tools?.github).toMatchObject({
+      app: { privateKey: "synthetic-gateway-key" },
+    });
+    expect(snapshot.config.agents?.entries?.main?.tools?.github).toMatchObject({
+      app: { privateKey: "synthetic-gateway-key" },
+    });
+    expect(snapshot.secretOwners.map((owner) => owner.ownerId)).toEqual(
+      expect.arrayContaining([
+        "github-app:tools.github",
+        "github-app:agents.entries.main.tools.github",
+      ]),
+    );
+  });
   it("resolves the Control UI GitHub preview credential independently", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

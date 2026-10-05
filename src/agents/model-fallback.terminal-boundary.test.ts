@@ -9,10 +9,13 @@ import {
 import { createCliOutputFailoverError } from "./cli-runner/output-error.js";
 import {
   FailoverError,
+  coerceToFailoverError,
+  describeFailoverError,
   findCliTerminalStopError,
   findCliTimeoutError,
   resolveModelFallbackError,
 } from "./failover-error.js";
+import { GitHubCredentialLookupError } from "./github-read-identity.js";
 import { AgentHarnessPreflightError, recordAgentHarnessPreflightOwner } from "./harness/errors.js";
 import {
   type ModelFallbackStepHandler,
@@ -100,6 +103,58 @@ it("does not consult provider policy or rotate models for a transcript conflict"
   const error = new SqliteTranscriptMutationConflictError("conflicting-session");
   await expectTerminalStop(error);
   await expectTerminalStop(new Error("worker operation failed", { cause: error }));
+});
+
+it.each([
+  { status: 503, wrapper: "direct", configured: false },
+  { status: 503, wrapper: "direct", configured: true },
+  { status: 403, wrapper: "direct", configured: true },
+  { status: 503, wrapper: "aggregate", configured: true },
+] as const)(
+  "preserves credential lookup $status/$wrapper with fallbacks configured=$configured",
+  async ({ status, wrapper, configured }) => {
+    providerHook.mockReturnValue(undefined);
+    const lookup = new GitHubCredentialLookupError({
+      lookupId: "11111111-1111-4111-8111-111111111111",
+      clientStage: "broker",
+      clientCode: "http_rejected",
+      httpStatus: status,
+    });
+    const error = wrapper === "direct" ? lookup : new AggregateError([lookup], "intent failed");
+    await expectTerminalStop(error, {
+      fallbacksOverride: configured ? fallbackOptions.fallbacksOverride : [],
+    });
+    expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+    expect(
+      coerceToFailoverError(error, { provider: "fixture-provider", model: "fixture-model" }),
+    ).toBeNull();
+    expect(describeFailoverError(error).reason).toBeUndefined();
+    expect(lookup.diagnostic.httpStatus).toBe(status);
+  },
+);
+
+it.each([
+  { status: 408, reason: "timeout" },
+  { status: 503, reason: "server_error" },
+  { status: 503, reason: "server_error", name: "GitHubCredentialLookupError" },
+  { status: 429, reason: "rate_limit" },
+  { status: 403, reason: "auth" },
+] as const)("retains genuine provider $status fallback as $reason", async (fixture) => {
+  const { status, reason } = fixture;
+  providerHook.mockReturnValue(undefined);
+  const error = Object.assign(new Error(`HTTP ${status}`), { status });
+  if ("name" in fixture && fixture.name !== undefined) {
+    error.name = fixture.name;
+  }
+  const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("recovered");
+  const onError = vi.fn();
+  await expect(runWithModelFallback({ ...fallbackOptions, run, onError })).resolves.toMatchObject({
+    outcome: "completed",
+    result: "recovered",
+  });
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(onError).toHaveBeenCalledOnce();
+  expect(onError.mock.calls[0]?.[0].error).toMatchObject({ reason, status });
 });
 
 it("retains closed ownership when async disposal also fails", async () => {

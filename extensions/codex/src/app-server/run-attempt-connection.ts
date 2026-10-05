@@ -178,15 +178,18 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         : undefined;
     const hasLocalToolEnv = localToolEnv && Object.keys(localToolEnv).length > 0;
     shellPathPrepend = hasLocalToolEnv ? preparedEnvironment?.localToolPathPrepend : undefined;
-    shellEnvironment = hasLocalToolEnv
+    const processEnvironment = hasLocalToolEnv
       ? { ...baseShellEnvironment, ...localToolEnv }
       : baseShellEnvironment;
+    shellEnvironment = localGitHub
+      ? { ...processEnvironment, ...localGitHub.env }
+      : processEnvironment;
     // Tool lookup must not reject native login requests. Codex owns profile and
     // snapshot startup; only the identity restrictions above disable login.
-    return shellEnvironment
+    return processEnvironment
       ? {
           ...appServer,
-          start: { ...appServer.start, env: { ...appServer.start.env, ...shellEnvironment } },
+          start: { ...appServer.start, env: { ...appServer.start.env, ...processEnvironment } },
         }
       : appServer;
   };
@@ -249,9 +252,14 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
             assertCodexSessionRuntimeOwnership(binding, params.expectedSessionRuntimeOwnership)
         : undefined,
     });
+  let localGitHub: Awaited<
+    ReturnType<NonNullable<typeof params.hostCapabilities.prepareLocalGitHubEnvironment>>
+  >;
+  let detachGitHubAbort: (() => void) | undefined;
   const assertCurrent = () => {
     bindingAuthority.assertCurrent();
     assertModelExecutionCurrent();
+    localGitHub?.assertCurrent();
   };
   const authority = createNativeSessionBindingAuthority(bindingAuthority.lineage, assertCurrent);
   let startupBinding = admittedBinding;
@@ -530,6 +538,43 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     // Host capabilities are identity-keyed; carry generation proof separately.
     return {
       params,
+      prepareLocalGitHub: async () => {
+        if (
+          isIncognitoSessionKey(contextSessionKey) ||
+          sandbox?.enabled ||
+          remoteExec ||
+          appServer.start.transport !== "stdio" ||
+          appServer.remoteWorkspaceRoot ||
+          isCodexAppServerProxyLaunch(appServer.start.args) ||
+          usesSupervisionConnection
+        ) {
+          return undefined;
+        }
+        localGitHub ??= await params.hostCapabilities.prepareLocalGitHubEnvironment?.({
+          assertCurrent: () => {
+            bindingAuthority.assertCurrent();
+            assertModelExecutionCurrent();
+          },
+          signal: runAbortController.signal,
+        });
+        if (localGitHub?.signal && !detachGitHubAbort) {
+          const signal = localGitHub.signal;
+          const onAbort = () => abortExplicitly(signal.reason);
+          signal.addEventListener("abort", onAbort, { once: true });
+          detachGitHubAbort = () => signal.removeEventListener("abort", onAbort);
+          if (signal.aborted) {
+            onAbort();
+          }
+        }
+        return localGitHub;
+      },
+      releaseLocalGitHub: async () => {
+        detachGitHubAbort?.();
+        detachGitHubAbort = undefined;
+        await localGitHub?.dispose();
+      },
+      // SAFETY: This mutable slot starts unset; preparation assigns only admitted local GitHub instructions.
+      localGitHubInstructions: undefined as string | undefined,
       prepareInputAttachments: async (
         request: Omit<
           Parameters<NonNullable<typeof params.hostCapabilities.prepareInputAttachments>>[0],
@@ -636,6 +681,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     // The attempt owns this listener only after connection preparation returns.
     cancellation.dispose();
     releaseModelExecution();
+    await localGitHub?.dispose();
     throw error;
   }
 }

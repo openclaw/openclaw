@@ -522,6 +522,40 @@ function collectCronAssignments(params: ConfigCollectorParams): void {
   });
 }
 
+function collectGitHubAppAssignments(params: ConfigCollectorParams): void {
+  const collect = (config: unknown, path: string) => {
+    if (!isRecord(config) || config.kind !== "app-installation" || !isRecord(config.app)) {
+      return;
+    }
+    const app = config.app;
+    collectSecretInputAssignment({
+      value: app.privateKey,
+      path: `${path}.app.privateKey`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      owner: {
+        ownerKind: "capability",
+        ownerId: `github-app:${path}`,
+        requiredForGateway: false,
+        disposition: "isolate",
+        contract: config,
+      },
+      apply: (value) => {
+        app.privateKey = value;
+      },
+    });
+  };
+  collect(params.config.tools?.github, "tools.github");
+  for (const { entry, source } of listAgentEntriesWithSource(params.config)) {
+    const path =
+      source.kind === "entries"
+        ? appendConfigPathSegment("agents.entries", source.key)
+        : `agents.list[${source.index}]`;
+    collect(entry.tools?.github, `${path}.tools.github`);
+  }
+}
+
 /** Collects SecretRef assignments from core non-plugin config surfaces. */
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
@@ -547,6 +581,7 @@ export function collectCoreConfigAssignments(params: {
     });
   }
 
+  collectGitHubAppAssignments(params);
   collectAgentMemorySearchAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);

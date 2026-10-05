@@ -106,6 +106,7 @@ function createNodeEventHarness() {
     nodeId = "node-1",
     clientId = "openclaw-macos",
     platform = "darwin",
+    commands: string[] = [],
   ) => {
     const client = {
       connId,
@@ -117,7 +118,7 @@ function createNodeEventHarness() {
         device: { id: nodeId },
         client: { id: clientId, platform, mode: "node", version: "1.0.0" },
         caps: [],
-        commands: [],
+        commands,
       },
     } as unknown as GatewayWsClient;
     runtime.nodeRegistry.register(client, {
@@ -153,6 +154,32 @@ function createNodeEventHarness() {
       .map(([, payload]) => payload);
   return { ...runtime, binding, resolvePairing, register, send, changes };
 }
+
+describe("registered node command feature events", () => {
+  it("keeps metadata separate from permissions and refuses a replaced connection", async () => {
+    const h = createNodeEventHarness();
+    const first = h.register("conn-first", "node-1", "openclaw-macos", "darwin", ["system.run"]);
+    const before = h.nodeRegistry.get("node-1")!;
+    const caps = [...before.caps];
+    const commands = [...before.commands];
+    const features = { "system.run": ["profile-refresh"], "unregistered.command": ["unknown"] };
+    const accepted = await h.send(first, { features }, "node.command.features");
+    expect(accepted).toHaveBeenCalledWith(
+      true,
+      { ok: true, event: "node.command.features", handled: true, reason: "updated" },
+      undefined,
+    );
+    expect(h.nodeRegistry.get("node-1")).toMatchObject({
+      commandFeatures: { "system.run": ["profile-refresh"] },
+      caps,
+      commands,
+    });
+    h.register("conn-new", "node-1", "openclaw-macos", "darwin", ["system.run"]);
+    await h.send(first, { features }, "node.command.features");
+    expect(h.nodeRegistry.get("node-1")?.commandFeatures).toBeUndefined();
+    h.nodeRegistry.unregister("conn-new");
+  });
+});
 
 describe("registered node desktop availability events", () => {
   it("invalidates only the reporting node's inventory on state changes and connection retirement", async () => {

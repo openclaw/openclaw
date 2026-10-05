@@ -115,8 +115,10 @@ function createFixture(
   );
   const requestForSession = vi.fn();
   const pullRequests = { subscribe: vi.fn(), unsubscribe: vi.fn(), read: vi.fn(), stop: vi.fn() };
+  const readDiagnostics = vi.fn();
   // Only these services belong to the read handler; the authorization helpers stay real.
   const context = {
+    logGateway: { info: readDiagnostics },
     getRuntimeConfig,
     controlUiSessionPullRequests: pullRequests,
     getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>
@@ -151,6 +153,7 @@ function createFixture(
     return respond;
   };
   return {
+    readDiagnostics,
     client,
     context,
     invoke,

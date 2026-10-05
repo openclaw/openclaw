@@ -1,18 +1,25 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
-import { access } from "node:fs/promises";
+import fs, { access } from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as tempPaths from "openclaw/plugin-sdk/temp-path";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
 import * as transport from "./app-server/transport-stdio.js";
 import * as transportLifecycle from "./app-server/transport.js";
 import { createCodexNodeExecServerCommand } from "./node-exec-server.js";
+import {
+  encodeCodexNodeGitHubControl,
+  parseCodexNodeGitHubControl,
+} from "./node-github-refresh.js";
 
-// Pinned Codex 0.154.0 transport.rs emits this line before entering its stdio loop.
+// Pinned Codex 0.160.0 transport.rs:113 emits this line before entering its stdio loop.
 const READY = " INFO codex_exec_server::server::transport: codex-exec-server listening on stdio\n";
 const fixture = `
 const readline = require('node:readline');
@@ -30,7 +37,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function startFixture(readyBeforeRegistrationReturns = false) {
+async function startFixture(
+  readyBeforeRegistrationReturns = false,
+  github?: { token: string; login: string; branch: string; host: string },
+) {
   const controller = new AbortController();
   const receiver = vi.fn((_receive: (message: Uint8Array) => void | Promise<void>) => () => {});
   const send = vi.fn(async (_message: Uint8Array) => {});
@@ -83,7 +93,7 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
     ownerEpoch: 1,
   };
   const invocation = command.handle(
-    JSON.stringify({ placement, authorization: "human-approved" }),
+    JSON.stringify({ placement, authorization: "human-approved", ...(github ? { github } : {}) }),
     io,
     {
       sessionKey: placement.sessionKey,
@@ -129,6 +139,132 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
 }
 
 describe("Codex node native readiness", () => {
+  it("settles an admitted GitHub profile write before releasing a disconnected workspace", async () => {
+    const writeHeld = createDeferred<void>();
+    const releaseWrite = createDeferred<void>();
+    const chmod = fs.chmod.bind(fs);
+    let writeSettled = false;
+    let cleanedBeforeWriteSettled = false;
+    const createWorkspace = tempPaths.tempWorkspace;
+    // Capture cleanup at its resource boundary, before asynchronous removal.
+    vi.spyOn(tempPaths, "tempWorkspace").mockImplementation(async (options) => {
+      const workspace = await createWorkspace(options);
+      const cleanup = workspace.cleanup.bind(workspace);
+      workspace.cleanup = async () => {
+        cleanedBeforeWriteSettled = !writeSettled;
+        return cleanup();
+      };
+      return workspace;
+    });
+    const close = transportLifecycle.closeCodexAppServerTransportAndWait;
+    vi.spyOn(transportLifecycle, "closeCodexAppServerTransportAndWait").mockImplementation(
+      async (...args) => {
+        const result = await close(...args);
+        // Physical child closure precedes worker-backed registration settlement.
+        // Let resource cleanup react to the complete termination receipt first.
+        setImmediate(() => releaseWrite.resolve());
+        return result;
+      },
+    );
+    const h = await startFixture(false, {
+      token: "synthetic-node-initial",
+      login: "x-access-token",
+      branch: "fixture",
+      host: "fixture.ghe.com",
+    });
+    let delivery: Promise<unknown> | undefined;
+    try {
+      await h.stderr(READY);
+      await Promise.resolve();
+      vi.spyOn(fs, "chmod").mockImplementationOnce(async (...args) => {
+        await chmod(...args);
+        writeHeld.resolve();
+        await releaseWrite.promise;
+        writeSettled = true;
+      });
+      const receive = h.receiver.mock.calls[0]![0];
+      delivery = Promise.resolve(
+        receive(
+          encodeCodexNodeGitHubControl({
+            type: "openclaw.github.profile",
+            generation: 1,
+            token: "synthetic-disconnected-refresh",
+            expiresAtMs: Date.now() + 3_600_000,
+          }),
+        ),
+      ).catch((error: unknown) => error);
+      await writeHeld.promise;
+      h.controller.abort(new Error("profile refresh disconnected"));
+      await expect(delivery).resolves.toMatchObject({ message: "profile refresh disconnected" });
+      await h.outcome;
+      expect(cleanedBeforeWriteSettled).toBe(false);
+      expect(h.send).not.toHaveBeenCalled();
+      expect(h.release).toHaveBeenCalledOnce();
+      await expect(access(h.privateHome)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      releaseWrite.resolve();
+      await delivery;
+      await h.cleanup();
+    }
+  });
+
+  it("refreshes the owned profile, acknowledges duplicate delivery and refuses lost authority before publication", async () => {
+    const h = await startFixture(false, {
+      token: "synthetic-node-initial",
+      login: "x-access-token",
+      branch: "fixture",
+      host: "fixture.ghe.com",
+    });
+    try {
+      await h.stderr(READY);
+      // The registered command installs its framed receiver after native readiness.
+      await Promise.resolve();
+      const receive = h.receiver.mock.calls[0]![0];
+      const snapshot = {
+        type: "openclaw.github.profile" as const,
+        generation: 1,
+        token: "synthetic-node-renewed",
+        expiresAtMs: Date.now() + 3_600_000,
+      };
+      await receive(encodeCodexNodeGitHubControl(snapshot));
+      await receive(encodeCodexNodeGitHubControl(snapshot));
+      const profileFile = path.join(h.privateHome, "github", "hosts.yml");
+      expect(parse(await fs.readFile(profileFile, "utf8"))["fixture.ghe.com"].oauth_token).toBe(
+        snapshot.token,
+      );
+      const acknowledgements = h.send.mock.calls.map(([bytes]) =>
+        parseCodexNodeGitHubControl(bytes),
+      );
+      expect(acknowledgements).toEqual(
+        expect.arrayContaining([
+          { type: "openclaw.github.profile.ack", generation: 1, ok: true },
+          { type: "openclaw.github.profile.ack", generation: 1, ok: true },
+        ]),
+      );
+      const chmod = fs.chmod.bind(fs);
+      vi.spyOn(fs, "chmod").mockImplementationOnce(async (...args) => {
+        await chmod(...args);
+        h.assertExecAuthorized.mockImplementation(() => {
+          throw new Error("synthetic node authority lost");
+        });
+      });
+      await expect(
+        receive(
+          encodeCodexNodeGitHubControl({
+            ...snapshot,
+            generation: 2,
+            token: "synthetic-forbidden",
+          }),
+        ),
+      ).rejects.toThrow("node authority lost");
+      expect(parse(await fs.readFile(profileFile, "utf8"))["fixture.ghe.com"].oauth_token).toBe(
+        snapshot.token,
+      );
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   it("retains workspace resources until the in-flight shutdown receipt settles", async () => {
     const createWorkspace = tempPaths.tempWorkspace;
     const cleanupStarted = vi.fn();

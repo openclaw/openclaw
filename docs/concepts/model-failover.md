@@ -34,6 +34,12 @@ thinking parameter. Model/account restrictions and unrelated unsupported options
 keep their original failure classification and follow the configured fallback
 policy. OpenClaw does not retry them with thinking disabled.
 
+Repository credential lookup failures are independent of model availability.
+OpenClaw preserves the typed GitHub credential failure and its lookup diagnostic
+instead of treating the credential broker's HTTP status as a model timeout or
+rotating providers. This does not change repository access or restore external
+SSO authorization; genuine model-provider failures retain their fallback policy.
+
 ## Runtime flow
 
 <Steps>

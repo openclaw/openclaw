@@ -62,6 +62,7 @@
   "file-access-runtime",
   "file-lock",
   "gateway-config-runtime",
+  "github-worker-runtime",
   "global-singleton",
   "group-activation",
   "heartbeat-runtime",

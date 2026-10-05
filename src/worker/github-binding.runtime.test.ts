@@ -109,6 +109,27 @@ describe("prepareWorkerGitHubEnvironment", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("prepares credentials without changing checkout metadata for a non-repository binding", async () => {
+    const before = await git(cwd, "symbolic-ref", "HEAD");
+    const remote = await git(cwd, "remote", "get-url", "origin");
+    const environment = await prepareWorkerGitHubEnvironment({
+      binding: { token: binding.token, login: binding.login },
+      stateDir: path.join(root, "credential-only-state"),
+      turnId: "credential-only",
+      cwd,
+    });
+    expect(environment?.localIdentityEnv.GH_CONFIG_DIR).toBeTypeOf("string");
+    expect(environment?.credentialScrubEnv.GH_TOKEN).toBe("");
+    expect(
+      await fs.readFile(
+        path.join(environment!.localIdentityEnv.GH_CONFIG_DIR!, "hosts.yml"),
+        "utf8",
+      ),
+    ).toContain(binding.token);
+    expect(await git(cwd, "symbolic-ref", "HEAD")).toBe(before);
+    expect(await git(cwd, "remote", "get-url", "origin")).toBe(remote);
+  });
+
   it.each([
     { scenario: "reconciled identical content", content: pushedContent, porcelain: "" },
     { scenario: "reconciled local edits", content: "local edit\n", porcelain: ` M ${filename}\0` },
@@ -310,8 +331,10 @@ describe("prepareWorkerGitHubEnvironment", () => {
     // Project only fixture-owned keys so a failed assertion cannot dump the host environment.
     const expectedEnv = {
       ...prepared?.localIdentityEnv,
-      GH_TOKEN: binding.token,
+      GH_TOKEN: "",
+      GH_ENTERPRISE_TOKEN: "",
       GITHUB_TOKEN: "",
+      GITHUB_ENTERPRISE_TOKEN: "",
     };
     const actualEnv = Object.fromEntries(
       Object.keys(expectedEnv).map((key) => [key, options.baseEnv?.[key]]),
@@ -354,6 +377,49 @@ describe("prepareWorkerGitHubEnvironment", () => {
     await disposeWorkerGitHubEnvironment(path.join(root, "state"), "next-turn");
     await expect(fs.access(currentProfile)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it.each([{ host: "fixture.ghe.com" }, { host: "github.corp.invalid" }])(
+    "writes an isolated $host profile using its gh credential contract",
+    async ({ host }) => {
+      const enterprise = {
+        ...binding,
+        host,
+        remoteUrl: `https://${host}/example/repo.git`,
+      };
+      await git(root, "config", "--global", `url.${origin}.insteadOf`, enterprise.remoteUrl);
+      const runner = vi.spyOn(exec, "runCommandWithTimeout");
+      const prepared = await prepareWorkerGitHubEnvironment({
+        binding: enterprise,
+        stateDir: path.join(root, "enterprise-state"),
+        turnId: "enterprise-turn",
+        cwd,
+      });
+      const hosts = await fs.readFile(
+        path.join(prepared!.localIdentityEnv.GH_CONFIG_DIR!, "hosts.yml"),
+        "utf8",
+      );
+
+      expect(prepared?.localIdentityEnv.GH_HOST).toBe(host);
+      const fetchCall = runner.mock.calls.find(([args]) => args[3] === "fetch");
+      const fetchOptions = fetchCall?.[1];
+      if (typeof fetchOptions !== "object") {
+        throw new Error("Expected options for enterprise Git fetch");
+      }
+      expect(fetchOptions.baseEnv).toMatchObject({
+        GH_TOKEN: "",
+        GH_ENTERPRISE_TOKEN: "",
+      });
+      expect(hosts).toContain(host);
+      expect(hosts).toContain(binding.token);
+      expect(JSON.stringify(prepared)).not.toContain(binding.token);
+      expect(prepared?.credentialScrubEnv).toEqual({
+        GH_TOKEN: "",
+        GH_ENTERPRISE_TOKEN: "",
+        GITHUB_TOKEN: "",
+        GITHUB_ENTERPRISE_TOKEN: "",
+      });
+    },
+  );
 
   it("warns and continues without changing local files when origin cannot be fetched", async () => {
     await fs.writeFile(path.join(cwd, filename), "unpublished work\n");

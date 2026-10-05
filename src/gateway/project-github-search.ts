@@ -68,9 +68,11 @@ function parseRepository(value: unknown): RemoteProject | null {
 function repositoryArray(value: unknown): RemoteProject[] {
   const items = Array.isArray(value)
     ? value
-    : isRecord(value) && Array.isArray(value.items)
-      ? value.items
-      : [];
+    : isRecord(value) && Array.isArray(value.repositories)
+      ? value.repositories
+      : isRecord(value) && Array.isArray(value.items)
+        ? value.items
+        : [];
   return items.flatMap((item) => {
     const parsed = parseRepository(item);
     return parsed ? [parsed] : [];
@@ -101,8 +103,14 @@ async function loadExactRepository(
   }
 }
 
-async function loadAffiliatedRepositories(request: GitHubSearchRequest): Promise<RemoteProject[]> {
-  const url = new URL("user/repos", `${gitHubPublicApi.GITHUB_API_BASE_URL}/`);
+async function loadAffiliatedRepositories(
+  request: GitHubSearchRequest,
+  appInstallation = false,
+): Promise<RemoteProject[]> {
+  const url = new URL(
+    appInstallation ? "installation/repositories" : "user/repos",
+    `${gitHubPublicApi.GITHUB_API_BASE_URL}/`,
+  );
   url.searchParams.set("affiliation", "owner,collaborator,organization_member");
   url.searchParams.set("sort", "updated");
   url.searchParams.set("direction", "desc");
@@ -130,10 +138,11 @@ async function searchProjectsUncached(params: {
   query: string;
   request: GitHubSearchRequest;
   token?: string;
+  appInstallation?: boolean;
 }): Promise<ProjectsSearchRemoteResult> {
   const [exact, affiliated, global] = await Promise.all([
     EXACT_REPO_QUERY.test(params.query) ? loadExactRepository(params.query, params.request) : null,
-    params.token ? loadAffiliatedRepositories(params.request) : [],
+    params.token ? loadAffiliatedRepositories(params.request, params.appInstallation) : [],
     loadRepositorySearch(params.query, params.request),
   ]);
   // Order is the ranking: exact owner/name hit, then affiliated repositories
@@ -164,6 +173,8 @@ export async function searchRemoteProjects(
     fetchImpl?: typeof fetch;
     now?: number;
     token?: string;
+    appInstallation?: boolean;
+    requireAuthentication?: boolean;
     host?: string;
     apiBaseUrl?: string;
     assertCurrent?: () => void;
@@ -198,7 +209,7 @@ export async function searchRemoteProjects(
           cacheScope: gitHubPublicApi.githubApiCredentialCacheScope(options.token),
         };
   // Gateway reloads run in-process, so cache results must stay credential-scoped.
-  const cacheKey = `${normalizedQuery}\0${host}\0${apiBaseUrl}\0${cacheScope}`;
+  const cacheKey = `${normalizedQuery}\0${host}\0${apiBaseUrl}\0${cacheScope}\0${options.appInstallation === true}`;
   const now = options.now ?? Date.now();
   const cached = searchCache.get(cacheKey);
   const reusable = cached && cached.expiresAt > now && !cached.access.signal.aborted;
@@ -233,18 +244,21 @@ export async function searchRemoteProjects(
             apiBaseUrl,
           ),
         );
-      return optionalAuth
+      return optionalAuth && !options.requireAuthentication
         ? gitHubPublicApi.withOptionalGitHubAuth(token, readJson)
         : readJson(token);
     };
-    entry.promise = searchProjectsUncached({ query: query.trim(), request, token }).catch(
-      (error: unknown) => {
-        if (searchCache.get(cacheKey) === entry) {
-          searchCache.delete(cacheKey);
-        }
-        throw error;
-      },
-    );
+    entry.promise = searchProjectsUncached({
+      query: query.trim(),
+      request,
+      token,
+      appInstallation: options.appInstallation,
+    }).catch((error: unknown) => {
+      if (searchCache.get(cacheKey) === entry) {
+        searchCache.delete(cacheKey);
+      }
+      throw error;
+    });
   }
   searchCache.delete(cacheKey);
   searchCache.set(cacheKey, entry);

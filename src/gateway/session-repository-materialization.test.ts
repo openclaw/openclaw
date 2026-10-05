@@ -231,6 +231,23 @@ describe("explicit repository move to Gateway", () => {
       };
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
+      await writeManagedGitHubProfileFiles(
+        resolveManagedGitHubProfileDir({
+          agentId: "main",
+          scope: "system",
+          profileId: cfg.tools.github.profileId,
+        }),
+        { login: "shared-bot", token: "synthetic-materialization-selected-token" },
+      );
+      vi.spyOn(githubOAuth, "verifyGitHubCredential").mockResolvedValue({
+        status: "available",
+        account: { accountId: 42, login: "shared-bot", avatarUrl: null },
+        scopes: [],
+      });
+      vi.spyOn(githubOAuthLifecycle, "requestCurrentGitHubOAuthRefresh").mockResolvedValue(
+        undefined,
+      );
+
       const source = state.path("source");
       await fsp.mkdir(source);
       await git(source, ["init", "-b", "main"]);

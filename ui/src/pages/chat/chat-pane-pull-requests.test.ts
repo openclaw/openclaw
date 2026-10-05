@@ -430,6 +430,9 @@ describe("chat pane pushed pull request state", () => {
           .toHaveBeenCalledWith(
             `sessions.github.${method}`,
             expect.objectContaining({ sessionKey: "global", agentId: "research" }),
+            ...(method === "options" || method === "status"
+              ? [expect.objectContaining({ onSent: expect.any(Function) })]
+              : []),
           );
       }
     },

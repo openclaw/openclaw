@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
+import { prepareWorkerGitHubEnvironment } from "../worker/github-binding.runtime.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
@@ -235,6 +237,61 @@ describe.skipIf(process.platform === "win32")("local GitHub credential launch bo
     expect(beforeSpawn).toHaveBeenCalledOnce();
     expect(boundary.spawn).toHaveBeenCalledOnce();
   });
+
+  it.each(["ghe.example.test", "tenant.ghe.com"])(
+    "launches the admitted GHE worker profile for %s with existing credential variables",
+    async (host) => {
+      const prepared = await prepareWorkerGitHubEnvironment({
+        binding: { host, token: "synthetic-launch-token", login: "selected-bot" },
+        stateDir: root,
+        turnId: "ghe-turn",
+        cwd: root,
+      });
+      assert(prepared);
+      const resolved = resolvePreparedExecEnvironment({
+        execParams: { command: "echo synthetic" },
+        host: "gateway",
+        defaultPathPrepend: [],
+        ...prepared,
+        warnings: [],
+      });
+      const probe = path.join(root, "enterprise-credential-outcome.cjs");
+      await fs.writeFile(
+        probe,
+        'const expected = process.argv[2] === "rotated" ? "synthetic-rotated-token" : "synthetic-launch-token"; process.stdout.write(JSON.stringify({host: process.env.GH_HOST, selected: process.env.GH_TOKEN === expected && process.env.GH_ENTERPRISE_TOKEN === process.env.GH_TOKEN, cleared: !process.env.GITHUB_TOKEN && !process.env.GITHUB_ENTERPRISE_TOKEN}));',
+      );
+      boundary.spawn.mockImplementation((input: SpawnInput) => {
+        expect(input.env?.GH_TOKEN).toBe("");
+        expect(input.env?.GH_ENTERPRISE_TOKEN).toBe("");
+        return supervisor.spawn(input);
+      });
+      const run = async (generation = "initial") =>
+        (
+          await launch({
+            env: resolved.env,
+            githubProfileDir: prepared.localIdentityEnv.GH_CONFIG_DIR,
+            command: [process.execPath, probe, generation].map(quoteCliArg).join(" "),
+          })
+        ).promise;
+      const first = await run();
+      expect(first.exitCode).toBe(0);
+      expect(JSON.parse(first.aggregated)).toEqual({ host, selected: true, cleared: true });
+      await prepared.refresh({ generation: 1, token: "synthetic-rotated-token" }, () => {});
+      const rotated = await run("rotated");
+      expect(rotated.exitCode).toBe(0);
+      expect(JSON.parse(rotated.aggregated)).toEqual({ host, selected: true, cleared: true });
+      await fs.writeFile(
+        path.join(prepared.localIdentityEnv.GH_CONFIG_DIR!, "hosts.yml"),
+        "github.com:\n  oauth_token: synthetic-native-token\n",
+        { mode: 0o600 },
+      );
+      const refused = await run();
+      expect(refused.exitCode).toBe(1);
+      expect(refused.aggregated).toContain(safeMessage);
+      expect(JSON.stringify(boundary.spawn.mock.calls)).not.toContain("synthetic-launch-token");
+      expect(JSON.stringify(boundary.spawn.mock.calls)).not.toContain("synthetic-rotated-token");
+    },
+  );
 
   it("does not infer a managed binding from arbitrary GH_CONFIG_DIR", async () => {
     const env = {

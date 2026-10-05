@@ -162,7 +162,14 @@ const GitAuthorSchema = workerProtocolObject({
   name: GitAuthorField.optional(),
   email: GitAuthorField.optional(),
 }).refine((value) => Object.values(value).every((entry) => entry !== undefined));
+const GitHubHostSchema = z
+  .string()
+  .min(1)
+  .max(253)
+  .regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u)
+  .refine((value) => !value.includes(".."));
 const GitHubLaunchSchema = workerProtocolObject({
+  executionKind: z.literal("app-installation").optional(),
   token: z
     .string()
     .min(1)
@@ -170,7 +177,7 @@ const GitHubLaunchSchema = workerProtocolObject({
     .refine((value) => !/[\s\p{Cc}]/u.test(value)),
   login: z
     .string()
-    .regex(/^[A-Za-z0-9-]{1,39}$/u)
+    .regex(/^[A-Za-z0-9-]{1,39}(?:\[bot\])?$/u)
     .refine((value) => value.trim() === value),
   branch: z
     .string()
@@ -183,14 +190,40 @@ const GitHubLaunchSchema = workerProtocolObject({
         !value.startsWith("-") &&
         !value.includes("..") &&
         !value.includes("@{"),
-    ),
+    )
+    .optional(),
+  host: GitHubHostSchema.optional(),
   remoteUrl: z
     .string()
-    .regex(/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/u)
-    .refine((value) => value.trim() === value)
+    .refine((value) => value.trim() === value && !/[\s\p{Cc}]/u.test(value))
+    .pipe(z.string().url())
     .optional(),
   gitAuthor: GitAuthorSchema.optional(),
-}).refine((value) => Object.values(value).every((entry) => entry !== undefined));
+})
+  .refine((value) => Object.values(value).every((entry) => entry !== undefined))
+  .superRefine((value, ctx) => {
+    if (!value.remoteUrl) {
+      return;
+    }
+    if (!value.branch) {
+      ctx.addIssue({ code: "custom", message: "GitHub checkout remote requires a branch" });
+    }
+    const remote = URL.parse(value.remoteUrl);
+    const host = value.host ?? "github.com";
+    if (
+      !remote ||
+      remote.protocol !== "https:" ||
+      remote.hostname !== host ||
+      remote.port ||
+      remote.username ||
+      remote.password ||
+      remote.search ||
+      remote.hash ||
+      !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/u.test(remote.pathname)
+    ) {
+      ctx.addIssue({ code: "custom", message: "GitHub remote must match the bound HTTPS host" });
+    }
+  });
 
 export function parseWorkerGitHubLaunchBinding(
   value: unknown,

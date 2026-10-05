@@ -262,6 +262,18 @@ export async function captureGatewayOperatorRunAuthority(input: {
   const profileId = actor?.kind === "operator" ? actor.profileId : GATEWAY_OWNER_PROFILE_ID;
   const connectionId = client.connId;
   const connectionSignal = client.connectionSignal;
+  const factoryActorId =
+    process.env.FACTORY_AUTH_MODE === "github" &&
+    client.internal?.authenticatedOperator === true &&
+    !client.internal.syntheticClient &&
+    !client.internal.agentRuntimeIdentity &&
+    !client.internal.agentToolCaller &&
+    Boolean(connectionId) &&
+    !client.invalidated &&
+    !connectionSignal?.aborted &&
+    client.authenticatedUserProfile?.profileId === profileId
+      ? client.authenticatedFactoryGitHubAccountId
+      : undefined;
   if (params.hasCurrentClientAuthority?.() === false) {
     throw new Error("Gateway caller authority is no longer active.");
   }

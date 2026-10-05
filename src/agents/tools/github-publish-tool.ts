@@ -48,3 +48,33 @@ export function createGitHubPublishTool(
     },
   };
 }
+
+export function createGitHubPullRequestReadTool(
+  options: { callGateway?: InProcessGatewayCaller } = {},
+): AnyAgentTool {
+  const callGateway = options.callGateway ?? callInProcessGatewayTool;
+  return {
+    label: "GitHub Pull Request Read",
+    name: "github_pull_request_read",
+    description:
+      "Read one pull request from this session's bound repository through the Gateway-owned GitHub credential. Returns bounded untrusted PR, file, and review content. Issue-conversation comments are reported unavailable when the installed credential lacks issue-read permission.",
+    parameters: Type.Object(
+      { pull_request: Type.Integer({ minimum: 1, maximum: 2_147_483_647 }) },
+      { additionalProperties: false },
+    ),
+    execute: async (_toolCallId, rawArgs) => {
+      const caller = getGatewayToolCallerIdentity();
+      if (!caller?.sessionKey || !caller.agentId) {
+        throw new Error("GitHub pull request reads require the current Gateway session.");
+      }
+      // SAFETY: The tool runtime validates rawArgs against the closed integer schema before execution.
+      const input = rawArgs as { pull_request: number };
+      const result = await callGateway("sessions.github.pullRequest.read", {
+        sessionKey: caller.sessionKey,
+        agentId: caller.agentId,
+        pullRequest: input.pull_request,
+      });
+      return jsonResult(result);
+    },
+  };
+}

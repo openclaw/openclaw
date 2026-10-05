@@ -17,8 +17,8 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import {
-  createOperationalRunInstanceRef,
   createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../admitted-run-context.js";
 import {
@@ -77,8 +77,8 @@ async function admitted<T>(
 ) {
   const admission = prepareAgentRunAdmission({
     cfg: {},
-    operationalRunInstance: createOperationalRunInstanceRef(attempt.runId),
     operatorAuthority,
+    operationalRunInstance: createOperationalRunInstanceRef(attempt.runId),
     facts: {
       agentId: "main",
       runId: attempt.runId,
@@ -355,6 +355,26 @@ describe("host-prepared embedded tool authority", () => {
       });
     },
   );
+
+  it("carries the original admitted operator authority into the execution caller", async () => {
+    const operator = createAdmittedRunOperatorAuthority({
+      profileId: "synthetic-operator",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+    });
+    await admitted(
+      async ({ admittedRunContext }) =>
+        withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext },
+          attempt,
+          undefined,
+          async () => {
+            expect(getGatewayToolCallerIdentity()?.operatorAuthority).toBe(operator);
+          },
+        ),
+      operator,
+    );
+  });
 
   it("captures only a matching admitted owner for legacy active-run registration", async () => {
     const params = {

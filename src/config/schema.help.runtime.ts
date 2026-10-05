@@ -89,11 +89,29 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec":
     "Exec-tool policy grouping for shell execution host, security mode, approval behavior, and runtime bindings. Keep conservative defaults in production and tighten elevated execution paths.",
   "tools.github":
-    "Managed local GitHub CLI profile and optional Git author for agent tools. Omit this object to preserve the Gateway runtime user's native account and author; repository remote credentials are never overridden.",
+    "Selected GitHub execution identity and optional Git author for agent tools, repository reads, checkout and publication. Omit this object to preserve native identity.",
   "tools.github.profileId":
     "Opaque generated profile version used to switch managed credentials atomically.",
   "tools.github.kind":
-    "Marks a managed OAuth profile whose rotating refresh credential is owned by the Gateway. Omitted profiles use a personal access token.",
+    "Selects managed OAuth or a Gateway-issued scoped App installation credential. Omitted kind uses a personal access token; App failure never falls back to human credentials.",
+  ...Object.fromEntries(
+    ["tools.github", "agents.entries.*.tools.github"].flatMap((prefix) =>
+      Object.entries({
+        app: "Explicit scoped GitHub App installation used by the trusted Gateway issuer; no human credential fallback.",
+        "app.appId": "Exact App ID verified by the Gateway before issuance.",
+        "app.installationId": "Exact installation ID owned by the selected App.",
+        "app.accountId": "Exact installation owner account ID; not the human or bot account.",
+        "app.repositories":
+          "Exact repository IDs and full names allowed in the installation token.",
+        "app.permissions":
+          "Requested installation permissions, verified against effective grants before execution.",
+        "app.privateKey":
+          "Gateway-only SecretRef for App JWT signing; excluded from execution environments and agent secret access.",
+        "app.keyVersion":
+          "Versioned key reference used in the managed profile generation; change it on key rotation.",
+      }).map(([key, value]) => [`${prefix}.${key}`, value]),
+    ),
+  ),
   "tools.github.gitAuthor.name": "Optional process-local Git author and committer name.",
   "tools.github.gitAuthor.email": "Optional process-local Git author and committer email.",
   "agents.entries.*.tools.github":

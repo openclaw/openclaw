@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { runExec } from "../process/exec.js";
@@ -39,6 +40,7 @@ import { prepareControlUiSessionPrServiceTarget } from "./control-ui-session-pr-
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
+import * as projectGitHubIdentity from "./project-github-identity.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createControlUiHandlers } from "./server-methods/control-ui.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
@@ -91,6 +93,75 @@ async function withFixture(
   }
 }
 
+it.each(["unchanged", "visibility", "grant", "unrelated repository"] as const)(
+  "binds enterprise chat previews to current session visibility: %s",
+  async (change) => {
+    const prepare = vi
+      .spyOn(projectGitHubIdentity, "prepareGatewayProjectGitHubIdentity")
+      .mockImplementation(async ({ assertActive }) => ({
+        token: "synthetic-private-preview-token",
+        cacheScope: "synthetic-private-preview",
+        selection: { source: "system-detected", accountId: 42 },
+        assertSelected: assertActive,
+        revalidate: async () => assertActive(),
+        start: async <T>(operation: () => T): Promise<Awaited<T>> => {
+          assertActive();
+          return await operation();
+        },
+      }));
+    try {
+      await withFixture("operator.read", async (f) => {
+        f.cfg.gateway = { ...f.cfg.gateway, github: { host: "microsoft.ghe.com" } };
+        setRuntimeConfigSnapshot(f.cfg);
+        const repository = await getSessionRepositoryWorkspaceStore().create({
+          agentId: "main",
+          sessionKey,
+          url: "https://microsoft.ghe.com/bic/lobster.git",
+          branch: "openclaw/actual-session-branch",
+          assertCurrent: () => {},
+        });
+        await f.seed(sessionKey, f.profile.id, { repositoryWorkspaceId: repository.workspaceId });
+        const load = vi.fn<NonNullable<Parameters<typeof createControlUiHandlers>[0]>>(
+          async (_target, identity) => {
+            expect(identity?.repository).toEqual({ owner: "bic", repo: "lobster" });
+            await identity?.revalidate();
+            if (change === "visibility" || change === "grant") {
+              await f.changeReader(change);
+            }
+            await identity?.revalidate();
+            return { title: "Reviewed PR from another branch", number: 16225 };
+          },
+        );
+        const respond = vi.fn();
+        await handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "enterprise-preview",
+            method: "controlUi.githubPreview",
+            params: {
+              sessionKey,
+              agentId: "main",
+              kind: "pull",
+              owner: "bic",
+              repo: change === "unrelated repository" ? "other" : "lobster",
+              number: 16225,
+            },
+          },
+          client: f.client,
+          context: f.context,
+          extraHandlers: createControlUiHandlers(load),
+          isWebchatConnect: () => false,
+          respond,
+        });
+        expect(load).toHaveBeenCalledTimes(change === "unrelated repository" ? 0 : 1);
+        expect(respond.mock.calls[0]?.[0]).toBe(change === "unchanged");
+      });
+    } finally {
+      prepare.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  },
+);
 function frames(socket: ReturnType<typeof createGatewayWsTestSocket>) {
   return socket.send.mock.calls.flatMap(([data]) => {
     const frame: unknown = JSON.parse(data);
@@ -376,6 +447,7 @@ describe("registered session PR subscriptions", () => {
             ready = true;
           }
           return {
+            sessionId: session.sessionKey,
             params: { sessionKey: session.sessionKey, agentId: "main" },
             identity: session.sessionKey,
             readSource: { agentId: "main", path: "/synthetic/unused.sqlite" },

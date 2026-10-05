@@ -49,6 +49,14 @@ import {
   type WorkerTurnLauncherOptions,
 } from "./worker-turn-launcher.test-support.js";
 
+// Local checkout fixtures exercise turn custody without a GitHub account.
+vi.mock("./worker-github-binding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./worker-github-binding.js")>()),
+  prepareWorkerGitHubBindingGrant: async () => undefined,
+  revokeWorkerGitHubBindingGrant: (await import("./worker-github-grant.js"))
+    .revokeWorkerGitHubBindingGrant,
+}));
+
 describe("worker turn launcher reclaimed placement", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);

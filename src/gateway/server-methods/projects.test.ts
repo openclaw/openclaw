@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as githubReadIdentity from "../../agents/github-read-identity.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
@@ -10,30 +8,29 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import * as transcriptWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
-  createOpenClawTestState,
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { redeemFactoryGitHubProof } from "../factory-github-proof.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { gitHubPublicApi } from "../github-public-api.js";
 import * as projectGitHubSearch from "../project-github-search.js";
+import type { GatewayClient } from "./client-types.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
+import { registerPreparedProjectReadTests } from "./projects.prepared-read.test-cases.js";
 import {
   execFileAsync,
   initializeRepository,
@@ -335,6 +332,84 @@ test("projects.searchRemote uses the opted-in native system GitHub identity", as
     search.mockRestore();
     token.mockRestore();
   }
+});
+
+test("Factory project selection checks the current verified actor at the repository effect", async () => {
+  await withProjectState(async () => {
+    const profile = ensureProfileForEmail("github:microsoft.ghe.com:101");
+    vi.stubEnv("FACTORY_AUTH_MODE", "github");
+    vi.stubEnv("GH_TOKEN", "ambient-token-must-not-bypass-proof");
+    const token = vi
+      .spyOn(githubReadIdentity, "readNativeGitHubToken")
+      .mockImplementation(async (env) => {
+        const verdict = redeemFactoryGitHubProof(env.OPENCLAW_FACTORY_GITHUB_PROOF ?? "");
+        expect(verdict).toMatchObject({
+          purpose: "project-search",
+          actorId: 101,
+          profileId: profile.id,
+          binding: { kind: "connection", connectionId: "current-connection" },
+        });
+        return "actor-token";
+      });
+    const search = vi
+      .spyOn(projectGitHubSearch, "searchRemoteProjects")
+      .mockResolvedValue({ credential: "configured", projects: [] });
+    const call = (scopes: string[], actorId: number | null = 101) => {
+      const client: GatewayClient = {
+        connId: "current-connection",
+        authenticatedFactoryGitHubAccountId: actorId ?? undefined,
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+          role: "operator",
+          scopes,
+        },
+      };
+      return invokeProjectMethod(
+        "projects.searchRemote",
+        { query: "bic/lobster" },
+        {},
+        scopes,
+        undefined,
+        {
+          ...registeredProjectsHandlers,
+          "projects.searchRemote": (options) =>
+            registeredProjectsHandlers["projects.searchRemote"]?.({ ...options, client }),
+        },
+      );
+    };
+    try {
+      expect(await call(["operator.read", "operator.write"])).toMatchObject({
+        ok: true,
+        payload: { credential: "configured", projects: [] },
+      });
+      expect(token).toHaveBeenCalledWith(
+        expect.objectContaining({
+          OPENCLAW_FACTORY_ACTOR_ID: "101",
+          OPENCLAW_FACTORY_SESSION_KEY: "current-connection",
+          OPENCLAW_FACTORY_GITHUB_PROOF: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+          GH_TOKEN: undefined,
+        }),
+        false,
+        "github.com",
+      );
+      const denied = await call(["operator.read"]);
+      expect(denied).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+      const anonymous = await call(["operator.read", "operator.write"], null);
+      expect(anonymous).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+      expect(token).toHaveBeenCalledOnce();
+    } finally {
+      token.mockRestore();
+      search.mockRestore();
+    }
+  });
 });
 
 test("projects.list exposes a normalized configured default repository", async () => {
@@ -658,158 +733,7 @@ test("project responses redact credentials and URL suffixes from registered orig
   });
 });
 
-test("registered projects.list reads recents and observed session rows off the caller thread", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-worker-" });
-  try {
-    const repo = await initializeRepository(state.root);
-    const profile = ensureProfileForEmail("projects-worker@example.test");
-    const cfg = {
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
-    };
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:project-worker" },
-      {
-        sessionId: "project-worker",
-        updatedAt: 20,
-        spawnedCwd: repo,
-        execCwd: repo,
-        createdActor: { type: "human", source: "profile", id: profile.id },
-      },
-    );
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-    const observer = observeSqliteReadSql(prototype);
-    const rowQueries = () => observer.queries.filter((sql) => /session_nodes/i.test(sql));
-    try {
-      loadCombinedSessionStoreForGatewayCore(cfg);
-      expect(rowQueries().length).toBeGreaterThan(0);
-      observer.queries.length = 0;
-      for (let round = 0; round < 2; round++) {
-        expect(
-          await invokeProjectMethod(
-            "projects.list",
-            { includeObserved: true },
-            cfg,
-            ["operator.write"],
-            profile.id,
-            registeredProjectsHandlers,
-          ),
-        ).toMatchObject({
-          ok: true,
-          payload: {
-            recents: [{ kind: "folder", folder: repo, displayName: "registered" }],
-            observedProjects: [
-              { checkouts: [{ runnerId: "gateway", path: repo }], lastUsedAt: 20 },
-            ],
-          },
-        });
-      }
-      expect(rowQueries()).toEqual([]);
-    } finally {
-      observer.restore();
-    }
-  } finally {
-    await state.cleanup();
-  }
-});
-
-test.each(["write scope", "session access", "registry access", "probe access"])(
-  "projects.list rechecks %s after preparation",
-  async (change) => {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "projects-worker-scope-",
-    });
-    const read = transcriptWorker.withSessionHistoryWorkerDatabases;
-    let restoreRead = () => {};
-    try {
-      const profile = ensureProfileForEmail("projects-scope@example.test");
-      const cfg = {
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
-      };
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "agent:main:scope" },
-        {
-          sessionId: "scope",
-          updatedAt: 1,
-          spawnedCwd: "/private/project",
-          execCwd: "/private/project",
-          createdActor: { type: "human", source: "profile", id: profile.id },
-        },
-      );
-      const scopes = ["operator.write"];
-      const observer = vi
-        .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
-        .mockImplementation(async (options, operation) => {
-          const result = await read(options, operation);
-          if (change === "write scope") {
-            scopes.splice(0, scopes.length, "operator.read");
-          } else if (change === "session access") {
-            bumpGatewayAccessRevision();
-          }
-          return result;
-        });
-      restoreRead = () => observer.mockRestore();
-      if (change === "probe access") {
-        resolveRepositoryIdentity.mockImplementationOnce(async (checkoutPath) => {
-          bumpGatewayAccessRevision();
-          return {
-            checkoutRoot: checkoutPath,
-            repoRoot: checkoutPath,
-            originUrl: "",
-            fingerprint: checkoutPath,
-          };
-        });
-      }
-      if (change === "registry access") {
-        listRegistryRecords.mockImplementationOnce(async () => {
-          bumpGatewayAccessRevision();
-          return [];
-        });
-      }
-      const result = await invokeProjectMethod(
-        "projects.list",
-        { includeObserved: true },
-        cfg,
-        scopes,
-        profile.id,
-        change === "probe access" || change === "registry access"
-          ? projectsHandlers
-          : registeredProjectsHandlers,
-      );
-      if (change !== "write scope") {
-        expect(result).toMatchObject({
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: expect.stringContaining("Project access changed"),
-          },
-        });
-        expect(result?.payload).toBeUndefined();
-        return;
-      }
-      expect(result).toEqual({
-        ok: true,
-        payload: {
-          projects: [
-            {
-              id: "workspace:main",
-              displayName: path.basename(state.workspaceDir),
-              source: "workspace",
-              agentId: "main",
-            },
-          ],
-          recents: [],
-        },
-        error: undefined,
-      });
-      expect(observer).toHaveBeenCalled();
-    } finally {
-      restoreRead();
-      await state.cleanup();
-    }
-  },
-);
+registerPreparedProjectReadTests();
 
 test("projects.remove returns INVALID_REQUEST for an unknown id", async () => {
   return withProjectState(async () => {

@@ -24,7 +24,10 @@ export function githubChangeMetadata(
   return metadata;
 }
 
-export function githubPreviewView(preview: ControlUiGitHubPreview): ControlUiLinkReaderPreview {
+export function githubPreviewView(
+  preview: ControlUiGitHubPreview,
+  host = "github.com",
+): ControlUiLinkReaderPreview {
   const badge: ControlUiLinkReaderPreview["badge"] = preview.mergedAt
     ? { label: "Merged", tone: "accent" }
     : preview.draft && preview.state === "open"
@@ -35,7 +38,7 @@ export function githubPreviewView(preview: ControlUiGitHubPreview): ControlUiLin
           ? { label: "Closed", tone: "accent" }
           : { label: "Closed", tone: "negative" };
   return {
-    url: githubTargetUrl(preview),
+    url: githubTargetUrl(preview, host),
     title: preview.title,
     subtitle: preview.owner + "/" + preview.repo + " #" + preview.number,
     badge: {
@@ -43,7 +46,7 @@ export function githubPreviewView(preview: ControlUiGitHubPreview): ControlUiLin
       timestamp: preview.mergedAt ?? (preview.state === "closed" ? preview.closedAt : undefined),
     },
     author: preview.login,
-    authorUrl: "https://github.com/" + encodeURIComponent(preview.login),
+    authorUrl: `https://${host}/` + encodeURIComponent(preview.login),
     coAuthors: preview.coAuthors?.map(({ login, avatarDataUrl }) => ({
       name: login,
       imageUrl: avatarDataUrl,
@@ -54,11 +57,17 @@ export function githubPreviewView(preview: ControlUiGitHubPreview): ControlUiLin
     imageUrl: preview.avatarDataUrl,
     metadata:
       preview.kind === "pull"
-        ? githubChangeMetadata(preview.additions, preview.deletions).map(({ value, tone }) => ({
-            label: "",
-            value,
-            tone,
-          }))
+        ? [
+            ...githubChangeMetadata(preview.additions, preview.deletions).map(
+              ({ value, tone }) => ({
+                label: "",
+                value,
+                tone,
+              }),
+            ),
+            ...(preview.branch ? [{ label: "Branch", value: preview.branch }] : []),
+            ...(preview.checksSummary ? [{ label: "CI", value: preview.checksSummary }] : []),
+          ]
         : preview.comments === undefined
           ? []
           : [{ label: "Comments", value: String(preview.comments) }],

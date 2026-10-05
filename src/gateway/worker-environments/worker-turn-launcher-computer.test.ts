@@ -48,8 +48,9 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 
 const prepareGitHubBinding = vi.hoisted(() => vi.fn());
-vi.mock("./worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: prepareGitHubBinding,
+vi.mock("./worker-github-binding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./worker-github-binding.js")>()),
+  prepareWorkerGitHubBindingGrant: prepareGitHubBinding,
 }));
 
 describe("worker launch capabilities", () => {
@@ -70,7 +71,8 @@ describe("worker launch capabilities", () => {
         remoteUrl: "https://github.com/owner/repo.git",
         gitAuthor: { name: "Shared Bot", email: "shared@example.test" },
       };
-      prepareGitHubBinding.mockResolvedValue(available ? github : undefined);
+      const revoke = vi.fn(async () => {});
+      prepareGitHubBinding.mockResolvedValue(available ? { binding: github, revoke } : undefined);
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
         if (available) {
           expect(plan.assignment.github).toEqual(github);
@@ -101,6 +103,7 @@ describe("worker launch capabilities", () => {
         ),
       ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
       expect(launchTurn).toHaveBeenCalledOnce();
+      expect(revoke).toHaveBeenCalledTimes(available ? 1 : 0);
     },
   );
 
