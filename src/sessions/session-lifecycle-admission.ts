@@ -426,6 +426,30 @@ export function isCompetingSessionWorkAdmissionActive(
   );
 }
 
+/**
+ * Whether another admitted turn owns any of these session identities,
+ * excluding admissions that also own `ownIdentity`. Callers whose lease is
+ * uniquely indexed by a run-scoped identity (for example a cron run's
+ * lifecycle-revision identity) can detect competing owners without holding
+ * the current-admission AsyncLocalStorage context.
+ */
+export function isCompetingSessionWorkAdmissionActiveExcluding(
+  scope: string,
+  identities: Iterable<string | undefined>,
+  ownIdentity: string,
+): boolean {
+  const [normalizedOwnIdentity] = normalizeSessionIdentities(scope, [ownIdentity]);
+  const ownAdmissions =
+    normalizedOwnIdentity !== undefined
+      ? ACTIVE_SESSION_WORK_ADMISSIONS.get(normalizedOwnIdentity)
+      : undefined;
+  return normalizeSessionIdentities(scope, identities).some((identity) =>
+    Array.from(ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []).some(
+      (admission) => admission.phase === "acquired" && !ownAdmissions?.has(admission),
+    ),
+  );
+}
+
 type SessionWorkAdmissionReleaseParams = SessionLifecycleMutationTarget;
 
 function collectSessionWorkAdmissions(

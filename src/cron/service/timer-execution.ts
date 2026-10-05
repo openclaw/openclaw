@@ -433,6 +433,7 @@ async function executeDetachedCronJob(
     error: res.error,
     errorClassification: res.errorClassification,
     executionStarted: res.executionStarted,
+    admissionDisposition: res.admissionDisposition,
     // Forward the post-run delivery failure recorded on an otherwise
     // successful run so the service can persist it as `lastDeliveryError` and
     // emit it on the finished event for CLI/UI/API run logs (#95419).

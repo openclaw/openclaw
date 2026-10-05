@@ -164,11 +164,16 @@ export type CronFailureNotificationDetail =
     };
 
 /** Execution result used to author persisted state, run logs, and isolated turn results. */
+/** Typed pre-run rejection when isolated cron work never enters an agent runner. */
+export type CronAgentAdmissionDisposition = "session-conflict" | "rejected";
+
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
   /** True once agent execution begins; retries after this point can replay side effects. */
   executionStarted?: boolean;
+  /** Typed pre-run rejection so callers never infer admission state from error prose. */
+  admissionDisposition?: CronAgentAdmissionDisposition;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   errorClassification?: CronRunErrorClassification;

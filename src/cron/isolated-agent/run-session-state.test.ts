@@ -783,6 +783,90 @@ describe("createPersistCronSessionEntry", () => {
     expect(persistedStore[sessionKey]).toStrictEqual(nextSession.sessionEntry);
   });
 
+  it("does not replace a lifecycle revision while a competing writer owns the session identities", async () => {
+    // Repro for #165162: a session-bound cron tick persists a fresh
+    // lifecycle revision before it acquires the session lane. The active
+    // writer on that session (mid-turn host compaction, delivery) holds its
+    // admission under the session key and session id — not under a cron
+    // lifecycle-revision identity — so the claim guard must treat the session
+    // as actively owned and defer instead of invalidating the captured claim.
+    const sessionKey = "agent:main:session";
+    const storePath = "/tmp/sessions-competing-writer.json";
+    const activeRevision = crypto.randomUUID();
+    const nextRevision = crypto.randomUUID();
+    const sessionId = "persistent-session-id";
+    const activeEntry = makeSessionEntry({ sessionId, lifecycleRevision: activeRevision });
+    const persistedStore: Record<string, SessionEntry> = { [sessionKey]: activeEntry };
+    const nextSession = {
+      ...makeCronSession(makeSessionEntry({ sessionId, lifecycleRevision: nextRevision })),
+      initialSessionEntry: activeEntry,
+      lifecycleRevision: nextRevision,
+      storePath,
+    } as MutableCronSession;
+    const persistNext = createPersistCronSessionEntry({
+      cronSession: nextSession,
+      agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
+      persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
+    });
+    const writerLease = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      assertAllowed: () => {},
+    });
+
+    try {
+      await expect(persistNext()).rejects.toThrow(
+        `Session "${sessionKey}" changed while starting work. Retry.`,
+      );
+      expect(persistedStore[sessionKey]).toBe(activeEntry);
+    } finally {
+      writerLease.release();
+    }
+    await expect(persistNext()).resolves.toBeUndefined();
+    expect(persistedStore[sessionKey]).toStrictEqual(nextSession.sessionEntry);
+  });
+
+  it("claims the session while only its own run admission owns the session identities", async () => {
+    // The cron run's own admission shares the session key and session id
+    // identities with competing writers; it is excluded through the run's
+    // lifecycle-revision identity. A claim with only that admission active
+    // must not defer itself.
+    const sessionKey = "agent:main:session";
+    const storePath = "/tmp/sessions-own-run-admission.json";
+    const runRevision = crypto.randomUUID();
+    const sessionId = "persistent-session-id";
+    const initialSessionEntry = makeSessionEntry({
+      sessionId,
+      lifecycleRevision: "initial-revision",
+    });
+    const cronSession = {
+      ...makeCronSession(makeSessionEntry({ sessionId, lifecycleRevision: runRevision })),
+      initialSessionEntry,
+      lifecycleRevision: runRevision,
+      storePath,
+    } as MutableCronSession;
+    const persistedStore: Record<string, SessionEntry> = { [sessionKey]: initialSessionEntry };
+    const persist = createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
+      persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
+    });
+    const ownLease = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, sessionId, resolveCronLifecycleRevisionIdentity(runRevision)],
+      assertAllowed: () => {},
+    });
+
+    try {
+      await expect(persist()).resolves.toBeUndefined();
+      expect(persistedStore[sessionKey]).toMatchObject({ lifecycleRevision: runRevision });
+    } finally {
+      ownLease.release();
+    }
+  });
+
   it("claims an initial row after a benign concurrent same-generation field write", async () => {
     // Repro for the session-store claim race: under a large, busy store a
     // concurrent writer advances an ownership field (delivery/token/status) on

@@ -3,6 +3,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 /** Execution and result contracts for isolated cron agent runs. */
 import type {
+  CronAgentAdmissionDisposition,
   CronDeliveryTrace,
   CronResolvedDeliveryState,
   CronNextCheckProposal,
@@ -10,8 +11,7 @@ import type {
   CronRunTelemetry,
 } from "../types.js";
 
-/** Pre-run disposition returned when isolated cron work never enters an agent runner. */
-export type CronAgentAdmissionDisposition = "session-conflict" | "rejected";
+export type { CronAgentAdmissionDisposition };
 
 /** Final isolated cron turn result merged into service state and run logs. */
 export type RunCronAgentTurnResult = {

@@ -39,6 +39,7 @@ import {
   resolveCronNextRunWithLowerBound,
   resolveDeliveryState,
   resolveDisabledHeartbeatOneShotRetryDecision,
+  resolveSessionConflictDeferralDecision,
   resolveTransientCronRetryDecision,
   shouldRetryDisabledHeartbeatOneShot,
 } from "./timer-trigger.js";
@@ -167,6 +168,13 @@ export function applyJobResult(
       deliveryState.deliverySuppressionReason,
     );
 
+  // A session-conflict rejection is a deferral, not an execution failure: the
+  // payload never ran and a competing writer owns the session lane. Do not
+  // spend execution-failure retries (#165162); the occurrence retries on the
+  // conflict backoff until the writer releases.
+  const deferredBySessionConflict =
+    result.status === "error" && result.admissionDisposition === "session-conflict";
+
   // Track consecutive errors for backoff / auto-disable; skipped runs use a
   // separate counter so opt-in skip alerts do not affect retry behavior.
   const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
@@ -194,7 +202,7 @@ export function applyJobResult(
     result.errorClassification.reportedByAgent === true &&
     alertConfig === null &&
     resolveCronDeliveryPlan(job).mode === "none";
-  if (result.status === "error") {
+  if (result.status === "error" && !deferredBySessionConflict) {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     job.state.consecutiveSkipped = 0;
   } else if (result.status === "skipped") {
@@ -309,6 +317,22 @@ export function applyJobResult(
         // One-shot done or skipped: disable to prevent tight-loop (#11452).
         job.enabled = false;
         job.state.nextRunAtMs = undefined;
+      } else if (deferredBySessionConflict) {
+        // Busy session: keep the occurrence alive on the conflict backoff
+        // without spending the transient retry budget; it executes once the
+        // competing writer releases.
+        const deferral = resolveSessionConflictDeferralDecision();
+        if (scheduleNextRun(result.endedAt + deferral.backoffMs) !== undefined) {
+          state.deps.log.info(
+            {
+              jobId: job.id,
+              jobName: job.name,
+              nextRunAtMs: job.state.nextRunAtMs,
+              backoffMs: deferral.backoffMs,
+            },
+            "cron: deferring one-shot behind an active session writer",
+          );
+        }
       } else if (result.status === "error") {
         const retryDecision = resolveTransientCronRetryDecision({
           error: result.error,
@@ -360,6 +384,7 @@ export function applyJobResult(
       job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
     } else if (
       result.status === "error" &&
+      !deferredBySessionConflict &&
       isJobEnabled(job) &&
       !silentReportedFailure &&
       maybeAutoDisableCronJobAfterRunFailure({
@@ -380,7 +405,7 @@ export function applyJobResult(
         },
         "cron: auto-disabled job after consecutive run failures",
       );
-    } else if (result.status === "error" && isJobEnabled(job)) {
+    } else if (result.status === "error" && isJobEnabled(job) && !deferredBySessionConflict) {
       const retryDecision = resolveTransientCronRetryDecision({
         error: result.error,
         errorClassification: result.errorClassification,
