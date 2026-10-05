@@ -178,10 +178,9 @@ function withToolResultText(
   text: string,
   fileContent?: string,
 ): AgentToolResult<unknown> {
-  const content = Array.isArray(result.content) ? result.content : [];
   let replaced = false;
-  const nextContent: ToolContentBlock[] = content.map((block) => {
-    if (!replaced && block && typeof block === "object" && block.type === "text") {
+  const nextContent: ToolContentBlock[] = result.content.map((block) => {
+    if (!replaced && block.type === "text") {
       replaced = true;
       return Object.assign({}, block, { text });
     }
@@ -439,16 +438,8 @@ async function normalizeReadImageResult(
   result: AgentToolResult<unknown>,
   filePath: string,
 ): Promise<AgentToolResult<unknown>> {
-  const content = Array.isArray(result.content) ? result.content : [];
-
-  const image = content.find(
-    (b): b is ImageContentBlock =>
-      Boolean(b) &&
-      typeof b === "object" &&
-      b.type === "image" &&
-      typeof b.data === "string" &&
-      typeof b.mimeType === "string",
-  );
+  const content = result.content;
+  const image = content.find((block): block is ImageContentBlock => block.type === "image");
   if (!image) {
     return result;
   }
@@ -473,15 +464,10 @@ async function normalizeReadImageResult(
   }
 
   const nextContent = content.map((block) => {
-    if (block && typeof block === "object" && block.type === "image") {
+    if (block.type === "image") {
       return Object.assign({}, block, { mimeType: sniffed });
     }
-    if (
-      block &&
-      typeof block === "object" &&
-      block.type === "text" &&
-      typeof block.text === "string"
-    ) {
+    if (block.type === "text") {
       return Object.assign({}, block, { text: rewriteReadImageHeader(block.text, sniffed) });
     }
     return block;
@@ -513,15 +499,8 @@ function normalizeReadResultDetails(
     };
   }
 
-  const content = Array.isArray(result.content) ? result.content : [];
   const displayText = getToolResultText(result) ?? "";
-  const image = content.find(
-    (block): block is ImageContentBlock =>
-      Boolean(block) &&
-      typeof block === "object" &&
-      block.type === "image" &&
-      typeof block.mimeType === "string",
-  );
+  const image = result.content.find((block): block is ImageContentBlock => block.type === "image");
   if (image) {
     return {
       ...result,

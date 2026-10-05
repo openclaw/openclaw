@@ -26,6 +26,7 @@ import {
 } from "./session-manager-codec.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import {
+  prepareSessionManagerSync,
   captureSessionManagerIncognitoBinding,
   installSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
@@ -46,7 +47,6 @@ import type {
   PreparedSessionTranscriptReload,
   SessionManagerBoundedContext,
 } from "./session-manager-view-types.js";
-import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   migrated = false;
@@ -98,7 +98,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
 
   /** @deprecated Runtime callers should await setSessionTargetAsync. */
   setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
-    warnSessionPersistenceDeprecation("SessionManager.setSessionTarget", "setSessionTargetAsync");
+    prepareSessionManagerSync("setSessionTarget", target, this);
     this.setSessionTargetSync(target);
   }
 
@@ -322,10 +322,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
 
   /** @deprecated Runtime callers should await reloadPersistedTranscriptAsync. */
   reloadPersistedTranscript(): void {
-    warnSessionPersistenceDeprecation(
-      "SessionManager.reloadPersistedTranscript",
-      "reloadPersistedTranscriptAsync",
-    );
+    prepareSessionManagerSync("reloadPersistedTranscript", this.persistenceTarget, this);
     this.reloadPersistedTranscriptSync();
   }
 

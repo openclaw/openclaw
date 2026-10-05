@@ -14,7 +14,9 @@ expensive jobs in `ci.yml`:
 - Real-Gateway Control UI E2E (mocked/bundled `checks-ui-e2e` remains owner-selected).
 - Windows Node tests, macOS Node tests, macOS Swift jobs, and iOS build/simulator smoke.
 - The published-npm-driver × candidate update cell, including on update-owner PRs.
-- Dependency/dead-export scanning (Knip) and runtime topology/architecture checks.
+- Dependency/dead-export scanning (Knip) and the full runtime topology/architecture job.
+  Runtime import-cycle checks remain in the existing PR guard; TypeScript changes
+  also select Madge there. See [scope selection](/ci/scope-and-routing/selection).
 - Android screenshot capture.
 
 The first four groups retain their existing hourly main-tier and full release

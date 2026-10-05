@@ -47,7 +47,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 - In the Control UI, assistant images and attachments appear in message order, between their surrounding paragraphs. Before/after labels stay beside the corresponding images.
 - Attachment directives owned by the current WebChat reply stay hidden in live transcript events while files are prepared. User prompts, fenced examples, and references outside that reply's attachment pipeline remain unchanged.
 - WebChat excludes reasoning-flagged reply payloads (`isReasoning: true`) from assistant content, transcript replay text, and audio content blocks. Thinking-only payloads therefore do not surface as visible assistant messages or playable audio.
-- `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run).
+- `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run). The Control UI reconciles each note by transcript identity, so identical notes remain separate and do not become run activity or duplicate after a history reload.
 - Aborted runs can keep partial assistant output visible in the UI. Gateway persists that partial text into transcript history when buffered output exists, and marks the entry with abort metadata.
 
 ### Transcript and delivery model

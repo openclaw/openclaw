@@ -8,6 +8,7 @@ import {
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
 } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import { sleep } from "../utils/sleep.js";
 import { asFsSafeFileLockRoot, createFileLockManager } from "./file-lock-manager.js";
 import { root } from "./fs-safe.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
@@ -249,9 +250,7 @@ async function acquireLifecycleLock(
           error,
         );
       }
-      await new Promise((resolve) => {
-        setTimeout(resolve, Math.min(PACKAGE_LIFECYCLE_LOCK_POLL_MS, remainingMs));
-      });
+      await sleep(Math.min(PACKAGE_LIFECYCLE_LOCK_POLL_MS, remainingMs));
     }
   }
 }

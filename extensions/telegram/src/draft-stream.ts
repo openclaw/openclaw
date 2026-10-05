@@ -56,41 +56,7 @@ const MAX_CONSECUTIVE_PREVIEW_FAILURES = 3;
 // never stalled waiting on the dwell.
 const MIN_PREVIEW_DWELL_MS = 4_000;
 
-export type TelegramDraftStream = {
-  update: (
-    text: string,
-    options?: {
-      onPlatformSendDispatch?: () => Promise<void>;
-      assertPlatformSendAuthorized?: () => void;
-    },
-  ) => void;
-  updateLazy: (resolveText: () => string | undefined) => void;
-  updatePreview: (preview: TelegramDraftPreview) => void;
-  flush: () => Promise<void>;
-  waitForInFlight: () => Promise<void>;
-  messageId: () => number | undefined;
-  lastDeliveredText: () => string;
-  currentMessageSnapshot: () => TelegramDraftMessageSnapshot | undefined;
-  clear: () => Promise<void>;
-  stop: () => Promise<void>;
-  /** Stop without a final flush or delete. */
-  discard: () => Promise<void>;
-  /** Prepared final content not yet accepted after retained pagination pages. */
-  remainingFinalContent: () => TelegramDraftMessageSnapshot | undefined;
-  /** True while a pending or visible draft owns a first/batched reply target. */
-  hasConsumedReplyTarget: () => boolean;
-  /** Reset internal state so the next update creates a new message instead of editing. */
-  forceNewMessage: () => void;
-  /**
-   * Reposition the window: rewind so the next update creates a new message,
-   * and schedule the superseded message's delete for AFTER the new one lands
-   * (post-new-then-delete-old, never delete-then-repost — avoids the client
-   * scroll-jump).
-   */
-  rotateToNewMessageDeferringDelete: () => void;
-  /** True when a preview sendMessage was attempted but the response was lost. */
-  sendMayHaveLanded: () => boolean;
-};
+export type TelegramDraftStream = ReturnType<typeof createTelegramDraftStream>;
 
 type TelegramDraftUpdate = string | { resolveText: () => string | undefined };
 
@@ -132,7 +98,7 @@ export function createTelegramDraftStream(params: {
   onProviderMessage?: (message: Message) => Promise<void> | void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
-}): TelegramDraftStream {
+}) {
   const richMessages = params.richMessages === true;
   const transportLimit = richMessages ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT;
   const maxChars = Math.min(params.maxChars ?? transportLimit, transportLimit);
@@ -709,6 +675,7 @@ export function createTelegramDraftStream(params: {
     pendingPlatformSendAuthorization = undefined;
   };
 
+  /** Prepared final content not yet accepted after retained pagination pages. */
   const remainingFinalContent = (): TelegramDraftMessageSnapshot | undefined => {
     const plan = finalPagePlan;
     if (!plan || plan.nextPageIndex <= 0 || plan.nextPageIndex >= plan.pages.length) {
@@ -836,6 +803,7 @@ export function createTelegramDraftStream(params: {
   };
 
   const REPOSITION_DELETE_DELAY_MS = 1_500;
+  /** Rewind and delete the superseded preview only after its replacement lands. */
   const rotateToNewMessageDeferringDelete = (): void => {
     const supersededMessageId = streamMessageId;
     const supersededVisibleSince = streamVisibleSinceMs;
@@ -856,20 +824,26 @@ export function createTelegramDraftStream(params: {
   params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
-    update: (text, options) =>
+    update: (
+      text: string,
+      options?: {
+        onPlatformSendDispatch?: () => Promise<void>;
+        assertPlatformSendAuthorized?: () => void;
+      },
+    ) =>
       requestDraftUpdate(
         text,
         undefined,
         options?.onPlatformSendDispatch,
         options?.assertPlatformSendAuthorized,
       ),
-    updateLazy: (resolveText) => updateDraft({ resolveText }),
+    updateLazy: (resolveText: () => string | undefined) => updateDraft({ resolveText }),
     updatePreview,
     flush,
     waitForInFlight,
     messageId: () => streamMessageId,
     lastDeliveredText: () => lastDeliveredText,
-    currentMessageSnapshot: () => {
+    currentMessageSnapshot: (): TelegramDraftMessageSnapshot | undefined => {
       const ownsReplyTarget =
         !consumesReplyTarget ||
         (replyTargetState.kind === "retained" && replyTargetState.messageId === streamMessageId);
@@ -879,15 +853,19 @@ export function createTelegramDraftStream(params: {
     },
     clear,
     stop,
+    /** Stop without a final flush or delete. */
     discard: async () => {
       await stopForClear();
       observeCurrentProviderMessage();
       await drainProviderMessageObservations();
     },
     remainingFinalContent,
+    /** True while a pending or visible draft owns a first/batched reply target. */
     hasConsumedReplyTarget: () => replyTargetState.kind !== "available",
+    /** Reset internal state so the next update creates a new message instead of editing. */
     forceNewMessage: () => resetStreamToNewMessage(false, true),
     rotateToNewMessageDeferringDelete,
+    /** True when a preview sendMessage was attempted but the response was lost. */
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }

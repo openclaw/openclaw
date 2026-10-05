@@ -11,6 +11,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { logWarn } from "../logger.js";
@@ -246,21 +247,19 @@ async function withInputFileTimeout<T>(params: {
     ? AbortSignal.any([params.signal, controller.signal])
     : controller.signal;
   signal.throwIfAborted();
-  let onAbort!: () => void;
-  const cancelled = new Promise<never>((_, reject) => {
-    onAbort = () => reject(toErrorObject(signal.reason, "Input file extraction aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
   const timeout = setTimeout(
     () => controller.abort(new Error(`${params.label} timed out after ${timeoutMs}ms`)),
     timeoutMs,
   );
   try {
     // Legacy extractors may not cooperate, but the worker also receives the deadline cancellation.
-    return await Promise.race([params.task(signal), cancelled]);
+    return await racePromiseWithAbortSignal(
+      () => params.task(signal),
+      signal,
+      (abortedSignal) => toErrorObject(abortedSignal.reason, "Input file extraction aborted"),
+    );
   } finally {
     clearTimeout(timeout);
-    signal.removeEventListener("abort", onAbort);
   }
 }
 

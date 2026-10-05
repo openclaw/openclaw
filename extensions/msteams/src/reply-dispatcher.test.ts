@@ -683,7 +683,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       const latest = String(stream.update.mock.calls.at(-1)?.[0]);
       expect(latest.match(/Checking/g)).toHaveLength(1);
 
-      dispatcher.replyOptions.onReasoningEnd?.();
+      await dispatcher.replyOptions.onReasoningEnd?.();
       await dispatcher.replyOptions.onReasoningStream?.({
         text: "Next thought",
         isReasoningSnapshot,

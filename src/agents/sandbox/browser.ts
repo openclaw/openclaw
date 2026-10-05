@@ -20,6 +20,7 @@ import {
 } from "../../plugin-sdk/browser-profiles.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { sleep } from "../../utils/sleep.js";
 import {
   BROWSER_BRIDGES,
   stopCachedBrowserBridge,
@@ -111,9 +112,7 @@ async function waitForSandboxCdp(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((r) => {
-      setTimeout(r, Math.min(150, remainingMs));
-    });
+    await sleep(Math.min(150, remainingMs));
   }
   return false;
 }

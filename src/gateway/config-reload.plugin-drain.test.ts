@@ -6,7 +6,11 @@ import { getPluginRuntimeGeneration, PluginRuntimeApplicationError } from "../pl
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  createPluginRegistryOwner,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -83,18 +87,22 @@ describe("plugin drain recovery", () => {
     };
     // This Gateway's Codex generation holds admitted work, as during a long agent turn, while
     // another Gateway in the process owns the default registry with an idle Codex.
+    const registryOwners: ReturnType<typeof createPluginRegistryOwner>[] = [];
     const [instance, otherGatewayInstance] = [0, 1].map(() => {
       const builder = createTestPluginRegistry();
       const record = createPluginRecord({ id: "codex", source: "/synthetic/codex.ts" });
       builder.registry.plugins.push(record);
       builder.createApi(record, { config: {} });
       setActivePluginRegistry(builder.registry);
+      registryOwners.push(createPluginRegistryOwner(builder.registry));
       const pluginInstance = getPluginInstance(record);
       assert(pluginInstance);
       return pluginInstance;
     });
     assert(instance && otherGatewayInstance !== instance);
     const releaseWork = instance.retainWork();
+    const cleanup = createDeferredCore();
+    let cleanupCall: Promise<void> | undefined;
     const harness = createReloaderHarness(async () => makeSnapshot({ config }), {
       initialConfig,
       // Stands in for the reload owner's 60s pre-stop drain expiring on the held work.
@@ -130,31 +138,40 @@ describe("plugin drain recovery", () => {
           : "applied";
       },
     });
-    await harness.reloader.ready;
-    await flushWatcherChange(harness);
-    config = { ...config, agents: { entries: { main: { skills: [] } } } };
-    await flushWatcherChange(harness);
-    expect(harness.onHotReload).toHaveBeenCalledOnce();
-    expect(harness.onConfigApplied).not.toHaveBeenCalled();
-    expect(harness.log.info).toHaveBeenCalledWith(
-      expect.stringContaining("config reload deferred"),
-    );
-    expect(harness.log.info).not.toHaveBeenCalledWith(expect.stringContaining("--wait"));
+    try {
+      await harness.reloader.ready;
+      await flushWatcherChange(harness);
+      config = { ...config, agents: { entries: { main: { skills: [] } } } };
+      await flushWatcherChange(harness);
+      expect(harness.onHotReload).toHaveBeenCalledOnce();
+      expect(harness.onConfigApplied).not.toHaveBeenCalled();
+      expect(harness.log.info).toHaveBeenCalledWith(
+        expect.stringContaining("config reload deferred"),
+      );
+      expect(harness.log.info).not.toHaveBeenCalledWith(expect.stringContaining("--wait"));
 
-    // The pre-stop drain also joins cleanup calls, so the retry waits for them too.
-    const cleanup = createDeferredCore();
-    const cleanupCall = instance.runCleanup(() => cleanup.promise);
-    releaseWork();
-    await flushReload(harness.reloader);
-    expect(harness.onHotReload).toHaveBeenCalledOnce();
+      // The pre-stop drain also joins cleanup calls, so the retry waits for them too.
+      cleanupCall = instance.runCleanup(() => cleanup.promise);
+      releaseWork();
+      await flushReload(harness.reloader);
+      expect(harness.onHotReload).toHaveBeenCalledOnce();
 
-    cleanup.resolve();
-    await cleanupCall;
-    await flushReload(harness.reloader);
-    expect(harness.onHotReload).toHaveBeenCalledTimes(2);
-    expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(true);
-    expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
-    expect(harness.log.error).toHaveBeenCalledOnce();
+      cleanup.resolve();
+      await cleanupCall;
+      await flushReload(harness.reloader);
+      expect(harness.onHotReload).toHaveBeenCalledTimes(2);
+      expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(true);
+      expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
+      expect(harness.log.error).toHaveBeenCalledOnce();
+    } finally {
+      await harness.reloader.stop();
+      releaseWork();
+      cleanup.resolve();
+      await cleanupCall;
+      for (const owner of registryOwners.toReversed()) {
+        await owner.close();
+      }
+    }
   });
 
   it.each(["explicit wait", "revert", "revert with model edit"] as const)(

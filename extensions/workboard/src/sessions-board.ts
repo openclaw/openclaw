@@ -97,6 +97,7 @@ async function listSessions(
         configuredAgentsOnly: true,
         includeGlobal: false,
         includeUnknown: false,
+        excludeDock: true,
         ...(board.sessions.scope?.includeAutomation
           ? {}
           : { excludeCron: true, excludeSystem: true }),

@@ -17,6 +17,7 @@ import type { StartupMigrationLease } from "../infra/startup-migration-checkpoin
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { withDeferredPluginDoctorMigrations } from "../plugins/doctor-contract-registry.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   listAgentDatabaseAdmissionRefusals,
@@ -34,7 +35,6 @@ import {
   throwStartupMigrationIdentityChanged,
 } from "./doctor-startup-migration-refusal.js";
 import { addDoctorLegacyIssues } from "./doctor/shared/legacy-config-issues.js";
-import { completeDoctorPluginMetadataSnapshot } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
 export type ConfigPreflightSnapshotRead = {
   snapshot: ConfigFileSnapshot;
@@ -77,12 +77,12 @@ function formatPluginRegistryDifferences(
 }
 
 export async function readConfigPreflightSnapshot(params: {
+  purpose: "startup" | "doctor";
   allowCurrentPluginMetadata: boolean;
   includePluginMetadata: boolean;
   isolateEnv?: boolean;
   measure?: ConfigSnapshotReadMeasure;
   observe?: boolean;
-  preparePluginMetadataSnapshot: boolean;
   skipPluginValidation: boolean;
   /** Complete a private update snapshot before Doctor contract modules are inspected. */
   prepareSnapshot?: (snapshot: ConfigFileSnapshot) => Promise<void>;
@@ -120,14 +120,15 @@ export async function readConfigPreflightSnapshot(params: {
       async () => {
         if (params.includePluginMetadata && !params.skipPluginValidation) {
           const result = await readConfigFileSnapshotWithPluginMetadata(readOptions);
-          const pluginMetadataSnapshot = params.preparePluginMetadataSnapshot
-            ? completeDoctorPluginMetadataSnapshot({
-                snapshot: result.pluginMetadataSnapshot,
-                config: result.snapshot.sourceConfig ?? result.snapshot.config ?? {},
-              })
-            : result.pluginMetadataSnapshot;
+          const pluginMetadataSnapshot = completePluginMetadataSnapshot({
+            snapshot: result.pluginMetadataSnapshot,
+            config: result.snapshot.sourceConfig ?? result.snapshot.config ?? {},
+          });
           return {
-            snapshot: addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot),
+            snapshot:
+              params.purpose === "doctor" || !result.snapshot.valid
+                ? addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot)
+                : result.snapshot,
             ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
           };
         }
@@ -138,7 +139,12 @@ export async function readConfigPreflightSnapshot(params: {
         if (!params.preparePluginMigrations) {
           await params.prepareSnapshot?.(snapshot);
         }
-        return { snapshot: addDoctorLegacyIssues(snapshot) };
+        return {
+          snapshot:
+            params.purpose === "doctor" || !snapshot.valid
+              ? addDoctorLegacyIssues(snapshot)
+              : snapshot,
+        };
       },
     );
   });

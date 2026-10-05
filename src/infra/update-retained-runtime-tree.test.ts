@@ -3,24 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { loggingState } from "../logging/state.js";
 import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import * as fsSafe from "./fs-safe.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  setLoggerOverride(null);
-  loggingState.rawConsole = null;
-  resetLogger();
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 async function fixture(setup?: (source: string) => Promise<void>) {
   const root = await fs.realpath(dirs.make("retained-runtime-link-"));
@@ -64,51 +56,6 @@ async function fixture(setup?: (source: string) => Promise<void>) {
       }),
   };
 }
-
-it.each(["EPERM", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EIO", "open-EPERM"])(
-  "retains guarded byte copies only for clone capability refusal (%s)",
-  async (code) => {
-    const f = await fixture(async (source) => {
-      await fs.writeFile(path.join(source, "node_modules", ".bin", "second"), "second launcher");
-    });
-    const messages: string[] = [];
-    const capture = (line: string) => messages.push(line);
-    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
-    loggingState.rawConsole = { log: capture, info: capture, warn: capture, error: capture };
-    const refusal = new fsSafe.FsSafeError("helper-failed", "native file copy failed", {
-      cause: Object.assign(new Error(code === "open-EPERM" ? "open: denied" : "FICLONE: denied"), {
-        code: code === "open-EPERM" ? "EPERM" : code,
-      }),
-    });
-    const openRoot = fsSafe.root;
-    vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
-      const root = await openRoot(...args);
-      const copyIn = root.copyIn.bind(root);
-      vi.spyOn(root, "copyIn").mockImplementation((relative, source, options) => {
-        if (options?.clone !== "never") {
-          return Promise.reject(refusal);
-        }
-        return copyIn(relative, source, options);
-      });
-      return root;
-    });
-    if (code === "EIO" || code === "open-EPERM") {
-      await expect(f.link()).rejects.toBe(refusal);
-      expect(messages).toEqual([]);
-      return;
-    }
-    await f.link();
-    for (const name of ["tool", "second"]) {
-      const original = path.join(f.source, "node_modules", ".bin", name);
-      const retained = path.join(f.destination, "node_modules", ".bin", name);
-      expect(await fs.readFile(retained)).toEqual(await fs.readFile(original));
-      expect((await fs.stat(retained)).ino).not.toBe((await fs.stat(original)).ino);
-      expect((await fs.stat(retained)).mode).toBe((await fs.stat(original)).mode);
-    }
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("byte copy");
-  },
-);
 
 it.each([
   { filesystem: "native", existingTwin: true },

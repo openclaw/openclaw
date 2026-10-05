@@ -598,34 +598,25 @@ export class TwilioProvider implements VoiceCallProvider {
       }, CHUNK_DELAY_MS);
 
       let muLawAudio: Buffer;
-      let removeAbortListener = () => {};
       const synthTimeoutMs = ttsProvider.synthesisTimeoutMs;
       try {
-        const synthPromise = ttsProvider.synthesizeForTelephony(text);
-        const abortPromise = new Promise<never>((_, reject) => {
-          const onAbort = () => {
-            reject(
-              signal.reason instanceof Error
-                ? signal.reason
-                : new Error("Telephony TTS synthesis aborted"),
-            );
-          };
-          signal.addEventListener("abort", onAbort, { once: true });
-          removeAbortListener = () => signal.removeEventListener("abort", onAbort);
-          if (signal.aborted) {
-            onAbort();
-          }
-        });
         muLawAudio = await raceWithTimeout(
-          Promise.race([synthPromise, abortPromise]),
+          ttsProvider.synthesizeForTelephony(text),
           synthTimeoutMs,
           () => {
             throw new Error(`Telephony TTS synthesis timed out after ${synthTimeoutMs}ms`);
           },
+          {
+            signal,
+            onAbort: () => {
+              throw signal.reason instanceof Error
+                ? signal.reason
+                : new Error("Telephony TTS synthesis aborted");
+            },
+          },
         );
       } finally {
         clearInterval(keepAlive);
-        removeAbortListener();
       }
 
       if (muLawAudio.length === 0) {

@@ -32,11 +32,9 @@ type AddChannelSetupOptionsParams = {
   includeAll?: boolean;
 };
 
-type ChannelSetupOptionMode = "none" | "modern" | "legacy";
-
 type ChannelSetupOptionRegistration = {
-  mode: ChannelSetupOptionMode;
-  legacyIntDefaultAttributeNames: ReadonlySet<string>;
+  preserveLegacyDefaults: boolean;
+  dropEmptyLegacyDefaultsForAttributeNames: ReadonlySet<string>;
 };
 
 const LEGACY_CHANNEL_SETUP_OPTIONS: readonly ChannelSetupCliOption[] = [
@@ -118,16 +116,11 @@ async function addChannelSetupOptions(
     resolveChannelSetupCliOptionMetadata(selected, {
       includeAll: params.includeAll,
     });
-  const mode: ChannelSetupOptionMode = selected
-    ? selectedChannel?.setup
-      ? "modern"
-      : "legacy"
-    : "none";
   const seenFlags = new Set(command.options.flatMap(getChannelSetupOptionSwitches));
   for (const option of options) {
     addChannelSetupOption(command, option, seenFlags);
   }
-  if (params.includeAll || (mode === "legacy" && selectedChannel?.setup === undefined)) {
+  if (params.includeAll || (selected && selectedChannel?.setup === undefined)) {
     for (const option of LEGACY_CHANNEL_SETUP_OPTIONS) {
       addChannelSetupOption(command, option, seenFlags);
     }
@@ -138,7 +131,10 @@ async function addChannelSetupOptions(
       legacyIntDefaultAttributeNames.add(attributeName);
     }
   }
-  return { mode, legacyIntDefaultAttributeNames };
+  return {
+    preserveLegacyDefaults: !selected || !selectedChannel?.setup,
+    dropEmptyLegacyDefaultsForAttributeNames: legacyIntDefaultAttributeNames,
+  };
 }
 
 export async function registerChannelsCli(
@@ -321,8 +317,8 @@ export async function registerChannelsCli(
     .option("--name <name>", "Display name for this account");
 
   let channelSetupRegistration: ChannelSetupOptionRegistration = {
-    mode: "none",
-    legacyIntDefaultAttributeNames: new Set(),
+    preserveLegacyDefaults: true,
+    dropEmptyLegacyDefaultsForAttributeNames: new Set(),
   };
   const selectedChannelId = await resolveChannelsAddChannelFromArgv(argv);
   if (
@@ -346,18 +342,7 @@ export async function registerChannelsCli(
       );
       await channelsAddCommand(
         {
-          ...resolveChannelsAddOptions(
-            channelArg,
-            opts,
-            command,
-            channelSetupRegistration.mode === "modern"
-              ? undefined
-              : {
-                  preserveLegacyDefaults: true,
-                  dropEmptyLegacyDefaultsForAttributeNames:
-                    channelSetupRegistration.legacyIntDefaultAttributeNames,
-                },
-          ),
+          ...resolveChannelsAddOptions(channelArg, opts, command, channelSetupRegistration),
           agent: resolveStringOption(command, "agent"),
         },
         defaultRuntime,

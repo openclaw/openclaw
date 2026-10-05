@@ -754,7 +754,11 @@ command identities. Other CLI backends use the prompt catalog only.
 ## Snapshots and refresh
 
 OpenClaw snapshots eligible skills **when a session starts** and reuses that
-list until a refresh trigger below applies.
+list until a refresh trigger below applies. New sessions recheck skill
+prerequisites, including binaries installed into an existing `PATH` directory,
+even when the skill files have not changed.
+Existing snapshots keep their selected skill sources: a newly eligible skill
+with the same name does not replace another source's implementation during hydration.
 
 Managed library selections keep their exact revisions until an explicit
 attach or refresh, including across Gateway restarts. The refresh triggers

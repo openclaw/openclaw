@@ -44,6 +44,14 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
   return {
     ...actual,
+    // Control-lane timing must not depend on filesystem or worker scheduling.
+    resolveInboundSessionEnvelopeContextAsync: vi
+      .fn<typeof actual.resolveInboundSessionEnvelopeContextAsync>()
+      .mockImplementation(async ({ cfg }) => ({
+        storePath: "/tmp/openclaw/signal-sessions.json",
+        envelopeOptions: actual.resolveEnvelopeFormatOptions(cfg),
+        previousTimestamp: undefined,
+      })),
     runChannelInboundEvent: createSignalPreparedDispatchRunner(
       actual.runChannelInboundEvent,
       recordInboundSessionMock,

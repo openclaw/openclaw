@@ -2274,8 +2274,10 @@ counter, second index, or new persistence owner is introduced.
 Writable database admission atomically repairs the same-name index through the
 canonical index owner, with its existing integrity checks. This is an index-only
 change at agent schema 24; no schema-version bump or event conversion is required.
-The one-time rebuild reads retained trajectory rows and temporarily holds a probe
-index and replacement. Later event writes maintain the byte-length expression,
+The one-time rebuild reads retained trajectory rows and builds the replacement
+once inside a savepoint; rollback restores the old index on failure. Gateway
+startup defers that repair to its agent preparation worker after the listener
+binds. Later event writes maintain the byte-length expression,
 including null run IDs. Older same-version writable owners can rebuild their
 prior partial index on downgrade or binary rollback without changing event rows.
 Strict read-only validation may require that writable repair before reopening.

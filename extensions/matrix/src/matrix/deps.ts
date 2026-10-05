@@ -13,12 +13,6 @@ const REQUIRED_MATRIX_PACKAGES = [
 const MIN_MATRIX_CRYPTO_NATIVE_BINDING_BYTES = 1_000_000;
 const MATRIX_COMMAND_OUTPUT_TAIL_BYTES = 64 * 1024;
 
-type MatrixCryptoRuntimeDeps = {
-  requireFn?: (id: string) => unknown;
-  resolveFn?: (id: string) => string;
-  log?: (message: string) => void;
-};
-
 function resolveMissingMatrixPackages(resolveFn?: (id: string) => string): string[] {
   const resolve = resolveFn ?? defaultResolveFn;
   return REQUIRED_MATRIX_PACKAGES.filter((pkg) => {
@@ -97,14 +91,14 @@ function resolveMatrixCryptoNativeBindingFilename(): string | null {
   }
 }
 
-function resolveMatrixCryptoNativeBindingPath(resolveFn: (id: string) => string): string | null {
+function resolveMatrixCryptoNativeBindingPath(): string | null {
   const filename = resolveMatrixCryptoNativeBindingFilename();
   if (!filename) {
     return null;
   }
   try {
     return path.join(
-      path.dirname(resolveFn("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js")),
+      path.dirname(defaultResolveFn("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js")),
       filename,
     );
   } catch {
@@ -112,11 +106,7 @@ function resolveMatrixCryptoNativeBindingPath(resolveFn: (id: string) => string)
   }
 }
 
-function removeIncompleteMatrixCryptoNativeBinding(params: {
-  bindingPath: string | null;
-  log?: (message: string) => void;
-}): void {
-  const bindingPath = params.bindingPath;
+function removeIncompleteMatrixCryptoNativeBinding(bindingPath: string | null): void {
   if (!bindingPath) {
     return;
   }
@@ -126,9 +116,6 @@ function removeIncompleteMatrixCryptoNativeBinding(params: {
       return;
     }
     fs.unlinkSync(bindingPath);
-    params.log?.(
-      `matrix: removed incomplete native crypto runtime (${stat.size} bytes); it will be downloaded again`,
-    );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
@@ -136,33 +123,21 @@ function removeIncompleteMatrixCryptoNativeBinding(params: {
   }
 }
 
-export async function ensureMatrixCryptoRuntime(
-  params: MatrixCryptoRuntimeDeps = {},
-): Promise<void> {
-  const usesDefaultRuntime = !params.requireFn && !params.resolveFn;
-  if (usesDefaultRuntime && defaultMatrixCryptoRuntimeEnsurePromise) {
-    await defaultMatrixCryptoRuntimeEnsurePromise;
-    return;
-  }
-  const ensurePromise = ensureMatrixCryptoRuntimeOnce(params);
-  if (!usesDefaultRuntime) {
-    await ensurePromise;
-    return;
-  }
-  defaultMatrixCryptoRuntimeEnsurePromise = ensurePromise.catch((error: unknown) => {
-    defaultMatrixCryptoRuntimeEnsurePromise = null;
-    throw error;
-  });
+export async function ensureMatrixCryptoRuntime(): Promise<void> {
+  defaultMatrixCryptoRuntimeEnsurePromise ??= ensureMatrixCryptoRuntimeOnce().catch(
+    (error: unknown) => {
+      defaultMatrixCryptoRuntimeEnsurePromise = null;
+      throw error;
+    },
+  );
   await defaultMatrixCryptoRuntimeEnsurePromise;
 }
 
-async function ensureMatrixCryptoRuntimeOnce(params: MatrixCryptoRuntimeDeps): Promise<void> {
-  const resolveFn = params.resolveFn ?? defaultResolveFn;
-  const nativeBindingPath = resolveMatrixCryptoNativeBindingPath(resolveFn);
-  removeIncompleteMatrixCryptoNativeBinding({ bindingPath: nativeBindingPath, log: params.log });
-  const requireFn = params.requireFn ?? defaultRequireFn;
+async function ensureMatrixCryptoRuntimeOnce(): Promise<void> {
+  const nativeBindingPath = resolveMatrixCryptoNativeBindingPath();
+  removeIncompleteMatrixCryptoNativeBinding(nativeBindingPath);
   try {
-    requireFn("@matrix-org/matrix-sdk-crypto-nodejs");
+    defaultRequireFn("@matrix-org/matrix-sdk-crypto-nodejs");
     return;
   } catch (err) {
     if (!isMissingMatrixCryptoRuntimeError(err)) {
@@ -170,8 +145,7 @@ async function ensureMatrixCryptoRuntimeOnce(params: MatrixCryptoRuntimeDeps): P
     }
   }
 
-  const scriptPath = resolveFn("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js");
-  params.log?.("matrix: bootstrapping native crypto runtime");
+  const scriptPath = defaultResolveFn("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js");
   let failure: string | undefined;
   try {
     const result = await runCommandWithTimeout([process.execPath, scriptPath], {
@@ -190,11 +164,11 @@ async function ensureMatrixCryptoRuntimeOnce(params: MatrixCryptoRuntimeDeps): P
   } catch (error) {
     failure = (error instanceof Error ? error.message : String(error)).trim();
   }
-  removeIncompleteMatrixCryptoNativeBinding({ bindingPath: nativeBindingPath, log: params.log });
+  removeIncompleteMatrixCryptoNativeBinding(nativeBindingPath);
   if (failure !== undefined) {
     throw new Error(failure || "Matrix crypto runtime bootstrap failed.");
   }
-  requireFn("@matrix-org/matrix-sdk-crypto-nodejs");
+  defaultRequireFn("@matrix-org/matrix-sdk-crypto-nodejs");
 }
 
 export async function ensureMatrixSdkInstalled(params?: {

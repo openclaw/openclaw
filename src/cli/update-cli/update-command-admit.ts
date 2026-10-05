@@ -3,7 +3,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
-  listLegacyOAuthSidecarPaths,
+  listReferencedLegacyOAuthSidecarPaths,
 } from "../../commands/doctor-auth-legacy-paths.js";
 import { planLegacyConfigForUpdateChannel } from "../../commands/doctor/legacy-config-repair.js";
 import { findRetiredConfigUpgradeRequirement } from "../../commands/doctor/shared/retired-config-formats.js";
@@ -250,11 +250,11 @@ async function inspectUpdateAdmission(
               resolveLegacyInstalledPluginIndexStorePath({ stateDir }),
             ]);
             assertNoRetiredStateFiles("OAuth credential sidecars", [
-              ...listLegacyOAuthSidecarPaths(
+              ...listReferencedLegacyOAuthSidecarPaths(
                 env,
                 snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
               ),
-              ...listLegacyOAuthSidecarPaths(databaseContext.env, databaseContext.config),
+              ...listReferencedLegacyOAuthSidecarPaths(databaseContext.env, databaseContext.config),
             ]);
             assertNoRetiredStateFiles(
               "Cron state",

@@ -30,6 +30,7 @@ import type {
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { SessionMaintenancePreservationConflictError } from "./session-mutation-conflict-error.js";
 import { resolveReplySessionInitializationUpserts } from "./session-reset-entry.js";
 import type { ReplySessionInitializationUpsertDescriptor } from "./session-reset.types.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
@@ -320,22 +321,23 @@ export async function commitReplySessionInitialization(params: {
     await applySessionEntryLifecycleMutation(mutation, { ...captured, path: database.path });
   } catch (error) {
     if (
-      !(error instanceof SessionEntryLifecycleUpsertConflictError) ||
-      error.sessionKey !== resolved.normalizedKey
+      !(error instanceof SessionMaintenancePreservationConflictError) &&
+      (!(error instanceof SessionEntryLifecycleUpsertConflictError) ||
+        error.sessionKey !== resolved.normalizedKey)
     ) {
       throw error;
     }
     const current = await loadReplySessionInitializationEntriesAsync(
       {
         agentId: params.agentId,
-        sessionKey: error.sessionKey,
+        sessionKey: resolved.normalizedKey,
         storePath,
       },
       database,
       source?.key.startsWith("file:") ? source : undefined,
     );
     assertSourceCurrent(true);
-    return createStaleReplySessionInitializationResult(current[error.sessionKey]);
+    return createStaleReplySessionInitializationResult(current[resolved.normalizedKey]);
   }
   if (staleCommit !== undefined) {
     return createStaleReplySessionInitializationResult(staleCommit ?? undefined);

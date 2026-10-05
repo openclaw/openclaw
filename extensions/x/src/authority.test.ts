@@ -16,6 +16,7 @@ import {
   type Payload,
 } from "./test-support/monitor-fixture.js";
 import { createQueue } from "./test-support/monitor.js";
+import { createXTestSpend } from "./test-support/spend.js";
 
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
@@ -166,6 +167,7 @@ describe("X stored allowlist authority", () => {
       const remove = await administrator(test);
       let posts = 0;
       const api = createXApiClient({
+        spend: createXTestSpend(),
         clientId: "synthetic-client",
         clientSecret: "synthetic-secret",
         refreshToken: "synthetic-refresh",

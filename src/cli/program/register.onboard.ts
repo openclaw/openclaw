@@ -325,12 +325,18 @@ export function registerOnboardCommand(program: Command): void {
       });
     });
 
-  recommendations
-    .command("acknowledge")
-    .description("Mark the stored onboarding recommendation offer as answered")
-    .option("--agent <id>", "Agent whose onboarding recommendations should be used")
-    .option("--retry <id...>", "Leave failed recommendation IDs pending for a later run")
-    .action(async (opts: { retry?: string[] }, acknowledgeCommand: Command) => {
+  for (const [name, description] of [
+    ["acknowledge", "Mark the stored onboarding recommendation offer as answered"],
+    ["refresh", "Clear stored app recommendations so the next onboarding run rescans"],
+  ] as const) {
+    const mutation = recommendations
+      .command(name)
+      .description(description)
+      .option("--agent <id>", "Agent whose onboarding recommendations should be used");
+    if (name === "acknowledge") {
+      mutation.option("--retry <id...>", "Leave failed recommendation IDs pending for a later run");
+    }
+    mutation.action(async (opts: { retry?: string[] }, actionCommand: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         if (
@@ -339,38 +345,20 @@ export function registerOnboardCommand(program: Command): void {
         ) {
           return;
         }
-        const { acknowledgeOnboardRecommendationsCommand } =
-          await import("../../commands/onboard-recommendations.js");
-        const agent = resolveRecommendationAgentOption(acknowledgeCommand);
-        await acknowledgeOnboardRecommendationsCommand(
-          { retry: opts.retry, ...(agent !== undefined ? { agent } : {}) },
-          defaultRuntime,
-        );
-      });
-    });
-
-  recommendations
-    .command("refresh")
-    .description("Clear stored app recommendations so the next onboarding run rescans")
-    .option("--agent <id>", "Agent whose onboarding recommendations should be used")
-    .action(async (_opts, refreshCommand: Command) => {
-      const { defaultRuntime } = await import("../../runtime.js");
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        if (
-          !(await validateRecommendationParentOptions(command, defaultRuntime)) ||
-          !(await validateRecommendationParentOptions(recommendations, defaultRuntime))
-        ) {
-          return;
+        const commands = await import("../../commands/onboard-recommendations.js");
+        const agent = resolveRecommendationAgentOption(actionCommand);
+        const agentOptions = agent !== undefined ? { agent } : {};
+        if (name === "acknowledge") {
+          await commands.acknowledgeOnboardRecommendationsCommand(
+            { retry: opts.retry, ...agentOptions },
+            defaultRuntime,
+          );
+        } else {
+          await commands.refreshOnboardRecommendationsCommand(agentOptions, defaultRuntime);
         }
-        const { refreshOnboardRecommendationsCommand } =
-          await import("../../commands/onboard-recommendations.js");
-        const agent = resolveRecommendationAgentOption(refreshCommand);
-        await refreshOnboardRecommendationsCommand(
-          agent !== undefined ? { agent } : {},
-          defaultRuntime,
-        );
       });
     });
+  }
 
   command.action(async (opts, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");

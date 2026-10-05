@@ -261,43 +261,39 @@ export function createExecTool(
       const elevatedDefaults = defaults?.elevated;
       const elevatedMode = resolveExecElevatedMode(defaults, params.elevated);
       const elevatedRequested = elevatedMode !== "off";
-      if (elevatedRequested) {
-        if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
-          const runtime = defaults?.sandbox ? "sandboxed" : "direct";
-          const gates: string[] = [];
-          const contextParts: string[] = [];
-          const provider = normalizeOptionalString(defaults?.messageProvider);
-          const sessionKey = normalizeOptionalString(defaults?.sessionKey);
-          if (provider) {
-            contextParts.push(`provider=${provider}`);
-          }
-          if (sessionKey) {
-            contextParts.push(`session=${sessionKey}`);
-          }
-          if (!elevatedDefaults?.enabled) {
-            gates.push(
-              "enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)",
-            );
-          } else {
-            gates.push(
-              "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)",
-            );
-          }
-          throw new Error(
-            [
-              `elevated is not available right now (runtime=${runtime}).`,
-              `Failing gates: ${gates.join(", ")}`,
-              contextParts.length > 0 ? `Context: ${contextParts.join(" ")}` : undefined,
-              "Fix-it keys:",
-              "- tools.elevated.enabled",
-              "- tools.elevated.allowFrom.<provider>",
-              "- agents.entries.*.tools.elevated.enabled",
-              "- agents.entries.*.tools.elevated.allowFrom.<provider>",
-            ]
-              .filter(Boolean)
-              .join("\n"),
+      if (elevatedRequested && (!elevatedDefaults?.enabled || !elevatedDefaults.allowed)) {
+        const runtime = defaults?.sandbox ? "sandboxed" : "direct";
+        const gates: string[] = [];
+        const contextParts: string[] = [];
+        const provider = normalizeOptionalString(defaults?.messageProvider);
+        const sessionKey = normalizeOptionalString(defaults?.sessionKey);
+        if (provider) {
+          contextParts.push(`provider=${provider}`);
+        }
+        if (sessionKey) {
+          contextParts.push(`session=${sessionKey}`);
+        }
+        if (!elevatedDefaults?.enabled) {
+          gates.push("enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)");
+        } else {
+          gates.push(
+            "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)",
           );
         }
+        throw new Error(
+          [
+            `elevated is not available right now (runtime=${runtime}).`,
+            `Failing gates: ${gates.join(", ")}`,
+            contextParts.length > 0 ? `Context: ${contextParts.join(" ")}` : undefined,
+            "Fix-it keys:",
+            "- tools.elevated.enabled",
+            "- tools.elevated.allowFrom.<provider>",
+            "- agents.entries.*.tools.elevated.enabled",
+            "- agents.entries.*.tools.elevated.allowFrom.<provider>",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        );
       }
       const requestedTarget = requireValidExecTarget(params.host);
       const target = resolveExecTarget({

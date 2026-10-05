@@ -106,7 +106,7 @@ import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
-  AgentDatabaseDeletionSnapshot,
+  AgentDatabaseDeletionWorkerSnapshot,
   AgentDeletionJournalAuthority,
   AgentDeletionJournalPurpose,
   AgentDeletionJournalStatus,
@@ -437,7 +437,7 @@ export type OpenClawStateReadResult =
     }
   | {
       type: "agentDatabaseDeletion.snapshot";
-      snapshot: AgentDatabaseDeletionSnapshot;
+      snapshot: AgentDatabaseDeletionWorkerSnapshot;
     }
   | {
       type: "workerEnvironments.pruneCandidates";

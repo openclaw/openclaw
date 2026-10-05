@@ -87,7 +87,7 @@ import {
 } from "../skills/library/selection-read.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
-import { readAgentDatabaseDeletionSnapshotInDatabase } from "./agent-deletion-journal.read.js";
+import { readAgentDatabaseDeletionWorkerSnapshot } from "./agent-deletion-journal.snapshot.worker.js";
 import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import {
   isConfigMachineStateReadCommand,
@@ -240,7 +240,7 @@ serveOwnedWorkerTasks(
             if (command.type === "agentDatabaseDeletion.snapshot") {
               return {
                 type: command.type,
-                snapshot: readAgentDatabaseDeletionSnapshotInDatabase(
+                snapshot: readAgentDatabaseDeletionWorkerSnapshot(
                   db,
                   input.databasePath,
                   command.purpose,

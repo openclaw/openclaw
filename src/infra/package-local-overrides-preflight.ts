@@ -40,10 +40,6 @@ export async function preflightLocalOverrides(params: {
       }
       continue;
     }
-    if (!change.baseline) {
-      conflicts.push({ path: change.path, reason: "target-missing" });
-      continue;
-    }
     if (targetProbe.status === "blocked") {
       conflicts.push({ path: change.path, reason: "target-changed" });
       continue;

@@ -48,13 +48,6 @@ async function loadModelCatalogForInspection(cfg: OpenClawConfig, rawAgentId?: s
   );
 }
 
-function requireModelRunPrompt(value: unknown): string {
-  if (typeof value !== "string" || normalizeOptionalString(value) === undefined) {
-    throw new Error("--prompt cannot be empty or whitespace-only.");
-  }
-  return value;
-}
-
 async function readModelRunImageFiles(files: string[] | undefined) {
   if (!files || files.length === 0) {
     return [];
@@ -86,20 +79,6 @@ async function readModelRunImageFiles(files: string[] | undefined) {
       };
     }),
   );
-}
-
-function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    throw new Error("--thinking must be a string.");
-  }
-  const normalized = normalizeThinkLevel(value);
-  if (!normalized) {
-    throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
-  }
-  return normalized;
 }
 
 async function runModelRun(params: {
@@ -322,14 +301,14 @@ async function runModelRun(params: {
 }
 
 async function buildModelProviders(cfg: OpenClawConfig, agentId: string) {
-  const { providerHasGenericConfig, resolveSelectedProviderFromModelRef } =
-    await import("./shared.js");
+  const { providerHasGenericConfig } = await import("./shared.js");
+  const { resolveModelRefOverride } = await import("../../shared/model-ref-override.js");
   const { resolveAgentEffectiveModelPrimary } = await import("../../agents/agent-scope.js");
   const { getProviderEnvVarsCore } = await import("../../secrets/provider-env-vars.js");
   const catalog = await loadModelCatalogForInspection(cfg, agentId);
-  const selectedProvider = resolveSelectedProviderFromModelRef(
+  const selectedProvider = resolveModelRefOverride(
     resolveAgentEffectiveModelPrimary(cfg, agentId),
-  );
+  ).provider;
   const grouped = new Map<
     string,
     {
@@ -451,8 +430,20 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action((opts, command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption, resolveTransport } = await import("./shared.js");
-        const prompt = requireModelRunPrompt(opts.prompt);
-        const thinking = normalizeModelRunThinking(opts.thinking);
+        const prompt = opts.prompt;
+        if (typeof prompt !== "string" || normalizeOptionalString(prompt) === undefined) {
+          throw new Error("--prompt cannot be empty or whitespace-only.");
+        }
+        let thinking: ThinkLevel | undefined;
+        if (opts.thinking !== undefined) {
+          if (typeof opts.thinking !== "string") {
+            throw new Error("--thinking must be a string.");
+          }
+          thinking = normalizeThinkLevel(opts.thinking);
+          if (!thinking) {
+            throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
+          }
+        }
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),

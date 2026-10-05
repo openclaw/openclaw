@@ -101,6 +101,21 @@ beforeEach(() => {
 });
 
 describe("resolveMcpLoopbackScopedTools", () => {
+  it("mediates an explicit wildcard policy while an omitted cap keeps native coding ownership", async () => {
+    resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "message"]));
+
+    await resolveMcpLoopbackPolicyTools(scopeParams({ toolsAllow: ["*"] }));
+    const wildcard = resolveGatewayScopedTools.mock.calls.at(-1)?.[0];
+    expect(new Set(wildcard?.mediatedToolNames)).toContain("read");
+    expect(new Set(wildcard?.mediatedToolNames)).toContain("exec");
+    expect(new Set(wildcard?.excludeToolNames)).not.toContain("read");
+
+    await resolveMcpLoopbackPolicyTools(scopeParams({}));
+    const uncapped = resolveGatewayScopedTools.mock.calls.at(-1)?.[0];
+    expect(new Set(uncapped?.mediatedToolNames)).toEqual(new Set());
+    expect(new Set(uncapped?.excludeToolNames)).toContain("read");
+  });
+
   it("keeps exact grant names exact instead of reinterpreting policy shorthand", async () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["write", "apply_patch"]));
 

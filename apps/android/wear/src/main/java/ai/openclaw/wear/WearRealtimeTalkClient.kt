@@ -38,7 +38,6 @@ import kotlinx.coroutines.yield
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ceil
 import kotlin.math.sqrt
 
@@ -53,7 +52,7 @@ internal class WearRealtimeTalkClient(
   private val audioLock = Any()
   private val audioFocus =
     WearAudioFocusController(context) {
-      activeAttempt?.let { attempt -> scope.launch { clearOutput(attempt, resumeCapture = true) } }
+      activeAttempt?.let { attempt -> scope.launch { clearOutput(attempt) } }
     }
   private val _isCapturing = MutableStateFlow(false)
   val isCapturing: StateFlow<Boolean> = _isCapturing
@@ -63,8 +62,6 @@ internal class WearRealtimeTalkClient(
   val mouthLevel: StateFlow<Float> = _mouthLevel
   private val _channelFailed = MutableStateFlow(false)
   val channelFailed: StateFlow<Boolean> = _channelFailed
-
-  private val attemptGeneration = AtomicLong()
 
   @Volatile private var activeAttempt: ActiveAttempt? = null
 
@@ -87,7 +84,6 @@ internal class WearRealtimeTalkClient(
   internal data class ActiveAttempt(
     val nodeId: String,
     val attemptId: String,
-    val generation: Long,
     val resources: ChannelResources,
   )
 
@@ -123,7 +119,6 @@ internal class WearRealtimeTalkClient(
           ActiveAttempt(
             nodeId = nodeId,
             attemptId = attemptId,
-            generation = attemptGeneration.incrementAndGet(),
             resources = checkNotNull(resources),
           )
         // A completed startup callback is not authority to capture after cancellation.
@@ -211,7 +206,7 @@ internal class WearRealtimeTalkClient(
             if (!isCurrent(attempt)) break
             when (frame.type) {
               WearRealtimeAudioFrameType.OUTPUT_PCM -> writeOutput(attempt, frame.payload)
-              WearRealtimeAudioFrameType.CLEAR_OUTPUT -> clearOutput(attempt, resumeCapture = true)
+              WearRealtimeAudioFrameType.CLEAR_OUTPUT -> clearOutput(attempt)
               WearRealtimeAudioFrameType.INPUT_PCM -> error("Phone sent an invalid Watch audio frame")
             }
           }
@@ -430,25 +425,19 @@ internal class WearRealtimeTalkClient(
             playbackEndsAtMillis == scheduledPlaybackEndMillis &&
             SystemClock.elapsedRealtime() >= scheduledPlaybackEndMillis
           ) {
-            clearOutputLocked(attempt, resumeCapture = true)
+            clearOutputLocked(attempt)
           }
         }
       }
   }
 
-  private fun clearOutput(
-    attempt: ActiveAttempt,
-    resumeCapture: Boolean,
-  ) {
+  private fun clearOutput(attempt: ActiveAttempt) {
     synchronized(audioLock) {
-      if (isCurrent(attempt)) clearOutputLocked(attempt, resumeCapture)
+      if (isCurrent(attempt)) clearOutputLocked(attempt)
     }
   }
 
-  private fun clearOutputLocked(
-    attempt: ActiveAttempt?,
-    resumeCapture: Boolean,
-  ) {
+  private fun clearOutputLocked(attempt: ActiveAttempt?) {
     playbackIdleJob?.cancel()
     playbackIdleJob = null
     playbackEndsAtMillis = 0L
@@ -467,7 +456,7 @@ internal class WearRealtimeTalkClient(
     runCatching { track?.release() }
     _isPlaying.value = false
     audioFocus.abandon()
-    if (resumeCapture && attempt != null && isCurrent(attempt)) {
+    if (attempt != null && isCurrent(attempt)) {
       runCatching { startCaptureLocked(attempt) }
         .onFailure { handleChannelFailure(attempt) }
     }
@@ -502,13 +491,13 @@ internal class WearRealtimeTalkClient(
   ): Boolean =
     synchronized(audioLock) {
       val current = activeAttempt ?: return false
-      if (expected != null && current.generation != expected.generation) return false
+      if (expected != null && current !== expected) return false
       activeAttempt = null
       if (failed) _channelFailed.value = true
       readJob?.cancel()
       readJob = null
       pauseCaptureLocked()
-      clearOutputLocked(attempt = null, resumeCapture = false)
+      clearOutputLocked(attempt = null)
       // Keep teardown serialized: a concurrent shutdown must not return and
       // cancel scope while another closeLocal still owns open streams.
       closeChannel(current.resources)
@@ -525,7 +514,7 @@ internal class WearRealtimeTalkClient(
     runCatching { channelClient.close(resources.channel) }
   }
 
-  private fun isCurrent(attempt: ActiveAttempt): Boolean = activeAttempt?.generation == attempt.generation
+  private fun isCurrent(attempt: ActiveAttempt): Boolean = activeAttempt === attempt
 
   private companion object {
     const val CHANNEL_OPEN_ATTEMPTS = 2

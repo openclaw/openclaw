@@ -2,6 +2,7 @@
 // Starts delayed maintenance, cron, heartbeat, recovery, and pricing refresh work.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   captureDeliveryQueueStateContext,
   resolveDeliveryQueueStateEnv,
@@ -116,6 +117,37 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
 }): void {
+  if (process.platform === "linux") {
+    params.scheduler.schedule({
+      id: "database:page-cache",
+      delayMs: params.delayMs,
+      everyMs: 15 * 60 * 1000,
+      run: () =>
+        runWithGatewayIndependentRootWorkAdmission(
+          async () => {
+            await racePromiseWithAbortSignal(params.waitForPostReadyWork(), params.signal);
+            if (params.isClosing()) {
+              return;
+            }
+            const { warmGatewayDatabasePageCache } =
+              await import("./server-database-page-cache.js");
+            params.signal.throwIfAborted();
+            await warmGatewayDatabasePageCache({
+              databases: params.startupMaintenance.startupSessionDatabases,
+              signal: params.signal,
+              startupTrace: params.startupMaintenance.startupTrace,
+              log: params.log,
+            });
+          },
+          "runtime:database-page-cache",
+          params.signal,
+        ).catch((error: unknown) => {
+          if (!params.isClosing()) {
+            params.log.warn(`database page-cache probe failed: ${String(error)}`);
+          }
+        }),
+    });
+  }
   params.scheduler.schedule({
     id: "startup:maintenance",
     delayMs: params.delayMs,

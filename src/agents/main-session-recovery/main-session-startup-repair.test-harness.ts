@@ -1,10 +1,10 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
-import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { runStartupSessionMaintenanceForTest } from "../../gateway/server-startup-session-migration.test-support.js";
 import {
   clearAgentRunContext,
@@ -13,6 +13,12 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  preparePendingAgentDatabase,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -22,14 +28,18 @@ import {
 } from "../subagent-test-fixtures.test-helpers.js";
 import { saveSubagentRegistryToSqlite } from "../subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "../subagents/registry/subagent-registry.store.sqlite.js";
+import type { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
+import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 import {
   markStartupOrphanedMainSessionsForRecovery,
   recoverRestartAbortedMainSessions,
+  scheduleRestartAbortedMainSessionRecovery,
 } from "./main-session-restart-recovery.js";
 
 type StartupSessionRepairFixture = {
   tmpDir: string;
   makeSessionsDir: (agentId?: string) => Promise<string>;
+  mainSessionEntry: (overrides?: SessionEntryFixture) => SessionEntry;
   writeStore: (sessionsDir: string, store: Record<string, SessionEntryFixture>) => Promise<void>;
   writeTranscript: (
     sessionsDir: string,
@@ -45,13 +55,122 @@ type StartupSessionRepairFixture = {
     failed: number;
     skipped: number;
   }) => Promise<void>;
-  gatewayRuntime: GatewayRecoveryRuntime;
+  gatewayRuntime: ReturnType<typeof createRecoveryRuntimeFixture>;
   dispatchSettlement: { resolve: () => void };
 };
 
 export function registerStartupSessionRepairCases(
   getFixture: () => StartupSessionRepairFixture,
 ): void {
+  it.each([
+    { selection: "all", agentIds: undefined },
+    { selection: "main", agentIds: new Set(["main"]) },
+  ])("keeps a configured fixed store with a retired owner ($selection)", async ({ agentIds }) => {
+    const { tmpDir, makeSessionsDir, mainSessionEntry, writeStore } = getFixture();
+    const sessionsDir = await makeSessionsDir("old");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, { "agent:old:main": mainSessionEntry() });
+
+    const cfg = {
+      agents: { entries: { main: {} } },
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    await expect(
+      discoverRestartRecoveryStoreTargets({
+        cfg,
+        agentIds,
+        stateDir: tmpDir,
+        statuses: ["running"],
+      }),
+    ).resolves.toContainEqual({ agentId: "old", storePath });
+  });
+
+  it.each(["during the initial scan", "after the initial scan", "after stop"] as const)(
+    "observes deferred database admission %s",
+    async (publication) => {
+      const {
+        tmpDir,
+        makeSessionsDir,
+        mainSessionEntry,
+        writeStore,
+        writeTranscript,
+        gatewayRuntime,
+      } = getFixture();
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await writeStore(sessionsDir, {
+        "agent:main:main": mainSessionEntry({ abortedLastRun: undefined }),
+      });
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "resume after database admission" },
+        { role: "toolResult", content: "main result" },
+      ]);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: tmpDir };
+      const refusal = createAgentDatabaseInspectionRefusal({
+        agentId: "main",
+        paths: [],
+        reason: "Startup inspection is pending",
+        pending: true,
+      });
+      recordAgentDatabaseAdmissions([refusal], { env });
+      const scanned = createDeferred();
+      const releaseScan = createDeferred();
+      const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+      let initialPass: Promise<unknown> | undefined;
+      const admissionSpy = vi
+        .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+        .mockImplementation(
+          <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal): Promise<T> => {
+            const pass = admit(run, origin, signal);
+            if (origin !== "main-session:startup-recovery" || initialPass) {
+              return pass;
+            }
+            const held = pass.then(async (result) => {
+              scanned.resolve();
+              await releaseScan.promise;
+              return result;
+            });
+            initialPass = held;
+            return held;
+          },
+        );
+      const recovery = scheduleRestartAbortedMainSessionRecovery({
+        gatewayRuntime,
+        getConfig: () => ({}),
+        delayMs: 0,
+        stateDir: tmpDir,
+      });
+      try {
+        await scanned.promise;
+        expect(callGateway).not.toHaveBeenCalled();
+        if (publication !== "during the initial scan") {
+          releaseScan.resolve();
+          await initialPass;
+        }
+        if (publication === "after stop") {
+          await recovery.stop();
+        }
+        await preparePendingAgentDatabase(refusal, { env, assertCurrent() {} }, async () => {});
+        releaseScan.resolve();
+        if (publication === "after stop") {
+          await recovery.stop();
+          expect(callGateway).not.toHaveBeenCalled();
+        } else {
+          await gatewayRuntime.expectAdmission(1, recovery, {
+            sessionKey: "agent:main:main",
+            storePath,
+          });
+        }
+      } finally {
+        releaseScan.resolve();
+        await recovery.stop();
+        admissionSpy.mockRestore();
+        recordAgentDatabaseAdmissions([], { env });
+      }
+    },
+  );
+
   it("repairs a mixed restart roster without abandoning main recovery or live work", async () => {
     const {
       tmpDir,

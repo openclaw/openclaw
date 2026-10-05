@@ -29,14 +29,6 @@ type OpenAIResponsesPayloadPolicyOptions = {
   enableServerCompaction?: boolean;
 };
 
-type OpenAIResponsesEndpointClass =
-  | "default"
-  | "openai-public"
-  | "openai"
-  | "azure-openai"
-  | "xai-native"
-  | "custom";
-
 type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number | undefined;
@@ -51,16 +43,6 @@ type OpenAIResponsesPayloadPolicy = {
   usesInstructionsField: boolean;
 };
 
-type OpenAIResponsesPayloadCapabilities = {
-  allowsOpenAIServiceTier: boolean;
-  allowsResponsesStore: boolean;
-  explicitContinuationOptIn: boolean;
-  shouldStripResponsesPromptCache: boolean;
-  supportsResponsesStoreField: boolean;
-  usesKnownNativeOpenAIRoute: boolean;
-  usesVerifiedInstructionsEndpoint: boolean;
-};
-
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 function resolveUrlHostname(value: unknown): string | undefined {
   const trimmed = readStringValue(value)?.trim();
@@ -70,7 +52,7 @@ function resolveUrlHostname(value: unknown): string | undefined {
   return (URL.parse(trimmed) ?? URL.parse(`https://${trimmed}`))?.hostname.toLowerCase();
 }
 
-function resolveOpenAIResponsesEndpointClass(baseUrl: unknown): OpenAIResponsesEndpointClass {
+function resolveOpenAIResponsesEndpointClass(baseUrl: unknown) {
   const trimmed = readStringValue(baseUrl)?.trim();
   if (!trimmed) {
     return "default";
@@ -119,9 +101,7 @@ function readCompatPayloadBoolean(
   return typeof value === "boolean" ? value : undefined;
 }
 
-function resolveOpenAIResponsesPayloadCapabilities(
-  model: OpenAIResponsesPayloadModel,
-): OpenAIResponsesPayloadCapabilities {
+function resolveOpenAIResponsesPayloadCapabilities(model: OpenAIResponsesPayloadModel) {
   const provider = normalizeOptionalLowercaseString(model.provider);
   const api = normalizeOptionalLowercaseString(model.api);
   const isOpenAIProvider = provider === "openai";

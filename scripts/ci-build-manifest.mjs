@@ -1395,6 +1395,10 @@ const manifest = {
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
+  // The existing guards row already runs the runtime-value cycle check.
+  // Older scope owners retain Madge rather than silently dropping the type graph.
+  run_pr_madge_import_cycles:
+    runCheck && ordinaryPullRequest && (proposedCheckScope?.madgeImportCycles ?? true),
   narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan

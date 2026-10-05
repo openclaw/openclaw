@@ -3067,7 +3067,7 @@ a:is(
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
-  min-height: 32px;
+  min-height: var(--sidebar-nav-row-height);
   padding: 0 8px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
@@ -3381,16 +3381,23 @@ a:is(
   box-shadow: 0 0 0 2px var(--sidebar-bg);
 }
 
-/* "Pages" section head: zone-style label plus the pin-editor affordance. */
-.sidebar-nav__head {
-  position: absolute;
-  z-index: 1;
-  top: 5px;
-  right: 0;
+.sidebar-nav__lead {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  padding-inline-end: 8px;
+}
+
+.sidebar-nav__lead > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sidebar-nav__head-slot {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  padding: 0 8px 0 12px;
+  flex: none;
+  block-size: var(--sidebar-nav-row-height);
 }
 
 .sidebar-nav__head-action {
@@ -3423,10 +3430,6 @@ a:is(
   .sidebar-nav__head-action {
     opacity: 1;
   }
-
-  .sidebar-home-session-states {
-    transform: translateX(-25px);
-  }
 }
 
 .sidebar-nav__head-action:hover,
@@ -3451,14 +3454,6 @@ a:is(
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition: transform var(--duration-fast) ease;
-}
-
-/* The Pages editor shares Home's row. Move every trailing state together so
-   its hover/focus hitbox never covers progress, warning, or draft status. */
-.sidebar-nav:hover .sidebar-home-session-states,
-.sidebar-nav:focus-within .sidebar-home-session-states {
-  transform: translateX(-25px);
 }
 
 /* Zone 5: product chrome in one slim footer bar. The shell footer's top

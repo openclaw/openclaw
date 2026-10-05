@@ -26,6 +26,7 @@ import { resolveWindowsServiceCommandProfile } from "./service-env-merge.js";
 import { ServiceInspectionError } from "./service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
+  GatewayServiceCommandSnapshot,
   GatewayServiceEnv,
   GatewayServiceReadOptions,
   GatewayServiceRenderArgs,
@@ -431,7 +432,7 @@ async function readWindowsTaskCommand(
     const scriptPath = launchers?.[0]?.scriptPath ?? resolveTaskScriptPath(env);
     const content = await readTaskFile(scriptPath, deadline);
     options?.onLauncherContent?.(content, scriptPath);
-    let workingDirectory = action?.workingDirectory ?? "";
+    let workingDirectory = "";
     let commandLine = "";
     const environment: Record<string, string> = {};
     for (const rawLine of content.split(/\r?\n/)) {
@@ -512,7 +513,7 @@ async function readWindowsTaskCommand(
     ) {
       throw new Error("Scheduled Task selector changed during inspection");
     }
-    return {
+    const managedDefinition: GatewayServiceCommandSnapshot = {
       // The task-only outer process owns the Job Object; diagnostics and lifecycle
       // controls must compare against its inner Gateway child, which omits this flag.
       programArguments,
@@ -523,6 +524,22 @@ async function readWindowsTaskCommand(
             environmentValueSources: Object.fromEntries(
               Object.keys(environment).map((key) => [key, "inline"]),
             ),
+          }
+        : {}),
+    };
+    return {
+      ...managedDefinition,
+      ...(action?.workingDirectory
+        ? {
+            workingDirectory: workingDirectory || action.workingDirectory,
+            // Runtime intent binds the authored script; native cwd remains effective metadata.
+            managedDefinition,
+            managedOverrides:
+              cmdLauncher &&
+              path.win32.resolve(action.workingDirectory).toLowerCase() ===
+                path.win32.resolve(path.win32.dirname(scriptPath)).toLowerCase()
+                ? {}
+                : { launcher: "working-directory" },
           }
         : {}),
       sourcePath: scriptPath,

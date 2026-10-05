@@ -31,7 +31,6 @@ import {
   resolveAgentWorkspaceProvisioning,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentIdByWorkspacePath,
-  resolveAgentModelPrimaryWriteTarget,
   setAgentEffectiveModelPrimary,
 } from "./agent-scope.js";
 
@@ -448,12 +447,7 @@ describe("resolveAgentConfig", () => {
 
     const inheritedCfg: OpenClawConfig = {
       agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
+        defaults: structuredClone(cfg.agents?.defaults),
         entries: { main: {} },
       },
     };
@@ -467,23 +461,28 @@ describe("resolveAgentConfig", () => {
     });
   });
 
-  it("resolves the model write target without mutating config", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { model: "openai/gpt-5.4" },
-        entries: { main: {}, work: { model: "anthropic/claude-sonnet-4-6" } },
-      },
-    };
-    const before = structuredClone(cfg);
-
-    expect(resolveAgentModelPrimaryWriteTarget(cfg, "main")).toBe("defaults");
-    expect(resolveAgentModelPrimaryWriteTarget(cfg, "work")).toBe("agent");
-    expect(resolveAgentModelPrimaryWriteTarget(cfg, "main", { target: "agent" })).toBe("agent");
-    expect(resolveAgentModelPrimaryWriteTarget(cfg, "work", { target: "defaults" })).toBe(
-      "defaults",
-    );
-    expect(cfg).toEqual(before);
-  });
+  it.each([
+    ["main", "agent", "openai/gpt-5.4", "test/next"],
+    ["work", "defaults", "test/next", undefined],
+  ] as const)(
+    "writes the explicit model target for %s at %s",
+    (agentId, target, defaultsModel, mainModel) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { model: "openai/gpt-5.4" },
+          entries: { main: {}, work: { model: "anthropic/claude-sonnet-4-6" } },
+        },
+      };
+      expect(setAgentEffectiveModelPrimary(cfg, agentId, "test/next", { target })).toBe(target);
+      expect(cfg.agents).toEqual({
+        defaults: { model: defaultsModel },
+        entries: {
+          main: mainModel ? { model: mainModel } : {},
+          work: { model: "anthropic/claude-sonnet-4-6" },
+        },
+      });
+    },
+  );
 
   it("resolves run fallback overrides via shared helper", () => {
     const cfg: OpenClawConfig = {

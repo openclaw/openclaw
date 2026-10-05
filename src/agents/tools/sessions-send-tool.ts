@@ -465,15 +465,9 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         targetSessionKey: resolvedKey,
         run: async () => {
           if (visibleSession.missing) {
-            if (mode === "steer" || mode === "notify" || mode === "resume") {
-              return sendFailure(
-                "error",
-                "Cannot notify, steer, or resume a missing session. Use mode=followup to start a new turn.",
-                displayKey,
-                runId,
-              );
-            }
             const createdSession = await createConfiguredAgentMainSession({
+              mode,
+              inheritedToolPolicySource: opts?.inheritedToolPolicySource,
               callGateway: sendGatewayCall,
               agentId: targetAgentId,
               sessionKey: resolvedKey,
@@ -482,7 +476,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               assertCurrent: access.assertCurrent,
             });
             if (!createdSession.ok) {
-              return sendFailure("error", createdSession.error, displayKey);
+              return sendFailure(createdSession.status, createdSession.error, displayKey);
             }
           }
 

@@ -2889,10 +2889,6 @@ describe("state migrations", () => {
       contents: { triggers: ["wake"], updatedAtMs: 123 },
     },
     {
-      relativePath: "update-check.json",
-      contents: { lastAvailableVersion: "2026.9.7" },
-    },
-    {
       relativePath: "restart-sentinel.json",
       contents: {
         version: 1,
@@ -2981,6 +2977,19 @@ describe("state migrations", () => {
       await expectMissingPath(`${sourcePath}.migrated`);
       await expectMissingPath(resolveOpenClawStateSqlitePath(env));
     }
+  });
+
+  it("ignores a leftover update-check cache instead of refusing", async () => {
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
+    const sourcePath = path.join(stateDir, "update-check.json");
+    const original = '{"lastAvailableVersion":"2026.9.7"}\n';
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(sourcePath, original);
+    const params = { cfg: createConfig(), env, homedir: () => root };
+
+    await expect(detectLegacyStateMigrations(params)).resolves.toBeDefined();
+    await expect(autoMigrateLegacyState(params)).resolves.toBeDefined();
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(original);
   });
 
   it("auto-migrates standalone legacy config health state", async () => {

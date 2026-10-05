@@ -1,8 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createMcpAppStandaloneTicket,
-  mcpAppStandaloneTesting,
-} from "../gateway/mcp-app-standalone.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMcpAppStandaloneTicket } from "../gateway/mcp-app-standalone.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import {
@@ -99,9 +96,10 @@ function runtime(privateServer: boolean): SessionMcpRuntime {
     joinCleanup: async () => {},
   };
 }
+afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
   vi.clearAllMocks();
-  mcpAppStandaloneTesting.clearTickets();
+  vi.spyOn(Date, "now").mockReturnValue(1);
   mocks.fetch.mockImplementation(async (params) => ({
     ...params,
     viewId: "view",
@@ -162,7 +160,6 @@ describe("materialized MCP App identity provenance", () => {
         sessionKey: "agent:main:channel",
         view,
         toolOperationsAuthorized: true,
-        nowMs: 1,
       }),
     ).toBeDefined();
   });
@@ -195,7 +192,6 @@ describe("materialized MCP App identity provenance", () => {
         sessionKey: "agent:main:channel",
         view,
         toolOperationsAuthorized: true,
-        nowMs: 1,
       }),
     ).toBeUndefined();
   });

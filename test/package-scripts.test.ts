@@ -188,9 +188,9 @@ describe("package scripts", () => {
       const targets =
         buildAllIndex < 0
           ? extractNodeScriptTargets(script)
-          : resolveBuildAllSteps(parseBuildAllArgs(tokens.slice(buildAllIndex + 1)).profile)
-              .filter((step) => step.kind !== "pnpm")
-              .flatMap((step) => extractNodeScriptTargets(["node", ...step.args].join(" ")));
+          : resolveBuildAllSteps(
+              parseBuildAllArgs(tokens.slice(buildAllIndex + 1)).profile,
+            ).flatMap((step) => extractNodeScriptTargets(["node", ...step.args].join(" ")));
       const check = targets.indexOf("scripts/check-plugin-sdk-exports.mts");
 
       expect(check).toBeGreaterThanOrEqual(0);

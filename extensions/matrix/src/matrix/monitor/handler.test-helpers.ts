@@ -191,10 +191,10 @@ export function createMatrixHandlerTestHarness(
       prepared.markDispatchIdle();
     }
   };
-  const createChannelInboundEnvelopeBuilder = (() => (input: { body: string }) =>
+  const createChannelInboundEnvelopeBuilderAsync = (async () => (input: { body: string }) =>
     (options.formatAgentEnvelope ?? (({ body }: { body: string }) => body))({
       body: input.body,
-    })) as NonNullable<MatrixMonitorHandlerParams["createChannelInboundEnvelopeBuilder"]>;
+    })) as NonNullable<MatrixMonitorHandlerParams["createChannelInboundEnvelopeBuilderAsync"]>;
   const runPrepared =
     options.runPrepared ??
     vi.fn<MatrixRunPreparedMockFn>(async (turn) => {
@@ -389,7 +389,7 @@ export function createMatrixHandlerTestHarness(
     needsRoomAliasesForConfig: options.needsRoomAliasesForConfig ?? false,
     resolveLiveUserAllowlist: options.resolveLiveUserAllowlist,
     resolveStorePath: options.resolveStorePath ?? (() => "/tmp/session-store"),
-    createChannelInboundEnvelopeBuilder,
+    createChannelInboundEnvelopeBuilderAsync,
     finalizeInboundContext,
     resolveHumanDelayConfig: options.resolveHumanDelayConfig ?? (() => undefined),
     historyLimit: options.historyLimit ?? 0,
