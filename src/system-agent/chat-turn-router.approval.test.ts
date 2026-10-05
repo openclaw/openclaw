@@ -135,56 +135,73 @@ describe("SystemAgentChatEngine approval", () => {
     },
   );
 
-  it("hatches an agent requested by the custodian with approval-bound provenance", async () => {
-    useTempStateDir();
-    const createAgent = vi.fn(async () => ({
-      status: "created" as const,
-      agentId: "researcher",
-      name: "researcher",
-      workspace: "/tmp/researcher",
-      agentDir: "/tmp/agent-researcher",
-      bootstrapPending: true,
-      config: {},
-      configPath: "/tmp/openclaw.json",
-    }));
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => ({ text: "noted" }),
-      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
-      deps: { createAgent, loadOverview: fakeOverviewLoader() },
-    });
-    engine.propose({
-      kind: "create-agent",
-      agentId: "researcher",
-      workspace: "/tmp/researcher",
-    });
-    const proposal = expectDefined(engine.getPendingOperatorProposal(), "create-agent proposal");
+  it.each([
+    {
+      origin: "custodian",
+      requesterAgentId: undefined,
+      expectedCreatorAgentId: "openclaw",
+      expectedDescription: "create agent researcher with workspace /tmp/researcher",
+    },
+    {
+      origin: "delegated agent",
+      requesterAgentId: "research",
+      expectedCreatorAgentId: "research",
+      expectedDescription:
+        "create agent researcher with workspace /tmp/researcher, requested by agent research",
+    },
+  ])(
+    "hatches an agent requested by the $origin with approval-bound provenance",
+    async ({ requesterAgentId, expectedCreatorAgentId, expectedDescription }) => {
+      useTempStateDir();
+      const createAgent = vi.fn(async () => ({
+        status: "created" as const,
+        agentId: "researcher",
+        name: "researcher",
+        workspace: "/tmp/researcher",
+        agentDir: "/tmp/agent-researcher",
+        bootstrapPending: true,
+        config: {},
+        configPath: "/tmp/openclaw.json",
+      }));
+      const engine = new SystemAgentChatEngine({
+        runAgentTurn: async () => ({ text: "noted" }),
+        classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+        deps: { createAgent, loadOverview: fakeOverviewLoader() },
+        ...(requesterAgentId ? { requesterAgentId, operatorApprovalOnly: true } : {}),
+      });
+      engine.propose({
+        kind: "create-agent",
+        agentId: "researcher",
+        workspace: "/tmp/researcher",
+      });
+      const proposal = expectDefined(engine.getPendingOperatorProposal(), "create-agent proposal");
 
-    expect(proposal.operation).toEqual({
-      kind: "create-agent",
-      agentId: "researcher",
-      workspace: "/tmp/researcher",
-    });
-    expect(describeSystemAgentPersistentOperation(proposal.operation)).toBe(
-      "create agent researcher with workspace /tmp/researcher",
-    );
+      expect(proposal.operation).toEqual({
+        kind: "create-agent",
+        agentId: "researcher",
+        workspace: "/tmp/researcher",
+        ...(requesterAgentId ? { requesterAgentId } : {}),
+      });
+      expect(describeSystemAgentPersistentOperation(proposal.operation)).toBe(expectedDescription);
 
-    const reply = expectDefined(
-      await engine.resolveOperatorApproval("allow-once", proposal.hash),
-      "approved create-agent reply",
-    );
+      const reply = expectDefined(
+        await engine.resolveOperatorApproval("allow-once", proposal.hash),
+        "approved create-agent reply",
+      );
 
-    expect(createAgent).toHaveBeenCalledWith({
-      entry: { id: "researcher" },
-      workspace: "/tmp/researcher",
-      provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
-    });
-    expect(reply.action).toBe("open-tui");
-    expect(reply.handoff).toMatchObject({
-      kind: "open-tui",
-      agentId: "researcher",
-      agentDraft: "hatch",
-    });
-  });
+      expect(createAgent).toHaveBeenCalledWith({
+        entry: { id: "researcher" },
+        workspace: "/tmp/researcher",
+        provenance: { createdVia: "agent", creatorAgentId: expectedCreatorAgentId },
+      });
+      expect(reply.action).toBe("open-tui");
+      expect(reply.handoff).toMatchObject({
+        kind: "open-tui",
+        agentId: "researcher",
+        agentDraft: "hatch",
+      });
+    },
+  );
 
   it("stays in setup when post-write verification flags the config", async () => {
     useTempStateDir();
@@ -393,35 +410,48 @@ describe("SystemAgentChatEngine approval", () => {
     expect(observedInput).toContain("<redacted>");
   });
 
-  it("keeps hint-sensitive parent config writes away from model paths and history", async () => {
-    useTempStateDir();
-    const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
-    const runConfigSet = vi.fn(async () => {});
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: runAgentTurn as never,
-      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
-    });
+  it.each([
+    {
+      path: 'channels.synology-chat.accounts["prod.guild"].webhookUrl',
+      value: "https://gateway.example/webhook/synology?access_token=very-secret",
+    },
+    {
+      path: "plugins.entries.codex.config.appServer.headers.Authorization",
+      value: "Bearer very-secret",
+    },
+    {
+      path: "channels.synology-chat",
+      value: '{ webhookUrl: "https://gateway.example/webhook/synology?access_token=very-secret" }',
+    },
+  ])(
+    "keeps hint-sensitive config writes at $path away from model paths and history",
+    async ({ path, value }) => {
+      useTempStateDir();
+      const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
+      const runConfigSet = vi.fn(async () => {});
+      const engine = new SystemAgentChatEngine({
+        runAgentTurn: runAgentTurn as never,
+        deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+      });
 
-    const path = "channels.synology-chat";
-    const value =
-      '{ webhookUrl: "https://gateway.example/webhook/synology?access_token=very-secret" }';
-    const proposed = await engine.handle(`config set ${path} ${value}`);
+      const proposed = await engine.handle(`config set ${path} ${value}`);
 
-    expect(runAgentTurn).not.toHaveBeenCalled();
-    expect(proposed.text).toContain("<redacted>");
-    expect(proposed.text).not.toContain("very-secret");
-    expect(engine.getPendingOperatorProposal()?.operation).toEqual({
-      kind: "config-set",
-      path,
-      value,
-    });
+      expect(runAgentTurn).not.toHaveBeenCalled();
+      expect(proposed.text).toContain("<redacted>");
+      expect(proposed.text).not.toContain("very-secret");
+      expect(engine.getPendingOperatorProposal()?.operation).toEqual({
+        kind: "config-set",
+        path,
+        value,
+      });
 
-    const applied = await engine.handle("yes");
-    expect(runConfigSet).toHaveBeenCalledOnce();
-    expect(applied.text).toContain("[openclaw] done: config.set");
-    expect(JSON.stringify(engine.historySince(0))).not.toContain("very-secret");
-    expect(JSON.stringify(engine.historySince(0))).toContain("<redacted secret>");
-  });
+      const applied = await engine.handle("yes");
+      expect(runConfigSet).toHaveBeenCalledOnce();
+      expect(applied.text).toContain("[openclaw] done: config.set");
+      expect(JSON.stringify(engine.historySince(0))).not.toContain("very-secret");
+      expect(JSON.stringify(engine.historySince(0))).toContain("<redacted secret>");
+    },
+  );
 
   it("keeps kernel-owned channel config visible in its approval", async () => {
     const path = 'channels.modelByChannel["token=prod"].chat';

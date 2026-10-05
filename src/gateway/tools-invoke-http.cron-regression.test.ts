@@ -133,6 +133,14 @@ async function invoke(tool: string, scopes = "operator.write") {
 }
 
 describe("tools invoke HTTP denylist", () => {
+  it("blocks cron and gateway by default", async () => {
+    const gatewayRes = await invoke("gateway");
+    const cronRes = await invoke("cron", "operator.admin");
+
+    expect(gatewayRes.status).toBe(404);
+    expect(cronRes.status).toBe(404);
+  });
+
   it("keeps a normalized deny authoritative over a canonical allow", async () => {
     cfg = {
       gateway: {

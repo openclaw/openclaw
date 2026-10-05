@@ -306,15 +306,19 @@ describe("custodian role creation through persisted configuration", () => {
     });
   });
 
-  it.each(["unfinished-bootstrap", "authority-revoked"])(
+  it.each(["unfinished-bootstrap", "authority-revoked", "post-commit-first"])(
     "reports and audits retained members after %s blocks the remaining team",
     async (failure) => {
       await withState(async (root) => {
         const workspaceRoot = path.join(root, "team");
-        const retainedAgentIds = ["coordinator", "researcher"];
+        const retainedAgentIds =
+          failure === "post-commit-first" ? ["coordinator"] : ["coordinator", "researcher"];
         let researcherRecorded = false;
         const recordProvenance = agentProvenance.recordAgentProvenance;
         vi.spyOn(agentProvenance, "recordAgentProvenance").mockImplementation((...args) => {
+          if (failure === "post-commit-first" && args[0] === "coordinator") {
+            throw new Error("provenance unavailable");
+          }
           const result = recordProvenance(...args);
           researcherRecorded ||= args[0] === "researcher";
           return result;
@@ -355,7 +359,11 @@ describe("custodian role creation through persisted configuration", () => {
           expect(output).toContain(id);
         }
         expect(output).toContain(
-          failure === "unfinished-bootstrap" ? "unfinished bootstrap" : "authority closed",
+          failure === "unfinished-bootstrap"
+            ? "unfinished bootstrap"
+            : failure === "authority-revoked"
+              ? "authority closed"
+              : "provenance unavailable",
         );
         expect(output).not.toContain("Created team:");
         expect(listSystemAgentAuditEntriesForTests().at(-1)?.value).toMatchObject({

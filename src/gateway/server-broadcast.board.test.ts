@@ -795,6 +795,13 @@ const readScopes = ["read", "write", "admin"];
 describe("operator event scope guards", () => {
   it.each([
     { event: "skills.changed", payload: { reason: "remote-node" }, allowed: readScopes },
+    { event: "plugins.changed", payload: { generation: 1 }, allowed: readScopes },
+    { event: "mcp.app.resourceUpdated", payload: { reason: "remote-node" }, allowed: readScopes },
+    {
+      event: "mcp.app.hostContextChanged",
+      payload: { reason: "remote-node" },
+      allowed: readScopes,
+    },
     {
       event: "talk.voice.change",
       payload: {
@@ -812,6 +819,18 @@ describe("operator event scope guards", () => {
       event: "update.run.changed",
       payload: { runId: "run", phase: "staging", status: "running", updatedAtMs: 1 },
       allowed: ["admin"],
+      nodeScope: "admin",
+    },
+    {
+      event: "plugins.install.progress",
+      payload: {
+        activityId: "install-activity",
+        stage: "runtime",
+        status: "started",
+        requestId: "install-request",
+      },
+      allowed: ["admin"],
+      targeted: true,
       nodeScope: "admin",
     },
     {

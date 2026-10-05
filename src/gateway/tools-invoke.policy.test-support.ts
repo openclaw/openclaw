@@ -214,40 +214,41 @@ export function registerToolsInvokeUploadTests({
       }
     },
   );
-  it.each([{ tool: "message", args: { action: "send", buffer: "cHJvb2Y=" } }])(
-    "blocks new bytes through HTTP and RPC for $tool $args",
-    async ({ tool, args }) => {
-      setConfig({ gateway: { uploads: { enabled: false } } });
-      const res = await postToolsInvoke({
-        port: getPort(),
-        headers: gatewayAdminHeaders(),
-        body: {
-          name: tool,
-          args,
-          conversationReadOrigin: "delegated",
-          internal: { syntheticClient: true },
-        },
-      });
-      expect(res.status).toBe(403);
-      expect(await res.json()).toMatchObject({
-        ok: false,
-        error: {
-          type: "tool_call_blocked",
-          message: expect.stringContaining("gateway.uploads.enabled"),
-        },
-      });
-      const rpc = await invokeToolsRpc({ name: tool, args }, ["operator.admin"], {
-        id: "gateway-client",
-        mode: "backend",
-      });
-      expect(rpc?.[1]).toMatchObject({
-        ok: false,
-        error: { code: "forbidden", message: expect.stringContaining("gateway.uploads.enabled") },
-      });
-      expect(hookMocks.uploadToolExecute).not.toHaveBeenCalled();
-      expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    { tool: "workboard_attachment_add", args: { contentBase64: "cHJvb2Y=" } },
+    { tool: "message", args: { action: "send", buffer: "cHJvb2Y=" } },
+    { tool: "message", args: { action: "send", media: "data:image/png;base64,cHJvb2Y=" } },
+  ])("blocks new bytes through HTTP and RPC for $tool $args", async ({ tool, args }) => {
+    setConfig({ gateway: { uploads: { enabled: false } } });
+    const res = await postToolsInvoke({
+      port: getPort(),
+      headers: gatewayAdminHeaders(),
+      body: {
+        name: tool,
+        args,
+        conversationReadOrigin: "delegated",
+        internal: { syntheticClient: true },
+      },
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: {
+        type: "tool_call_blocked",
+        message: expect.stringContaining("gateway.uploads.enabled"),
+      },
+    });
+    const rpc = await invokeToolsRpc({ name: tool, args }, ["operator.admin"], {
+      id: "gateway-client",
+      mode: "backend",
+    });
+    expect(rpc?.[1]).toMatchObject({
+      ok: false,
+      error: { code: "forbidden", message: expect.stringContaining("gateway.uploads.enabled") },
+    });
+    expect(hookMocks.uploadToolExecute).not.toHaveBeenCalled();
+    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+  });
 
   it.each([
     {

@@ -715,6 +715,54 @@ describe("slack native approval adapter", () => {
     });
   });
 
+  it("skips native delivery when agent filters do not match", async () => {
+    const cfg = buildConfig({
+      execApprovals: {
+        enabled: true,
+        approvers: ["U123APPROVER"],
+        target: "both",
+        agentFilter: ["ops-agent"],
+      },
+    });
+
+    const originTarget = await slackApprovalCapability.native?.resolveOriginTarget?.({
+      cfg,
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        id: "req-1",
+        request: {
+          command: "echo hi",
+          agentId: "other-agent",
+          turnSourceChannel: "slack",
+          turnSourceTo: "channel:C123",
+          turnSourceAccountId: "default",
+          sessionKey: "agent:other-agent:slack:channel:c123",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+    const dmTargets = await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+      cfg,
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        id: "req-1",
+        request: {
+          command: "echo hi",
+          agentId: "other-agent",
+          sessionKey: "agent:other-agent:slack:channel:c123",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(originTarget).toBeNull();
+    expect(dmTargets).toStrictEqual([]);
+  });
+
   it("skips native delivery when the request is bound to another Slack account", async () => {
     const originTarget = await slackApprovalCapability.native?.resolveOriginTarget?.({
       cfg: buildConfig(),
