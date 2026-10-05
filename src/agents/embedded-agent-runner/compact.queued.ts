@@ -33,7 +33,7 @@ import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { beginForegroundSessionMaintenance } from "../session-maintenance/coordinator.js";
-import { resolveSessionPlacementSandbox } from "../session-placement-admission.js";
+import { prepareSessionPlacementSandbox } from "../session-placement-admission.js";
 import { deferOwningContextEngineBudgetCompaction } from "./compact.deferred-context-engine.js";
 import { runForegroundCompactionWork } from "./compact.foreground-work.js";
 import { compactNativeCliSession } from "./compact.js";
@@ -269,9 +269,9 @@ async function compactEmbeddedAgentSessionImpl(
     const agentDir =
       params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
     const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
-    const placementSandbox =
+    using placement =
       params.sandbox === undefined
-        ? await resolveSessionPlacementSandbox({
+        ? await prepareSessionPlacementSandbox({
             agentId: runtimeTarget.agentId,
             config: params.config,
             sessionId: runtimeTarget.sessionId,
@@ -279,6 +279,23 @@ async function compactEmbeddedAgentSessionImpl(
             workspaceDir: resolvedWorkspaceDir,
           })
         : null;
+    const sourceHost = host;
+    const assertActive = () => {
+      sourceHost.assertActive?.();
+      placement?.assertCurrent();
+    };
+    host = {
+      ...sourceHost,
+      assertActive,
+      sourceAuthority: {
+        ...sourceHost.sourceAuthority,
+        assertActive: () => {
+          sourceHost.sourceAuthority.assertActive();
+          assertActive();
+        },
+      },
+    };
+    const placementSandbox = placement?.sandbox;
     assertQueuedCompactionPreparationActive(params, host);
     const requestedSelection = {
       ...params,

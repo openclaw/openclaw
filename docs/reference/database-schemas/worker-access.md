@@ -2620,6 +2620,15 @@ The released synchronous statistics SDK and process-held incognito paths keep
 their existing owners. Schemas, stored bytes, retention, and update behavior are
 unchanged.
 
+Compaction sandbox selection reads placement through the existing shared-state
+projection and retains its physical-store observation until the consumer settles.
+Absent placements are retained too: a new placement, pending publication, owner
+replacement, or uncertain write refuses subsequent effects. Remote sandboxes also
+recheck the environment's live attachment and device identity. Queued compaction
+composes these checks with its original source and transcript commit authority;
+side questions and plugin-harness dispatch retain the same prepared owner.
+This read-only cutover changes no schema, admission, stored bytes, or update behavior.
+
 SessionManager's awaited persistence family uses its existing SQLite writer
 domain for file-backed transcripts, including user and custom messages,
 `beforeFreshMessageCommit`, metadata, compaction, and branch/leaf mutations.
