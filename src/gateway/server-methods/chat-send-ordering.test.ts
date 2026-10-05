@@ -63,7 +63,7 @@ it.for([false, true])(
         const ticket = reserve(keys);
         if (ticket) {
           tickets.add(ticket);
-          const wait = ticket.wait;
+          const wait = ticket.wait.bind(ticket);
           vi.spyOn(ticket, "wait").mockImplementation((abortSignal) => {
             if (firstPreparationHeld) {
               laterAdmissionEntered.resolve();
