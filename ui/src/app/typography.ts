@@ -11,6 +11,14 @@ const FONT_FALLBACKS = {
   serif: 'Georgia, "Times New Roman", serif',
   mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace',
 };
+// Shared self-hosted Vietnamese fallback (fonts/noto-sans-vietnamese.css).
+// Placed immediately after the selected face so missing Instrument/latin-ext
+// glyphs (U+1EA0–U+1EF1, U+031B, …) resolve here before OS fonts.
+const VIETNAMESE_FALLBACK = {
+  asset: "fonts/noto-sans-vietnamese.css",
+  family: "Noto Sans",
+  id: "noto-sans-vietnamese",
+} as const;
 const TYPEFACE_METADATA: Record<
   TypefaceId,
   { label: string; family?: string; kind: keyof typeof FONT_FALLBACKS }
@@ -34,7 +42,14 @@ const TYPEFACE_METADATA: Record<
 export const TYPEFACES = Object.fromEntries(
   UI_APPEARANCE_TYPEFACE_VALUES.map((id) => {
     const { label, family = label, kind } = TYPEFACE_METADATA[id];
-    const stack = id === "system" ? FONT_FALLBACKS.sans : `"${family}", ${FONT_FALLBACKS[kind]}`;
+    // Proportional Noto must stay out of mono stacks: JetBrains Mono omits
+    // letters such as U+1EBF, and a variable-width fallback breaks code alignment.
+    const stack =
+      id === "system"
+        ? FONT_FALLBACKS.sans
+        : kind === "mono"
+          ? `"${family}", ${FONT_FALLBACKS[kind]}`
+          : `"${family}", "${VIETNAMESE_FALLBACK.family}", ${FONT_FALLBACKS[kind]}`;
     return [id, { label, stack, asset: id === "system" ? undefined : `fonts/${id}.css` }] as const;
   }),
   // SAFETY: Mapping the complete wire tuple emits one typed entry for every TypefaceId.
@@ -88,12 +103,27 @@ function loadTypefaceStylesheet(face: TypefaceId): void {
   document.head.append(link);
 }
 
+function loadVietnameseFallbackStylesheet(): void {
+  const id = `openclaw-typeface-${VIETNAMESE_FALLBACK.id}`;
+  if (document.getElementById(id)) {
+    return;
+  }
+  const link = document.createElement("link");
+  link.id = id;
+  link.rel = "stylesheet";
+  link.href = inferControlUiPublicAssetPath(VIETNAMESE_FALLBACK.asset);
+  document.head.append(link);
+}
+
 export function syncTypefaceStylesheets(faces: TypefacePair): void {
   if (typeof document === "undefined") {
     return;
   }
   loadTypefaceStylesheet(faces.ui);
   loadTypefaceStylesheet(faces.chat);
+  // Shared Vietnamese subset: one stylesheet for every bundled face stack.
+  // Same retention model as jetbrains-mono (load once; never unload).
+  loadVietnameseFallbackStylesheet();
   // base.css --mono names JetBrains Mono for every theme's code spans, but only
   // the @font-face declaration here makes that true; the woff2 itself downloads
   // lazily on the first rendered code glyph, so this costs one small stylesheet.
@@ -101,6 +131,7 @@ export function syncTypefaceStylesheets(faces: TypefacePair): void {
 }
 
 export function loadTypefaceSpecimens(): void {
+  loadVietnameseFallbackStylesheet();
   UI_APPEARANCE_TYPEFACE_VALUES.forEach(loadTypefaceStylesheet);
 }
 
