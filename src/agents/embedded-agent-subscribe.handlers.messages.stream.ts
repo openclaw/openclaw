@@ -196,7 +196,7 @@ export function emitAssistantCommentaryStreamData(
     // the Control UI can key the live row to the persisted fallback row; without
     // it every generic segment is unkeyed and survives as a duplicate.
     const commentaryItemId = isResponsesCommentary
-      ? itemId
+      ? (itemId ?? resolveAssistantStreamItemId({ contentIndex: index, message }))
       : resolveAssistantStreamItemId({ message });
     ctx.emitAssistantStreamData(
       { text, delta: "", replace: true, phase: "commentary", itemId: commentaryItemId },

@@ -36,7 +36,6 @@ import {
 } from "../sessions/session-key-utils.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
-import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
   appendChatCanvasBlocks,
   appendChatCanvasBlocksToMessage,
@@ -45,6 +44,7 @@ import {
 import {
   projectLiveAssistantBufferedText,
   shouldSuppressAssistantEventForLiveChat,
+  resolveLiveAssistantTextInput,
 } from "./live-chat-projector.js";
 import type {
   GatewayBroadcastFn,
@@ -769,7 +769,7 @@ export function createAgentEventHandler({
     clientRunId: string,
     sourceRunId: string,
     seq: number,
-    input: NonNullable<ReturnType<typeof resolveAssistantTextInput>>,
+    input: NonNullable<ReturnType<typeof resolveLiveAssistantTextInput>>,
     opts?: { controlUiVisible?: boolean; isCurrent?: () => boolean; isHeartbeat?: boolean },
   ) => {
     const run = chatRunState.getOrCreate(clientRunId);
@@ -1600,23 +1600,15 @@ export function createAgentEventHandler({
       if (isControlUiVisible && isToolEvent && !suppressHeartbeatToolEvents) {
         sendNodeToolPayload(evt, sessionKey, sessionAgentId, agentPayload);
       }
-      const assistantLiveChatInput =
-        evt.stream === "assistant" ? resolveAssistantTextInput(evt.data) : undefined;
-      const suppressAssistant = shouldSuppressAssistantEventForLiveChat(evt.data);
-      if (
-        !isAborted &&
-        assistantLiveChatInput &&
-        (!suppressAssistant || assistantLiveChatInput.itemId)
-      ) {
+      const assistantLiveChatInput = resolveLiveAssistantTextInput(evt.stream, evt.data);
+      if (!isAborted && assistantLiveChatInput) {
         emitChatDelta(
           sessionKey,
           sessionAgentId,
           clientRunId,
           evt.runId,
           evt.seq,
-          suppressAssistant
-            ? { ...assistantLiveChatInput, text: "", delta: "" }
-            : assistantLiveChatInput,
+          assistantLiveChatInput,
           {
             controlUiVisible: isControlUiVisible,
             isCurrent,

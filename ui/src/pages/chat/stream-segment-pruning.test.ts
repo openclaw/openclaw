@@ -4,7 +4,10 @@ import {
   visibleAssistantStreamParts,
   type ToolStreamReconciliationState,
 } from "./stream-reconciliation.ts";
-import { reconcilePersistedAssistantStream } from "./stream-segment-pruning.ts";
+import {
+  reconcilePersistedAssistantStream,
+  reconcileReplacedAssistantStream,
+} from "./stream-segment-pruning.ts";
 
 function persisted(runId: string, text: string) {
   return { role: "assistant", content: text, __openclaw: { id: runId, runId, seq: 1 } };
@@ -78,3 +81,42 @@ describe("persisted assistant stream history cache", () => {
     }
   });
 });
+
+it.each(["", "Earlier answer.\n\n"])(
+  "forgets retracted cumulative ownership before a same-text answer (%j)",
+  (prefix) => {
+    const text = "Repeated text.";
+    const state: ToolStreamReconciliationState = {
+      chatStreamStartedAt: 1,
+      chatRunId: "run-1",
+      chatStream: prefix + text,
+      chatStreamSegments: [
+        ...(prefix ? [{ text: prefix, ts: 1, runId: "run-1", persisted: true as const }] : []),
+        {
+          text: prefix + text,
+          ts: 2,
+          runId: "run-1",
+          persisted: true,
+          retiredItemId: "commentary",
+          boundaryRunId: "steer-run",
+        },
+        { text, ts: 2, runId: "run-1", itemId: "commentary" },
+      ],
+    };
+    state.chatStream = prefix;
+    reconcileReplacedAssistantStream(state, prefix);
+    state.chatStream = prefix + text;
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: true,
+        isHiddenStreamText: () => false,
+      }).map((part) => part.text.trim()),
+    ).toEqual([text, text]);
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: true,
+        isHiddenStreamText: () => false,
+      }).at(-1)?.afterBoundaryRunId,
+    ).toBe("steer-run");
+  },
+);

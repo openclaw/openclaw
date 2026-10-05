@@ -44,6 +44,7 @@ import {
 import {
   discardStreamSegmentIndexes,
   reconcilePersistedAssistantStream,
+  reconcileReplacedAssistantStream,
 } from "./stream-segment-pruning.ts";
 import {
   authoritativeHistoryAppliedForRun,
@@ -357,6 +358,9 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       !isAssistantHeartbeatAckForDisplay(payload.message)
     ) {
       state.chatStream = next;
+      if (payload.replace === true) {
+        reconcileReplacedAssistantStream(state, next);
+      }
       reconcilePersistedAssistantStream(state);
     }
   } else if (payload.state === "final") {

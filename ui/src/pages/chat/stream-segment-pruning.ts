@@ -91,6 +91,35 @@ function persistedAssistantRunMessages(history: unknown[] | undefined, runId: st
   return messages;
 }
 
+/** A producer replacement invalidates prefixes removed from its cumulative buffer. */
+export function reconcileReplacedAssistantStream(
+  state: ToolStreamReconciliationState,
+  text: string,
+): void {
+  state.chatStreamSegments = state.chatStreamSegments?.flatMap((segment) => {
+    if (
+      segment.runId !== state.chatRunId ||
+      !streamSegmentUsesAccumulatedText(segment) ||
+      text.startsWith(segment.text)
+    ) {
+      return [segment];
+    }
+    // A steer boundary still owns ordering after its text has been reclassified.
+    return segment.boundaryRunId
+      ? [
+          {
+            text: "",
+            ts: segment.ts,
+            runId: segment.runId,
+            boundaryRunId: segment.boundaryRunId,
+            afterBoundaryRunId: segment.afterBoundaryRunId,
+            boundaryMarker: true as const,
+          },
+        ]
+      : [];
+  });
+}
+
 export function reconcilePersistedAssistantStream(state: ToolStreamReconciliationState): void {
   const runId = state.chatRunId;
   if (!runId) {
