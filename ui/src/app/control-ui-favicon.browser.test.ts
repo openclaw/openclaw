@@ -7,6 +7,7 @@ import { sessionsResult } from "../lib/sessions/session-capability.test-support.
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import {
+  applyControlUiFaviconImage,
   applyControlUiFaviconStatus,
   applyControlUiPresentation,
 } from "./control-ui-environment-presentation.runtime.ts";
@@ -77,6 +78,7 @@ describe("favicon presentation ownership", () => {
   afterEach(() => {
     setCurrentThemeBranding({ mascot: "claw", critters: [] });
     document.documentElement.dataset.themeMascot = "claw";
+    applyControlUiFaviconImage(null);
     applyControlUiFaviconStatus("idle");
     applyControlUiPresentation({ environment: null });
     svgIcon.remove();
@@ -105,6 +107,53 @@ describe("favicon presentation ownership", () => {
     }
     setCurrentThemeBranding(previousBranding);
     vi.restoreAllMocks();
+  });
+
+  it("keeps custom colors under environment branding and composes every status dot", async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 32;
+    const drawing = canvas.getContext("2d")!;
+    drawing.fillStyle = "rgb(180, 40, 110)";
+    drawing.fillRect(0, 0, 32, 32);
+    const artwork = canvas.toDataURL("image/png");
+    applyControlUiFaviconImage(artwork);
+    applyControlUiPresentation({
+      environment: { label: "Preview", color: "blue" },
+      seamColor: "#5078a0",
+    });
+    expect(svgIcon.href).toBe(artwork);
+    for (const [status, dot] of [
+      ["working", [80, 120, 160]],
+      ["attention", [210, 150, 60]],
+      ["done", [100, 180, 120]],
+      ["disconnected", [130, 130, 130]],
+    ] as const) {
+      const changed = createDeferred();
+      const observer = new MutationObserver(() => changed.resolve());
+      observer.observe(svgIcon, { attributes: true, attributeFilter: ["href"] });
+      try {
+        applyControlUiFaviconStatus(status);
+        await changed.promise;
+      } finally {
+        observer.disconnect();
+      }
+      const image = new Image();
+      image.src = svgIcon.href;
+      await image.decode();
+      drawing.clearRect(0, 0, 32, 32);
+      drawing.drawImage(image, 0, 0);
+      const basePixels = [...drawing.getImageData(8, 8, 1, 1).data];
+      const dotPixels = [...drawing.getImageData(25, 25, 1, 1).data];
+      expect(basePixels).toEqual([180, 40, 110, 255]);
+      expect(dotPixels).toEqual([...dot, 255]);
+      expect(pngIcon.href).toBe(svgIcon.href);
+    }
+    applyControlUiFaviconStatus("idle");
+    expect(svgIcon.href).toBe(artwork);
+    applyControlUiFaviconImage(null);
+    expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).not.toBeNull();
+    applyControlUiPresentation({ environment: null });
+    expectOriginals();
   });
 
   function expectOriginals() {

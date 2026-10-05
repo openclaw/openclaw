@@ -579,10 +579,11 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
       if (pushWriter !== writer || pushEpoch !== epoch) {
         return;
       }
+      const dispatchedBatch = "batch" in result ? result.batch : batch;
       if (result.ok) {
-        removeBatch(batch);
+        removeBatch(dispatchedBatch);
         const lastSeen = parseStoredPrefs(readStorage(LAST_SEEN_KEY, pendingScope)) ?? {};
-        const nextLastSeen = { ...lastSeen, ...batch };
+        const nextLastSeen = { ...lastSeen, ...dispatchedBatch };
         const profilePrefs = resolveProfileAppearancePrefs(
           writer.state.client?.gatewayUrl ?? "",
           pushProfileId,
@@ -590,10 +591,10 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
         if (useProfile && profilePrefs) {
           const configPrefs = extractServerUiPrefs(writer.state.configSnapshot?.config);
           for (const key of SYNCED_PREF_KEYS) {
-            if (!Object.hasOwn(batch, key)) {
+            if (!Object.hasOwn(dispatchedBatch, key)) {
               continue;
             }
-            if (batch[key] === null) {
+            if (dispatchedBatch[key] === null) {
               delete profilePrefs[key];
               if (configPrefs[key] === undefined) {
                 delete nextLastSeen[key];
@@ -601,13 +602,13 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
                 Object.assign(nextLastSeen, { [key]: configPrefs[key] });
               }
             } else {
-              Object.assign(profilePrefs, { [key]: batch[key] });
+              Object.assign(profilePrefs, { [key]: dispatchedBatch[key] });
             }
           }
           lastReconciledConfigObject = null;
         }
         writeStorage(LAST_SEEN_KEY, pendingScope, JSON.stringify(nextLastSeen));
-        settlePendingStorage(batch);
+        settlePendingStorage(dispatchedBatch);
         clearConflictRedrain();
         if (pushWriter !== writer || pushEpoch !== epoch) {
           return;
@@ -642,10 +643,10 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
       // Definitive viewer-scope or validation rejections degrade to device-local state.
       // LAST_SEEN still owns the authoritative server value per key, so identical
       // refreshes and reloads preserve this local edit; only a server delta replaces it.
-      removeBatch(batch);
-      settlePendingStorage(batch);
+      removeBatch(dispatchedBatch);
+      settlePendingStorage(dispatchedBatch);
       afterCommit?.({ needsRefresh: false, retainedLocal: true });
-      return;
+      break;
     }
   }
 }

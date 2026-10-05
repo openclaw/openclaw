@@ -434,6 +434,97 @@
   }
 }
 
+/* A file value and its remove action form one control, without an inner divider. */
+.settings-file {
+  display: flex;
+  align-items: stretch;
+  width: 310px;
+  max-width: 100%;
+  min-width: 0;
+  min-height: var(--settings-control-height, 36px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.settings-file > .btn {
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transition:
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.settings-file > .settings-file__value {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  text-align: start;
+}
+
+.settings-file__thumbnail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+}
+
+.settings-file__thumbnail img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.settings-file__thumbnail svg {
+  width: 18px;
+  height: 18px;
+}
+
+.settings-file__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--control-ui-text-sm);
+}
+
+.settings-file > .settings-file__remove {
+  flex: 0 0 auto;
+  width: 28px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.settings-file__remove svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-file > .btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.settings-file > .btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+@media (max-width: 768px) {
+  .settings-file {
+    width: 100%;
+  }
+}
+
 /* Trailing action rows hold only a button cluster: give it the full row
    (definite width, see the wrap note on .settings-row__control) so nowrap
    button labels wrap as whole buttons instead of squeezing into 60%. */

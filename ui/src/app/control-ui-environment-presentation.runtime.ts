@@ -55,6 +55,16 @@ export function applyControlUiPresentation(params: {
 type ControlUiFaviconStatus = "attention" | "working" | "done" | "disconnected" | "idle";
 
 let faviconStatus: ControlUiFaviconStatus = "idle";
+let faviconImage: string | null = null;
+
+export function applyControlUiFaviconImage(image: string | null): void {
+  if (faviconImage === image) {
+    return;
+  }
+  faviconImage = image;
+  faviconSources.clear();
+  syncControlUiFavicon();
+}
 let faviconPalette: ReturnType<typeof resolveFaviconPalette> | undefined;
 const faviconSources = new Map<string, Promise<FaviconSource>>();
 const faviconRequests = new WeakMap<HTMLLinkElement, { signature: string }>();
@@ -123,7 +133,7 @@ export function syncControlUiFavicon(): void {
     faviconSources.clear();
   }
   for (const icon of document.querySelectorAll<HTMLLinkElement>('link[rel="icon"]')) {
-    if (!baseSvg && !color) {
+    if (!faviconImage && !baseSvg && !color) {
       faviconRequests.delete(icon);
       if (icon.dataset.openclawOriginalFavicon) {
         restoreFavicon(icon, JSON.parse(icon.dataset.openclawOriginalFavicon));
@@ -139,8 +149,14 @@ export function syncControlUiFavicon(): void {
     const original: [string | null, string | null] = JSON.parse(
       icon.dataset.openclawOriginalFavicon,
     );
-    const href = baseSvg ?? original[0];
-    const type = baseSvg ? "image/svg+xml" : original[1];
+    const href = faviconImage ?? baseSvg ?? original[0];
+    const type = faviconImage
+      ? faviconImage.startsWith("data:image/webp;")
+        ? "image/webp"
+        : "image/png"
+      : baseSvg
+        ? "image/svg+xml"
+        : original[1];
     const signature = JSON.stringify([href, type, color, ring]);
     if (faviconRequests.get(icon)?.signature === signature) {
       continue;

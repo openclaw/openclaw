@@ -50,6 +50,14 @@ When you run several Gateways, set `gateway.controlUi.environment` to distinguis
 
 The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the sidebar and narrow topbar, a browser-title suffix, and a matching favicon. The label is trimmed and must contain 1–24 characters. Available colors are `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, and `gray`. The label and color are intentionally visible before sign-in; leave `environment` unset to keep the standard appearance unchanged.
 
+## Browser tab icon
+
+In **Settings → Appearance → Browser tab icon**, choose **Default**, **Agent avatar**, or **Custom**. Default keeps the theme and Gateway environment icon. Agent avatar uses the selected agent's image, falling back to Default when an image is unavailable. Custom uses your uploaded image across agent switches; it does not change the agent's identity.
+
+For Custom, choose a PNG, JPG, or WebP image up to 2 MiB. OpenClaw fits and compresses the image for the small tab icon. Click the selected file to replace it, or remove it to return to the empty Custom state, which displays Default. Switching modes preserves the uploaded image. Activity and attention dots remain visible in every mode.
+
+The choice is saved to your authenticated profile on the connected Gateway and has a browser-local mirror. Without a writable profile it stays local to the browser. This setting does not change other people's tab icons.
+
 ## Community invitation
 
 The sidebar shows a community invitation with Reddit, Discord, and X links by default. Its first appearance waits until sidebar interaction finishes, so it does not move session controls while you use them. Its close button dismisses it for the current browser origin. The redesigned invitation appears again for browsers that dismissed the older Discord-only card. Dismissing this version keeps it hidden across routine updates. To hide the invitation for everyone using a Control UI deployment, run this on the Gateway serving that UI:

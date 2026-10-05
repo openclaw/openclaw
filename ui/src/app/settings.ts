@@ -4,7 +4,11 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { normalizeUiAppearancePreference } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import {
+  normalizeTabIconPreference,
+  normalizeUiAppearancePreference,
+  type TabIconPreference,
+} from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
@@ -186,6 +190,7 @@ export type UiSettings = {
   // Browser typeface overrides; undefined = theme default.
   fontUi?: TypefaceId;
   fontChat?: TypefaceId;
+  tabIcon?: TabIconPreference;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
@@ -508,6 +513,7 @@ export function loadUiPreferences(
       accent: normalizeAccentColor(parsed.accent),
       fontUi: normalizeTypefaceOverride(parsed.fontUi),
       fontChat: normalizeTypefaceOverride(parsed.fontChat),
+      tabIcon: normalizeTabIconPreference(parsed.tabIcon),
       chatShowThinking: normalizeBooleanSetting(parsed.chatShowThinking, defaults.chatShowThinking),
       chatShowToolCalls: normalizeBooleanSetting(
         parsed.chatShowToolCalls,
@@ -666,6 +672,7 @@ export function saveSettings(next: UiSettings, options: { selectGateway?: boolea
     accent: normalizeAccentColor(next.accent),
     fontUi: normalizeTypefaceOverride(next.fontUi),
     fontChat: normalizeTypefaceOverride(next.fontChat),
+    tabIcon: normalizeTabIconPreference(next.tabIcon),
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
     chatPersistCommentary: next.chatPersistCommentary ?? true,

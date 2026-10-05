@@ -1407,6 +1407,22 @@ const enSettings = {
       inlineHintBefore: "Click",
       inlineHintAfter:
         "to add one browser-local tweakcn theme. In tweakcn, use Share and paste the copied link here.",
+      tabIcon: {
+        title: "Browser tab icon",
+        source: "Source",
+        sourceLabel: "Browser tab icon source",
+        default: "Default",
+        agent: "Agent avatar",
+        custom: "Custom",
+        image: "Image",
+        formats: "PNG, JPG or WebP",
+        chooseImage: "Choose image…",
+        replaceImage: "Replace image: {name}",
+        removeImage: "Remove image",
+        unusable: "This image could not be opened. Choose a PNG, JPG or WebP image.",
+        tooLarge: "This image is too large. Choose an image no larger than 2 MiB.",
+        tooDetailed: "This image could not fit the tab icon limit. Choose a simpler image.",
+      },
       textSize: "Text size",
     },
     chatPrefs: {

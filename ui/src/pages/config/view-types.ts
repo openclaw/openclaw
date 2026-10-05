@@ -5,6 +5,7 @@ import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
+import type { TabIconPreference } from "../../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
 import type {
   NativeNotificationsPermission,
@@ -142,6 +143,13 @@ export type ConfigProps = {
   onImportCustomTheme: () => void;
   onClearCustomTheme: () => void;
   onOpenCustomThemeImport?: () => void;
+  tabIcon: TabIconPreference | undefined;
+  tabIconBusy: boolean;
+  tabIconError: string | null;
+  tabIconUploadsEnabled: boolean;
+  setTabIconMode: (mode: TabIconPreference["mode"]) => void;
+  onTabIconFileChange: (file: File) => void;
+  onRemoveTabIconImage: () => void;
   textScale: number;
   textScaleOverridden: boolean;
   setTextScale: (value: number) => void;

@@ -22,6 +22,8 @@ import {
   setQuestionPromptClient,
 } from "./question-prompt.ts";
 
+export { connectControlUiFaviconArtwork } from "./control-ui-favicon-artwork.runtime.ts";
+
 export function connectControlUiFavicon(
   shell: HTMLElement,
   context: Pick<ApplicationContext, "gateway" | "agentSelection" | "sessions" | "overlays">,
