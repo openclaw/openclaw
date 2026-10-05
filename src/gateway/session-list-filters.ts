@@ -39,7 +39,11 @@ import type {
   SessionListRowContext,
   SessionListRowContextProvider,
 } from "./session-utils-contracts.js";
-import { isFinitePositiveTimestamp, resolveSessionChildOwners } from "./session-utils-core.js";
+import {
+  isFinitePositiveTimestamp,
+  matchesSessionArchiveFilter,
+  resolveSessionChildOwners,
+} from "./session-utils-core.js";
 import { createSessionListSearchMatcher } from "./session-utils-search.js";
 import type { SessionListModelCatalog, SessionsListResult } from "./session-utils.types.js";
 
@@ -83,13 +87,6 @@ export type SessionListFilterParams = {
   projectActiveRun?: SessionListActiveRunProjector;
   shouldYield?: () => boolean;
 };
-
-export function matchesSessionArchiveFilter(
-  entry: Pick<SessionEntry, "archivedAt">,
-  archived: SessionsListParams["archived"],
-) {
-  return archived === "all" || (entry.archivedAt !== undefined) === (archived === true);
-}
 
 function createSessionCandidateFilter(params: SessionListFilterParams) {
   const { opts, now } = params;

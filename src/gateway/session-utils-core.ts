@@ -3,6 +3,7 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
@@ -20,6 +21,13 @@ import {
   createSessionRowModelCacheKey,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
+
+export function matchesSessionArchiveFilter(
+  entry: Pick<SessionEntry, "archivedAt">,
+  archived: SessionsListParams["archived"],
+) {
+  return archived === "all" || (entry.archivedAt !== undefined) === (archived === true);
+}
 
 export function deriveSessionTitle(
   entry: SessionEntry | undefined,
