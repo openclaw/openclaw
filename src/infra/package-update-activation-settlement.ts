@@ -129,16 +129,33 @@ export async function verifyPackagePublicationSettlement(
   }
   const contentPaths = new Set(inventoried);
   const assertTarget = (field: string, target: unknown) => {
+    const file = typeof target === "string" ? path.resolve(live, target) : live;
+    const relative = path.relative(live, file).split(path.sep).join("/");
     if (
       typeof target !== "string" ||
       !target ||
       target.includes("\\") ||
       (field === "exports" && !target.startsWith("./")) ||
-      !contentPaths.has(path.relative(live, path.resolve(live, target)).split(path.sep).join("/"))
+      relative === ".." ||
+      relative.startsWith("../") ||
+      path.isAbsolute(relative) ||
+      (relative.startsWith("dist/") && !contentPaths.has(relative)) ||
+      !fs.statSync(file, { throwIfNoEntry: false })?.isFile()
     ) {
       throw new Error(
-        `Package settlement refused: package.json ${field} must reference an inventoried file${typeof target === "string" ? `: ${target}` : "."}`,
+        `Package settlement refused: package.json ${field} must resolve to a package file (inventoried within dist)${typeof target === "string" ? `: ${target}` : "."}`,
       );
+    }
+    const resolved = fs.realpathSync(file);
+    if (!resolved.startsWith(`${live}${path.sep}`)) {
+      throw new Error(
+        `Package settlement refused: package.json ${field} leaves the package: ${target}.`,
+      );
+    }
+    for (const observedPath of [file, resolved]) {
+      if (!observed.has(observedPath)) {
+        observed.set(observedPath, fs.lstatSync(observedPath, { bigint: true }));
+      }
     }
   };
   if (manifest.value.main !== undefined) {
@@ -206,8 +223,8 @@ export async function verifyPackagePublicationSettlement(
     }
   };
   assertUnchanged();
-  // Package scopes can change loading without changing any inventoried module bytes.
-  const extraInspection = await walkDirectory(live, {
+  // Only dist scopes affect inventoried modules; dependency manifests are expected.
+  const extraInspection = await walkDirectory(path.join(live, "dist"), {
     symlinks: "include",
     descend: (entry) => {
       if (!observed.has(entry.path)) {
@@ -219,24 +236,24 @@ export async function verifyPackagePublicationSettlement(
   const inventoryPaths = new Set([...inventory, PACKAGE_DIST_INVENTORY_RELATIVE_PATH]);
   const extraManifests = extraInspection.entries
     .filter((entry) => entry.name.toLowerCase() === "package.json")
-    .map((entry) => entry.relativePath.replace(/\\/gu, "/"))
-    .filter((file) => file !== "package.json" && !contentPaths.has(file));
+    .map((entry) => `dist/${entry.relativePath.replace(/\\/gu, "/")}`)
+    .filter((file) => !contentPaths.has(file));
   if (extraManifests.length || extraInspection.failedDirs.length) {
     throw new Error(
       `Package settlement refused: unverified package.json scopes: ${[
         ...extraManifests,
-        ...extraInspection.failedDirs.map((entry) => `${entry.relativePath || "."} (unreadable)`),
+        ...extraInspection.failedDirs.map((entry) => `dist/${entry.relativePath} (unreadable)`),
       ].join(", ")}.`,
     );
   }
   const extras = extraInspection.entries
     .filter((entry) => entry.kind !== "directory")
-    .map((entry) => entry.relativePath.replace(/\\/gu, "/"))
-    .filter((file) => file.startsWith("dist/") && !inventoryPaths.has(file))
+    .map((entry) => `dist/${entry.relativePath.replace(/\\/gu, "/")}`)
+    .filter((file) => !inventoryPaths.has(file))
     .toSorted();
   assertUnchanged();
   return {
     assertUnchanged,
-    detail: `Root package.json was field-verified, not content-verified. Inventoried dist content mismatches: none. Extra dist paths: ${extras.length ? extras.join(", ") : "none"}. Original per-path metadata is not retained in the sealed tree digest.`,
+    detail: `Root package.json was field-verified, not content-verified. Entry targets outside dist were checked for resolution, not content. Inventoried dist content mismatches: none. Extra dist paths: ${extras.length ? extras.join(", ") : "none"}. Original per-path metadata is not retained in the sealed tree digest.`,
   };
 }

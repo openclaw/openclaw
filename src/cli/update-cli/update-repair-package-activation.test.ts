@@ -179,10 +179,26 @@ async function interruptedPublication() {
       exports: {
         ".": { import: "./dist/index.js", default: ["./dist/index.js", null] },
         "./nested": "./dist/nested/index.js",
+        "./cli-entry": "./openclaw.mjs",
+        "./package.json": "./package.json",
       },
-      bin: { openclaw: "dist/index.js" },
+      bin: { openclaw: "openclaw.mjs" },
     }),
   );
+  fs.writeFileSync(path.join(stageRoot, "openclaw.mjs"), 'import "./dist/index.js";\n');
+  const stagedLauncher = path.join(f.params.stage.layout.binDir, "openclaw");
+  fs.unlinkSync(stagedLauncher);
+  fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", stagedLauncher);
+  fs.writeFileSync(path.join(stageRoot, "README.md"), "Synthetic package README\n");
+  fs.writeFileSync(path.join(stageRoot, "LICENSE"), "Synthetic package license\n");
+  for (const dependency of ["dep-a", "@scope/dep-b", "dep-a/node_modules/dep-c"]) {
+    const directory = path.join(stageRoot, "node_modules", dependency);
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(
+      path.join(directory, "package.json"),
+      JSON.stringify({ name: path.basename(dependency), version: "1.0.0", type: "commonjs" }),
+    );
+  }
   fs.mkdirSync(path.join(stageRoot, "dist/nested"));
   fs.writeFileSync(path.join(stageRoot, "dist/nested/index.js"), "export {};\n");
   fs.mkdirSync(path.join(stageRoot, "dist/scoped"));
@@ -254,7 +270,7 @@ async function interruptedPublication() {
 }
 
 describe.skipIf(process.platform === "win32")("public package repair of obsolete recovery", () => {
-  it("settles an externally changed publication only after verifying the live candidate inventory", async () => {
+  it("settles the npm layout with dependency manifests and an external dist backup", async () => {
     const f = await interruptedPublication();
     fs.symlinkSync("missing-extra-target", path.join(f.packageRoot, "dist/extra-link"));
     const helper = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
@@ -273,7 +289,8 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     );
     expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain("2.0.0");
     expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"), "utf8")).toBe("export {};\n");
-    expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+    expect(fs.readlinkSync(f.launcher)).toBe("../lib/node_modules/openclaw/openclaw.mjs");
+    expect(fs.readFileSync(f.launcher, "utf8")).toBe('import "./dist/index.js";\n');
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("publication-settled-external-change"),
     );
@@ -281,6 +298,11 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("dist/extra-link"));
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("Root package.json was field-verified, not content-verified."),
+    );
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Entry targets outside dist were checked for resolution, not content.",
+      ),
     );
     expect(getUpdateRun(f.record.descriptor.operationId)).toMatchObject({
       status: "succeeded",
@@ -321,7 +343,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     expect(f.journal.read().phase).toBe("prepared");
   });
 
-  it.each(["dist/package.json", "dist/nested/package.json", "lib/nested/package.json"])(
+  it.each(["dist/package.json", "dist/nested/package.json"])(
     "keeps recovery armed when an extra %s can change module loading",
     async (relative) => {
       const f = await interruptedPublication();
@@ -341,9 +363,9 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     { field: "name", value: "other-package" },
     { field: "version", value: "1.0.0" },
     { field: "type", value: "commonjs" },
-    { field: "main", value: "unverified.js" },
-    { field: "exports", value: { ".": { import: "./dist/index.js", default: "./unverified.js" } } },
-    { field: "bin", value: { openclaw: "openclaw.mjs" } },
+    { field: "main", value: "missing.js" },
+    { field: "exports", value: { ".": { import: "./dist/index.js", default: "./missing.js" } } },
+    { field: "bin", value: { openclaw: "dangling.mjs" } },
     { field: "parse", value: null },
   ])(
     "keeps recovery armed for an unverified root package.json $field",
@@ -351,8 +373,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       const f = await interruptedPublication();
       const manifestPath = path.join(f.packageRoot, "package.json");
       const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      fs.writeFileSync(path.join(f.packageRoot, "unverified.js"), "export {};\n");
-      fs.writeFileSync(path.join(f.packageRoot, "openclaw.mjs"), "export {};\n");
+      fs.symlinkSync("missing.mjs", path.join(f.packageRoot, "dangling.mjs"));
       fs.writeFileSync(
         manifestPath,
         field === "parse" ? "{" : JSON.stringify({ ...manifest, [field]: value }),

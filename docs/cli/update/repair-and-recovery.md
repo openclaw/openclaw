@@ -259,16 +259,18 @@ reports the exact candidate version, every file in the package's own dist conten
 inventory still matches, the original helper's seal verifies, and no updater owns
 the installation. The root `package.json` must parse with name `openclaw`, the
 candidate version, and type `module`; every `main`, `exports`, and `bin` target must
-resolve to an inventoried file. Extra `package.json` files anywhere under the
-package root refuse settlement because they can change Node's module loading.
-Other extra dist files remain warnings. Restore any changed inventoried file to
-its packaged bytes before retrying; a working Gateway alone does not waive an
-inventory failure. Repair preserves the
+resolve to a file in the package. Targets within `dist/` must be inventoried;
+top-level targets such as `openclaw.mjs` are checked for resolution without content
+verification. Extra `package.json` files under `dist/` refuse settlement because
+they can change how inventoried code loads. Dependency manifests under
+`node_modules/` are expected and ignored. Other extra dist files remain warnings.
+Restore any changed inventoried file to its packaged bytes before retrying; a
+working Gateway alone does not waive an inventory failure. Repair preserves the
 previous package and sealed helper, leaves the installed package and launchers in
 place, and records the warning and extra paths in update history. The warning and
 receipt identify the root manifest as field-verified, not content-verified. The
-sealed tree digest cannot identify old per-file metadata differences. Use a CLI containing
-this fix; the original sealed helper keeps its original recovery checks.
+sealed tree digest cannot identify old per-file metadata differences. Use a CLI
+containing this fix; the original sealed helper keeps its original recovery checks.
 
 For a package update stranded by an older updater's launcher ownership checks,
 use the manual installation hop, then repair from the new CLI at the same root:
