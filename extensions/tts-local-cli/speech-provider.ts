@@ -36,21 +36,53 @@ function resolveVoiceId(cfg: SpeechProviderConfig): string | undefined {
 }
 
 /**
- * A CLI backend owns its voice catalog, so the config declares it. With no
- * declared list, the selected voice is the only one we can honestly report.
+ * Talk records carry the selection, not the executable. Dropping absent and
+ * blank values keeps a Talk voice choice from clobbering base CLI settings.
  */
-function resolveVoiceList(cfg: SpeechProviderConfig): string[] {
-  const declared = asStringArray(cfg.voices);
-  if (declared?.length) {
-    return declared;
-  }
-  const selected = resolveVoiceId(cfg);
-  return selected ? [selected] : [];
+function meaningfulOverrides(cfg: SpeechProviderConfig): SpeechProviderConfig {
+  return Object.fromEntries(
+    Object.entries(cfg).filter(
+      ([, value]) => value !== undefined && !(typeof value === "string" && value.trim() === ""),
+    ),
+  );
 }
 
 function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechProviderConfig {
   const providers = asOptionalRecord(rawConfig.providers);
   return asOptionalRecord(providers?.["tts-local-cli"]) ?? asOptionalRecord(providers?.cli) ?? {};
+}
+
+/**
+ * `listSpeechVoices` builds `providerConfig` from TTS settings, so voices
+ * declared under `talk.providers` are invisible to a Talk voice command. Fall
+ * back to the wider config so either location populates the catalog.
+ */
+function resolveVoiceCatalog(req: {
+  providerConfig?: SpeechProviderConfig;
+  cfg?: unknown;
+}): string[] {
+  const cfg = asOptionalRecord(req.cfg) ?? {};
+  const scopes = [
+    req.providerConfig ?? {},
+    ...(["talk", "tts"] as const).map((scope) =>
+      resolveCliProviderConfig(asOptionalRecord(cfg[scope]) ?? {}),
+    ),
+  ];
+  // A declared catalog always beats a lone selection: a voiceId left in one
+  // scope must not hide the voices list another scope declares.
+  for (const scope of scopes) {
+    const declared = asStringArray(scope.voices);
+    if (declared?.length) {
+      return declared;
+    }
+  }
+  for (const scope of scopes) {
+    const selected = typeof scope.voiceId === "string" ? scope.voiceId.trim() : "";
+    if (selected) {
+      return [selected];
+    }
+  }
+  return [];
 }
 
 function getConfig(cfg: SpeechProviderConfig, timeoutMs: number = DEFAULT_TIMEOUT_MS) {
@@ -364,11 +396,15 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
       return getConfig(ctx.providerConfig) !== null;
     },
 
+    resolveTalkConfig({ baseTtsConfig, talkProviderConfig }): SpeechProviderConfig {
+      return {
+        ...resolveCliProviderConfig(asOptionalRecord(baseTtsConfig) ?? {}),
+        ...meaningfulOverrides(talkProviderConfig),
+      };
+    },
+
     async listVoices(req) {
-      return resolveVoiceList(req.providerConfig ?? {}).map((voice) => ({
-        id: voice,
-        name: voice,
-      }));
+      return resolveVoiceCatalog(req).map((voice) => ({ id: voice, name: voice }));
     },
 
     async synthesize(req) {

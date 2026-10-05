@@ -31,8 +31,8 @@ to your command with `{{VoiceId}}`:
 }
 ```
 
-The declared voices are what `/talk-voice list` shows and what `/talk-voice set`
-chooses from. With `voices` unset, the configured `voiceId` is reported on its
+The declared voices are what `/voice list` shows and what `/voice set`
+chooses from (the command is `/talkvoice` on Discord). With `voices` unset, the configured `voiceId` is reported on its
 own; with neither set, the voice list is empty and `{{VoiceId}}` expands to
 nothing. `voiceId` does not have to appear in `voices` — the list advertises
 choices, while `voiceId` selects what runs.

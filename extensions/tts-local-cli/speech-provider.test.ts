@@ -245,6 +245,103 @@ describe("buildCliSpeechProvider", () => {
     expectArgsContainSequence(parseAudioPayload(result).args, ["--voice", "am_michael"]);
   });
 
+  it("keeps base executable settings when Talk supplies only a voice", () => {
+    const provider = buildCliSpeechProvider();
+
+    expect(
+      provider.resolveTalkConfig?.({
+        cfg: TEST_CFG,
+        baseTtsConfig: {
+          providers: {
+            "tts-local-cli": {
+              command: "/usr/local/bin/my-tts --voice {{VoiceId}}",
+              args: ["{{OutputPath}}"],
+              outputFormat: "wav",
+              voices: ["af_jessica", "af_bella"],
+              voiceId: "af_jessica",
+            },
+          },
+        },
+        talkProviderConfig: { voiceId: "af_bella" },
+        timeoutMs: 1000,
+      }),
+    ).toMatchObject({
+      command: "/usr/local/bin/my-tts --voice {{VoiceId}}",
+      args: ["{{OutputPath}}"],
+      outputFormat: "wav",
+      voices: ["af_jessica", "af_bella"],
+      voiceId: "af_bella",
+    });
+  });
+
+  it("ignores blank Talk overrides rather than clobbering the executable", () => {
+    const provider = buildCliSpeechProvider();
+
+    expect(
+      provider.resolveTalkConfig?.({
+        cfg: TEST_CFG,
+        baseTtsConfig: {
+          providers: { "tts-local-cli": { command: "real-command", outputFormat: "wav" } },
+        },
+        talkProviderConfig: { command: "   ", voiceId: "af_bella" },
+        timeoutMs: 1000,
+      }),
+    ).toMatchObject({ command: "real-command", voiceId: "af_bella" });
+  });
+
+  it("lists voices declared under talk.providers when the request config omits them", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: {
+        talk: {
+          providers: { "tts-local-cli": { command: "x", voices: ["af_jessica", "am_michael"] } },
+        },
+      } as never,
+      providerConfig: { command: "x" },
+    });
+
+    expect(voices).toEqual([
+      { id: "af_jessica", name: "af_jessica" },
+      { id: "am_michael", name: "am_michael" },
+    ]);
+  });
+
+  it("prefers a declared catalog over a selection left in another scope", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: {
+        talk: { providers: { "tts-local-cli": { voices: ["af_bella", "am_michael"] } } },
+      } as never,
+      // A stale voiceId here must not hide the catalog Talk declares.
+      providerConfig: { command: "x", voiceId: "af_jessica" },
+    });
+
+    expect(voices).toEqual([
+      { id: "af_bella", name: "af_bella" },
+      { id: "am_michael", name: "am_michael" },
+    ]);
+  });
+
+  it("prefers voices on the request config over the wider config", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: {
+        talk: { providers: { "tts-local-cli": { voices: ["talk-voice"] } } },
+      } as never,
+      providerConfig: { command: "x", voices: ["request-voice"] },
+    });
+
+    expect(voices).toEqual([{ id: "request-voice", name: "request-voice" }]);
+  });
+
+  it("falls back to tts.providers voices when neither the request nor talk declares them", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: {
+        tts: { providers: { "tts-local-cli": { command: "x", voices: ["tts-voice"] } } },
+      } as never,
+      providerConfig: { command: "x" },
+    });
+
+    expect(voices).toEqual([{ id: "tts-voice", name: "tts-voice" }]);
+  });
+
   it("templates an empty voice id when no voice is configured", async () => {
     const script = createCliFixture();
     const result = await synthesize(
