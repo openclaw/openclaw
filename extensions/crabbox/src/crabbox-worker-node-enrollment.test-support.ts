@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   fixtureReceiptClientSource,
   type FixtureReceiptChannel,
@@ -126,11 +127,49 @@ if (args[0] === "--version") {
   return fs.readFileSync(archive);
 }
 
-export async function expectSetupPhases(result: Promise<{ code: number | null; output: string }>) {
+export async function expectSetupPhases(
+  result: Promise<{ code: number | null; output: string; leaseId: string; setupCode: string }>,
+) {
   const completed = await result;
   expect(completed.code).toBe(0);
   const lines = completed.output.trim().split("\n");
-  // Crabbox consumes these stream markers; successful bootstrap emits no other data.
-  expect(lines.every((line) => /^CRABBOX_PHASE:[a-z.-]{1,80}$/.test(line))).toBe(true);
-  return lines.map((line) => line.slice("CRABBOX_PHASE:".length));
+  expect(
+    lines.every((line) => /^(CRABBOX_PHASE:[a-z.-]{1,80}|CRABBOX_WORKER_STAGE:\{.*\})$/.test(line)),
+  ).toBe(true);
+  const milestones: unknown[] = lines
+    .filter((line) => line.startsWith("CRABBOX_WORKER_STAGE:"))
+    .map((line) => JSON.parse(line.slice("CRABBOX_WORKER_STAGE:".length)));
+  expect(milestones).toContainEqual(
+    expect.objectContaining({
+      leaseId: completed.leaseId,
+      stage: "preparation",
+      elapsedMs: 0,
+      outcome: "started",
+    }),
+  );
+  expect(milestones).toContainEqual(
+    expect.objectContaining({
+      leaseId: completed.leaseId,
+      stage: "complete",
+      elapsedMs: 0,
+      outcome: "completed",
+    }),
+  );
+  expect(
+    milestones.every(
+      (event) =>
+        isRecord(event) &&
+        event.leaseId === completed.leaseId &&
+        typeof event.elapsedMs === "number" &&
+        Number.isSafeInteger(event.elapsedMs) &&
+        event.elapsedMs >= 0 &&
+        typeof event.totalElapsedMs === "number" &&
+        Number.isSafeInteger(event.totalElapsedMs) &&
+        event.totalElapsedMs >= event.elapsedMs,
+    ),
+  ).toBe(true);
+  expect(completed.output).not.toContain(completed.setupCode);
+  return lines
+    .filter((line) => line.startsWith("CRABBOX_PHASE:"))
+    .map((line) => line.slice("CRABBOX_PHASE:".length));
 }

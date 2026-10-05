@@ -364,10 +364,9 @@ export function createPreparedEnvironmentStoreOps(options: {
 /** Placement and consumption commit together; dropping a placement never recreates a spare. */
 export function consumePreparedEnvironment(
   db: DatabaseSync,
-  input: PreparedEnvironmentSelection,
+  input: Omit<PreparedEnvironmentSelection, "assertCurrent">,
   nowMs: number,
 ): WorkerSessionPlacementRecord | undefined {
-  input.assertCurrent();
   const placement = findPlacement(db, input.sessionId);
   if (
     !placement ||

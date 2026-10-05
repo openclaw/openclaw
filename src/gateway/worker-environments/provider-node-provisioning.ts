@@ -10,10 +10,12 @@ import type {
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
+import { readImageReserveProject } from "./image-reserve.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import type { createWorkerProjectPreparation } from "./project-preparation.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
+import { withWorkerProvisionStage } from "./provider-provision-telemetry.js";
 import type { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
@@ -312,11 +314,13 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       ) {
         throw new Error("Prepared worker provisioning owner is no longer current");
       }
+      return current;
     };
     let nodeBuild: WorkerAdmissionHandshake;
     try {
       assertCurrent();
-      if (!options.ensureNodeWorkerBundle) {
+      const ensureNodeWorkerBundle = options.ensureNodeWorkerBundle;
+      if (!ensureNodeWorkerBundle) {
         throw new Error("Device worker bundle installer is unavailable");
       }
       const artifact = await prepareBundle(await preparedInstallation, cancellation?.signal);

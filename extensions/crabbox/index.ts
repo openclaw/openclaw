@@ -72,6 +72,8 @@ export default definePluginEntry({
       openclawRoot: resolveOpenClawRoot(api.rootDir),
       wallpaperPath: workerWallpaperPath,
       warn: (message) => api.logger.warn(message),
+      onProvisionStage: (event) =>
+        api.logger.info(JSON.stringify({ event: "worker_provision_stage", ...event })),
       warmImagePolicy: resolveCrabboxWarmImagePolicy(api.pluginConfig),
     });
     for (const action of ["pin", "delete", "rollback"] as const) {

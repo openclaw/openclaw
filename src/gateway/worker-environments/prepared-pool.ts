@@ -605,30 +605,13 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       },
     );
   };
-  const candidates = (intent: WorkerProviderPreparedIntent) =>
-    intent.preparationKey
-      ? store.list().filter((record) => {
-          const limits = policy(record);
-          const presenceDemand = presence.current();
-          return (
-            limits.target > 0 &&
-            limits.maxTotal > 0 &&
-            record.state === "ready" &&
-            record.providerId === intent.providerId &&
-            record.preparation !== null &&
-            record.preparation.key === intent.preparationKey &&
-            record.preparation.consumedAtMs === null &&
-            ((presenceDemand?.project.key ===
-              readWorkerProjectSnapshot(record.profileSnapshot.project)?.key &&
-              (presenceDemand!.retireAtMs ?? Number.MAX_SAFE_INTEGER) > now()) ||
-              record.preparation.expiresAtMs > now()) &&
-            record.destroyRequestedAtMs === null &&
-            record.sharedHost === false &&
-            record.nodeDeviceId !== null &&
-            record.leaseId !== null
-          );
-        })
-      : [];
+  const candidates = createPreparedWorkerCandidateSelection({
+    store,
+    policy,
+    presence,
+    poolProject,
+    now,
+  });
   const maintain = async (environmentId?: string) => {
     if (signal.aborted) {
       return;

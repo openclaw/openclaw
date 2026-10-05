@@ -120,32 +120,12 @@ export async function createWorkerEnvironmentStore(
     );
     return operation;
   }
-  async function reconcilePending() {
-    for (const recovery of owner.pendingReconciliations()) {
-      try {
-        assertActive();
-        const revision = owner.nextSequence();
-        const facts = await snapshot(recovery.ids);
-        owner.install(facts, revision, false);
-        owner.release(recovery.token);
-        if (
-          recovery.revocationId &&
-          !facts.credentials.some(
-            (credential) => credential.environmentId === recovery.revocationId,
-          )
-        ) {
-          owner.publishCredentialRevoked(recovery.revocationId);
-        }
-        sessionChanges.emit({ all: true, scope: "worker-environments" });
-      } catch (error) {
-        throw new AggregateError(
-          [recovery.error, error],
-          "Worker environment mutation failed and inventory reconciliation failed",
-          { cause: error },
-        );
-      }
-    }
-  }
+  const reconcilePending = () =>
+    reconcilePendingWorkerEnvironmentMutations({
+      owner,
+      assertCurrent: assertActive,
+      snapshot,
+    });
   function mutate<Key extends keyof Operations>(
     type: Key,
     input: Operations[Key]["input"],

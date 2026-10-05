@@ -22,6 +22,59 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+test.each(["success", "error"] as const)(
+  "keeps admitted startup identity and reports %s only after actual settlement",
+  async (outcome) => {
+    const log = { info: vi.fn() };
+    const diagnostics = startChatSendDiagnostics(log);
+    const identity = {
+      runId: "recovery:session:cycle",
+      sessionId: "session",
+      lifecycleGeneration: "generation",
+    };
+    diagnostics.bindRun(identity);
+    diagnostics.bindRun({ ...identity, runId: "unrelated-successor" });
+    diagnostics.acknowledge();
+    const deferred = Promise.withResolvers<string>();
+    const error = new Error("synthetic private error must not be logged");
+    const measured = diagnostics.measure("worktree", () => deferred.promise);
+    expect(log.info).toHaveBeenCalledExactlyOnceWith("run phase", {
+      owner: "chat",
+      ...identity,
+      name: "chat.send.worktree",
+      spanId: 1,
+      status: "entry",
+      startedAt: expect.any(Number),
+    });
+    // ACK/disposal and backend start cannot manufacture settlement of a pending await.
+    diagnostics[Symbol.dispose]();
+    diagnostics.finish();
+    expect(log.info).toHaveBeenCalledOnce();
+    if (outcome === "success") {
+      deferred.resolve("prepared");
+      await expect(measured).resolves.toBe("prepared");
+    } else {
+      deferred.reject(error);
+      await expect(measured).rejects.toBe(error);
+    }
+    expect(log.info.mock.calls[1]).toEqual([
+      "run phase",
+      {
+        owner: "chat",
+        ...identity,
+        name: "chat.send.worktree",
+        spanId: 1,
+        status: outcome,
+        startedAt: log.info.mock.calls[0]?.[1]?.startedAt,
+        endedAt: expect.any(Number),
+        durationMs: expect.any(Number),
+      },
+    ]);
+    expect(log.info).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(log.info.mock.calls)).not.toContain(error.message);
+  },
+);
+
 test.each([999.9, 1_000])(
   "slow sends remain visible at the 1s threshold with diagnostics disabled (%sms)",
   (elapsedMs) => {

@@ -257,6 +257,7 @@ export async function runProvisionSetup(
     setup: string;
     timeoutMs?: number;
     forwardedEnv?: Record<string, string>;
+    onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => void;
   },
 ): Promise<void> {
   try {
@@ -276,6 +277,7 @@ export async function runProvisionSetup(
           env: childEnv,
           input: params.setup,
           runCommand: params.runCommand,
+          ...(params.onOutputChunk ? { onOutputChunk: params.onOutputChunk } : {}),
           signal: params.signal,
           sleep: params.sleep,
           timeoutMs: remainingProvisionTimeout(

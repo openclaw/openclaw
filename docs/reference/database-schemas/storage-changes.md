@@ -205,13 +205,16 @@ session accessor's synchronous row check; moving that separate owner to prepared
 async custody remains follow-up work. The retained placement claim checks do not
 repeat the placement row read inside that source guard.
 
-Placement activation and prepared-environment consumption retain their existing
-synchronous atomic parent transactions. Node pairing uses its existing write
-worker and carries inventory changes in its committed receipt. All three publish
-fields already prepared by their transactions through the same inventory owner,
-before observers and without another SQLite read. Revisions reserved at commit
-admission preserve newer publications when a delayed worker reply supplies the
-rest of the committed row. Retention reads bounded pages
+Prepared-environment consumption and placement binding execute together in the
+existing shared-state write worker. The host retains the original selection
+authority and rechecks it at transaction and commit admission. Production samples
+the consumption timestamp inside the native transaction, so writer waits cannot
+consume an expired reserve. Its committed receipt publishes both consumption and
+placement facts before observers, without another SQLite read or replaying an
+unknown write outcome. Placement activation and node pairing publish their
+prepared inventory changes through the same inventory owner. Revisions reserved
+at commit admission preserve newer publications when a delayed worker reply
+supplies the rest of the committed row. Retention reads bounded pages
 in a read-only worker, applies the existing demand policy, and deletes only exact,
 still-unreferenced observations in the write worker. Shutdown joins accepted writes;
 stored rows, schemas, retention policy, configuration, and update behavior are unchanged.

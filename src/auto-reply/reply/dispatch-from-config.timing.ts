@@ -15,12 +15,22 @@ type ReplyHotPathLogParams = ReplyHotPathLogContext & {
 
 const replyHotPathTimingLog = createSubsystemLogger("auto-reply/reply-timing");
 
-export function createReplyHotPathTimingTracker(options: { profilerEnabled?: boolean } = {}) {
+export function createReplyHotPathTimingTracker(
+  options: {
+    profilerEnabled?: boolean;
+    identity?: { runId: string; sessionId?: string; lifecycleGeneration: string };
+  } = {},
+) {
+  const identity = options.identity ? { ...options.identity } : undefined;
   const timing = createReplyTimingTracker<
     ReplyHotPathLogParams | (ReplyHotPathLogContext & { outcome: "milestone"; reason: string })
   >({
     log: replyHotPathTimingLog,
     enabled: options.profilerEnabled === true,
+    onPhase: identity
+      ? (phase) =>
+          replyHotPathTimingLog.info("run phase", { owner: "reply", ...identity, ...phase })
+      : undefined,
     formatMessage: (params, summary, stages) =>
       `reply hot path timings channel=${params.channel} messageId=${params.messageId ?? "unknown"} runId=${params.runId ?? "unknown"} sessionId=${params.sessionId ?? "unknown"} sessionKey=${params.sessionKey ?? "unknown"} outcome=${params.outcome} totalMs=${summary.totalMs} stages=${stages}${params.reason ? ` reason=${params.reason}` : ""}`,
     detailKeys: () => [

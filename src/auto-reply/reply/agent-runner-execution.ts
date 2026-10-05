@@ -137,15 +137,16 @@ async function executeAgentTurnInternalLoop(
     liveModelSwitchRuntimeEntry = { agentRuntimeOverride: err.agentRuntimeOverride };
   };
 
+  const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   const agentTurnTiming = createAgentTurnTimingTracker({
+    runId: params.opts?.runId,
+    sessionId: runnableRun.sessionId,
+    lifecycleGeneration,
     profilerEnabled: isReplyProfilerEnabled({ config: runtimeConfig }),
   });
   const shouldSurfaceToControlUi = isInternalMessageChannel(
-    params.followupRun.run.messageProvider ??
-      params.sessionCtx.Surface ??
-      params.sessionCtx.Provider,
+    runnableRun.messageProvider ?? params.sessionCtx.Surface ?? params.sessionCtx.Provider,
   );
-  const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,

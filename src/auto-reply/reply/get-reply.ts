@@ -30,6 +30,7 @@ import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -237,8 +238,23 @@ export async function getReplyFromConfig(
   // Retain preparation timings before a stall happens. Whole-turn summaries
   // include inference and tools, so only profiling warns on their duration.
   const profilerEnabled = isReplyProfilerEnabled({ config: cfg });
+  const phaseIdentity = opts?.runId
+    ? {
+        runId: opts.runId,
+        sessionId: opts.expectedExistingSessionId,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      }
+    : undefined;
   const resolverTiming = createReplyTimingTracker({
     log: replyResolverTimingLog,
+    onPhase: phaseIdentity
+      ? (phase) =>
+          replyResolverTimingLog.info("run phase", {
+            owner: "reply-resolver",
+            ...phaseIdentity,
+            ...phase,
+          })
+      : undefined,
     enabled: profilerEnabled,
   });
   const useFastTestBootstrap = resolverTiming.measureSync("reply.resolve_fast_test_bootstrap", () =>

@@ -30,6 +30,7 @@ import {
   resolveRequiredNodeCommandAuthority,
 } from "../node-command-policy.js";
 import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
+import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import { workerInferenceMetadata } from "../worker-environments/inference-placement.js";
 import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
@@ -271,6 +272,20 @@ function defineEnvironmentMutation<T extends Record<string, unknown>>(
       respond(true, await run(options, service), undefined);
     } catch (error) {
       const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      if (method === "destroy" && options.params.force !== true) {
+        const errorCode = typeof code === "string" || typeof code === "number" ? code : "unknown";
+        // Preserve ordinary destruction diagnostics without exposing provider payloads.
+        const detail =
+          error instanceof Error
+            ? { name: error.name, message: error.message }
+            : "Unknown worker destruction error";
+        context.logGateway.warn(
+          `worker environment destroy failed (environmentId=${formatForLog(options.params.environmentId)}, code=${formatForLog(errorCode)}): ${formatForLog(detail)}`.replace(
+            /\s+/gu,
+            " ",
+          ),
+        );
+      }
       const invalid =
         method === "destroy"
           ? code === "environment_not_found" || code === "invalid_state"
@@ -335,7 +350,24 @@ export const environmentsHandlers: GatewayRequestHandlers = {
           params.includeDesktopSetup,
         );
       }
-      const profiles = await listWorkerProfilesWithMachines(context);
+      const allProfiles = await listWorkerProfilesWithMachines(context);
+      const config = context.getRuntimeConfig();
+      const role = resolveOperatorRolePolicy(client ?? null, config);
+      const currentScopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      const administrator =
+        currentScopes.includes(ADMIN_SCOPE) && (!role || role.scopes.includes(ADMIN_SCOPE));
+      const profiles = allProfiles;
+      const canWrite =
+        authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, currentScopes).allowed &&
+        (!role || authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, role.scopes).allowed);
+      const dispatchableProfileIds = config.gateway?.roles
+        ? allProfiles
+            .filter(
+              (profile) =>
+                canWrite && (administrator || role?.workerProfiles?.includes(profile.id)),
+            )
+            .map((profile) => profile.id)
+        : undefined;
       authority.assertCurrent();
       const includeCurrentPreparedDetails =
         includePreparedDetails &&
@@ -367,6 +399,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
                   : profiles,
               }
             : {}),
+          ...(dispatchableProfileIds ? { dispatchableProfileIds } : {}),
           ...(includeCurrentPreparedDetails && preparedPool ? { preparedPool } : {}),
         },
         undefined,

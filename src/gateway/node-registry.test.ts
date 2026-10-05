@@ -15,7 +15,9 @@ import {
   setActiveNodeContexts,
 } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import {
+  NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -1775,6 +1777,116 @@ describe("gateway/node-registry", () => {
       setLoggerOverride(null);
       resetLogger();
       now.mockRestore();
+    }
+  });
+
+  it.each([
+    "socket_not_open",
+    "socket_buffer_limit",
+    "send_or_serialization_exception",
+    "pairing_not_current",
+    "pairing_state_unavailable",
+    "event_transport_refused",
+  ])("correlates bundle invoke refusal %s without exporting payloads", async (reason) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const capture = createDiagnosticLogRecordCapture();
+    setLoggerOverride({ level: "warn", consoleLevel: "silent" });
+    let pairingCurrent = true;
+    let pairingUnavailable = false;
+    const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+      createPrivateRegistry({
+        isPairingStateCurrent: () => {
+          if (pairingUnavailable) {
+            throw new Error("private pairing failure");
+          }
+          return pairingCurrent;
+        },
+      });
+    const socket = Object.assign(new EventEmitter(), {
+      readyState: WebSocket.OPEN as number,
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+      terminate: vi.fn(),
+    });
+    const client = makeClient("conn-1", "node-1", [], {
+      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      socket: socket as unknown as GatewayWsClient["socket"],
+    });
+    if (reason === "event_transport_refused") {
+      registry.registerTransport(client, pairingA, {
+        send: () => false,
+        sendRaw: () => false,
+      });
+    } else {
+      registerNodeSession(registry, client, pairingA);
+    }
+    publishRunner(registry, { enabled: true, capacity: { total: 1, available: 1 } });
+    const node = expectDefined(await transport.getCurrentNode("node-1"), "current runner");
+    if (reason === "socket_not_open") {
+      socket.readyState = WebSocket.CLOSING;
+    } else if (reason === "socket_buffer_limit") {
+      socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    } else if (reason === "send_or_serialization_exception") {
+      socket.send.mockImplementation(() => {
+        throw new Error("private transport error");
+      });
+    } else if (reason === "pairing_not_current") {
+      pairingCurrent = false;
+    } else if (reason === "pairing_state_unavailable") {
+      pairingUnavailable = true;
+    }
+    const onDispatchReady = vi.fn();
+    try {
+      await expect(
+        runWithDiagnosticTraceContext({ traceId: "a".repeat(32), spanId: "b".repeat(16) }, () =>
+          transport.invoke({
+            node,
+            command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
+            params: { token: "private-download-authority", url: "https://private.invalid/archive" },
+            timeoutMs: 0,
+            isDispatchAuthorized: () => true,
+            onDispatchReady,
+          }),
+        ),
+      ).resolves.toEqual(failure("UNAVAILABLE", "failed to send invoke to node"));
+      expect(onDispatchReady).not.toHaveBeenCalled();
+      await capture.flush();
+      const refusals = capture.records.filter(
+        (record) => record.message === "node invoke dispatch refused",
+      );
+      expect(refusals).toEqual([
+        expect.objectContaining({
+          trace: { traceId: "a".repeat(32), spanId: "b".repeat(16) },
+          attributes: expect.objectContaining({
+            nodeId: "node-1",
+            connId: "conn-1",
+            invokeId: expect.any(String),
+            command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
+            reason,
+            remoteEffects: "unknown",
+            ...(reason.startsWith("socket_") || reason === "send_or_serialization_exception"
+              ? { socketReadyState: socket.readyState, bufferedBytes: socket.bufferedAmount }
+              : {}),
+          }),
+        }),
+      ]);
+      const records = JSON.stringify(capture.records);
+      expect(records).not.toContain("private-download-authority");
+      expect(records).not.toContain("private.invalid");
+      expect(records).not.toContain("private transport error");
+      expect(records).not.toContain("private pairing failure");
+      if (reason !== "send_or_serialization_exception") {
+        expect(socket.send).not.toHaveBeenCalled();
+      }
+      if (reason === "socket_buffer_limit") {
+        expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+      }
+    } finally {
+      socket.emit("close");
+      capture.cleanup();
+      setLoggerOverride(null);
+      resetLogger();
     }
   });
 

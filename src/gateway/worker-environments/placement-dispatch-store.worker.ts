@@ -9,6 +9,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
+import type { PreparedEnvironmentSelection } from "./environment-record.js";
 import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
 import {
   nextGeneration,
@@ -17,14 +18,16 @@ import {
   type WorkerSessionPlacementDispatchIdentity,
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
-import { ensureLocal, getRequired, query } from "./placement-row-codec.js";
+import { ensureLocal, getRequired, query, updateTransition } from "./placement-row-codec.js";
 import {
   isFailedWorkerPlacementEnvironmentGone,
   matchesWorkerPlacementTarget,
 } from "./placement-target.js";
 import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
-import { findWorkerEnvironment } from "./store-row-codec.js";
+import { consumePreparedEnvironment } from "./prepared-environment-store.js";
+import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
+import { findWorkerEnvironment, readWorkerEnvironmentFacts } from "./store-row-codec.js";
 
 function startWorkerPlacementDispatchInWorker(
   input: { placement: WorkerSessionPlacementDispatchIdentity; nowMs: number },
@@ -129,7 +132,59 @@ function startWorkerPlacementDispatchInWorker(
   );
 }
 
+function bindPreparedWorkerEnvironmentInWorker(
+  input: { selection: Omit<PreparedEnvironmentSelection, "assertCurrent">; nowMs?: number },
+  database: OpenClawStateDatabase,
+) {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const nowMs = input.nowMs ?? Date.now();
+      const current = consumePreparedEnvironment(db, input.selection, nowMs);
+      const placement = current
+        ? updateTransition(
+            db,
+            current,
+            "provisioning",
+            { environmentId: input.selection.environmentId },
+            nowMs,
+          )
+        : null;
+      const environment = placement
+        ? findWorkerEnvironment(db, input.selection.environmentId)
+        : undefined;
+      if (placement && !environment?.preparation) {
+        throw new Error("Prepared worker binding lost its consumed environment");
+      }
+      const receipt = {
+        placement,
+        environmentAdmission: placement
+          ? createWorkerEnvironmentCommitAdmission(
+              readWorkerEnvironmentFacts(db, [input.selection.environmentId]),
+            )
+          : [],
+        environment: environment?.preparation
+          ? {
+              environmentId: environment.environmentId,
+              preparation: environment.preparation,
+              updatedAtMs: environment.updatedAtMs,
+            }
+          : null,
+      };
+      deferSqliteWorkerCommitReceipt(db, receipt);
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
+      return receipt;
+    },
+    { database },
+    { operationLabel: "workerPlacements.bindPreparedEnvironment" },
+  );
+}
+
 export const workerPlacementOperations = {
+  "workerPlacements.bindPreparedEnvironment": (
+    input: Parameters<typeof bindPreparedWorkerEnvironmentInWorker>[0],
+    { open },
+  ) => bindPreparedWorkerEnvironmentInWorker(input, open()),
   "workerPlacements.startDispatch": (
     input: Parameters<typeof startWorkerPlacementDispatchInWorker>[0],
     { open },

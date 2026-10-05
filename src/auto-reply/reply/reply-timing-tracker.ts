@@ -4,6 +4,7 @@ import {
   createStageTimingTracker,
   formatStageTimings,
   type StageTiming,
+  type StageTimingPhase,
 } from "../../shared/stage-timing.js";
 
 type ReplyTimingSummary = {
@@ -41,6 +42,7 @@ export function isReplyProfilerEnabled(params?: {
 export function createReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams>(params: {
   log: { warn: (message: string, details?: Record<string, unknown>) => void };
   enabled: boolean;
+  onPhase?: (phase: StageTimingPhase) => void;
   formatMessage?: (
     params: TLogParams,
     summary: ReplyTimingSummary,
@@ -48,7 +50,7 @@ export function createReplyTimingTracker<TLogParams extends object = ReplyTiming
   ) => string;
   detailKeys?: (params: TLogParams) => readonly string[];
 }): ReplyTimingTracker<TLogParams> {
-  const timing = createStageTimingTracker();
+  const timing = createStageTimingTracker(undefined, params.onPhase);
   let didLog = false;
   const totalWarnMs = params.enabled ? 1_000 : 10_000;
   const stageWarnMs = params.enabled ? 500 : 5_000;

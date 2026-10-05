@@ -85,15 +85,25 @@ const desktopEnvironment = ${JSON.stringify(desktopEnvironment)};
 const desktopSetup = ${JSON.stringify(params.desktopSetup)};
 const credentials = process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 const setupCode = process.env.${CLOUD_SETUP_CODE_ENV};
+const workerCodexBase64 = process.env.${CLOUD_WORKER_CODEX_ENV};
 delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
+delete process.env.${CLOUD_WORKER_CODEX_ENV};
 if (process.platform !== "win32") process.umask(0o077);
 let phase;
 const failureMessage = (artifact, failedPhase, code, origin) => "Cloud worker " + artifact + " " + failedPhase + " failed" + (code ? " (" + code + ")" : "") + (origin ? " from " + origin : "");
+const bootstrapStartedAt = performance.now();
+let phaseStartedAt = bootstrapStartedAt;
+const reportStage = (stage, elapsedMs, outcome) => console.error("CRABBOX_WORKER_STAGE:" + JSON.stringify({ leaseId, stage, elapsedMs, totalElapsedMs: Math.round(performance.now() - bootstrapStartedAt), outcome }));
 const setPhase = (next) => {
   if (phase === next) return;
+  const at = performance.now();
+  if (phase) reportStage(phase.toLowerCase().replaceAll(" ", "-"), Math.round(at - phaseStartedAt), "completed");
   phase = next;
+  phaseStartedAt = at;
   console.error("CRABBOX_PHASE:openclaw-bootstrap-" + next.toLowerCase().replaceAll(" ", "-"));
+  reportStage(next.toLowerCase().replaceAll(" ", "-"), 0, "started");
+  if (next === "complete") reportStage("complete", 0, "completed");
 };
 setPhase("preparation");
 (async () => {
@@ -466,7 +476,7 @@ setPhase("preparation");
   await launchNodeProcess();
   if (desktopTarget !== "macos") finishDesktopSetup();
   setPhase("complete");
-})().catch((error) => { console.error(error.downloadArtifact ? error.message : failureMessage("node bootstrap", error.downloadPhase || phase, error.code) + ": " + error.message); process.exitCode = 1; });
+})().catch((error) => { reportStage(phase.toLowerCase().replaceAll(" ", "-"), Math.round(performance.now() - phaseStartedAt), "failed"); console.error(error.downloadArtifact ? error.message : failureMessage("node bootstrap", error.downloadPhase || phase, error.code) + ": " + error.message); process.exitCode = 1; });
 `;
   return {
     command: wrapCrabboxNodeScript(

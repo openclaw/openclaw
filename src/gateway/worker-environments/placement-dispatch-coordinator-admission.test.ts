@@ -1,5 +1,5 @@
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
@@ -17,7 +17,14 @@ import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 
 type DispatchService = WorkerPlacementDispatchService;
 
+const stages = vi.hoisted(() => vi.fn());
+vi.mock("./placement-diagnostics.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./placement-diagnostics.js")>()),
+  recordWorkerPlacementStage: stages,
+}));
+
 describe("worker placement session admission", () => {
+  beforeEach(() => stages.mockClear());
   it.each(["dispatch", "reclaim"] as const)(
     "admits unrelated device %s while a reconciliation provider teardown never settles",
     async (kind) => {
@@ -160,6 +167,9 @@ describe("worker placement session admission", () => {
       ).toHaveLength(1);
       expect(coordinated.getPendingDeviceDispatchCount("node-one")).toBe(0);
       expect(coordinated.getPendingDeviceDispatchCount("node-two")).toBe(0);
+      expect(
+        stages.mock.calls.filter(([id]) => id === request.sessionId).map(([, stage]) => stage),
+      ).toEqual(["dispatch_received", "dispatch_admitted", "dispatch_received", "dispatch_joined"]);
     },
   );
 

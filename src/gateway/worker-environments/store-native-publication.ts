@@ -7,6 +7,7 @@ import {
   workerEnvironmentProjections,
   type WorkerEnvironmentNativePatch,
 } from "./store-projection.js";
+import type { WorkerEnvironmentFacts } from "./store.types.js";
 
 /** Reserve order while the caller holds the physical writer lock or grants its worker commit. */
 export function reserveWorkerEnvironmentNativePublication(identity: DatabasePathIdentity) {
@@ -49,4 +50,36 @@ export function publishWorkerEnvironmentNativeMutation(
     throw new Error("Worker environment publication requires its owning transaction");
   }
   sessionChanges.emit({ all: true, scope: "worker-environments" }, db);
+}
+
+/** Exact-ID recovery belongs to the inventory owner, including coupled placement commits. */
+export async function reconcilePendingWorkerEnvironmentMutations(params: {
+  owner: NonNullable<ReturnType<typeof workerEnvironmentProjections.get>>;
+  assertCurrent: () => void;
+  snapshot: (ids: readonly string[]) => Promise<WorkerEnvironmentFacts>;
+}) {
+  const { owner } = params;
+  for (const recovery of owner.pendingReconciliations()) {
+    try {
+      params.assertCurrent();
+      const revision = owner.nextSequence();
+      const facts = await params.snapshot(recovery.ids);
+      params.assertCurrent();
+      owner.install(facts, revision, false);
+      owner.release(recovery.token);
+      if (
+        recovery.revocationId &&
+        !facts.credentials.some((credential) => credential.environmentId === recovery.revocationId)
+      ) {
+        owner.publishCredentialRevoked(recovery.revocationId);
+      }
+      sessionChanges.emit({ all: true, scope: "worker-environments" });
+    } catch (error) {
+      throw new AggregateError(
+        [recovery.error, error],
+        "Worker environment mutation failed and inventory reconciliation failed",
+        { cause: error },
+      );
+    }
+  }
 }

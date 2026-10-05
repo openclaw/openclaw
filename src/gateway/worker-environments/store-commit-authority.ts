@@ -1,4 +1,5 @@
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerEnvironmentAttachmentRecord } from "./session-attachment.js";
@@ -66,4 +67,21 @@ export function createWorkerEnvironmentCommitAdmission(
       credentials.get(environmentId),
     ),
   }));
+}
+
+export function isWorkerEnvironmentCommitAdmission(
+  value: unknown,
+): value is WorkerEnvironmentCommitAdmission {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (fact) =>
+        isRecord(fact) &&
+        typeof fact.environmentId === "string" &&
+        typeof fact.environmentAuthority === "string" &&
+        typeof fact.credentialAuthority === "string" &&
+        typeof fact.transferAuthority === "string" &&
+        typeof fact.attachmentAuthority === "string",
+    )
+  );
 }

@@ -40,6 +40,7 @@ export type CrabboxCommandRunner = (
     env?: NodeJS.ProcessEnv;
     input?: string | Uint8Array;
     maxOutputBytes: number;
+    onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => void;
     signal?: AbortSignal;
     timeoutMs: number;
   },
@@ -54,6 +55,7 @@ export async function runCrabboxCommand(params: {
   input?: string | Uint8Array;
   signal?: AbortSignal;
   timeoutMs: number;
+  onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => void;
 }): Promise<SpawnResult> {
   params.signal?.throwIfAborted();
   let result: SpawnResult;
@@ -65,6 +67,7 @@ export async function runCrabboxCommand(params: {
       ...(params.env === undefined ? {} : { env: params.env }),
       ...(params.input === undefined ? {} : { input: params.input }),
       ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.onOutputChunk ? { onOutputChunk: params.onOutputChunk } : {}),
     });
   } catch (error) {
     params.signal?.throwIfAborted();

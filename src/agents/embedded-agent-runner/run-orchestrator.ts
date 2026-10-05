@@ -277,6 +277,13 @@ async function runEmbeddedAgentInternal(
         using _ = { [Symbol.dispose]: () => preReplyGeneration?.release() };
         const preReplyAssertCurrent = preReplyGeneration?.assertCurrent;
         const startupStages = createStageTimingTracker(Date.now);
+        const emitStartupStageSummary = createEmbeddedRunStageSummaryEmitter({
+          label: "startup stages",
+          log,
+          runId: params.runId,
+          sessionId: params.sessionId,
+          tracker: startupStages,
+        });
         const {
           requestedWorkspaceResolution,
           runtimeWorkspaceResolution,
@@ -408,6 +415,8 @@ async function runEmbeddedAgentInternal(
               cwd: params.cwd,
               sessionId: params.sessionId,
             });
+            startupStages.mark("prompt-projects");
+            emitStartupStageSummary("pre-run");
             const { activeProjectKeys } = projects;
             const preparedModelRuntime = Object.freeze({
               ...preparedModelRuntimeOwnerSnapshot,
@@ -424,14 +433,9 @@ async function runEmbeddedAgentInternal(
                 startedAtMs: started,
               });
               const { notifyExecutionPhase } = progressController;
-              const emitStartupStageSummary = createEmbeddedRunStageSummaryEmitter({
-                label: "startup stages",
-                log,
-                runId: params.runId,
-                sessionId: params.sessionId,
-                tracker: startupStages,
-              });
               await params.onExecutionStarted?.({ lifecycleGeneration });
+              startupStages.mark("execution-start");
+              emitStartupStageSummary("execution-start");
               throwIfAborted();
               assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
               notifyExecutionPhase("runner_entered");

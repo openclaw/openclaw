@@ -591,8 +591,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return providerLifecycle.prepareIntent(...args);
     },
     assertPreparedIntentCurrent: providerLifecycle.assertPreparedIntentCurrent,
-    getPreparedCandidates: (intent: WorkerProviderPreparedIntent) =>
-      preparedPool.candidates(intent).map(environmentAccess.project),
+    revalidatePreparedIntentRepository: providerLifecycle.revalidatePreparedIntentRepository,
+    getPreparedCandidates: (...args: Parameters<typeof preparedPool.candidates>) =>
+      preparedPool.candidates(...args).map(environmentAccess.project),
     schedulePreparedRefill,
     setHumanPresence: preparedPool.setHumanPresence,
     inventoryVersion: store.inventoryVersion,

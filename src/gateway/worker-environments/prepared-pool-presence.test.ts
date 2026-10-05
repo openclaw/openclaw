@@ -21,6 +21,7 @@ import {
 } from "./prepared-pool.test-support.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
+import { requireWorkerProfile } from "./service-validation.js";
 
 describe("authenticated human prepared-pool demand", () => {
   const fixture = usePreparedPoolFixture();
@@ -457,7 +458,7 @@ describe("authenticated human prepared-pool demand", () => {
 
     fixture.nowMs = 60_999;
     await fixture.schedule(presence.owner);
-    expect(presence.read()?.project.baseCommit).toBe(repository.baseCommit);
+    expect(presence.read()?.project).toMatchObject({ baseCommit: repository.baseCommit });
     expect(
       old
         .slice(1)
@@ -679,7 +680,7 @@ describe("authenticated human prepared-pool demand", () => {
     const departureRejected = expect(departure).rejects.toThrow();
     resume();
     await Promise.all([rejected, departureRejected]);
-    expect(presence.read()?.project.baseCommit).toBe(repository.baseCommit);
+    expect(presence.read()?.project).toMatchObject({ baseCommit: repository.baseCommit });
     expect(fixture.reserves().every((record) => record.preparation?.key === PREPARATION_KEY)).toBe(
       true,
     );

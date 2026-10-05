@@ -1,5 +1,6 @@
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../infra/node-commands.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -9,6 +10,8 @@ import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-comman
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 import { getInProcessGatewayRequestContext } from "./server-plugin-in-process-dispatch.js";
+
+const duplexLog = createSubsystemLogger("gateway/node-duplex");
 
 export function hasInProcessGatewayContext(
   resolveGatewayContext?: GatewayContextResolver,
@@ -127,12 +130,22 @@ export async function openOwnedGatewayNodeDuplex(options: {
       framedReady = true;
       ready.resolve();
     },
-    onError: (error) => controller.abort(error),
+    onError: (error) => {
+      closeOrigin ??= "framing_error";
+      controller.abort(error);
+    },
   });
-  const onAbort = () => endpoint.close();
+  const onAbort = () => {
+    if (options.signal.aborted) {
+      closeOrigin ??= "owner_signal";
+    }
+    endpoint.close();
+  };
   signal.addEventListener("abort", onAbort, { once: true });
+  const { requiredCommandFeatures: _features, assertCurrent: _current, ...invokeParams } = params;
+  const openedAtMs = Date.now();
   const closed = invokeNode(
-    params,
+    invokeParams,
     {
       onProgress: (chunk) => {
         assertRuntimeCurrent();
@@ -160,6 +173,26 @@ export async function openOwnedGatewayNodeDuplex(options: {
       controller.abort(new Error("Node duplex command has closed."));
     });
   void closed.catch(ready.reject);
+  const observeClosed = (outcome: "resolved" | "rejected") => {
+    try {
+      duplexLog.info("node duplex invocation closed", {
+        nodeId: params.nodeId,
+        invokeId,
+        origin:
+          closeOrigin ?? (outcome === "resolved" ? "invocation_resolved" : "invocation_rejected"),
+        outcome,
+        framedReady,
+        openedAtMs,
+        lifetimeMs: Date.now() - openedAtMs,
+      });
+    } catch {
+      // Observation cannot change the invocation's original settlement or readiness.
+    }
+  };
+  void closed.then(
+    () => observeClosed("resolved"),
+    () => observeClosed("rejected"),
+  );
   await ready.promise;
   return {
     send: (message) => endpoint.send(message),
@@ -168,7 +201,10 @@ export async function openOwnedGatewayNodeDuplex(options: {
       return endpoint.onMessage(listener);
     },
     closed,
-    close: () => controller.abort(new Error("Node duplex channel closed by its caller.")),
+    close: () => {
+      closeOrigin ??= "caller_close";
+      controller.abort(new Error("Node duplex channel closed by its caller."));
+    },
   };
 }
 

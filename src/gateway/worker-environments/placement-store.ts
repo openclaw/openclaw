@@ -7,7 +7,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { startWorkerPlacementDispatch } from "./placement-dispatch-store.js";
+import {
+  bindPreparedWorkerEnvironment,
+  startWorkerPlacementDispatch,
+} from "./placement-dispatch-store.js";
 import { createPlacementMoveOps } from "./placement-move-intent.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import {
@@ -23,7 +26,6 @@ import {
   getRequired,
   query,
   readWorkerPlacementsForReconcileInDatabase,
-  updateTransition,
 } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { createPlacementSessionToolOperationOps } from "./placement-session-tool-operations.js";
@@ -43,7 +45,6 @@ import {
 import { createPlacementWorkspaceJournalWorkerOps } from "./placement-workspace-journal-store.js";
 import { createPlacementWorkspaceReservationOps } from "./placement-workspace-reservation.js";
 import { createPlacementWorkspaceResultReader } from "./placement-workspace-result-store.js";
-import { consumePreparedEnvironment } from "./prepared-environment-store.js";
 import type { PreparedEnvironmentSelection } from "./store.js";
 import {
   projectWorkspaceResultConflict,
@@ -349,20 +350,8 @@ export function createWorkerSessionPlacementStore(
 
     bindPreparedEnvironment(
       input: PreparedEnvironmentSelection,
-    ): WorkerSessionPlacementRecord | undefined {
-      return write((db) => {
-        const nowMs = now();
-        const current = consumePreparedEnvironment(db, input, nowMs);
-        return current
-          ? updateTransition(
-              db,
-              current,
-              "provisioning",
-              { environmentId: input.environmentId },
-              nowMs,
-            )
-          : undefined;
-      });
+    ): Promise<WorkerSessionPlacementRecord | undefined> {
+      return bindPreparedWorkerEnvironment(path, input, options.now?.());
     },
 
     startDispatch(

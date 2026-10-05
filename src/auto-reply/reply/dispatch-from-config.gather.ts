@@ -155,7 +155,32 @@ export async function gatherDispatchRequest(
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
   const assertRequestCurrent = () => params.replyOptions?.operatorAuthority?.assertCurrent();
-  const initialSessionStoreEntry = await resolveSessionStoreLookup(ctx, cfg, assertRequestCurrent);
+  const traceAttributes = {
+    surface: channel,
+    hasSessionKey: Boolean(sessionKey),
+    hasRunId: typeof params.replyOptions?.runId === "string",
+  };
+  const replyHotPathTiming = createReplyHotPathTimingTracker({
+    identity: params.replyOptions?.runId
+      ? {
+          runId: params.replyOptions.runId,
+          sessionId: params.replyOptions.expectedExistingSessionId,
+          lifecycleGeneration,
+        }
+      : undefined,
+    profilerEnabled: isReplyProfilerEnabled({ config: cfg }),
+  });
+  const traceReplyPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
+    replyHotPathTiming.measure(name, () =>
+      measureDiagnosticsTimelineSpan(name, run, {
+        phase: "agent-turn",
+        config: cfg,
+        attributes: traceAttributes,
+      }),
+    );
+  const initialSessionStoreEntry = await traceReplyPhase("reply.read_source_store", () =>
+    resolveSessionStoreLookup(ctx, cfg, assertRequestCurrent),
+  );
   assertRequestCurrent();
   // resolveSessionStoreLookup is command-target-aware (it prefers
   // resolveCommandTurnTargetSessionKey), whereas the lifecycle's sessionKey is
@@ -184,22 +209,6 @@ export async function gatherDispatchRequest(
     startedAtMs: startTime,
     trackSessionState: canTrackSession,
   });
-  const traceAttributes = {
-    surface: channel,
-    hasSessionKey: Boolean(sessionKey),
-    hasRunId: typeof params.replyOptions?.runId === "string",
-  };
-  const replyHotPathTiming = createReplyHotPathTimingTracker({
-    profilerEnabled: isReplyProfilerEnabled({ config: cfg }),
-  });
-  const traceReplyPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
-    replyHotPathTiming.measure(name, () =>
-      measureDiagnosticsTimelineSpan(name, run, {
-        phase: "agent-turn",
-        config: cfg,
-        attributes: traceAttributes,
-      }),
-    );
   let agentDispatchStartedAt = 0;
 
   const recordProcessed = (outcome: DispatchProcessedOutcome, opts?: DispatchProcessedOptions) => {
@@ -296,14 +305,16 @@ export async function gatherDispatchRequest(
     sourceSessionKey &&
     initialSessionStoreEntry.sessionKey &&
     sourceSessionKey !== initialSessionStoreEntry.sessionKey
-      ? await resolveSessionStoreLookup(
-          {
-            ...ctx,
-            // Strip target so store resolution follows the source SessionKey.
-            CommandTargetSessionKey: undefined,
-          },
-          cfg,
-          assertRequestCurrent,
+      ? await traceReplyPhase("reply.read_source_store", () =>
+          resolveSessionStoreLookup(
+            {
+              ...ctx,
+              // Strip target so store resolution follows the source SessionKey.
+              CommandTargetSessionKey: undefined,
+            },
+            cfg,
+            assertRequestCurrent,
+          ),
         )
       : initialSessionStoreEntry;
   assertRequestCurrent();
@@ -338,10 +349,12 @@ export async function gatherDispatchRequest(
     }
   };
   const sessionStoreEntry = boundAcpDispatchSessionKey
-    ? await resolveSessionStoreLookup(
-        { ...ctx, SessionKey: boundAcpDispatchSessionKey },
-        cfg,
-        assertRequestCurrent,
+    ? await traceReplyPhase("reply.read_bound_store", () =>
+        resolveSessionStoreLookup(
+          { ...ctx, SessionKey: boundAcpDispatchSessionKey },
+          cfg,
+          assertRequestCurrent,
+        ),
       )
     : initialSessionStoreEntry;
   assertRequestCurrent();

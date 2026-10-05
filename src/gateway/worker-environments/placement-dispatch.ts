@@ -1,46 +1,34 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
-import type { WorkerNodePlacementAuthority } from "./device-placement-eligibility.js";
+import { assertWorkerRecoveryExecutorReleased } from "./environment-record.js";
+import { PreparedWorkspaceRegistrationMissingError } from "./node-worker-prepared-workspace-transport.js";
+import { recordWorkerPlacementStage } from "./placement-diagnostics.js";
 import {
   createPlacementFailureActions,
-  type WorkerActivationBarrier,
   type WorkerActiveDispatchPlacement,
-  type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
-import {
-  createWorkerPlacementDispatchStartup,
-  type WorkerDevicePlacementRequirementResolver,
-  type WorkerPlacementRecoveryBarrier,
-} from "./placement-dispatch-startup.js";
+import { createWorkerPlacementDispatchStartup } from "./placement-dispatch-startup.js";
+import { PreparedEnvironmentBindingIndeterminateError } from "./placement-dispatch-store.js";
+import type { WorkerPlacementDispatchOptions } from "./placement-dispatch.types.js";
 import { createWorkerPlacementMoveAbandonment } from "./placement-move-abandon.js";
-import {
-  createWorkerPlacementMoveService,
-  type WorkerPlacementMoveBarrier,
-} from "./placement-move-service.js";
-import type { WorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
+import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import type {
-  WorkerPlacementReclaimBarriers,
   WorkerPlacementPendingOperations,
   WorkerReclaimPlacement,
 } from "./placement-reclaim-contract.js";
-import {
-  createWorkerPlacementReclaim,
-  type WorkerPlacementReclaimOptions,
-} from "./placement-reclaim.js";
+import { createWorkerPlacementReclaim } from "./placement-reclaim.js";
 import { reportPlacementTransition } from "./placement-record.js";
-import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import {
   isFailedWorkerPlacementEnvironmentGone,
   matchesWorkerPlacementTarget,
   type WorkerPlacementCancellationTarget,
 } from "./placement-target.js";
+import { createRetainedWorkerRecovery } from "./retained-worker-recovery.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementAuthorization,
-  WorkerPlacementMoveDestination,
-  WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
   WorkerPlacementReclaimSourceCheck,
 } from "./service-contract.js";
@@ -161,7 +149,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       }
       await startup.validateDevicePlacement(request);
       signal?.throwIfAborted();
+      recordWorkerPlacementStage(request.sessionId, "workspace_resolve_started", {
+        generation: placement.generation,
+      });
       const workspace = await options.resolveWorkspace(request);
+      recordWorkerPlacementStage(request.sessionId, "workspace_resolve_completed", {
+        generation: placement.generation,
+      });
       if (
         workspace.kind === "repository" &&
         !request.deviceId &&
@@ -177,6 +171,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       const projectPath = workspace.kind === "local" ? workspace.path : undefined;
       // Workspace preparation yields; fence the current paired node again before durable provision.
       await startup.validateDevicePlacement(request);
+      recordWorkerPlacementStage(request.sessionId, "intent_prepare_started", {
+        generation: placement.generation,
+      });
       const preparedIntent = !request.deviceId
         ? await environments.prepareProjectIntent(request.profileId, {
             machineClass: request.machineClass,

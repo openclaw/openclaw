@@ -7,10 +7,15 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { PreparedEnvironmentBindingIndeterminateError } from "./placement-dispatch-store.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { observePlacementAuthority } from "./placement-turn-authority.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
 const delivery = vi.hoisted(() => ({
   loseIntentResult: false,
+  losePreparedBindingResult: false,
+  bindingWrites: 0,
   hideReceipt: false,
   hideSettlement: false,
   loseRevocationResult: undefined as "receipt" | "settlement" | "unknown" | undefined,
@@ -61,6 +66,9 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
               if (command.type === "workerEnvironments.revokeEnvironmentCredential") {
                 delivery.revocationWrites += 1;
               }
+              if (command.type === "workerPlacements.bindPreparedEnvironment") {
+                delivery.bindingWrites += 1;
+              }
               const result = await scope
                 .execute(command, executeOptions)
                 .catch((error: unknown) => {
@@ -89,6 +97,15 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
                 delivery.loseRevocationResult = undefined;
                 delivery.hideReceipt = recovery !== "receipt";
                 delivery.hideSettlement = recovery === "unknown";
+                throw delivery.resultFailure;
+              }
+              if (
+                command.type === "workerPlacements.bindPreparedEnvironment" &&
+                delivery.losePreparedBindingResult
+              ) {
+                delivery.losePreparedBindingResult = false;
+                delivery.hideReceipt = true;
+                delivery.hideSettlement = true;
                 throw delivery.resultFailure;
               }
               return result;
@@ -125,6 +142,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     delivery.loseRevocationResult = undefined;
     delivery.loseRevocationFailure = false;
     delivery.loseIntentResult = false;
+    delivery.losePreparedBindingResult = false;
+    delivery.bindingWrites = 0;
     delivery.failReadback = false;
     delivery.intentWrites = 0;
     delivery.revocationWrites = 0;
@@ -186,19 +205,31 @@ it("recovers a settled write through another live facade's next mutation after r
   }
 });
 
-it("publishes permanent revocation once across committed, rolled-back and unknown worker outcomes", async () => {
+async function readyRecoveryFixture(environmentId: string, prepared = false) {
   const database = openOpenClawStateDatabase({
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("environment-revocation-recovery-") },
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("environment-recovery-") },
   });
   const first = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
   const survivor = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
-  const environmentId = "worker-revocation-recovery";
   await first.createIntent({
     environmentId,
     providerId: "fake-provider",
     profileId: "test-profile",
-    profileSnapshot: { settings: {} },
-    provisionOperationId: "provision:worker-revocation-recovery",
+    profileSnapshot: {
+      settings: {},
+      ...(prepared ? { executionMode: "worker-turn" as const } : {}),
+    },
+    ...(prepared
+      ? {
+          preparation: {
+            purpose: "reserve" as const,
+            key: "d".repeat(64),
+            demandAtMs: 900,
+            expiresAtMs: 2_000,
+          },
+        }
+      : {}),
+    provisionOperationId: `provision:${environmentId}`,
   });
   await first.transition({ environmentId, from: "requested", to: "provisioning" });
   const ready = await first.transition({
@@ -222,6 +253,13 @@ it("publishes permanent revocation once across committed, rolled-back and unknow
       },
     },
   });
+  return { database, first, survivor, ready, environmentId };
+}
+
+it("publishes permanent revocation once across committed, rolled-back and unknown worker outcomes", async () => {
+  const { database, first, survivor, ready, environmentId } = await readyRecoveryFixture(
+    "worker-revocation-recovery",
+  );
   const firstNotifications: string[] = [];
   const survivorNotifications: string[] = [];
   first.onCredentialRevoked((id) => firstNotifications.push(id));
@@ -312,6 +350,57 @@ it("publishes permanent revocation once across committed, rolled-back and unknow
     expect(delivery.revocationWrites).toBe(6);
   } finally {
     showNativeConfirmation();
+    await Promise.all([first.close(), survivor.close()]);
+  }
+});
+
+it("keeps a coupled prepared binding indeterminate until exact inventory readback settles", async () => {
+  const { database, first, survivor, ready, environmentId } = await readyRecoveryFixture(
+    "worker-prepared-recovery",
+    true,
+  );
+  const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+  const identity = {
+    sessionId: "prepared-session",
+    sessionKey: "agent:main:prepared-session",
+    agentId: "main",
+    executionMode: "worker-turn" as const,
+  };
+  const requested = await placements.startDispatch(identity);
+  const authority = observePlacementAuthority(database.path, identity.sessionId);
+  try {
+    delivery.losePreparedBindingResult = true;
+    delivery.failReadback = true;
+    await expect(
+      placements.bindPreparedEnvironment({
+        ...identity,
+        expectedGeneration: requested.generation,
+        environmentId,
+        ownerEpoch: ready.ownerEpoch,
+        providerId: "fake-provider",
+        profileId: "test-profile",
+        preparationKey: "d".repeat(64),
+        nodeDeviceId: "device-revocation-recovery",
+        leaseId: "lease-revocation-recovery",
+        bundleHash: "a".repeat(64),
+        assertCurrent: () => first.get(environmentId),
+      }),
+    ).rejects.toBeInstanceOf(PreparedEnvironmentBindingIndeterminateError);
+    expect(() => survivor.get(environmentId)).toThrow("unsettled mutation");
+    expect(() => authority.assertCurrent()).toThrow("placement authority changed");
+    await first.close();
+    delivery.hideReceipt = false;
+    delivery.hideSettlement = false;
+    await survivor.ready();
+    expect(survivor.get(environmentId)?.preparation?.consumedAtMs).toBe(1_000);
+    expect(placements.get(identity.sessionId)).toMatchObject({
+      state: "provisioning",
+      environmentId,
+    });
+    expect(delivery.bindingWrites).toBe(1);
+    expect(delivery.readbackIds).toEqual([[environmentId], [environmentId]]);
+  } finally {
+    authority.release();
     await Promise.all([first.close(), survivor.close()]);
   }
 });

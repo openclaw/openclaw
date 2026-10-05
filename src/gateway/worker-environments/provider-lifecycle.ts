@@ -23,8 +23,10 @@ import { createWorkerMachineCatalog } from "./provider-machine-catalog.js";
 import { createWorkerNodeProvisioning } from "./provider-node-provisioning.js";
 import { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
 import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
+import { withWorkerProvisionStage } from "./provider-provision-telemetry.js";
 import { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
 import { createWorkerRuntimeRefresher } from "./provider-runtime-refresh.js";
+import { createWorkerSshBootstrap } from "./provider-ssh-bootstrap.js";
 import {
   requireProviderOperationTimeoutMs,
   requireWorkerLease,
@@ -317,10 +319,12 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           : provider.provision(profile, record.provisionOperationId, provisionOptions);
       };
       lease = requireWorkerLease(
-        await callProvider(
-          record.environmentId,
-          cancellation ? cancellation.retainProvider(provision) : provision,
-          providerTimeoutMs,
+        await withWorkerProvisionStage(record, "provider-provision", () =>
+          callProvider(
+            record.environmentId,
+            cancellation ? cancellation.retainProvider(provision) : provision,
+            providerTimeoutMs,
+          ),
         ),
       );
     } catch (error) {
@@ -454,11 +458,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
     try {
       beforeProvision?.();
-      const preparedNode = await nodeProvisioning.prepare(
-        record,
-        provider,
-        signal,
-        beforeProvision,
+      const preparedNode = await withWorkerProvisionStage(record, "node-artifacts", () =>
+        nodeProvisioning.prepare(record, provider, signal, beforeProvision),
       );
       let installation: WorkerInstallationArtifact | undefined = preparedNode?.installation;
       cancellation?.assertActive();

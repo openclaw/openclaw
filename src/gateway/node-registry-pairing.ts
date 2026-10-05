@@ -36,24 +36,33 @@ export function pairingStateMatchesBinding(
   return !binding.generation || binding.generation === current.generation;
 }
 
+export function resolvePublishedPairingCurrentness(
+  node: { nodeId: string; pairingIdentity?: string; pairingGeneration?: string },
+  isPairingStateCurrent:
+    | ((nodeId: string, expected: PairedDeviceNodeBinding) => boolean)
+    | undefined,
+): "current" | "stale" | "unavailable" {
+  if (!isPairingStateCurrent) {
+    return "current";
+  }
+  try {
+    return node.pairingIdentity &&
+      isPairingStateCurrent(node.nodeId, {
+        identity: node.pairingIdentity,
+        ...(node.pairingGeneration ? { generation: node.pairingGeneration } : {}),
+      })
+      ? "current"
+      : "stale";
+  } catch {
+    return "unavailable";
+  }
+}
+
 export function isPublishedPairingCurrent(
   node: { nodeId: string; pairingIdentity?: string; pairingGeneration?: string },
   isPairingStateCurrent:
     | ((nodeId: string, expected: PairedDeviceNodeBinding) => boolean)
     | undefined,
 ): boolean {
-  if (!isPairingStateCurrent) {
-    return true;
-  }
-  try {
-    return Boolean(
-      node.pairingIdentity &&
-      isPairingStateCurrent(node.nodeId, {
-        identity: node.pairingIdentity,
-        ...(node.pairingGeneration ? { generation: node.pairingGeneration } : {}),
-      }),
-    );
-  } catch {
-    return false;
-  }
+  return resolvePublishedPairingCurrentness(node, isPairingStateCurrent) === "current";
 }

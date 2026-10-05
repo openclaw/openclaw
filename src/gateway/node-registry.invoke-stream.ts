@@ -4,10 +4,16 @@ import {
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
+import {
+  NODE_INVOKE_PROGRESS_DIAGNOSTIC_INTERVAL_MS,
+  nodeInvokeProgressDiagnosticSchema,
+  type NodeInvokeProgressDiagnostic,
+} from "../shared/node-invoke-progress-diagnostic.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import type { NodeInvokeResult } from "./node-invoke.types.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
@@ -41,6 +47,10 @@ export type PendingInvoke = {
   removeAbortListener?: () => void;
   admissionContinuation?: GatewayRootWorkAdmissionContinuationScope;
   isCompletionAuthorized?: () => boolean;
+  startedAtMs?: number;
+  lastOrderedProgressAtMs?: number;
+  progressDiagnosticAtMs?: number;
+  progressDiagnosticStages?: Set<NodeInvokeProgressDiagnostic["stage"]>;
 };
 
 export type NodeInvokeProgressParams = ProtocolNodeInvokeProgressParams & {
@@ -55,6 +65,35 @@ export type NodeInvokeResultParams = NodeInvokeResult & {
 
 const MAX_PENDING_PROGRESS_CHUNKS = 128;
 const MAX_INVOKE_INPUT_BYTES = 16 * 1024;
+const streamLog = createSubsystemLogger("gateway/node-duplex");
+type FailurePhase =
+  | "node_result"
+  | "connection_lost"
+  | "progress_callback"
+  | "idle_deadline"
+  | "hard_deadline"
+  | "signal"
+  | "policy"
+  | "completion_authority";
+
+function boundedFailureCode(code?: string) {
+  switch (code) {
+    case "IDLE_TIMEOUT":
+    case "TIMEOUT":
+    case "POLICY_CHANGED":
+    case "APPROVAL_AUTHORITY_CLOSED":
+    case "ABORTED":
+    case "PAIRING_CHANGED":
+    case "DISCONNECTED":
+    case "UNAVAILABLE":
+    case "NODE_NOT_READY":
+    case "INVALID_REQUEST":
+    case "MCP_SERVER_UNAVAILABLE":
+      return code;
+    default:
+      return "unclassified";
+  }
+}
 
 export class NodeInvokeStreamController {
   constructor(
@@ -117,6 +156,7 @@ export class NodeInvokeStreamController {
       if (!this.takePending(id, pending)) {
         continue;
       }
+      this.observeFailure(id, pending, "connection_lost");
       this.options.disconnectPending(pending);
     }
   }
@@ -135,6 +175,9 @@ export class NodeInvokeStreamController {
       params.error?.code === NODE_INVOKE_NOT_READY && pending.receivedProgress
         ? { code: "UNAVAILABLE", message: "node reported not-ready after invocation progress" }
         : (params.error ?? null);
+    if (!params.ok) {
+      this.observeFailure(params.id, pending, "node_result", error?.code);
+    }
     pending.resolve({
       ok: params.ok,
       payload: params.payload,
@@ -152,6 +195,7 @@ export class NodeInvokeStreamController {
     idleTimeoutMs: number;
     signal?: AbortSignal;
   }): void {
+    params.pending.startedAtMs = performance.now();
     const continuation = captureGatewayRootWorkAdmissionContinuationScope();
     if (continuation) {
       params.pending.admissionContinuation = continuation;
@@ -190,6 +234,7 @@ export class NodeInvokeStreamController {
           pairingChanged
             ? { code: "PAIRING_CHANGED", message: "node pairing changed after dispatch" }
             : { code: "ABORTED", message: "node invoke cancelled" },
+          "signal",
         );
       };
       params.signal.addEventListener("abort", onAbort, { once: true });
@@ -243,7 +288,11 @@ export class NodeInvokeStreamController {
       } catch (error) {
         this.options.sendCancel(params.invokeId, pending);
         this.clearTimers(pending);
+        const ownsFailure = this.options.pendingInvokes.get(params.invokeId) === pending;
         this.options.pendingInvokes.delete(params.invokeId);
+        if (ownsFailure) {
+          this.observeFailure(params.invokeId, pending, "progress_callback");
+        }
         pending.reject(error instanceof Error ? error : new Error(String(error)));
         break;
       }
@@ -256,6 +305,7 @@ export class NodeInvokeStreamController {
       if (!this.getPending(params.invokeId, params.nodeId, params.connId)) {
         break;
       }
+      pending.lastOrderedProgressAtMs = performance.now();
       this.resetIdleTimer(params.invokeId, pending);
     }
     return true;
@@ -283,6 +333,62 @@ export class NodeInvokeStreamController {
     return this.getPending(invokeId, nodeId, connId) !== undefined;
   }
 
+  recordProgressDiagnostic(nodeId: string, connId: string, payload: unknown): boolean {
+    const parsed = nodeInvokeProgressDiagnosticSchema.safeParse(payload);
+    if (!parsed.success) {
+      return false;
+    }
+    const snapshot = parsed.data;
+    const pending = this.options.pendingInvokes.get(snapshot.invokeId);
+    const now = performance.now();
+    if (
+      !pending ||
+      !pending.onProgress ||
+      pending.nodeId !== nodeId ||
+      pending.connId !== connId ||
+      !this.options.isConnectionActive(pending) ||
+      (pending.deadlineAtMs !== undefined && now >= pending.deadlineAtMs) ||
+      !this.options.isCommandAllowed(nodeId, pending.command)
+    ) {
+      return false;
+    }
+    try {
+      if (pending.isCompletionAuthorized?.() === false) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    // Diagnostic reads must never cancel, settle, extend or revive the invocation.
+    if (
+      this.options.pendingInvokes.get(snapshot.invokeId) !== pending ||
+      !this.options.isConnectionActive(pending) ||
+      (snapshot.stage === "sample" &&
+        pending.progressDiagnosticAtMs !== undefined &&
+        now - pending.progressDiagnosticAtMs < NODE_INVOKE_PROGRESS_DIAGNOSTIC_INTERVAL_MS) ||
+      pending.progressDiagnosticStages?.has(snapshot.stage)
+    ) {
+      return false;
+    }
+    if (snapshot.stage === "sample") {
+      pending.progressDiagnosticAtMs = now;
+    } else {
+      (pending.progressDiagnosticStages ??= new Set()).add(snapshot.stage);
+    }
+    try {
+      streamLog.info("node invoke progress state", {
+        nodeId,
+        connId,
+        ...snapshot,
+        receiverNextProgressSeq: pending.nextProgressSeq,
+        receiverBufferedProgressCount: pending.progressChunks.size,
+      });
+    } catch {
+      // The diagnostic sink cannot change the invocation's result or authority.
+    }
+    return true;
+  }
+
   private getPending(id: string, nodeId: string, connId: string | undefined) {
     const pending = this.options.pendingInvokes.get(id);
     if (
@@ -304,10 +410,15 @@ export class NodeInvokeStreamController {
     } catch {
       // Lifecycle owners may assert by throwing; unreadable authority also fails closed.
     }
-    this.cancelPending(id, pending, {
-      code: "APPROVAL_AUTHORITY_CLOSED",
-      message: "node invoke authority closed before settlement",
-    });
+    this.cancelPending(
+      id,
+      pending,
+      {
+        code: "APPROVAL_AUTHORITY_CLOSED",
+        message: "node invoke authority closed before settlement",
+      },
+      "completion_authority",
+    );
     return undefined;
   }
 
@@ -359,6 +470,12 @@ export class NodeInvokeStreamController {
     if (!this.takePending(requestId, pending)) {
       return;
     }
+    this.observeFailure(
+      requestId,
+      pending,
+      error.code === "IDLE_TIMEOUT" ? "idle_deadline" : "hard_deadline",
+      error.code,
+    );
     this.options.sendCancel(requestId, pending);
     pending.resolve({ ok: false, error });
   }
@@ -367,10 +484,15 @@ export class NodeInvokeStreamController {
     if (this.options.isCommandAllowed(pending.nodeId, pending.command)) {
       return false;
     }
-    this.cancelPending(requestId, pending, {
-      code: "POLICY_CHANGED",
-      message: "node command is no longer allowed",
-    });
+    this.cancelPending(
+      requestId,
+      pending,
+      {
+        code: "POLICY_CHANGED",
+        message: "node command is no longer allowed",
+      },
+      "policy",
+    );
     return true;
   }
 
@@ -378,11 +500,45 @@ export class NodeInvokeStreamController {
     requestId: string,
     pending: PendingInvoke,
     error: { code: string; message: string },
+    phase: FailurePhase,
   ): void {
     if (this.takePending(requestId, pending)) {
+      this.observeFailure(requestId, pending, phase, error.code);
       this.options.sendCancel(requestId, pending);
       this.options.onFailedResult(pending);
       pending.resolve({ ok: false, error });
+    }
+  }
+
+  private observeFailure(
+    invokeId: string,
+    pending: PendingInvoke,
+    phase: FailurePhase,
+    code?: string,
+  ): void {
+    if (!pending.onProgress) {
+      return;
+    }
+    const now = performance.now();
+    try {
+      streamLog.info("node invoke stream failed", {
+        nodeId: pending.nodeId,
+        invokeId,
+        phase,
+        errorCode: boundedFailureCode(code),
+        receivedProgress: pending.receivedProgress === true,
+        nextProgressSeq: pending.nextProgressSeq,
+        bufferedProgressCount: pending.progressChunks.size,
+        idleTimeoutMs: pending.idleTimeoutMs,
+        lifetimeMs:
+          pending.startedAtMs === undefined ? undefined : Math.max(0, now - pending.startedAtMs),
+        lastOrderedProgressAgeMs:
+          pending.lastOrderedProgressAtMs === undefined
+            ? undefined
+            : Math.max(0, now - pending.lastOrderedProgressAtMs),
+      });
+    } catch {
+      // Observation cannot settle an invocation, call its authority, or expose error content.
     }
   }
 

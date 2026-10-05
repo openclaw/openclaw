@@ -43,7 +43,22 @@ export function resolveRunStartupPhase(
   return undefined;
 }
 
-export function createAgentTurnTimingTracker(options: { profilerEnabled?: boolean } = {}) {
+export function createAgentTurnTimingTracker(
+  options: {
+    profilerEnabled?: boolean;
+    runId?: string;
+    sessionId?: string;
+    lifecycleGeneration?: string;
+  } = {},
+) {
+  const phaseIdentity =
+    options.runId && options.lifecycleGeneration
+      ? {
+          runId: options.runId,
+          sessionId: options.sessionId,
+          lifecycleGeneration: options.lifecycleGeneration,
+        }
+      : undefined;
   const observedExecutionPhases = new Set<EmbeddedAgentExecutionPhase>();
   const timing = createReplyTimingTracker<AgentTurnLogParams>({
     log: {
@@ -60,6 +75,10 @@ export function createAgentTurnTimingTracker(options: { profilerEnabled?: boolea
       },
     },
     enabled: options.profilerEnabled === true,
+    onPhase: phaseIdentity
+      ? (phase) =>
+          agentTurnTimingLog.info("run phase", { owner: "agent-turn", ...phaseIdentity, ...phase })
+      : undefined,
     formatMessage: (params, summary, stages) => {
       const identity = `runId=${params.runId} sessionId=${params.sessionId ?? "unknown"} sessionKey=${params.sessionKey ?? "unknown"}`;
       return "milestone" in params

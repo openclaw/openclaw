@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { recordWorkerPlacementStage } from "./placement-diagnostics.js";
 import type {
   WorkerDispatchPlacement,
   WorkerProvisioningDispatchPlacement,
@@ -348,6 +349,7 @@ export function coordinateWorkerPlacementDispatch(
       }
     },
     dispatch: async (request, onTransition, authorize, callerSignal) => {
+      recordWorkerPlacementStage(request.sessionId, "dispatch_received");
       callerSignal?.throwIfAborted();
       const inFlight = pendingOperations(request.sessionId).find(
         (pending) => pending.kind === "dispatch",
@@ -356,6 +358,7 @@ export function coordinateWorkerPlacementDispatch(
         if (!isDeepStrictEqual(inFlight.request, request)) {
           throw new Error(`Session ${request.sessionKey} is already dispatching another request`);
         }
+        recordWorkerPlacementStage(request.sessionId, "dispatch_joined");
         return await racePromiseWithAbortSignal(
           joinOperation(inFlight.operation, authorize),
           callerSignal,
@@ -373,9 +376,10 @@ export function coordinateWorkerPlacementDispatch(
         return await admitDispatch(
           request,
           (signal) =>
-            runSessionOperation(request.sessionId, signal, () =>
-              service.dispatch(request, report, authorize, signal),
-            ),
+            runSessionOperation(request.sessionId, signal, () => {
+              recordWorkerPlacementStage(request.sessionId, "dispatch_admitted");
+              return service.dispatch(request, report, authorize, signal);
+            }),
           authorize,
           callerSignal,
         );

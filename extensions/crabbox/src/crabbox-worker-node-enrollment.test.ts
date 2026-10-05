@@ -278,7 +278,7 @@ echo 123
   const closed = once(child, "close");
   try {
     const [code] = await (options?.signal ? withinTest(closed, options.signal) : closed);
-    return { code, output: Buffer.concat(output).toString("utf8") };
+    return { code, output: Buffer.concat(output).toString("utf8"), leaseId, setupCode };
   } finally {
     clearTimeout(timeout);
     const active = child.exitCode === null && child.signalCode === null;

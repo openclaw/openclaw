@@ -4,8 +4,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { redactLogRecordForTransport } from "../../logging/redact.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { parseNodeWorkerWorkspaceExecResult } from "../../worker/node-workspace-protocol.js";
+import { environment } from "./node-worker-tunnel.test-support.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
@@ -18,6 +21,329 @@ import {
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+const setupDiagnostics = vi.hoisted(() => vi.fn());
+const placementDiagnostics = vi.hoisted(() => vi.fn());
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) => {
+      const logger = actual.createSubsystemLogger(name);
+      return name === "gateway/worker-workspace"
+        ? { ...logger, warn: setupDiagnostics, info: setupDiagnostics }
+        : name === "gateway/worker-placement"
+          ? { ...logger, info: placementDiagnostics }
+          : logger;
+    },
+  };
+});
+
+it.each(["errno", "nested", "rpc", "unknown", "abort", "sink", "hostile"] as const)(
+  "reports the failed repository preparation without exposing private error data: %s",
+  async (kind) => {
+    placementDiagnostics.mockReset();
+    if (kind === "sink") {
+      placementDiagnostics.mockImplementationOnce(() => {
+        throw new Error("private sink failure");
+      });
+    }
+    const secret = "private-repository-error-body";
+    const code = kind === "rpc" ? "UNAVAILABLE" : kind === "unknown" ? secret : "EIO";
+    const cause = Object.assign(new Error(secret), { code });
+    const failure = kind === "nested" ? new Error(secret, { cause }) : cause;
+    if (kind === "abort") {
+      failure.name = "AbortError";
+      cause.code = secret;
+    }
+    if (kind === "hostile") {
+      Object.defineProperty(failure, "code", {
+        get: () => {
+          throw new Error(secret);
+        },
+      });
+    }
+    const record = environment();
+    const service = createNodeWorkspaceTransferService({
+      temporaryRoot: tempDirs.make("node-preparation-diagnostics-"),
+      getOwner: () => ({
+        environment: record,
+        credential: { ownerEpoch: record.ownerEpoch, sessionId: "session-1" },
+      }),
+    });
+    const actions = createNodeWorkerWorkspaceActions({
+      environmentId: record.environmentId,
+      ownerEpoch: record.ownerEpoch,
+      sessionId: "session-1",
+      ownerSignal: new AbortController().signal,
+      isOwnerCurrent: () => true,
+      workspaceTransfer: service,
+      runWorkspaceCommand: async (command) => {
+        command.assertCurrent?.();
+        throw failure;
+      },
+    });
+    try {
+      await expect(
+        actions.syncWorkspace({
+          sessionId: "session-1",
+          sessionKey: "agent:main:diagnostics",
+          generation: 17,
+          source: {
+            kind: "repository",
+            url: "https://example.invalid/private-source.git",
+            branch: "accepted",
+            baseCommit: "a".repeat(40),
+            gitToken: secret,
+          },
+        }),
+      ).rejects.toBe(failure);
+      const events = placementDiagnostics.mock.calls.map(([, facts]) => facts);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          stage: "repository_prepare_failed",
+          sessionId: "session-1",
+          environmentId: record.environmentId,
+          ownerEpoch: record.ownerEpoch,
+          generation: 17,
+          diagnosticCode: "operation_failed",
+          elapsedMs: expect.any(Number),
+          innerDiagnosticCode:
+            kind === "unknown" || kind === "hostile"
+              ? undefined
+              : kind === "abort"
+                ? "ABORT_ERR"
+                : kind === "rpc"
+                  ? "UNAVAILABLE"
+                  : "EIO",
+        }),
+      );
+      const logged = JSON.stringify(events);
+      expect(logged).not.toContain(secret);
+      expect(logged).not.toContain("private-source.git");
+      expect(logged).not.toContain("stack");
+    } finally {
+      await service.closeAll();
+    }
+  },
+);
+
+it.each([
+  "exit",
+  "timeout",
+  "malformed",
+  "partial",
+  "success",
+  "extended-success",
+  "extended-failure",
+  "sequence-bound",
+  "sink-success",
+  "sink-failure",
+] as const)(
+  "preserves safe repository setup result diagnostics through redaction: %s",
+  async (outcome) => {
+    setupDiagnostics.mockReset();
+    const succeeded = ["success", "extended-success", "sequence-bound", "sink-success"].includes(
+      outcome,
+    );
+    if (outcome === "sink-success" || outcome === "sink-failure") {
+      setupDiagnostics.mockImplementation(() => {
+        throw new Error("synthetic private diagnostic sink");
+      });
+    }
+    const record = environment();
+    const baseCommit = "c".repeat(40);
+    const baseManifestRef = `sha256:${"d".repeat(64)}`;
+    const marker =
+      outcome === "extended-success" || outcome === "extended-failure"
+        ? "TEAMCLAW_SETUP_V1 stage=env_load outcome=succeeded\nTEAMCLAW_SETUP_V1 stage=credential_acquisition outcome=started elapsedMs=0\nTEAMCLAW_SETUP_V1 stage=credential_transport outcome=succeeded elapsedMs=7\n" +
+          (succeeded
+            ? "TEAMCLAW_SETUP_V1 stage=credential_acquisition outcome=succeeded elapsedMs=2147483647\n"
+            : "TEAMCLAW_SETUP_V1 stage=credential_acquisition outcome=failed exit=255 elapsedMs=9\n")
+        : outcome === "sequence-bound"
+          ? "TEAMCLAW_SETUP_V1 stage=env_load outcome=started elapsedMs=0\n".repeat(30) +
+            "TEAMCLAW_SETUP_V1 stage=env_load outcome=succeeded\n"
+          : outcome === "exit"
+            ? "TEAMCLAW_SETUP_V1 stage=toolchain_install outcome=started\nTEAMCLAW_SETUP_V1 stage=toolchain_install outcome=failed exit=7\n"
+            : outcome === "timeout"
+              ? "TEAMCLAW_SETUP_V1 stage=compiler_probe outcome=started\n"
+              : "TEAMCLAW_SETUP_V1 stage=unknown outcome=failed exit=7\nTEAMCLAW_SETUP_V1 stage=env_load outcome=succeeded exit=0\nTEAMCLAW_SETUP_V1 stage=clippy_probe outcome=failed exit=9999\n" +
+                ["01", "-1", "1.5", "1e3", "2147483648", "99999999999", "NaN", "Infinity"]
+                  .map(
+                    (value) =>
+                      `TEAMCLAW_SETUP_V1 stage=credential_transport outcome=succeeded elapsedMs=${value}\n`,
+                  )
+                  .join("") +
+                "TEAMCLAW_SETUP_V1 stage=env_load outcome=failed elapsedMs=1 exit=1\nTEAMCLAW_SETUP_V1 stage=env_load outcome=failed exit=01\nTEAMCLAW_SETUP_V1 stage=env_load outcome=succeeded elapsedMs=1 extra=private\n";
+    const service = createNodeWorkspaceTransferService({
+      temporaryRoot: tempDirs.make("node-setup-diagnostics-"),
+      getOwner: () => ({
+        environment: record,
+        credential: { ownerEpoch: record.ownerEpoch, sessionId: "session-1" },
+      }),
+    });
+    const run = vi.fn(
+      async (
+        command: Parameters<
+          Parameters<typeof createNodeWorkerWorkspaceActions>[0]["runWorkspaceCommand"]
+        >[0],
+      ) => {
+        command.assertCurrent?.();
+        const setup = command.argv[2]?.includes("worktree-setup.sh") === true;
+        const result = {
+          workspaceDir: "/node/workspace",
+          stdout: setup
+            ? "private setup stdout"
+            : command.argv.includes("rev-parse")
+              ? baseCommit
+              : baseManifestRef,
+          stderr: setup
+            ? outcome === "partial"
+              ? "private setup stderr\nTEAMCLAW_SETUP_V1 stage=provenance outcome=started"
+              : `${marker}private setup stderr\n`
+            : "",
+          code: setup ? (outcome === "timeout" ? null : succeeded ? 0 : 7) : 0,
+          signal:
+            setup && outcome === "timeout"
+              ? "SIGTERM"
+              : setup && outcome === "malformed"
+                ? "PRIVATE_CANARY"
+                : null,
+          killed: setup && outcome === "timeout",
+          termination: setup && outcome === "timeout" ? "timeout" : "exit",
+          ...(setup
+            ? { stderrTruncatedBytes: 9, stdoutTruncatedBytes: 3, outputLimitExceeded: false }
+            : {}),
+        };
+        const parsed = parseNodeWorkerWorkspaceExecResult(result);
+        if (!parsed) {
+          throw new Error("Invalid synthetic node result");
+        }
+        return parsed;
+      },
+    );
+    const actions = createNodeWorkerWorkspaceActions({
+      environmentId: record.environmentId,
+      ownerEpoch: record.ownerEpoch,
+      sessionId: "session-1",
+      ownerSignal: new AbortController().signal,
+      isOwnerCurrent: () => true,
+      workspaceTransfer: service,
+      runWorkspaceCommand: run,
+    });
+    try {
+      const sync = actions.syncWorkspace({
+        sessionId: "session-1",
+        sessionKey: "agent:main:setup",
+        generation: 17,
+        source: {
+          kind: "repository",
+          url: "https://example.invalid/repository.git",
+          branch: "accepted-branch",
+          baseCommit,
+          runSetupScript: true,
+        },
+      });
+      if (succeeded) {
+        await expect(sync).resolves.toMatchObject({ baseCommit, manifestRef: baseManifestRef });
+        expect(setupDiagnostics).toHaveBeenCalledOnce();
+      } else {
+        await expect(sync).rejects.toThrow();
+        expect(setupDiagnostics).toHaveBeenCalledOnce();
+        const details = redactLogRecordForTransport(setupDiagnostics.mock.calls[0]![1], {
+          format: "console",
+        });
+        expect(details).toMatchObject({
+          phase: "repository_setup",
+          environmentId: record.environmentId,
+          ownerEpoch: record.ownerEpoch,
+          sessionId: "session-1",
+          sessionKey: "agent:main:setup",
+          placementGeneration: 17,
+          baseCommit,
+          baseManifestRef,
+          scriptPath: ".openclaw/worktree-setup.sh",
+          configuredTimeoutMs: 120_000,
+          exitCode: outcome === "timeout" ? null : 7,
+          termination: outcome === "timeout" ? "timeout" : "exit",
+          killed: outcome === "timeout",
+          timedOut: outcome === "timeout",
+          stderrTruncatedBytes: 9,
+          stdoutTruncatedBytes: 3,
+        });
+        expect(details.elapsedMs).toEqual(expect.any(Number));
+        if (outcome === "extended-failure") {
+          expect(details).toMatchObject({
+            helperStage: "credential_acquisition",
+            helperOutcome: "failed",
+            helperExitCode: 255,
+            helperElapsedMs: 9,
+            helperMarkerCount: 4,
+          });
+          expect(details.helperMarkers).toEqual([
+            expect.objectContaining({ helperStage: "env_load", helperOutcome: "succeeded" }),
+            expect.objectContaining({ helperStage: "credential_acquisition", helperElapsedMs: 0 }),
+            expect.objectContaining({ helperStage: "credential_transport", helperElapsedMs: 7 }),
+            expect.objectContaining({ helperStage: "credential_acquisition", helperElapsedMs: 9 }),
+          ]);
+        } else if (outcome === "exit" || outcome === "timeout") {
+          expect(details).toMatchObject({
+            helperStage: outcome === "exit" ? "toolchain_install" : "compiler_probe",
+            helperOutcome: outcome === "exit" ? "failed" : "started",
+          });
+          if (outcome === "exit") {
+            expect(details.helperExitCode).toBe(7);
+          }
+        } else {
+          expect(details.helperStage).toBeUndefined();
+          expect(details.signal).toBeUndefined();
+        }
+        const serialized = JSON.stringify(details);
+        for (const value of [
+          "private setup stdout",
+          "private setup stderr",
+          "PRIVATE_CANARY",
+          "TEAMCLAW_SETUP_V1",
+        ]) {
+          expect(serialized).not.toContain(value);
+        }
+      }
+      if (succeeded) {
+        const [message, raw] = setupDiagnostics.mock.calls[0]!;
+        expect(message).toBe("worker repository setup completed");
+        const details = redactLogRecordForTransport(raw);
+        expect(details).toMatchObject({ exitCode: 0, termination: "exit" });
+        if (outcome === "extended-success") {
+          expect(details).toMatchObject({
+            helperStage: "credential_acquisition",
+            helperElapsedMs: 2147483647,
+            helperMarkerCount: 4,
+          });
+          expect(details.helperMarkers).toEqual([
+            expect.not.objectContaining({ helperElapsedMs: expect.any(Number) }),
+            expect.objectContaining({ helperElapsedMs: 0 }),
+            expect.objectContaining({ helperStage: "credential_transport", helperElapsedMs: 7 }),
+            expect.objectContaining({ helperElapsedMs: 2147483647 }),
+          ]);
+        } else if (outcome === "sequence-bound") {
+          expect(details.helperMarkerCount).toBe(31);
+          expect(details.helperMarkers).toHaveLength(24);
+          expect(details.helperElapsedMs).toBeUndefined();
+        }
+        expect(JSON.stringify(details)).not.toMatch(
+          /private setup|PRIVATE_CANARY|TEAMCLAW_SETUP_V1/u,
+        );
+      }
+      const setupCommand = run.mock.calls.find(([command]) =>
+        command.argv[2]?.includes("worktree-setup.sh"),
+      )?.[0];
+      expect(setupCommand).toMatchObject({ timeoutMs: 120_000, transportRetry: "never" });
+    } finally {
+      await service.closeAll();
+      setupDiagnostics.mockReset();
+    }
+  },
+);
 
 it.each([
   { operation: "clone", reason: "clone-failed", stage: "git clone" },

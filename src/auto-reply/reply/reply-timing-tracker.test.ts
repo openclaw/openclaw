@@ -30,6 +30,73 @@ describe("isReplyProfilerEnabled", () => {
 });
 
 describe("createReplyTimingTracker", () => {
+  it("preserves sync and async operation outcomes when phase logging throws", async () => {
+    const tracker = createReplyTimingTracker({
+      log: { warn: vi.fn() },
+      enabled: false,
+      onPhase: () => {
+        throw new Error("synthetic log failure");
+      },
+    });
+    const error = new Error("original operation error");
+    expect(tracker.measureSync("prepare", () => "ready")).toBe("ready");
+    expect(() =>
+      tracker.measureSync("prepare", () => {
+        throw error;
+      }),
+    ).toThrow(error);
+    await expect(tracker.measure("prepare", () => "ready")).resolves.toBe("ready");
+    await expect(
+      tracker.measure("prepare", () => {
+        throw error;
+      }),
+    ).rejects.toBe(error);
+  });
+  it.each(["success", "error"] as const)(
+    "retains an admitted preparation entry before settlement and its %s exit",
+    async (outcome) => {
+      const identity = {
+        runId: "restart-recovery-reconcile:session:cycle",
+        sessionId: "session",
+        lifecycleGeneration: "generation-7",
+      };
+      const tracker = createReplyHotPathTimingTracker({ identity });
+      const deferred = Promise.withResolvers<string>();
+      const error = new Error("synthetic private payload must not be logged");
+      const measured = tracker.measure("reply.wait_admission_ticket", () => deferred.promise);
+      expect(subsystemInfo).toHaveBeenCalledExactlyOnceWith("run phase", {
+        owner: "reply",
+        ...identity,
+        name: "reply.wait_admission_ticket",
+        spanId: 1,
+        status: "entry",
+        startedAt: expect.any(Number),
+      });
+      if (outcome === "success") {
+        deferred.resolve("accepted");
+        await expect(measured).resolves.toBe("accepted");
+      } else {
+        deferred.reject(error);
+        await expect(measured).rejects.toBe(error);
+      }
+      expect(subsystemInfo.mock.calls[1]).toEqual([
+        "run phase",
+        {
+          owner: "reply",
+          ...identity,
+          name: "reply.wait_admission_ticket",
+          spanId: 1,
+          status: outcome,
+          startedAt: subsystemInfo.mock.calls[0]?.[1]?.startedAt,
+          endedAt: expect.any(Number),
+          durationMs: expect.any(Number),
+        },
+      ]);
+      expect(subsystemInfo).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(subsystemInfo.mock.calls)).not.toContain(error.message);
+    },
+  );
+
   it("reports slow preparation without profiling while keeping fast replies quiet", async () => {
     const warn = vi.fn();
     let nowMs = 0;
