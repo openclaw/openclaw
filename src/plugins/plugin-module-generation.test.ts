@@ -841,7 +841,7 @@ describe("plugin module generations", () => {
     const plugin = load(root, "index.ts").value as { read(): Promise<unknown> };
     await expect(plugin.read()).rejects.toThrow(
       process.versions.bun
-        ? /ParseError: Unexpected token[\s\S]*broken\.ts:1:20/
+        ? /^ParseError: (?:[A-Za-z]:[\\/]: )?Unexpected token[\s\S]*broken\.ts:1:20/
         : /^Transform failed with 1 error:\nbroken\.ts:1:20: ERROR: Unexpected "="/,
     );
   });
