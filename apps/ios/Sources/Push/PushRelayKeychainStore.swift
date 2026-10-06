@@ -42,11 +42,13 @@ enum PushRelayRegistrationStore {
 
     @discardableResult
     static func saveRegistrationState(_ state: RegistrationState) -> Bool {
-        guard let data = try? JSONEncoder().encode(state) else {
+        guard let data = try? JSONEncoder().encode(state),
+              let raw = String(data: data, encoding: .utf8)
+        else {
             return false
         }
         return GenericPasswordKeychainStore.saveString(
-            String(decoding: data, as: UTF8.self),
+            raw,
             service: self.service,
             account: self.registrationStateAccount)
     }

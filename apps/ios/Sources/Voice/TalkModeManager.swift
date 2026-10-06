@@ -82,6 +82,8 @@ private final class TranscriptStreamingOwner {
         text: String,
         phase: TalkPhase,
         watchPresentation: TalkWatchPresentation)?
+    /// Subscribed before chat.send so a fast terminal cannot outrun its owner.
+    var completionEvents: AsyncStream<EventFrame>?
 }
 
 private enum PushToTalkGatewayContext {
@@ -1832,7 +1834,6 @@ final class TalkModeManager {
         do {
             let startedAt = Date().timeIntervalSince1970
             let runId = UUID().uuidString
-            // Subscribe before chat.send so a fast terminal cannot outrun its owner.
             let completionSubscription = await gateway.makeServerEventSubscription(
                 bufferingNewest: 200,
                 matching: { Self.matchesChatEvent($0, runId: runId) })
@@ -1840,6 +1841,7 @@ final class TalkModeManager {
             let completionEvents = completionSubscription.events
             guard await gateway.currentRoute() == gatewayRoute else { return }
             guard self.isCurrentTranscriptProcessing(generation) else { return }
+            streamingOwner.completionEvents = completionEvents
             self.logger.info(
                 "chat.send start sessionKey=\(sessionKey, privacy: .public) chars=\(prompt.count, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send start sessionKey=\(sessionKey) chars=\(prompt.count)")
@@ -1884,7 +1886,6 @@ final class TalkModeManager {
                 gatewayRoute: gatewayRoute,
                 sessionKey: sessionKey,
                 generation: generation,
-                completionEvents: completionEvents,
                 streamingOwner: streamingOwner)
             else { return }
             guard self.isCurrentTranscriptProcessing(generation) else { return }
@@ -1911,7 +1912,6 @@ final class TalkModeManager {
         gatewayRoute: GatewayNodeSessionRoute,
         sessionKey: String,
         generation: UInt64,
-        completionEvents: AsyncStream<EventFrame>,
         streamingOwner: TranscriptStreamingOwner) async throws -> Bool?
     {
         let runId = acknowledgement.runId
@@ -1937,6 +1937,7 @@ final class TalkModeManager {
                         transcriptProcessingGeneration: generation)
                 }
             }
+            guard let completionEvents = streamingOwner.completionEvents else { return nil }
             completion = await self.waitForChatCompletion(
                 runId: runId,
                 gateway: gateway,

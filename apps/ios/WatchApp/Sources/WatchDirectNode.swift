@@ -675,7 +675,10 @@ final class WatchDirectNode {
 
     private func encodedResponse(id: String, payload: some Encodable) throws -> BridgeInvokeResponse {
         let data = try JSONEncoder().encode(payload)
-        return BridgeInvokeResponse(id: id, ok: true, payloadJSON: String(decoding: data, as: UTF8.self))
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw CocoaError(.fileWriteInapplicableStringEncoding)
+        }
+        return BridgeInvokeResponse(id: id, ok: true, payloadJSON: json)
     }
 
     private static func errorResponse(
@@ -698,9 +701,11 @@ final class WatchDirectNode {
     }
 
     private static func saveConfiguration(_ configuration: WatchGatewayConfiguration) -> Bool {
-        guard let data = try? JSONEncoder().encode(configuration) else { return false }
+        guard let data = try? JSONEncoder().encode(configuration),
+              let raw = String(data: data, encoding: .utf8)
+        else { return false }
         return GenericPasswordKeychainStore.saveString(
-            String(decoding: data, as: UTF8.self),
+            raw,
             service: self.keychainService,
             account: self.keychainAccount)
     }

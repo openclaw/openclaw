@@ -159,6 +159,9 @@ actor PushRegistrationManager {
 
     private static func encodePayload(_ payload: some Encodable) throws -> String {
         let data = try JSONEncoder().encode(payload)
-        return String(decoding: data, as: UTF8.self)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw PushRelayError.relayMisconfigured("Failed to encode push registration payload as UTF-8")
+        }
+        return json
     }
 }
