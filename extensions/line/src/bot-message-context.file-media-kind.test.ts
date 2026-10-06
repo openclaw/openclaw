@@ -75,7 +75,7 @@ describe("LINE file message media kind", () => {
   ])("hands the agent $label as $kind", async (fixture) => {
     await withOpenClawTestState({ label: "line-file-media-kind" }, async (state) => {
       const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
-        String(input).endsWith("/message/file-1/content")
+        String(input instanceof Request ? input.url : input).endsWith("/message/file-1/content")
           ? new Response(fixture.bytes, { headers: { "content-type": fixture.header } })
           : new Response("{}", { status: 404 }),
       );
