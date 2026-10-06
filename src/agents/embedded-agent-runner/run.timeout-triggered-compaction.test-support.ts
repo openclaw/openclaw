@@ -12,6 +12,7 @@ import {
   mockedResolveAuthProfileOrder,
   mockedRunEmbeddedAttempt,
   resetSharedRunIntegrationHarnessMocks,
+  type MockGetApiKeyForModelParams,
 } from "./run.overflow-compaction.harness.js";
 import {
   createSharedRunIntegrationSession,
@@ -227,12 +228,14 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     fixture = session;
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     mockedResolveAuthProfileOrder.mockReturnValue(["profile-a", "profile-b"]);
-    mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
-      apiKey: "fixture",
-      profileId: profileId ?? "profile-a",
-      source: "test",
-      mode: "api-key",
-    }));
+    mockedGetApiKeyForModel.mockImplementation(
+      async ({ profileId }: MockGetApiKeyForModelParams = {}) => ({
+        apiKey: "fixture",
+        profileId: profileId ?? "profile-a",
+        source: "test",
+        mode: "api-key",
+      }),
+    );
     mockedRunEmbeddedAttempt.mockResolvedValue(
       session.makeAttemptResult({
         timedOut: true,

@@ -43,8 +43,10 @@ type ResolvedRetainedControlUiAsset = {
   rootRealPath: string;
 };
 
+type ControlUiAssetPrepareOptions = { signal?: AbortSignal };
+
 export type ControlUiAssetRetention = {
-  prepare: (options?: { signal?: AbortSignal }) => Promise<void>;
+  prepare: (options?: ControlUiAssetPrepareOptions) => Promise<void>;
   resolveAsset: (assetPath: string) => Promise<ResolvedRetainedControlUiAsset | null>;
 };
 
@@ -451,7 +453,7 @@ export function createControlUiAssetRetention(root: string): ControlUiAssetReten
   };
 
   return {
-    prepare({ signal } = {}) {
+    prepare({ signal }: ControlUiAssetPrepareOptions = {}) {
       preparing ??= (async () => {
         inventory = (async () => {
           signal?.throwIfAborted();

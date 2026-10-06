@@ -494,7 +494,7 @@ docker_e2e_prepare_package_context "$ROOT_TARBALL"
     // Bootstrap is outside this wiring test; the registry and child lifetime are real.
     writeFileSync(
       join(bin, "npm"),
-      '#!/bin/sh\nif [ "$1" = --version ]; then printf "12.0.2\\n"; fi\n',
+      '#!/bin/sh\nif [ "$1" = --version ]; then printf "12.1.0\\n"; fi\n',
       { mode: 0o755 },
     );
     writeFileSync(

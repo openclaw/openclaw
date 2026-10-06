@@ -67,6 +67,72 @@ describe("Control UI build chunking", () => {
     expect(chunks.filter((chunk) => chunk.imports.includes(deferred.fileName))).toHaveLength(0);
   });
 
+  it("keeps deferred HTML rendering out of the initial Lit runtime", async () => {
+    const entry = "virtual:deferred-html-fixture";
+    const deferred = new URL("../pages/chat/components/chat-message-text.ts", import.meta.url)
+      .pathname;
+    const sources = new Map([
+      [
+        entry,
+        'import { nothing } from "lit"; export const placeholder = nothing; export const load = () => import(' +
+          JSON.stringify(deferred) +
+          ");",
+      ],
+      [
+        deferred,
+        'import { unsafeHTML } from "lit/directives/unsafe-html.js"; export const render = (html) => unsafeHTML(html);',
+      ],
+    ]);
+    const result = await build({
+      configFile: false,
+      publicDir: false,
+      logLevel: "silent",
+      plugins: [
+        {
+          name: "deferred-html-fixture",
+          resolveId: (id) => (sources.has(id) ? id : null),
+          load: (id) => sources.get(id) ?? null,
+        },
+      ],
+      build: {
+        write: false,
+        minify: false,
+        rolldownOptions: {
+          input: entry,
+          preserveEntrySignatures: "allow-extension",
+          output: { codeSplitting: controlUiCodeSplitting, strictExecutionOrder: true },
+        },
+      },
+    });
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const entryChunk = chunks.find((chunk) => chunk.isEntry);
+    const directiveChunk = chunks.find((chunk) =>
+      Object.keys(chunk.modules).some((id) => {
+        const key = controlUiBootManifestKey(id);
+        return (
+          key.startsWith("node_modules/lit-html/") && key.endsWith("/directives/unsafe-html.js")
+        );
+      }),
+    );
+    if (!entryChunk || !directiveChunk) {
+      throw new Error("Expected initial and HTML directive chunks");
+    }
+    const byFile = new Map(chunks.map((chunk) => [chunk.fileName, chunk]));
+    const initialFiles = new Set<string>();
+    const visit = (fileName: string) => {
+      if (initialFiles.has(fileName)) {
+        return;
+      }
+      initialFiles.add(fileName);
+      byFile.get(fileName)?.imports.forEach(visit);
+    };
+    visit(entryChunk.fileName);
+    expect(initialFiles).not.toContain(directiveChunk.fileName);
+  });
+
   it("groups stable runtime dependencies into bounded chunks", () => {
     expect(controlUiCodeSplitting.includeDependenciesRecursively).toBe(false);
     expect(controlUiCodeSplitting.groups[1]).toMatchObject({
@@ -103,6 +169,8 @@ describe("Control UI build chunking", () => {
       ["lit", "until"],
       ["lit-html", "until"],
       ["lit-html", "private-async-helpers"],
+      ["lit", "unsafe-html"],
+      ["lit-html", "unsafe-html"],
     ]) {
       expect(
         controlUiStableChunkName(`/repo/node_modules/${name}/directives/${directive}.js`),

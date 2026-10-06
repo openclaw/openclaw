@@ -41,6 +41,16 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "rawStream",
 ] as const;
 
+export const toOptionString = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "bigint") {
+    return value.toString();
+  }
+  return undefined;
+};
+
 export function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): GatewayRunOpts {
   const resolved: GatewayRunOpts = { ...opts };
 

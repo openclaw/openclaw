@@ -41,9 +41,9 @@ env:
   MINISIGN_ARCHIVE_SHA256: 9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73
   MINISIGN_BINARY_SHA256: 2c74dffcc1c9a5ee55957c60971998ace2b89f22585631594ec2152c588af8db
   MINISIGN_URL: https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
-  TAURI_CLI_ARCHIVE_SHA256: 6864602a34292aa6f2ad40ae019eebe5c1064d6c623fe20696a8a8974067e60b
-  TAURI_CLI_BINARY_SHA256: 23a27f61c50417fe87c92fa958fb56ecc8de7c791f78df3cac046c8579b45897
-  TAURI_CLI_URL: https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.11.4/cargo-tauri-x86_64-unknown-linux-gnu.tgz
+  TAURI_CLI_ARCHIVE_SHA256: 8544e19c4312f653e80f92241ee4212b4d928ad33461bfb1d2997c52560c418f
+  TAURI_CLI_BINARY_SHA256: 851817fba9e37026a7cc48ee27b43441b3cae4171462e27328f77fdce61c35d4
+  TAURI_CLI_URL: https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.0/cargo-tauri-x86_64-unknown-linux-gnu.tgz
 
 jobs:
   validate_release:
@@ -369,7 +369,7 @@ jobs:
           version="${RELEASE_TAG#v}"
           # Stamp the release version into the bundles; the committed manifests
           # keep a placeholder 0.1.0 so releases stay tag-driven.
-          pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage \
+          pnpm dlx @tauri-apps/cli@2.12.0 build --bundles deb,appimage \
             --config "{\"version\":\"${version}\",\"bundle\":{\"createUpdaterArtifacts\":false,\"useLocalToolsDir\":false}}"
 
       - name: Finalize AppImage
@@ -416,7 +416,7 @@ jobs:
             --output "${RUNNER_TEMP}/linux-packaged-runtime" \
             --require-fuse \
             --shell-container \
-              "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
+              "archlinux@sha256:f3691b4dde62ba4c4b6f0ae2c1fbf28e8c0c8c4b9a35c7e06dc1f70e21aa29f6"
 
       - name: Upload packaged runtime failure evidence
         if: failure() && steps.packaged-runtime.outcome == 'failure'
@@ -581,7 +581,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          pnpm dlx @tauri-apps/cli@2.11.4 build --bundles app,dmg \
+          pnpm dlx @tauri-apps/cli@2.12.0 build --bundles app,dmg \
             --config "{\"version\":\"${version}\",\"bundle\":{\"createUpdaterArtifacts\":false}}"
 
       - name: Verify and stage unsigned macOS bundles
@@ -670,7 +670,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis \
+          pnpm dlx @tauri-apps/cli@2.12.0 build --bundles nsis \
             --config "{\"version\":\"${version}\",\"bundle\":{\"createUpdaterArtifacts\":false}}"
 
       - name: Verify and stage unsigned Windows bundle

@@ -254,7 +254,7 @@ jobs:
         # Validation builds have no TAURI_SIGNING_PRIVATE_KEY, and the configured updater
         # pubkey makes the bundler hard-require it. Skip updater artifacts here;
         # linux-app-release.yml builds the signed updater bundles.
-        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage --config '{"bundle":{"createUpdaterArtifacts":false,"useLocalToolsDir":false}}'
+        run: pnpm dlx @tauri-apps/cli@2.12.0 build --bundles deb,appimage --config '{"bundle":{"createUpdaterArtifacts":false,"useLocalToolsDir":false}}'
 
       - name: Finalize AppImage
         if: github.event_name == 'workflow_dispatch'
@@ -302,7 +302,7 @@ jobs:
             --output "${RUNNER_TEMP}/linux-packaged-runtime" \
             --require-fuse \
             --shell-container \
-              "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
+              "archlinux@sha256:f3691b4dde62ba4c4b6f0ae2c1fbf28e8c0c8c4b9a35c7e06dc1f70e21aa29f6"
 
       - name: Upload packaged runtime failure evidence
         if: github.event_name == 'workflow_dispatch' && failure() && steps.packaged-runtime.outcome == 'failure'

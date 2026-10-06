@@ -8405,7 +8405,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(jobNeeds(npm12Job)).toEqual(["resolve_package", "package_integrity"]);
     expect(npm12Job.permissions).toEqual({ actions: "read", contents: "read" });
     const npm12Step = workflowStep(npm12Job, "Run install.sh with npm 12");
-    expect(npm12Step.run).toContain("npm@12.0.2");
+    expect(npm12Step.run).toContain("npm@12.1.0");
     expect(npm12Step.run).toContain("bash scripts/install.sh");
     expect(npm12Step.run).toContain("scripts/docker/install-sh-common/version-parse.sh");
     expect(npm12Step.run).toContain("extract_openclaw_semver");

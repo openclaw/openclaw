@@ -2,5 +2,5 @@ name: openclaw/codeql-boundary-queries
 version: 0.0.0
 library: false
 dependencies:
-  codeql/javascript-all: 2.6.28
+  codeql/javascript-all: 2.10.2
 extractor: javascript

@@ -140,7 +140,7 @@ Isolated native worker and subprocess fixtures use `mockNativeModuleExports` fro
 The mocks live until that child exits. Capture original call-through functions before
 registering replacements because Bun updates existing module namespace bindings.
 
-The test toolchain pins stable Vitest `5.0.1`, including its browser and coverage
+The test toolchain pins stable Vitest `5.0.2`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
 suites. Await asynchronous assertions, keep `vi.mock`/`vi.hoisted` at module
 scope, and perform actions whose mock calls you assert inside the test.

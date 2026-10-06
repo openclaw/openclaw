@@ -8,7 +8,7 @@ run_android_fastlane() {
   gemfile="${_OPENCLAW_ANDROID_FASTLANE_REPO_ROOT}/apps/android/Gemfile"
 
   local setup_hint=""
-  setup_hint="Install Ruby 3.4.10, then run: cd apps/android && gem install bundler -v 4.0.21 && bundle _4.0.21_ install"
+  setup_hint="Install Ruby 4.0.7, then run: cd apps/android && gem install bundler -v 4.0.21 && bundle _4.0.21_ install"
   local bundle_error=""
   local bundle_status=1
   if [[ ! -f "$gemfile" ]]; then

@@ -67,6 +67,8 @@ type SteeringContinuation = {
 
 export type OpenAIResponsesWebSocketMode = "websocket" | "websocket-cached" | "auto";
 
+type WebSocketReleaseOptions = { keep?: boolean };
+
 type OpenAIResponsesWebSocketStream = {
   stream: AsyncIterable<unknown>;
   request: ResponsesContinuationRequest;
@@ -75,7 +77,7 @@ type OpenAIResponsesWebSocketStream = {
   continuationStatus: ResponsesContinuationStatus | "socket_not_cached";
   inputReplay?: ResponsesInputReplay;
   readonly hasActiveResponse: boolean;
-  finish: (options?: { keep?: boolean }) => void;
+  finish: (options?: WebSocketReleaseOptions) => void;
 };
 
 // Keep this credential-keyed SDK/normalized-replay cache separate from ChatGPT/Codex's
@@ -197,7 +199,7 @@ type WebSocketLease = {
   entry?: CachedWebSocketConnection;
   reusedConnection: boolean;
   steeringContinuation?: SteeringContinuation;
-  release: (options?: { keep?: boolean }) => void;
+  release: (options?: WebSocketReleaseOptions) => void;
 };
 
 function createTransientWebSocketLease(connection: PreparedWebSocketConnection): WebSocketLease {
@@ -226,7 +228,7 @@ function createCachedWebSocketLease(
     entry,
     reusedConnection,
     steeringContinuation,
-    release: ({ keep } = {}) => {
+    release: ({ keep }: WebSocketReleaseOptions = {}) => {
       if (!keep || entry.socket.socket.readyState !== WEBSOCKET_OPEN_STATE) {
         invalidateOwnedWebSocketSession(cacheKey, entry);
         return;
@@ -469,7 +471,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
           },
         })
       : undefined;
-  const finish = ({ keep = true }: { keep?: boolean } = {}) => {
+  const finish = ({ keep = true }: WebSocketReleaseOptions = {}) => {
     if (released) {
       return;
     }

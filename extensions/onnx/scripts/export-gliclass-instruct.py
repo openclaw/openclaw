@@ -19,10 +19,10 @@ import tempfile
 
 PACKAGES = {
     "gliclass": "0.1.20",
-    "torch": "2.9.1",
-    "transformers": "5.3.0",
-    "tokenizers": "0.22.2",
-    "onnx": "1.19.1",
+    "torch": "2.14.0",
+    "transformers": "5.17.0",
+    "tokenizers": "0.23.2",
+    "onnx": "1.23.0",
 }
 
 SOURCES = {

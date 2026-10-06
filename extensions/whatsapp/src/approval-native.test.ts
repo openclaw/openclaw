@@ -5,7 +5,10 @@ import { whatsappApprovalCapability } from "./approval-native.js";
 const fixture = createNativeApprovalTestFixture({
   channel: "whatsapp",
   capability: whatsappApprovalCapability,
-  buildConfig: ({ channel, approvals } = {}) => ({
+  buildConfig: ({
+    channel,
+    approvals,
+  }: Parameters<Parameters<typeof createNativeApprovalTestFixture>[0]["buildConfig"]>[0] = {}) => ({
     channels: { whatsapp: { enabled: true, ...channel } },
     approvals,
   }),

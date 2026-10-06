@@ -1,7 +1,7 @@
-diff --git a/dist/chunks/cac.fSuRXrAx.js b/dist/chunks/cac.fSuRXrAx.js
-index 7b254fba15c5a1f7a0716aa22d943918dace605c..79971c50b0003a7f147264964471836c58e2649f 100644
---- a/dist/chunks/cac.fSuRXrAx.js
-+++ b/dist/chunks/cac.fSuRXrAx.js
+diff --git a/dist/chunks/cac.BLbEtnDd.js b/dist/chunks/cac.BLbEtnDd.js
+index 74a2521ae03d43ca92a3f8626fac1da392bc21d1..4589ee5d42fb361569b431d2d271b7a43f654d87 100644
+--- a/dist/chunks/cac.BLbEtnDd.js
++++ b/dist/chunks/cac.BLbEtnDd.js
 @@ -2318,7 +2318,12 @@ function parseCLI(argv, config = {}) {
  	if (arrayArgs[0] !== "vitest") throw new Error(`Expected "vitest" as the first argument, received "${arrayArgs[0]}"`);
  	arrayArgs[0] = "/index.js";
@@ -16,10 +16,10 @@ index 7b254fba15c5a1f7a0716aa22d943918dace605c..79971c50b0003a7f147264964471836c
  	if (arrayArgs[2] === "watch" || arrayArgs[2] === "dev") options.watch = true;
  	if (arrayArgs[2] === "run" && !options.watch) options.run = true;
  	if (arrayArgs[2] === "related") {
-diff --git a/dist/chunks/index.D4dXTzh9.js b/dist/chunks/index.D4dXTzh9.js
-index 7f8ab40e591a03cffbb914d5bcd8f06702ae4619..70d5d27486c4c6a5561d5b6c7c39548cf9fcd1e5 100644
---- a/dist/chunks/index.D4dXTzh9.js
-+++ b/dist/chunks/index.D4dXTzh9.js
+diff --git a/dist/chunks/index.hTNFpC24.js b/dist/chunks/index.hTNFpC24.js
+index 870b7240758fe81a2a8a84c7d81569245faef923..58125c44c448c6e01554de6e27ca56375de2fcd8 100644
+--- a/dist/chunks/index.hTNFpC24.js
++++ b/dist/chunks/index.hTNFpC24.js
 @@ -16,6 +16,7 @@ import { Console } from 'node:console';
  class BareModuleMocker {
  	options;
@@ -84,7 +84,7 @@ index 7f8ab40e591a03cffbb914d5bcd8f06702ae4619..70d5d27486c4c6a5561d5b6c7c39548c
  			}
  		}
  	}
-@@ -753,7 +762,7 @@ function startVitestModuleRunner(options) {
+@@ -754,7 +763,7 @@ function startVitestModuleRunner(options) {
  				const rawId = unwrapId(id);
  				resolvingModules.add(rawId);
  				try {
@@ -93,10 +93,10 @@ index 7f8ab40e591a03cffbb914d5bcd8f06702ae4619..70d5d27486c4c6a5561d5b6c7c39548c
  					if (!isImportActual) {
  						const resolvedMock = moduleRunner.mocker.getDependencyMockByUrl(id);
  						if (resolvedMock?.type === "manual" || resolvedMock?.type === "redirect") return {
-diff --git a/dist/chunks/index.DzobfTyw.js b/dist/chunks/index.DzobfTyw.js
-index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b4d8d955e 100644
---- a/dist/chunks/index.DzobfTyw.js
-+++ b/dist/chunks/index.DzobfTyw.js
+diff --git a/dist/chunks/index.C-uw7tH9.js b/dist/chunks/index.C-uw7tH9.js
+index cdf7f640a05be5e7fd0b3b1b8905cafc1672fdec..d7e6f6ab31bc949c02f1e35a6e1e61d3edc06a93 100644
+--- a/dist/chunks/index.C-uw7tH9.js
++++ b/dist/chunks/index.C-uw7tH9.js
 @@ -6367,7 +6367,9 @@ class ModuleFetcher {
  		if ("code" in result) trace.setAttribute("vitest.fetched_module.code_length", result.code.length);
  	}
@@ -601,7 +601,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		// a shared entry can create the container's server on first use,
  		// but the server still belongs to the declaring config
  		project._sharedViteServer = !!entry.sharedServer;
-@@ -20622,6 +20690,7 @@ class Vitest {
+@@ -20624,6 +20692,7 @@ class Vitest {
  		// populate will merge all configs into every project,
  		// we don't want that when just listing tags
  		if (!resolved.listTags) populateProjectsTags(this.coreWorkspaceProject, this.projects);
@@ -609,7 +609,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		this.reporters = await createReporters(resolved.reporters, this);
  		// API setup (watch mode only). Must run after the reporters array is built
  		// above, since `setup()` appends the UI/API WebSocket reporter to it. For a
-@@ -20638,7 +20707,6 @@ class Vitest {
+@@ -20640,7 +20709,6 @@ class Vitest {
  				setup(this, browserServer);
  			}
  		}
@@ -617,7 +617,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		await Promise.all([...this._onSetServer.map((fn) => fn()), this._traces.waitInit()]);
  	}
  	/** @internal */
-@@ -20679,7 +20747,7 @@ class Vitest {
+@@ -20681,7 +20749,7 @@ class Vitest {
  		if (this.coverageProvider?.onFileTransform) this.clearAllCachePaths();
  	}
  	clearAllCachePaths() {
@@ -626,11 +626,11 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  			Object.values(vite.environments).forEach((environment) => this._fsCache.invalidateAllCachePaths(environment));
  		});
  	}
-diff --git a/dist/chunks/index.m3L2HgmY.js b/dist/chunks/index.m3L2HgmY.js
-index dadbf7ade257975994efc67f2cd2a6b48c46fc1a..bb1a15b797f8dde8ddeb5a4da51688bc94828d03 100644
---- a/dist/chunks/index.m3L2HgmY.js
-+++ b/dist/chunks/index.m3L2HgmY.js
-@@ -4964,12 +4964,12 @@ function requireFakeTimersSrc () {
+diff --git a/dist/chunks/index.DGdajAO2.js b/dist/chunks/index.DGdajAO2.js
+index e274fdf8f8eaff053e316f4db64349ee51024968..3075a728fb4672b2cef5135a90dd73d1704b9344 100644
+--- a/dist/chunks/index.DGdajAO2.js
++++ b/dist/chunks/index.DGdajAO2.js
+@@ -4975,12 +4975,12 @@ function requireFakeTimersSrc () {
  	                    return this.refed;
  	                },
  	                refresh: function () {
@@ -644,10 +644,10 @@ index dadbf7ade257975994efc67f2cd2a6b48c46fc1a..bb1a15b797f8dde8ddeb5a4da51688bc
  	                    timer.order = uniqueTimerOrder++;
  	                    setTimer(clock, timer);
  	                    clock.timerHeap.push(timer);
-diff --git a/dist/chunks/init-forks.DgHqDQHC.js b/dist/chunks/init-forks.DgHqDQHC.js
-index b94d451557434b23c38737e23163ffed35d14257..cfe76caf7dd29928d737cb5bd17ce9f399086b65 100644
---- a/dist/chunks/init-forks.DgHqDQHC.js
-+++ b/dist/chunks/init-forks.DgHqDQHC.js
+diff --git a/dist/chunks/init-forks.CdGu3HUy.js b/dist/chunks/init-forks.CdGu3HUy.js
+index f88bec3a07889bd852e82375387d2ca15eb18795..cd7eafd7f12c9b212f9b1332e9c03983040405cd 100644
+--- a/dist/chunks/init-forks.CdGu3HUy.js
++++ b/dist/chunks/init-forks.CdGu3HUy.js
 @@ -13,7 +13,12 @@ processOn("error", onError);
  function workerInit(options) {
  	const { runTests } = options;
@@ -662,10 +662,10 @@ index b94d451557434b23c38737e23163ffed35d14257..cfe76caf7dd29928d737cb5bd17ce9f3
  		on: (cb) => processOn("message", cb),
  		off: (cb) => processOff("message", cb),
  		teardown: () => {
-diff --git a/dist/chunks/plugin.d.CN87HSxv.d.ts b/dist/chunks/plugin.d.CN87HSxv.d.ts
-index b31a948b64185b00819abf6820db864d95008082..8ea87c4e7588503a03b2d8f103ce8d26102ad4cd 100644
---- a/dist/chunks/plugin.d.CN87HSxv.d.ts
-+++ b/dist/chunks/plugin.d.CN87HSxv.d.ts
+diff --git a/dist/chunks/plugin.d.My_z-jmU.d.ts b/dist/chunks/plugin.d.My_z-jmU.d.ts
+index 1ab59e3b3bc637f04fa987c968dabd51ae46e647..fa3533734d7c764c88beb0d25338ba4977a6bb51 100644
+--- a/dist/chunks/plugin.d.My_z-jmU.d.ts
++++ b/dist/chunks/plugin.d.My_z-jmU.d.ts
 @@ -1032,13 +1032,14 @@ declare class TestProject {
  	config: ResolvedConfig;
  	viteConfig: ResolvedConfig$1;
@@ -700,7 +700,7 @@ index b31a948b64185b00819abf6820db864d95008082..8ea87c4e7588503a03b2d8f103ce8d26
  	error?: unknown;
  } | {
  	type: "testfileFinished";
-@@ -4432,6 +4437,7 @@ interface ResolvedConfig extends Omit<Required<UserConfig>, "project" | "config"
+@@ -4434,6 +4439,7 @@ interface ResolvedConfig extends Omit<Required<UserConfig>, "project" | "config"
  interface ResolvedProjectEntry {
  	viteConfig: ResolvedConfig$1;
  	projectConfig: ResolvedConfig;
@@ -708,7 +708,7 @@ index b31a948b64185b00819abf6820db864d95008082..8ea87c4e7588503a03b2d8f103ce8d26
  	/**
  	* When set, this entry exists only so browser-instance siblings can attach
  	* to a parent that owns the Vite server and (later) the browser provider.
-@@ -4489,6 +4495,16 @@ interface UserWorkspaceConfig extends UserConfig$1 {
+@@ -4491,6 +4497,16 @@ interface UserWorkspaceConfig extends UserConfig$1 {
  type UserProjectConfigFn = (env: ConfigEnv) => UserWorkspaceConfig | Promise<UserWorkspaceConfig>;
  type UserProjectConfigExport = UserWorkspaceConfig | Promise<UserWorkspaceConfig> | UserProjectConfigFn;
  type TestProjectInlineConfiguration = (UserWorkspaceConfig & {
@@ -750,7 +750,7 @@ index d397cb801d96ed4387adec3f8ef09123ddc636fe..f103cbe65ad64dceddb733bdd2e2a034
  }
  // throttle based on summary reporter's DURATION_UPDATE_INTERVAL_MS
 diff --git a/dist/node.d.ts b/dist/node.d.ts
-index be99c57c695ce0524369adc790d76cefd6d843bc..4d434dab726c6279051c23e84a22abe2716f1add 100644
+index f4e7d978b8a1f891655fe745441e6ffac5e94cac..5b23e9805687204eafa0276a119bd9ea1a64b111 100644
 --- a/dist/node.d.ts
 +++ b/dist/node.d.ts
 @@ -425,6 +425,7 @@ declare class ForksPoolWorker implements PoolWorker {

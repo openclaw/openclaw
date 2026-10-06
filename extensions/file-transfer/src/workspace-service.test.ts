@@ -154,7 +154,7 @@ beforeEach(async () => {
       params: request.params as Record<string, unknown>,
       pluginConfig,
     });
-    invokeNode.mockImplementation(async ({ params } = {}) => {
+    invokeNode.mockImplementation(async ({ params }: Parameters<typeof invokeNode>[0] = {}) => {
       switch (request.command) {
         case "file.fetch":
           return {

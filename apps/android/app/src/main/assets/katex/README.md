@@ -1,11 +1,11 @@
 # KaTeX Android assets
 
-- Version: KaTeX 0.18.5 (`v0.18.5`, released 2026-08-31)
-- Source: https://github.com/KaTeX/KaTeX/releases/tag/v0.18.5
-- Release archive: https://github.com/KaTeX/KaTeX/releases/download/v0.18.5/katex.tar.gz
-- Published and verified archive SHA-256: `a4122a3f8879fd2b9db5de6a8f19113b2287ab305ee20ed9ca60bd9caf8ae369`
+- Version: KaTeX 0.18.9 (`v0.18.9`, released 2026-09-23)
+- Source: https://github.com/KaTeX/KaTeX/releases/tag/v0.18.9
+- Package archive: https://registry.npmjs.org/katex/-/katex-0.18.9.tgz
+- Archive SHA-256: `78174318fa53363e4321ac3c10b39d3598aaa73a92dc75362eb08b16f6705782` (verified against the npm registry SHA-512 integrity before extraction)
 
-Only the minified runtime, its stylesheet, and the WOFF2 fonts referenced by that stylesheet are copied from the release archive. `index.html` and `renderer.js` are OpenClaw's local rendering shell. No auto-render extension, mhchem extension, source map, WOFF, or TTF file is bundled.
+Only the minified runtime, its stylesheet, and the WOFF2 fonts referenced by that stylesheet are copied from the official npm package archive. `index.html` and `renderer.js` are OpenClaw's local rendering shell. No auto-render extension, mhchem extension, source map, WOFF, or TTF file is bundled.
 
 ## SHA-256
 
@@ -31,7 +31,7 @@ d04c54219f9eaec6d4d4fd42dfb28785975a4794d6b2fc71e566b9cd6db842dd  fonts/KaTeX_Si
 a4af7d414440a1c1790825cfb700cf9cf43b0f2c4b04f0ebc523011ad9853ec0  fonts/KaTeX_Size4-Regular.woff2
 71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b  fonts/KaTeX_Typewriter-Regular.woff2
 e73bea6d899a3f89595d37f5713cb5ddabc4084fc428a5931782628ee14799e2  index.html
-5bc44ab327592b75fcf2d412a1b396ebf20203bfe826a1966fb8ab03f8b08bb4  katex.min.css
-30c9f7c07bf54d341ffd8f16dc6632766f12b16d0a064e2a08f2d6b1744396a6  katex.min.js
+b9ce0e8ce93f0c18c4986fe1f1c3c269d921b56a69e6c97f83a507916b38aab5  katex.min.css
+155f6c2d673c5912e3b48f45d8830eaad18ae1953915939ceb648ea8b9c3e7e2  katex.min.js
 ab11a1f6ed422e1adb15d39a8bb390717b23e1062d3ad75e7eff3e4d1a81dec6  renderer.js
 ```

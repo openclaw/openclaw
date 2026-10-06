@@ -23,19 +23,19 @@ import {
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
+type SessionReceiptDeletionOptions = {
+  assertCurrent?: () => void;
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
+  retainedSessionKeys?: ReadonlySet<string>;
+};
+
 /** Capture historical receipts while the session still owns its logical keys. */
 export async function preparePersonalGitHubSessionReceiptDeletion(params: {
   agentId: string;
   generations: readonly GitHubSessionReceiptGeneration[];
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
-}): Promise<
-  (options?: {
-    assertCurrent?: () => void;
-    sessionEntryCurrent?: SessionEntryCurrentCheck;
-    retainedSessionKeys?: ReadonlySet<string>;
-  }) => Promise<void>
-> {
+}): Promise<(options?: SessionReceiptDeletionOptions) => Promise<void>> {
   params.assertCurrent?.();
   const context = captureOpenClawStateWorkerContext({ env: params.env });
   const generations = params.generations.map((generation) => ({ ...generation }));
@@ -50,7 +50,11 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
     { assertCurrent: params.assertCurrent, existingOnly: true },
   )) ?? { personal: [], repository: [] };
   params.assertCurrent?.();
-  return async ({ assertCurrent, sessionEntryCurrent, retainedSessionKeys } = {}) => {
+  return async ({
+    assertCurrent,
+    sessionEntryCurrent,
+    retainedSessionKeys,
+  }: SessionReceiptDeletionOptions = {}) => {
     const selectedKeys = new Set(input.sessionKeys.filter((key) => !retainedSessionKeys?.has(key)));
     if (selectedKeys.size === 0) {
       return;

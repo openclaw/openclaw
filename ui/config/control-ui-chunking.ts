@@ -95,9 +95,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     moduleIdIncludesPackage(id, "lit-html") ||
     moduleIdIncludesPackage(id, "@lit/reactive-element")
   ) {
-    // Cache and async content directives have only deferred consumers. Keep
-    // their implementation and helpers with those consumers, outside startup.
-    return /\/directives\/(?:cache|until|private-async-helpers)\.js$/u.test(normalized)
+    // Cached, async, and sanitized HTML rendering have only deferred consumers.
+    // Keep their directives and helpers with those consumers, outside startup.
+    return /\/directives\/(?:cache|until|private-async-helpers|unsafe-html)\.js$/u.test(normalized)
       ? undefined
       : "lit-runtime";
   }

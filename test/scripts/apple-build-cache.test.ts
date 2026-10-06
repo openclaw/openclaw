@@ -129,15 +129,19 @@ fs.appendFileSync("builds", "built\\n");`,
     mkdirSync(bin);
     mkdirSync(path.join(crate, "src"), { recursive: true });
     copyFileSync("apps/shared/OpenClawWatchRTC/build.sh", path.join(crate, "build.sh"));
-    for (const file of ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "src/lib.rs"]) {
+    for (const file of ["Cargo.toml", "Cargo.lock", "src/lib.rs"]) {
       writeFileSync(path.join(crate, file), "fixture");
     }
+    writeFileSync(
+      path.join(crate, "rust-toolchain.toml"),
+      '[toolchain]\nchannel = "nightly-fixture"\n',
+    );
     const tool = (name: string, body: string) => {
       const file = path.join(bin, name);
       writeFileSync(file, "#!/bin/sh\nset -eu\n" + body);
       chmodSync(file, 0o755);
     };
-    tool("rustup", "echo fixture-rustc\n");
+    tool("rustup", '[ "$1" = run ]\n[ "$2" = nightly-fixture ]\necho fixture-rustc\n');
     tool("xcodebuild", "echo fixture-xcode\n");
     tool(
       "xcrun",

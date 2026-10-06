@@ -157,7 +157,7 @@ sendReceipt(String(index), "completed");
         expect(JSON.parse(readFileSync(path.join(root, `${index}.started`), "utf8"))).toEqual([
           "dlx",
           "--package",
-          "knip@6.32.2",
+          "knip@6.38.0",
           "knip",
           ...scanArgs,
           "--no-progress",

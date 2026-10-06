@@ -1,6 +1,6 @@
 str0m and native realtime audio dependency notices
 
-The component index identifies the versions pinned by Cargo.lock. Build-time dependencies are included conservatively. Identical license texts are reproduced once and referenced by their identifiers below. The Rust standard library notices correspond to nightly-2026-09-05.
+The component index identifies the versions pinned by Cargo.lock. Build-time dependencies are included conservatively. Identical license texts are reproduced once and referenced by their identifiers below. The Rust standard library notices correspond to nightly-2026-09-28.
 
 COMPONENT INDEX
 
@@ -90,7 +90,7 @@ Source: https://github.com/tokio-rs/bytes
 Declared license: MIT
 LICENSE: L016
 
-cc 1.4.7
+cc 1.5.1
 Source: https://github.com/rust-lang/cc-rs
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
@@ -184,6 +184,12 @@ Source: https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25
 Declared license: BSD-3-Clause
 LICENSE: L031
 
+curve25519-dalek-derive 0.1.1
+Source: https://github.com/dalek-cryptography/curve25519-dalek
+Declared license: MIT/Apache-2.0
+LICENSE-APACHE: L005
+LICENSE-MIT: L039
+
 data-encoding 2.11.1
 Source: https://github.com/ia0/data-encoding
 Declared license: MIT
@@ -260,7 +266,15 @@ Declared license: MIT/Apache-2.0
 LICENSE-APACHE: L005
 LICENSE-MIT: L044
 
-find-msvc-tools 0.1.13
+fiat-crypto 0.2.9
+Source: https://github.com/mit-plv/fiat-crypto
+Declared license: MIT OR Apache-2.0 OR BSD-1-Clause
+COPYRIGHT: L150
+LICENSE-APACHE: L151
+LICENSE-BSD-1: L152
+LICENSE-MIT: L153
+
+find-msvc-tools 0.1.14
 Source: https://github.com/rust-lang/cc-rs
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
@@ -330,7 +344,7 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L001
 LICENSE-MIT: L053
 
-is 0.11.0
+is 0.11.1
 Source: https://github.com/algesten/str0m
 Declared license: MIT OR Apache-2.0
 str0m-workspace-LICENSE-MIT.txt: L038
@@ -502,6 +516,16 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L055
 LICENSE-MIT: L039
 
+r-efi 5.3.0
+Source: https://github.com/r-efi/r-efi
+Declared license: MIT OR Apache-2.0 OR LGPL-2.1-or-later
+AUTHORS: L131
+
+r-efi 6.0.0
+Source: https://github.com/r-efi/r-efi
+Declared license: MIT OR Apache-2.0 OR LGPL-2.1-or-later
+AUTHORS: L132
+
 rand 0.9.5
 Source: https://github.com/rust-random/rand
 Declared license: MIT OR Apache-2.0
@@ -636,7 +660,7 @@ Declared license: Apache-2.0 OR MIT
 LICENSE-APACHE: L001
 LICENSE-MIT: L089
 
-str0m 0.23.1
+str0m 0.24.0
 Source: https://github.com/algesten/str0m
 Declared license: MIT OR Apache-2.0
 LICENSE-MIT.txt: L038
@@ -673,13 +697,13 @@ Source: https://github.com/mystor/synstructure
 Declared license: MIT
 LICENSE: L091
 
-thiserror 2.0.20
+thiserror 2.0.21
 Source: https://github.com/dtolnay/thiserror
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L055
 LICENSE-MIT: L039
 
-thiserror-impl 2.0.20
+thiserror-impl 2.0.21
 Source: https://github.com/dtolnay/thiserror
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L055
@@ -749,6 +773,27 @@ Declared license: MIT/Apache-2.0
 LICENSE-APACHE: L005
 LICENSE-MIT: L100
 
+wasi 0.11.1+wasi-snapshot-preview1
+Source: https://github.com/bytecodealliance/wasi
+Declared license: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+LICENSE-APACHE: L005
+LICENSE-Apache-2.0_WITH_LLVM-exception: L126
+LICENSE-MIT: L039
+
+wasip2 1.0.4+wasi-0.2.12
+Source: https://github.com/bytecodealliance/wasi-rs
+Declared license: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+LICENSE-APACHE: L005
+LICENSE-Apache-2.0_WITH_LLVM-exception: L126
+LICENSE-MIT: L039
+
+wit-bindgen 0.57.1
+Source: https://github.com/bytecodealliance/wit-bindgen
+Declared license: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+LICENSE-APACHE: L005
+LICENSE-Apache-2.0_WITH_LLVM-exception: L126
+LICENSE-MIT: L039
+
 x25519-dalek 2.0.1
 Source: https://github.com/dalek-cryptography/curve25519-dalek/tree/main/x25519-dalek
 Declared license: BSD-3-Clause
@@ -772,7 +817,14 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
 LICENSE-MIT: L102
 
-zerocopy 0.8.56
+zerocopy 0.8.59
+Source: https://github.com/google/zerocopy
+Declared license: BSD-2-Clause OR Apache-2.0 OR MIT
+LICENSE-APACHE: L103
+LICENSE-BSD: L104
+LICENSE-MIT: L105
+
+zerocopy-derive 0.8.59
 Source: https://github.com/google/zerocopy
 Declared license: BSD-2-Clause OR Apache-2.0 OR MIT
 LICENSE-APACHE: L103
@@ -879,8 +931,7 @@ Copyright: The Rust Project Developers (see https://thanks.rust-lang.org)
 
 Out-of-tree dependencies
 
-The following licenses cover the out-of-tree crates that were used in the
-Rust Standard Library in this release:
+The following licenses cover the out-of-tree crates that were used in the Rust Standard Library in this release:
 
 📦 aho-corasick-1.1.4
 
@@ -1043,6 +1094,24 @@ License text: L005
 LICENSE-MIT
 
 License text: L057
+
+📦 bstr-1.13.1
+
+URL: https://crates.io/crates/bstr/1.13.1
+
+Authors: Andrew Gallant <jamslam@gmail.com>
+
+License: MIT OR Apache-2.0
+
+Notices:
+
+LICENSE-APACHE
+
+License text: L005
+
+LICENSE-MIT
+
+License text: L154
 
 📦 cc-1.2.59
 
@@ -1283,24 +1352,6 @@ Notices:
 LICENSE
 
 License text: L112
-
-📦 diff-0.1.13
-
-URL: https://crates.io/crates/diff/0.1.13
-
-Authors: Utkarsh Kukreti <utkarshkukreti@gmail.com>
-
-License: MIT OR Apache-2.0
-
-Notices:
-
-LICENSE-APACHE
-
-License text: L109
-
-LICENSE-MIT
-
-License text: L113
 
 📦 dlmalloc-0.2.14
 
@@ -1570,7 +1621,7 @@ License text: L047
 
 LICENSE-MIT
 
-License text: L118
+License text: L149
 
 📦 gimli-0.34.0
 
@@ -2618,20 +2669,6 @@ LICENSE-MIT
 
 License text: L039
 
-📦 serde-xml-rs-0.8.2
-
-URL: https://crates.io/crates/serde-xml-rs/0.8.2
-
-Authors: Ingvar Stepanyan <me@rreverser.com>, William Bartlett <bartlettstarman@gmail.com>
-
-License: MIT
-
-Notices:
-
-LICENSE
-
-License text: L139
-
 📦 serde_core-1.0.228
 
 URL: https://crates.io/crates/serde_core/1.0.228
@@ -2776,6 +2813,20 @@ LICENSE-MIT
 
 License text: L086
 
+📦 similar-3.2.0
+
+URL: https://crates.io/crates/similar/3.2.0
+
+Authors: Armin Ronacher <armin.ronacher@active-4.com>, Pierre-Étienne Meunier <pe@pijul.org>, Brandon Williams <bwilliams.eng@gmail.com>
+
+License: Apache-2.0
+
+Notices:
+
+LICENSE
+
+License text: L005
+
 📦 strsim-0.11.1
 
 URL: https://crates.io/crates/strsim/0.11.1
@@ -2857,42 +2908,6 @@ License text: L059
 UNLICENSE
 
 License text: L108
-
-📦 thiserror-2.0.18
-
-URL: https://crates.io/crates/thiserror/2.0.18
-
-Authors: David Tolnay <dtolnay@gmail.com>
-
-License: MIT OR Apache-2.0
-
-Notices:
-
-LICENSE-APACHE
-
-License text: L055
-
-LICENSE-MIT
-
-License text: L039
-
-📦 thiserror-impl-2.0.18
-
-URL: https://crates.io/crates/thiserror-impl/2.0.18
-
-Authors: David Tolnay <dtolnay@gmail.com>
-
-License: MIT OR Apache-2.0
-
-Notices:
-
-LICENSE-APACHE
-
-License text: L055
-
-LICENSE-MIT
-
-License text: L039
 
 📦 unicode-ident-1.0.24
 
@@ -3016,9 +3031,9 @@ Authors:
 
 License: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 
-📦 wasip2-1.0.4+wasi-0.2.12
+📦 wasip2-2.0.1+wasi-0.2.12
 
-URL: https://crates.io/crates/wasip2/1.0.4+wasi-0.2.12
+URL: https://crates.io/crates/wasip2/2.0.1+wasi-0.2.12
 
 Authors:
 
@@ -3046,9 +3061,9 @@ Authors:
 
 License: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 
-📦 wasip3-0.7.1+wasi-0.3.0
+📦 wasip3-0.9.0+wasi-0.3.0
 
-URL: https://crates.io/crates/wasip3/0.7.1+wasi-0.3.0
+URL: https://crates.io/crates/wasip3/0.9.0+wasi-0.3.0
 
 Authors:
 
@@ -3184,9 +3199,9 @@ LICENSE-MIT
 
 License text: L039
 
-📦 wit-bindgen-0.57.1
+📦 wit-bindgen-0.62.0
 
-URL: https://crates.io/crates/wit-bindgen/0.57.1
+URL: https://crates.io/crates/wit-bindgen/0.62.0
 
 Authors: Alex Crichton <alex@alexcrichton.com>
 
@@ -3287,20 +3302,6 @@ URL: https://crates.io/crates/wit-parser/0.244.0
 Authors: Alex Crichton <alex@alexcrichton.com>
 
 License: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
-
-📦 xml-1.2.1
-
-URL: https://crates.io/crates/xml/1.2.1
-
-Authors: Vladimir Matveev <vmatveev@citrine.cc>, Kornel (https://github.com/kornelski)
-
-License: MIT
-
-Notices:
-
-LICENSE
-
-License text: L147
 
 📦 yaml-rust-0.4.5
 
@@ -10549,30 +10550,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-L113
-========================================================================
-MIT License
-
-Copyright (c) 2015 Utkarsh Kukreti
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
 L114
 ========================================================================
 Copyright (c) 2015
@@ -10678,35 +10655,6 @@ the following restrictions:
     misrepresented as being the original software.
 
 3. This notice may not be removed or altered from any source distribution.
-
-L118
-========================================================================
-Copyright (c) 2018-2026 The rust-random Project Developers
-Copyright (c) 2014 The Rust Project Developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
 
 L119
 ========================================================================
@@ -11744,30 +11692,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-L139
-========================================================================
-MIT License
-
-Copyright (c) 2017 Ingvar Stepanyan
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
 L140
 ========================================================================
 The MIT License (MIT)
@@ -12125,30 +12049,6 @@ MIT License
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE
 
-L147
-========================================================================
-The MIT License (MIT)
-
-Copyright (c) 2014 Vladimir Matveev
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
 L148
 ========================================================================
 The MIT License (MIT)
@@ -12201,3 +12101,105 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+L150
+========================================================================
+SPDX-License-Identifier: MIT OR Apache-2.0 OR BSD-1-Clause
+
+Fiat Cryptography is licensed under the MIT License <LICENSE-MIT> or
+<http://opensource.org/licenses/MIT>, the Apache License, Version 2.0
+<LICENSE-APACHE> or <http://www.apache.org/licenses/LICENSE-2.0>, or
+the BSD 1-Clause License <LICENSE-BSD-1> or
+<https://spdx.org/licenses/BSD-1-Clause.html>, at your option.
+
+L151
+========================================================================
+The Apache License, Version 2.0 (Apache-2.0)
+
+Copyright 2015-2020 the fiat-crypto authors (see the AUTHORS file)
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+L152
+========================================================================
+The BSD 1-Clause License (BSD-1-Clause)
+
+Copyright (c) 2015-2020 the fiat-crypto authors (see the AUTHORS file)
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+
+THIS SOFTWARE IS PROVIDED BY the fiat-crypto authors "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL Berkeley Software Design,
+Inc. BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+L153
+========================================================================
+The MIT License (MIT)
+
+Copyright (c) 2015-2020 the fiat-crypto authors (see the AUTHORS file).
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+L154
+========================================================================
+The MIT License (MIT)
+
+Copyright (c) 2018-2019 Andrew Gallant
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.

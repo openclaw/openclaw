@@ -40,16 +40,16 @@ overrides:
   "chevrotain>lodash-es": 4.18.1
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
-  "@agentclientprotocol/codex-acp@1.12.0>@openai/codex": 0.160.0
+  "@agentclientprotocol/codex-acp@1.13.1>@openai/codex": 0.160.0
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.13
   "@codemirror/view@6.43.13>@codemirror/state": 6.7.6
   "@anthropic-ai/sdk": 0.128.0
-  "@anthropic-ai/vertex-sdk@0.19.10>google-auth-library": 11.1.0
+  "@anthropic-ai/vertex-sdk@0.19.11>google-auth-library": 11.1.0
   "@opentelemetry/core": 2.11.0
   "@opentelemetry/propagator-jaeger": 2.11.0
-  "@aws-sdk/core": 3.978.0
-  "@aws-sdk/credential-provider-node": 3.972.83
-  "@aws-sdk/xml-builder": 3.972.40
+  "@aws-sdk/core": 3.978.1
+  "@aws-sdk/credential-provider-node": 3.972.84
+  "@aws-sdk/xml-builder": 3.972.41
   "@hono/node-server": 2.1.1
   axios: 1.20.0
   fast-uri: 4.2.1
@@ -66,10 +66,7 @@ overrides:
   form-data: 4.0.6
   "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"
   ip-address: 10.7.2
-  "mailauth@5.0.3>nodemailer": 10.0.10
-  "mailauth@5.0.3>joi": 18.2.9
-  # Mailauth pins vulnerable Undici; remove when its direct dependency is fixed.
-  "mailauth@5.0.3>undici": 8.10.2
+  "mailauth@7.1.0>nodemailer": 10.0.11
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   proxy-addr: 2.0.8
@@ -122,8 +119,8 @@ patchedDependencies:
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch
   "matrix-js-sdk@42.4.0": patches/matrix-js-sdk@42.4.0.patch
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch
-  vitest@5.0.1: patches/vitest@5.0.1.patch
-  "@awesome.me/webawesome@3.13.0": patches/@awesome.me__webawesome@3.13.0.patch
-  "@openclaw/proxyline@0.3.12": patches/@openclaw__proxyline@0.3.12.patch
+  vitest@5.0.2: patches/vitest@5.0.2.patch
+  "@awesome.me/webawesome@3.14.0": patches/@awesome.me__webawesome@3.14.0.patch
+  "@openclaw/proxyline@0.3.13": patches/@openclaw__proxyline@0.3.13.patch
   ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch
   chrome-devtools-mcp@1.10.1: patches/chrome-devtools-mcp@1.10.1.patch

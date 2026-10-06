@@ -2,7 +2,7 @@
 
 Keep existing insertion anchors when extending these patches: pnpm 12 can apply a zero-context, zero-length insertion one line early. After regeneration and installation, verify installed files against the patch's target blob hashes before testing.
 
-`@openclaw/proxyline@0.3.12` has an approved public export of its existing
+`@openclaw/proxyline@0.3.13` has an approved public export of its existing
 `ProxylineNodeProxyAgent` class. The shared Node adapter uses that dual-protocol
 agent to retain per-request `NO_PROXY` routing even when every configured proxy
 route is invalid. The patch changes only the package entrypoint and regenerated
@@ -14,7 +14,7 @@ Remove this patch, its registration, and both bundle entries when an upstream re
 exports the standalone agent and passes `extensions/whatsapp/src/session.media-upload.test.ts`
 and `src/infra/net/node-proxy-agent.test.ts` without the patch.
 
-`@awesome.me/webawesome@3.13.0` retains its approved dropdown, submenu, select, tooltip, and animation lifecycle repairs. The dropdown initializes focus after its popup becomes usable, before joining animation cleanup or completion, and preserves a newer composed focus target during popup rendering. Freshly mounted open menus also join the popup's initial anchor resolution before focusing; already anchored menus retain their existing visibility and native occlusion across reopen. Initial-focus handlers can close or disconnect the menu; the existing transition owner fences those reentrant paths before starting an animation. Opening completion never resets a newer item, submenu, or outside focus. Both published distributions carry the same owner. The tooltip trigger handler uses upstream's `containsComposedNode` helper to retain the 3.13 fix for hover across Shadow DOM slots; the port also preserves upstream overflow-tag size and pill styling.
+`@awesome.me/webawesome@3.14.0` retains its approved dropdown, submenu, select, tooltip, and animation lifecycle repairs. The dropdown initializes focus after its popup becomes usable, before joining animation cleanup or completion, and preserves a newer composed focus target during popup rendering. Freshly mounted open menus also join the popup's initial anchor resolution before focusing; already anchored menus retain their existing visibility and native occlusion across reopen. Initial-focus handlers can close or disconnect the menu; the existing transition owner fences those reentrant paths before starting an animation. Opening completion never resets a newer item, submenu, or outside focus. Both published distributions carry the same owner. The tooltip trigger handler uses upstream's `containsComposedNode` helper to retain the 3.13 fix for hover across Shadow DOM slots; the port also preserves upstream overflow-tag size and pill styling.
 
 Remove the dropdown focus hunk when an upstream release passes `ui/src/e2e/chat-attachment-focus.e2e.test.ts`, the unchanged platform attachment menu suite, and both `web-awesome-dropdown*.browser.test.ts` lifecycle suites without a consumer animation wait. These tests use real CSS animation boundaries, native keyboard input, and the actual browser filechooser; mobile identities are emulated, not native OS-picker certification. Retain the other patch owners until their respective regressions pass upstream.
 
@@ -41,30 +41,30 @@ Remove the noVNC patch, its registration, and its exact-version guard exception 
 
 Remove the Matrix patch, its registration, and its exact-version guard exception when an upstream release passes `node scripts/run-vitest.mjs extensions/matrix/src/matrix/client/file-sync-store.sdk.test.ts` and the full Matrix QA catalog, including the original DM SAS-to-QR sequence. The regression exercises the real SQLite sync store, SDK cache hydration, and crypto event wiring; it observes crypto input rather than substituting for native verification proof.
 
-`vitest@5.0.1` has one approved exact-version pnpm patch. Vitest 5 bundles the
+`vitest@5.0.2` has one approved exact-version pnpm patch. Vitest 5 bundles the
 runner, and `@vitest/runner@5.0.0` is not published, so no standalone runner
 dependency or patch remains. The published package integrity is
-`sha512-iA95lQbKEkvrtTkdAgnWbXfbipWiiWe/hDl2P5tMi6WFwD76G0NxXAGp/M9EOcYupeGJRr6wppMc7CoA41TQjg==`.
+`sha512-7MQrx9pDv5aHiUcovIb/70Ys3tgtkUVgCtledvKdCmEO+/1Dicq5ZqoSxOW034m03oqC+oHOKui2dM6qtMLoJg==`.
 The patch SHA-256 is
-`90ba2969491e095cc2e92a4d38256dfcf64f85078ec29e1762b9429a00b35901`
+`d3fc73d1081ee50a6e31ba56dd2305d91e51af6076d77800f81b32582b97ec4b`
 and it changes exactly these eight published files:
 
 | Target | Published SHA-256 | Patched SHA-256 |
 | --- | --- | --- |
-| `dist/chunks/cac.fSuRXrAx.js` | `0290aaa6677cb20fb472b7d101e66b879e982d3799e9eb69ae84652cb8ecacd4` | `36e72e47372bc2c77fdaa9725675644db84ce6f34f86ceb8422b2ac7f9c7ec39` |
-| `dist/chunks/index.D4dXTzh9.js` | `70e7ab020f7f03ae96797ad10b46549cd2edb61e4a4d975ba08d10fe41a0bb9e` | `e45d5d5babb300e099fb955b2af65aea5604db6019d9f0bc1b397a323466b063` |
-| `dist/chunks/index.DzobfTyw.js` | `26c9c3d31efea8bb6e5f6f495db89968ba820a26c0676341f3682ec5377d584d` | `a41a0c84d88ab4aaddf92eb7b11234fc4c72bae7386b63c91898e692e1a81a95` |
-| `dist/chunks/index.m3L2HgmY.js` | `f56631635acaf90deb3b99e037afd8a2431ef685781ae3aa1109bb33d1d02702` | `5c0b1653ddd88eff204dccc35289f66eca06ec43878a6ec73bfc601c3e66be71` |
-| `dist/chunks/init-forks.DgHqDQHC.js` | `7e424d9f059e2343698c78c082469198e05cc8b189484dbdd6b5236b21f9b443` | `2f0f61b0e41cbb3d44bfaff0ddb903c047b175c1e0494bd08f95cfd7b9b2848f` |
-| `dist/chunks/plugin.d.CN87HSxv.d.ts` | `a93d72194894d0eb54e7c43bd41167195dcf6a17800ce18fcee1716e1905dda5` | `2491673a5b9de8255f53dd7e573763d35776e1ff42e0096f98ba31b431fd55e8` |
+| `dist/chunks/cac.BLbEtnDd.js` | `5f5c23279439e06afe622b5701b5fbb9bc70827b32f509ee48c75f453715c957` | `70184edeba951b5114d6d00cf9b188bfea25f16d2257be13a122a89dca567d06` |
+| `dist/chunks/index.hTNFpC24.js` | `5b265cbdc6d5d1bed6f93c756802b4d7db938c286e71b3feb0807eb4cd76c581` | `7b3184b888647de5d628c9b58c7c566aadb32862efa056b728588751b32d84d9` |
+| `dist/chunks/index.C-uw7tH9.js` | `a0fd07e32370305250f173648b675304c4b3fa2740a7323eabfb6665241d0c67` | `e1675361d42d6547d511b09a4c123a0e4f2c07b9892e3a4851aef9233a8de686` |
+| `dist/chunks/index.DGdajAO2.js` | `7f3de50f59e9b8e2a71a3346d88a299ff651ffcb53cd3bdd341eaf063248bbd5` | `c29e7cadd49e2b94b960dc89c64e7ce5d5a6a6250c4e46cbbcd9818a6926dbaa` |
+| `dist/chunks/init-forks.CdGu3HUy.js` | `c07d1c86347c550b8e75113e216708a3f52397dde2fdb4d8f818dc7bd6c4af44` | `8c9e4717fc2296489db46c11b454fcab8eaea28ccea2ea625994eca9f1c29514` |
+| `dist/chunks/plugin.d.My_z-jmU.d.ts` | `edf216dd39859a6c30a2cde4cfd080d9d74d91def974b9e1e4abaab8ba155852` | `0f50c44b6ddf6379b98e4a5a9f4b5393071388d11c2ce1782c1747f49b11e27f` |
 | `dist/chunks/run.C5UmxDPh.js` | `890fef0254ad442f55902adc9a7d0e639bb9ba5a78ef4fc53a30f10f1aa9f77c` | `6412031b0068dbe300b7af1ba27056be77c914d067cee69b3dc396b7da8df8cd` |
-| `dist/node.d.ts` | `09b5ab06e7b242132974144474b24a0fddde568e0fb20d69215d156d78ac0d7f` | `7ffe96f8dd9ffcdf5f3d67e56c02f509a516072cd523c9dcef596ada77afd06f` |
+| `dist/node.d.ts` | `d4ada6722bc9fc0da4dc2ffe8d5396582647275f24bf501c3ecefe0fc28975f0` | `dfcc005d8c179a64a7754b37de5eac25d0f07eac92f07f8ff868004d0bca4cf1` |
 
-Vitest 5.0.1 writes replacement cache metadata upstream; the patch uses that
+Vitest 5.0.2 writes replacement cache metadata upstream; the patch uses that
 `writeMetadata` owner and retains the remaining generation and invalidation
 repairs. The patch owns these temporary invariants and removal gates:
 
-- **Mock resolution (`index.D4dXTzh9.js`):** module fetches join the mocker's
+- **Mock resolution (`index.hTNFpC24.js`):** module fetches join the mocker's
   serialized resolution before reading its registry, even after the pending-id
   queue is emptied by an in-flight pass. Resolution drains ids queued during a
   pass; failed callers retain their errors without poisoning later callers.
@@ -72,20 +72,20 @@ repairs. The patch owns these temporary invariants and removal gates:
   stock Vitest passes `test/scripts/vitest-mock-resolution.test.ts` and the
   original cold Gateway CI group containing
   `authenticated-request-dispatch.lifetime.test.ts`.
-- **CLI validation (`cac.fSuRXrAx.js`):** public `parseCLI` validates unknown
+- **CLI validation (`cac.BLbEtnDd.js`):** public `parseCLI` validates unknown
   options, required values, and required arguments without executing a command.
   Help/version and `allowUnknownOptions` retain native semantics. Remove this
   hunk when stock Vitest passes the native validation cases in
   `test/scripts/run-vitest-profile.test.ts` and
   `test/scripts/vitest-report-owner.test.ts`.
-- **Filesystem cache generations (`index.DzobfTyw.js`):** persistence remains
+- **Filesystem cache generations (`index.C-uw7tH9.js`):** persistence remains
   disabled until lockfile integrity completes; generation participates in cache
   keys; lock transitions rewrite metadata and reset retained roots, keys, and
   transform temporary markers; invalidation covers the root and selected
   projects. Remove these hunks when stock Vitest passes the four cache-generation
   and invalidation regressions in `test/vitest-performance-config.test.ts`.
-- **Graceful fork shutdown (`index.DzobfTyw.js`,
-  `init-forks.DgHqDQHC.js`, `plugin.d.CN87HSxv.d.ts`, `dist/node.d.ts`):**
+- **Graceful fork shutdown (`index.C-uw7tH9.js`,
+  `init-forks.CdGu3HUy.js`, `plugin.d.My_z-jmU.d.ts`, `dist/node.d.ts`):**
   built-in fork workers flush a `willExit` response, exit explicitly, and are
   joined before run completion. Deadline and abnormal-exit paths still fail and
   terminate the worker; custom transports remain parent-owned unless they opt
@@ -93,8 +93,8 @@ repairs. The patch owns these temporary invariants and removal gates:
   `test/scripts/vitest-fork-shutdown.test.ts`,
   `test/scripts/run-vitest-state-cleanup.test.ts`, and
   `test/scripts/run-vitest-profile.test.ts`.
-- **File-backed report projects (`index.DzobfTyw.js`,
-  `plugin.d.CN87HSxv.d.ts`):** a Vitest-owned
+- **File-backed report projects (`index.C-uw7tH9.js`,
+  `plugin.d.My_z-jmU.d.ts`):** a Vitest-owned
   `{ config, root?, namePrefix? }` descriptor loads its config exactly once,
   keeps the file-owned root when omitted, preserves the explicit root when
   supplied, and derives its final name after Vite hooks. A replayed prefix
@@ -109,7 +109,7 @@ repairs. The patch owns these temporary invariants and removal gates:
   throttle, so an early callback can rearm without losing the trailing update.
   Remove this hunk when stock Vitest passes
   `test/scripts/vitest-runner-task-updates.test.ts`.
-- **Fake timer heap order (`index.m3L2HgmY.js`):** refresh removes a timer from
+- **Fake timer heap order (`index.DGdajAO2.js`):** refresh removes a timer from
   the heap before mutating its ordering key, then reinserts it. Remove this hunk
   when stock Vitest passes `test/scripts/vitest-fake-timers.test.ts` and
   `extensions/telegram/src/probe.response-body-timeout.test.ts`.

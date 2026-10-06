@@ -107,7 +107,7 @@ describe("Android release shell wrapper arguments", () => {
         rbenv,
         "#!/usr/bin/env bash\n" +
           'if [[ "${1:-}" == "versions" && "${2:-}" == "--bare" ]]; then\n' +
-          '  printf "3.4.10\\n"\n' +
+          '  printf "4.0.7\\n"\n' +
           "  exit 0\n" +
           "fi\n" +
           'if [[ "${1:-}" == "which" && "${2:-}" == "fastlane" ]]; then\n' +

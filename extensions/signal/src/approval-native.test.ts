@@ -11,7 +11,10 @@ import {
 const fixture = createNativeApprovalTestFixture({
   channel: "signal",
   capability: signalApprovalCapability,
-  buildConfig: ({ channel, approvals } = {}) => ({
+  buildConfig: ({
+    channel,
+    approvals,
+  }: Parameters<Parameters<typeof createNativeApprovalTestFixture>[0]["buildConfig"]>[0] = {}) => ({
     channels: { signal: { enabled: true, ...channel } },
     approvals,
   }),

@@ -307,7 +307,14 @@ describe("openclaw-modal-dialog", () => {
     const onCancel = vi.fn();
     modal.addEventListener("modal-cancel", onCancel);
 
-    dialog.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    vi.spyOn(dialog, "getBoundingClientRect").mockReturnValue(new DOMRect(100, 100, 300, 200));
+    dialog.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, clientX: 200, clientY: 150 }),
+    );
+    expect(onCancel).not.toHaveBeenCalled();
+    dialog.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, clientX: 50, clientY: 50 }),
+    );
 
     expect(onCancel).toHaveBeenCalledTimes(1);
   });

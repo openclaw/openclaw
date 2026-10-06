@@ -77,8 +77,9 @@ import {
 } from "../terminal-interactivity.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
 import { getGatewayStartGuardErrors } from "./pre-bootstrap.js";
+import type { GatewayRunLoopStartOptions } from "./run-loop-startup.js";
 import { runGatewayLoop } from "./run-loop.js";
-import type { GatewayRunOpts } from "./run-options.js";
+import { toOptionString, type GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import {
   resolveGatewayStartupFailureExitCode,
@@ -109,16 +110,6 @@ const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "trusted-proxy",
 ];
 const GATEWAY_TAILSCALE_MODES: readonly GatewayTailscaleMode[] = ["off", "serve", "funnel"];
-
-const toOptionString = (value: unknown): string | undefined => {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return value.toString();
-  }
-  return undefined;
-};
 
 function extractGatewayMiskeys(parsed: unknown): {
   hasGatewayToken: boolean;
@@ -962,7 +953,10 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       beginBoot,
       completeBoot,
       onRestartStartupFailure: triageStartupFailure,
-      start: async ({ requestHotReloadRecovery, ...startupOptions } = {}) => {
+      start: async ({
+        requestHotReloadRecovery,
+        ...startupOptions
+      }: GatewayRunLoopStartOptions = {}) => {
         const snapshotPreparation = await import("../../config/io.snapshot-preparation.js");
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;

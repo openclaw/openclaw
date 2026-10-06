@@ -335,7 +335,7 @@ const mockedFormatContextWindowBlockMessage = vi.fn(
   (params: { guard: { tokens: number; source: string } }) =>
     `Model context window too small (${params.guard.tokens} tokens; source=${params.guard.source}). Minimum is 1000.`,
 );
-type MockGetApiKeyForModelParams = {
+export type MockGetApiKeyForModelParams = {
   profileId?: string;
   model?: { api?: string };
 };

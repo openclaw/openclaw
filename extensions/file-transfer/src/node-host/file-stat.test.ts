@@ -72,7 +72,7 @@ describe("file.stat", () => {
         params: { path: target, followSymlinks: true, preflightOnly: true },
         pluginConfig: { nodes: { "node-1": { allowReadPaths: [target], ask: "off" } } },
       });
-      invokeNode.mockImplementation(async ({ params } = {}) => ({
+      invokeNode.mockImplementation(async ({ params }: Parameters<typeof invokeNode>[0] = {}) => ({
         ok: true,
         payload: await handleFileStat(params as Parameters<typeof handleFileStat>[0]),
       }));

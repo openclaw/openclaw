@@ -28,7 +28,9 @@ async function createRealDirFetchContext(input: {
     request: vi.fn(async () => ({ id: "approval-1", decision: "deny" as const })),
   };
   const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(
-    async ({ params } = {}) => ({
+    async ({
+      params,
+    }: Parameters<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>[0] = {}) => ({
       ok: true,
       payload: await handleDirFetch((params ?? {}) as Parameters<typeof handleDirFetch>[0]),
     }),

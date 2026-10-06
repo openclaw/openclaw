@@ -3233,7 +3233,7 @@ jobs:
       - *linux_node_checkout_step
       - name: Initialize RunsOn
         if: matrix.runner == 'runson-c8i-8xlarge' && runner.environment == 'self-hosted'
-        uses: runs-on/action@dfae4d98c5537a0dc7bbb7e6b9211f30ba240f6d # v2
+        uses: runs-on/action@dfae4d98c5537a0dc7bbb7e6b9211f30ba240f6d # v2.4.0
 
       - name: Record RunsOn allocation
         if: matrix.runner == 'runson-c8i-8xlarge' && runner.environment == 'self-hosted'
@@ -5594,7 +5594,7 @@ jobs:
       - name: Setup Ruby
         uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
-          ruby-version: "3.4.10"
+          ruby-version: "4.0.7"
           bundler: "4.0.21"
           bundler-cache: false
           working-directory: apps/ios
@@ -6154,7 +6154,7 @@ jobs:
           print(selected)
           PY
           )"
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$apk"
+          "$ANDROID_SDK_ROOT/build-tools/37.0.0/zipalign" -c -P 16 -v 4 "$apk"
 
       - name: Upload Access native test reports
         if: ${{ !cancelled() }}

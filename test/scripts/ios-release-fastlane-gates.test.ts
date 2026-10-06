@@ -725,14 +725,14 @@ puts JSON.generate(rows)
     const gemfile = readFileSync(gemfilePath, "utf8");
     const lockfile = readFileSync(gemfileLockPath, "utf8");
 
-    expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
+    expect(readFileSync(rubyVersionPath, "utf8")).toBe("4.0.7\n");
     expect(gemfile).toContain('gem "fastlane", "2.240.1"');
-    expect(gemfile).toContain('ruby "3.4.10"');
+    expect(gemfile).toContain('ruby "4.0.7"');
     expect(lockfile).toContain("fastlane (2.240.1)");
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
-    expect(lockfile).toContain("RUBY VERSION\n  ruby 3.4.10");
+    expect(lockfile).toContain("RUBY VERSION\n  ruby 4.0.7");
     expect(lockfile).toContain("BUNDLED WITH\n  4.0.21");
     expect(iosJob).not.toContain("BUNDLE_DEPLOYMENT");
     expect(iosJob).not.toContain("BUNDLE_GEMFILE");
@@ -742,7 +742,7 @@ puts JSON.generate(rows)
     expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
     // Dependabot bumps this pin; the contract is an immutable commit SHA, not one release.
     expect(shardJob).toMatch(/ruby\/setup-ruby@[0-9a-f]{40}\s/u);
-    expect(shardJob).toContain('ruby-version: "3.4.10"');
+    expect(shardJob).toContain('ruby-version: "4.0.7"');
     expect(shardJob).toContain('bundler: "4.0.21"');
     expect(shardJob).toContain("bundler-cache: false");
     expect(shardJob).toContain("working-directory: apps/ios");
@@ -820,7 +820,7 @@ puts JSON.generate(rows)
 
     expect(result.status).toBe(1);
     expect(trace).toBe("");
-    expect(result.stderr).toContain("Install Ruby 3.4.10");
+    expect(result.stderr).toContain("Install Ruby 4.0.7");
     expect(result.stderr).toContain("gem install bundler -v 4.0.21");
     expect(result.stderr).toContain("bundle _4.0.21_ install");
   });

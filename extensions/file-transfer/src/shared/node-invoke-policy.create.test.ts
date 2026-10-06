@@ -33,7 +33,7 @@ function fixture(overrides: { maxBytes?: number; canonical?: string } = {}) {
       },
     },
   });
-  invokeNode.mockImplementation(async ({ params } = {}) => ({
+  invokeNode.mockImplementation(async ({ params }: Parameters<typeof invokeNode>[0] = {}) => ({
     ok: true,
     payload: {
       ok: true,

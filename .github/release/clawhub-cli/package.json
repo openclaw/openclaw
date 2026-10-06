@@ -7,7 +7,7 @@
   },
   "overrides": {
     "clawhub@0.23.3": {
-      "undici": "7.29.1"
+      "undici": "7.30.0"
     }
   }
 }

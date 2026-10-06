@@ -20,7 +20,9 @@ describe("file-transfer dir.list policy", () => {
       }),
     };
     const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(
-      async ({ params } = {}) => {
+      async ({
+        params,
+      }: Parameters<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>[0] = {}) => {
         const record = requireRecord(params, "invoke params");
         events.push(record.preflightOnly === true ? "preflight" : "list");
         if (record.preflightOnly === true && record.expectedCanonicalPath === "/tmp/old-project") {

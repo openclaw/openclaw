@@ -185,7 +185,11 @@ export async function evaluateImapSender(params: {
     const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: 1 });
     result = await (params.authenticator ?? authenticate)(params.raw, {
       resolver: async (domain, type) =>
-        type === "TXT" ? await resolver.resolveTxt(domain) : await resolver.resolve(domain),
+        type === "TXT"
+          ? await resolver.resolveTxt(domain)
+          : type === "CNAME"
+            ? await resolver.resolve(domain, "CNAME")
+            : await resolver.resolve(domain, "A"),
       disableArc: true,
       disableBimi: true,
     });

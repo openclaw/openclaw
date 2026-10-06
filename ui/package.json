@@ -9,18 +9,18 @@
     "test": "node ../scripts/run-node-package-bin.mts vitest run --config vitest.config.ts"
   },
   "dependencies": {
-    "@awesome.me/webawesome": "3.13.0",
+    "@awesome.me/webawesome": "3.14.0",
     "@codemirror/commands": "6.11.1",
     "@codemirror/language": "6.12.4",
     "@codemirror/language-data": "6.5.2",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.13",
-    "@lezer/highlight": "1.2.3",
+    "@lezer/highlight": "1.2.4",
     "@lit/context": "1.1.6",
     "@lit/task": "1.0.3",
-    "@modelcontextprotocol/client": "2.0.0",
-    "@modelcontextprotocol/core": "2.0.0",
-    "@modelcontextprotocol/ext-apps": "2.0.0",
+    "@modelcontextprotocol/client": "2.1.0",
+    "@modelcontextprotocol/core": "2.1.0",
+    "@modelcontextprotocol/ext-apps": "2.0.3",
     "@noble/ed25519": "3.2.0",
     "@noble/hashes": "2.4.0",
     "@novnc/novnc": "1.7.0",
@@ -54,8 +54,8 @@
   },
   "devDependencies": {
     "@types/markdown-it": "14.2.0",
-    "@vitest/browser": "5.0.1",
-    "@vitest/browser-playwright": "5.0.1",
+    "@vitest/browser": "5.0.2",
+    "@vitest/browser-playwright": "5.0.2",
     "fake-indexeddb": "6.2.5",
     "jsdom": "30.1.1",
     "openclaw": "workspace:*",
@@ -63,6 +63,6 @@
     "playwright": "1.63.0",
     "postcss": "8.5.28",
     "vite": "8.3.1",
-    "vitest": "5.0.1"
+    "vitest": "5.0.2"
   }
 }

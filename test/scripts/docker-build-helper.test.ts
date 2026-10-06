@@ -1137,7 +1137,7 @@ print_log_tail "$LOG_PATH"
     expect(liveBuild).toContain("Live-test image not available; building");
     const openWebUi = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
     expect(openWebUi).toContain(
-      'OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228}"',
+      'OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.4@sha256:9591b13f13843c7721c2b8eaf7382846c81b3ffe126526d1888d1fed50c6a33f}"',
     );
     expect(openWebUi).toContain(
       'DOCKER_COMMAND_TIMEOUT="$DOCKER_PULL_TIMEOUT" docker_e2e_docker_cmd pull "$OPENWEBUI_IMAGE"',

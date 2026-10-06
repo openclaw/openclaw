@@ -97,7 +97,7 @@ describe("matrix harness runtime", () => {
 
       const compose = await readFile(result.composeFile, "utf8");
       expect(compose).toContain(
-        "image: ghcr.io/matrix-construct/tuwunel:v1.8.3@sha256:699fa9971c174e01c884abad8d1a3cfb2fe518e1a71f1fa16ea9dedf11873d74",
+        "image: ghcr.io/matrix-construct/tuwunel:v1.9.3@sha256:678b7f5350e06a41614444497c587da9dddf66767e4068a27480402f3c1367d0",
       );
       expect(compose).toContain('      - "127.0.0.1:28008:8008"');
       expect(compose).toContain('TUWUNEL_ALLOW_ENCRYPTION: "true"');

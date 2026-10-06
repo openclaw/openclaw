@@ -11,7 +11,10 @@ import {
 const fixture = createNativeApprovalTestFixture({
   channel: "imessage",
   capability: imessageApprovalCapability,
-  buildConfig: ({ channel, approvals } = {}) => ({
+  buildConfig: ({
+    channel,
+    approvals,
+  }: Parameters<Parameters<typeof createNativeApprovalTestFixture>[0]["buildConfig"]>[0] = {}) => ({
     channels: { imessage: { enabled: true, ...channel } },
     approvals,
   }),

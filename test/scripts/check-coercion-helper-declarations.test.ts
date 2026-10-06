@@ -40,12 +40,9 @@ describe("coercion helper declaration AST guard", () => {
       "function containsAsciiControlCharacter() {}",
     ].join("\n");
 
+    using parsed = parser.createSourceFile("src/example.ts", source);
     expect(
-      findBannedCoercionHelperDeclarations(
-        source,
-        "src/example.ts",
-        parser.createSourceFile("src/example.ts", source),
-      ),
+      findBannedCoercionHelperDeclarations(source, "src/example.ts", parsed.sourceFile),
     ).toEqual([
       { file: "src/example.ts", kind: "function", line: 1, name: "readString" },
       { file: "src/example.ts", kind: "variable", line: 2, name: "isRecord" },
@@ -76,12 +73,9 @@ describe("coercion helper declaration AST guard", () => {
       'const fixture = "function toError() {}";',
     ].join("\n");
 
+    using parsed = parser.createSourceFile("src/example.ts", source);
     expect(
-      findBannedCoercionHelperDeclarations(
-        source,
-        "src/example.ts",
-        parser.createSourceFile("src/example.ts", source),
-      ),
+      findBannedCoercionHelperDeclarations(source, "src/example.ts", parsed.sourceFile),
     ).toEqual([]);
   });
 
@@ -90,9 +84,10 @@ describe("coercion helper declaration AST guard", () => {
 function read\u0053tring() {}`;
 
     expect(
-      ["src/first.ts", "src/second.ts"].map((file) =>
-        findBannedCoercionHelperDeclarations(source, file, parser.createSourceFile(file, source)),
-      ),
+      ["src/first.ts", "src/second.ts"].map((file) => {
+        using parsed = parser.createSourceFile(file, source);
+        return findBannedCoercionHelperDeclarations(source, file, parsed.sourceFile);
+      }),
     ).toEqual([
       [{ file: "src/first.ts", kind: "function", line: 2, name: "readString" }],
       [{ file: "src/second.ts", kind: "function", line: 2, name: "readString" }],
@@ -217,10 +212,8 @@ function read\u0053tring() {}`;
       "export const VALUE = 1;",
     ].join("\n");
 
-    expect(findExportedCallableNames(parser.createSourceFile("src/owner.ts", source))).toEqual([
-      "alias",
-      "canonical",
-    ]);
+    using parsed = parser.createSourceFile("src/owner.ts", source);
+    expect(findExportedCallableNames(parsed.sourceFile)).toEqual(["alias", "canonical"]);
   });
 
   it("reports unclassified exports and stale, duplicate, or blank deferred entries", () => {

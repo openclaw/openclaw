@@ -187,7 +187,7 @@ run_remote_bash() {
     /bin/bash "$tmp"
 }
 
-GUM_VERSION="${OPENCLAW_GUM_VERSION:-2.0.0}"
+GUM_VERSION="${OPENCLAW_GUM_VERSION:-2.0.2}"
 GUM=""
 GUM_STATUS="skipped"
 GUM_REASON=""
@@ -2354,7 +2354,7 @@ ensure_pnpm() {
     local repo_dir="${1:-$PWD}"
     local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
     spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.5.1"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.7.0"
     version="${spec#pnpm@}"
     version="${version%%+*}"
     pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1

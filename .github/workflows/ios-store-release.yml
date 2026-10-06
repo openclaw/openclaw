@@ -57,7 +57,7 @@ jobs:
       - name: Setup Ruby
         uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
-          ruby-version: "3.4.10"
+          ruby-version: "4.0.7"
           bundler: "4.0.21"
           bundler-cache: false
           working-directory: apps/ios
@@ -155,7 +155,7 @@ jobs:
       - name: Setup Ruby
         uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
-          ruby-version: "3.4.10"
+          ruby-version: "4.0.7"
           bundler: "4.0.21"
           bundler-cache: false
           working-directory: apps/ios

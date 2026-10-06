@@ -1437,9 +1437,9 @@ jobs:
           trap 'rm -f "$package_path"' EXIT
           curl -LsSf --connect-timeout 10 --max-time 120 \
             -o "$package_path" \
-            https://github.com/NVIDIA/OpenShell/releases/download/v0.0.116/openshell_0.0.116-1_amd64.deb
+            https://github.com/NVIDIA/OpenShell/releases/download/v0.1.2/openshell_0.1.2-1_amd64.deb
           printf '%s  %s\n' \
-            883b5223399dd30a2b33b7f76817fd81295d610ce6f2d04a0266fc7cfbf87575 \
+            1f5416ea08f32fdc621f20a2cc0324298e60aba8bbe996459d9e3b44195f23df \
             "$package_path" | sha256sum --check -
           sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$package_path"
           openshell --version

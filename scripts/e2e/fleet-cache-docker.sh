@@ -245,7 +245,7 @@ PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz fleet-cache "${OPENCLAW_CURRENT_PA
 sha256sum "$PACKAGE_TGZ"
 prepare_install_prefix "$scratch/host-runtime" "node@$node_version" "$PACKAGE_TGZ"
 timeout --foreground 600s npm install --prefix "$scratch/host-runtime" --no-save --no-package-lock \
-  --no-audit --no-fund "node@$node_version" smol-toml@1.8.0 "$PACKAGE_TGZ"
+  --no-audit --no-fund "node@$node_version" smol-toml@1.9.0 "$PACKAGE_TGZ"
 node_bin="$scratch/host-runtime/node_modules/node/bin/node"
 export PATH="$scratch/host-runtime/node_modules/.bin:$PATH"
 sudo -n setpriv --reuid=1501 --regid=1501 --groups="$socket_gid" \

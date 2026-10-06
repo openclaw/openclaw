@@ -1294,9 +1294,9 @@ jobs:
           install_home="$RUNNER_TEMP/openclaw-npm12-home"
           install_prefix="$RUNNER_TEMP/openclaw-npm12-prefix"
           mkdir -p "$install_home" "$install_prefix"
-          npm install -g --prefix "$npm_tool" npm@12.0.2
+          npm install -g --prefix "$npm_tool" npm@12.1.0
           export PATH="$npm_tool/bin:$install_prefix/bin:$PATH"
-          [[ "$(npm --version)" == "12.0.2" ]]
+          [[ "$(npm --version)" == "12.1.0" ]]
           HOME="$install_home" \
             NPM_CONFIG_CACHE="$RUNNER_TEMP/openclaw-npm12-cache" \
             NPM_CONFIG_PREFIX="$install_prefix" \

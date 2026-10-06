@@ -10,6 +10,7 @@ import {
   mockedBuildEmbeddedRunPayloads,
   mockedEnsureAuthProfileStore,
   mockedGetApiKeyForModel,
+  type MockGetApiKeyForModelParams,
   mockedMarkAuthProfileFailure,
   mockedResolveAuthProfileOrder,
   mockedRunEmbeddedAttempt,
@@ -81,12 +82,14 @@ function prepareAuthFailoverRun(
     order: { openai: [failedProfile, backupProfile] },
   });
   mockedResolveAuthProfileOrder.mockReturnValue([failedProfile, backupProfile]);
-  mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
-    apiKey: profileId === backupProfile ? "backup-api-key" : "failed-api-key",
-    profileId: profileId ?? failedProfile,
-    source: "test",
-    mode: "api-key",
-  }));
+  mockedGetApiKeyForModel.mockImplementation(
+    async ({ profileId }: MockGetApiKeyForModelParams = {}) => ({
+      apiKey: profileId === backupProfile ? "backup-api-key" : "failed-api-key",
+      profileId: profileId ?? failedProfile,
+      source: "test",
+      mode: "api-key",
+    }),
+  );
   return runEmbeddedAgent;
 }
 
@@ -227,18 +230,20 @@ describe("native harness auth failover", () => {
       let modelRef = { provider: "openai", model: "gpt-5.6-luna" };
       const runEmbeddedAgent = prepareAuthFailoverRun(true, { nativeModelRef: () => modelRef });
       const params = await createNativeHostRunParams();
-      mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => {
-        modelRef = {
-          ...modelRef,
-          [field]: field === "model" ? "gpt-5.6-sol" : "different-native-provider",
-        };
-        return {
-          apiKey: "prepared-key",
-          profileId: profileId ?? failedProfile,
-          source: "test",
-          mode: "api-key",
-        };
-      });
+      mockedGetApiKeyForModel.mockImplementation(
+        async ({ profileId }: MockGetApiKeyForModelParams = {}) => {
+          modelRef = {
+            ...modelRef,
+            [field]: field === "model" ? "gpt-5.6-sol" : "different-native-provider",
+          };
+          return {
+            apiKey: "prepared-key",
+            profileId: profileId ?? failedProfile,
+            source: "test",
+            mode: "api-key",
+          };
+        },
+      );
       mockedRunEmbeddedAttempt.mockResolvedValue(
         makeAttemptResult({ assistantTexts: ["must not infer"] }),
       );

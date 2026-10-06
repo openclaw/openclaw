@@ -695,8 +695,8 @@ describe("CUDA runtime selection", () => {
     const mebibyte = 1024 * 1024;
 
     expect(asset).toMatchObject({
-      name: "llama-b10809-bin-win-cuda-12.4-x64.zip",
-      sha256: "c77bfcd9ed8d91e8721a2d6a290b907fddd4fa5412a47b21c6fa1709116b85f9",
+      name: "llama-b11223-bin-win-cuda-12.4-x64.zip",
+      sha256: "469c7fe904021e825369a4567ead94a4bf08784d319947512c0242dbea0c3aca",
       limits: {
         maxArchiveBytes: 400 * mebibyte,
         maxExtractedBytes: 600 * mebibyte,
