@@ -1206,7 +1206,8 @@ describe("subagent registry seam flow", () => {
       },
     });
 
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         childRunId: "run-refresh-pending-timeout-payload",
         outcome: expect.objectContaining({
@@ -2543,7 +2544,8 @@ describe("subagent registry seam flow", () => {
 
     expect(await finalize()).toBe(1);
     await waitForFast(() =>
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenNthCalledWith(
+        1,
         expect.objectContaining({
           childRunId: "run-interrupted",
           requesterSessionKey: "agent:main:main",
