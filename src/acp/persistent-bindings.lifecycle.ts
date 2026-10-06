@@ -92,6 +92,9 @@ export async function ensureConfiguredAcpBindingSession(params: {
             sessionKey,
             key,
             value,
+            // Inherited thinking the adapter cannot represent must not take the
+            // binding offline; the accepted level stays in use.
+            ...(key === "thinking" ? { tolerateRejectedThinking: true } : {}),
           });
         }
       }
