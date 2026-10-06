@@ -508,6 +508,12 @@
       "title": "Native sessions",
       "order": 10,
       "properties": ["sessionCatalog"]
+    },
+    {
+      "id": "claude-cli",
+      "title": "Claude CLI",
+      "order": 20,
+      "properties": ["claudeCli"]
     }
   ],
   "configSchema": {
@@ -520,6 +526,13 @@
         "properties": {
           "enabled": { "type": "boolean", "default": true }
         }
+      },
+      "claudeCli": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "replaceNativePrompt": { "type": "boolean", "default": false }
+        }
       }
     }
   },
@@ -531,6 +544,14 @@
     "sessionCatalog.enabled": {
       "label": "Discover Claude Code Sessions",
       "help": "List native Claude Code sessions in the sidebar from this Gateway and eligible paired nodes."
+    },
+    "claudeCli": {
+      "label": "Claude CLI Runs",
+      "help": "Settings for agent turns that OpenClaw runs through the claude-cli backend."
+    },
+    "claudeCli.replaceNativePrompt": {
+      "label": "Replace Native System Prompt",
+      "help": "Pass OpenClaw's system prompt via --system-prompt-file so it replaces Claude Code's native prompt on claude-cli agent turns, instead of appending to it. Off by default; existing agents keep the native prompt. Applies on the next turn without a Gateway restart."
     }
   }
 }

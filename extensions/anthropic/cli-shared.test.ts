@@ -933,3 +933,55 @@ describe("normalizeClaudeBackendConfig", () => {
     );
   });
 });
+
+describe("Claude native prompt replacement (opt-in)", () => {
+  const REPLACE_NATIVE_PROMPT_CONFIG = {
+    plugins: {
+      entries: { anthropic: { config: { claudeCli: { replaceNativePrompt: true } } } },
+    },
+  };
+
+  it("keeps the append-system-prompt file arg by default", () => {
+    const normalized = normalizeClaudeBackendConfig(
+      {
+        command: "claude",
+        systemPromptFileArg: "--append-system-prompt-file",
+        systemPromptMode: "append",
+      },
+      { backendId: "claude-cli" },
+    );
+
+    expect(normalized.systemPromptFileArg).toBe("--append-system-prompt-file");
+    expect(normalized.systemPromptMode).toBe("append");
+  });
+
+  it("swaps to the replace-system-prompt file arg when opted in", () => {
+    const normalized = normalizeClaudeBackendConfig(
+      {
+        command: "claude",
+        systemPromptFileArg: "--append-system-prompt-file",
+        systemPromptMode: "append",
+      },
+      { backendId: "claude-cli", config: REPLACE_NATIVE_PROMPT_CONFIG },
+    );
+
+    expect(normalized.systemPromptFileArg).toBe("--system-prompt-file");
+    expect(normalized.systemPromptMode).toBe("replace");
+  });
+
+  it("skips the dynamic-sections trim flag when the native prompt is replaced", () => {
+    const context = {
+      workspaceDir: "/tmp",
+      provider: "claude-cli",
+      modelId: "claude-haiku-4-5",
+      useResume: false,
+      baseArgs: ["-p"],
+    };
+    const options = { excludeDynamicSystemPromptSections: true };
+
+    expect(resolveClaudeCliExecutionArgs(context, options)).toContain(CLAUDE_CACHE_FLAG);
+    expect(
+      resolveClaudeCliExecutionArgs({ ...context, config: REPLACE_NATIVE_PROMPT_CONFIG }, options),
+    ).not.toContain(CLAUDE_CACHE_FLAG);
+  });
+});

@@ -243,6 +243,34 @@ when that exact live session is replaced, and never apply to Bash. Policies
 that never prompt keep their existing behavior: `security: "deny"` rejects
 every request, and ask `off` with less than full security denies without asking.
 
+### Claude Code prompt ownership
+
+By default, OpenClaw appends its system prompt to Claude Code's native prompt
+(`--append-system-prompt-file`), so ordinary `claude-cli` turns run with both
+prompts. To give OpenClaw's prompt sole ownership of the system prompt on
+agent turns, enable the Anthropic plugin setting:
+
+```json5
+{
+  plugins: {
+    entries: {
+      anthropic: {
+        config: {
+          claudeCli: { replaceNativePrompt: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Fresh and resumed turns then pass `--system-prompt-file` instead of
+`--append-system-prompt-file`. The setting is off by default, so existing
+agents keep their instructions, and it applies on the next turn without a
+Gateway restart. The `--exclude-dynamic-system-prompt-sections` trim flag is
+skipped when the native prompt is replaced, since there are no native sections
+left to trim.
+
 ### Native Bash and the exec allowlist
 
 When a run retains native `Bash`, `ask: "on-miss"` makes the `claude-cli` backend check commands
