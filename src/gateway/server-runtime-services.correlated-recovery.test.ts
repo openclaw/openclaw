@@ -135,8 +135,7 @@ describe("registered correlated completion recovery custody", () => {
           .spyOn(store, "executeExistingOpenClawStateRead")
           .mockImplementationOnce(async (_options, command) => {
             expect(command).toEqual({
-              type: "subagents.runs",
-              scope: { kind: "page", after: undefined },
+              type: "subagents.restore",
             });
             throw new Error("registry hydration read unavailable");
           });

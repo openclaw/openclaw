@@ -38,6 +38,42 @@ export class CliArgumentError extends Error {
   override name = "CliArgumentError";
 }
 
+export type GatewayBenchRuntimeOptions = {
+  gatewayRuntime: string;
+  gatewayCpus?: string;
+};
+
+export function parseGatewayBenchRuntimeOptions(
+  flags: ReadonlyMap<string, readonly string[]>,
+): GatewayBenchRuntimeOptions {
+  const gatewayRuntime = flags.get("--gateway-runtime")?.[0]?.trim() ?? process.execPath;
+  if (!gatewayRuntime || gatewayRuntime.startsWith("-") || gatewayRuntime.includes("\0")) {
+    throw new CliArgumentError("--gateway-runtime must be an executable path or name");
+  }
+  const gatewayCpus = flags.get("--gateway-cpus")?.[0];
+  if (gatewayCpus !== undefined && !/^\d+(?:,\d+)*$/u.test(gatewayCpus)) {
+    throw new CliArgumentError("--gateway-cpus requires comma-separated CPU numbers");
+  }
+  return { gatewayRuntime, gatewayCpus };
+}
+
+export function buildGatewayBenchCommand(
+  args: string[],
+  options: GatewayBenchRuntimeOptions,
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  if (options.gatewayCpus) {
+    if (platform !== "linux") {
+      throw new CliArgumentError("--gateway-cpus requires Linux taskset");
+    }
+    return {
+      command: "taskset",
+      args: ["--cpu-list", options.gatewayCpus, options.gatewayRuntime, ...args],
+    };
+  }
+  return { command: options.gatewayRuntime, args };
+}
+
 export function parseCliArgs(
   argv: string[],
   options: {

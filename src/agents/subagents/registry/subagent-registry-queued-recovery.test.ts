@@ -5,7 +5,7 @@ import { applySessionEntryExactReplacements } from "../../../config/sessions/ses
 import { callGateway } from "../../../gateway/call.js";
 import { sessionSharingTestContext } from "../../../gateway/server-methods/sessions-sharing.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import {
@@ -24,6 +24,7 @@ import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = vi.hoisted(() => ({
@@ -93,19 +94,7 @@ afterEach(async () => {
 });
 
 async function readStored() {
-  const reply = await executeExistingOpenClawStateRead(
-    { env: state.env },
-    { type: "subagents.runs", scope: { kind: "page" } },
-  );
-  if (
-    !reply?.ok ||
-    reply.type !== "subagents.runs" ||
-    reply.projection ||
-    reply.page?.nextRunId !== null
-  ) {
-    throw new Error("Queued recovery fixture could not read its durable registry");
-  }
-  return reply.runs;
+  return readAllSubagentRunsInWorker(captureOpenClawStateWorkerContext({ env: state.env }));
 }
 
 function createRegistrationFixture() {

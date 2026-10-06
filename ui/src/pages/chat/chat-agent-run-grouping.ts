@@ -6,11 +6,13 @@ import {
   assistantMessageIsInterrupted,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
-import type {
-  ActivityRunRenderItem,
-  CompletedTurnRenderItem,
-  StreamRunRenderItem,
-  WorkGroupRenderItem,
+import {
+  groupEndsRunInFailure,
+  joinActivityRuns,
+  type ActivityRunRenderItem,
+  type CompletedTurnRenderItem,
+  type StreamRunRenderItem,
+  type WorkGroupRenderItem,
 } from "./chat-thread-grouping.ts";
 import {
   chatItemStartsDisplayTurn,
@@ -76,12 +78,7 @@ function itemFailsFrame(item: AgentRunFramePart): boolean {
   if (item.kind === "work-group" && item.replyRunId) {
     return false;
   }
-  return chatItemGroups(item).some((group) =>
-    group.messages.some(
-      ({ message }) =>
-        assistantMessageIsInterrupted(message) || asRecord(message)?.stopReason === "error",
-    ),
-  );
+  return chatItemGroups(item).some(groupEndsRunInFailure);
 }
 
 function itemIsActive(item: AgentRunFramePart): boolean {
@@ -196,13 +193,35 @@ export function coalesceAgentRunFrames(
   let segmentId: string | undefined;
   let runId: string | undefined;
   let parts: AgentRunFramePart[] = [];
+  // A run that resumes a handoff continues the open frame: one answer, one
+  // footer. The frame keeps the identity it opened with, so resuming reuses its
+  // row; `resuming` lets exactly the next run in.
+  let opened: { runId: string; boundaryId: string | undefined } | undefined;
+  let resuming = false;
+  // No row marks a handoff, so operations on either side of one are one log.
+  let afterHandoff = false;
+  const addPart = (item: AgentRunFramePart) => {
+    const last = parts.at(-1);
+    const joined = afterHandoff && last ? joinActivityRuns(last, item) : undefined;
+    afterHandoff = false;
+    if (joined) {
+      parts[parts.length - 1] = joined;
+    } else {
+      parts.push(item);
+    }
+  };
   const flush = (failed = false) => {
-    if (!runId || parts.length === 0) {
+    const frameRunId = opened?.runId ?? runId;
+    const openedBoundaryId = opened ? opened.boundaryId : boundaryId;
+    opened = undefined;
+    resuming = false;
+    afterHandoff = false;
+    if (!runId || !frameRunId || parts.length === 0) {
       return;
     }
     const active = parts.some(itemIsActive);
     const actionOwner = active || failed ? null : completedFrameActionOwner(parts);
-    if (!boundaryId && !active && !actionOwner) {
+    if (!openedBoundaryId && !active && !actionOwner) {
       result.push(...parts);
       parts = [];
       runId = undefined;
@@ -210,12 +229,16 @@ export function coalesceAgentRunFrames(
     }
     // A history window can start inside a known run. This frame-local identity
     // supplies no prompt/recipient facts and must not leak into the next run.
-    const frameBoundaryId = boundaryId ?? `send:${runId}`;
-    const semanticKey = frameKey(runId, frameBoundaryId, frameSegmentId(parts, segmentId));
+    const frameBoundaryId = openedBoundaryId ?? `send:${frameRunId}`;
+    const semanticKey = frameKey(frameRunId, frameBoundaryId, frameSegmentId(parts, segmentId));
     // A peer input can split one causal run into separate presentation rows.
     // Reopening it must not reuse the earlier row’s DOM or measured height.
     const key = emittedFrameKeys.has(semanticKey)
-      ? frameKey(runId, frameBoundaryId, JSON.stringify([presentationBoundaryKey, parts[0]!.key]))
+      ? frameKey(
+          frameRunId,
+          frameBoundaryId,
+          JSON.stringify([presentationBoundaryKey, parts[0]!.key]),
+        )
       : semanticKey;
     emittedFrameKeys.add(semanticKey);
     result.push({
@@ -234,6 +257,12 @@ export function coalesceAgentRunFrames(
     runId = undefined;
   };
   for (const item of items) {
+    if (item.kind === "notice" && item.handoffBoundary && runId && parts.length > 0) {
+      opened ??= { runId, boundaryId };
+      resuming = true;
+      afterHandoff = true;
+      continue;
+    }
     if (!isAgentRunFramePart(item)) {
       flush();
       result.push(item);
@@ -255,6 +284,20 @@ export function coalesceAgentRunFrames(
       boundaryId = nextBoundaryId;
     }
     const candidateBoundaryId = item.kind === "stream-run" ? item.boundaryId : undefined;
+    const candidateRunId = itemRunId(item);
+    if (resuming && !candidateRunId && item.kind === "stream-run" && !candidateBoundaryId) {
+      // The resumed run can be working before the pane learns its run id. Its
+      // status belongs here already, so the block does not split and rejoin.
+      addPart(item);
+      continue;
+    }
+    if (resuming && candidateRunId && candidateRunId !== runId) {
+      // Rows the handing-off run recorded after its handoff call still belong to
+      // it. Once the next run arrives, later parts compare against that run.
+      boundaryId = candidateBoundaryId;
+      runId = candidateRunId;
+      resuming = false;
+    }
     if (candidateBoundaryId) {
       const effectiveBoundaryId = boundaryId ?? (runId ? `send:${runId}` : undefined);
       if (candidateBoundaryId !== effectiveBoundaryId) {
@@ -262,7 +305,6 @@ export function coalesceAgentRunFrames(
       }
       boundaryId = candidateBoundaryId;
     }
-    const candidateRunId = itemRunId(item);
     if (item.kind === "activity-run" && !candidateRunId) {
       flush();
       result.push(item);
@@ -291,7 +333,7 @@ export function coalesceAgentRunFrames(
       flush();
     }
     runId = candidateRunId;
-    parts.push(item);
+    addPart(item);
     if (failed) {
       flush(true);
       boundaryId = undefined;

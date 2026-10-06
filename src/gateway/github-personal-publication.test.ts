@@ -1,3 +1,21 @@
+// Register the shared Git transport before any publication or run-lease consumer.
+// oxfmt-ignore
+import {
+  BRANCH,
+  NEW_HEAD,
+  OLD_HEAD,
+  SESSION_ID,
+  SESSION_KEY,
+  WORKSPACE_TREE,
+  commandCalls,
+  commandResult,
+  commands,
+  createTestGitHubPublicationCoordinator,
+  createRealPublicationWorkspace,
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
+} from "./github-publication.test-support.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -29,22 +47,6 @@ import {
   personalPublicationAccount as account,
   expectPersonalPublicationReplay,
 } from "./github-personal-publication.test-support.js";
-import {
-  BRANCH,
-  NEW_HEAD,
-  OLD_HEAD,
-  SESSION_ID,
-  SESSION_KEY,
-  WORKSPACE_TREE,
-  commandCalls,
-  commandResult,
-  commands,
-  createTestGitHubPublicationCoordinator,
-  createRealPublicationWorkspace,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-  persistPublicationTestSession,
-} from "./github-publication.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -58,17 +60,6 @@ import { seedAttachedPlacementEnvironment } from "./worker-environments/placemen
 const mocks = githubPublicationTestMocks();
 
 const table = "github_personal_publication_requests";
-
-vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/worktrees/git-lock.js")>()),
-  lockWorktreeForProcess: vi.fn(async () => undefined),
-  unlockWorktree: vi.fn(async () => undefined),
-}));
-vi.mock("../process/exec.js", () => ({
-  runCommandBuffered: (
-    ...args: Parameters<typeof import("../process/exec.js").runCommandBuffered>
-  ) => mocks.runCommand(...args),
-}));
 
 describe("personal publication authority and recovery", () => {
   installGitHubPublicationTestHarness();

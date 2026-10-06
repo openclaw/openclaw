@@ -2407,13 +2407,19 @@ shared-state writes do not prevent pruning. The reader retains the original
 physical source and schema admission through cleanup; existing-schema integrity
 proof comes from the worker and never falls back to a native integrity scan.
 
-Initial registry restoration reads one owned snapshot in pages bounded to 128 rows
-and 1 MiB of stored payload, allowing one oversized record to remain whole. The
-existing staging worker owns fresh snapshot tokens and cleanup. The host checks
-live source admission and awaits worker quarantine admission before the snapshot
-producer opens the source. Each page's fixed reader checks quarantine again before
-querying the pinned bytes. The host installs decoded records and physical row
-versions, preserving creation order and refusing unreadable canonical rows.
+Initial registry restoration streams one read-only SQLite transaction through the
+existing read worker, in batches bounded to 128 rows and 1 MiB of stored payload;
+one oversized record remains whole. The worker waits for each host acknowledgment
+before reading another batch. Ordinary startup no longer copies the shared database
+or reopens a reader for each batch. Artifact-preserving scopes retain their existing
+snapshot owner. Quarantine and schema admission precede the read; the host rechecks
+live source authority before accepting each batch. Cancellation joins reader cleanup
+and discards partial results. The host installs the complete decoded registry and
+physical row versions only after the read settles, preserving creation order and
+refusing unreadable canonical rows. Hydration still precedes Gateway readiness;
+activation and recovery remain post-ready.
+Session-list facts are prepared with each immutable row and reused at publication.
+A replacement row owns new facts; the cache does not retain retired rows.
 Completion acknowledgments also carry decoded records and worker-computed physical
 versions; the host does not parse or hash the retained JSON again. Transaction and
 commit authority, terminal-event

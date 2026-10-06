@@ -623,8 +623,8 @@ async function prepareCliRunContextWithinReadFence(
     }) ?? normalizedCatalogModel;
   const questionRoute = { provider: modelProvider, model: modelId };
   const questionFingerprint = questionOperation
-    ? questionOperation.bindToolAuthorityRoute(questionRoute)
-    : questionSnapshot?.fingerprint(questionRoute);
+    ? await questionOperation.bindToolAuthorityRouteAsync(questionRoute)
+    : await questionSnapshot?.fingerprintAsync(questionRoute);
   if (questionOperation) {
     params = { ...params, toolAuthorityFingerprint: questionFingerprint };
   }

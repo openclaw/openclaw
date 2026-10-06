@@ -1,5 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type {
+  ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityRoute,
+  ReplyToolAuthorityPreparation,
+} from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type {
+  PreparedSessionEntryWorkerRead,
+  SessionEntryWorkerRead,
+} from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
@@ -15,6 +23,97 @@ export type AgentHarnessTtsProvenanceTransfer = <T extends object>(
   attemptResult: T,
   eligibleMediaUrls: readonly string[],
 ) => T;
+
+type CallerReadPreparer = (
+  caller: ReplyToolAuthorityOverlay | undefined,
+  fingerprint: string,
+  route: ReplyToolAuthorityRoute | undefined,
+  assertCurrent: () => void,
+) => Promise<Pick<ReplyToolAuthorityPreparation, "prepareCurrent"> | undefined>;
+const callerReadPreparers = new WeakMap<object, CallerReadPreparer>();
+
+export type PreparedToolAuthorityRead = {
+  reads: readonly SessionEntryWorkerRead[];
+  assertPrepared: (reads: readonly PreparedSessionEntryWorkerRead[]) => void;
+  /** Ordinary legacy queue admission only; never call from a worker grant. */
+  assertLegacyCurrent: () => void;
+};
+const toolAuthorityReadScope = new AsyncLocalStorage<{
+  reads: PreparedToolAuthorityRead[];
+  complete: boolean;
+}>();
+const workerToolPreparations = new WeakMap<() => Promise<void>, { complete: boolean }>();
+
+export function bindWorkerToolPreparation<
+  T extends Pick<ReplyToolAuthorityPreparation, "prepareCurrent">,
+>(
+  preparation: T,
+  dependencies: readonly Pick<ReplyToolAuthorityPreparation, "prepareCurrent">[] = [],
+): T {
+  workerToolPreparations.set(preparation.prepareCurrent, {
+    complete: dependencies.every(
+      (dependency) => workerToolPreparations.get(dependency.prepareCurrent)?.complete === true,
+    ),
+  });
+  return preparation;
+}
+
+export function isToolAuthorityReadCaptureActive(): boolean {
+  return toolAuthorityReadScope.getStore() !== undefined;
+}
+
+export function recordPreparedToolAuthorityRead(read: PreparedToolAuthorityRead): void {
+  toolAuthorityReadScope.getStore()?.reads.push(read);
+}
+
+export async function capturePreparedToolAuthorityReads(
+  preparation: ReplyToolAuthorityPreparation,
+) {
+  const metadata = workerToolPreparations.get(preparation.prepareCurrent);
+  const scope: { reads: PreparedToolAuthorityRead[]; complete: boolean } = {
+    reads: [],
+    complete: metadata?.complete ?? false,
+  };
+  if (metadata) {
+    await toolAuthorityReadScope.run(scope, preparation.prepareCurrent);
+  } else {
+    await preparation.prepareCurrent();
+  }
+  preparation.assertCurrent();
+  return {
+    reads: scope.reads,
+    // Known wrappers retain their own reads even when a dependency still needs
+    // synchronous compatibility outside worker admission.
+    assertCompatibility:
+      !scope.complete || !scope.reads.length ? preparation.compatAssertCurrent : undefined,
+  };
+}
+
+export function bindReplyToolAuthorityCallerRead(
+  projector: object,
+  prepare: CallerReadPreparer,
+): void {
+  callerReadPreparers.set(projector, prepare);
+}
+
+export async function prepareReplyToolAuthorityCallerRead(
+  projector: object | undefined,
+  caller: ReplyToolAuthorityOverlay | undefined,
+  fingerprint: string | undefined,
+  route: ReplyToolAuthorityRoute | undefined,
+  assertCurrent: () => void,
+) {
+  assertCurrent();
+  const prepared =
+    projector && fingerprint
+      ? await callerReadPreparers.get(projector)?.(caller, fingerprint, route, assertCurrent)
+      : undefined;
+  const scope = toolAuthorityReadScope.getStore();
+  if (scope && !prepared) {
+    scope.complete = false;
+  }
+  return prepared;
+}
 
 export type PreparedQuestionAnswerAuthority = Readonly<{
   sessionKey: string;

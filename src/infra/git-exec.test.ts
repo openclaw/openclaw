@@ -25,6 +25,7 @@ import {
   executeGitCommand,
   executeGitCommandBytes,
   executeGitCommandBuffered,
+  GitCommandTimeoutError,
   gitNullConfigPath,
   normalizeGitPathForFilesystem,
   requireGitCommand,
@@ -382,7 +383,9 @@ it.each([
   const args = ["worktree", "add"];
   const result = await executeGitCommand("/repo", args, { timeoutMs });
   const label = `timed out after ${seconds} seconds`;
-  const message = createGitCommandError("git worktree add", result).message;
+  const error = createGitCommandError("git worktree add", result);
+  expect(error).toBeInstanceOf(GitCommandTimeoutError);
+  const message = error.message;
   expect(message).toContain(label);
   expect(message).toContain(
     `Git did not finish within its ${seconds}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`,

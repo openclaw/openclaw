@@ -249,8 +249,10 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         async () => {
-          // The admitted run owns preparation, cancellation, and error publication.
-          admission.assertWorkAdmissionCurrent();
+          // Input already owned by the sink must finalize before source admission can fail.
+          if (!acceptedMessageInjection) {
+            admission.assertWorkAdmissionCurrent();
+          }
           let assertWorkspaceRunOwnership: (() => void) | undefined;
           if (
             !acceptedMessageInjection &&

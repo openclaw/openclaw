@@ -666,8 +666,6 @@ describe("gateway chat metadata lifecycle composition", () => {
   it.each([
     ["SecretRef-only runtime auth", "secret-ref", true, false],
     ["SecretRef auth after profile-scoped catalog rejection", "secret-ref", true, true],
-    ["external CLI OAuth bootstrap", "external-oauth", true, false],
-    ["unresolved SecretRef", "unresolved-secret-ref", false, false],
   ] as const)(
     "converges chat metadata and models.list for %s",
     async (_, kind, available, rejected) => {

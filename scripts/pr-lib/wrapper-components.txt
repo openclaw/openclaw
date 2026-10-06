@@ -872,6 +872,7 @@ src/infra/gateway-process-argv.ts
 src/infra/gateway-scheduler.ts
 src/infra/gateway-supervision.ts
 src/infra/git-commit.ts
+src/infra/git-content-budget.ts
 src/infra/git-exec.ts
 src/infra/git-network-retry.ts
 src/infra/git-operation-timing.ts
@@ -1228,6 +1229,7 @@ src/plugins/compat/model-account-connect-record.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
+src/plugins/compat/reply-tool-authority-record.ts
 src/plugins/compat/session-persistence-records.ts
 src/plugins/compat/tts-preferences-record.ts
 src/plugins/compat/watched-sessions.ts
@@ -1350,7 +1352,6 @@ src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-instance-owned-values.ts
-src/plugins/plugin-instance-runtime-scope.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts

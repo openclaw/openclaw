@@ -297,7 +297,7 @@ const runtimeConsumers = [
   },
   {
     file: "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
-    configs: ["test/vitest/vitest.tooling.config.ts"],
+    configs: ["test/vitest/vitest.infra.config.ts"],
     mode: "private-qa",
     dir: "",
   },

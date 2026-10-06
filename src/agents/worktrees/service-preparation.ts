@@ -9,20 +9,16 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../../config/paths.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createCommandError } from "../../process/command-error.js";
-import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createCrustaceanSlug } from "../session-slug.js";
 import {
   withWorktreeAllocationLease,
-  withWorktreeMutationLease,
   waitForWorktreeCapacity,
   type WorktreeAllocationGuard,
 } from "./allocation.js";
 import { WorktreeCapacityContentionError } from "./capacity.js";
 import { WorktreeRepositoryError } from "./errors.js";
-import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
 import {
   commandError,
   listGitWorktrees,
@@ -35,16 +31,11 @@ import {
 import { appendNameOrdinal, validateName } from "./name.js";
 import { worktreeOwnerMatches } from "./owner.js";
 import { startWorktreePreparationPhase } from "./preparation-timing.js";
-import {
-  readRegistryWorktrees,
-  readRegistryWorktreeForMutation,
-  readLiveRegistryWorktreeByOwner,
-  requireActiveWorktreeRecord,
-} from "./registry-read.js";
+import { readRegistryWorktrees, readLiveRegistryWorktreeByOwner } from "./registry-read.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { resolveCheckoutRootFromRealPath } from "./repository-paths.js";
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
-import { acquireWorktreeRunLease, withGitLockTransition } from "./run-lease.js";
+import { acquireWorktreeRunLease } from "./run-lease.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeCreationOutcome,
@@ -682,54 +673,4 @@ export async function createOwnedWorktree(
     }
   }
   return await create(params.name ?? params.suggestedName ?? createCrustaceanSlug());
-}
-
-export async function acquireManagedWorktree(
-  env: NodeJS.ProcessEnv,
-  id: string,
-  now: () => number,
-): Promise<ManagedWorktreeRecord> {
-  return withWorktreeRunEnd(env, () =>
-    withWorktreeMutationLease({ env, id }, (guard) =>
-      // A run cannot adopt this lock until activity publication or its rollback settles.
-      withGitLockTransition(id, async () => {
-        const record = requireActiveWorktreeRecord(
-          id,
-          await readRegistryWorktreeForMutation({ ...guard, env, id }),
-        );
-        const acquired = await lockWorktreeForProcess(record, { beforeRun: guard.commitGuard });
-        try {
-          const lastActiveAt = now();
-          await updateRegistryWorktree(
-            env,
-            id,
-            { lastActiveAt },
-            {
-              workerAuthority: {
-                ...guard.workerAuthority,
-                predicates: [{ kind: "binding", record }],
-              },
-            },
-          );
-          guard.commitGuard();
-          return { ...record, lastActiveAt };
-        } catch (error) {
-          if (acquired && !hasSqliteWorkerOutcomeUnknown(error)) {
-            try {
-              await runOutsideCommandProcessScope(() =>
-                unlockWorktree(record, { beforeRun: guard.rollbackGuard }),
-              );
-            } catch (cleanupError) {
-              throw new AggregateError(
-                [error, cleanupError],
-                "Worktree activity publication and Git lock cleanup failed",
-                { cause: cleanupError },
-              );
-            }
-          }
-          throw error;
-        }
-      }),
-    ),
-  );
 }

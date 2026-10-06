@@ -88,7 +88,7 @@ describe("ManagedWorktreeService snapshot index", () => {
     let checkedIndex = false;
     vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
       const argv = args[0];
-      if (argv[0] === "git" && argv.includes("worktree") && argv.includes("remove")) {
+      if (argv.includes("git") && argv.includes("worktree") && argv.includes("remove")) {
         expect(await fs.readFile(index)).toEqual(bytes);
         checkedIndex = true;
       }
