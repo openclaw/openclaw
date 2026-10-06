@@ -29,7 +29,7 @@ function makeRetainedChild(runId = "run-a"): SubagentRunRecord {
 
 function makeContext(entry = makeRetainedChild(), siblings: SubagentRunRecord[] = []) {
   const warn = vi.fn();
-  const runs = new Map([entry, ...siblings].map((entry) => [entry.runId, entry]));
+  const runs = new Map([entry, ...siblings].map((child) => [child.runId, child]));
   const context = createRequesterWakeContextFixture(runs, warn);
   return { entry, context, warn };
 }
