@@ -2959,8 +2959,10 @@ openclaw-chat-ci-details {
   }
 }
 
+/* Display-contents notice hosts remain DOM ancestors. Their cards must use
+   the composer's inset instead of applying a second one inside the shell. */
 .agent-chat__composer-notices
-  > :is(
+  :is(
     .chat-composer-neighbor-card,
     .agent-chat__composer-errors,
     .agent-chat__talk-status.callout,

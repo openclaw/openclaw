@@ -125,7 +125,7 @@
 .agent-chat__input,
 .agent-chat__disabled-banner.callout,
 .agent-chat__composer-notices
-  > :is(
+  :is(
     .chat-composer-neighbor-card,
     .agent-chat__composer-errors--standalone,
     .agent-chat__talk-status.callout
