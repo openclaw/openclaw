@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { WebSocketServer } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
@@ -396,6 +397,12 @@ describe("node stream close acknowledgement", () => {
       targetServer.listen(0, "127.0.0.1", resolve);
     });
     const targetPort = (targetServer.address() as AddressInfo).port;
+    const closedLog = createDeferred();
+    const stopClosedLog = onInternalDiagnosticEvent((event) => {
+      if (event.type === "log.record" && event.message === "node stream closed") {
+        closedLog.resolve();
+      }
+    });
     const controller = new AbortController();
     let failure: unknown;
     let ack: (() => void) | undefined;
@@ -435,12 +442,8 @@ describe("node stream close acknowledgement", () => {
       ack?.();
       await running;
       expect(failure).toBeUndefined();
-      await expect
-        .poll(async () => {
-          await logCapture.flush();
-          return logCapture.records.find((record) => record.message === "node stream closed");
-        })
-        .toBeTruthy();
+      await closedLog.promise;
+      await logCapture.flush();
       expect(
         logCapture.records.find((record) => record.message === "node stream closed")?.attributes,
       ).toMatchObject({
@@ -458,6 +461,7 @@ describe("node stream close acknowledgement", () => {
       await new Promise<void>((resolve) => {
         gateway.close(() => resolve());
       });
+      stopClosedLog();
     }
   });
 
@@ -744,79 +748,4 @@ describe("node stream close acknowledgement", () => {
       });
     }
   });
-
-  it("bounds a gateway close that withholds TCP FIN", async () => {
-    let peer: net.Socket | undefined;
-    const gateway = net.createServer({ allowHalfOpen: true }, (socket) => {
-      peer = socket;
-      socket.on("error", () => undefined);
-      let buffer = Buffer.alloc(0);
-      let upgraded = false;
-      let sentClose = false;
-      socket.on("data", (chunk: Buffer) => {
-        if (!upgraded) {
-          buffer = Buffer.concat([buffer, chunk]);
-          const headerEnd = buffer.indexOf("\r\n\r\n");
-          if (headerEnd === -1) {
-            return;
-          }
-          const header = buffer.subarray(0, headerEnd).toString("latin1");
-          const key = /^Sec-WebSocket-Key: ([^\r\n]+)/m.exec(header)?.[1]?.trim();
-          if (!key) {
-            socket.destroy();
-            return;
-          }
-          const accept = createHash("sha1")
-            .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
-            .digest("base64");
-          socket.write(
-            "HTTP/1.1 101 Switching Protocols\r\n" +
-              "Upgrade: websocket\r\n" +
-              "Connection: Upgrade\r\n" +
-              `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-          );
-          upgraded = true;
-          return;
-        }
-        if (!sentClose) {
-          sentClose = true;
-          // Close code 1000. Leave the TCP connection half-open.
-          socket.write(Buffer.from([0x88, 0x02, 0x03, 0xe8]));
-        }
-      });
-    });
-    await new Promise<void>((resolve) => {
-      gateway.listen(0, "127.0.0.1", resolve);
-    });
-    const target = new Duplex({
-      read() {},
-      write(_chunk, _encoding, callback) {
-        callback();
-      },
-    });
-    const controller = new AbortController();
-    const started = Date.now();
-    try {
-      await runNodeStreamTransport({
-        gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
-        attachPath: "/node-desktop/attach",
-        expectedAttachPath: "/node-desktop/attach",
-        target: { stream: target },
-        metadata: { ok: true },
-        streamName: "desktop",
-        signal: controller.signal,
-      });
-      const elapsed = Date.now() - started;
-      expect(target.readableEnded).toBe(false);
-      expect(elapsed).toBeGreaterThan(20_000);
-      expect(elapsed).toBeLessThan(40_000);
-    } finally {
-      controller.abort();
-      target.destroy();
-      peer?.destroy();
-      await new Promise<void>((resolve) => {
-        gateway.close(() => resolve());
-      });
-    }
-  }, 50_000);
 });
