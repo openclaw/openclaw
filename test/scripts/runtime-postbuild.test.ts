@@ -1298,6 +1298,51 @@ describe("previous release update compatibility", () => {
     ]);
   });
 
+  it.each(["exact", "changed delegation", "changed binding", "changed target"])(
+    "traces only the exact shipped 2026.9.8 config alias (%s)",
+    (variant) => {
+      const facade =
+        'export { createConfigIO, readConfigFileSnapshot, readSourceConfigBestEffort } from "./config-abcdefgh.mjs";\n';
+      let alias = fsSync.readFileSync(
+        path.join(MODULE_ROOT, "test/fixtures/update-config-runtime-alias-2026.9.8.txt"),
+        "utf8",
+      );
+      if (variant === "changed delegation") {
+        alias = alias.replace("return runtime[name]", "return undefined");
+      } else if (variant === "changed binding") {
+        alias = alias.replace('select("createConfigIO")', 'select("readConfigFileSnapshot")');
+      } else if (variant === "changed target") {
+        alias = alias.replace('"./io.runtime-BNEtkwm5.mjs"', '"./"');
+      }
+      const record = () =>
+        recordImportedFixture('(await import("./io.runtime.js"))', {
+          "io.runtime.js": alias,
+          "io.runtime-BNEtkwm5.mjs": facade,
+          "config-abcdefgh.mjs": [
+            "//#region src/config/io.ts",
+            "export function createConfigIO() {}",
+            "export function readConfigFileSnapshot() {}",
+            "export function readSourceConfigBestEffort() {}",
+          ].join("\n"),
+        });
+      if (variant !== "exact") {
+        expect(record).toThrow("Cannot trace io.runtime.js export createConfigIO");
+        return;
+      }
+      expect(record().inventory.releases[0]?.chunks).toMatchObject([
+        {
+          path: "io.runtime.js",
+          exports: ["createConfigIO", "readConfigFileSnapshot", "readSourceConfigBestEffort"].map(
+            (exported) => ({
+              exported,
+              origin: { module: "src/config/io.ts", symbol: exported },
+            }),
+          ),
+        },
+      ]);
+    },
+  );
+
   it.each(["source scripts", "different owner", "mutable binding", "dist path", "unknown script"])(
     "distinguishes source completion contracts from unknown dynamic imports (%s)",
     (variant) => {
