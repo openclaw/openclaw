@@ -1,5 +1,4 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   getDoctorChannelCapabilities,
@@ -7,17 +6,14 @@ import {
 } from "../channel-capabilities.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { hasAllowFromEntries } from "./allowlist.js";
+import type { ChannelDoctorEmptyAllowlistPolicyHooks } from "./channel-doctor.js";
 import {
   collectEmptyAllowlistPolicyWarningsForAccount,
   resolveDoctorAccountDmAccess,
 } from "./empty-allowlist-policy.js";
 
-type ScanEmptyAllowlistPolicyWarningsParams = {
+type ScanEmptyAllowlistPolicyWarningsParams = Partial<ChannelDoctorEmptyAllowlistPolicyHooks> & {
   doctorFixCommand: string;
-  extraWarningsForAccount?: (params: ChannelDoctorEmptyAllowlistAccountContext) => string[];
-  shouldSkipDefaultEmptyGroupAllowlistWarning?: (
-    params: ChannelDoctorEmptyAllowlistAccountContext,
-  ) => boolean;
 };
 
 function isDisabledRecord(value: unknown): boolean {
@@ -44,31 +40,24 @@ export async function scanEmptyAllowlistPolicyWarnings(
     options: { suppressGroupAllowlistWarning?: boolean } = {},
   ) => {
     const { dmPolicy, effectiveAllowFrom } = resolveDoctorAccountDmAccess(account, parent);
+    const context = {
+      account,
+      channelName,
+      dmPolicy,
+      effectiveAllowFrom: effectiveAllowFrom ?? undefined,
+      parent,
+      prefix,
+    };
     warnings.push(
       ...collectEmptyAllowlistPolicyWarningsForAccount({
-        account,
-        channelName,
-        cfg,
+        ...context,
         doctorFixCommand: params.doctorFixCommand,
-        parent,
-        prefix,
-        shouldSkipDefaultEmptyGroupAllowlistWarning: (context) =>
+        shouldSkipDefaultEmptyGroupAllowlistWarning: (accountContext) =>
           options.suppressGroupAllowlistWarning ||
-          Boolean(params.shouldSkipDefaultEmptyGroupAllowlistWarning?.(context)),
+          Boolean(params.shouldSkipDefaultEmptyGroupAllowlistWarning?.(accountContext)),
       }),
     );
-    if (params.extraWarningsForAccount) {
-      warnings.push(
-        ...params.extraWarningsForAccount({
-          account,
-          channelName,
-          dmPolicy,
-          effectiveAllowFrom: effectiveAllowFrom ?? undefined,
-          parent,
-          prefix,
-        }),
-      );
-    }
+    warnings.push(...(params.extraWarningsForAccount?.(context) ?? []));
   };
 
   for (const [channelName, channelConfig] of Object.entries(

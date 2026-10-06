@@ -53,7 +53,7 @@ describe("ACP session listing", () => {
       const sql = observeMainThreadSql();
       let entries;
       try {
-        entries = await listAcpSessionEntries({ ...scope, clone: false });
+        entries = await listAcpSessionEntries(scope);
         sql.expectIdle();
       } finally {
         sql.restore();

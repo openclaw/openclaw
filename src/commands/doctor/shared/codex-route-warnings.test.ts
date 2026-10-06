@@ -772,53 +772,50 @@ describe("collectCodexRouteWarnings", () => {
   });
 
   it("repairs configured Codex model refs to canonical OpenAI refs with model-scoped Codex runtime", () => {
-    const result = maybeRepairCodexRoutes(
-      {
-        agents: {
-          defaults: {
+    const result = maybeRepairCodexRoutes({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.5",
+            fallbacks: ["openai-codex/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+          },
+          heartbeat: { model: "openai-codex/gpt-5.4-mini" },
+          subagents: {
             model: {
               primary: "openai-codex/gpt-5.5",
-              fallbacks: ["openai-codex/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+              fallbacks: ["openai-codex/gpt-5.4"],
             },
-            heartbeat: { model: "openai-codex/gpt-5.4-mini" },
-            subagents: {
-              model: {
-                primary: "openai-codex/gpt-5.5",
-                fallbacks: ["openai-codex/gpt-5.4"],
-              },
-            },
-            compaction: {
-              model: "openai-codex/gpt-5.4",
-              memoryFlush: { model: "openai-codex/gpt-5.4-mini" },
-            },
-            mediaModels: {
-              image: {
-                primary: "openai-codex/gpt-image-2",
-                fallbacks: ["openai-codex/gpt-image-1"],
-              },
-              video: { primary: "openai-codex/sora-2" },
-            },
-            models: { "openai-codex/gpt-5.5": { alias: "codex" } },
           },
-          entries: {
-            worker: { model: "openai-codex/gpt-5.4" },
+          compaction: {
+            model: "openai-codex/gpt-5.4",
+            memoryFlush: { model: "openai-codex/gpt-5.4-mini" },
           },
-        },
-        channels: {
-          modelByChannel: { telegram: { default: "openai-codex/gpt-5.4" } },
-        },
-        hooks: {
-          mappings: [
-            {
-              model: "openai-codex/gpt-5.4-mini",
+          mediaModels: {
+            image: {
+              primary: "openai-codex/gpt-image-2",
+              fallbacks: ["openai-codex/gpt-image-1"],
             },
-          ],
-          gmail: { model: "openai-codex/gpt-5.4" },
+            video: { primary: "openai-codex/sora-2" },
+          },
+          models: { "openai-codex/gpt-5.5": { alias: "codex" } },
         },
-        tts: { summaryModel: "openai-codex/gpt-5.4-mini" },
+        entries: {
+          worker: { model: "openai-codex/gpt-5.4" },
+        },
       },
-      { codexRuntimeReady: true },
-    );
+      channels: {
+        modelByChannel: { telegram: { default: "openai-codex/gpt-5.4" } },
+      },
+      hooks: {
+        mappings: [
+          {
+            model: "openai-codex/gpt-5.4-mini",
+          },
+        ],
+        gmail: { model: "openai-codex/gpt-5.4" },
+      },
+      tts: { summaryModel: "openai-codex/gpt-5.4-mini" },
+    });
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.cfg.agents?.defaults?.model).toEqual({

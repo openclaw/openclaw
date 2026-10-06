@@ -22,7 +22,6 @@ import {
   resolveFullyBlockedConfigMutationReason,
   type ConfigSnapshotForInstallExecution,
 } from "../plugins/install-config.js";
-import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import { resolveBundledInstallPlanForNpmFailure } from "../plugins/install-source-plan.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
@@ -33,7 +32,6 @@ import { shortenHomePath } from "../utils.js";
 import { persistHookPackInstall } from "./hook-install-persistence.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
-  createHookPackInstallLogger,
   createPluginInstallLogger,
   formatPluginInstallWithHookFallbackError,
 } from "./plugins-command-helpers.js";
@@ -55,16 +53,6 @@ type InstallResult =
       installSource?: ManagedPluginLifecycleError["installSource"];
     };
 
-export function resolveInstallSafetyOverrides(
-  overrides: InstallSafetyOverrides,
-): InstallSafetyOverrides {
-  return {
-    config: overrides.config,
-    onInstallPolicyWarning: overrides.onInstallPolicyWarning,
-    trustedSourceLinkedOfficialInstall: overrides.trustedSourceLinkedOfficialInstall,
-  };
-}
-
 async function attemptHookInstall(
   source: HookCompatibleSource,
   params: InstallParams,
@@ -75,12 +63,16 @@ async function attemptHookInstall(
   },
   assertOwned?: () => void,
 ): Promise<InstallHooksResult> {
+  const runtime = params.runtime ?? defaultRuntime;
   const common = requestDeferredPackageDirInstall(
     {
-      ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
+      ...params.safetyOverrides,
       config: params.snapshot.config,
       mode: source.mode,
-      logger: createHookPackInstallLogger(params.runtime),
+      logger: {
+        info: (message: string) => runtime.log(message),
+        warn: (message: string) => runtime.log(theme.warn(message)),
+      },
       ...options,
     },
     assertOwned,

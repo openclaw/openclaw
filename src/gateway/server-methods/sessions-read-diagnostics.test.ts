@@ -137,7 +137,13 @@ test.each(["channel-only", "slow-warning"])("attributes %s operations", async (m
     const context = requestContext(await seedSessions());
     context.subscribeSessionEvents = vi.fn();
     const client = { ...identifiedClient("owner@example.com"), connId: "private-connection" };
-    const request = { agentId: "main", limit: 1, includeDerivedTitles: true };
+    const request = {
+      agentId: "main",
+      limit: 1,
+      source: "sidebar" as const,
+      rowMode: "compact" as const,
+      includeDerivedTitles: true,
+    };
     await initializeSessionReadContext(context);
     await getSessionRowProjection(context)!.ensureMaterialized();
     const owner = getSessionRowProjection(context)!;
@@ -182,6 +188,11 @@ test.each(["channel-only", "slow-warning"])("attributes %s operations", async (m
       for (const [index, operation] of ["sessions.list", "sessions.subscribe"].entries()) {
         expect(events[index]).toMatchObject({
           operation,
+          source: "sidebar",
+          rowMode: "compact",
+          limit: 1,
+          offset: 0,
+          filterKind: "agentId",
           pid: process.pid,
           threadId,
           isMainThread,

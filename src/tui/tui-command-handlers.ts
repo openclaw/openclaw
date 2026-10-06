@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
+import {
+  SettingsList,
+  type Component,
+  type OverlayHandle,
+  type SelectItem,
+} from "@earendil-works/pi-tui";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
@@ -22,12 +27,9 @@ import {
   resolveTuiCommandDescriptor,
   type TuiCommandHandlerName,
 } from "./commands.js";
-import {
-  createFilterableSelectList,
-  createSearchableSelectList,
-  createSettingsList,
-  modelSelectItems,
-} from "./components/selectors.js";
+import { FilterableSelectList } from "./components/filterable-select-list.js";
+import { createSearchableSelectList, modelSelectItems } from "./components/selectors.js";
+import { filterableSelectListTheme, settingsListTheme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { runTuiBrowserSetup } from "./tui-browser-setup.js";
 import type { CommandHandlerContext } from "./tui-command-context.js";
@@ -182,11 +184,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const hasTrackedAbortTarget = () => Boolean(state.activeChatRunId || hasPendingSubmit(state));
 
-  const hasUnsafeSessionRollover = () =>
-    hasTrackedAbortTarget() || state.activityStatus === "finishing context";
-
   const rejectUnsafeSessionRollover = (command: "new" | "reset") => {
-    if (!hasUnsafeSessionRollover()) {
+    if (!hasTrackedAbortTarget() && state.activityStatus !== "finishing context") {
       return false;
     }
     // Reset interrupts admitted Gateway work, so both rollover commands must
@@ -196,18 +195,16 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     return true;
   };
 
-  const captureSessionIncarnation = () => captureTuiSessionIncarnation(state);
-
   const applySessionSetting = async (
     patch: Omit<Parameters<TuiBackend["patchSession"]>[0], "key" | "agentId">,
     success: string | ((result: SessionsPatchResult) => string),
     failure: string,
-    after?: (result: SessionsPatchResult) => void | Promise<void>,
+    after: () => void | Promise<void> = refreshSessionInfo,
   ) => {
     if (!admitSessionAction()) {
       return;
     }
-    const { selection, isCurrent } = captureSessionIncarnation();
+    const { selection, isCurrent } = captureTuiSessionIncarnation(state);
     try {
       const result = await client.patchSession({
         key: selection.sessionKey,
@@ -219,11 +216,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       chatLog.addSystem(typeof success === "function" ? success(result) : success);
       applySessionInfoFromPatch(result);
-      if (after) {
-        await after(result);
-      } else {
-        await refreshSessionInfo();
-      }
+      await after();
     } catch (err) {
       if (isCurrent()) {
         chatLog.addSystem(`${failure}: ${formatTuiErrorMessage(err)}`);
@@ -236,7 +229,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     onSelect: (value: string) => Promise<void>,
     request: { overlay?: OverlayHandle },
   ) => {
-    const { isCurrent } = captureSessionIncarnation();
+    const { isCurrent } = captureTuiSessionIncarnation(state);
     selector.onSelect = (item) => {
       if (pickerRequest !== request) {
         return;
@@ -263,7 +256,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const openModelSelector = () => {
     const request = beginPickerRequest();
-    const { selection, isCurrent } = captureSessionIncarnation();
+    const { selection, isCurrent } = captureTuiSessionIncarnation(state);
     let models = client.getKnownModels?.({ agentId: selection.agentId }) ?? [];
     const selector = createSearchableSelectList([], 9);
     const update = (next: typeof models, emptyMessage = "No models available") => {
@@ -342,26 +335,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     openSelector(createSearchableSelectList(items, 9), setAgent, request);
   };
 
-  const openContextModeSelector = () => {
-    const request = beginPickerRequest();
-    const items = [
-      ["list", "Short context breakdown"] as const,
-      ["detail", "Per-file, per-tool, per-skill, and system prompt size"] as const,
-      ["json", "Machine-readable context report"] as const,
-    ].map(([value, description]) => ({ value, label: value, description }));
-    const selector = createSearchableSelectList(items, 9);
-    openSelector(selector, (value) => sendMessage(`/context ${value}`), request);
-  };
-
   const openSessionSelector = async () => {
     const request = beginPickerRequest();
-    const { selection, isCurrent } = captureSessionIncarnation();
+    const { selection, isCurrent } = captureTuiSessionIncarnation(state);
     try {
       const sessions = await loadRecentSessions(client, { agentId: selection.agentId });
       if (request !== pickerRequest || !isCurrent()) {
         return;
       }
-      const selector = createFilterableSelectList(buildSessionChoices(sessions), 9);
+      const selector = new FilterableSelectList(
+        buildSessionChoices(sessions),
+        9,
+        filterableSelectListTheme,
+      );
       openSelector(selector, setSession, request);
     } catch (err) {
       if (request !== pickerRequest || !isCurrent()) {
@@ -388,8 +374,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         values: ["off", "on"],
       },
     ];
-    const settings = createSettingsList(
+    const settings = new SettingsList(
       items,
+      7,
+      settingsListTheme,
       (id, value) => {
         if (id === "tools") {
           state.toolsExpanded = value === "expanded";
@@ -504,7 +492,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (opts.local) {
         addUnsupportedLocalCommand("context");
       } else if (!args) {
-        openContextModeSelector();
+        const request = beginPickerRequest();
+        const items = [
+          ["list", "Short context breakdown"] as const,
+          ["detail", "Per-file, per-tool, per-skill, and system prompt size"] as const,
+          ["json", "Machine-readable context report"] as const,
+        ].map(([value, description]) => ({ value, label: value, description }));
+        const selector = createSearchableSelectList(items, 9);
+        openSelector(selector, (value) => sendMessage(`/context ${value}`), request);
       } else {
         await sendMessage(raw);
       }
@@ -514,7 +509,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         if (!admitSessionAction()) {
           return;
         }
-        const { selection, isCurrent } = captureSessionIncarnation();
+        const { selection, isCurrent } = captureTuiSessionIncarnation(state);
         try {
           const result = await client.runGoalCommand({
             ...selection,
@@ -665,7 +660,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         if (!admitSessionAction()) {
           return;
         }
-        const { selection, isCurrent } = captureSessionIncarnation();
+        const { selection, isCurrent } = captureTuiSessionIncarnation(state);
         try {
           const result = await client.runUsageCostCommand(selection);
           if (isCurrent()) {
@@ -716,10 +711,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       );
     },
     activation: async (args) => {
-      if (!args) {
-        chatLog.addSystem("usage: /activation <mention|always>");
-        return;
-      }
       const activation = normalizeGroupActivation(args);
       if (!activation) {
         chatLog.addSystem("usage: /activation <mention|always>");
@@ -735,7 +726,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (!admitSessionAction() || rejectUnsafeSessionRollover("new")) {
         return;
       }
-      let creationIncarnation = captureSessionIncarnation();
+      let creationIncarnation = captureTuiSessionIncarnation(state);
       const { selection, sessionId } = creationIncarnation;
       const finishSessionTransition = beginSessionTransition("new");
       try {
@@ -751,7 +742,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           throw new Error("sessions.create returned no session key");
         }
         const adoption = setSession(result.key);
-        creationIncarnation = captureSessionIncarnation();
+        creationIncarnation = captureTuiSessionIncarnation(state);
         await adoption;
         if (creationIncarnation.isCurrent()) {
           chatLog.addSystem(`new session: ${result.key}`);
@@ -768,7 +759,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (!admitSessionAction() || rejectUnsafeSessionRollover("reset")) {
         return;
       }
-      let resetIncarnation = captureSessionIncarnation();
+      let resetIncarnation = captureTuiSessionIncarnation(state);
       const resetSelection = resetIncarnation.selection;
       const finishSessionTransition = beginSessionTransition("reset");
       try {
@@ -787,7 +778,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         state.sessionInfo.totalTokens = null;
         tui.requestRender();
         if (applySessionMutationResult(result, resetSelection)) {
-          resetIncarnation = captureSessionIncarnation();
+          resetIncarnation = captureTuiSessionIncarnation(state);
           await refreshSessionInfo();
         } else {
           await loadHistory();
@@ -874,7 +865,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       selection: sendSelection,
       sessionId: sendSessionId,
       isCurrent: isCurrentSendViewport,
-    } = captureSessionIncarnation();
+    } = captureTuiSessionIncarnation(state);
     const sendScope = readTuiSessionProjectionScope(state);
     try {
       if (!isBtw) {
@@ -1053,8 +1044,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     openModelSelector,
     openAgentSelector,
     openSessionSelector,
-    openSettings,
-    setAgent,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

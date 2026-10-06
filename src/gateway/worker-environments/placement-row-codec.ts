@@ -129,6 +129,22 @@ export function find(
   return row ? fromRow(row) : undefined;
 }
 
+export function readWorkerPlacementsForReconcileInDatabase(
+  db: DatabaseSync,
+  sessionKey?: string,
+): WorkerSessionPlacementRecord[] {
+  let select = query(db)
+    .selectFrom("worker_session_placements")
+    .selectAll()
+    .where("state", "not in", ["local", "reclaimed"]);
+  if (sessionKey !== undefined) {
+    select = select.where("session_key", "=", sessionKey);
+  }
+  return executeSqliteQuerySync(db, select.orderBy("updated_at_ms").orderBy("session_id")).rows.map(
+    fromRow,
+  );
+}
+
 export function readWorkerPlacementChangeSnapshotInDatabase(
   db: DatabaseSync,
   profileIds?: readonly string[],

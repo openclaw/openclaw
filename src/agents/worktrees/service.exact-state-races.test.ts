@@ -6,9 +6,14 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as gitExec from "../../infra/git-exec.js";
 import * as commandRunner from "../../process/exec-runner.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import * as provisionedFiles from "./provisioned-files.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
+import { updateRegistryWorktreeInDatabase } from "./registry-run-end.worker.js";
 import * as registry from "./registry.js";
 import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import * as leases from "./run-lease.js";
@@ -28,8 +33,9 @@ async function git(cwd: string, ...args: string[]) {
 describe("exact-state retirement admission and recovery", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   const temps = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
+    afterEach(async () => {
       vi.restoreAllMocks();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     }),
@@ -99,9 +105,9 @@ describe("exact-state retirement admission and recovery", () => {
       const f = await fixture();
       let token = "";
       const claim = leases.claimWorktreeRemoval;
-      vi.spyOn(leases, "claimWorktreeRemoval").mockImplementation((environment, request) => {
+      vi.spyOn(leases, "claimWorktreeRemoval").mockImplementation(async (environment, request) => {
         token = request.token;
-        claim(environment, request);
+        await claim(environment, request);
       });
       let current = true;
       let injected = false;
@@ -129,10 +135,12 @@ describe("exact-state retirement admission and recovery", () => {
             await fs.writeFile(path.join(f.record.path, "README.md"), "concurrent change\n");
           }
           if (kind === "activity") {
-            updateRegistryWorktree(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 1 });
+            await updateRegistryWorktree(env, f.record.id, {
+              lastActiveAt: f.record.lastActiveAt + 1,
+            });
           }
           if (kind === "claim") {
-            leases.abortWorktreeRemoval(env, f.record.id, token);
+            await leases.abortWorktreeRemoval(env, f.record.id, token);
           }
           if (kind === "authority") {
             current = false;
@@ -289,6 +297,15 @@ describe("exact-state retirement admission and recovery", () => {
       const recover = () => service.restore({ id: f.record.id, recoverExactState: f.exactState });
       if (phase !== "run-admission") {
         await expect(recover()).rejects.toThrow("controlled native move acknowledgement loss");
+      }
+      if (phase === "move-ack") {
+        expect(await refNames("refs/openclaw/removals/" + f.record.id)).not.toBe("");
+        await expect(leases.acquireWorktreeRunLease(f.record.id, { env })).rejects.toThrow(
+          "Worktree removal is incomplete",
+        );
+        expect(leases.hasLiveWorktreeRunLease(env, f.record.id)).toBe(false);
+      }
+      if (phase === "cleanup-ack") {
         const liveRun = await leases.acquireWorktreeRunLease(f.record.id, { env });
         try {
           await expect(recover()).rejects.toThrow(/busy|locked by live pid/);
@@ -304,6 +321,10 @@ describe("exact-state retirement admission and recovery", () => {
         }
         expect(await fs.readFile(f.indexPath)).toEqual(f.index);
         expect(await refNames("refs/openclaw/removals/" + f.record.id)).toBe("");
+        if (phase === "move-ack") {
+          admitted = await leases.acquireWorktreeRunLease(f.record.id, { env });
+          expect(leases.hasLiveWorktreeRunLease(env, f.record.id)).toBe(true);
+        }
       } finally {
         await admitted?.release();
       }
@@ -655,7 +676,9 @@ describe("exact-state retirement admission and recovery", () => {
             args[0].includes(`${result.snapshotRef}^{commit}`)
           ) {
             changed = true;
-            updateRegistryWorktree(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 1 });
+            await updateRegistryWorktree(env, f.record.id, {
+              lastActiveAt: f.record.lastActiveAt + 1,
+            });
           }
           return value;
         });
@@ -682,7 +705,7 @@ describe("exact-state retirement admission and recovery", () => {
     await service.remove(f.request);
     const update = registry.updateRegistryWorktree;
     let changed = false;
-    vi.spyOn(registry, "updateRegistryWorktree").mockImplementation((...args) => {
+    vi.spyOn(registry, "updateRegistryWorktree").mockImplementation(async (...args) => {
       if (
         !changed &&
         args[1] === f.record.id &&
@@ -690,7 +713,7 @@ describe("exact-state retirement admission and recovery", () => {
         args[2].removedAt === undefined
       ) {
         changed = true;
-        update(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 7 });
+        await update(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 7 });
       }
       return update(...args);
     });
@@ -718,7 +741,15 @@ describe("exact-state retirement admission and recovery", () => {
       const write = () => {
         attempted = true;
         try {
-          updateRegistryWorktree(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 7 });
+          // The synthetic contender runs inside the synchronous expiry transaction.
+          runOpenClawStateWriteTransaction(
+            ({ db }) =>
+              updateRegistryWorktreeInDatabase(db, {
+                id: f.record.id,
+                patch: { lastActiveAt: f.record.lastActiveAt + 7 },
+              }),
+            { env },
+          );
         } catch {
           rejected = true;
         }
@@ -936,20 +967,27 @@ describe("exact-state retirement admission and recovery", () => {
     await fs.writeFile(filename, "original secret\n");
     await fs.utimes(filename, 1_600_000_000, 1_600_000_000);
     const original = await fs.stat(filename);
-    const snapshot = provisionedFiles.snapshotProvisionedFiles;
+    const runCommand = gitExec.executeGitCommandBuffered;
     let captured = false;
-    vi.spyOn(provisionedFiles, "snapshotProvisionedFiles").mockImplementation(async (...args) => {
-      captured = true;
-      await fs.writeFile(filename, "different bytes\n");
-      try {
-        return await snapshot(...args);
-      } finally {
-        await fs.writeFile(filename, "original secret\n");
-        await fs.utimes(filename, original.atime, original.mtime);
+    vi.spyOn(gitExec, "executeGitCommandBuffered").mockImplementation(async (...args) => {
+      if (
+        !captured &&
+        args[0] === f.record.path &&
+        args[1].includes("--literal-pathspecs") &&
+        args[1].includes("ls-files") &&
+        args[1].includes("--ignored")
+      ) {
+        captured = true;
+        await fs.writeFile(filename, "different bytes\n");
       }
+      return await runCommand(...args);
     });
-    await expect(service.remove(f.request)).rejects.toThrow(/provisioned exact-state/);
+    await expect(service.remove(f.request)).rejects.toThrow(
+      /provisioned exact-state bytes changed after capture/,
+    );
     expect(captured).toBe(true);
+    await fs.writeFile(filename, "original secret\n");
+    await fs.utimes(filename, original.atime, original.mtime);
     expect(await fs.readFile(filename, "utf8")).toBe("original secret\n");
     expect(await fs.readFile(f.indexPath)).toEqual(f.index);
     expect(getRegistryWorktree(env, f.record.id)?.removedAt).toBeUndefined();

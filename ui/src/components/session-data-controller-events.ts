@@ -112,6 +112,8 @@ export function hasSidebarListFilter(owner: SidebarSessionQueryOwner): boolean {
 export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId: string) {
   const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
   return {
+    source: "sidebar",
+    excludeDock: true,
     ownerId: involvingMe ? undefined : ownerId || undefined,
     involvingMe: involvingMe || undefined,
     agentId,

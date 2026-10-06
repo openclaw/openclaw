@@ -230,7 +230,7 @@ async function closeChat(fixture: { context: BrowserContext; page: Page }): Prom
 async function setSelectedAgent(page: Page, name: string): Promise<void> {
   const sidebar = page.locator("openclaw-app-sidebar");
   await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-  await sidebar.getByRole("menuitemradio", { name, exact: true }).click();
+  await sidebar.getByRole("menuitem", { name, exact: true }).click();
 }
 
 async function replyToAgentMetadata(gateway: MockGatewayControls, agentId: "main" | "work") {

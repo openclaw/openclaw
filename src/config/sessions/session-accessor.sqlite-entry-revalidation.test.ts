@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { readSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
@@ -212,6 +213,9 @@ describe("SQLite session entry patch commit revalidation", () => {
               : /closed|replaced|not open/,
         );
         expect(updates).toBe(1);
+        if (changed === "connection") {
+          await closeOpenClawAgentDatabaseByPathAsync(database.path);
+        }
         expect(loadExactSessionEntry(scope)?.entry.label).toBe(
           changed === "row" ? "foreign" : "original",
         );
@@ -336,6 +340,31 @@ describe("SQLite session entry patch commit revalidation", () => {
   });
 
   describe("compact session currency facts", () => {
+    it("checks logical session currency without reading saved snapshots", () => {
+      database.db
+        .prepare(
+          "INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES (?, ?, ?)",
+        )
+        .run(
+          sessionKey,
+          "skillsSnapshot",
+          JSON.stringify({ prompt: "saved instructions".repeat(4096), skills: [] }),
+        );
+      const payloads = trackSqliteStatementExecutions(database.db, ["entry"], (sql) =>
+        sql.includes('from "session_nodes"') ? "entry" : null,
+      );
+      try {
+        expect(
+          readSessionEntryCurrentFactsInDatabase(database, sessionKey, "logical"),
+        ).toMatchObject({
+          sessionId: "session-1",
+        });
+        expect(payloads.textBytes.entry).toBeLessThan(2048);
+      } finally {
+        payloads.restore();
+      }
+    });
+
     it("discards facts first observed after a write in a rolled-back native transaction", () => {
       // A fresh admitted connection has never installed the lazy revision tracker.
       const connection = openNodeSqliteDatabase(database.path);
@@ -491,8 +520,8 @@ describe("SQLite session entry patch commit revalidation", () => {
   });
 
   it("commits an unchanged persisted row after reopening during preparation", async () => {
-    const persisted = await patchEntry("ordinary", () => {
-      expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+    const persisted = await patchEntry("ordinary", async () => {
+      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
       return { label: "renamed" };
     });
     expect(persisted).toMatchObject({ label: "renamed", sessionId: "session-1" });
@@ -603,10 +632,10 @@ describe("SQLite session entry patch commit revalidation", () => {
         { sessionId: "main-session", updatedAt: 10 },
       );
       await expect(
-        patchEntry(route, () => {
+        patchEntry(route, async () => {
           setCanonicalSqliteSessionMainKey(database, "work");
           setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
-          expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+          expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
           return null;
         }),
       ).rejects.toThrow("openclaw doctor --fix");
@@ -688,7 +717,7 @@ describe("SQLite session entry patch commit revalidation", () => {
         return { label: "with participants" };
       });
       expect(persisted).toMatchObject({ sessionId: "session-1", label: "with participants" });
-      expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
       expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
         label: "with participants",
         participantCount: 2,

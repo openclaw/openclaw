@@ -8,6 +8,7 @@ import * as manifestRegistry from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createConfigIoContext } from "./io.context.js";
+import { createConfigReadError } from "./io.invalid-config.js";
 import {
   readConfigFileSnapshotFromContext,
   readConfigFileSnapshotWithPluginMetadataFromContext,
@@ -45,6 +46,39 @@ function createContext(root: string, configPath = path.join(root, "openclaw.json
 }
 
 describe("config snapshot plugin metadata", () => {
+  it.each(["file", "includes", "validate"])(
+    "preserves the original %s read failure without serializing its cause",
+    async (phase) => {
+      const root = tempDirs.make("openclaw-config-read-cause-");
+      const context = createContext(root);
+      const raw = '{"gateway":{"mode":"local"}}';
+      fs.writeFileSync(context.configPath, raw);
+      const cause = Object.assign(new Error("config read fixture failed"), {
+        diagnosticContext: "private-cause-context",
+      });
+      context.deps.measure = async (name, run) => {
+        if (name === `config.snapshot.read.${phase}`) {
+          throw cause;
+        }
+        return await run();
+      };
+
+      const snapshot = await readConfigFileSnapshotFromContext(context);
+
+      expect(snapshot.valid).toBe(false);
+      expect(snapshot.issues[0]).toHaveProperty("cause", cause);
+      expect(snapshot.issues[0]?.message).toContain(context.configPath);
+      const failure = createConfigReadError(snapshot);
+      expect(failure.cause).toBe(cause);
+      expect(failure.cause).toHaveProperty("stack", cause.stack);
+      expect(failure.message).toContain(context.configPath);
+      expect(snapshot.readError).toEqual(phase === "file" ? { code: null } : undefined);
+      expect(JSON.stringify(snapshot)).not.toContain("private-cause-context");
+      expect(JSON.stringify(snapshot)).not.toContain('"cause"');
+      expect(fs.readFileSync(context.configPath, "utf8")).toBe(raw);
+    },
+  );
+
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "retains an inaccessible config parent as a read failure rather than a missing config",
     async () => {

@@ -17,7 +17,6 @@ import {
 import {
   type AuthProfileCredential as ProfileEntry,
   type AuthProfileEligibilityReasonCode,
-  clearRuntimeAuthProfileStoreSnapshot,
   externalCliDiscoveryScoped,
   ensureAuthProfileStore,
   listProfilesForProvider,
@@ -26,7 +25,7 @@ import {
   upsertAuthProfileWithLock,
 } from "../../agents/auth-profiles.js";
 import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/order.js";
-import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
+import { getScopedAuthProfileEnv } from "../../agents/auth-profiles/store.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as PROBE_STATUS_BY_FAILOVER_REASON } from "../../agents/failover/probe-status.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
@@ -46,8 +45,8 @@ import {
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveMergedModelProviderEntry } from "../../config/model-provider-config.js";
 import {
   copyConfigResolutionFacts,
@@ -68,18 +67,14 @@ import type {
 import type { GatewayLockIdentity, GatewayLockOptions } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
-import { redactStatusSecrets } from "../status-all/format.js";
-import { createAuthProbeWork } from "./list.probe.cleanup.js";
+import { redactStatusSecrets as redactAuthProbeError } from "../status-all/format.js";
+import { createAuthProbeWork, disposeAuthProbeDirectory } from "./list.probe.cleanup.js";
 import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
 import { formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
-/** Scrubs credential-shaped text before probe failures cross a UI or CLI boundary. */
-export function redactAuthProbeError(error: string): string {
-  return redactStatusSecrets(error);
-}
+export { redactAuthProbeError };
 
 export type AuthProbeStatus =
   | "ok"
@@ -114,13 +109,11 @@ export type AuthProbeResult = {
   latencyMs?: number;
 };
 
-type AuthProbeTarget = {
-  provider: string;
+type AuthProbeTarget = Pick<
+  AuthProbeResult,
+  "provider" | "profileId" | "label" | "source" | "mode"
+> & {
   model?: { provider: string; model: string } | null;
-  profileId?: string;
-  label: string;
-  source: "profile" | "env" | "models.json";
-  mode?: string;
   boundValue?: string;
   useRuntimeAuth?: boolean;
 };
@@ -153,13 +146,7 @@ export type AuthProbeSummary = {
   finishedAt: number;
   durationMs: number;
   totalTargets: number;
-  options: {
-    provider?: string;
-    profileIds?: string[];
-    timeoutMs: number;
-    concurrency: number;
-    maxTokens: number;
-  };
+  options: Omit<AuthProbeOptions, "includeDirectKeys">;
   results: AuthProbeResult[];
 };
 
@@ -717,6 +704,7 @@ async function probeTarget(params: {
 
   const runId = `probe-${target.provider}-${crypto.randomUUID()}`;
   let isolatedAgentDir: string | null = null;
+  let isolatedAuthEnv: NodeJS.ProcessEnv | undefined;
   let isolatedProfileId: string | undefined;
   let sessionTarget: Awaited<ReturnType<typeof prepareInternalSessionEffectsSession>> | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
@@ -744,13 +732,12 @@ async function probeTarget(params: {
     // authoritative: a run-provenance lease would rebind it to the committed
     // configured owner and lose the synthetic profile.
     if (target.boundValue || target.useRuntimeAuth) {
-      // Canonicalize so the isolated agent DB registers and unregisters under
-      // one path. os.tmpdir() is a symlink on macOS (/var -> /private/var), and
-      // disposeOpenClawAgentDatabaseByPath's exact-path guard would otherwise
-      // skip the registry row, leaking an agent_databases entry per probe.
+      // Keep native, worker, and registry locators canonical across macOS's
+      // os.tmpdir() symlink (/var -> /private/var).
       isolatedAgentDir = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-probe-")),
       );
+      isolatedAuthEnv = cloneEnvWithPlatformSemantics(getScopedAuthProfileEnv() ?? process.env);
     }
     if (target.boundValue && !target.useRuntimeAuth && isolatedAgentDir) {
       isolatedProfileId = `${target.provider}:probe-${crypto.randomUUID()}`;
@@ -841,15 +828,7 @@ async function probeTarget(params: {
       ];
       if (isolatedAgentDir) {
         const ownedDir = isolatedAgentDir;
-        cleanups.push(
-          () => {
-            clearRuntimeAuthProfileStoreSnapshot(ownedDir);
-          },
-          () => {
-            disposeOpenClawAgentDatabaseByPath(resolveAuthProfileDatabasePath(ownedDir));
-          },
-          () => fs.rm(ownedDir, { recursive: true, force: true }),
-        );
+        cleanups.push(() => disposeAuthProbeDirectory(ownedDir, isolatedAuthEnv));
       }
       const errors: unknown[] = [];
       for (const cleanup of cleanups) {
@@ -888,10 +867,7 @@ async function runTargetsWithConcurrency(params: {
 
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
   const agentDir = params.agentDir ?? resolveAgentDir(cfg, agentId);
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(cfg, agentId) ??
-    resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
 
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -975,17 +951,12 @@ export async function withAuthProbeStateOwnership<T>(
   }
 }
 
-export async function runAuthProbes(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  providers: string[];
-  modelCandidates: string[];
-  options: AuthProbeOptions;
-  onProgress?: (update: { completed: number; total: number; label?: string }) => void;
-  stateOwnership?: AuthProbeStateOwnership;
-}): Promise<AuthProbeSummary> {
+export async function runAuthProbes(
+  params: Parameters<typeof buildProbeTargets>[0] & {
+    onProgress?: Parameters<typeof runTargetsWithConcurrency>[0]["onProgress"];
+    stateOwnership?: AuthProbeStateOwnership;
+  },
+): Promise<AuthProbeSummary> {
   return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
     const startedAt = Date.now();
     const plan = await buildProbeTargets({

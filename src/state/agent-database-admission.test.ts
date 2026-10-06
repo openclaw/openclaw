@@ -6,13 +6,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentDatabaseAdmissionRefusalSchema } from "../../packages/gateway-protocol/src/schema/agent-database-admission.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
   AgentDatabaseAdmissionError,
   captureAgentDatabaseAdmission,
@@ -23,6 +24,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
+import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -33,13 +35,24 @@ import {
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import {
+  withExistingOpenClawStateDatabaseReadOnly,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "./openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  vi.unstubAllEnvs();
+const tempDirs = createTempDirTracker();
+afterEach(async () => {
+  try {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    tempDirs.cleanup();
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 describe("agent database admission", () => {
@@ -90,16 +103,31 @@ describe("agent database admission", () => {
     database.exec("UPDATE schema_meta SET agent_id = NULL WHERE meta_key = 'primary'");
     database.close();
     const before = fs.readFileSync(pathname);
-    await withAgentDatabaseStartupAdmission(async () => {
+    await withAgentDatabaseStartupAdmission(async (admission) => {
       await expect(
         assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }),
       ).resolves.toBeUndefined();
-      expect(readAgentDatabaseAdmissionRefusal("worker", { env })).toMatchObject({
-        code: "agent-database-inspection-failed",
-        reason: expect.stringContaining("no agent owner"),
-      });
       expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
-      deepStrictEqual(fs.readFileSync(pathname), before);
+      const owner = admission.adopt();
+      const prepareAgent = vi.fn(async () => {});
+      try {
+        admission.activate({
+          isCurrent: () => true,
+          preparationReady: Promise.resolve(),
+          openAgent: prepareAgent,
+          migrateAgent: prepareAgent,
+          publishAgent: prepareAgent,
+        });
+        await admission.pendingPreparation;
+        expect(readAgentDatabaseAdmissionRefusal("worker", { env })).toMatchObject({
+          code: "agent-database-inspection-failed",
+          reason: expect.stringContaining("no agent owner"),
+        });
+        expect(prepareAgent).not.toHaveBeenCalled();
+        deepStrictEqual(fs.readFileSync(pathname), before);
+      } finally {
+        await owner.stop();
+      }
     });
   });
 
@@ -180,6 +208,70 @@ describe("agent database admission", () => {
     });
     expect(assertAdmitted).not.toThrow();
     expect(inPreparation).toThrow("Agent database preparation has ended: main");
+  });
+
+  it("settles deferred startup admission after its discovery snapshot closes", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-deferred-admission-snapshot-") };
+    const agentId = "main";
+    const pathname = openOpenClawAgentDatabase({ agentId, env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    await withAgentDatabaseStartupAdmission(async (admission) => {
+      const tracked = vi.spyOn(admission, "track");
+      const owner = admission.adopt();
+      try {
+        await withOpenClawStateDatabaseReadSnapshot(
+          async () => {
+            const refusals = admission.defer({
+              env,
+              inspections: [
+                {
+                  target: { agentId, path: pathname },
+                  result: Promise.resolve({ incompatible: [], indeterminate: [] }),
+                },
+              ],
+              reason: "Awaiting Gateway activation",
+            });
+            recordAgentDatabaseAdmissions(refusals, { env, source: "startup" });
+          },
+          { env },
+        );
+        expect(readAgentDatabaseAdmissionRefusal(agentId, { env })?.code).toBe(
+          "agent-database-inspection-pending",
+        );
+        const phases: string[] = [];
+        admission.activate({
+          isCurrent: () => true,
+          preparationReady: Promise.resolve(),
+          openAgent: async ({ assertCurrent }) => {
+            assertCurrent();
+            phases.push("open");
+          },
+          migrateAgent: async ({ assertCurrent }) => {
+            assertCurrent();
+            expect(
+              withExistingOpenClawStateDatabaseReadOnly(
+                ({ db }) => readAgentDeletionJournalStatusInDatabase(db, agentId),
+                { env },
+              ),
+            ).toBe("absent");
+            phases.push("migration");
+          },
+          publishAgent: async ({ assertCurrent }) => {
+            assertCurrent();
+            phases.push("publication");
+          },
+        });
+        // Join the owner's work on success or refusal, never a success-only callback.
+        await Promise.all(tracked.mock.calls.map(([work]) => work));
+        const refusal = readAgentDatabaseAdmissionRefusal(agentId, { env });
+        expect(refusal, refusal?.reason).toBeUndefined();
+        expect(phases).toEqual(["open", "migration", "publication"]);
+      } finally {
+        await owner.stop();
+        tracked.mockRestore();
+      }
+    });
   });
 
   it.each([
@@ -297,14 +389,19 @@ describe("agent database admission", () => {
         status: "degraded",
         admissionRefusal: refusal,
       });
-      const { runStartupSessionMigration } =
-        await import("../gateway/server-startup-session-migration.js");
+      const { runStartupSessionMaintenanceForTest } =
+        await import("../gateway/server-startup-session-migration.test-support.js");
       const { assertConfiguredWorkspaceStateReady } =
         await import("../agents/workspace-state-dirs.js");
       await assertConfiguredWorkspaceStateReady({ cfg: config, env });
-      await runStartupSessionMigration({ cfg: config, env, log: { info: vi.fn(), warn: vi.fn() } });
+      await runStartupSessionMaintenanceForTest({
+        cfg: config,
+        env,
+        log: { info: vi.fn(), warn: vi.fn() },
+      });
       deepStrictEqual(fs.readFileSync(target), copyBytes);
       expect(() => openOpenClawAgentDatabase({ agentId, env })).toThrow(refusal?.reason);
+      await cleanupSessionStateForTest({ stateDir });
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       fs.renameSync(target, `${target}.operator-backup`);

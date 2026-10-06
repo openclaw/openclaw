@@ -27,8 +27,10 @@ import {
   createRejectedToolCallLauncher,
   toToolBatchCalls,
 } from "./tool-batch-admission.js";
+import { combineExecutedToolBatches } from "./tool-batch-completion.js";
 import {
   type AgentToolExecutionContext,
+  resolveAgentAssistantTurnId,
   runWithAgentToolExecutionContext,
 } from "./tool-execution-context.js";
 import {
@@ -311,14 +313,7 @@ async function runLoop(
           : undefined;
       const batches = [...streamed.batches, ...(terminalToolBatch ? [terminalToolBatch] : [])];
       const executedToolBatch: ExecutedToolCallBatch | undefined = batches.length
-        ? {
-            messages: batches.flatMap((batch) => batch.messages),
-            steeringMessages: [...new Set(batches.flatMap((batch) => batch.steeringMessages))],
-            terminate: batches.every((batch) => batch.terminate),
-            terminateRun: batches.some((batch) => batch.terminateRun),
-            intervention: batches.find((batch) => batch.intervention)?.intervention,
-            fatal: batches.find((batch) => batch.fatal)?.fatal,
-          }
+        ? combineExecutedToolBatches(config, message, batches)
         : undefined;
       const toolResults = executedToolBatch?.messages ?? [];
       turnTainted ||= toolResults.some(toolResultTaintsTurn);
@@ -584,7 +579,7 @@ async function executeToolCallGroups(
         const entry = await prepareToolCallEntry(batch, toolCall);
         entries.push(entry);
         if (!("kind" in entry)) {
-          await emitToolExecutionEnd(entry, batch.emit);
+          await emitToolExecutionEnd(entry, batch);
         }
         if (sequential || batch.signal?.aborted) {
           break;
@@ -614,7 +609,7 @@ async function executeToolCallGroups(
           if (sequential) {
             entry.execution.dispose();
           }
-          await emitToolExecutionEnd(finalized, batch.emit);
+          await emitToolExecutionEnd(finalized, batch);
           ordered[index] = finalized;
         } finally {
           entry.execution.dispose();
@@ -1344,7 +1339,7 @@ async function completeToolLoopInterventionBatch(
       },
       validation?.kind === "prepared" ? validation.args : toolCall.arguments,
     );
-    await emitToolExecutionEnd(finalized, batch.emit);
+    await emitToolExecutionEnd(finalized, batch);
     messages.push(await emitToolResultMessage(finalized, batch.emit));
     finalizedCalls.push(finalized);
   }
@@ -1395,7 +1390,7 @@ async function completeUnstartedToolCall(
     },
     "args" in options ? options.args : toolCall.arguments,
   );
-  await emitToolExecutionEnd(finalized, batch.emit);
+  await emitToolExecutionEnd(finalized, batch);
   return finalized;
 }
 
@@ -1433,11 +1428,13 @@ function emitToolExecutionStart(
 
 async function emitToolExecutionEnd(
   finalized: FinalizedToolCallOutcome,
-  emit: AgentEventSink,
+  batch: ToolBatchContext,
 ): Promise<void> {
-  await emit({
+  const assistantTurnId = resolveAgentAssistantTurnId(batch.assistantMessage);
+  await batch.emit({
     type: "tool_execution_end",
     toolCallId: finalized.toolCall.id,
+    ...(assistantTurnId ? { assistantTurnId } : {}),
     toolName: finalized.toolCall.name,
     result: finalized.result,
     isError: finalized.isError,

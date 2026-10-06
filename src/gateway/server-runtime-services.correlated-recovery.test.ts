@@ -13,7 +13,7 @@ import {
 } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { readFullSubagentRuns } from "../agents/subagents/registry/subagent-registry-read-cache.js";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
@@ -125,7 +125,7 @@ describe("registered correlated completion recovery custody", () => {
         const database = openOpenClawStateDatabase({
           env: { ...state.env, OPENCLAW_STATE_DIR: root },
         });
-        upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(child));
+        writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(child)], []);
         return database;
       };
       const database = persist(state.stateDir);
@@ -134,7 +134,10 @@ describe("registered correlated completion recovery custody", () => {
         const unavailable = vi
           .spyOn(store, "executeExistingOpenClawStateRead")
           .mockImplementationOnce(async (_options, command) => {
-            expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
+            expect(command).toEqual({
+              type: "subagents.runs",
+              scope: { kind: "page", after: undefined },
+            });
             throw new Error("registry hydration read unavailable");
           });
         try {

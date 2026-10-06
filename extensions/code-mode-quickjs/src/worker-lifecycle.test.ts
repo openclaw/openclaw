@@ -140,6 +140,9 @@ describe("Code Mode worker lifecycle", () => {
       vm.newFunction("__openclawHostCancelRequest", () => vm.undefined).consume((handle) =>
         vm.global.setProp("__openclawHostCancelRequest", handle),
       );
+      vm.newFunction("__openclawHostTakeBridgeReply", () => vm.undefined).consume((handle) =>
+        vm.global.setProp("__openclawHostTakeBridgeReply", handle),
+      );
       for (const [name, value] of Object.entries({
         __openclawCatalog: [],
         __openclawNamespaces: [],

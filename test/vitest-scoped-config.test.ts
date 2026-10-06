@@ -498,6 +498,7 @@ describe("scoped vitest configs", () => {
       "loader.lazy-alias.test.ts",
       "plugin-module-loader-cache.source-prescan.test.ts",
       "plugin-sdk-native-resolver.test.ts",
+      "sdk-alias.test.ts",
     ]) {
       expect(
         projects

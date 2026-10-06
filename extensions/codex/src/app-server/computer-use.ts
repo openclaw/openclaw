@@ -382,10 +382,11 @@ async function inspectCodexComputerUseWithoutFence(
   params: CodexComputerUseInspectionParams,
 ): Promise<CodexComputerUseStatus> {
   const request = createComputerUseRequest(params);
-  if (params.installMode !== "none") {
-    if (!resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig }).autoInstall) {
-      await prepareExplicitManagedComputerUseInstall(params);
-    }
+  if (
+    params.installMode !== "none" &&
+    !resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig }).autoInstall
+  ) {
+    await prepareExplicitManagedComputerUseInstall(params);
   }
 
   const managedMarketplacePath = await resolveClientManagedBundledMarketplacePath(
@@ -822,22 +823,7 @@ async function listComputerUseMarketplaceCandidates(
   const listed = await request<CodexPluginListResponse>("plugin/list", {
     cwds: [],
   } satisfies CodexRequestObject);
-  return findComputerUseMarketplaces(listed, config.pluginName);
-}
-
-async function codexNativePluginsDisabled(request: CodexComputerUseRequest): Promise<boolean> {
-  const response = await request<CodexAppServerRequestResult<"experimentalFeature/list">>(
-    "experimentalFeature/list",
-    {},
-  );
-  // Codex returns the full catalog when limit is omitted; absent plugins remains unknown so polling continues.
-  return response.data.find(({ name }) => name === "plugins")?.enabled === false;
-}
-
-function findComputerUseMarketplaces(
-  listed: CodexPluginListResponse,
-  pluginName: string,
-): MarketplaceRef[] {
+  const { pluginName } = config;
   return listed.marketplaces.flatMap((marketplace): MarketplaceRef[] => {
     const plugin = marketplace.plugins.find(
       (candidate) =>
@@ -864,6 +850,15 @@ function findComputerUseMarketplaces(
       },
     ];
   });
+}
+
+async function codexNativePluginsDisabled(request: CodexComputerUseRequest): Promise<boolean> {
+  const response = await request<CodexAppServerRequestResult<"experimentalFeature/list">>(
+    "experimentalFeature/list",
+    {},
+  );
+  // Codex returns the full catalog when limit is omitted; absent plugins remains unknown so polling continues.
+  return response.data.find(({ name }) => name === "plugins")?.enabled === false;
 }
 
 function chooseKnownComputerUseMarketplace(

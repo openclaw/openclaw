@@ -424,7 +424,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         deletion?.cleanupCompleted &&
         findAgentEntryIndex(listAgentEntries(lockedConfig), agentId) >= 0
       ) {
-        if (!claimCompletedAgentDeletion(agentId, deletion.operationId)) {
+        if (!(await claimCompletedAgentDeletion(agentId, deletion.operationId))) {
           throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
         }
         tombstoneClaimed = true;
@@ -675,7 +675,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         deletion?.cleanupCompleted &&
         !tombstoneClaimed &&
         committed.result?.status === "created" &&
-        !claimCompletedAgentDeletion(agentId, deletion.operationId)
+        !(await claimCompletedAgentDeletion(agentId, deletion.operationId))
       ) {
         throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
       }

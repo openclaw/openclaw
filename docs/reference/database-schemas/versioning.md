@@ -75,6 +75,18 @@ same-version readers can ignore the extra index, so binary rollback leaves it
 intact. The accepted design is recorded in the
 [session label index decision](https://github.com/openclaw/openclaw/pull/147837#issuecomment-5658783288).
 
+ACP resume lookups use two nonunique expression indexes on the existing
+`acp_sessions.identity_json` agent and ACPX session IDs. The shared-state worker
+selects only matching identities, and canonical session reads retain requester,
+backend, and lifecycle checks. Duplicate IDs retain session-key ordering; stale
+lifecycles do not authorize resume. Unresolved aliases and internal sessions stay
+ineligible, as in the canonical session listing. The writable schema owner installs the indexes
+on existing databases without changing the schema version or canonical rows.
+Construction scans ACP metadata once and uses temporary disk; subsequent metadata
+writes maintain both indexes. Older same-version readers ignore the extra indexes,
+so downgrade and binary rollback preserve rows and indexes. No new cache,
+retention policy, or operator configuration is introduced.
+
 Task and maintenance lookups added nonunique indexes without changing state
 schema 17 or agent schema 21: task requester sessions, worker placements by
 environment, and session entries whose validity is not yet confirmed. The task
@@ -124,6 +136,29 @@ scans batch history once and stores only pending entries. Older same-version bui
 can read and write the database safely, leaving the new index intact and recreating
 their day index; reopening with the current build retires it again. Binary rollback
 requires no row conversion or schema-version change.
+
+Memory chunk admission retires the nonunique `idx_memory_index_chunks_path`
+index at the same agent schema version. Both schema publishers retain the
+`(path, source)` index for path and source lookups. Writable memory initialization
+drops the redundant index after legacy storage validation; agent-only and read-only
+admission tolerate either state without recreating it. Older writable builds may
+rebuild it on downgrade or rollback. Rows and constraints are unchanged; see the
+[storage decision](/reference/database-schemas/storage-changes#memory-chunk-path-index-retirement).
+
+Trajectory retention replaces the existing `idx_agent_trajectory_runtime_run`
+definition with a full covering index on `(session_id, run_id, created_at,
+octet_length(event_json))`, including null run IDs. Agent schema 24 is unchanged.
+The canonical index owner rebuilds same-name drift on writable admission; initial
+construction reads trajectory history and uses temporary disk for its probe and
+replacement. Writes maintain the expression index. Older same-version writable
+owners can restore their prior definition on downgrade or rollback without
+changing event rows; strict read-only admission can require that repair first.
+During the v17 upgrade, Doctor normalizes legacy memory metadata and validates the
+legacy schema before creating target-schema objects. Missing required tables or
+triggers remain refusals. Canonical indexes are repaired after the remaining data
+migrations, with target-schema validation in the same transaction. A refusal rolls
+back the migration and leaves the database unavailable to runtime until repaired.
+See the [storage design](/reference/database-schemas/storage-changes#trajectory-retention-covering-index).
 
 Removing the Tasks and TaskFlow runtime does not change the shared-state or agent
 schema. The existing tables, indexes, and optional execution-owner columns

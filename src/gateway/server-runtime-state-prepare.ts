@@ -418,6 +418,7 @@ export async function prepareGatewayKernelState(params: {
   const channelManager = createChannelManager({
     scheduler,
     getRuntimeConfig,
+    resolveGatewayContext: resolvePluginGatewayContext,
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,

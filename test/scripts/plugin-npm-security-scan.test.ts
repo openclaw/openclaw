@@ -58,6 +58,11 @@ function packageTarball(
 }
 
 const SPAWN_SOURCE = 'import { spawn } from "node:child_process";\nspawn("owned-child");\n';
+const BUNDLED_HELPER_EXEC_SOURCE = `
+import type { ChildProcess } from "node:child_process";
+const exec = compileMatcher();
+exec(value);
+`;
 
 describe("plugin npm artifact security scan", () => {
   it("accepts reviewed production behavior from the exact tarball", () => {
@@ -137,10 +142,58 @@ describe("plugin npm artifact security scan", () => {
         packageName: "@openclaw/signal",
         packageVersion: "1.0.0",
         tarball: packageTarball("@openclaw/signal", {
-          "dist/index.js": "export const value = 1;\n",
-          "src/daemon.ts": SPAWN_SOURCE,
+          "dist/daemon.js": SPAWN_SOURCE,
+          "src/index.ts": "export const value = 1;\n",
         }),
       }),
     ).toThrow("unreviewed critical findings in exact npm artifact");
+  });
+
+  it("classifies reviewed findings by their file layout", () => {
+    const result = scanPluginNpmArtifactSecurity({
+      packageName: "@openclaw/acpx",
+      packageVersion: "1.0.0",
+      tarball: packageTarball("@openclaw/acpx", {
+        "dist/.setup/index.mjs": "export const value = 1;\n",
+        "dist/mcp-proxy.mjs": SPAWN_SOURCE,
+      }),
+    });
+    expect(result.criticalFindingCount).toBe(1);
+  });
+
+  it("rejects changed bytes at the reviewed iMessage setup helper path", () => {
+    expect(() =>
+      scanPluginNpmArtifactSecurity({
+        packageName: "@openclaw/imessage",
+        packageVersion: "1.0.0",
+        tarball: packageTarball("@openclaw/imessage", {
+          "dist/.setup/sanitize-outbound-3MLljgtY.mjs": BUNDLED_HELPER_EXEC_SOURCE,
+        }),
+      }),
+    ).toThrow("unreviewed critical findings in exact npm artifact");
+  });
+
+  it("keeps reviewed dist findings reachable in mixed-layout artifacts", () => {
+    const result = scanPluginNpmArtifactSecurity({
+      packageName: "@openclaw/google-meet",
+      packageVersion: "1.0.0",
+      tarball: packageTarball("@openclaw/google-meet", {
+        "dist/.setup/chunk.mjs": "export const value = 1;\n",
+        "dist/index.js": SPAWN_SOURCE,
+      }),
+    });
+    expect(result.criticalFindingCount).toBe(1);
+  });
+
+  it("keeps the reviewed Raft dist finding reachable in a mixed-layout artifact", () => {
+    const result = scanPluginNpmArtifactSecurity({
+      packageName: "@openclaw/raft",
+      packageVersion: "1.0.0",
+      tarball: packageTarball("@openclaw/raft", {
+        "dist/.setup/chunk.mjs": "export const value = 1;\n",
+        "dist/channel-plugin-api.js": SPAWN_SOURCE,
+      }),
+    });
+    expect(result.criticalFindingCount).toBe(1);
   });
 });

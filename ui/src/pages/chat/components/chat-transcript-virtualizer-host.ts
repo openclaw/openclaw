@@ -85,7 +85,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.endAnchor.recordLayoutCorrection(before, after),
   );
   private readonly followEnd = () => this.scrollToEnd({ source: "auto", behavior: "auto" });
-  private pendingScrollFrame: number | null = null;
   private readonly scrollRestoreHost: TranscriptScrollRestoreHost;
   private readonly messageReveal = new ChatMessageReveal();
   // Lit calls refs before newly rendered nodes are connected. Resolve the
@@ -272,11 +271,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       isContentReady: () => this.contentReady,
       getRowCount: () => this.rowKeys.length,
       isConnected: () => this.connected,
-      getPendingScrollFrame: () => this.pendingScrollFrame,
-      setPendingScrollFrame: (frame) => {
-        this.pendingScrollFrame = frame;
-      },
-      requestUpdate: this.requestUpdate,
+      pendingScrollFrame: null,
       onReaderScroll: () => this.callbacks.onReaderScroll?.(),
     };
     if (initialOffset !== null) {
@@ -396,9 +391,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.offsetState.touchScrolling = false;
     this.renderPreviousRows = null;
     this.messageReveal.clear();
-    if (this.pendingScrollFrame !== null) {
-      cancelAnimationFrame(this.pendingScrollFrame);
-      this.pendingScrollFrame = null;
+    if (this.scrollRestoreHost.pendingScrollFrame !== null) {
+      cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
+      this.scrollRestoreHost.pendingScrollFrame = null;
     }
     this.threadInnerElement = null;
     if (!this.connected) {
@@ -621,9 +616,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
     this.offsetState.scrollCommand = null;
     this.offsetState.pendingScrollOffset = null;
-    if (this.pendingScrollFrame !== null) {
-      cancelAnimationFrame(this.pendingScrollFrame);
-      this.pendingScrollFrame = null;
+    if (this.scrollRestoreHost.pendingScrollFrame !== null) {
+      cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
+      this.scrollRestoreHost.pendingScrollFrame = null;
     }
     const element = this.scrollElement;
     if (element) {

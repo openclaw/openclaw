@@ -178,6 +178,20 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       default:
         return;
     }
+    const turnScoped = message.role === "custom" && asOptionalRecord(message.details)?.turnScoped;
+    if (
+      message.role === "custom" &&
+      getOpenClawSystemUpdateKind(message) &&
+      typeof turnScoped === "boolean"
+    ) {
+      llmMessages.push({
+        role: "user",
+        content: message.content,
+        timestamp: message.timestamp,
+        operatorMessage: { turnScoped },
+      });
+      return;
+    }
     const timestamp =
       message.role === "compactionSummary"
         ? normalizeCompactionSummaryTimestamp(message.timestamp)

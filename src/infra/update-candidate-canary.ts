@@ -489,6 +489,10 @@ export async function validateUpdateCandidateCanary(
         cwd: params.root,
         durationMs: Date.now() - stepStartedAt,
         exitCode: timedOut ? null : code,
+        // Keep the check verdict when a later native crash evicts the rolling log tail.
+        ...(phase === "doctor" && checksCompletedAt !== undefined
+          ? { stdoutTail: "Doctor complete." }
+          : {}),
         ...(timedOut
           ? { termination: "timeout" as const }
           : signal

@@ -190,7 +190,9 @@ describe("SQLite report payload selection", () => {
           { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
         ]);
       }
-      const before = await Promise.all([requested, other].map(loadTranscriptEvents));
+      const before = await Promise.all(
+        [requested, other].map((target) => loadTranscriptEvents(target)),
+      );
       const identity = readDatabasePathIdentitySync(other.storePath);
       if (!identity.key.startsWith("file:")) {
         throw new Error("The second session store must exist");
@@ -225,7 +227,9 @@ describe("SQLite report payload selection", () => {
           },
         ),
       ).rejects.toThrow("Transcript report target differs from its session source restriction");
-      expect(await Promise.all([requested, other].map(loadTranscriptEvents))).toEqual(before);
+      expect(
+        await Promise.all([requested, other].map((target) => loadTranscriptEvents(target))),
+      ).toEqual(before);
     });
   });
 

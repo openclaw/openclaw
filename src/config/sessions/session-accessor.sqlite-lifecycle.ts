@@ -67,6 +67,7 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
+import { deleteIncognitoSessionLifecycle } from "./session-incognito-lifecycle-operations.js";
 import { resetSessionEntryInWorker } from "./session-reset.js";
 import { applySessionResetInDatabase } from "./session-reset.kernel.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -433,9 +434,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               const reclaimed = await runSqliteSessionReclamation({
                 diagnostics,
                 assertCommitAllowed: assertDeletionCurrent,
-                forceInProcess:
-                  typeof params.expectedDatabaseIdentity === "symbol" ||
-                  hasPreparedNativeSessionDeletion(),
+                forceInProcess: typeof params.expectedDatabaseIdentity === "symbol",
                 onInProcessCommit: recordCommit,
                 plan: reclamationPlan,
               });
@@ -515,7 +514,9 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               prepared.current.entry.sessionId,
               prepared.targetSnapshot.map((row) => row.sessionKey),
             );
-            await deleteReceipts(execution ? () => execution.assertCurrent() : undefined);
+            await deleteReceipts({
+              assertCurrent: execution ? () => execution.assertCurrent() : undefined,
+            });
           }
           result.archivedTranscripts = await publishSessionStateArchives(
             resolved,
@@ -527,7 +528,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
           result.archivedTranscripts.push(...historicalArchivedTranscripts);
           return result;
         },
-        { additionalIdentities: prepared.historicalGenerationIds },
+        { additionalIdentities: prepared.historicalGenerationIds, callerSettlesReceipts: true },
       );
     });
   } finally {
@@ -537,8 +538,13 @@ async function deleteSqliteSessionEntryLifecycleLocked(
 
 /** Deletes one persisted session entry using SQLite session rows. */
 export async function deleteSessionEntryLifecycle(
-  params: DeleteSessionEntryLifecycleParams,
+  params:
+    | DeleteSessionEntryLifecycleParams
+    | ({ kind: "incognito" } & Parameters<typeof deleteIncognitoSessionLifecycle>[0]),
 ): Promise<DeleteSessionEntryLifecycleResult> {
+  if ("kind" in params) {
+    return deleteIncognitoSessionLifecycle(params);
+  }
   return await deleteSqliteSessionEntryLifecycleInternal(params, false);
 }
 

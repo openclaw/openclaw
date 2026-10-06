@@ -78,19 +78,12 @@ export function resolveCodexWebSearchPlan(params: {
     nativeProviderSupportsSearch &&
     !managedSearchExplicit;
   if (!nativeSearchEnabled) {
-    if (
+    const suppressManagedWebSearch =
       !managedSearchExplicit &&
-      normalizeUniqueTrimmedStringList(nativeConfig?.allowedDomains).length > 0
-    ) {
-      return {
-        kind: "disabled",
-        suppressManagedWebSearch: true,
-        threadConfig: CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG,
-      };
-    }
+      normalizeUniqueTrimmedStringList(nativeConfig?.allowedDomains).length > 0;
     return {
-      kind: "managed",
-      suppressManagedWebSearch: false,
+      kind: suppressManagedWebSearch ? "disabled" : "managed",
+      suppressManagedWebSearch,
       threadConfig: CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG,
     };
   }

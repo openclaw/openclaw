@@ -27,6 +27,7 @@ import type {
   SessionEntryReplacementCommitted,
 } from "./session-accessor.sqlite-replacement-types.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
 import type { SessionEntry } from "./types.js";
 
 /** Receipts carry only publication facts, never saved prompts or maintenance payloads. */
@@ -34,7 +35,11 @@ export function prepareSessionEntryReplacementPublication(
   result: SessionEntryReplacementCommitted,
   database: OpenClawAgentDatabase,
 ): SessionEntryReplacementPublication {
-  const archived = new Set(result.maintenancePlans.flatMap((plan) => plan.archivedSessionKeys));
+  const archived = new Set(
+    result.maintenancePlans.flatMap((plan) =>
+      plan.archivedEntries.map(({ sessionKey }) => sessionKey),
+    ),
+  );
   const invalidated = new Set([...result.membershipInvalidatedKeys, ...archived]);
   const current = new Map<string, SessionEntry>();
   for (const key of result.current.keys()) {
@@ -76,13 +81,7 @@ export function prepareSessionEntryReplacementPublication(
           },
         }
       : {}),
-    changedKeys: [
-      ...new Set([
-        ...result.previous.keys(),
-        ...result.current.keys(),
-        ...result.maintenancePlans.flatMap((plan) => plan.archivedSessionKeys),
-      ]),
-    ],
+    changedKeys: [...new Set([...result.previous.keys(), ...result.current.keys(), ...archived])],
   };
 }
 
@@ -91,6 +90,7 @@ export function commitSessionEntryReplacementsInDatabase(
   database: OpenClawAgentDatabase,
   input: SessionEntryReplacementCommit,
   beforeReplacements: () => void,
+  refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
 ): SessionEntryReplacementCommitted {
   if (input.labelClaim) {
     assertSessionCreationLabelAvailable(
@@ -183,7 +183,13 @@ export function commitSessionEntryReplacementsInDatabase(
   const preservation = maintenance?.preservation;
   const maintenancePlan =
     maintenance && preservation
-      ? applySessionEntryMaintenanceInDatabase(database, maintenance, () => preservation)
+      ? applySessionEntryMaintenanceInDatabase(
+          database,
+          maintenance,
+          () => preservation,
+          undefined,
+          refreshCandidates,
+        )
       : emptySessionEntryMaintenancePlan();
   return {
     // Fresh creation must not retry another session's failed export.

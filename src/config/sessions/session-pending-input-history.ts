@@ -13,6 +13,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
@@ -27,6 +28,8 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
+import type { IncognitoHistoryTarget } from "./session-incognito-history-contract.js";
 import type {
   PendingInputCustodyCandidate,
   PendingInputHistoryGrant,
@@ -75,6 +78,81 @@ function applyReceipt(snapshot: PendingInputHistorySnapshot, receipt: PendingInp
     }
   }
   return snapshot;
+}
+
+/** Inactive until P7d. Accepted reconciliation retains its actor through native settlement. */
+export function createIncognitoPendingInputHistoryReader(params: {
+  actor: Pick<
+    IncognitoAgentDatabaseExecution,
+    "path" | "sessions" | "assertCurrent" | "assertReadable"
+  >;
+  authority: IncognitoSessionAuthority;
+  target: IncognitoHistoryTarget;
+}) {
+  const { actor, authority } = params;
+  actor.assertCurrent();
+  authority.assertCurrent();
+  const target = structuredClone(params.target);
+  const claim = actor.sessions.captureCurrent(target.sessionKey);
+  const assertCurrent = () => {
+    actor.assertCurrent();
+    authority.assertCurrent();
+    claim.assertCurrent();
+  };
+  const boundAuthority: IncognitoSessionAuthority = {
+    assertCurrent,
+    authorize: (stage, facts) => authority.authorize?.(stage, facts),
+  };
+  const readRows = (query: Omit<PendingInputHistoryQuery, "sessionKey" | "sessionId">) => {
+    assertCurrent();
+    const captured = { ...query };
+    return actor.sessions.withSharedState(async () => {
+      const snapshot = await actor.sessions.history(boundAuthority, {
+        type: "session.history.pending-inputs",
+        input: { ...target, query: captured },
+      });
+      assertCurrent();
+      const ids = snapshot.rows
+        .filter(
+          (row) => row.state === "queued" && !owns(actor.path, row, snapshot.currentSessionId),
+        )
+        .map((row) => row.input_id);
+      if (ids.length) {
+        const receipt = await actor.sessions.interruptPendingInputHistory(
+          // The worker checks this session generation in its transaction; its pending
+          // host projection cannot authorize its own mutation.
+          authority,
+          { ...target, ids },
+          (stage, facts) => admitCustody(actor.path, stage, facts),
+        );
+        applyReceipt(snapshot, receipt);
+      }
+      assertCurrent();
+      claim.authorize(authority, "commit");
+      assertCurrent();
+      return snapshot;
+    });
+  };
+  return {
+    async list(
+      options: { limit?: number; before?: number } = {},
+    ): Promise<SessionPendingInputPage> {
+      const { rows, total, nextBefore } = await readRows(options);
+      assertCurrent();
+      actor.assertReadable();
+      return {
+        items: rows.toReversed().map(projectSessionPendingInput),
+        total: total ?? 0,
+        ...(nextBefore !== undefined ? { nextBefore } : {}),
+      };
+    },
+    async read(id: string): Promise<SessionPendingInput | undefined> {
+      const row = (await readRows({ id, limit: 1 })).rows[0];
+      assertCurrent();
+      actor.assertReadable();
+      return row ? projectSessionPendingInput(row) : undefined;
+    },
+  };
 }
 
 /** Incognito retains its process-held owner until the separate actor cutover (worker-access P7). */

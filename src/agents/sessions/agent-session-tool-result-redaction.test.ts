@@ -242,13 +242,9 @@ describe("AgentSession model-visible tool-result redaction", () => {
           ),
         )
         .mockImplementation((model, context, options) => {
-          const result = context.messages.findLast(
-            (message: { role: string }) => message.role === "toolResult",
-          );
+          const result = context.messages.findLast((message) => message.role === "toolResult");
           expect(result?.isError).toBe(false);
-          currentToolText = result?.content.find(
-            (block: { type: string }) => block.type === "text",
-          )?.text;
+          currentToolText = result?.content.find((block) => block.type === "text")?.text;
           return streamOpenAIResponses(model as Model<"openai-responses">, context, {
             ...options,
             apiKey: "synthetic-probe-auth",
@@ -362,7 +358,6 @@ describe("AgentSession model-visible tool-result redaction", () => {
     const resourceLoader = new DefaultResourceLoader({
       cwd,
       agentDir: cwd,
-      settingsManager,
       extensionFactories: buildEmbeddedExtensionFactories({
         cfg: {},
         sessionManager,
@@ -418,12 +413,11 @@ describe("AgentSession model-visible tool-result redaction", () => {
       streamSimple: streamMocks.streamSimple,
     });
     const { session } = await createAgentSession({
+      systemPrompt: "Test session prompt",
       cwd,
-      agentDir: cwd,
       model,
       thinkingLevel: "medium",
       modelRegistry,
-      authStorage,
       tools: [toolName],
       sessionManager,
       settingsManager,

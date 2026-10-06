@@ -19,11 +19,13 @@ const suite = createControlUiE2eSuite({
 const DASHBOARD_REQUEST_PARAMS = {
   archived: "all",
   configuredAgentsOnly: true,
+  excludeDock: true,
   hasBoard: true,
   includeGlobal: true,
   includeUnknown: true,
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
   rowMode: "compact",
+  source: "dashboard",
 } as const;
 
 function sessionsResult(key: string, label: string, updatedAt: number) {
@@ -279,11 +281,14 @@ suite.define(() => {
           expect(canonical.params).toEqual({
             agentId: "main",
             configuredAgentsOnly: true,
+            excludeDock: true,
             includeDerivedTitles: true,
             includeGlobal: true,
             includeLastMessage: true,
             includeUnknown: true,
             limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+            rowMode: "compact",
+            source: "sidebar",
           });
           await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
           await page.waitForFunction(() => {

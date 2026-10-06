@@ -30,12 +30,6 @@ function renderChatInto(
   );
 }
 
-function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {}) {
-  const container = document.createElement("div");
-  renderChatInto(container, overrides);
-  return container;
-}
-
 describe("chat goal status", () => {
   function goalSession(
     goal: Partial<NonNullable<GatewaySessionRow["goal"]>> = {},
@@ -61,43 +55,65 @@ describe("chat goal status", () => {
     };
   }
 
-  it("renders the goal pill with status, objective, and elapsed time", () => {
-    const container = renderChatView({ selectedSession: goalSession() });
-
-    const goal = container.querySelector(".agent-chat__goal");
-    expect(goal?.querySelector(".agent-chat__goal-label")?.textContent).toBe("Pursuing goal");
-    expect(goal?.querySelector(".agent-chat__goal-objective")?.textContent).toBe(
-      "Land the web goal UI",
-    );
-    expect(goal?.querySelector(".agent-chat__goal-elapsed")?.textContent).toBe("15s");
-    expect(goal?.getAttribute("aria-label")).toBe("Pursuing goal (12k/50k): Land the web goal UI");
-    expect(goal?.closest(".agent-chat__goal-float")).not.toBeNull();
-    expect(goal?.closest(".agent-chat__composer-status-stack")).toBeNull();
-  });
-
-  it("dispatches typed goal actions from the pill controls", () => {
-    const onGoalAction = vi.fn();
-    const container = renderChatView({ selectedSession: goalSession(), onGoalAction });
-
-    container.querySelector<HTMLButtonElement>('button[aria-label="Pause goal"]')?.click();
-    container.querySelector<HTMLButtonElement>('button[aria-label="Clear goal"]')?.click();
-
-    expect(onGoalAction).toHaveBeenNthCalledWith(1, "goal-1", "pause");
-    expect(onGoalAction).toHaveBeenNthCalledWith(2, "goal-1", "clear");
-    expect(container.querySelector('button[aria-label="Resume goal"]')).toBeNull();
-  });
-
-  it("offers resume instead of pause for paused goals", () => {
-    const onGoalAction = vi.fn();
-    const container = renderChatView({
-      selectedSession: goalSession({ status: "paused", pausedAt: Date.now() }),
-      onGoalAction,
-    });
-
-    expect(container.querySelector('button[aria-label="Pause goal"]')).toBeNull();
-    container.querySelector<HTMLButtonElement>('button[aria-label="Resume goal"]')?.click();
-    expect(onGoalAction).toHaveBeenCalledWith("goal-1", "resume");
-  });
+  it.each([true, false])(
+    "renders goal details and gates actions when connected=%s",
+    (connected) => {
+      const onGoalAction = vi.fn();
+      const container = document.createElement("div");
+      const props = {
+        selectedSession: goalSession(),
+        onGoalAction,
+        connected,
+      };
+      renderChatInto(container, props);
+      const goal = container.querySelector(".agent-chat__goal");
+      expect(goal?.querySelector(".agent-chat__goal-label")?.textContent).toBe("Pursuing goal");
+      expect(goal?.querySelector(".agent-chat__goal-objective")?.textContent).toBe(
+        "Land the web goal UI",
+      );
+      expect(goal?.querySelector(".agent-chat__goal-elapsed")?.textContent).toBe("15s");
+      expect(goal?.getAttribute("aria-label")).toBe(
+        "Pursuing goal (12k/50k): Land the web goal UI",
+      );
+      expect(goal?.closest(".agent-chat__goal-float")).not.toBeNull();
+      expect(goal?.closest(".agent-chat__composer-status-stack")).toBeNull();
+      const button = (label: string) =>
+        container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+      expect(button("Resume goal")).toBeNull();
+      if (connected) {
+        button("Pause goal")?.click();
+        button("Clear goal")?.click();
+        expect(onGoalAction).toHaveBeenNthCalledWith(1, "goal-1", "pause");
+        expect(onGoalAction).toHaveBeenNthCalledWith(2, "goal-1", "clear");
+      } else {
+        expect(button("Pause goal")).toBeNull();
+      }
+      expect(container.querySelector(".agent-chat__goal-detail")?.getAttribute("aria-hidden")).toBe(
+        "true",
+      );
+      const toggle = button("Show goal details");
+      expect(toggle).not.toBeNull();
+      expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+      toggle?.click();
+      props.selectedSession = goalSession({ lastStatusNote: "Waiting for CI" });
+      renderChatInto(container, props);
+      const detail = container.querySelector(".agent-chat__goal-detail");
+      expect(detail?.getAttribute("aria-hidden")).toBe("false");
+      expect(detail?.querySelector(".agent-chat__goal-detail-objective")?.textContent).toBe(
+        "Land the web goal UI",
+      );
+      expect(detail?.querySelector(".agent-chat__goal-detail-note")?.textContent).toBe(
+        "Waiting for CI",
+      );
+      expect(
+        Array.from(
+          detail?.querySelectorAll(".agent-chat__goal-detail-meta > span") ?? [],
+          (element) => element.textContent?.trim(),
+        ),
+      ).toEqual(["12k/50k", "·", "15s"]);
+      expect(button("Hide goal details")?.getAttribute("aria-expanded")).toBe("true");
+    },
+  );
 
   it("exposes the pause reason in a keyboard-accessible tooltip and freezes elapsed time", () => {
     const container = document.createElement("div");
@@ -169,54 +185,5 @@ describe("chat goal status", () => {
     container.querySelector<HTMLButtonElement>('button[aria-label="Cancel goal entry"]')?.click();
     expect(draft).toBe("Keep my conversation draft");
     expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
-  });
-
-  it("expands goal details on demand", () => {
-    const props = createChatProps({
-      selectedSession: goalSession({ lastStatusNote: "Waiting for CI" }),
-      onGoalAction: vi.fn(),
-    });
-    const container = document.createElement("div");
-    render(renderChat(props), container);
-
-    expect(container.querySelector(".agent-chat__goal-detail")?.getAttribute("aria-hidden")).toBe(
-      "true",
-    );
-    const toggle = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Show goal details"]',
-    );
-    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-    toggle?.click();
-    render(renderChat(props), container);
-
-    const detail = container.querySelector(".agent-chat__goal-detail");
-    expect(detail?.getAttribute("aria-hidden")).toBe("false");
-    expect(detail?.querySelector(".agent-chat__goal-detail-objective")?.textContent).toBe(
-      "Land the web goal UI",
-    );
-    expect(detail?.querySelector(".agent-chat__goal-detail-note")?.textContent).toBe(
-      "Waiting for CI",
-    );
-    expect(
-      Array.from(detail?.querySelectorAll(".agent-chat__goal-detail-meta > span") ?? []).map(
-        (element) => element.textContent?.trim(),
-      ),
-    ).toEqual(["12k/50k", "·", "15s"]);
-    expect(
-      container
-        .querySelector('button[aria-label="Hide goal details"]')
-        ?.getAttribute("aria-expanded"),
-    ).toBe("true");
-  });
-
-  it("hides goal action buttons when the composer cannot send", () => {
-    const container = renderChatView({
-      selectedSession: goalSession(),
-      onGoalAction: vi.fn(),
-      connected: false,
-    });
-
-    expect(container.querySelector('button[aria-label="Pause goal"]')).toBeNull();
-    expect(container.querySelector('button[aria-label="Show goal details"]')).not.toBeNull();
   });
 });

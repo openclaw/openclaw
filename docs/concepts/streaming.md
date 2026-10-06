@@ -280,7 +280,8 @@ Slack-only:
 ### Discord
 
 - Uses send + edit preview messages.
-- `block` mode uses draft chunking (`draftChunk`).
+- `block` mode updates the preview at chunk boundaries while preserving the
+  answer's paragraph separators and code fences in the edited message.
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
 - `progress` is quiet by default: headline, authored commentary and reasoning,

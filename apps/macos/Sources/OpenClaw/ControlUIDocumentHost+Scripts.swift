@@ -21,29 +21,24 @@ extension ControlUIDocumentHost {
         url: URL,
         auth: DashboardWindowAuth) -> WKUserScript?
     {
-        guard auth.hasCredential || auth.usesBrowserIdentity || auth.usesNativeDevice else { return nil }
-        let credentials: [String: Any?] = [
-            "gatewayUrl": auth.gatewayUrl,
-            "token": auth.token,
-            "password": auth.password,
-        ]
-        var payload = credentials.compactMapValues { $0 }
-        if auth.usesNativeDevice {
-            payload = auth.legacyCredentials
-            payload["gatewayUrl"] = auth.gatewayUrl
+        var payload: [String: Any]
+        switch auth {
+        case .unauthenticated:
+            return nil
+        case let .nativeDevice(gatewayURL, _, _, credentials):
+            payload = credentials ?? [:]
+            payload["gatewayUrl"] = gatewayURL
             // Released UI must not prefer an earlier token over the accepted password.
             if payload["password"] != nil { payload["token"] = NSNull() }
-            if !auth.hasAcceptedNativeBinding {
+            if credentials == nil {
                 payload["token"] = NSNull()
                 payload["password"] = NSNull()
             }
             // Released UI consumes shared fields; current UI uses the native signer.
             payload["nativeConnectAuth"] = true
-        }
-        if auth.usesBrowserIdentity {
+        case let .browserIdentity(gatewayURL):
             // Explicit absence retires an earlier shared login at this browser origin.
-            payload["token"] = NSNull()
-            payload["password"] = NSNull()
+            payload = ["gatewayUrl": gatewayURL, "token": NSNull(), "password": NSNull()]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8)

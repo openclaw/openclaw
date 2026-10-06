@@ -293,7 +293,7 @@ async function resolveBaseToolsEffectiveInventory(
     modelId: context.modelId,
   });
   try {
-    return acquired.run((runtimeModelContext) =>
+    return await acquired.run((runtimeModelContext) =>
       resolveEffectiveToolInventory({
         conversationCapabilityProfile: context.capabilityProfile,
         cfg: context.cfg,

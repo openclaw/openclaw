@@ -226,10 +226,8 @@ export function prepareWorkspacePluginRegistries(
           },
         )
       : baseRegistry;
-  const prepared = (registry: PluginRegistry | undefined): PreparedWorkspacePluginRegistries => {
-    if (registry) {
-      retainRegistry(registry);
-    }
+  const prepared = (registry: PluginRegistry): PreparedWorkspacePluginRegistries => {
+    retainRegistry(registry);
     return {
       runtimePluginRegistry: registry,
       primaryRegistry:

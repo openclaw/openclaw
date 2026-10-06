@@ -1,11 +1,8 @@
-import type { SkillResourceDelivery } from "../../packages/gateway-protocol/src/schema/skill-resources.js";
-import type { WorkerTranscriptMessage } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import os from "node:os";
+import path from "node:path";
+import { getSupportedThinkingLevels } from "@openclaw/ai/internal/runtime";
+import { projectSessionEntryMessage } from "../../packages/agent-core/src/harness/session/session.js";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
-import type {
-  WorkerInferenceModelRef,
-  WorkerInferenceOptions,
-} from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
 import { copyAgentToolMetadata } from "../agents/agent-tool-metadata.js";
 import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
@@ -13,10 +10,12 @@ import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-too
 import { projectMemoryFlushTools } from "../agents/agent-tools.memory-flush.js";
 import { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/defaults.js";
-import { buildBootstrapContextForFiles } from "../agents/embedded-agent-helpers/bootstrap.js";
+import { buildRuntimeContextCustomMessage } from "../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { recordModelFallbackStop } from "../agents/failover-error.js";
 import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
+import { projectRuntimeContextFragments } from "../agents/internal-runtime-context.js";
+import { buildExecutionHostRuntimeFacts } from "../agents/runtime-execution-facts.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
@@ -24,8 +23,12 @@ import { DefaultResourceLoader } from "../agents/sessions/resource-loader.js";
 import { createAgentSession } from "../agents/sessions/sdk.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { SettingsManager } from "../agents/sessions/settings-manager.js";
+import { detectRuntimeShell, getShellConfig } from "../agents/shell-utils.js";
+import { resolveSystemPromptRepoRoot } from "../agents/system-prompt-params.js";
+import { completeSystemPromptRuntime } from "../agents/system-prompt-runtime.js";
 import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import type { loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
+import { getMachineDisplayName } from "../infra/machine-name.js";
+import { resolveRuntimeOsLabel } from "../infra/os-summary.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { materializeSkillResources } from "../skills/runtime/resources.js";
@@ -38,7 +41,9 @@ import {
   type WorkerTranscriptClient,
 } from "./embedded-agent-transcript.runtime.js";
 import type { createWorkerInferenceStreamAdapter } from "./inference-stream.runtime.js";
-import type { WorkerBrowserLaunchDescriptor, WorkerLaunchPlan } from "./launch-descriptor.js";
+import type { WorkerLaunchPlan } from "./launch-descriptor.js";
+import { createNativeInferenceStreamGuard } from "./native-inference-stream.js";
+import type { NativeRuntimeResolved } from "./native-runtime.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { createWorkerGatewayToolProxies } from "./worker-gateway-tools.js";
 import { createWorkerPlacementTools, WORKER_TOOL_CONFIG } from "./worker-placement-tools.js";
@@ -47,34 +52,30 @@ function toWorkerAgentError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
 }
 
-type RunWorkerEmbeddedTurnParams = {
-  skillResources?: SkillResourceDelivery;
-  agentId: string;
-  operationalRunInstance: OperationalRunInstanceRef;
-  agentRuntimeIdentityToken: string;
+type RunWorkerEmbeddedTurnParams = Omit<
+  WorkerLaunchPlan["assignment"],
+  | "workspaceDir"
+  | "github"
+  | "transcript"
+  | "liveEvents"
+  | "computer"
+  | "toolAuthority"
+  | "inference"
+> & {
   cwd: string;
   workerContainmentRoot: string;
   stateDir: string;
   github?: PreparedGitHubToolEnvironment;
   sessionId: string;
   sessionKey: string;
-  runId: string;
-  prompt: WorkerLaunchPlan["assignment"]["prompt"];
-  modelRef: WorkerInferenceModelRef;
   inference: { stream: ReturnType<typeof createWorkerInferenceStreamAdapter> };
+  nativeInference?: NativeRuntimeResolved;
   transcript: WorkerTranscriptClient;
   live: WorkerLiveClient;
   gatewayTools: Parameters<typeof createWorkerGatewayToolProxies>[1];
   toolSurface: WorkerToolSurface;
-  bootstrapFiles: Awaited<ReturnType<typeof loadWorkspaceBootstrapFiles>>;
-  initialMessages?: WorkerTranscriptMessage[];
-  suppressPromptTranscript?: boolean;
-  systemPrompt?: string;
-  inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly string[];
-  permissionMode?: import("../../packages/gateway-protocol/src/schema/sessions-row.js").SessionPermissionMode;
   execAuthority: WorkerLaunchPlan["assignment"]["toolAuthority"]["exec"];
-  browser?: WorkerBrowserLaunchDescriptor;
   browserRuntime?: WorkerBrowserRuntime;
   computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
   signal?: AbortSignal;
@@ -100,13 +101,39 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       throw new Error("worker operational run instance disagrees with the admitted turn");
     }
     const toolSurface = params.toolSurface;
-    const model = createNativeModelOwnedRuntimeModel({
-      provider: params.modelRef.provider,
-      modelId: params.modelRef.model,
-    });
-    model.contextWindow = toolSurface.policy.modelContextWindowTokens ?? model.contextWindow;
-    if (toolSurface.policy.modelHasVision !== undefined) {
-      model.input = toolSurface.policy.modelHasVision ? ["text", "image"] : ["text"];
+    const model =
+      params.nativeInference?.model ??
+      createNativeModelOwnedRuntimeModel({
+        provider: params.modelRef.provider,
+        modelId: params.modelRef.model,
+      });
+    if (!params.nativeInference) {
+      model.contextWindow = toolSurface.policy.modelContextWindowTokens ?? model.contextWindow;
+      if (toolSurface.policy.modelHasVision !== undefined) {
+        model.input = toolSurface.policy.modelHasVision ? ["text", "image"] : ["text"];
+      }
+    }
+    const requestedReasoning = params.inferenceOptions?.reasoning;
+    if (params.nativeInference && requestedReasoning === "adaptive") {
+      throw new Error("Adaptive thinking is not supported by runtime-local worker inference");
+    }
+    const thinkingLevel = params.nativeInference
+      ? requestedReasoning === "adaptive"
+        ? "off"
+        : (requestedReasoning ?? "off")
+      : "medium";
+    if (params.nativeInference && !getSupportedThinkingLevels(model).includes(thinkingLevel)) {
+      throw new Error("Requested thinking level is not supported by the node-local model");
+    }
+    if (
+      params.nativeInference &&
+      ((params.inferenceOptions?.maxTokens !== undefined &&
+        params.inferenceOptions.maxTokens !== model.maxTokens) ||
+        Object.values(params.inferenceOptions?.thinkingBudgets ?? {}).some(
+          (budget) => budget !== undefined && budget > model.maxTokens,
+        ))
+    ) {
+      throw new Error("Worker inference options exceed or override the node-local model budget");
     }
     const authStorage = AuthStorage.inMemory({});
     const modelRegistry = ModelRegistry.inMemory(authStorage);
@@ -114,18 +141,9 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       compaction: { enabled: false },
       retry: { enabled: false },
     });
-    const contextFiles = buildBootstrapContextForFiles(params.bootstrapFiles, {});
-    let toolSchemaDirectoryPrompt: string | undefined;
     const resourceLoader = new DefaultResourceLoader({
       cwd: params.cwd,
       agentDir: params.stateDir,
-      settingsManager,
-      // The Gateway supplies literal text, not a local prompt-file path.
-      appendSystemPromptTransform: () =>
-        [params.systemPrompt, resources?.snapshot.prompt, toolSchemaDirectoryPrompt].filter(
-          (prompt): prompt is string => Boolean(prompt),
-        ),
-      agentsFilesOverride: () => ({ agentsFiles: contextFiles }),
     });
     const baseSessionManager = SessionManager.inMemory(params.cwd);
     for (const message of params.initialMessages ?? []) {
@@ -137,6 +155,23 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       suppressNextUserMessagePersistence: params.suppressPromptTranscript,
       onMessagePersisted: transcriptRuntime.onMessagePersisted,
     });
+    const appendCustomMessage = sessionManager.appendCustomMessageEntryAsync.bind(sessionManager);
+    // Custom entries bypass the message guard but share its remote commit queue.
+    sessionManager.appendCustomMessageEntryAsync = async (
+      customType,
+      content,
+      display,
+      details,
+    ) => {
+      const entryId = await appendCustomMessage(customType, content, display, details);
+      const entry = sessionManager.getEntry(entryId);
+      const message = entry && projectSessionEntryMessage(entry);
+      if (!message) {
+        throw new Error("Worker custom message was not committed");
+      }
+      transcriptRuntime.onMessagePersisted(message);
+      return entryId;
+    };
 
     const allowedToolNameSet = new Set<string>(params.allowedToolNames);
     for (const entry of toolSurface.tools) {
@@ -275,15 +310,21 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
             prepared: { abortSignal: toolSignal, preserveToolNames: [] },
           })
           .promptToolPolicy.apply();
-        toolSchemaDirectoryPrompt = projected.toolSchemaDirectoryPrompt;
         await resourceLoader.reload();
+        const systemPrompt = completeSystemPromptRuntime(params.systemPrompt ?? "", {
+          host: await getMachineDisplayName(),
+          os: resolveRuntimeOsLabel(),
+          arch: os.arch(),
+          node: process.version,
+          shell: detectRuntimeShell() ?? path.basename(getShellConfig().shell),
+          repoRoot: resolveSystemPromptRepoRoot({ workspaceDir: params.cwd, cwd: params.cwd }),
+        });
         return await createAgentSession({
+          systemPrompt: resources?.rewriteReferences(systemPrompt) ?? systemPrompt,
           cwd: params.cwd,
-          agentDir: params.stateDir,
-          authStorage,
           modelRegistry,
           model,
-          thinkingLevel: "medium",
+          thinkingLevel,
           tools: projected.tools.map((tool) => tool.name),
           customTools: toToolDefinitions(projected.tools),
           sessionManager,
@@ -296,7 +337,22 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       }
     })();
     session.agent.sessionId = params.sessionId;
-    session.agent.streamFn = (_model, context, options) => {
+    const guardNativeStream = params.nativeInference
+      ? createNativeInferenceStreamGuard(params.nativeInference)
+      : undefined;
+    session.agent.streamFn = async (_model, context, options) => {
+      if (params.nativeInference && guardNativeStream) {
+        const native = params.nativeInference;
+        return guardNativeStream(
+          () =>
+            native.streamFn(model, context, {
+              ...params.inferenceOptions,
+              reasoning: thinkingLevel,
+              signal: options?.signal,
+            }),
+          options?.signal,
+        );
+      }
       const projected = toWorkerInferenceContext(context);
       if (projected.kind === "provider-replay-unavailable") {
         throw new Error(
@@ -306,7 +362,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       return params.inference.stream({
         modelRef: params.modelRef,
         context: projected.context,
-        options: structuredClone(params.inferenceOptions ?? {}),
+        options: structuredClone(params.inferenceOptions),
         ...(options?.signal ? { signal: options.signal } : {}),
       });
     };
@@ -333,11 +389,21 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           }
         }
       }
-      await session.agent.prompt({
-        role: "user",
-        content,
-        timestamp: Date.now(),
-      });
+      const fragments = params.runtimeContext
+        ? [
+            ...buildExecutionHostRuntimeFacts({ ...params, capabilityToolNames: activeToolNames }),
+            ...params.runtimeContext,
+          ]
+        : [];
+      const runtimeContext = buildRuntimeContextCustomMessage(
+        projectRuntimeContextFragments(fragments),
+        fragments,
+        params.inHistorySystemUpdates,
+      );
+      await session.agent.prompt([
+        { role: "user", content, timestamp: Date.now() },
+        ...(runtimeContext ? [runtimeContext] : []),
+      ]);
       await session.agent.waitForIdle();
       if (params.signal?.aborted) {
         throw toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.");

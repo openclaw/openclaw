@@ -13,7 +13,7 @@ read_when:
 - `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread; `pnpm test:perf:profile:runner` writes CPU + heap profiles for each unit worker. Both print their output directory (a temporary directory by default). Use `-- --output-dir <dir>` or `OPENCLAW_VITEST_PROFILE_DIR` to retain profiles at a chosen location.
 - `pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json`: runs every full-suite Vitest leaf config serially and writes grouped duration data plus per-config JSON/log artifacts. Full-suite reports isolate files by default so retained module graphs and GC pauses from earlier files are not charged to later assertions; pass `-- --no-isolate` only when intentionally profiling shared-worker accumulation. `pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json` compares grouped reports after a performance-focused change.
 - Full, extension, and include-pattern shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later whole-config runs use those timings to balance slow and fast shards. Include-pattern CI shards append the shard name to the timing key, which keeps filtered shard timings visible without replacing whole-config timing data. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
-- `pnpm ci:timings:refit`: regenerate committed `config/ci-test-timings.json` from the last five successful main CI runs; add `--dry-run` to preview the changed-entry table. This file owns per-file UI E2E and per-profile compact-group weights, unlike the gitignored `.artifacts/vitest-shard-timings.json` whole-config timing cache. Independent CI shards use only the committed weights, never that cache. See [CI timing refits](/ci/capacity#measured-shard-weights) for the daily refresh and sampling rules.
+- `pnpm ci:timings:refit`: regenerate committed `config/ci-test-timings.json` from up to five completed scheduled main CI runs using their successful jobs; add `--dry-run` to preview the changed-entry table. This file owns per-file UI E2E and per-profile compact-group weights, unlike the gitignored `.artifacts/vitest-shard-timings.json` whole-config timing cache. Independent CI shards use only the committed weights, never that cache. See [CI timing refits](/ci/capacity#measured-shard-weights) for the daily refresh and sampling rules.
 
 Runner profiling preserves the selected `forks` or `threads` pool, isolation, environment, and custom runners extending Vitest's `TestRunner`. Capture starts in a Node preload before Vitest worker imports, spans all files assigned to that worker, and finishes both profile files in awaited worker cleanup before teardown is acknowledged. It does not depend on exit-time profile flushing. Root global setup configures every selected project without replacing its reporters or setup. Main capture spans Vitest/Vite startup through run completion and close. Process termination before cleanup, bootstrap failures before runner construction, and teardown timeouts can still prevent output. Browser/VM pools, custom runners without `onCleanupWorkerContext`, and additional native `--cpu-prof`/`--heap-prof` flags are rejected for runner profiling.
 
@@ -267,6 +267,26 @@ Saved output: `pnpm test:startup:bench:smoke` writes `.artifacts/cli-startup-ben
 Gateway startup, restart, and agent concurrency benchmark fixtures use temporary home and state directories, loopback binding, and `discovery.mdns.mode: "off"` so synthetic Gateways do not advertise on the LAN, including on macOS.
 
 Defaults to the built CLI entry at `dist/entry.js`; run `pnpm build` first. Pass `--entry scripts/run-node.mjs` to measure the source runner instead, and keep those results separate from built-entry baselines.
+
+Startup, restart, and concurrency accept `--gateway-runtime <executable>` to
+select only the Gateway executable, leaving the benchmark controller and mock
+provider on the runtime that launched the script. The default is that same
+executable. Use an absolute path to select a specific staged runtime. JSON
+reports record this selection as `gatewayRuntime`; it is not a measured child
+version or binary hash. Failed activity-summary diagnostics omit this
+caller-supplied path, like the entry path; that mode is not performance proof.
+The existing restart report's `node` field describes the controller.
+
+On Linux, all three accept `--gateway-cpus 0,1,2,3`, applied through `taskset`
+only to the Gateway. Pin the controller separately when comparing runtimes:
+
+```bash
+taskset --cpu-list 4-31 node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts --case default --gateway-runtime /path/to/bun --gateway-cpus 0,1,2,3 --runs 1 --warmup 0 --output .artifacts/gateway-startup-bun.json
+```
+
+The installed-package `--installed-cohort` mode rejects both selectors; its
+input owns the attested runtime. Profiler options remain runtime-specific and
+require the selected runtime to support their profiling APIs.
 
 ```bash
 pnpm test:startup:gateway -- --runs 5 --warmup 1

@@ -153,6 +153,7 @@ export async function dispatchSessionsSendFollowup(
                       throw new Error("Child followup admission was closed.");
                     }
                     assertCurrent();
+                    params.assertDispatchCurrent?.();
                   },
                 }
               : {}),

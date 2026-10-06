@@ -49,25 +49,22 @@ function resolveInstallOptions(
 }
 
 function resolveRestartOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
-  const parentForce = inheritOptionFromParent<boolean>(command, "force");
-  const force = Boolean(cmdOpts.force || parentForce);
+  const options = resolveLifecycleOptions(cmdOpts, command);
   const safeFromGateway =
     process.platform === "win32" &&
     isGatewayServiceEnv(process.env) &&
     !isGatewayExternallySupervised() &&
-    !force &&
+    !options.force &&
     cmdOpts.wait === undefined &&
     !cmdOpts.preserveDefinition &&
     !cmdOpts.skipDeferral;
   return {
-    ...cmdOpts,
-    force,
+    ...options,
     safe: cmdOpts.safe || safeFromGateway,
-    json: resolveJsonOption(cmdOpts, command),
   };
 }
 
-function resolveStopOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
+function resolveLifecycleOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
   const parentForce = inheritOptionFromParent<boolean>(command, "force");
   return {
     ...cmdOpts,
@@ -119,6 +116,12 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .addOption(
       new Option("--expected-runtime-pin <json>", "Require the observed runtime intent").hideHelp(),
     )
+    .addOption(
+      new Option(
+        "--restore-service-cli <json>",
+        "Restore the service onto a retained OpenClaw CLI",
+      ).hideHelp(),
+    )
     .option("--token <token>", "Gateway token (token auth)")
     .option("--wrapper <path>", "Executable wrapper for generated service ProgramArguments")
     .option("--allow-unconfigured", "Allow the service to start without gateway.mode=local")
@@ -160,7 +163,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .action(async (cmdOpts, command) => {
       await runUpdateCommand(cmdOpts.updateExecutor, "stop", async () => {
         const { runDaemonStop } = await import("./lifecycle.runtime.js");
-        await runDaemonStop(resolveStopOptions(cmdOpts, command));
+        await runDaemonStop(resolveLifecycleOptions(cmdOpts, command));
       });
     });
 

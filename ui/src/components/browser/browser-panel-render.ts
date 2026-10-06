@@ -5,6 +5,7 @@ import { renderDockDestinations } from "../dock-destination-controls.ts";
 import { strokeIcon } from "../icons-tools.ts";
 import { icons } from "../icons.ts";
 import { renderPanelEmptyState } from "../panel-empty-state.ts";
+import { renderPanelIconButton } from "../panel-icon-button.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { renderBrowserPanelTabs } from "./browser-panel-tabs.ts";
@@ -15,30 +16,6 @@ export type BrowserPanelDock = "bottom" | "right";
 
 // Browser-only artwork stays with this lazy surface, outside the startup icon set.
 const mousePointer = strokeIcon(svg`<path d="m4 4 7.07 17 2.51-7.39L21 11.07z" />`);
-
-function renderIconButton(params: {
-  label: string;
-  icon: TemplateResult;
-  onClick: () => void;
-  className?: string;
-  title?: string;
-  disabled?: boolean;
-  busy?: boolean;
-  newTab?: boolean;
-}) {
-  return html`<button
-    class=${params.className ?? "bp-icon"}
-    type="button"
-    ?data-new-tab-action=${params.newTab}
-    title=${params.title ?? params.label}
-    aria-label=${params.label}
-    aria-busy=${params.busy ?? nothing}
-    ?disabled=${params.disabled}
-    @click=${params.onClick}
-  >
-    ${params.icon}
-  </button>`;
-}
 
 function renderHeaderActions(
   controller: BrowserPanelController,
@@ -73,7 +50,7 @@ function renderHeaderActions(
         ],
         onSelect: onDockChange,
       })}
-      ${renderIconButton({
+      ${renderPanelIconButton({
         className: "rail-header__action bp-icon",
         label: t("browser.openExternal"),
         icon: icons.externalLink,
@@ -81,7 +58,7 @@ function renderHeaderActions(
         disabled: !activeUrl,
         onClick: () => controller.openExternal(),
       })}
-      ${renderIconButton({
+      ${renderPanelIconButton({
         className: "rail-header__action bp-icon",
         label: t("browser.close"),
         icon: icons.x,
@@ -110,7 +87,8 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
       }
       ${
         embedded && !controller.host.fixedTab
-          ? renderIconButton({
+          ? renderPanelIconButton({
+              className: "bp-icon",
               label: t("browser.newTab"),
               icon: icons.plus,
               newTab: true,
@@ -118,19 +96,22 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
             })
           : nothing
       }
-      ${renderIconButton({
+      ${renderPanelIconButton({
+        className: "bp-icon",
         label: t("browser.back"),
         icon: icons.chevronLeft,
         disabled: nativeTab ? !nativeTab.canGoBack : !hasView || controller.evaluateUnavailable,
         onClick: () => controller.goHistory(-1),
       })}
-      ${renderIconButton({
+      ${renderPanelIconButton({
+        className: "bp-icon",
         label: t("browser.forward"),
         icon: icons.chevronRight,
         disabled: nativeTab ? !nativeTab.canGoForward : !hasView || controller.evaluateUnavailable,
         onClick: () => controller.goHistory(1),
       })}
-      ${renderIconButton({
+      ${renderPanelIconButton({
+        className: "bp-icon",
         label: t(nativeTab?.loading ? "browser.stop" : "browser.reload"),
         icon: nativeTab?.loading ? icons.x : icons.refresh,
         busy: !nativeTab && controller.loading,
@@ -167,7 +148,8 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
       />
       ${
         embedded
-          ? renderIconButton({
+          ? renderPanelIconButton({
+              className: "bp-icon",
               label: t("browser.openExternal"),
               icon: icons.externalLink,
               newTab: true,
@@ -179,7 +161,8 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
       ${
         controller.host.dashboardTarget?.sessionScoped
           ? nothing
-          : renderIconButton({
+          : renderPanelIconButton({
+              className: "bp-icon",
               label: t(
                 controller.download.pending ? "browser.downloading" : "browser.downloadFile",
               ),
@@ -189,14 +172,14 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
               onClick: () => void controller.download.save(),
             })
       }
-      ${renderIconButton({
+      ${renderPanelIconButton({
         className: `bp-icon ${controller.mode === "annotate" ? "is-active" : ""}`,
         label: t("browser.annotate"),
         icon: icons.penLine,
         disabled: !hasView,
         onClick: () => controller.setMode("annotate"),
       })}
-      ${renderIconButton({
+      ${renderPanelIconButton({
         className: `bp-icon ${controller.mode === "inspect" ? "is-active" : ""}`,
         label: t("browser.inspect"),
         title:

@@ -578,7 +578,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       await existing.hydration;
       return;
     }
-    const scope = childSessionListQuery(parentKey);
+    const scope = { ...childSessionListQuery(parentKey), source: "sidebar" as const };
     const query: ChildSessionQuery = {};
     this.childSessionQueries.set(parentKey, query);
     const isCurrent = () =>

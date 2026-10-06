@@ -13,17 +13,12 @@ import {
   validateWorktreesRestoreParams,
   validateWorktreesRetireSnapshotParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { formatWorktreeGcResult } from "../../agents/worktrees/gc-result.js";
-import { createManagedWorktreeOwnerPolicy } from "../../agents/worktrees/owner-protection.js";
-import {
-  managedWorktrees,
-  resolveWorktreeCleanupLimits,
-  WorktreeSnapshotError,
-} from "../../agents/worktrees/service.js";
+import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { resolveRecordedProjectRoot } from "../../projects/project-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { requestGatewayWorktreeMaintenance } from "../worktree-maintenance.js";
 import { captureLocalStateMutationGuard } from "./local-state-owner.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
@@ -31,7 +26,6 @@ import { resolveWorkspacePathContainment } from "./workspace-path-containment.js
 type WorktreeService = Pick<
   ManagedWorktreeService,
   | "create"
-  | "gc"
   | "list"
   | "listRegistryRecords"
   | "listRepositoryBranches"
@@ -42,7 +36,13 @@ type WorktreeService = Pick<
   | "retireSnapshot"
 >;
 
-function publicWorktreeRecord({ gcProtection: _gcProtection, ...record }: ManagedWorktreeRecord) {
+function publicWorktreeRecord(
+  { gcRetry: _gcRetry, ...record }: ManagedWorktreeRecord,
+  qualified = false,
+) {
+  if (!qualified) {
+    delete record.gcProtection;
+  }
   return record;
 }
 
@@ -130,7 +130,11 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      respond(true, { worktrees: (await service.list()).map(publicWorktreeRecord) }, undefined);
+      respond(
+        true,
+        { worktrees: (await service.list()).map((record) => publicWorktreeRecord(record)) },
+        undefined,
+      );
     },
     "worktrees.create": async (opts) => {
       const { params, respond } = opts;
@@ -182,7 +186,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         runSetupScript: scopes.includes(ADMIN_SCOPE),
       });
       commitGuard?.();
-      respond(true, params.expectedOwnerId ? record : publicWorktreeRecord(record), undefined);
+      respond(true, publicWorktreeRecord(record, Boolean(params.expectedOwnerId)), undefined);
     },
     "worktrees.remove": async (opts) => {
       const { params, respond } = opts;
@@ -264,7 +268,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         ...(commitGuard ? { commitGuard, signal: opts.signal } : {}),
       });
       commitGuard?.();
-      respond(true, params.expectedOwnerId ? record : publicWorktreeRecord(record), undefined);
+      respond(true, publicWorktreeRecord(record, Boolean(params.expectedOwnerId)), undefined);
     },
     "worktrees.branches": async (opts) => {
       const { params, respond } = opts;
@@ -293,33 +297,12 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
       if (commitGuard === null) {
         return;
       }
-      const cfg = context.getRuntimeConfig();
-      const limits = resolveWorktreeCleanupLimits();
-      const result = await service.gc({
-        limits,
-        retryDeferred: true,
-        ...createManagedWorktreeOwnerPolicy(cfg),
-        ...(commitGuard ? { commitGuard, signal: opts.signal } : {}),
-      });
       commitGuard?.();
-      if (params.expectedOwnerId) {
-        respond(true, result, undefined);
-        return;
-      }
-      if (result.outcome !== "completed") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, formatWorktreeGcResult(result), {
-            details: result,
-            // A retry could repeat any deletion that already committed.
-            retryable: false,
-          }),
-        );
-        return;
-      }
-      const { removed, orphansDeleted, snapshotsPruned } = result;
-      respond(true, { removed, orphansDeleted, snapshotsPruned }, undefined);
+      const receipt = requestGatewayWorktreeMaintenance(context.getRuntimeConfig, {
+        jobId: params.jobId,
+        retryDeferred: params.retryDeferred,
+      });
+      respond(true, receipt, undefined);
     },
     "worktrees.recoverRemoval": async (opts) => {
       const { params, respond } = opts;

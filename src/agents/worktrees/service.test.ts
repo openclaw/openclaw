@@ -13,6 +13,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
+import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import * as worktreeGit from "./git.js";
 import * as worktreeRegistry from "./registry.js";
 import {
@@ -618,13 +619,14 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("refuses to overwrite a branch recreated before restore", async () => {
+  it("refuses to overwrite a branch advanced after removal", async () => {
     const created = await materializeDownstreamFixture("restore-collision");
     await service.remove({ id: created.id, reason: "test" });
+    await git(repo, "commit", "--allow-empty", "-m", "new branch state");
     await git(repo, "branch", created.branch, "HEAD");
     const branchTip = await git(repo, "rev-parse", created.branch);
 
-    await expect(service.restore({ id: created.id })).rejects.toThrow("already exists");
+    await expect(service.restore({ id: created.id })).rejects.toThrow("Recorded branch moved");
 
     expect(await git(repo, "rev-parse", created.branch)).toBe(branchTip);
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
@@ -707,7 +709,7 @@ describe("ManagedWorktreeService", () => {
 
       let contention: unknown;
       try {
-        claimWorktreeRemoval(env, {
+        await claimWorktreeRemoval(env, {
           worktreeId: staleRecord.id,
           token: "late-remover",
         });
@@ -724,7 +726,7 @@ describe("ManagedWorktreeService", () => {
       // A stale remover that aborted its claim writes retained/failed outcomes with
       // the live-row condition (recordOutcome); against a finalized row it must be
       // a no-op instead of replacing the winner's removed-lossless fact.
-      updateRegistryWorktree(
+      await updateRegistryWorktree(
         env,
         created.id,
         { runEndCleanup: { outcome: "retained-dirty", at: now + 1 } },
@@ -757,7 +759,7 @@ describe("ManagedWorktreeService", () => {
       // A stale remover from the pre-restore lifecycle writes with the activity
       // stamp it observed (recordOutcome's condition); against the revived row it
       // must be a no-op instead of stamping a prior-lifecycle outcome.
-      updateRegistryWorktree(
+      await updateRegistryWorktree(
         env,
         created.id,
         { runEndCleanup: { outcome: "retained-dirty", at: now + 1 } },
@@ -887,7 +889,7 @@ describe("ManagedWorktreeService", () => {
         repoRoot: identity.repoRoot,
         repoFingerprint: identity.fingerprint,
       };
-      updateRegistryWorktree(env, created.id, { repositoryIdentity });
+      await updateRegistryWorktree(env, created.id, { repositoryIdentity });
       return { ...created, ...repositoryIdentity };
     }
 
@@ -955,7 +957,7 @@ describe("ManagedWorktreeService", () => {
       const liveIdentity = await service.resolveRepositoryIdentity(clone);
       const staleIdentity = await service.resolveRepositoryIdentity(repo);
       const created = await fixture("rebound", liveIdentity.repoRoot);
-      updateRegistryWorktree(env, created.id, {
+      await updateRegistryWorktree(env, created.id, {
         repositoryIdentity: {
           repoRoot: staleIdentity.repoRoot,
           repoFingerprint: staleIdentity.fingerprint,
@@ -1005,6 +1007,7 @@ describe("ManagedWorktreeService", () => {
       expect(await git(repo, "config", "--bool", "submodule.module.active")).toBe("true");
       expect(await git(path.join(repo, "module"), "rev-parse", "HEAD")).toBe(moduleHead);
 
+      useInProcessWorktreeCapacityTransport();
       const disk = fsSync.statfsSync(root);
       vi.spyOn(fsSync, "statfsSync").mockReturnValue({
         type: disk.type,

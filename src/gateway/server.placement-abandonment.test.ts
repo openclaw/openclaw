@@ -242,7 +242,7 @@ it.for(cases)(
       }
       const { sessionId, sessionKey, agentId } = REQUEST;
       const worktreeId = "abandonment-worktree";
-      insertRegistryWorktree(process.env, {
+      await insertRegistryWorktree(process.env, {
         id: worktreeId,
         name: "abandonment",
         repoFingerprint: "fixture",

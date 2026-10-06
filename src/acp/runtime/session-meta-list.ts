@@ -11,7 +11,6 @@ import { resolveSessionStorePathForAcp, type AcpSessionStoreEntry } from "./sess
 export async function listAcpSessionEntries(params: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  clone?: boolean;
   databasePath?: string;
 }): Promise<AcpSessionStoreEntry[]> {
   const { cfg, env, databasePath, assertCurrent } = await captureAcpSessionReadContext(params);

@@ -306,8 +306,7 @@ export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean)
 
   const detail = probe.error ? ` - ${probe.error}` : "";
   if (probe.gatewayReached && probe.connectLatencyMs != null) {
-    const latency =
-      typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
+    const latency = `${probe.connectLatencyMs}ms`;
     const readStatus = isScopeLimitedProbeFailure(probe)
       ? colorize(rich, theme.warn, "Read probe: limited")
       : colorize(rich, theme.error, "Read probe: failed");

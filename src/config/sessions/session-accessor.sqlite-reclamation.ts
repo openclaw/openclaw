@@ -48,7 +48,7 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { reclaimSessionMaintenanceInTransaction } from "./session-accessor.sqlite-maintenance-transaction.js";
 import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
-import { commitProjectedSessionEntryRemovalsInDatabase } from "./session-accessor.sqlite-projection-state.js";
+import { commitPreparedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
 import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 
@@ -207,11 +207,35 @@ function reclaimSqliteRowsInTransaction(
     const value = runSqliteSessionDeletionTransaction(
       (database) => {
         callbacks.beforeMutation?.();
-        const result = commitProjectedSessionEntryRemovalsInDatabase(
+        const progressCardResetKeys: string[] = [];
+        const projectionReconcileSessionIds: string[] = [];
+        const result = commitPreparedSessionEntryLifecycleMutationInDatabase(
           database,
           plan.input,
           plan.materializedPlans,
+          {
+            resetScope: {
+              agentId: plan.agentId,
+              path: database.path,
+              env: plan.databaseOptions.env,
+            },
+            onResetBoundary: ({
+              sessionKey,
+              sessionId,
+              progressCardReset,
+              projectionNeedsReconcile,
+            }) => {
+              if (progressCardReset) {
+                progressCardResetKeys.push(sessionKey);
+              }
+              if (projectionNeedsReconcile) {
+                projectionReconcileSessionIds.push(sessionId);
+              }
+            },
+          },
         );
+        result.progressCardResetKeys = progressCardResetKeys;
+        result.projectionReconcileSessionIds = projectionReconcileSessionIds;
         callbacks.onCommit?.(database, { kind: plan.kind, value: result });
         return result;
       },
@@ -334,7 +358,6 @@ function reclaimSqliteRowsInTransaction(
         plan.materializedPlans,
         protectedSessionIds,
         excludedSessionKeys,
-        undefined,
         diskBudget,
       );
       const db = getSessionKysely(transactionDb.db);

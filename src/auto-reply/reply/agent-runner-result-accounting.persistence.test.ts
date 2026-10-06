@@ -9,9 +9,9 @@ import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { applySessionEntryLifecycleMutation } from "../../config/sessions/session-accessor.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
   closeOpenClawAgentDatabasesAsync,
-  disposeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -45,7 +45,7 @@ beforeAll(() => {
 });
 afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
-  disposeOpenClawAgentDatabaseByPath(storePath);
+  await disposeOpenClawAgentDatabaseByPath(storePath);
   await closeOpenClawAgentDatabasesAsync(suiteRoot);
   expect(isOpenClawAgentDatabaseOpen(storePath)).toBe(false);
   fs.rmSync(suiteRoot, { recursive: true, force: true });
@@ -563,8 +563,13 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
   );
 
   it.each([
-    { mode: "heartbeat", withUsage: true },
-    { mode: "heartbeat", withUsage: false },
+    // Queued turns are never heartbeats; only ordinary runs account heartbeat completions.
+    ...(lane === "ordinary"
+      ? [
+          { mode: "heartbeat", withUsage: true },
+          { mode: "heartbeat", withUsage: false },
+        ]
+      : []),
     { mode: "exhausted fallback", withUsage: true },
     { mode: "exhausted fallback", withUsage: false },
     { mode: "inter-session completion", withUsage: true },

@@ -333,6 +333,62 @@ it("retains an inherited snapshot until its outer owner closes after the query",
   expect(mock.borrow).not.toHaveBeenCalled();
 });
 
+it("joins rejected fresh snapshot preparation before reporting its cleanup failure", async () => {
+  const options = source();
+  const preparationFailure = new Error("fresh snapshot preparation failed after admission");
+  const closeFailure = new Error("fresh snapshot producer did not close");
+  const preparation = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(() => {});
+  const closing = createRetainedOperation<void>(() => {});
+  const preparing = createDeferredCore();
+  const closeStarted = createDeferredCore();
+  mock.prepareFresh.mockImplementationOnce(() => {
+    preparing.resolve();
+    return {
+      ...preparation.operation,
+      startClose: () => {
+        closeStarted.resolve();
+        return closing.operation;
+      },
+    };
+  });
+  const consume = vi.fn(async () => "unused");
+  let settled = false;
+  ready = true;
+  const result = withOpenClawStateDatabaseReadSnapshot(consume, options, { fresh: true }).then(
+    (value) => {
+      settled = true;
+      return value;
+    },
+    (error: unknown) => {
+      settled = true;
+      return error;
+    },
+  );
+  await Promise.race([
+    preparing.promise,
+    result.then(() => {
+      throw new Error("Fresh snapshot settled before starting preparation");
+    }),
+  ]);
+  preparation.reject(preparationFailure);
+  try {
+    await Promise.race([
+      closeStarted.promise,
+      result.then(() => {
+        throw new Error("Fresh snapshot settled before joining its producer");
+      }),
+    ]);
+    expect(settled).toBe(false);
+    expect(consume).not.toHaveBeenCalled();
+    expect(mock.prepareInherited).not.toHaveBeenCalled();
+  } finally {
+    closing.reject(closeFailure);
+  }
+  await expect(result).resolves.toMatchObject({
+    cause: { errors: [preparationFailure, closeFailure], cause: preparationFailure },
+  });
+});
+
 it("retains failed preparation custody through a pending close and canonical retry", async () => {
   const observed = observeReaders();
   const options = source();

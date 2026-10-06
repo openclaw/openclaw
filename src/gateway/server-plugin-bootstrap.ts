@@ -8,7 +8,6 @@ import {
   getPluginMetadataSnapshotCache,
   withPluginCache,
 } from "../plugins/plugin-cache.js";
-import type { PluginRegistry } from "../plugins/registry.js";
 import {
   findActiveDegradedPlugin,
   formatPluginVerificationDiagnostic,
@@ -21,49 +20,10 @@ type GatewayPluginBootstrapLog = Required<PluginLogger>;
 type GatewayPluginBootstrapParams = Omit<
   Parameters<typeof loadGatewayPlugins>[0],
   "autoEnabledReasons"
-> & { log: GatewayPluginBootstrapLog; logDiagnostics?: boolean };
+> & { log: GatewayPluginBootstrapLog };
 
 // Reload replaces the cache's metadata object and permits the next generation's notices.
 const loggedInfoByMetadata = new WeakMap<object, Set<string>>();
-
-// Keep plugin/source attribution without exposing internal diagnostic objects.
-function logGatewayPluginDiagnostics(params: {
-  diagnostics: PluginRegistry["diagnostics"];
-  log: Pick<GatewayPluginBootstrapLog, "error" | "warn" | "info">;
-}) {
-  const metadata = getPluginCache().metadata;
-  const loggedInfo = loggedInfoByMetadata.get(metadata) ?? new Set<string>();
-  loggedInfoByMetadata.set(metadata, loggedInfo);
-  for (const diag of params.diagnostics) {
-    if (diag.level === "info") {
-      const key = JSON.stringify([diag.pluginId, diag.message]);
-      if (loggedInfo.has(key)) {
-        continue;
-      }
-      loggedInfo.add(key);
-    }
-    const degradedPlugin = diag.pluginId ? findActiveDegradedPlugin(diag.pluginId) : undefined;
-    // Startup preflight already emitted this typed owner diagnostic. Keep it
-    // in the registry for health/status, but do not print it a second time.
-    if (
-      diag.code === "plugin-verification" &&
-      degradedPlugin &&
-      diag.message === formatPluginVerificationDiagnostic(degradedPlugin.diagnostic)
-    ) {
-      continue;
-    }
-    const details = [
-      diag.pluginId ? `plugin=${diag.pluginId}` : null,
-      diag.source ? `source=${diag.source}` : null,
-    ]
-      .filter((entry): entry is string => Boolean(entry))
-      .join(", ");
-    const message = details
-      ? `[plugins] ${diag.message} (${details})`
-      : `[plugins] ${diag.message}`;
-    params.log[diag.level](message);
-  }
-}
 
 /** The caller joins accepted cleanup even when synchronous publication throws. */
 export type GatewayPluginRuntimePreparation = (
@@ -82,7 +42,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
       : getPluginCache(),
     () => {
       const started = performance.now();
-      const { log, logDiagnostics = true, ...loadParams } = params;
+      const { log, ...loadParams } = params;
       const activationSourceConfig = params.activationSourceConfig ?? params.cfg;
       const autoEnabled = applyPluginAutoEnable({
         config: activationSourceConfig,
@@ -119,11 +79,41 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
         autoEnabledReasons,
         channelPluginLoadIntent: params.channelPluginLoadIntent ?? "full",
       });
-      if (logDiagnostics && loaded.pluginRegistry.diagnostics.length > 0) {
-        logGatewayPluginDiagnostics({
-          diagnostics: loaded.pluginRegistry.diagnostics,
-          log,
-        });
+      if (loaded.pluginRegistry.diagnostics.length > 0) {
+        const metadata = getPluginCache().metadata;
+        const loggedInfo = loggedInfoByMetadata.get(metadata) ?? new Set<string>();
+        loggedInfoByMetadata.set(metadata, loggedInfo);
+        for (const diag of loaded.pluginRegistry.diagnostics) {
+          if (diag.level === "info") {
+            const key = JSON.stringify([diag.pluginId, diag.message]);
+            if (loggedInfo.has(key)) {
+              continue;
+            }
+            loggedInfo.add(key);
+          }
+          const degradedPlugin = diag.pluginId
+            ? findActiveDegradedPlugin(diag.pluginId)
+            : undefined;
+          // Startup preflight already emitted this typed owner diagnostic. Keep it
+          // in the registry for health/status, but do not print it a second time.
+          if (
+            diag.code === "plugin-verification" &&
+            degradedPlugin &&
+            diag.message === formatPluginVerificationDiagnostic(degradedPlugin.diagnostic)
+          ) {
+            continue;
+          }
+          const details = [
+            diag.pluginId ? `plugin=${diag.pluginId}` : null,
+            diag.source ? `source=${diag.source}` : null,
+          ]
+            .filter((entry): entry is string => Boolean(entry))
+            .join(", ");
+          const message = details
+            ? `[plugins] ${diag.message} (${details})`
+            : `[plugins] ${diag.message}`;
+          log[diag.level](message);
+        }
       }
       return { ...loaded, resolvedConfig };
     },

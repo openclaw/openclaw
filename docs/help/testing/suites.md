@@ -120,6 +120,10 @@ Native dependency policy:
       spawns can inherit another worker's temporary output pipe handles and
       prevent that worker's child cleanup from observing EOF. Worker counts
       and file parallelism remain unchanged.
+    - SQLite admission runs before test collection in each Vitest worker. Bun threads
+      inherit the config process's decision; OS forks initialize it locally.
+      Bun runs the existing native-close conformance probe before database pools
+      capture their policy; Node retains its runtime-provided capability.
     - The shared Vitest config fixes `isolate: false` and uses the
       non-isolated runner across the root projects, e2e, and live configs.
     - The root UI lane keeps its `jsdom` setup and optimizer, but runs on the
@@ -403,9 +407,10 @@ gh workflow run openclaw-live-and-e2e-checks-reusable.yml --ref main \
 ```
 
 Bun jobs are labeled advisory and report failures normally in their separate
-run. They do not replace Node release evidence or add PR jobs. The existing
-`setup-test-bun` action owns the fork pin. The existing trusted admission job
-installs it once and shares its executable by artifact ID with the test jobs.
+run. They do not replace Node release evidence or add PR jobs. The trusted
+admission checkout includes `scripts/lib/openclaw-bun.json` and its staging
+helper from the workflow revision. The existing `setup-test-bun` action installs
+that pin once and shares its executable by artifact ID with the test jobs.
 Only test steps select Bun; dependency
 installation, build preparation, packaging, and workflow tooling keep their
 current toolchain.

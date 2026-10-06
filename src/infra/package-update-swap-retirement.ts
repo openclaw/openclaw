@@ -12,6 +12,7 @@ import {
 } from "./package-update-filesystem.js";
 import type { PackageRootIntegrityFingerprint } from "./package-update-integrity.js";
 import type { createNpmPackageRootLinkLifecycle } from "./package-update-npm-root.js";
+import type { createPublicationOwner } from "./package-update-publication-owner.js";
 import { PackageUpdateActivationError } from "./package-update-swap-contract.js";
 import {
   createFreeBsdPkgOwnershipInspection,
@@ -127,7 +128,7 @@ export async function captureLegacyPackageBackupRetirement(
 
 /** Refusal occurred before transaction handoff or any live package mutation. */
 export async function retireRefusedPackageSwap(
-  activation: { disarmRollback: () => Promise<boolean>; retire: () => Promise<unknown> },
+  activation: Pick<ReturnType<typeof createPublicationOwner>, "disarmRollback" | "retire">,
   refusal: unknown,
 ): Promise<void> {
   try {

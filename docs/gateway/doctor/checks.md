@@ -50,6 +50,7 @@ full behavior and rationale of each numbered check, follow the links under
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Config file permission checks (chmod 600) when running locally.
     - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
+    - Claude CLI discovery uses the Anthropic plugin's executable resolver, including native installations in `~/.local/bin`. During updates, a Doctor child can inherit the Gateway service's narrower `PATH`; Doctor reports the discovered binary's location when it is outside that path. A missing binary still produces installation guidance.
 
   </Accordion>
   <Accordion title="Gateway, services, and supervisors">

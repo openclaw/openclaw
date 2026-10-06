@@ -7,9 +7,13 @@ import type {
   ThinkingBudgets,
   Transport,
 } from "@openclaw/llm-core";
-import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+import { runAgentLoop } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
-import { attachInternalSyncSteeringGetter, getInternalBeforeToolBatch } from "./internal-hooks.js";
+import {
+  attachInternalSyncSteeringGetter,
+  getInternalBeforeToolBatch,
+  getInternalToolTurnCompletion,
+} from "./internal-hooks.js";
 import { isOpenClawSystemUpdateMessage } from "./operator-messages.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
@@ -159,10 +163,16 @@ class PendingMessageQueue {
   }
 
   enqueue(message: AgentMessage): void {
+    this.admit(message)();
+  }
+
+  admit(message: AgentMessage): () => void {
     this.messages.push(message);
-    for (const listener of this.listeners) {
-      listener();
-    }
+    return () => {
+      for (const listener of this.listeners) {
+        listener();
+      }
+    };
   }
 
   peek(): readonly AgentMessage[] {
@@ -397,7 +407,12 @@ export class Agent {
    * message's unstarted sequential tail can be skipped. Parallel batches always run.
    */
   steer(message: AgentMessage): void {
-    this.steeringQueue.enqueue(message);
+    this.admitSteeringMessage(message)();
+  }
+
+  /** Install admitted input synchronously; notify listeners after admission custody ends. */
+  admitSteeringMessage(message: AgentMessage): () => void {
+    return this.steeringQueue.admit(message);
   }
 
   /** Cancel queued input unless a live provider response may already have admitted it. */
@@ -507,7 +522,7 @@ export class Agent {
       throw new TranscriptNotContinuableError(lastMessage.role);
     }
 
-    await this.runContinuation();
+    await this.runPromptMessages([]);
   }
 
   private normalizePromptInput(
@@ -538,18 +553,6 @@ export class Agent {
         messages,
         this.createContextSnapshot(),
         this.createLoopConfig(options),
-        (event) => this.processEvents(event),
-        signal,
-        this.streamFn,
-      );
-    });
-  }
-
-  private async runContinuation(): Promise<void> {
-    await this.runWithLifecycle(async (signal) => {
-      await runAgentLoopContinue(
-        this.createContextSnapshot(),
-        this.createLoopConfig(),
         (event) => this.processEvents(event),
         signal,
         this.streamFn,
@@ -603,6 +606,7 @@ export class Agent {
       toolExecution: this.toolExecution,
       beforeToolCall: this.beforeToolCall,
       beforeToolBatch: getInternalBeforeToolBatch(this),
+      completesToolTurn: getInternalToolTurnCompletion(this),
       toolLoopRecoveryState: this.toolLoopRecoveryState,
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,
@@ -646,6 +650,9 @@ export class Agent {
     try {
       await executor(abortController.signal);
     } catch (error) {
+      if (this.runtime?.isLocalError?.(error)) {
+        throw error;
+      }
       await this.handleRunFailure(error, abortController.signal.aborted);
     } finally {
       this.finishRun();

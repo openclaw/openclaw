@@ -677,7 +677,7 @@ describeControlUiE2e("session pull request chips", () => {
 
     await page.getByRole("button", { name: "Publish PR" }).click();
     const failure = page.locator('.chat-pr__publication-outcome[data-state="failed"]');
-    await expect.poll(() => failure.textContent()).toContain("GitHub publication failed.");
+    await expect.poll(() => failure.textContent()).toContain("Publication failed");
     await expect.poll(() => failure.textContent()).toContain("Check repository write access");
     await expect
       .poll(() => page.getByRole("button", { name: "Choose a new publication" }).count())

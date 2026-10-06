@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -161,7 +160,7 @@ export async function resolvePendingSkillProposal(input: {
         .join(", ");
       throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
     }
-    proposalId = expectDefined(matches[0], "matches capture group 0").id;
+    proposalId = matches[0]!.id;
   }
   const matched = await inspectSkillProposal(proposalId, store);
   if (!matched) {

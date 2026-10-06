@@ -100,7 +100,12 @@ export async function completeReplyAgentRun(input: {
 
     if (verboseEnabled) {
       const suffix = typeof count === "number" ? ` (count ${count})` : "";
-      prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
+      prefixNotices.push(
+        setReplyPayloadMetadata(
+          { text: `🧹 Auto-compaction complete${suffix}.` },
+          { hostNotice: true },
+        ),
+      );
     }
   }
   const trailingPluginStatusPayload = await buildReplyDiagnosticsPayload({

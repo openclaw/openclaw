@@ -13,9 +13,16 @@ import type {
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-registry-listing.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
 import type { RegisteredAgentWorkerOperations } from "./openclaw-agent-execution-operations.js";
+
+/** A retired owner refused new work; an admitted command's failure is never classified here. */
+export const AgentDatabaseExecutionAdmissionClosedError = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentDatabaseExecutionAdmissionClosedError"),
+  () => class AdmissionClosedError extends Error {},
+);
 
 /** Recorded by the native owner; a descriptor never grants access to that owner. */
 export type AgentDatabaseFileExecutionIdentity = {
@@ -108,15 +115,6 @@ export type AgentDatabaseIncognitoOperations = IncognitoSessionOperations & {
 };
 
 export type AgentDatabaseIncognitoAuthority = { assertCurrent(): void };
-
-export class IncognitoSessionEndedError extends Error {
-  readonly code = "INCOGNITO_SESSION_ENDED";
-
-  constructor(options?: ErrorOptions) {
-    super("Incognito session ended. Create a new incognito session to continue.", options);
-    this.name = "IncognitoSessionEndedError";
-  }
-}
 
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
   RegisteredAgentWorkerOperations & {

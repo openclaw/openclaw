@@ -15,12 +15,6 @@ import { sleep } from "../utils.js";
 
 type PortProcess = { pid: number; command?: string };
 
-type ForceFreePortResult = {
-  killed: PortProcess[];
-  waitedMs: number;
-  escalatedToSigkill: boolean;
-};
-
 type BeforePortSignal = (context: { port: number; pid?: number; signal: NodeJS.Signals }) => void;
 
 type ExecFileError = NodeJS.ErrnoException & {
@@ -287,7 +281,7 @@ export async function forceFreePortAndWait(
     /** Last-moment ownership guard invoked before each destructive signal. */
     beforeSignal?: BeforePortSignal;
   } = {},
-): Promise<ForceFreePortResult> {
+) {
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 1500, 0);
   const intervalMs = resolvePositiveTimerTimeoutMs(opts.intervalMs, 100);
   const sigtermTimeoutMs = Math.min(

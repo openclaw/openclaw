@@ -10,16 +10,64 @@ describe("github item references", () => {
     { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] },
     { owner: "other", repo: "release-tools", aliases: ["Release.Tools", "Release Tools"] },
   ];
+  const resolved = { githubRepo, githubRepositories };
+  const toolRepository = { owner: "acme", repo: "tools", aliases: ["Tools"] };
+  const tools = {
+    githubRepo,
+    githubRepositories: [
+      toolRepository,
+      { owner: "acme", repo: "clawsweeper", aliases: ["ClawSweeper"] },
+    ],
+  };
   function render(source: string, options: MarkdownRenderOptions = { githubRepo }) {
     return htmlFragment(toSanitizedMarkdownHtml(source, options));
   }
 
-  it.each([
-    ["Original ClawSweeper PR **#1558 merged**", "openclaw/clawsweeper/pull/1558"],
-    ["Release.Tools issue **#42**", "other/release-tools/issues/42"],
-    ["release-tools PR #42", "other/release-tools/pull/42"],
-  ])("resolves the named repository in %s", (source, target) => {
-    const options = { githubRepo, githubRepositories };
+  it.each<[string, string, MarkdownRenderOptions]>([
+    ["Original ClawSweeper PR **#1558 merged**", "openclaw/clawsweeper/pull/1558", resolved],
+    ["Release.Tools issue **#42**", "other/release-tools/issues/42", resolved],
+    ["release-tools PR #42", "other/release-tools/pull/42", resolved],
+    ["original tools PR #42", "acme/tools/pull/42", tools],
+    ["follow-up CLAWSWEEPER PR #42", "acme/clawsweeper/pull/42", tools],
+    ["(CLAWsweeper) PR #42", "openclaw/clawsweeper/pull/42", resolved],
+    ['"ClawSweeper": PR #42', "openclaw/clawsweeper/pull/42", resolved],
+    ["Original **ClawSweeper _PR_** **#42 merged**", "openclaw/clawsweeper/pull/42", resolved],
+    ["Finished. Follow-up PR #42", "openclaw/openclaw/pull/42", resolved],
+    [
+      "ClawSweeper PR #42",
+      "openclaw/clawsweeper/pull/42",
+      {
+        githubRepositories: [
+          ...githubRepositories,
+          { owner: "OPENCLAW", repo: "CLAWSWEEPER", aliases: ["clawsweeper"] },
+        ],
+      },
+    ],
+    [
+      "OpenClaw PR #42",
+      "openclaw/openclaw/pull/42",
+      { githubRepo, githubRepositories: [{ owner: "other", repo: "project", aliases: ["Claw"] }] },
+    ],
+    [
+      "Original Tools PR #42",
+      "other/original-tools/pull/42",
+      {
+        githubRepo,
+        githubRepositories: [
+          toolRepository,
+          { owner: "other", repo: "original-tools", aliases: ["Original Tools"] },
+        ],
+      },
+    ],
+    [
+      '"Alice\'s Tools" PR #42',
+      "acme/tools/pull/42",
+      {
+        githubRepo,
+        githubRepositories: [{ owner: "acme", repo: "tools", aliases: ["Alice's Tools"] }],
+      },
+    ],
+  ])("resolves the complete known repository in %s", (source, target, options) => {
     for (const rendered of [
       toSanitizedMarkdownHtml(source, options),
       toStreamingMarkdownParts(source, options).join(""),
@@ -41,61 +89,63 @@ describe("github item references", () => {
     expect(fragment.textContent?.trim()).toBe(input);
   });
 
-  it.each([
-    "ClawSweeper PR **#1576 opened**",
-    "UnknownProject PR #1576",
-    'repository "Unknown Project" PR #1576',
-  ])("does not bind an unresolved named reference to the checkout: %s", (source) => {
-    for (const rendered of [
-      toSanitizedMarkdownHtml(source, { githubRepo }),
-      toStreamingMarkdownParts(source, { githubRepo }).join(""),
-    ]) {
-      expect(htmlFragment(rendered).querySelector("a")).toBeNull();
-    }
-  });
-
-  it.each([
-    ["original tools", "tools"],
-    ["follow-up CLAWSWEEPER", "clawsweeper"],
-  ])("does not reinterpret ordinary prose before the known alias in %s", (prefix, repo) => {
-    const options = {
-      githubRepo,
-      githubRepositories: [
-        { owner: "acme", repo: "tools", aliases: ["Tools"] },
-        { owner: "acme", repo: "clawsweeper", aliases: ["ClawSweeper"] },
-      ],
-    };
-    for (const html of [
-      toSanitizedMarkdownHtml(prefix + " PR #42", options),
-      toStreamingMarkdownParts(prefix + " PR #42", options).join(""),
-    ]) {
-      expect(htmlFragment(html).querySelector("a")?.getAttribute("href")).toBe(
-        "https://github.com/acme/" + repo + "/pull/42",
-      );
-    }
-  });
-
-  it("prefers a known unresolved full alias to its resolved suffix", () => {
-    const options = {
-      githubRepo,
-      githubRepositories: [
-        { owner: "acme", repo: "tools", aliases: ["Tools"] },
-        { aliases: ["Unknown Tools"] },
-      ],
-    };
-    expect(render("Original Unknown Tools PR #42", options).querySelector("a")).toBeNull();
-  });
-
-  it("does not pick a repository when an alias is ambiguous", () => {
-    const options = {
-      githubRepo,
-      githubRepositories: [
-        ...githubRepositories,
-        { owner: "fork", repo: "clawsweeper", aliases: ["ClawSweeper"] },
-      ],
-    };
-    expect(render("ClawSweeper PR #1576", options).querySelector("a")).toBeNull();
-  });
+  it.each<[string, MarkdownRenderOptions]>([
+    ...[
+      "ClawSweeper PR **#1576 opened**",
+      "UnknownProject PR #1576",
+      'repository "Unknown Project" PR #1576',
+      "Unknown.Project PR #1576",
+      "project unknown PR #1576",
+      "repo: unknown PR #1576",
+    ].map((source): [string, MarkdownRenderOptions] => [source, { githubRepo }]),
+    [
+      "Original Unknown Tools PR #42",
+      { githubRepo, githubRepositories: [toolRepository, { aliases: ["Unknown Tools"] }] },
+    ],
+    [
+      "ClawSweeper PR #1576",
+      {
+        githubRepo,
+        githubRepositories: [
+          ...githubRepositories,
+          { owner: "fork", repo: "clawsweeper", aliases: ["ClawSweeper"] },
+        ],
+      },
+    ],
+    [
+      "ClawSweeper PR #1576",
+      { githubRepo, githubRepositories: [...githubRepositories, { aliases: ["ClawSweeper"] }] },
+    ],
+    [
+      "OpenClaw PR #1576",
+      {
+        githubRepo,
+        githubRepositories: [
+          ...githubRepositories,
+          { owner: "fork", repo: "openclaw", aliases: ["OpenClaw"] },
+        ],
+      },
+    ],
+    ...[
+      "project Unknown Tools PR #42",
+      "(“Unknown Tools”) PR #42",
+      "\"Unknown 'Legacy' Tools\" PR #42",
+    ].map((source): [string, MarkdownRenderOptions] => [
+      source,
+      { githubRepo, githubRepositories: [toolRepository] },
+    ]),
+    ["PR #141270 issue #123 #141270", {}],
+  ])(
+    "leaves absent, unknown, and ambiguous repository identities unlinked: %s",
+    (source, options) => {
+      for (const rendered of [
+        toSanitizedMarkdownHtml(source, options),
+        toStreamingMarkdownParts(source, options).join(""),
+      ]) {
+        expect(htmlFragment(rendered).querySelector("a")).toBeNull();
+      }
+    },
+  );
 
   it.each([
     ["openclaw/clawsweeper#1576", "issues"],
@@ -109,93 +159,6 @@ describe("github item references", () => {
         (source.includes("1576") ? "/1576" : "/42"),
     );
     expect(fragment.textContent?.trim()).toBe(source);
-  });
-
-  it.each([
-    ["(CLAWsweeper) PR #42", "clawsweeper"],
-    ['"ClawSweeper": PR #42', "clawsweeper"],
-    ["Original **ClawSweeper _PR_** **#42 merged**", "clawsweeper"],
-    ["Finished. Follow-up PR #42", "openclaw"],
-  ])("recognizes exact aliases but preserves ordinary prose: %s", (source, repo) => {
-    const rendered = render(source, { githubRepo, githubRepositories });
-    expect(rendered.querySelector("a")?.getAttribute("href")).toBe(
-      "https://github.com/openclaw/" + repo + "/pull/42",
-    );
-  });
-
-  it.each([
-    [{ aliases: ["ClawSweeper"] }],
-    [{ owner: "fork", repo: "openclaw", aliases: ["OpenClaw"] }],
-  ])("does not select the checkout to break a known alias collision", (other) => {
-    const options = { githubRepo, githubRepositories: [...githubRepositories, other] };
-    const source = other.aliases[0] + " PR #1576";
-    expect(render(source, options).querySelector("a")).toBeNull();
-  });
-
-  it("deduplicates same-coordinate aliases and resolves without checkout context", () => {
-    const options = {
-      githubRepositories: [
-        ...githubRepositories,
-        { owner: "OPENCLAW", repo: "CLAWSWEEPER", aliases: ["clawsweeper"] },
-      ],
-    };
-    expect(render("ClawSweeper PR #42", options).querySelector("a")?.getAttribute("href")).toBe(
-      "https://github.com/openclaw/clawsweeper/pull/42",
-    );
-  });
-
-  it.each(["Unknown.Project PR #1576", "project unknown PR #1576", "repo: unknown PR #1576"])(
-    "leaves syntactically qualified unknown repositories unlinked: %s",
-    (source) => {
-      expect(render(source).querySelector("a")).toBeNull();
-    },
-  );
-
-  it("does not match aliases inside larger identifiers", () => {
-    const options = {
-      githubRepo,
-      githubRepositories: [{ owner: "other", repo: "project", aliases: ["Claw"] }],
-    };
-    expect(render("OpenClaw PR #42", options).querySelector("a")?.getAttribute("href")).toBe(
-      "https://github.com/openclaw/openclaw/pull/42",
-    );
-  });
-
-  it.each([
-    "project Unknown Tools PR #42",
-    "(“Unknown Tools”) PR #42",
-    "\"Unknown 'Legacy' Tools\" PR #42",
-  ])("does not select a known suffix inside an explicit complete name: %s", (source) => {
-    const options = {
-      githubRepo,
-      githubRepositories: [{ owner: "acme", repo: "tools", aliases: ["Tools"] }],
-    };
-    expect(render(source, options).querySelector("a")).toBeNull();
-  });
-
-  it("prefers complete registered names over ordinary reference prefixes", () => {
-    const options = {
-      githubRepo,
-      githubRepositories: [
-        { owner: "acme", repo: "tools", aliases: ["Tools"] },
-        { owner: "other", repo: "original-tools", aliases: ["Original Tools"] },
-      ],
-    };
-    expect(render("Original Tools PR #42", options).querySelector("a")?.getAttribute("href")).toBe(
-      "https://github.com/other/original-tools/pull/42",
-    );
-  });
-
-  it("matches an entire paired-quote alias containing apostrophes", () => {
-    const quotedRepositories = [{ owner: "acme", repo: "tools", aliases: ["Alice's Tools"] }];
-    expect(
-      render('"Alice\'s Tools" PR #42', {
-        githubRepo,
-        githubRepositories: quotedRepositories,
-      })
-        .querySelector("a")
-        ?.getAttribute("href"),
-    ).toBe("https://github.com/acme/tools/pull/42");
   });
 
   it.each(["Release Tools (Legacy)", "Build:"])(
@@ -214,11 +177,6 @@ describe("github item references", () => {
       }
     },
   );
-
-  it("leaves references plain without a repository", () => {
-    const fragment = render("PR #141270 issue #123 #141270", {});
-    expect(fragment.querySelector("a")).toBeNull();
-  });
 
   it.each([
     ["PR #141270", "PR ", "141270", "pull"],

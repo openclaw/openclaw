@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import {
@@ -63,7 +62,6 @@ import type {
   AgentCommandOpts,
 } from "./command/types.js";
 import { createInternalSessionEffectsCleanup } from "./internal-session-effects.js";
-import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-store.js";
 import { createAgentRunRestartAbortError, isAgentRunDirectAbortReason } from "./run-termination.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
@@ -78,17 +76,16 @@ const log = createSubsystemLogger("agents/agent-command");
 
 async function agentCommandInternal(
   prepared: Awaited<ReturnType<typeof prepareAgentCommandExecution>>,
-  initialOpts: AgentCommandOpts,
   admissionIngress: AgentCommandAdmissionIngress,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
   watchSkills = false,
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
-  const isRawModelRun = initialOpts.modelRun === true || initialOpts.promptMode === "none";
-  const suppressVisibleSessionEffects = initialOpts.sessionEffects === "internal";
+  const isRawModelRun = prepared.opts.modelRun === true || prepared.opts.promptMode === "none";
+  const suppressVisibleSessionEffects = prepared.opts.sessionEffects === "internal";
   const preserveUserFacingSessionModelState =
-    initialOpts.preserveUserFacingSessionModelState === true;
+    prepared.opts.preserveUserFacingSessionModelState === true;
   const lifecycleAbortController = new AbortController();
   const preparedOpts = resolveCommandRecoveryOptions(prepared);
   const compactionSessionIdReporter = createCompactionSessionIdReporter(
@@ -138,15 +135,14 @@ async function agentCommandInternal(
   let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
   let sessionEntry = prepared.sessionEntry,
     runOwnedSessionId = sessionId;
+  // Subagent-lane turns are the parent's own task dispatch into the child (they
+  // carry no inter_session provenance today); classifying them as human would tell
+  // the parent a human interjected on every spawn, for embedded and ACP children alike.
   const sessionStateActor = classifySessionStateActor({
     inputProvenance: opts.inputProvenance,
     internalEvents: opts.internalEvents,
     sessionEffects: opts.sessionEffects,
   });
-  // Subagent-lane turns are the parent's own task dispatch into the child (they
-  // carry no inter_session provenance today); classifying them as human would tell
-  // the parent a human interjected on every spawn, for embedded and ACP children alike.
-  const isSubagentLaneTurn = normalizeOptionalString(opts.lane) === AGENT_LANE_SUBAGENT;
   let sessionReboundDuringRun = false;
   let trackedRestartRecoveryDeliveryClaim = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
@@ -156,7 +152,7 @@ async function agentCommandInternal(
   const preparedSessionId = sessionEntry?.sessionId;
   const { track: trackInternalModelRunTarget, cleanup: cleanupInternalModelRunTargets } =
     createInternalSessionEffectsCleanup({
-      enabled: initialOpts.modelRun === true && suppressVisibleSessionEffects,
+      enabled: prepared.opts.modelRun === true && suppressVisibleSessionEffects,
       agentId: sessionAgentId,
       runId,
       storePath,
@@ -169,6 +165,7 @@ async function agentCommandInternal(
   let releaseForeground: (() => void) | undefined;
   let maintenanceRequest: SessionMaintenanceRequest | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
+  let commandError: unknown;
   try {
     const operatorSession =
       opts.operatorAuthority && sessionKey
@@ -177,15 +174,12 @@ async function agentCommandInternal(
             cfg,
             agentId: sessionAgentId,
             sessionKey,
-            assertSourceCurrent: () => {
-              opts.abortSignal?.throwIfAborted();
-              opts.assertSourceCurrent?.();
-            },
+            currentSource: () => opts,
           })
         : undefined;
     if (
       sessionStateActor.actorType === "human" &&
-      !isSubagentLaneTurn &&
+      !isSubagentLane &&
       !opts.internalEvents?.length &&
       opts.bootstrapContextRunKind !== "heartbeat" &&
       opts.bootstrapContextRunKind !== "cron"
@@ -420,7 +414,7 @@ async function agentCommandInternal(
           body,
           transcriptBody,
           suppressVisibleSessionEffects,
-          provenance: isSubagentLaneTurn ? "agent" : sessionStateActor.actorType,
+          provenance: isSubagentLane ? "agent" : sessionStateActor.actorType,
           sessionAgentId,
           sessionId,
           sessionKey,
@@ -452,7 +446,7 @@ async function agentCommandInternal(
             executionWorkspaceDir: cwd ?? workspaceDir,
             watchSkills,
             isNewSession,
-            isSubagentLaneTurn,
+            isSubagentLaneTurn: isSubagentLane,
             suppressVisibleSessionEffects,
             thinkOnce,
             thinkOverride,
@@ -497,7 +491,7 @@ async function agentCommandInternal(
         { config: cfg },
       );
       sessionEntry = modelSelection.sessionEntry;
-      const foreground = await prepareCommandForegroundRun({
+      const { prepared: attemptPrepared, admission } = await prepareCommandForegroundRun({
         prepared,
         opts,
         sessionEntry,
@@ -512,8 +506,7 @@ async function agentCommandInternal(
           compactionSessionIdReporter.onCompactionCommitted(committedSessionId);
         },
       });
-      const attemptPrepared = foreground.prepared;
-      preparedRunAdmission = foreground.admission;
+      preparedRunAdmission = admission;
       sessionEntry = attemptPrepared.sessionEntry;
       if (attemptPrepared.sessionId !== runOwnedSessionId) {
         runOwnedSessionId = attemptPrepared.sessionId;
@@ -576,6 +569,9 @@ async function agentCommandInternal(
       maintenanceRequest = finalized.maintenance;
       return finalized.deliveryResult;
     });
+  } catch (error) {
+    commandError = error;
+    throw error;
   } finally {
     await finishAgentCommandCleanup({
       prepared,
@@ -584,6 +580,10 @@ async function agentCommandInternal(
       sessionReboundDuringRun,
       trackedRestartRecoveryDeliveryClaim,
       terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
+      terminalEvent: {
+        data: { phase: commandError === undefined ? "end" : "error", error: commandError },
+      },
+      abortSignal: opts.abortSignal,
       lifecycleGeneration,
       beforeTerminalDelivery: opts.beforeTerminalDelivery,
       reportCommitted: compactionSessionIdReporter.reportCommitted,
@@ -610,7 +610,7 @@ async function agentCommandWithAdmissionIngress(
     deps,
     operatorAuthority: admissionIngress.kind === "local-cli",
     run: async (prepared, resolvedDeps) =>
-      await agentCommandInternal(prepared, prepared.opts, admissionIngress, runtime, resolvedDeps),
+      await agentCommandInternal(prepared, admissionIngress, runtime, resolvedDeps),
   });
 }
 
@@ -667,7 +667,6 @@ async function agentCommandFromIngressInternal(
           const run = async () =>
             await agentCommandInternal(
               prepared,
-              prepared.opts,
               { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
               runtime,
               deps,

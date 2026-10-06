@@ -273,7 +273,7 @@ export async function sendSubagentAnnounceDirectly(
     // A recovered requester already owns this admitted input. Reuse its final
     // receipt through the normal delivery checks; never execute the old wake again.
     const recovery =
-      !parentOnly && sourceToolId === "subagent_settle"
+      !parentOnly && (sourceToolId === "subagent_settle" || isSubagentCompletion)
         ? resolveRequesterRecoveryDelivery(requesterEntry, params.directIdempotencyKey)
         : undefined;
     if (recovery?.kind === "delivery") {
@@ -315,6 +315,7 @@ export async function sendSubagentAnnounceDirectly(
       sessionEntry: requesterEntry,
     });
     if (
+      !recoveredResult &&
       !parentOnly &&
       params.expectsCompletionMessage &&
       requesterActivity.sessionId &&
@@ -579,7 +580,7 @@ export async function sendSubagentAnnounceDirectly(
     );
     if (
       parentOnly ||
-      sourceToolId !== "subagent_settle" ||
+      (sourceToolId !== "subagent_settle" && !isSubagentCompletion) ||
       recoveredResult !== undefined ||
       requesterCanonicalKey !== canonicalRequesterSessionKey ||
       !requesterAgentId ||
@@ -612,6 +613,7 @@ export async function sendSubagentAnnounceDirectly(
         agentId: requesterAgentId,
         storePath: requesterStorePath,
         sessionKeys: [canonicalRequesterSessionKey],
+        snapshotFields: [],
       });
     } catch (error) {
       if (params.signal?.aborted) {

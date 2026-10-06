@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasSqliteSessionOwnerColumns } from "../config/sessions/session-accessor.sqlite-owner-projection.js";
+import { assertCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { assertSupportedAgentSchemaVersion } from "../state/openclaw-agent-db-schema-read.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   enableNodeSqliteKyselyStatementCache,
@@ -18,6 +21,7 @@ import {
   readSqliteDataVersion,
   runSqliteReadOperationSync,
 } from "./sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 describe("admitted SQLite schema facts", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -44,6 +48,48 @@ describe("admitted SQLite schema facts", () => {
         database.close();
       }
     }
+  });
+
+  it("serves admitted runtime schema checks without executing SQL", () => {
+    const database = openDatabase(
+      `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
+    );
+    assertCanonicalSessionValidationSchema(database);
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(tableExists(database, "session_nodes")).toBe(true);
+        assertCanonicalSessionValidationSchema(database);
+      }
+      expect(observation.queries).toEqual([]);
+    } finally {
+      observation.restore();
+    }
+  });
+
+  it("refreshes writer admission after BEGIN despite an enclosing read operation", () => {
+    const filename = path.join(tempDirs.make("openclaw-schema-writer-"), "agent.sqlite");
+    const database = openDatabase(
+      `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
+      true,
+      filename,
+    );
+    database.exec("PRAGMA journal_mode=WAL");
+    assertCanonicalSessionValidationSchema(database);
+    const peer = new DatabaseSync(filename);
+    databases.push(peer);
+    runSqliteReadOperationSync(database, () => {
+      peer.exec("DROP TRIGGER session_nodes_canonical_pending_after_update");
+      expect(() =>
+        runSqliteImmediateTransactionSync(database, () =>
+          assertCanonicalSessionValidationSchema(database),
+        ),
+      ).toThrow(/canonical validation schema is missing or drifted/u);
+      expect(database.isTransaction).toBe(false);
+    });
   });
 
   it.each(["exec", "all"] as const)(
@@ -157,9 +203,11 @@ describe("admitted SQLite schema facts", () => {
       expect(hasTable("later")).toBe(true);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(3);
       writer.exec("PRAGMA user_version = 2147483647");
-      expect(() => assertSupportedAgentSchemaVersion(reader, filename)).toThrow(
-        /newer schema version/iu,
-      );
+      expect(() =>
+        runSqliteReadOperationSync(reader, () =>
+          assertSupportedAgentSchemaVersion(reader, filename),
+        ),
+      ).toThrow(/newer schema version/iu);
     },
   );
 
@@ -381,6 +429,20 @@ describe("admitted SQLite schema facts", () => {
       expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(5);
     },
   );
+
+  it("closes failed native write iterators before their statement is reused", () => {
+    const database = openDatabase("CREATE TABLE original (id INTEGER PRIMARY KEY)");
+    const insert = database.prepare("INSERT INTO original VALUES (?) RETURNING id");
+    expect([...insert.iterate(1)]).toEqual([{ id: 1 }]);
+
+    const rejected = insert.iterate(1);
+    expect(() => rejected.next()).toThrow("UNIQUE constraint failed");
+    rejected.return?.();
+
+    database.prepare("DELETE FROM original WHERE id = ?").run(1);
+    expect([...insert.iterate(2)]).toEqual([{ id: 2 }]);
+    expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 2 }]);
+  });
 
   it("retains successful DDL preceding a failed multi-statement batch", () => {
     const database = openDatabase();

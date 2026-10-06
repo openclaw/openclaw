@@ -80,6 +80,7 @@ import {
   updateSelectedSessions,
   type SessionDeleteRow,
 } from "./selection.ts";
+import { SessionDetailsController } from "./session-details-controller.ts";
 import { renderSessionManagementMenu } from "./session-menu.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
@@ -152,6 +153,12 @@ class SessionsPage extends OpenClawLightDomElement {
   private listRequest?: Promise<void>;
   private searchTimer?: ReturnType<typeof setTimeout>;
   private appliedListResult: SessionsListResult | null | undefined;
+  private readonly details = new SessionDetailsController(this, {
+    captureScope: () => this.captureRequestScope(),
+    isCurrent: (scope) => this.isRequestScopeCurrent(scope),
+    row: () => this.result?.sessions.find((row) => row.key === this.expandedSessionKey),
+    agentId: (row, scope) => row.agentId ?? this.sessionPathAgentId(row.key, scope.context),
+  });
   private readonly inputDialog = new SessionsPageDialog((message) => {
     this.error = message;
   });
@@ -231,6 +238,7 @@ class SessionsPage extends OpenClawLightDomElement {
       this.applyRouteData();
     }
     this.bindSessionList();
+    this.details.synchronize();
   }
 
   override disconnectedCallback() {
@@ -246,6 +254,7 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private retirePageOperations() {
+    this.details.reset();
     this.pluginActionLifetime.abort();
     this.pluginActionLifetime = new AbortController();
     this.pageEpoch += 1;
@@ -1150,23 +1159,6 @@ class SessionsPage extends OpenClawLightDomElement {
     }
   }
 
-  private async toggleSessionDetails(sessionKey: string) {
-    const context = this.context;
-    if (!context) {
-      return;
-    }
-    const leavingDeepLink = this.deepLinkSessionKey !== null;
-    this.deepLinkSessionKey = null;
-    if (leavingDeepLink) {
-      void this.refreshSessionList();
-    }
-    if (this.expandedSessionKey === sessionKey) {
-      this.expandedSessionKey = null;
-      return;
-    }
-    this.expandedSessionKey = sessionKey;
-  }
-
   private openSessionMenu(
     row: GatewaySessionRow,
     position: { x: number; y: number },
@@ -1395,10 +1387,10 @@ class SessionsPage extends OpenClawLightDomElement {
       })}
       ${renderSettingsWorkspace(
         renderSessions({
-          loading: this.loading,
+          loading: this.loading || this.details.loading,
           refreshing: this.refreshing,
           result: this.result,
-          error: this.error,
+          error: this.details.error ?? this.error,
           activeMinutes: this.activeMinutes,
           limit: this.limit,
           includeGlobal: this.includeGlobal,
@@ -1532,7 +1524,13 @@ class SessionsPage extends OpenClawLightDomElement {
           },
           onOpenSessionMenu: (row, position, trigger) =>
             this.openSessionMenu(row, position, trigger),
-          onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),
+          onToggleDetails: (key) => {
+            this.expandedSessionKey = this.expandedSessionKey === key ? null : key;
+            if (this.deepLinkSessionKey !== null) {
+              this.deepLinkSessionKey = null;
+              void this.refreshSessionList();
+            }
+          },
         }),
         { id: "sessions-hub-panel" },
       )}

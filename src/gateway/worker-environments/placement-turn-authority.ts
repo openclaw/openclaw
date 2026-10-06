@@ -1,10 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import { registerListener } from "../../shared/listeners.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import {
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
@@ -35,6 +38,7 @@ export type PlacementTurnClaimAuthority = {
 type ClaimChange = {
   sessionId: string;
   sequence?: number;
+  indeterminate?: true;
 } & (
   | {
       kind: "claim";
@@ -67,13 +71,25 @@ type PlacementAuthorityOwner = {
   identity: DatabasePathIdentity;
   active: boolean;
   claims: Map<string, Set<RetainedClaim>>;
-  observations: Map<string, Set<{ revoked: boolean }>>;
+  observations: Map<string | undefined, Set<{ revoked: boolean; indeterminate: boolean }>>;
   pending: Set<ClaimChange>;
+  settlementListeners: Set<() => void>;
   sequence: number;
   published: Map<string, number>;
   tools: Map<string, { sequence: number; authority?: ToolAuthority }>;
   workspaceResults: Map<string, WorkspaceResultFacts>;
 };
+
+function notifySettlement(owner: PlacementAuthorityOwner): void {
+  owner.settlementListeners.forEach((listener) => listener());
+}
+
+function hasPendingPublication(owner: PlacementAuthorityOwner, sessionId?: string): boolean {
+  return [...owner.pending].some(
+    (change) =>
+      change.kind !== "tools" && (sessionId === undefined || change.sessionId === sessionId),
+  );
+}
 
 function notifyRevoked(claim: RetainedClaim): void {
   if (!claim.revoked) {
@@ -81,18 +97,14 @@ function notifyRevoked(claim: RetainedClaim): void {
   }
   const listeners = [...claim.listeners];
   claim.listeners.clear();
-  for (const listener of listeners) {
-    try {
-      listener();
-    } catch {
-      // Cleanup observers cannot undo the authoritative revocation.
-    }
-  }
+  notifyListeners(listeners, undefined);
 }
 
 function closeOwner(owner: PlacementAuthorityOwner): void {
   owner.active = false;
   owner.pending.clear();
+  notifySettlement(owner);
+  owner.settlementListeners.clear();
   owner.published.clear();
   owner.tools.clear();
   owner.workspaceResults.clear();
@@ -129,6 +141,7 @@ function ownerFor(identity: DatabasePathIdentity): PlacementAuthorityOwner {
     claims: new Map(),
     observations: new Map(),
     pending: new Set(),
+    settlementListeners: new Set(),
     sequence: 0,
     published: new Map(),
     tools: new Map(),
@@ -177,6 +190,7 @@ function prunePublication(owner: PlacementAuthorityOwner, sessionId: string): vo
 
 function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, sequence: number): void {
   owner.pending.delete(change);
+  notifySettlement(owner);
   if (!owner.active) {
     return;
   }
@@ -191,8 +205,12 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
     prunePublication(owner, change.sessionId);
     return;
   }
-  for (const observation of owner.observations.get(change.sessionId) ?? []) {
+  for (const observation of [
+    ...(owner.observations.get(change.sessionId) ?? []),
+    ...(owner.observations.get(undefined) ?? []),
+  ]) {
     observation.revoked = true;
+    observation.indeterminate ||= change.indeterminate === true;
   }
   if (sequence > (owner.published.get(change.sessionId) ?? -1)) {
     const result =
@@ -271,28 +289,34 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
   prunePublication(owner, change.sessionId);
 }
 
-/** Retain placement custody across a read-worker wait and pending claim commits. */
-export function observePlacementAuthority(pathname: string, sessionId: string) {
+function capturePlacementObservation(pathname: string, sessionId?: string) {
   const context = captureOpenClawStateWorkerContext({ path: pathname });
   const owner = ownerFor(context.admission.identity);
-  const observation = { revoked: false };
-  const observations = owner.observations.get(sessionId) ?? new Set<{ revoked: boolean }>();
+  const observation = { revoked: false, indeterminate: false };
+  const observations = owner.observations.get(sessionId) ?? new Set<typeof observation>();
   observations.add(observation);
   owner.observations.set(sessionId, observations);
   let released = false;
-  return {
+  const changedMessage =
+    sessionId === undefined
+      ? "Worker placement inventory changed"
+      : `Session ${sessionId} placement authority changed`;
+  const assertUsable = () => {
+    context.admission.assertCurrent();
+    if (
+      released ||
+      observation.indeterminate ||
+      !owner.active ||
+      owners.get(owner.identity.key) !== owner
+    ) {
+      throw new Error(changedMessage);
+    }
+  };
+  const authority = {
     assertCurrent(this: void) {
-      context.admission.assertCurrent();
-      if (
-        released ||
-        observation.revoked ||
-        !owner.active ||
-        owners.get(owner.identity.key) !== owner ||
-        [...owner.pending].some(
-          (change) => change.kind !== "tools" && change.sessionId === sessionId,
-        )
-      ) {
-        throw new Error(`Session ${sessionId} placement authority changed`);
+      assertUsable();
+      if (observation.revoked || hasPendingPublication(owner, sessionId)) {
+        throw new Error(changedMessage);
       }
     },
     release(this: void) {
@@ -301,9 +325,58 @@ export function observePlacementAuthority(pathname: string, sessionId: string) {
       if (observations.size === 0 && owner.observations.get(sessionId) === observations) {
         owner.observations.delete(sessionId);
       }
-      prunePublication(owner, sessionId);
+      if (sessionId !== undefined) {
+        prunePublication(owner, sessionId);
+      }
     },
   };
+  return { authority, observation, owner, assertUsable };
+}
+
+/** Omit the session to observe the inventory, including placements created after an empty read. */
+export function observePlacementAuthority(pathname: string, sessionId?: string) {
+  return capturePlacementObservation(pathname, sessionId).authority;
+}
+
+/** Refresh only unconsumed reads; retained observations and uncertain writes stay fenced. */
+export async function preparePlacementAuthorityRead<T>(
+  pathname: string,
+  sessionId: string,
+  read: () => Promise<T>,
+) {
+  const { authority, observation, owner, assertUsable } = capturePlacementObservation(
+    pathname,
+    sessionId,
+  );
+  const signal = getAsyncWorkSignal();
+  const assertReading = () => {
+    signal?.throwIfAborted();
+    assertUsable();
+  };
+  try {
+    for (;;) {
+      assertReading();
+      while (hasPendingPublication(owner, sessionId)) {
+        const settled = createDeferredCore();
+        const unsubscribe = registerListener(owner.settlementListeners, settled.resolve);
+        try {
+          await racePromiseWithAbortSignal(settled.promise, signal);
+        } finally {
+          unsubscribe();
+        }
+        assertReading();
+      }
+      observation.revoked = false;
+      const value = await read();
+      assertReading();
+      if (!observation.revoked && !hasPendingPublication(owner, sessionId)) {
+        return { value, ...authority };
+      }
+    }
+  } catch (error) {
+    authority.release();
+    throw error;
+  }
 }
 
 function stageChange(db: DatabaseSync, change: ClaimChange): void {
@@ -323,6 +396,7 @@ function stageChange(db: DatabaseSync, change: ClaimChange): void {
       },
       rollback() {
         owner.pending.delete(change);
+        notifySettlement(owner);
         prunePublication(owner, change.sessionId);
         try {
           assertTransactionUsable(db);
@@ -523,10 +597,12 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
     rollback: () =>
       settle(() => {
         owner.pending.delete(change);
+        notifySettlement(owner);
         prunePublication(owner, change.sessionId);
       }),
     invalidate: () =>
       settle(() => {
+        change.indeterminate = true;
         // Uncertain claim/tool writes revoke that incarnation. Workspace-only writes
         // invalidate read observations while preserving the separate turn authority.
         if (change.kind === "tools") {

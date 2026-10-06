@@ -5,7 +5,7 @@ import {
   generateBranchSummary,
 } from "../runtime/index.js";
 import { AgentSessionExecution } from "./agent-session-execution.js";
-import { extractTextContent, normalizeBranchSummaryResult } from "./agent-session-utils.js";
+import { extractTextContent } from "./agent-session-utils.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
 import type { ExtensionRunner, TreePreparation } from "./extensions/index.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
@@ -116,31 +116,29 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         const model = this.model!;
         const { apiKey, headers } = await this.getRequiredRequestAuth(model);
         const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
-        const result = normalizeBranchSummaryResult(
-          await generateBranchSummary(entriesToSummarize, {
-            model,
-            apiKey,
-            headers,
-            signal: abortController.signal,
-            customInstructions,
-            replaceInstructions,
-            reserveTokens: branchSummarySettings.reserveTokens,
-            streamFn: this.agent.streamFn,
-            runtime: createCompactionRuntime((usage) =>
-              recordSessionModelUsage(this.sessionManager, usage),
-            ),
-          }),
-        );
-        if (result.aborted) {
-          return { cancelled: true, aborted: true };
+        const result = await generateBranchSummary(entriesToSummarize, {
+          model,
+          apiKey,
+          headers,
+          signal: abortController.signal,
+          customInstructions,
+          replaceInstructions,
+          reserveTokens: branchSummarySettings.reserveTokens,
+          streamFn: this.agent.streamFn,
+          runtime: createCompactionRuntime((usage) =>
+            recordSessionModelUsage(this.sessionManager, usage),
+          ),
+        });
+        if (!result.ok) {
+          if (result.error.code === "aborted") {
+            return { cancelled: true, aborted: true };
+          }
+          throw new Error(result.error.message);
         }
-        if (result.error) {
-          throw new Error(result.error);
-        }
-        summaryText = result.summary;
+        summaryText = result.value.summary;
         summaryDetails = {
-          readFiles: result.readFiles || [],
-          modifiedFiles: result.modifiedFiles || [],
+          readFiles: result.value.readFiles,
+          modifiedFiles: result.value.modifiedFiles,
         };
       } else if (extensionSummary) {
         summaryText = extensionSummary.summary;

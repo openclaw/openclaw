@@ -178,6 +178,9 @@ describe("Gateway catalog worker pool", () => {
       expect(custody.threadId).toBeGreaterThan(0);
       const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);
       fs.writeFileSync(`${fixture.marker}.hold`, "");
+      // This case orders pool failure before the foreground fallback. Keep its clock
+      // fixed while real worker entry and recovery run under variable host pressure.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       renewal = fixture.snapshots[0]!.loadFullModelCatalog!({ refresh: true });
       void renewal.catch(() => undefined);
       await entered(renewal, signal);
@@ -205,6 +208,7 @@ describe("Gateway catalog worker pool", () => {
       });
       await expect(renewal).rejects.toMatchObject({ name: "WorkerTaskError", code: "unavailable" });
       await expect(queuedCatalog).rejects.toThrow("superseded");
+      vi.useRealTimers();
       const originalError = await renewal.catch((error: unknown) => error);
       expect(originalError).toBe(catalogFailures[0]!.error);
       expect(catalogFailures[0]).toMatchObject({ modelFactsChanged: false });
@@ -256,6 +260,7 @@ describe("Gateway catalog worker pool", () => {
         pendingTasks: 0,
       });
     } finally {
+      vi.useRealTimers();
       fs.rmSync(`${fixture.marker}.hold`, { force: true });
       await Promise.allSettled([renewal, queuedAuth, queuedCatalog]);
       taskChannel.unsubscribe(recordFailure);
@@ -300,9 +305,37 @@ describe("Gateway catalog worker pool", () => {
           })!;
         const entered = observeCatalogEntry(fixture.marker, original.agentDir);
         fs.writeFileSync(`${fixture.marker}.hold`, "");
-        renewal = original.loadFullModelCatalog!({ refresh: true });
+        const foregroundDeadlines: Array<() => void> = [];
+        const schedule = globalThis.setTimeout;
+        const deadlineSpy = vi
+          .spyOn(globalThis, "setTimeout")
+          .mockImplementation((callback, ms, ...args) => {
+            if (ms !== 5_000) {
+              return schedule(callback, ms, ...args);
+            }
+            let fired = false;
+            const expire = () => {
+              if (fired) {
+                return;
+              }
+              fired = true;
+              clearTimeout(timer);
+              callback(...args);
+            };
+            // Retain the native fallback so an earlier assertion cannot strand cleanup.
+            const timer = schedule(expire, ms);
+            foregroundDeadlines.push(expire);
+            return timer;
+          });
+        try {
+          renewal = original.loadFullModelCatalog!({ refresh: true });
+        } finally {
+          deadlineSpy.mockRestore();
+        }
         void renewal.catch(() => undefined);
         await entered(renewal, signal);
+        expect(foregroundDeadlines).toHaveLength(1);
+        foregroundDeadlines[0]!();
         // The foreground deadline returns retained data while acquisition stays behind the barrier.
         await expect(renewal).resolves.toBe(accepted);
         const worker = observed.spawned[0]!;

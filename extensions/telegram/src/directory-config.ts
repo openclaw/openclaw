@@ -5,29 +5,23 @@ import { createResolvedDirectoryEntriesLister } from "openclaw/plugin-sdk/direct
 import { mergeTelegramAccountConfig } from "./account-config.js";
 import { resolveDefaultTelegramAccountSelection } from "./account-selection.js";
 
-type TelegramDirectoryAccount = {
-  config: TelegramAccountConfig;
-};
-
-function resolveTelegramDirectoryAccount(
+function resolveTelegramDirectoryConfig(
   cfg: OpenClawConfig,
   accountId?: string | null,
-): TelegramDirectoryAccount {
+): TelegramAccountConfig {
   const resolvedAccountId = accountId?.trim()
     ? normalizeAccountId(accountId)
     : resolveDefaultTelegramAccountSelection(cfg).accountId;
-  return {
-    config: mergeTelegramAccountConfig(cfg, resolvedAccountId),
-  };
+  return mergeTelegramAccountConfig(cfg, resolvedAccountId);
 }
 
 export const listTelegramDirectoryPeersFromConfig =
-  createResolvedDirectoryEntriesLister<TelegramDirectoryAccount>({
+  createResolvedDirectoryEntriesLister<TelegramAccountConfig>({
     kind: "user",
-    resolveAccount: resolveTelegramDirectoryAccount,
-    resolveSources: (account) => [
-      mapAllowFromEntries(account.config.allowFrom),
-      Object.keys(account.config.dms ?? {}),
+    resolveAccount: resolveTelegramDirectoryConfig,
+    resolveSources: (config) => [
+      mapAllowFromEntries(config.allowFrom),
+      Object.keys(config.dms ?? {}),
     ],
     normalizeId: (entry) => {
       const trimmed = entry.replace(/^(telegram|tg):/i, "").trim();
@@ -42,9 +36,9 @@ export const listTelegramDirectoryPeersFromConfig =
   });
 
 export const listTelegramDirectoryGroupsFromConfig =
-  createResolvedDirectoryEntriesLister<TelegramDirectoryAccount>({
+  createResolvedDirectoryEntriesLister<TelegramAccountConfig>({
     kind: "group",
-    resolveAccount: resolveTelegramDirectoryAccount,
-    resolveSources: (account) => [Object.keys(account.config.groups ?? {})],
+    resolveAccount: resolveTelegramDirectoryConfig,
+    resolveSources: (config) => [Object.keys(config.groups ?? {})],
     normalizeId: (entry) => entry.trim() || null,
   });

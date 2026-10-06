@@ -129,6 +129,8 @@ export const SessionRowSchema = Type.Object(
     channelAvatarUrl: Type.Optional(NonEmptyString),
     conversationLink: Type.Optional(SessionConversationLinkSchema),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+    /** Prepared dashboard membership fact shared by list and change-event rows. */
+    hasBoard: Type.Optional(Type.Boolean()),
     /** Shared dashboard default; absent means split. */
     boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
     displayName: Type.Optional(Type.String()),
@@ -142,6 +144,8 @@ export const SessionRowSchema = Type.Object(
     peerKind: Type.Optional(SessionPeerKindSchema),
     isMain: Type.Optional(Type.Boolean()),
     isBackground: Type.Optional(Type.Boolean()),
+    /** Conversation owned by a plugin dock rather than ordinary session discovery. */
+    isDock: Type.Optional(Type.Boolean()),
     chatType: Type.Optional(
       Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
     ),
@@ -177,6 +181,8 @@ export const SessionRowSchema = Type.Object(
     parentSessionKey: Type.Optional(Type.String()),
     parentSessionId: Type.Optional(Type.String()),
     controlOwnerSessionKey: Type.Optional(Type.String()),
+    /** Retained owners used by spawnedBy filtering at snapshotAt; empty retires child membership. */
+    childOwnerSessionKeys: Type.Optional(Type.Array(NonEmptyString, { maxItems: 2 })),
     childSessions: Type.Optional(Type.Array(Type.String())),
     forkedFromParent: Type.Optional(Type.Boolean()),
     spawnDepth: Type.Optional(Type.Number()),
@@ -228,6 +234,8 @@ export const SessionRowSchema = Type.Object(
         Type.Literal("internal"),
       ]),
     ),
+    /** Immutable presentation surface; independent of creation provenance. */
+    createdSurface: Type.Optional(Type.Literal("plugin-dock")),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
     participants: Type.Optional(

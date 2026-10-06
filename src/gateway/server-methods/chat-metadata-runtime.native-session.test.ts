@@ -1,5 +1,6 @@
 import { describe, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import * as acpMetadata from "../../acp/runtime/session-meta-readonly.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -176,6 +177,17 @@ describe("gateway chat metadata native session ownership", () => {
     expect(neutral.models).toEqual(hostModels);
 
     const pending = await harness.runtime.read(request);
+    const acpRead = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
+    try {
+      expect(await harness.runtime.read({ ...request, includeModels: false })).toEqual({
+        commands: [{ name: "command-1-1" }],
+        swarmEnabled: true,
+      });
+      expect(acpRead).not.toHaveBeenCalled();
+    } finally {
+      acpRead.mockRestore();
+    }
+    expect(pending.runtimeSelectionLocked).toBe(true);
     expect(pending.models).toEqual([
       { id: "gpt-5.6-sol", name: "Sol", provider: "openai" },
       hostModels[1],

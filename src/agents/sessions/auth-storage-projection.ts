@@ -33,9 +33,14 @@ export function materializeAuthStorageStore(
   return { ...store, profiles };
 }
 
-function projectAuthStorageData(store: AuthProfileStore | null): AuthStorageData {
+export function projectAuthoritativeAuthStorageData(
+  store: AuthProfileStore,
+  snapshots: readonly AuthProfileStore[],
+): AuthStorageData {
+  const materialized = materializeAuthStorageStore(store, snapshots);
+  assertAuthStorageSecretRefsMaterialized(materialized);
   const projected: AuthStorageData = {};
-  for (const [profileId, credential] of Object.entries(store?.profiles ?? {})) {
+  for (const [profileId, credential] of Object.entries(materialized.profiles)) {
     if (profileId !== `${credential.provider}:default`) {
       continue;
     }
@@ -69,15 +74,6 @@ export function assertAuthStorageSecretRefsMaterialized(store: AuthProfileStore)
       );
     }
   }
-}
-
-export function projectAuthoritativeAuthStorageData(
-  store: AuthProfileStore,
-  snapshots: readonly AuthProfileStore[],
-): AuthStorageData {
-  const materialized = materializeAuthStorageStore(store, snapshots);
-  assertAuthStorageSecretRefsMaterialized(materialized);
-  return projectAuthStorageData(materialized);
 }
 
 export function applyAuthStorageData(

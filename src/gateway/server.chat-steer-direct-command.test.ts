@@ -231,6 +231,7 @@ it.for([
           coreBuiltinToolNames: new Set(),
           replaySafeToolNames: new Set(),
           codeModeExecToolNames: new Set(),
+          sourceReplyCapableToolNames: new Set(),
           sideEffectToolOwners: new Map(),
           trustedLocalMediaToolNames: new Set(),
         },

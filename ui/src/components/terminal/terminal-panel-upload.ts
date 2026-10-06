@@ -7,6 +7,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { renderDockDestinations } from "../dock-destination-controls.ts";
 import { icons } from "../icons.ts";
+import { renderPanelIconButton } from "../panel-icon-button.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   encodeTerminalUpload,
@@ -415,16 +416,13 @@ export function renderTerminalPanelActions(params: {
   return html`<div class="rail-header__actions tp-actions">
     ${
       params.upload.uploadsEnabled()
-        ? html`<button
-            class="rail-header__action tp-icon tp-upload"
-            type="button"
-            title=${t("terminal.addFiles")}
-            aria-label=${t("terminal.addFiles")}
-            ?disabled=${params.upload.hasPendingBatch() || !params.upload.hasActiveTab()}
-            @click=${params.upload.chooseFiles}
-          >
-            ${icons.paperclip}
-          </button>`
+        ? renderPanelIconButton({
+            className: "rail-header__action tp-icon tp-upload",
+            label: t("terminal.addFiles"),
+            icon: icons.paperclip,
+            disabled: params.upload.hasPendingBatch() || !params.upload.hasActiveTab(),
+            onClick: params.upload.chooseFiles,
+          })
         : nothing
     }
     ${
@@ -432,60 +430,51 @@ export function renderTerminalPanelActions(params: {
         ? nothing
         : html`${params.sessionPicker}${
             params.embedded
-              ? html`<button
-                  class="rail-header__action tp-icon"
-                  type="button"
-                  title=${t("terminal.dockBottom")}
-                  aria-label=${t("terminal.dockBottom")}
-                  @click=${() => params.onDock("bottom")}
-                >
-                  ${icons.panelBottomOpen}
-                </button>`
+              ? renderPanelIconButton({
+                  className: "rail-header__action tp-icon",
+                  label: t("terminal.dockBottom"),
+                  icon: icons.panelBottomOpen,
+                  onClick: () => params.onDock("bottom"),
+                })
               : html`${renderDockDestinations({
-                    current: params.dock,
-                    groupClass: "tp-dock-modes",
-                    groupLabel: t("terminal.dockMode"),
-                    destinations: [
-                      {
-                        dock: "bottom",
-                        label: t("terminal.dockBottom"),
-                        icon: icons.panelBottomOpen,
-                        className: "tp-icon",
-                      },
-                      {
-                        dock: "right",
-                        label: t("terminal.dockRight"),
-                        icon: icons.panelRightOpen,
-                        className: "tp-icon",
-                      },
-                      {
-                        dock: "main",
-                        label: t("terminal.dockMain"),
-                        icon: icons.columns2,
-                        className: "tp-icon",
-                      },
-                    ],
-                    onSelect: params.onDock,
-                  })}
-                  <button
-                    class="rail-header__action tp-icon tp-open-fullscreen"
-                    type="button"
-                    data-new-tab-action
-                    title=${t("terminal.openWindow")}
-                    aria-label=${t("terminal.openWindow")}
-                    @click=${params.onOpenFullscreen}
-                  >
-                    ${icons.maximize}
-                  </button>
-                  <button
-                    class="rail-header__action tp-icon"
-                    type="button"
-                    title=${t("terminal.hide")}
-                    aria-label=${t("terminal.hide")}
-                    @click=${params.onHide}
-                  >
-                    ${icons.x}
-                  </button>`
+                  current: params.dock,
+                  groupClass: "tp-dock-modes",
+                  groupLabel: t("terminal.dockMode"),
+                  destinations: [
+                    {
+                      dock: "bottom",
+                      label: t("terminal.dockBottom"),
+                      icon: icons.panelBottomOpen,
+                      className: "tp-icon",
+                    },
+                    {
+                      dock: "right",
+                      label: t("terminal.dockRight"),
+                      icon: icons.panelRightOpen,
+                      className: "tp-icon",
+                    },
+                    {
+                      dock: "main",
+                      label: t("terminal.dockMain"),
+                      icon: icons.columns2,
+                      className: "tp-icon",
+                    },
+                  ],
+                  onSelect: params.onDock,
+                })}
+                ${renderPanelIconButton({
+                  className: "rail-header__action tp-icon tp-open-fullscreen",
+                  label: t("terminal.openWindow"),
+                  icon: icons.maximize,
+                  newTab: true,
+                  onClick: params.onOpenFullscreen,
+                })}
+                ${renderPanelIconButton({
+                  className: "rail-header__action tp-icon",
+                  label: t("terminal.hide"),
+                  icon: icons.x,
+                  onClick: params.onHide,
+                })}`
           }`
     }
   </div>`;

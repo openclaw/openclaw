@@ -34,22 +34,6 @@ type LabFeatureState = {
   overridden: boolean;
 };
 
-function readConfiguredFeatureEnabled(
-  raw: unknown,
-  activeValues: readonly LabFeatureValue[],
-): boolean {
-  if (typeof raw === "boolean" || typeof raw === "string") {
-    return activeValues.includes(raw);
-  }
-  if (!isRecord(raw)) {
-    return false;
-  }
-  const enabled = raw.enabled;
-  return typeof enabled === "boolean" || typeof enabled === "string"
-    ? activeValues.includes(enabled)
-    : Object.keys(raw).some((key) => key !== "enabled");
-}
-
 const BOOLEAN_GATE = {
   onValue: true,
   offValue: false,
@@ -95,7 +79,13 @@ export const LAB_FEATURES = [
     configPath: ["tools", "toolSearch", "enabled"],
     // Mirrors resolveToolSearchConfig: unauthored config is on, while explicit
     // booleans and objects retain their own enablement semantics.
-    readEnabled: (raw) => raw === undefined || readConfiguredFeatureEnabled(raw, [true]),
+    readEnabled: (raw) =>
+      raw === undefined ||
+      raw === true ||
+      (isRecord(raw) &&
+        (typeof raw.enabled === "boolean" || typeof raw.enabled === "string"
+          ? raw.enabled === true
+          : Object.keys(raw).some((key) => key !== "enabled"))),
     // Explicit objects without a mode retain the legacy "code" surface.
     // Pin structured calls when writing an enabled override from Labs.
     enableAlso: { mode: "tools" },

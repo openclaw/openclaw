@@ -240,7 +240,10 @@ export async function prepareCanonicalCodexFork(params: {
     modelId: params.model,
   };
   const developerInstructions = [
-    buildDeveloperInstructions(promptContext, { dynamicTools }),
+    buildDeveloperInstructions(promptContext, {
+      dynamicTools,
+      nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
+    }),
     workspaceInstructions,
   ]
     .filter(Boolean)

@@ -168,7 +168,8 @@ describe("submitEmbeddedAttemptPrompt", () => {
         model,
         settingsManager,
         sessionManager,
-        resourceLoader: { ...createResourceLoader(), getSystemPrompt: () => systemPrompt },
+        systemPrompt,
+        resourceLoader: createResourceLoader(),
       });
       const transcriptPrompt = "Answer the new request with ACK.";
       const prependContext = "Prepared hook context. ".repeat(210);
@@ -586,42 +587,9 @@ describe("submitEmbeddedAttemptPrompt", () => {
       const input = createBaseInput();
       const isRawModelRun = scenario === "raw-probe";
       const isFinalization = scenario === "settled-finalization";
-      const attempt = {
-        config: {},
-        operation: isFinalization ? "settled-tool-finalization" : "attempt",
-        skipPreparedUserTurnMessage: isFinalization || scenario === "skipped-prepared",
-        model: { id: "test-model", provider: "test-provider", api: "openai-responses" },
-        modelId: "test-model",
-        provider: "test-provider",
-        prompt: currentUser.content,
-        runId: "btw-current-user",
-        sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-        trigger: "user",
-        userTurnTranscriptRecorder: recorder,
-        workspaceDir: state.workspaceDir,
-      } as Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["attempt"];
-      await prepareEmbeddedAttemptSessionBoundary({
-        activeSession: activeSession as unknown as Parameters<
-          typeof prepareEmbeddedAttemptSessionBoundary
-        >[0]["activeSession"],
-        attempt,
-        getUserTranscriptContexts: () => undefined,
-        isRawModelRun,
-        preparedUserTurnMessage: attempt.skipPreparedUserTurnMessage ? undefined : currentUser,
-        sessionManager,
-        setActiveSessionSystemPrompt: vi.fn(),
-      });
-      const expectedSnapshotMessages = isFinalization ? [currentUser] : [];
-      expect(activeSession.messages).toEqual(expectedSnapshotMessages);
-      expect(sessionManager.getLeafId()).toBe(appended.entryId);
-      if (scenario === "after-reset-metadata") {
-        await sessionManager.appendThinkingLevelChange("low");
-      }
-      const persistedBefore = loadTranscriptEventsSync(target);
+      const runId = "btw-current-user";
       const handle = {
-        runId: attempt.runId,
+        runId,
         queueMessage: async () => undefined,
         isStreaming: () => true,
         isCompacting: () => false,
@@ -629,18 +597,49 @@ describe("submitEmbeddedAttemptPrompt", () => {
       };
       const admission = prepareSystemAgentRunAdmission(
         {},
-        attempt.runId,
+        runId,
         target.agentId,
         "btw-snapshot-test",
       );
-      setActiveEmbeddedRun(sessionId, handle, target.sessionKey);
       try {
-        attempt.admittedRunContext = await admission.admit("embedded");
+        const attempt = {
+          admittedRunContext: await admission.admit("embedded"),
+          config: {},
+          operation: isFinalization ? "settled-tool-finalization" : "attempt",
+          skipPreparedUserTurnMessage: isFinalization || scenario === "skipped-prepared",
+          model: testModel,
+          provider: "test-provider",
+          prompt: currentUser.content,
+          runId,
+          sessionId,
+          sessionKey: target.sessionKey,
+          sessionTarget: target,
+          trigger: "user",
+          userTurnTranscriptRecorder: recorder,
+          workspaceDir: state.workspaceDir,
+        } satisfies Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["attempt"];
+        await prepareEmbeddedAttemptSessionBoundary({
+          activeSession: activeSession as unknown as Parameters<
+            typeof prepareEmbeddedAttemptSessionBoundary
+          >[0]["activeSession"],
+          attempt,
+          getUserTranscriptContexts: () => undefined,
+          isRawModelRun,
+          preparedUserTurnMessage: attempt.skipPreparedUserTurnMessage ? undefined : currentUser,
+          sessionManager,
+          setActiveSessionSystemPrompt: vi.fn(),
+        });
+        const expectedSnapshotMessages = isFinalization ? [currentUser] : [];
+        expect(activeSession.messages).toEqual(expectedSnapshotMessages);
+        expect(sessionManager.getLeafId()).toBe(appended.entryId);
+        if (scenario === "after-reset-metadata") {
+          await sessionManager.appendThinkingLevelChange("low");
+        }
+        const persistedBefore = loadTranscriptEventsSync(target);
+        setActiveEmbeddedRun(sessionId, handle, target.sessionKey);
         const assembly = await prepareEmbeddedAttemptPromptAssembly({
           attempt,
-          activeSession: activeSession as unknown as Parameters<
-            typeof prepareEmbeddedAttemptPromptAssembly
-          >[0]["activeSession"],
+          activeSession,
           sessionManager,
           hookRunner: null,
           hookAgentId: "main",
@@ -681,7 +680,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       } finally {
         admission.close();
         clearActiveEmbeddedRun(sessionId, handle, target.sessionKey);
-        forgetPromptBuildDrainCacheForRun(attempt.runId);
+        forgetPromptBuildDrainCacheForRun(runId);
       }
     });
   });

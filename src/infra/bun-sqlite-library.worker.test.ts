@@ -260,9 +260,11 @@ describe("Bun SQLite process selection and worker inheritance", () => {
           break;
         }
         case "model-context":
-          expect(await reader.readSessionTranscriptModelContextAsync(target, undefined)).toEqual({
-            events: [],
-          });
+          expect(await reader.readSessionTranscriptModelContextInWorker(target, undefined)).toEqual(
+            {
+              events: [],
+            },
+          );
           break;
         case "session-entry": {
           const { buildSessionEntry } =

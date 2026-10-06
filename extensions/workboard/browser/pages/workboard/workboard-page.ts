@@ -152,6 +152,10 @@ export function createWorkboardPage(
       if (connected) {
         void refreshMetadata();
       } else {
+        sessionsBoard.sync(
+          state.boards.find((board) => board.id === state.boardFilter),
+          false,
+        );
         stop();
       }
     };
@@ -181,6 +185,7 @@ export function createWorkboardPage(
         reconcileCardOverlays(state, (card) => matchesBoardFilter(card, boardId));
       }
       if (
+        context.presented &&
         boardId !== WORKBOARD_ALL_BOARDS_FILTER &&
         workboard.boardsReady &&
         !state.boards.some((board) => board.id === boardId)
@@ -466,7 +471,7 @@ export function createWorkboardPage(
     });
     const unsubscribeState = workboard.subscribe(requestUpdate);
     const unsubscribeEvents = host.onEvent(WORKBOARD_CHANGED_EVENT, (payload) => {
-      if (!disposed && connected && context.presented) {
+      if (!disposed && connected && context.presented && !sessionsBoard.hasCurrent(payload)) {
         handleWorkboardChanged(workboard, payload);
       }
     });

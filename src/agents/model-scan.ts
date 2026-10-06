@@ -361,21 +361,20 @@ export async function scanOpenRouterModels(
   return pMap(
     filtered,
     async (entry) => {
-      const isFree = isFreeOpenRouterModel(entry);
       let tool: ProbeResult = { ok: false, latencyMs: null, skipped: true };
       let image: ProbeResult = { ok: false, latencyMs: null, skipped: true };
       if (probe) {
         const model: OpenAIModel = {
           ...baseModel,
           id: entry.id,
-          name: entry.name || entry.id,
+          name: entry.name,
           contextWindow: entry.contextLength ?? baseModel.contextWindow,
           maxTokens: entry.maxCompletionTokens ?? baseModel.maxTokens,
           input: parseModality(entry.modality),
         };
 
         tool = await probeModel(model, apiKey, timeoutMs, llmRuntime.complete, "tool");
-        if (model.input?.includes("image")) {
+        if (model.input.includes("image")) {
           image = await probeModel(model, apiKey, timeoutMs, llmRuntime.complete, "image");
         }
       }
@@ -385,7 +384,7 @@ export async function scanOpenRouterModels(
         ...entry,
         provider: "openrouter",
         modelRef: `openrouter/${entry.id}`,
-        isFree,
+        isFree: true,
         tool,
         image,
       };

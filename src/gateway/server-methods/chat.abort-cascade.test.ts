@@ -100,7 +100,7 @@ describe("descendant cascade ownership", () => {
     expect(persist.mock.calls[0]?.[0].snapshots.map((snapshot) => snapshot.runId)).toEqual([
       "parent",
     ]);
-    expect(getSubagentRunByChildSessionKey(childKey)?.execution.endedAt).toBeUndefined();
+    expect((await getSubagentRunByChildSessionKey(childKey))?.execution.endedAt).toBeUndefined();
     expect(start).not.toHaveBeenCalled();
     releaseSwarmRun("held-capacity");
     await started.promise;
@@ -297,7 +297,8 @@ describe("descendant cascade ownership", () => {
         await entered.promise;
         if (kind === "late descendant") {
           expect(
-            getSubagentRunByChildSessionKey("agent:main:subagent:orchestrator")?.execution.endedAt,
+            (await getSubagentRunByChildSessionKey("agent:main:subagent:orchestrator"))?.execution
+              .endedAt,
           ).toBeUndefined();
           await registerChild();
         }
@@ -317,7 +318,7 @@ describe("descendant cascade ownership", () => {
       proceed.resolve();
       const respond = await pending;
       expect(requireLastRespondCall(respond)[0]).toBe(!kind.startsWith("all foreign"));
-      const child = getSubagentRunByChildSessionKey(childKey);
+      const child = await getSubagentRunByChildSessionKey(childKey);
       if (canCascade) {
         expect(child).toMatchObject({
           endedReason: "subagent-killed",

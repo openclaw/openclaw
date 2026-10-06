@@ -5,6 +5,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -43,6 +44,18 @@ export function selectAcpSessionRow(
       .selectAll()
       .where("session_key", "=", sessionKey),
   );
+}
+
+export function* selectAcpSessionRowsByKeys(db: DatabaseSync, keys: readonly string[]) {
+  for (let index = 0; index < keys.length; index += 500) {
+    yield* executeSqliteQuerySync(
+      db,
+      getAcpSessionKysely(db)
+        .selectFrom("acp_sessions")
+        .selectAll()
+        .where("session_key", "in", sqliteStringSet(keys.slice(index, index + 500))),
+    ).rows;
+  }
 }
 
 const ACP_DATABASE_KEY_PREFIX = "@acp:v1:";
@@ -87,7 +100,7 @@ export function parseAcpDatabaseSessionKey(sessionKey: string):
 }
 
 export function acpSessionRowMatchesEntry(
-  row: AcpSessionRow,
+  row: Pick<AcpSessionRow, "session_id" | "updated_at">,
   entry: AcpSessionEntryBinding | undefined,
 ): boolean {
   return (

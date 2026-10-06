@@ -6,13 +6,14 @@ import {
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
   publishTranscriptUpdate,
-  readActiveTranscriptEntryAnchor,
   resolveSessionTranscriptRuntimeTarget,
-  rewriteTranscriptMessageAtAnchor,
   type TranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
+import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
+import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
+import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { registerUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-admission.js";
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
@@ -136,11 +137,16 @@ async function persistUserTurnTranscript(
   }
   let appended = { ...result, message: result.message };
   if (!appended.anchor) {
+    const assertCurrent = captureOwnedTranscriptWriteAssertion(params);
     await waitForSessionTranscriptProjection(params);
-    const anchor = readActiveTranscriptEntryAnchor({ ...params, entryId: appended.messageId });
+    const anchor = await readActiveTranscriptEntryAnchorAsync({
+      ...params,
+      entryId: appended.messageId,
+    });
+    assertCurrent();
     appended = anchor ? { ...appended, anchor } : appended;
   }
-  if (!appended.anchor || appended.message.role !== "user") {
+  if (!appended.anchor) {
     return undefined;
   }
   if (committedWithoutAnchor && appended.appended) {
@@ -180,7 +186,7 @@ async function confirmPersistedSteerTargetRunId(params: {
     }
   | undefined
 > {
-  const rewritten = await rewriteTranscriptMessageAtAnchor(params.admission, (message) => {
+  const rewritten = await rewritePreparedTranscriptMessageAtAnchor(params.admission, (message) => {
     if (!isUserMessage(message)) {
       return undefined;
     }
@@ -417,18 +423,13 @@ export function createUserTurnTranscriptRecorder(
     await admissionWrite;
   };
 
-  const persistPrepared = async (options: {
-    waitForRuntime: boolean;
-    skipWhenBlocked: boolean;
-    message?: PersistedUserTurnMessage;
-    target?: UserTurnTranscriptTargetResolver;
-    updateMode?: UserTurnTranscriptUpdateMode;
-    cwd?: string;
-    expectedSessionId?: string;
-    expectedSessionState?: SessionTranscriptTurnPersistOptions["expectedSessionState"];
-    sessionLifecyclePatch?: SessionTranscriptTurnPersistOptions["sessionLifecyclePatch"];
-    retryIfUnpersisted?: boolean;
-  }): Promise<UserTurnTranscriptPersistResult | undefined> => {
+  const persistPrepared = async (
+    options: NonNullable<Parameters<UserTurnTranscriptRecorder["persistApproved"]>[0]> & {
+      waitForRuntime: boolean;
+      skipWhenBlocked: boolean;
+      message?: PersistedUserTurnMessage;
+    },
+  ): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (options.skipWhenBlocked && blocked) {
       return undefined;
     }

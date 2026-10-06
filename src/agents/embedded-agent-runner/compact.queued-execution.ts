@@ -169,6 +169,7 @@ export async function runPrimaryNativeCompactionInLanes<T>(
         requireCompactionWriterEntry(read.value, expectedEntry);
       },
     );
+    host.assertActive?.();
     return run();
   });
 }
@@ -301,7 +302,7 @@ export async function executeQueuedContextEngineCompaction(input: {
       // Engine-owned compaction doesn't load the transcript at this level, so
       // message counts are unavailable. We pass sessionFile so hook subscribers
       // can read the transcript themselves if they need exact counts.
-      if (hookRunner?.hasHooks?.("before_compaction") && hookRunner.runBeforeCompaction) {
+      if (hookRunner?.hasHooks("before_compaction")) {
         try {
           await hookRunner.runBeforeCompaction(
             {
@@ -346,6 +347,7 @@ export async function executeQueuedContextEngineCompaction(input: {
               expectedEntry,
               backendParams.abortSignal,
             );
+            writeContext.assertCommitAllowed();
             const clearClaim = setTranscriptBytePreflightClaim(
               backendParams.runtimeContext,
               transcriptBytePreflightAuthority,
@@ -544,12 +546,7 @@ export async function executeQueuedContextEngineCompaction(input: {
             assertActive,
           });
         }
-        if (
-          result.ok &&
-          (await canContinue()) &&
-          hookRunner?.hasHooks?.("after_compaction") &&
-          hookRunner.runAfterCompaction
-        ) {
+        if (result.ok && (await canContinue()) && hookRunner?.hasHooks("after_compaction")) {
           try {
             const afterHookCtx = {
               ...hookCtx,

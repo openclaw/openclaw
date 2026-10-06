@@ -94,7 +94,6 @@ import {
 } from "../command/attempt-execution.helpers.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
@@ -104,8 +103,7 @@ import {
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
-import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
-import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
+import { beginContextEngineLogicalTurn } from "../harness/context-engine-turn-begin.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
@@ -116,7 +114,6 @@ import {
   type PreparedRootedExecutionCapability,
 } from "../rooted-run-params.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
-import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
@@ -142,6 +139,7 @@ import {
   createCliRunCurrentAssertion,
   resolveCliExecutionTarget,
   retainCliPluginExecutionConsumer,
+  unsupportedIsolatedCompletionError,
 } from "./execution-target.js";
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
@@ -179,15 +177,6 @@ type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
   isolatedCompletionEnforced?: true;
   secretInput?: CliSecretInput;
 };
-
-function unsupportedIsolatedCompletionError(backendId: string): Error & { code: "unsupported" } {
-  return Object.assign(
-    new Error(
-      `CLI backend "${backendId}" does not support isolated completion; OpenClaw did not start the run.`,
-    ),
-    { name: "IsolatedCompletionUnsupportedError", code: "unsupported" as const },
-  );
-}
 
 type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the OpenClaw orchestrator. */
@@ -341,6 +330,8 @@ async function prepareCliRunContextWithinReadFence(
     : undefined;
   const toolPolicy = resolveCliRuntimeToolPolicy({
     params,
+    policySessionKey,
+    policyAgentId,
     backendId: backendResolved.id,
     bundleMcp: backendResolved.bundleMcp,
     canEnforceExactToolAvailability,
@@ -632,8 +623,8 @@ async function prepareCliRunContextWithinReadFence(
     }) ?? normalizedCatalogModel;
   const questionRoute = { provider: modelProvider, model: modelId };
   const questionFingerprint = questionOperation
-    ? questionOperation.bindToolAuthorityRoute(questionRoute)
-    : questionSnapshot?.fingerprint(questionRoute);
+    ? await questionOperation.bindToolAuthorityRouteAsync(questionRoute)
+    : await questionSnapshot?.fingerprintAsync(questionRoute);
   if (questionOperation) {
     params = { ...params, toolAuthorityFingerprint: questionFingerprint };
   }
@@ -901,7 +892,7 @@ async function prepareCliRunContextWithinReadFence(
   const mcpContextBase =
     mcpLoopbackRuntime || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled
       ? buildCliMcpGrantContext({
-          run: params,
+          run: { ...params, workspaceDir },
           config: runConfig,
           requireExplicitMessageTarget,
           agentId: sessionAgentId,
@@ -1188,42 +1179,17 @@ async function prepareCliRunContextWithinReadFence(
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
         ? applyClaudeManagedMcpTimeout(rawLoopbackServerConfig)
         : rawLoopbackServerConfig;
-    const sandboxStatus = resolveSandboxRuntimeStatus({
-      cfg: runConfig,
-      sessionKey: policySessionKey,
-      agentId: policyAgentId,
-    });
-    const nativeMcpCapabilityProfile = resolveConversationCapabilityProfile({
-      config: runConfig,
-      sessionKey: policySessionKey,
-      runSessionKey:
-        params.sessionKey && params.sessionKey !== policySessionKey ? params.sessionKey : undefined,
-      sessionId: params.sessionId,
-      runId: params.runId,
-      agentId: policyAgentId,
-      agentAccountId: params.agentAccountId,
-      messageProvider: params.messageProvider ?? params.messageChannel,
-      messageChannel: params.messageChannel,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
-      modelProvider,
-      modelId,
-      workspaceDir,
-      cwd,
-      sandboxToolPolicy: sandboxStatus.sandboxed ? sandboxStatus.toolPolicy : undefined,
-      runtimeToolAllowlist: runtimeToolsAllowPolicy,
-      inheritRuntimeToolAllowlist: true,
-      inputProvenance: params.inputProvenance,
-      trustedInternalHandoff: params.trustedInternalHandoff,
-      scheduledToolPolicy: params.scheduledToolPolicy,
-    });
+    const { capabilityProfile: nativeMcpCapabilityProfile, sandboxStatus } =
+      mcp.resolveCliNativeMcpPolicy(params, {
+        config: runConfig,
+        policySessionKey,
+        policyAgentId,
+        modelProvider,
+        modelId,
+        workspaceDir,
+        cwd,
+        runtimeToolsAllowPolicy,
+      });
     const preparedBackend = await prepareCliBundleMcpConfig({
       enabled: bundleMcpEnabled || systemAgentMcpConfig !== undefined,
       mode: backendResolved.bundleMcpMode,
@@ -1591,6 +1557,7 @@ async function prepareCliRunContextWithinReadFence(
       : isSideQuestion
         ? extraSystemPrompt
         : await prepareCliSystemPrompt({
+            preparedTtsPreferences: params.preparedTtsPreferences,
             requesterProfileId,
             workspaceDir,
             cwd,
@@ -1886,20 +1853,14 @@ async function prepareCliRunContextWithinReadFence(
     let deferContextEngineDisposalUntil: PreparedCliRunContext["deferContextEngineDisposalUntil"] =
       params.contextEngineLogicalTurnLease?.deferDisposalUntil;
     if (params.contextEngineLogicalTurnLease) {
-      selectContextEngineForTranscriptHost({
+      const effective = await beginContextEngineLogicalTurn({
         lease: params.contextEngineLogicalTurnLease,
         host: contextEngineHostSupport,
-        operation: "agent-run",
         recorder: params.userTurnTranscriptRecorder,
-      });
-      await drainPendingContextEngineTurnsBeforeRun({
-        admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
         isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
-        lease: params.contextEngineLogicalTurnLease,
-        recorder: params.userTurnTranscriptRecorder,
         sessionTarget: params.sessionTarget,
       });
-      resolvedContextEngine = params.contextEngineLogicalTurnLease.begin().engine;
+      resolvedContextEngine = effective.engine;
     } else {
       const trackDisposal = captureAsyncWorkTracker();
       const ownedEngine = await resolveContextEngine(runConfig, {

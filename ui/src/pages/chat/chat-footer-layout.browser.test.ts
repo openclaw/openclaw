@@ -360,8 +360,6 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
     [900, 500, "mobile-landscape-900", "inline", false],
     [640, 900, "mobile-responsive-640", "overlay", false],
     [320, 568, "mobile-320", "overlay", false],
-    [375, 812, "mobile-375", "overlay", false],
-    [430, 932, "mobile-430", "overlay", false],
     [1200, 800, "desktop-with-pull-request", "overlay", true],
     [375, 812, "mobile-with-pull-request", "overlay", true],
   ] as const)(

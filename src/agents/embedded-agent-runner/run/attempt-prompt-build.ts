@@ -75,16 +75,26 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 type OrphanRepairPlan = ReturnType<typeof resolveOrphanRepairPlan>;
 
-type EmbeddedAttemptSteeringLease = {
+export type EmbeddedAttemptSteeringLease = {
   leaseId: string;
   runIds: string[];
   isCurrent: () => boolean;
 };
 
 export async function prepareEmbeddedAttemptPromptAssembly(input: {
-  attempt: EmbeddedRunAttemptParams;
-  activeSession: AgentSession;
-  sessionManager: SessionManager;
+  attempt: Omit<
+    EmbeddedRunAttemptParams,
+    | "authStorage"
+    | "authProfileStore"
+    | "modelRegistry"
+    | "sessionFile"
+    | "thinkLevel"
+    | "timeoutMs"
+    | "modelId"
+    | "fastMode"
+  >;
+  activeSession: Pick<AgentSession, "messages">;
+  sessionManager: Pick<SessionManager, "getLeafId">;
   hookRunner: HookRunner;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
@@ -436,6 +446,7 @@ type PromptAssemblyContext = {
 export async function prepareEmbeddedAttemptPromptContext(input: {
   sessionVersion?: number;
   appendOnlyRuntimeContext?: boolean;
+  executionHost?: boolean;
   inHistorySystemUpdates?: boolean;
   attempt: PromptContextAttempt;
   capabilityToolNames: ReadonlySet<string>;
@@ -554,6 +565,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       ? []
       : await buildRuntimeFactsContext({
           capabilityToolNames: input.capabilityToolNames,
+          executionHost: input.executionHost,
           cfg: attempt.config ?? {},
           sessionKey: attempt.sessionKey,
           sessionId: attempt.sessionId,
@@ -620,6 +632,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     promptToolResultAggregateMaxChars,
     promptToolResultMaxChars,
     ...(runtimeContextMessageForCurrentTurn ? { runtimeContextMessageForCurrentTurn } : {}),
+    runtimeContextFragments: contextFragments,
     systemPromptForHook,
   };
 }

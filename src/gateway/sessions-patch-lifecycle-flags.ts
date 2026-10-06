@@ -1,7 +1,8 @@
 // Applies archive, pin, snooze, and unread facts to the projected session entry.
 import type { ErrorShape, SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { settleArchivedSessionRun } from "../config/sessions/terminal-status.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
 
 export function applySessionPatchLifecycleFlags(params: {
@@ -28,6 +29,7 @@ export function applySessionPatchLifecycleFlags(params: {
       delete next.pinnedAt;
       delete next.snoozedUntil;
       delete next.snoozedAt;
+      settleArchivedSessionRun(next, now);
     } else {
       delete next.archivedAt;
       delete next.archivedBy;

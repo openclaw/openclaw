@@ -49,44 +49,40 @@ export function prepareSkillProposalDraft(input: {
   goal?: string;
   evidence?: string;
 }): PreparedSkillProposalDraft {
-  try {
-    assertProposalFieldWithinLimit(
-      "description",
-      input.description,
-      MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES,
-    );
-    assertProposalFieldWithinLimit("content", input.content, input.maxSkillBytes);
-    const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
-    const content = renderProposalMarkdown({
-      name: input.name,
-      description: input.skillDescription,
-      content: input.content,
-      fallbackFrontmatterContent: input.fallbackFrontmatterContent,
-      version: input.version,
-      date: input.date,
-    });
-    const goal = normalizeOptionalString(input.goal);
-    const evidence = normalizeOptionalString(input.evidence);
-    const scan = scanProposalBundle(content, supportFiles, [
-      ...(input.secretScanMetadata ?? []),
-      { file: "description", content: input.description },
-      { file: "skill-description", content: input.skillDescription },
-      { file: "goal", content: goal },
-      { file: "evidence", content: evidence },
-    ]);
-    assertProposalContainsNoLiteralSecrets(scan);
-    return {
-      content,
-      description: input.description,
-      draftHash: hashSkillProposalContent(content),
-      scan,
-      supportFiles,
-      ...(goal ? { goal } : {}),
-      ...(evidence ? { evidence } : {}),
-    };
-  } catch (cause) {
-    throw cause instanceof Error ? cause : new Error(String(cause));
-  }
+  assertProposalFieldWithinLimit(
+    "description",
+    input.description,
+    MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES,
+  );
+  assertProposalFieldWithinLimit("content", input.content, input.maxSkillBytes);
+  const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
+  const content = renderProposalMarkdown({
+    name: input.name,
+    description: input.skillDescription,
+    content: input.content,
+    fallbackFrontmatterContent: input.fallbackFrontmatterContent,
+    version: input.version,
+    date: input.date,
+  });
+  const goal = normalizeOptionalString(input.goal);
+  const evidence = normalizeOptionalString(input.evidence);
+  const scan = scanProposalBundle(content, supportFiles, [
+    ...(input.secretScanMetadata ?? []),
+    { file: "description", content: input.description },
+    { file: "skill-description", content: input.skillDescription },
+    { file: "goal", content: goal },
+    { file: "evidence", content: evidence },
+  ]);
+  assertProposalContainsNoLiteralSecrets(scan);
+  return {
+    content,
+    description: input.description,
+    draftHash: hashSkillProposalContent(content),
+    scan,
+    supportFiles,
+    ...(goal ? { goal } : {}),
+    ...(evidence ? { evidence } : {}),
+  };
 }
 
 export function resolveUpdateProposalDescription(

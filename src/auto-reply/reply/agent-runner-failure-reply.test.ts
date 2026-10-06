@@ -131,6 +131,18 @@ describe("buildExternalRunFailureReply", () => {
     },
   );
 
+  it("retains the actual provider rejection when verbose output is off", () => {
+    const message = "The AI service could not accept this request";
+    const error = new FailoverError(message, {
+      reason: "format",
+      rawError: "Invalid service_tier argument",
+    });
+    expect(buildExternalRunFailureReply({ message, error })).toEqual({
+      text: String.raw`LLM request rejected: Invalid service\_tier argument`,
+      isGenericRunnerFailure: false,
+    });
+  });
+
   it("uses preserved format diagnostics without exposing raw details", () => {
     const message = "safe summary";
     const error = new FailoverError(message, {

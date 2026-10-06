@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const { sysctl, errno, dead } = vi.hoisted(() => ({
+const { sysctl, errno, dead, rosetta } = vi.hoisted(() => ({
   sysctl: vi.fn(),
   errno: vi.fn(),
   dead: vi.fn(),
+  rosetta: vi.fn(),
 }));
 vi.mock("node:module", () => ({
   createRequire: () => () => ({
@@ -17,6 +18,8 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ debug: vi.fn() }),
 }));
 vi.mock("../../shared/pid-alive.js", () => ({ isPidDefinitelyDead: dead }));
+// mock-isolation: the real detector reads and caches the test host's CPU brand.
+vi.mock("../../shared/rosetta-translation.js", () => ({ isRosettaTranslatedProcess: rosetta }));
 import { readDarwinProcessCommand } from "./darwin-process-command.js";
 
 let reply: Buffer | undefined;
@@ -46,6 +49,7 @@ beforeEach(() => {
   reply = undefined;
   errno.mockReset().mockReturnValue(1);
   dead.mockReset().mockReturnValue(false);
+  rosetta.mockReset().mockReturnValue(false);
   sysctl
     .mockReset()
     .mockImplementation((mib: Int32Array, _count: number, output: Buffer, size: Buffer) => {
@@ -116,3 +120,10 @@ it.each([
     }
   },
 );
+
+it("fails visibly instead of calling sysctl through koffi under Rosetta", () => {
+  rosetta.mockReturnValue(true);
+  reply = argumentsReply(["node", "dist/index.js"]);
+  expect(() => readDarwinProcessCommand(12, uid)).toThrow(/under Rosetta/);
+  expect(sysctl).not.toHaveBeenCalled();
+});

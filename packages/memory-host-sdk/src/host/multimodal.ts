@@ -69,29 +69,12 @@ export function isMemoryMultimodalEnabled(settings: MemoryMultimodalSettings): b
   return settings.enabled && settings.modalities.length > 0;
 }
 
-/** Return accepted file extensions for a modality. */
-export function getMemoryMultimodalExtensions(
-  modality: MemoryMultimodalModality,
-): readonly string[] {
-  return MEMORY_MULTIMODAL_SPECS[modality].extensions;
-}
-
 /** Build the text label that accompanies embedded multimodal file content. */
 export function buildMemoryMultimodalLabel(
   modality: MemoryMultimodalModality,
   normalizedPath: string,
 ): string {
   return `${MEMORY_MULTIMODAL_SPECS[modality].labelPrefix}: ${normalizedPath}`;
-}
-
-/** Build a glob that matches an extension case-insensitively for indexed sources. */
-export function buildCaseInsensitiveExtensionGlob(extension: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(extension).replace(/^\./, "");
-  if (!normalized) {
-    return "*";
-  }
-  const parts = Array.from(normalized, (char) => `[${char.toLowerCase()}${char.toUpperCase()}]`);
-  return `*.${parts.join("")}`;
 }
 
 /** Classify a file path into a supported multimodal modality under current settings. */
@@ -105,7 +88,7 @@ export function classifyMemoryMultimodalPath(
   const lower = normalizeLowercaseStringOrEmpty(filePath);
   return (
     settings.modalities.find((modality) =>
-      getMemoryMultimodalExtensions(modality).some((extension) => lower.endsWith(extension)),
+      MEMORY_MULTIMODAL_SPECS[modality].extensions.some((extension) => lower.endsWith(extension)),
     ) ?? null
   );
 }

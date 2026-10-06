@@ -52,6 +52,7 @@ function toWorkerInferenceMessage(
             ? message.content
             : message.content.map(projectWorkerTextOrImageContent),
         timestamp: message.timestamp,
+        ...(message.operatorMessage ? { operatorMessage: message.operatorMessage } : {}),
       },
     };
   }
@@ -107,15 +108,10 @@ export type WorkerTranscriptClient = {
   commit: (messages: WorkerTranscriptMessage[]) => Promise<void>;
 };
 
-type WorkerTranscriptRuntime = {
-  onMessagePersisted: (message: AgentMessage) => void;
-  withSessionWriteSettlement: AgentSessionWriteSettlementRunner;
-};
-
 export function createWorkerTranscriptRuntime(
   client: WorkerTranscriptClient,
   signal?: AbortSignal,
-): WorkerTranscriptRuntime {
+) {
   const pendingTranscriptMessages: WorkerTranscriptMessage[] = [];
   let failedCommit: { error: unknown } | undefined;
   const onMessagePersisted = (message: AgentMessage) => {

@@ -259,7 +259,7 @@ it("observes committed deletion before startup handoff after canonical database 
     await withAgentDeletion(
       "alpha",
       async (begin) => {
-        const deletion = begin({
+        const deletion = await begin({
           agentId: "alpha",
           agentDir,
           sessionsDir: path.join(stateDir, "agents", "alpha", "sessions"),

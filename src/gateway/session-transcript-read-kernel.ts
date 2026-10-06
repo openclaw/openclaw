@@ -4,13 +4,12 @@ import { resolveVisibleHistoryEventCount } from "../config/sessions/session-acce
 import {
   readTranscriptDisplayDeltaFromProjection,
   readRecentSessionTranscriptHistoryEventsFromProjection,
-  readOffPathSessionTranscriptEventsFromProjection,
   readSessionTranscriptHistoryEventByIdFromProjection,
   readSessionTranscriptHistoryEventLookupFromProjection,
   readSessionTranscriptHistoryEventPageFromProjection,
-  readSessionTranscriptHistoryEventsFromProjection,
   readSessionTranscriptHistoryAnchorPageFromProjection,
 } from "../config/sessions/session-accessor.sqlite-history-query.js";
+import { readSessionTranscriptSourcePageFromProjection } from "../config/sessions/session-accessor.sqlite-history-source.js";
 import type {
   CurrentTranscriptProjection,
   SessionTranscriptMessageEvent,
@@ -44,7 +43,6 @@ import type {
   ReadRecentSessionMessagesResult,
   ReadSessionMessageByIdResult,
   ReadSessionMessagesAroundIdResult,
-  ReadSessionMessagesAsyncOptions,
   ReadSessionMessagesResult,
   SessionTranscriptMessageByIdOptions,
   SessionTranscriptPageOptions,
@@ -252,22 +250,14 @@ export function selectSessionTranscriptProjection(
         : { found: false, oversized: false };
     }
     case "source": {
-      const opts = selection.options;
+      const { events, ...page } = readSessionTranscriptSourcePageFromProjection(
+        projection,
+        selection.options,
+      );
       return {
-        messages:
-          opts.mode === "recent"
-            ? readRecentSqliteMessageRecords(projection, opts).messages
-            : projectSqliteHistoryEvents(
-                readSessionTranscriptHistoryEventsFromProjection(projection),
-              ),
+        ...page,
+        messages: projectSqliteHistoryEvents(events),
         transcriptPath: sessionFile,
-        ...(opts.mode === "full" && opts.includeOffPathMessages
-          ? {
-              offPathMessages: projectSqliteHistoryEvents(
-                readOffPathSessionTranscriptEventsFromProjection(projection),
-              ),
-            }
-          : {}),
       };
     }
     case "lookup": {
@@ -431,18 +421,14 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     );
   }
 
-  async function readSessionMessagesAsync(
-    scope: SessionTranscriptReadScope,
-    opts: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
-  ): Promise<unknown[]> {
-    return (await readSessionMessagesWithSourceAsync(scope, opts)).messages;
-  }
-
   async function readSessionMessagesWithSourceAsync(
     scope: SessionTranscriptReadScope,
-    opts: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
+    opts: Parameters<SessionTranscriptReader["readSessionMessagesWithSourceAsync"]>[1],
   ): Promise<ReadSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
+    if (opts.cursor?.kind === "archive") {
+      return archivedTranscriptReader(target).readSourcePage(opts, opts.cursor.snapshot);
+    }
     const snapshot = (await readSnapshotIfPresent(
       target,
       (projection) =>
@@ -452,14 +438,25 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
           target.sessionFile,
         ),
       opts,
-    )) ?? { messages: [], offPathMessages: [] };
-    const result =
-      snapshot.messages.length === 0 && opts.allowResetArchiveFallback === true
-        ? await archivedTranscriptReader(target).read(opts)
-        : { messages: snapshot.messages, transcriptPath: target.sessionFile };
-    return snapshot.offPathMessages
-      ? { ...result, messages: [...result.messages, ...snapshot.offPathMessages] }
-      : result;
+    )) ?? { messages: [] };
+    if (
+      opts.allowResetArchiveFallback === true &&
+      !opts.cursor &&
+      (snapshot.snapshot?.totalMessages ?? 0) === 0
+    ) {
+      return archivedTranscriptReader(target).readSourcePage(
+        opts,
+        snapshot.snapshot ?? {
+          indexedSeq: -1,
+          activeEventCount: 0,
+          totalMessages: 0,
+          generation: undefined,
+          tailEventSeq: undefined,
+          resetSeq: null,
+        },
+      );
+    }
+    return snapshot;
   }
 
   async function readSessionMessageByIdAsync(
@@ -488,7 +485,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     );
   }
 
-  /** Read exact membership while retaining full-history validity and empty-only archive fallback. */
+  /** Read exact membership with current visibility and empty-only archive fallback. */
   async function readSessionMessagesMatchingIdAsync(
     scope: SessionTranscriptReadScope,
     messageId: string,
@@ -616,7 +613,6 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     visitSessionMessagesAsync,
     readSessionTranscriptSummaryAsync,
     readSessionMessageCountAsync,
-    readSessionMessagesAsync,
     readSessionMessagesWithSourceAsync,
     readSessionMessageByIdAsync,
     readSessionMessagesMatchingIdAsync,

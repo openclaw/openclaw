@@ -1,6 +1,6 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createTlonCitationResolver } from "./cites.js";
+import { resolveTlonCitations } from "./cites.js";
 
 const NEST = "chat/~public/general";
 
@@ -26,10 +26,13 @@ function makeResolver() {
     essay: { content: [{ inline: ["PRIVATE-CONTENT"] }] },
   }));
   const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-  return { scry, ...createTlonCitationResolver({ api: { scry }, runtime }) };
+  return {
+    scry,
+    resolveAllCites: (content: unknown) => resolveTlonCitations(content, { scry }, runtime),
+  };
 }
 
-describe("createTlonCitationResolver scry path composition", () => {
+describe("Tlon citation scry path composition", () => {
   it("resolves a valid channel post inside the channel-post namespace", async () => {
     const { scry, resolveAllCites } = makeResolver();
     const postId = "170141184507799509469114119040828178432";

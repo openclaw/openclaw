@@ -80,7 +80,6 @@ const enModelControls = {
       refreshingModels: "Refreshing models…",
       refreshingProviderModels: "Refreshing models for {providers}…",
       modelPending: "Model pending",
-      modelStarting: "Starting…",
       modelsUnavailable: "Models unavailable",
       runtimeUnavailable: "This harness is unavailable for this model.",
       modelsRefreshFailed: "Some models could not be refreshed. Open Models to try again.",

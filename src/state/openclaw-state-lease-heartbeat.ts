@@ -42,7 +42,7 @@ const WORKER_RESPONSE_TIMEOUT_MS = 1_000;
 export function startOpenClawStateLeaseTimer(params: {
   observation: BigInt64Array<SharedArrayBuffer>;
   heartbeatMs: number;
-  renew(): Promise<void>;
+  renew(): Promise<unknown>;
   onRenewError(error: unknown): void;
   onLost(error: Error): void;
 }) {

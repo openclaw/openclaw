@@ -48,21 +48,10 @@ import { projectDaemonRuntimeStatus } from "./status.projection.js";
 import { readDaemonServiceStatus } from "./status.service.js";
 import type { GatewayRpcOpts } from "./types.js";
 
-type ConfigSummary = Awaited<ReturnType<typeof readDaemonStatusConfig>>["summary"];
-
-type DaemonConfigContext = {
-  mergedDaemonEnv: Record<string, string | undefined>;
-  cliCfg: OpenClawConfig;
-  daemonCfg: OpenClawConfig;
-  cliConfigSummary: ConfigSummary;
-  daemonConfigSummary: ConfigSummary;
-  configMismatch: boolean;
-};
-
 async function loadDaemonConfigContext(
   serviceEnv?: Record<string, string>,
   opts: { deep?: boolean } = {},
-): Promise<DaemonConfigContext> {
+) {
   const mergedDaemonEnv = {
     ...process.env,
     ...(serviceEnv ?? undefined),

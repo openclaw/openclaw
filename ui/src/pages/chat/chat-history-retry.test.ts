@@ -20,10 +20,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function readHistory(client: GatewayBrowserClient, key: string, isCurrent = () => true) {
+  return requestSharedHistory(
+    null,
+    client,
+    key,
+    "chat.history",
+    "main",
+    undefined,
+    {},
+    { isCurrent },
+  );
+}
+
 describe("shared chat history transient recovery", () => {
-  it("presents pending agent database inspection as normal startup", () => {
-    const error = new GatewayRequestError({
-      code: "UNAVAILABLE",
+  it.each([
+    {
       message:
         "Agent main has not completed startup inspection and preparation.\nSessions remain unavailable until background inspection finishes.",
       details: {
@@ -35,24 +47,19 @@ describe("shared chat history transient recovery", () => {
       },
       retryable: true,
       retryAfterMs: 250,
-    });
-
-    expect(formatChatHistoryLoadError(error)).toBe(
-      "This agent is still starting. Retry in a moment.",
-    );
-  });
-
-  it("preserves settled agent database inspection diagnostics", () => {
-    const error = new GatewayRequestError({
-      code: "UNAVAILABLE",
+      expected: "This agent is still starting. Retry in a moment.",
+    },
+    {
       message: "Agent database inspection failed. Run Doctor.",
       details: {
         code: "agent-database-inspection-failed",
       },
       retryable: false,
-    });
-
-    expect(formatChatHistoryLoadError(error)).toBe("Agent database inspection failed. Run Doctor.");
+      expected: "Agent database inspection failed. Run Doctor.",
+    },
+  ])("formats $details.code for the operator", ({ expected, ...params }) => {
+    const error = new GatewayRequestError({ code: "UNAVAILABLE", ...params });
+    expect(formatChatHistoryLoadError(error)).toBe(expected);
   });
 
   it.each([false, true])(
@@ -130,6 +137,7 @@ describe("shared chat history transient recovery", () => {
         retryable: true,
       }),
       retryable: true,
+      elapsedMs: 0,
     },
     {
       error: new GatewayRequestError({
@@ -138,6 +146,7 @@ describe("shared chat history transient recovery", () => {
         retryable: false,
       }),
       retryable: false,
+      elapsedMs: 0,
     },
     {
       error: new GatewayProtocolRequestTimeoutError({
@@ -146,39 +155,36 @@ describe("shared chat history transient recovery", () => {
         requestSent: true,
       }),
       retryable: false,
+      elapsedMs: 0,
+    },
+    {
+      error: new GatewayProtocolRequestTimeoutError({
+        method: "chat.history",
+        timeoutMs: 30_000,
+        requestSent: true,
+      }),
+      retryable: true,
+      elapsedMs: 60_000,
     },
   ])(
-    "preserves manual retry policy for $error.name ($error.code)",
-    async ({ error, retryable }) => {
+    "preserves manual retry policy for $error.name after $elapsedMs ms",
+    async ({ error, retryable, elapsedMs }) => {
+      vi.useFakeTimers();
       const state = makeChatHost({
-        requestHandlers: { "chat.history": () => Promise.reject(error) },
+        requestHandlers: {
+          "chat.history": () => {
+            // A suspended tab can observe an RPC timeout before its overdue reader timer runs.
+            vi.setSystemTime(Date.now() + elapsedMs);
+            return Promise.reject(error);
+          },
+        },
       });
       await loadChatHistory(state, { deferBranches: true });
       expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "failed", retryable });
       expect(state.request).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
     },
   );
-
-  it("keeps a matching late timeout manually retryable after the recovery window elapses", async () => {
-    vi.useFakeTimers();
-    const state = makeChatHost({
-      requestHandlers: {
-        "chat.history": async () => {
-          // A suspended tab can observe an RPC timeout before its overdue reader timer runs.
-          vi.setSystemTime(Date.now() + 60_000);
-          throw new GatewayProtocolRequestTimeoutError({
-            method: "chat.history",
-            timeoutMs: 30_000,
-            requestSent: true,
-          });
-        },
-      },
-    });
-    await loadChatHistory(state, { deferBranches: true });
-    expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "failed", retryable: true });
-    expect(state.request).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
 
   it("does not publish an old pane timeout over the newly loaded conversation", async () => {
     vi.useFakeTimers();
@@ -238,16 +244,7 @@ describe("shared chat history transient recovery", () => {
       },
     });
     expect(client.connected).toBe(true);
-    const read = requestSharedHistory(
-      null,
-      client,
-      "real-wire",
-      "chat.history",
-      "main",
-      undefined,
-      {},
-      { isCurrent: () => true },
-    );
+    const read = readHistory(client, "real-wire");
     const outcome = read.catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(29_000);
     socket.emitMessage({ type: "event", event: "tick", payload: {} });
@@ -270,79 +267,41 @@ describe("shared chat history transient recovery", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("cancels the retry timer when the final reader reaches its existing deadline", async () => {
-    vi.useFakeTimers();
-    const request = vi.fn().mockRejectedValue(
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "Busy",
-        retryable: true,
-        retryAfterMs: 120_000,
-      }),
-    );
-    const client = createTestGatewayClient(request);
-    const outcome = requestSharedHistory(
-      null,
-      client,
-      "long-delay",
-      "chat.history",
-      "main",
-      undefined,
-      {},
-      { isCurrent: () => true },
-    ).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(await outcome).toMatchObject({ message: expect.stringContaining("timed out") });
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("expires staggered readers independently without retrying before a long server hint", async () => {
-    vi.useFakeTimers();
-    const request = vi.fn().mockRejectedValue(
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "Busy",
-        retryable: true,
-        retryAfterMs: 120_000,
-      }),
-    );
-    const client = createTestGatewayClient(request);
-    const first = requestSharedHistory(
-      null,
-      client,
-      "staggered",
-      "chat.history",
-      "main",
-      undefined,
-      {},
-      { isCurrent: () => true },
-    ).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(30_000);
-    let secondSettled = false;
-    const second = requestSharedHistory(
-      null,
-      client,
-      "staggered",
-      "chat.history",
-      "main",
-      undefined,
-      {},
-      { isCurrent: () => true },
-    )
-      .catch((error: unknown) => error)
-      .finally(() => {
-        secondSettled = true;
-      });
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(await first).toMatchObject({ message: expect.stringContaining("timed out") });
-    expect(secondSettled).toBe(false);
-    expect(request).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(await second).toMatchObject({ message: expect.stringContaining("timed out") });
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
-  });
+  it.each([false, true])(
+    "expires readers before a long server hint (staggered=%s)",
+    async (staggered) => {
+      vi.useFakeTimers();
+      const request = vi.fn().mockRejectedValue(
+        new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "Busy",
+          retryable: true,
+          retryAfterMs: 120_000,
+        }),
+      );
+      const client = createTestGatewayClient(request);
+      const first = readHistory(client, "long-delay").catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(30_000);
+      let secondSettled = false;
+      const second = staggered
+        ? readHistory(client, "long-delay")
+            .catch((error: unknown) => error)
+            .finally(() => {
+              secondSettled = true;
+            })
+        : undefined;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await first).toMatchObject({ message: expect.stringContaining("timed out") });
+      expect(request).toHaveBeenCalledTimes(1);
+      if (second) {
+        expect(secondSettled).toBe(false);
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(await second).toMatchObject({ message: expect.stringContaining("timed out") });
+        expect(request).toHaveBeenCalledTimes(1);
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("never retries a timed-out read once all pane owners have changed", async () => {
     vi.useFakeTimers();
@@ -355,16 +314,7 @@ describe("shared chat history transient recovery", () => {
     );
     const client = createTestGatewayClient(request);
     let current = true;
-    const outcome = requestSharedHistory(
-      null,
-      client,
-      "retired",
-      "chat.history",
-      "main",
-      undefined,
-      {},
-      { isCurrent: () => current },
-    ).catch((error: unknown) => error);
+    const outcome = readHistory(client, "retired", () => current).catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(0);
     current = false;
     await vi.advanceTimersByTimeAsync(500);
@@ -386,26 +336,8 @@ describe("shared chat history transient recovery", () => {
       )
       .mockResolvedValueOnce({ messages: [{ role: "assistant", content: "Recovered" }] });
     const client = createTestGatewayClient(request);
-    const first = requestSharedHistory(
-      null,
-      client,
-      "shared",
-      "chat.history",
-      "main",
-      undefined,
-      {},
-      { isCurrent: () => true },
-    );
-    const second = requestSharedHistory(
-      null,
-      client,
-      "shared",
-      "chat.history",
-      "main",
-      undefined,
-      {},
-      { isCurrent: () => true },
-    );
+    const first = readHistory(client, "shared");
+    const second = readHistory(client, "shared");
     const outcomes = Promise.allSettled([first, second]);
     await vi.advanceTimersByTimeAsync(499);
     expect(request).toHaveBeenCalledTimes(1);

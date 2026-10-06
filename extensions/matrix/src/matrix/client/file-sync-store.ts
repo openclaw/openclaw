@@ -137,12 +137,6 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     return Promise.resolve();
   }
 
-  override wantsSave(): boolean {
-    // We persist directly from setSyncData/storeClientOptions so the SDK's
-    // periodic save hook stays disabled. Shutdown uses flush() for a final sync.
-    return false;
-  }
-
   override async deleteAllData(): Promise<void> {
     const store = this.requireStore();
     this.clearPersistTimer();

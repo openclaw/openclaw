@@ -2,7 +2,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -15,20 +14,13 @@ import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import {
   resolveApprovalRequestKind,
   type ApprovalRequestChannelRouteClass,
+  type ApprovalRequestInput,
 } from "./approval-types.js";
-import type { ExecApprovalRequest } from "./exec-approvals.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
-import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
 
-export type ApprovalRequestLike = {
-  id: string;
-  request:
-    | ExecApprovalRequest["request"]
-    | PluginApprovalRequest["request"]
-    | SystemAgentApprovalRequest["request"];
-  createdAtMs: number;
-  expiresAtMs: number;
-};
+export type ApprovalRequestLike = Pick<
+  ApprovalRequestInput,
+  "id" | "request" | "createdAtMs" | "expiresAtMs"
+>;
 
 function resolveApprovalForwardTargets(params: {
   cfg: OpenClawConfig;
@@ -89,21 +81,11 @@ export function classifyApprovalRequestChannelRoute(params: {
   return "unbound";
 }
 
-type ApprovalRequestSessionBinding = {
-  channel?: string;
-  accountId?: string;
-};
-
-type PersistedApprovalRequestSessionEntry = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
-
 /** Loads the persisted session entry referenced by an approval request, if still present. */
 export function resolvePersistedApprovalRequestSessionEntry(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
-}): PersistedApprovalRequestSessionEntry | null {
+}) {
   const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
   if (!sessionKey) {
     return null;
@@ -125,7 +107,7 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
 function resolvePersistedApprovalRequestSessionBinding(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
-}): ApprovalRequestSessionBinding | null {
+}) {
   const persisted = resolvePersistedApprovalRequestSessionEntry(params);
   if (!persisted) {
     return null;

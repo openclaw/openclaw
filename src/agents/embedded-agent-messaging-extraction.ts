@@ -35,7 +35,54 @@ export function extractMessagingToolSourceReplyPayload(
   if (status && status !== "sent") {
     return undefined;
   }
-  const sourceReply = readRecord(details.sourceReply) ?? details;
+  return readSourceReplyPayload(details, readRecord(details.sourceReply) ?? details);
+}
+
+/**
+ * Reads the final reply a `canDeliverSourceReply` tool authored in `details.sourceReply`.
+ * Unlike internal-ui mirrors, nothing has been sent yet: the host delivers the payload
+ * to the current source and records it in the transcript after delivery. A reply needs
+ * text or media; `final: false` is not a deliverable reply, so the model continues as
+ * usual. Callers must already have verified the tool's capability and invocation scope.
+ */
+export function extractToolAuthoredSourceReplyPayload(
+  result: unknown,
+): MessagingToolSourceReplyPayload | undefined {
+  const details = readToolResultDetails(result);
+  const sourceReply = details ? readRecord(details.sourceReply) : undefined;
+  if (!details || !sourceReply || sourceReply.final === false) {
+    return undefined;
+  }
+  const payload = readSourceReplyPayload(details, sourceReply);
+  if (!payload) {
+    return undefined;
+  }
+  // Same admission as source-reply delivery: blank text and blank media entries are
+  // dropped there, and attachments ride along but do not qualify a reply on their own.
+  const hasDeliverableContent =
+    Boolean(payload.text?.trim()) || resolveSourceReplyMediaUrls(payload).length > 0;
+  return hasDeliverableContent ? payload : undefined;
+}
+
+/**
+ * The media a source reply delivers: `mediaUrls` when present, else `mediaUrl`,
+ * without blank entries. Delivery and tool-authored admission share it.
+ */
+export function resolveSourceReplyMediaUrls(
+  payload: Pick<MessagingToolSourceReplyPayload, "mediaUrl" | "mediaUrls">,
+): string[] {
+  const media = payload.mediaUrls?.length
+    ? payload.mediaUrls
+    : payload.mediaUrl
+      ? [payload.mediaUrl]
+      : [];
+  return media.filter((value) => value.trim().length > 0);
+}
+
+function readSourceReplyPayload(
+  details: Record<string, unknown>,
+  sourceReply: Record<string, unknown>,
+): MessagingToolSourceReplyPayload | undefined {
   const payload: MessagingToolSourceReplyPayload = {};
   const text = readStringValue(sourceReply.text) ?? readStringValue(details.message);
   if (text) {

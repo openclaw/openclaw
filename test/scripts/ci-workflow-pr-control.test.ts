@@ -158,7 +158,7 @@ describe("PR failure cancellation", () => {
       ).toBe(admitted);
     }
   });
-  it("does not admit the final gate for cancelled workflows or draft pull requests", () => {
+  it("gates cancelled workflows and drafts while preserving an uncertain failure", () => {
     const gate = readCiWorkflow().jobs["ci-gate"];
     for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
       for (const cancelled of [true, false]) {
@@ -177,6 +177,15 @@ describe("PR failure cancellation", () => {
         }
       }
     }
+    expect(
+      evaluateWorkflowExpression(gate.if, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        cancelled: true,
+        failFastResult: "failure",
+      }),
+    ).toBe(true);
   });
 
   it.each(["pull_request", "push", "workflow_dispatch"] as const)(
@@ -356,79 +365,31 @@ describe("PR failure cancellation", () => {
     },
   );
 
-  it("keeps an uncertain cancellation red even if cause outputs are unavailable", () => {
-    expect(
-      evaluateWorkflowExpression(readCiWorkflow().jobs["ci-gate"].if, {
-        eventName: "pull_request",
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        cancelled: true,
-        failFastResult: "failure",
-      }),
-    ).toBe(true);
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "does not reuse a previous attempt's failure cause or monitor result",
-    () => {
+  it.skipIf(process.platform === "win32").each(["rerun", "disabled"] as const)(
+    "verifies selected lanes without requiring a %s PR monitor",
+    (mode) => {
       const workflow = readCiWorkflow();
       const gate = workflow.jobs["ci-gate"];
-      const context = {
-        eventName: "pull_request" as const,
+      const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+        eventName: "pull_request",
         repository: "openclaw/openclaw",
-        runAttempt: 2,
-        failFastOutputs: { failure_job_id: "42", failure_run_attempt: "1" },
-        failFastResult: "failure",
-        preflightOutputs: { run_checks_node_core_nondist: "true" },
-      };
-      expect(evaluateWorkflowExpression(workflow.jobs["pr-fail-fast"].if, context)).toBe(false);
-      expect(evaluateWorkflowExpression(gate.if, { ...context, cancelled: true })).toBe(false);
-      const report = gate.steps.find(
-        (entry: WorkflowStep) => entry.name === "Report originating PR failure",
-      );
-      expect(evaluateWorkflowExpression(`\${{ ${report.if} }}`, context)).toBe(false);
-      const verify = gate.steps.find(
-        (entry: WorkflowStep) => entry.name === "Verify selected CI lanes",
-      );
-      const monitorRow = verify.env.JOB_RESULTS.split("\n")
-        .find((line: string) => line.startsWith("pr-fail-fast="))
-        .replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
-          String(evaluateWorkflowExpression(expression, context)),
-        );
-      expect(monitorRow).toBe("pr-fail-fast=skipped|false");
-      for (const [result, exit] of [
-        ["success", 0],
-        ["failure", 1],
-        ["cancelled", 1],
-      ] as const) {
-        const run = spawnSync("/bin/bash", ["-c", verify.run], {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            JOB_RESULTS: `preflight=success|true\nsecurity-fast=success|true\nchecks-node-core-test-nondist-shard=${result}|true\n${monitorRow}`,
-          },
-        });
-        expect(run.status, run.stdout).toBe(exit);
-      }
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "does not require the PR monitor when fail-fast is disabled",
-    () => {
-      const workflow = readCiWorkflow();
-      const context = {
-        eventName: "pull_request" as const,
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        failFastResult: "skipped",
+        runAttempt: mode === "rerun" ? 2 : 1,
+        failFastOutputs: mode === "rerun" ? { failure_job_id: "42", failure_run_attempt: "1" } : {},
+        failFastResult: mode === "rerun" ? "failure" : "skipped",
         preflightOutputs: {
-          disable_fail_fast: "true",
           run_checks_node_core_nondist: "true",
+          ...(mode === "disabled" ? { disable_fail_fast: "true" } : {}),
         },
       };
       expect(evaluateWorkflowExpression(workflow.jobs["pr-fail-fast"].if, context)).toBe(false);
-      const verify = workflow.jobs["ci-gate"].steps.find(
+      if (mode === "rerun") {
+        expect(evaluateWorkflowExpression(gate.if, { ...context, cancelled: true })).toBe(false);
+        const report = gate.steps.find(
+          (entry: WorkflowStep) => entry.name === "Report originating PR failure",
+        );
+        expect(evaluateWorkflowExpression(`\${{ ${report.if} }}`, context)).toBe(false);
+      }
+      const verify = gate.steps.find(
         (entry: WorkflowStep) => entry.name === "Verify selected CI lanes",
       );
       const monitorRow = verify.env.JOB_RESULTS.split("\n")

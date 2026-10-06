@@ -73,6 +73,7 @@ const scratchDirs: string[] = [];
 const bunConfig = "test/vitest/vitest.unit-fast.config.ts";
 const unitConfig = "test/vitest/vitest.unit.config.ts";
 const unitSrcConfig = "test/vitest/vitest.unit-src.config.ts";
+const graphemeTarget = "packages/normalization-core/src/grapheme.test.ts";
 const libraryTarget = "src/library.test.ts";
 const workerQuiescenceTarget = "src/node-host/node-worker-workspace-quiescence.acceptance.test.ts";
 const workerClosingWindowTarget = "src/worker/worker-connection-closing-window.test.ts";
@@ -672,13 +673,15 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     "preserves runtime inventories under $policy with $vitestArgs",
     async ({ policy, vitestArgs }) => {
       const skippedOnBun = "src/process/spawn-broker/cleanup.test.ts";
-      const v8HeapTest = "src/infra/worker-task-pool.memory.test.ts";
+      const workerMemoryTest = "src/infra/worker-task-pool.memory.test.ts";
       const pluginRetentionTest = "src/plugins/runtime.retention.test.ts";
       const nodeHistoryBenchmark = "test/scripts/bench-session-history.test.ts";
       const nativeCompilerTest = "test/scripts/native-typescript.test.ts";
       const compilerGraphTest = "test/scripts/ts-topology.test.ts";
       const mixedCompilerTest = "src/plugin-sdk/provider-tools.test.ts";
       const bunVitestFiles = [
+        "packages/markdown-core/src/render-aware-chunking.test.ts",
+        workerMemoryTest,
         "src/agents/code-mode-node.test.ts",
         vitestBunTarget,
         nativeCompilerTest,
@@ -690,12 +693,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/plugin-sdk/provider-catalog-shared.cancellation.test.ts",
         "src/plugin-sdk/provider-catalog-shared.retention.test.ts",
       ].toSorted();
-      const nodeFiles = [
-        skippedOnBun,
-        v8HeapTest,
-        nodeHistoryBenchmark,
-        "packages/markdown-core/src/render-aware-chunking.test.ts",
-      ];
+      const nodeFiles = [skippedOnBun, nodeHistoryBenchmark];
       const nativeFiles = vitestArgs.length ? [] : [bunTarget, nativeBunTarget];
       const bunFiles = nativeFiles.length
         ? bunVitestFiles
@@ -832,7 +830,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       ),
     ).toEqual([
       {
-        runtime: "node",
+        runtime: "bun",
         includePatterns: ["packages/markdown-core/src/render-aware-chunking.test.ts"],
       },
       { runtime: "bun", engine: "bun-test", files: [bunTarget] },
@@ -972,7 +970,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   ] as const)(
     "admits qualified unit coverage while preserving $config siblings under $policy",
     async ({ policy, config, nodeFile }) => {
-      const bunFiles = [libraryTarget, workerQuiescenceTarget, workerClosingWindowTarget];
+      const bunFiles = [
+        ...(config === unitConfig ? [graphemeTarget] : []),
+        libraryTarget,
+        workerQuiescenceTarget,
+        workerClosingWindowTarget,
+      ];
       const includePatterns = [...bunFiles, nodeFile];
       const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
       await expect(
@@ -1024,6 +1027,14 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
             ),
           ).toBe(false);
         }
+      }
+      if (config === unitSrcConfig) {
+        expect(
+          resolveCiTestRuntimeSelections(
+            { configs: [config], includePatterns: [graphemeTarget] },
+            policy,
+          ),
+        ).toEqual([{ runtime: "node" }]);
       }
       expect(ciTestShardRequiresBun({ configs: [config] }, policy)).toBe(true);
     },
@@ -1137,6 +1148,20 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
   it.each([
     {
+      config: "test/vitest/vitest.extension-database-workers.config.ts",
+      dir: "extensions",
+      targets: ["extensions/team-reports/src/render/theme.test.ts"],
+      sibling: "extensions/team-reports/src/render/site.test.ts",
+      glob: "team-reports/src/render/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.extension-whatsapp.config.ts",
+      dir: "extensions",
+      targets: ["extensions/whatsapp/src/session.media-upload.test.ts"],
+      sibling: "extensions/whatsapp/src/session.test.ts",
+      glob: "whatsapp/src/*.test.ts",
+    },
+    {
       config: "test/vitest/vitest.extension-slack.config.ts",
       dir: "extensions",
       targets: [
@@ -1159,9 +1184,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       config: "test/vitest/vitest.plugins.config.ts",
       dir: "src/plugins",
-      targets: ["src/plugins/plugin-module-generation.interop.test.ts"],
+      targets: [
+        "src/plugins/plugin-module-generation.interop.test.ts",
+        "src/plugins/provider-discovery.capture-lifetime.test.ts",
+        "src/plugins/sdk-alias.test.ts",
+      ],
       sibling: "src/plugins/plugin-module-generation.test.ts",
-      glob: "plugin-module-generation*.test.ts",
+      glob: "**/*.test.ts",
     },
     {
       config: "test/vitest/vitest.tooling.config.ts",
@@ -1200,7 +1229,10 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       config: "test/vitest/vitest.infra.config.ts",
       dir: "",
-      targets: ["src/infra/update-managed-service-handoff-reclamation.test.ts"],
+      targets: [
+        "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+        "src/infra/update-managed-service-handoff-reclamation.test.ts",
+      ],
       sibling: "src/infra/update-managed-service-handoff-recovery.test.ts",
       glob: "**/*.test.ts",
     },

@@ -11,11 +11,13 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   beginGatewayRestartSignalAdmission,
   beginGatewayRootWorkAdmissionWhenOpen,
+  beginGatewayShutdownCleanup,
   captureGatewayRootWorkAdmissionContinuationScope,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
   getGatewayRestartDrainSignal,
+  getGatewayShutdownCleanupSignal,
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDrainError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -94,9 +96,13 @@ it.each(["stop (SIGTERM)", "restart (SIGUSR2)"] as const)(
   "preserves cancellation while stop supersedes %s refusals",
   async (first) => {
     const signal = getGatewayRestartDrainSignal();
+    const cleanupSignal = getGatewayShutdownCleanupSignal();
+    beginGatewayShutdownCleanup();
+    expect(cleanupSignal.aborted).toBe(false);
     const aborted = vi.fn();
     signal.addEventListener("abort", aborted);
     markGatewayRestartDraining(first);
+    expect(cleanupSignal.aborted).toBe(false);
     const originalReason = signal.reason;
     expect(originalReason).toMatchObject({
       name: "GatewayDrainingError",
@@ -116,8 +122,11 @@ it.each(["stop (SIGTERM)", "restart (SIGUSR2)"] as const)(
     await expect(runWithGatewayIndependentRootWorkAdmission(async () => {})).rejects.toThrow(
       message,
     );
+    beginGatewayShutdownCleanup();
+    expect(cleanupSignal.aborted).toBe(true);
     resetGatewayWorkAdmission();
     expect(getGatewayRestartDrainSignal().aborted).toBe(false);
+    expect(getGatewayShutdownCleanupSignal().aborted).toBe(false);
   },
 );
 

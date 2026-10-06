@@ -76,6 +76,7 @@ type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 
 type PreparedStreamCompletionModel =
   | (Extract<PreparedSimpleCompletionModel, { model: Model }> & {
+      readServiceTiers?: (model: Model) => readonly string[] | undefined;
       recordServiceTierObservation?: ReturnType<
         NonNullable<PreparedModelRuntimeSnapshot["accountCatalog"]>["prepareServiceTierObserver"]
       >;
@@ -507,7 +508,21 @@ async function prepareSimpleCompletionModelCore(
     model: bindModelLlmRuntime(preparedModel, modelRuntime.llmRuntime, completionTransport),
     auth: resolvedAuth,
     ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
-    ...(recordServiceTierObservation ? { recordServiceTierObservation } : {}),
+    ...(recordServiceTierObservation
+      ? {
+          recordServiceTierObservation,
+          readServiceTiers: (target: Model) =>
+            selectedCredential && selectedCredential.source !== "harness"
+              ? context.preparedModelRuntime.accountCatalog?.readServiceTiers({
+                  identityKey: selectedCredential.identityKey,
+                  modelId: target.id,
+                  runtimeId: "openclaw",
+                  api: target.api,
+                  baseUrl: target.baseUrl,
+                })
+              : undefined,
+        }
+      : {}),
   };
 }
 

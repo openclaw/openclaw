@@ -3006,11 +3006,25 @@ class ChatComposerLayoutTest {
         layoutDirection = { direction },
         scene = AndroidScreenshotScene.Branches,
       )
-    composeRule.waitUntil {
-      // Branch IO can publish after showChat idles; drain Android Main before reading ViewModel bridges.
-      composeRule.runOnIdle {
-        model.chatSessionBranches.value.size == 12 && model.chatOutboxPresentationRestored.value && !model.chatSessionBranchesLoading.value
+    // Room-backed startup and its ViewModel bridges must participate in Compose idleness.
+    val readiness =
+      object : IdlingResource {
+        override val isIdleNow: Boolean
+          get() =
+            model.chatSessionBranches.value.size == 12 &&
+              model.chatOutboxPresentationRestored.value &&
+              !model.chatSessionBranchesLoading.value
+
+        override fun getDiagnosticMessageIfBusy(): String =
+          "Branch fixture branches=${controller.sessionBranches.value.size}/${model.chatSessionBranches.value.size} " +
+            "restored=${controller.outboxPresentationRestored.value}/${model.chatOutboxPresentationRestored.value} " +
+            "loading=${controller.sessionBranchesLoading.value}/${model.chatSessionBranchesLoading.value}"
       }
+    composeRule.registerIdlingResource(readiness)
+    try {
+      composeRule.waitForIdle()
+    } finally {
+      composeRule.unregisterIdlingResource(readiness)
     }
     assertEquals(0, controller.pendingRunCount.value)
     return model
@@ -5626,11 +5640,30 @@ class ChatComposerLayoutTest {
         """{"sessionKey":"${controller.sessionKey.value}","revision":1}""",
       )
     }
-    composeRule.waitUntil {
+    // The controller publishes from IO, outside Compose's automatic synchronization.
+    val progressCardRefresh =
+      object : IdlingResource {
+        override val isIdleNow: Boolean
+          get() =
+            controller.progressCard.value
+              ?.steps
+              ?.size == steps.size
+
+        override fun getDiagnosticMessageIfBusy(): String = "Progress card steps=${controller.progressCard.value?.steps?.size} expected=${steps.size}"
+      }
+    composeRule.registerIdlingResource(progressCardRefresh)
+    try {
+      composeRule.waitForIdle()
+    } finally {
+      composeRule.unregisterIdlingResource(progressCardRefresh)
+    }
+    assertEquals(
+      "The progress card must publish all fixture steps",
+      steps.size,
       controller.progressCard.value
         ?.steps
-        ?.size == steps.size
-    }
+        ?.size,
+    )
   }
 
   private fun assertPhysicalEnterDuringActiveRun(

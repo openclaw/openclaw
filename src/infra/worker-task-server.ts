@@ -1,4 +1,5 @@
-import type { MessagePort, Transferable } from "node:worker_threads";
+import { MessagePort, type Transferable } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   serveOwnedWorkerTasks as serveRuntimeWorkerTasks,
   type WorkerTaskChannel,
@@ -12,6 +13,7 @@ import {
 } from "./agent-database-readers.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
+import { WORKER_TASK_PORT_MESSAGE } from "./worker-task-transport.js";
 
 export type { WorkerTaskChannel } from "@openclaw/worker-runtime/worker";
 
@@ -39,6 +41,7 @@ export function serveOwnedWorkerTasks<Output>(
   } = {},
 ): void {
   let memoryPort: MessagePort;
+  let taskPort: MessagePort | undefined;
   let memorySamplesStarted = false;
   serveRuntimeWorkerTasks<Output, [string, string][]>(
     handler,
@@ -58,10 +61,23 @@ export function serveOwnedWorkerTasks<Output>(
       },
     },
     {
+      selectStartupPort(message) {
+        if (!isRecord(message) || message.type !== WORKER_TASK_PORT_MESSAGE) {
+          return undefined;
+        }
+        if (!(message.port instanceof MessagePort)) {
+          throw new Error("Retained worker task port is invalid");
+        }
+        taskPort = message.port;
+        return taskPort;
+      },
       initialize(port) {
         // Results use the host port; worker-local diagnostics must keep JSON stdout clean.
         loggingState.forceConsoleToStderr = true;
         memoryPort = port;
+      },
+      onReady() {
+        taskPort?.postMessage({ status: "ready" }, []);
       },
       onMessage(sampleMemory) {
         if (sampleMemory && !memorySamplesStarted) {

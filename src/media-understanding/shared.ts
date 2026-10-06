@@ -19,6 +19,7 @@ import {
   resolveProviderRequestPolicyConfig,
 } from "../agents/provider-request-config.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
@@ -160,16 +161,14 @@ export function createProviderOperationTimeoutError(deadline: ProviderOperationD
 }
 
 /** Resolves a static or lazy request timeout with a validated fallback. */
-function resolveProviderRequestTimeoutMs(params: {
-  timeoutMs?: ProviderOperationTimeoutMs;
-  defaultTimeoutMs: number;
-}): number {
-  const resolved = typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs;
-  const fallback = resolveTimerTimeoutMs(params.defaultTimeoutMs, DEFAULT_GUARDED_HTTP_TIMEOUT_MS);
+function resolveProviderRequestTimeoutMs(
+  timeoutMs: ProviderOperationTimeoutMs | undefined,
+): number {
+  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
   if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
-    return fallback;
+    return DEFAULT_GUARDED_HTTP_TIMEOUT_MS;
   }
-  return resolveTimerTimeoutMs(resolved, fallback);
+  return resolveTimerTimeoutMs(resolved, DEFAULT_GUARDED_HTTP_TIMEOUT_MS);
 }
 
 /** Returns a lazy timeout resolver for code paths that retry or poll multiple HTTP calls. */
@@ -191,9 +190,7 @@ export async function waitProviderOperationPollInterval(params: {
   if (remainingMs <= 0) {
     throw createProviderOperationTimeoutError(params.deadline);
   }
-  await new Promise((resolve) => {
-    setTimeout(resolve, Math.min(pollIntervalMs, remainingMs));
-  });
+  await sleepWithAbort(Math.min(pollIntervalMs, remainingMs));
 }
 
 /** Poll a provider-owned request without changing its transport or response contract. */
@@ -479,10 +476,7 @@ async function fetchProviderOperation(params: {
     stage: params.stage,
     retry: params.retry,
     operation: async () => {
-      const timeoutMs = resolveProviderRequestTimeoutMs({
-        timeoutMs: params.timeoutMs,
-        defaultTimeoutMs: DEFAULT_GUARDED_HTTP_TIMEOUT_MS,
-      });
+      const timeoutMs = resolveProviderRequestTimeoutMs(params.timeoutMs);
       const requestDeadline = createProviderOperationDeadline({
         timeoutMs,
         label: params.requestFailedMessage ?? `${params.provider ?? "provider"} ${params.stage}`,

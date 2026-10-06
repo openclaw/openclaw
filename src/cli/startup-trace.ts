@@ -35,6 +35,7 @@ const STARTUP_PROGRESS_PHASES = new Set([
   "cli.main.gateway-run-imports",
   "cli.main.gateway-run-pre-bootstrap",
   "cli.main.gateway-run-bootstrap",
+  "cli.main.gateway-run-reload-environment",
 ]);
 const BOOTSTRAP_PROGRESS_PHASES = new Set([
   "cli.bootstrap.admission.database-readiness",
@@ -91,7 +92,12 @@ export async function measureGatewayBootstrapStep<T>(
   metrics?: () => Readonly<Record<string, number>>,
 ): Promise<T> {
   const traceEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
-  const progressEnabled = BOOTSTRAP_PROGRESS_PHASES.has(name);
+  const progressEnabled =
+    BOOTSTRAP_PROGRESS_PHASES.has(name) ||
+    (isForegroundGatewayRunArgv(process.argv) &&
+      (name.startsWith("cli.bootstrap.") ||
+        name === "cli.command.config-ready" ||
+        name === "cli.command.config-guard-import"));
   if (!traceEnabled && !progressEnabled) {
     return await run();
   }
@@ -123,19 +129,7 @@ function hasDiagnosticsTimelinePath(env: NodeJS.ProcessEnv): boolean {
 export function createGatewayDispatchStartupTrace(
   argv: string[],
   source: GatewayStartupTraceSource,
-): {
-  enabled: boolean;
-  consoleEnabled: boolean;
-  requiresDiagnosticsConfig(): Promise<boolean>;
-  configureDiagnosticsTimeline(config: OpenClawConfig): Promise<void>;
-  setLineFormatter(formatter: GatewayStartupTraceLineFormatter): void;
-  mark(name: string): void;
-  measure<T>(
-    name: string,
-    run: () => T | PromiseLike<T>,
-    options?: StartupTraceMeasureOptions,
-  ): Promise<T>;
-} {
+) {
   const gatewayInvocation = argv.slice(2).includes("gateway");
   const enabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) && gatewayInvocation;
   const progressEnabled = isForegroundGatewayRunArgv(argv);
@@ -287,13 +281,13 @@ export function createGatewayDispatchStartupTrace(
       await flushPendingTimelineEvents();
       return timelineActivation === "unknown";
     },
-    async configureDiagnosticsTimeline(config) {
+    async configureDiagnosticsTimeline(config: OpenClawConfig) {
       timelineConfig = config;
       timelineConfigResolved = true;
       await flushPendingTimelineEvents();
       await pendingTimelineWrites;
     },
-    setLineFormatter(formatter) {
+    setLineFormatter(formatter: GatewayStartupTraceLineFormatter) {
       lineFormatter = formatter;
       process.off("exit", flushPendingPlainOnExit);
       flushPending(formatter);

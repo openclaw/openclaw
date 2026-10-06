@@ -1,6 +1,9 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { mintMcpLoopbackClientGrant as MintMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
 import {
   resolveMcpLoopbackPolicyTools,
@@ -13,6 +16,7 @@ import {
   createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
+import * as subagentSpawn from "../subagents/spawn/subagent-spawn.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -66,7 +70,7 @@ function completionRun(sessionTarget: {
   } satisfies Partial<RunCliAgentParams>;
 }
 
-describe("trusted completion tool preparation", () => {
+describe("restricted CLI tool preparation", () => {
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
   const mintGrant = vi.fn<typeof MintMcpLoopbackClientGrant>();
 
@@ -105,6 +109,219 @@ describe("trusted completion tool preparation", () => {
     await fixture.settle();
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
+  });
+
+  it.each([
+    "conversation",
+    "sender config",
+    "group config",
+    "persisted allow",
+    "persisted deny",
+    "persisted rootless",
+    "persisted rootless workspace fallback",
+  ])(
+    "mediates a sender-restricted turn from %s and retains its root and spawn restriction",
+    async (source) => {
+      const sessionRoot = path.join(fixture.session.dir, "requester-task");
+      fs.mkdirSync(sessionRoot);
+      const rootless = source.includes("rootless");
+      const needsWorkspaceFallback = source === "persisted rootless workspace fallback";
+      const workspaceDir = rootless ? sessionRoot : fixture.session.dir;
+      const outsidePath = path.join(fixture.session.dir, "outside-task.txt");
+      fs.writeFileSync(outsidePath, "outside requester root");
+      const conversationToolPolicy = {
+        allow: ["read", "sessions_spawn"],
+        deny: ["exec"],
+      };
+      const persisted = source.startsWith("persisted");
+      const sessionKey = persisted
+        ? "agent:main:subagent:restricted-child"
+        : source === "group config"
+          ? "agent:main:telegram:group:chat-1"
+          : fixture.session.sessionTarget.sessionKey;
+      const sessionEntry: SessionEntry = {
+        sessionId: fixture.session.sessionTarget.sessionId,
+        updatedAt: 1,
+        permissionMode: "read-only",
+        sessionRoot: rootless ? undefined : sessionRoot,
+        ...(persisted
+          ? {
+              spawnedBy: "agent:main:main",
+              spawnDepth: 1,
+              inheritedToolPolicyVersion: 1,
+              inheritedToolPolicySource: "sender",
+              inheritedToolAllow:
+                source === "persisted deny"
+                  ? []
+                  : rootless
+                    ? ["read", "write", "sessions_spawn"]
+                    : ["read", "sessions_spawn"],
+              inheritedToolDeny: ["exec"],
+            }
+          : {}),
+      };
+      const sessionTarget = { ...fixture.session.sessionTarget, sessionKey };
+      replaceSessionEntrySync(sessionTarget, sessionEntry);
+      const config: OpenClawConfig = {
+        session: { store: fixture.session.sessionTarget.storePath },
+        agents: {
+          defaults: {
+            subagents: { maxSpawnDepth: 2 },
+            ...(needsWorkspaceFallback ? { workspace: workspaceDir } : {}),
+          },
+        },
+        ...(source === "sender config"
+          ? { tools: { toolsBySender: { "id:guest": conversationToolPolicy } } }
+          : {}),
+        ...(source === "group config"
+          ? { channels: { telegram: { groups: { "chat-1": { tools: conversationToolPolicy } } } } }
+          : {}),
+        ...(source === "conversation"
+          ? { mcp: { servers: { userProbe: { command: "node", args: ["user-probe.mjs"] } } } }
+          : {}),
+      };
+      const context = await fixture.prepare({
+        provider: "claude-cli",
+        model: "opus",
+        modelHasVision: false,
+        conversationToolPolicy: source === "conversation" ? conversationToolPolicy : undefined,
+        messageProvider: "telegram",
+        senderId: persisted ? undefined : "guest",
+        senderIsOwner: false,
+        sessionKey,
+        sessionFile: sessionKey,
+        sessionTarget,
+        sessionEntry,
+        workspaceDir: needsWorkspaceFallback ? "   " : workspaceDir,
+        config,
+      });
+      const launch = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
+        status: "accepted",
+        context: "isolated",
+        childSessionKey: "agent:main:subagent:restricted-root-helper",
+        runId: "restricted-root-helper",
+      });
+      try {
+        const grant = mintGrant.mock.calls[0]?.[0]?.context;
+        expect(grant).toBeDefined();
+        if (!grant) {
+          throw new Error("expected a channel-restricted MCP grant");
+        }
+        expect(context.params.cliToolAvailability).toEqual({
+          native: [],
+          openClaw: expect.arrayContaining(["read", "sessions_spawn"]),
+        });
+        expect(grant.toolsAllow).not.toContain("exec");
+        if (source !== "persisted deny") {
+          expect(grant.toolsAllow?.toSorted()).toEqual(["read", "sessions_spawn"]);
+        }
+        expect(grant.conversationToolPolicy).toEqual(
+          source === "conversation" ? conversationToolPolicy : undefined,
+        );
+        const scoped = await resolveMcpLoopbackScopedTools({
+          cfg: config,
+          context: grant,
+          admittedRunContext: context.params.admittedRunContext,
+        });
+        expect(scoped.tools.map((tool) => tool.name)).not.toContain("write");
+        const spawn = scoped.tools.find((tool) => tool.name === "sessions_spawn");
+        if (!spawn) {
+          throw new Error("expected the permitted spawn tool");
+        }
+        await expect(
+          spawn.execute("restricted-visible", { task: "helper", visible: true }),
+        ).resolves.toMatchObject({
+          details: {
+            status: "forbidden",
+            error: "This sender may only start hidden helpers of the same agent.",
+          },
+        });
+        await expect(spawn.execute("restricted-hidden", { task: "helper" })).resolves.toMatchObject(
+          {
+            details: { status: "accepted" },
+          },
+        );
+        expect(launch.mock.calls[0]?.[1]).toMatchObject({
+          inheritedToolPolicySource: "sender",
+          workspaceDir,
+          sessionPermissionPolicy: { mode: "read-only", root: sessionRoot },
+        });
+        const read = scoped.tools.find((tool) => tool.name === "read");
+        if (!read) {
+          throw new Error("expected the permitted read tool");
+        }
+        await expect(read.execute("restricted-root-read", { path: outsidePath })).rejects.toThrow();
+        const args = context.preparedBackend.backend.args ?? [];
+        const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
+        const bundle = JSON.parse(fs.readFileSync(mcpConfigPath ?? "", "utf-8")) as {
+          mcpServers: Record<string, unknown>;
+        };
+        expect(Object.keys(bundle.mcpServers)).toEqual(["openclaw"]);
+      } finally {
+        launch.mockRestore();
+        await context.preparedBackend.cleanup?.();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "without exact tool selection",
+      nativeToolMode: "always-on" as const,
+      execHost: undefined,
+    },
+    {
+      name: "with node execution",
+      nativeToolMode: "selectable" as const,
+      execHost: "node" as const,
+    },
+  ])("refuses a persisted sender-restricted child $name", async ({ nativeToolMode, execHost }) => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [{ ...claudeBackend, nativeToolMode }],
+    });
+    const sessionKey = "agent:main:subagent:restricted-child";
+    const sessionEntry: SessionEntry = {
+      sessionId: fixture.session.sessionTarget.sessionId,
+      updatedAt: 1,
+      spawnedBy: "agent:main:main",
+      spawnDepth: 1,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolPolicySource: "sender",
+      inheritedToolAllow: ["read", "sessions_spawn"],
+      inheritedToolDeny: ["exec"],
+      execHost,
+    };
+    const sessionTarget = { ...fixture.session.sessionTarget, sessionKey };
+    replaceSessionEntrySync(sessionTarget, sessionEntry);
+    await expect(
+      fixture.prepare({
+        provider: "claude-cli",
+        sessionKey,
+        sessionFile: sessionKey,
+        sessionTarget,
+        sessionEntry,
+        config: { session: { store: sessionTarget.storePath } },
+      }),
+    ).rejects.toThrow("cannot enforce conversation tool policy");
+    expect(mintGrant).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "bundled MCP", backend: { bundleMcp: false } },
+    { name: "exact native tool selection", backend: { nativeToolMode: "always-on" as const } },
+  ])("refuses a channel-restricted turn without $name", async ({ backend }) => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [{ ...claudeBackend, ...backend }],
+    });
+    await expect(
+      fixture.prepare({
+        provider: "claude-cli",
+        conversationToolPolicy: { deny: ["exec"] },
+      }),
+    ).rejects.toThrow("cannot enforce conversation tool policy");
+    expect(mintGrant).not.toHaveBeenCalled();
   });
 
   it("mediates trusted completion tools with persisted requester policy", async () => {

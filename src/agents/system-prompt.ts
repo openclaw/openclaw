@@ -36,7 +36,6 @@ import {
   type PreparedMemoryPromptSection,
 } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
-import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
@@ -71,6 +70,7 @@ import type {
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
 import { buildMessagingSection, resolveSilentReplyPromptMode } from "./system-prompt-messaging.js";
+import { buildRuntimeLine } from "./system-prompt-runtime.js";
 import { buildSkillsSection } from "./system-prompt-skills.js";
 import { buildSystemPromptToolLines } from "./system-prompt-tool-list.js";
 import type {
@@ -106,10 +106,6 @@ function cacheStablePromptPrefix(key: string, build: () => string): string {
   return value;
 }
 
-function hashStablePromptInput(value: unknown): string {
-  return sha256Hex(JSON.stringify(value));
-}
-
 function buildExecApprovalPromptGuidance(params: {
   runtimeChannel?: string;
   inlineButtonsEnabled?: boolean;
@@ -126,39 +122,6 @@ function buildExecApprovalPromptGuidance(params: {
     return `${policyGuidance} exec approval-pending: native card/buttons first. Plain /approve only when tool requires chat/manual approval; copy exact "Reply with:" command.`;
   }
   return `${policyGuidance} exec approval-pending: send exact /approve from "Reply with:"; never ask for another code.`;
-}
-
-function buildAgentBootstrapSystemPromptSections(params: {
-  bootstrapMode?: BootstrapMode;
-  bootstrapTruncationNotice?: string;
-  contextFiles?: EmbeddedContextFile[];
-}): string[] {
-  const lines: string[] = [];
-  if (params.bootstrapMode && params.bootstrapMode !== "none") {
-    lines.push(
-      "## Bootstrap Pending",
-      ...(params.bootstrapMode === "limited"
-        ? buildLimitedBootstrapPromptLines({
-            introLine: "Bootstrap pending; this run cannot safely finish full BOOTSTRAP.md.",
-            nextStepLine:
-              "Next: primary interactive run with normal workspace access, or user deletes canonical BOOTSTRAP.md after completion.",
-          })
-        : buildFullBootstrapPromptLines({
-            readLine:
-              params.bootstrapMode === "full" &&
-              params.contextFiles?.some((file) => isBootstrapContextFile(file.path))
-                ? "BOOTSTRAP.md below; follow before normal reply."
-                : "Read workspace BOOTSTRAP.md; follow before normal reply.",
-            firstReplyLine: "First visible reply must follow BOOTSTRAP.md; no generic greeting.",
-          })),
-      "",
-    );
-  }
-  const bootstrapTruncationNotice = params.bootstrapTruncationNotice?.trim();
-  if (bootstrapTruncationNotice) {
-    lines.push("## Bootstrap Context Notice", bootstrapTruncationNotice, "");
-  }
-  return lines;
 }
 
 function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
@@ -222,38 +185,6 @@ function buildOwnerIdentityLine(
     return undefined;
   }
   return `${OWNER_PROMPT_PREFIX}${displayOwnerNumbers.join(", ")}${OWNER_PROMPT_SUFFIX}`;
-}
-
-function buildAssistantOutputDirectivesSection(params: {
-  isMinimal: boolean;
-  sourceMessageToolOnly: boolean;
-  messageToolAvailable: boolean;
-}) {
-  if (params.isMinimal || (params.sourceMessageToolOnly && !params.messageToolAvailable)) {
-    return [];
-  }
-  if (params.sourceMessageToolOnly) {
-    return [
-      "## Assistant Output Directives",
-      "- Visible source output: `message(action=send)`.",
-      "- Media paths = attachments, not prose. One: `media`; many: `attachments: [{media: ...}]`.",
-      "- Synthesized speech: `voiceText`; optional `voiceProvider`, `voiceId`; voice note: `asVoice`.",
-      "- No legacy `MEDIA:` here. Explicit native reply: `replyTo`.",
-      "",
-    ];
-  }
-  // TRANSITIONAL(marker-retirement): bracket-directive teaching survives only for
-  // automatic-mode replies. Delete this branch (leaving the message-tool variant
-  // above) when the visibleReplies default flips to "message_tool".
-  return [
-    "## Assistant Output Directives",
-    "- Media attachment: own line `MEDIA:<path-or-url>` per item; path is not prose.",
-    "- Directive starts line, plain text, outside fences/Markdown; never inline or wrapped.",
-    "- Attached voice note: `[[audio_as_voice]]`.",
-    "- Native reply starts with `[[reply_to_current]]`; explicit id only: `[[reply_to:<id>]]`.",
-    "- Directives stripped before render; channel config controls delivery.",
-    "",
-  ];
 }
 
 function normalizeProviderPromptBlock(value: unknown): string | undefined {
@@ -629,48 +560,74 @@ export function buildAgentSystemPrompt(params: {
   );
   // Cache keys and bootstrap checks retain the original ordered file objects.
   const contextFiles = preparedContextFiles.map(({ file }) => file);
-  const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
-    bootstrapMode: params.bootstrapMode,
-    bootstrapTruncationNotice: params.bootstrapTruncationNotice,
-    contextFiles,
-  });
-  const stablePrefixCacheKey = hashStablePromptInput({
-    workspaceDir: params.workspaceDir,
-    runtimeCwd,
-    promptMode,
-    promptSurface,
-    toolLines,
-    toolSchemaDirectoryPrompt,
-    capabilityToolNames: [...availableTools].toSorted(),
-    renderOpenClawToolWorkflowHints,
-    hasGateway,
-    hasOpenClaw,
-    readToolName,
-    waitToolHints,
-    nativeCommandGuidanceLines,
-    providerSectionOverrides,
-    providerStablePrefix,
-    reasoningHint,
-    reasoningLevel,
-    userTimezone,
-    sandboxInfo: params.sandboxInfo,
-    displayWorkspaceDir,
-    workspaceGuidance,
-    workspaceOnlyGuidance,
-    workspaceNotes,
-    bootstrapMode: params.bootstrapMode,
-    bootstrapSystemPromptSections,
-    docsPath: params.docsPath,
-    sourcePath: params.sourcePath,
-    skillsPrompt,
-    codeModeActive: params.codeModeActive,
-    modelAliasLines: params.modelAliasLines,
-    includeMemorySection: params.includeMemorySection,
-    memoryCitationsMode: params.memoryCitationsMode,
-    memorySection,
-    acpEnabled,
-    stableContextFiles: contextFiles,
-  });
+  const bootstrapSystemPromptSections: string[] = [];
+  if (params.bootstrapMode && params.bootstrapMode !== "none") {
+    bootstrapSystemPromptSections.push(
+      "## Bootstrap Pending",
+      ...(params.bootstrapMode === "limited"
+        ? buildLimitedBootstrapPromptLines({
+            introLine: "Bootstrap pending; this run cannot safely finish full BOOTSTRAP.md.",
+            nextStepLine:
+              "Next: primary interactive run with normal workspace access, or user deletes canonical BOOTSTRAP.md after completion.",
+          })
+        : buildFullBootstrapPromptLines({
+            readLine:
+              params.bootstrapMode === "full" &&
+              contextFiles.some((file) => isBootstrapContextFile(file.path))
+                ? "BOOTSTRAP.md below; follow before normal reply."
+                : "Read workspace BOOTSTRAP.md; follow before normal reply.",
+            firstReplyLine: "First visible reply must follow BOOTSTRAP.md; no generic greeting.",
+          })),
+      "",
+    );
+  }
+  const bootstrapTruncationNotice = params.bootstrapTruncationNotice?.trim();
+  if (bootstrapTruncationNotice) {
+    bootstrapSystemPromptSections.push(
+      "## Bootstrap Context Notice",
+      bootstrapTruncationNotice,
+      "",
+    );
+  }
+  const stablePrefixCacheKey = sha256Hex(
+    JSON.stringify({
+      workspaceDir: params.workspaceDir,
+      runtimeCwd,
+      promptMode,
+      promptSurface,
+      toolLines,
+      toolSchemaDirectoryPrompt,
+      capabilityToolNames: [...availableTools].toSorted(),
+      renderOpenClawToolWorkflowHints,
+      hasGateway,
+      hasOpenClaw,
+      readToolName,
+      waitToolHints,
+      nativeCommandGuidanceLines,
+      providerSectionOverrides,
+      providerStablePrefix,
+      reasoningHint,
+      reasoningLevel,
+      userTimezone,
+      sandboxInfo: params.sandboxInfo,
+      displayWorkspaceDir,
+      workspaceGuidance,
+      workspaceOnlyGuidance,
+      workspaceNotes,
+      bootstrapMode: params.bootstrapMode,
+      bootstrapSystemPromptSections,
+      docsPath: params.docsPath,
+      sourcePath: params.sourcePath,
+      skillsPrompt,
+      codeModeActive: params.codeModeActive,
+      modelAliasLines: params.modelAliasLines,
+      includeMemorySection: params.includeMemorySection,
+      memoryCitationsMode: params.memoryCitationsMode,
+      memorySection,
+      acpEnabled,
+      stableContextFiles: contextFiles,
+    }),
+  );
   const stablePrefix = cacheStablePromptPrefix(stablePrefixCacheKey, () => {
     const lines = [
       "You are a personal assistant running inside OpenClaw.",
@@ -941,11 +898,27 @@ export function buildAgentSystemPrompt(params: {
           ? `Current elevated level: ${elevated.defaultLevel} (full auto-approval unavailable here; use ask/on instead).`
           : "Current elevated level: off (elevated exec unavailable)."
       : "",
-    ...buildAssistantOutputDirectivesSection({
-      isMinimal,
-      sourceMessageToolOnly,
-      messageToolAvailable,
-    }),
+    // TRANSITIONAL(marker-retirement): bracket directives remain for automatic replies.
+    ...(!isMinimal && (!sourceMessageToolOnly || messageToolAvailable)
+      ? [
+          "## Assistant Output Directives",
+          ...(sourceMessageToolOnly
+            ? [
+                "- Visible source output: `message(action=send)`.",
+                "- Media paths = attachments, not prose. One: `media`; many: `attachments: [{media: ...}]`.",
+                "- Synthesized speech: `voiceText`; optional `voiceProvider`, `voiceId`; voice note: `asVoice`.",
+                "- No legacy `MEDIA:` here. Explicit native reply: `replyTo`.",
+              ]
+            : [
+                "- Media attachment: own line `MEDIA:<path-or-url>` per item; path is not prose.",
+                "- Directive starts line, plain text, outside fences/Markdown; never inline or wrapped.",
+                "- Attached voice note: `[[audio_as_voice]]`.",
+                "- Native reply starts with `[[reply_to_current]]`; explicit id only: `[[reply_to:<id>]]`.",
+                "- Directives stripped before render; channel config controls delivery.",
+              ]),
+          "",
+        ]
+      : []),
     ...(!isMinimal && silentReplyPromptMode !== "none"
       ? [
           "## Silent Replies",
@@ -1076,45 +1049,4 @@ export function buildAgentSystemPrompt(params: {
   return lines.filter(Boolean).join("\n");
 }
 
-function buildRuntimeLine(
-  runtimeInfo?: SystemPromptRuntimeInfo,
-  runtimeChannel?: string,
-  runtimeCapabilities: string[] = [],
-): string {
-  const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
-  // Transcript ids rotate on rewind; isolated cron keys also carry per-run ids.
-  // Keep only stable session identity in the cached Runtime line.
-  const { baseSessionKey } = parseCronRunScopeSuffix(runtimeInfo?.sessionKey);
-  return `Runtime: ${[
-    runtimeInfo?.agentName ? `name=${runtimeInfo.agentName}` : "",
-    runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
-    baseSessionKey ? `session=${sanitizeForPromptLiteral(baseSessionKey)}` : "",
-    runtimeInfo?.sessionUrl ? `sessionUrl=${sanitizeForPromptLiteral(runtimeInfo.sessionUrl)}` : "",
-    runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
-    runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
-    runtimeInfo?.os
-      ? `os=${runtimeInfo.os}${runtimeInfo?.arch ? ` (${runtimeInfo.arch})` : ""}`
-      : runtimeInfo?.arch
-        ? `arch=${runtimeInfo.arch}`
-        : "",
-    runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
-    runtimeInfo?.activeNode
-      ? `active_node=${sanitizeForPromptLiteral(runtimeInfo.activeNode)}`
-      : "",
-    runtimeInfo?.activeNodeIdentity ? `active_node_identity=${runtimeInfo.activeNodeIdentity}` : "",
-    runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
-    runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
-    runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
-    runtimeChannel ? `channel=${runtimeChannel}` : "",
-    runtimeChannel
-      ? `capabilities=${
-          normalizedRuntimeCapabilities.length > 0
-            ? normalizedRuntimeCapabilities.join(",")
-            : "none"
-        }`
-      : "",
-  ]
-    .filter(Boolean)
-    .join(" | ")}`;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

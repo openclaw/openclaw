@@ -491,7 +491,15 @@ export class CodexNativeSubagentSubmissionOwner {
       return;
     }
     try {
-      const turn = await this.readTurn(state, custody);
+      const childThreadId = custody.receipt.childThreadId;
+      const turn = await readCodexNativeSubmissionTurn(custody.receipt, {
+        client: this.dependencies.client,
+        recovery: this.dependencies.recovery,
+        prepareReceiver: () => this.dependencies.prepareReceiver(state, childThreadId),
+        isCurrent: () => this.isObserving(state, custody),
+        parentThreadId: () => this.nativeParentThreadId(state, childThreadId),
+        currentChild: () => this.dependencies.currentChild(childThreadId),
+      });
       if (turn) {
         this.promote(state, custody, turn, true);
       }
@@ -511,21 +519,6 @@ export class CodexNativeSubagentSubmissionOwner {
       delayForAttempt(this.pollDelays, custody.attempt++),
     );
     custody.timer.unref();
-  }
-
-  private readTurn(
-    state: ParentState,
-    custody: SubmissionCustody,
-  ): Promise<JsonObject | undefined> {
-    const childThreadId = custody.receipt.childThreadId;
-    return readCodexNativeSubmissionTurn(custody.receipt, {
-      client: this.dependencies.client,
-      recovery: this.dependencies.recovery,
-      prepareReceiver: () => this.dependencies.prepareReceiver(state, childThreadId),
-      isCurrent: () => this.isObserving(state, custody),
-      parentThreadId: () => this.nativeParentThreadId(state, childThreadId),
-      currentChild: () => this.dependencies.currentChild(childThreadId),
-    });
   }
 
   private finishCustody(state: ParentState, custody: SubmissionCustody): void {

@@ -319,13 +319,7 @@ export async function migrateLegacyWebPush(params: {
       const warnings: string[] = [];
       const notices: string[] = [];
 
-      let legacy: ParsedLegacyState;
-      try {
-        legacy = await readLegacyState(stateRoot, params.stateDir, params.detected, env);
-      } catch (error) {
-        warnings.push(`Failed reading legacy Web Push state: ${String(error)}`);
-        return { changes, warnings };
-      }
+      const legacy = await readLegacyState(stateRoot, params.stateDir, params.detected, env);
 
       let claimed: LegacyMigrationSourceClaim[];
       try {

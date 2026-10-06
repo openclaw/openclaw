@@ -1,9 +1,10 @@
-import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
-import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  PreparedReplyTranscriptStart,
+  ReplyDispatchRun,
+} from "../../auto-reply/get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -13,18 +14,16 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import {
-  loadTranscriptEventRowsAfterSeqSync,
-  readActiveTranscriptEntryAnchor,
-  readSessionTranscriptWatermark,
   resolveSessionTranscriptDatabasePath,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import {
-  recordAssistantManagedMediaUrls,
-  type PrepareAssistantTranscriptMessage,
-} from "../../config/sessions/transcript-assistant-delivery.js";
-import { splitMediaFromOutput } from "../../media/parse.js";
+  readActiveTranscriptEntryAnchorAsync,
+  readSessionTranscriptAnchorsAsync,
+} from "../../config/sessions/session-transcript-anchor-read.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -33,21 +32,16 @@ import {
   extractAssistantPhaseText,
   extractAssistantTextForPhase,
 } from "../../shared/chat-message-content.js";
-import {
-  parseInlineDirectives,
-  stripInlineDirectiveTagsForDelivery,
-  sanitizeReplyDirectiveId,
-} from "../../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { isToolHistoryBlockType } from "../chat-display-projection.canvas.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
+import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import {
   readSessionMessageByIdAsync,
   readSessionTranscriptWatermarkAsync,
 } from "../session-transcript-readers.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   combineNonStreamingReplyParts,
@@ -65,12 +59,14 @@ import {
   type WebchatReplyMediaRequesterContext,
 } from "./chat-reply-media.js";
 import {
+  buildTranscriptReplyTextFromInputs,
   readChatSendReplyPayload,
   replaceChatSendReplyPayload,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
-import { observeChatSendCommentaryMedia } from "./chat-send-commentary-media.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
+import { createAssistantCommentaryMediaCustody } from "./chat-send-commentary-media.js";
+import { resolveChatReplyDeliveryFromAnchors } from "./chat-send-reply-delivery.js";
+import { createChatReplySessionReader, type ChatReplySession } from "./chat-send-reply-session.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import {
   assistantTranscriptScope,
@@ -84,58 +80,6 @@ import {
 } from "./chat-tts-markers.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export function buildTranscriptReplyTextFromInputs(
-  inputs: readonly ReplyDispatchOperation[],
-): string {
-  const chunks = inputs
-    .map((input) => {
-      const payload = readChatSendReplyPayload(input);
-      if (payload.isReasoning === true) {
-        return "";
-      }
-      const parts =
-        input.kind === "prepared" ? input.plan.parts : resolveSendableOutboundReplyParts(payload);
-      const lines: string[] = [];
-      const parsedText =
-        input.kind === "raw" && payload.text?.includes("[[")
-          ? parseInlineDirectives(payload.text)
-          : undefined;
-      const replyToId =
-        sanitizeReplyDirectiveId(payload.replyToId) ??
-        sanitizeReplyDirectiveId(parsedText?.replyToExplicitId);
-      if (replyToId) {
-        lines.push(`[[reply_to:${replyToId}]]`);
-      } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
-        lines.push("[[reply_to_current]]");
-      }
-      const text =
-        input.kind === "raw" && payload.text
-          ? stripInlineDirectiveTagsForDelivery(payload.text).text
-          : (payload.text ?? "");
-      if (text.trim() && (input.kind === "prepared" || !isSuppressedControlReplyText(text))) {
-        lines.push(text);
-      }
-      for (const mediaUrl of parts.mediaUrls) {
-        if (payload.sensitiveMedia === true) {
-          continue;
-        }
-        const trimmed = mediaUrl.trim();
-        if (trimmed) {
-          lines.push(`Attachment: ${trimmed}`);
-        }
-      }
-      if (
-        (payload.audioAsVoice || parsedText?.audioAsVoice) &&
-        parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))
-      ) {
-        lines.push("[[audio_as_voice]]");
-      }
-      return lines.join("\n");
-    })
-    .filter(Boolean);
-  return combineNonStreamingReplyParts(chunks);
-}
-
 /** Build delivery options and capture state for the core-owned webchat dispatcher. */
 export function createChatSendReplyDispatch(params: {
   accountId: string | undefined;
@@ -147,42 +91,27 @@ export function createChatSendReplyDispatch(params: {
   getReplyDispatchRun?: () => ReplyDispatchRun | undefined;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   logGateway: GatewayRequestContext["logGateway"];
-  session: Pick<
-    PreparedChatSendSession,
-    "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "sessionKey" | "sessionLoadOptions"
-  >;
+  session: ChatReplySession;
   userTurnRecorder: Pick<UserTurnTranscriptRecorder, "markBlocked" | "getAdmissionReceipt">;
 }) {
   const { accountId, isAgentRunStarted, logGateway, session, userTurnRecorder } = params;
   const { backingSessionId, cfg, clientRunId } = session;
   // Extract scalar transcript bindings from borrowed entries; reread after asynchronous work.
   const sessionLoadOptions = { ...session.sessionLoadOptions, clone: false };
-  let assistantTranscriptRewriteState = {
-    sessionId: undefined as string | undefined,
-    generation: null as string | null,
-    afterSeq: 0,
-  };
+  const { notePreparedSession, readCurrentSession, captureTranscriptStart } =
+    createChatReplySessionReader(session);
+  let assistantTranscriptRewriteState: ReturnType<typeof captureTranscriptStart>;
   let agentRunId = clientRunId;
   let agentTranscriptLifecycleRevision: string | undefined;
-  const captureAgentTranscriptStart = (runId = clientRunId) => {
+  const captureAgentTranscriptStart = (
+    runId = clientRunId,
+    prepared?: PreparedReplyTranscriptStart | null,
+  ) => {
     agentRunId = runId;
-    const current = loadSessionEntry(session.sessionKey, sessionLoadOptions);
-    const sessionId = current.entry?.sessionId ?? backingSessionId;
-    const watermark = sessionId
-      ? readSessionTranscriptWatermark({
-          agentId: session.agentId,
-          sessionId,
-          sessionKey: session.sessionKey,
-          storePath: current.storePath,
-        })
-      : { generation: null, maxSeq: null };
-    assistantTranscriptRewriteState = {
-      sessionId,
-      generation: watermark.generation,
-      afterSeq: watermark.maxSeq ?? 0,
-    };
-    agentTranscriptLifecycleRevision = current.entry?.lifecycleRevision;
-    return true;
+    const transcriptStart = captureTranscriptStart(prepared);
+    assistantTranscriptRewriteState = transcriptStart;
+    agentTranscriptLifecycleRevision = transcriptStart?.lifecycleRevision;
+    return transcriptStart !== undefined;
   };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
@@ -191,22 +120,16 @@ export function createChatSendReplyDispatch(params: {
   });
   const deliveredReplies: DeliveredChatSendReply[] = [];
   const finalizedAgentMediaTranscriptKeys = new Set<string>();
-  let preparingTranscript = false;
-  const prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage = (
-    message,
-    sourceText,
-  ) => {
-    if (!preparingTranscript || !isAgentRunStarted() || !params.isRunCurrent?.() || !sourceText) {
-      return message;
-    }
-    // Record delivery ownership before publication, while preserving raw refs for
-    // the exact-row materializer. This is display provenance, never local-file trust.
-    const prepared = recordAssistantManagedMediaUrls(
-      message,
-      splitMediaFromOutput(sourceText).mediaUrls,
-    );
-    return params.prepareAssistantTranscriptMessage?.(prepared, sourceText) ?? prepared;
-  };
+  const commentaryMedia = createAssistantCommentaryMediaCustody({
+    requesterContext: params.requesterContext,
+    session,
+    accountId,
+    getRunId: () => agentRunId,
+    isCurrent: () => isAgentRunStarted() && params.isRunCurrent?.() === true,
+    abortSignal: params.abortSignal,
+    logGateway,
+    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+  });
   const resolveReplyDelivery = async (
     minimumAssistantMessageIndex = 0,
   ): Promise<ReplyDeliveryState> => {
@@ -214,7 +137,7 @@ export function createChatSendReplyDispatch(params: {
     const transcriptStart = assistantTranscriptRewriteState;
     const runId = agentRunId;
     const lifecycleRevision = agentTranscriptLifecycleRevision;
-    const isCurrent = () => {
+    const isRunCurrent = () => {
       const currentAdmission = userTurnRecorder.getAdmissionReceipt();
       if (
         !admission ||
@@ -230,8 +153,15 @@ export function createChatSendReplyDispatch(params: {
       ) {
         return false;
       }
-      const current = loadSessionEntry(session.sessionKey, sessionLoadOptions);
+      return true;
+    };
+    const isCurrent = async () => {
+      if (!admission || !isRunCurrent()) {
+        return false;
+      }
+      const current = await readCurrentSession();
       return (
+        isRunCurrent() &&
         current.entry?.sessionId === admission.sessionId &&
         current.entry.lifecycleRevision === lifecycleRevision &&
         resolveSessionTranscriptDatabasePath({
@@ -242,19 +172,31 @@ export function createChatSendReplyDispatch(params: {
         }) === admission.storePath
       );
     };
-    if (!admission || transcriptStart.sessionId !== admission.sessionId || !isCurrent()) {
+    if (
+      !admission ||
+      !transcriptStart ||
+      transcriptStart.sessionId !== admission.sessionId ||
+      !(await isCurrent())
+    ) {
       return "missing";
     }
     const scope = admission;
     await waitForSessionTranscriptProjection(scope, params.abortSignal);
-    if (!isCurrent()) {
+    if (!(await isCurrent())) {
       return "missing";
     }
     const watermark = await readSessionTranscriptWatermarkAsync(scope);
-    if (!isCurrent()) {
+    if (!(await isCurrent())) {
       return "missing";
     }
-    const input = readActiveTranscriptEntryAnchor(admission);
+    const initial = await readSessionTranscriptAnchorsAsync(scope, {
+      entryIds: [admission.entryId],
+      afterSeq: transcriptStart.afterSeq,
+    });
+    if (!(await isCurrent())) {
+      return "missing";
+    }
+    const input = initial.anchors[0];
     if (!input || input.rawSeq !== admission.rawSeq) {
       return "missing";
     }
@@ -263,20 +205,15 @@ export function createChatSendReplyDispatch(params: {
     const candidateIds: string[] = [];
     // Stream indices also advance between content blocks. Fence with committed input
     // identities instead of treating the number of persisted assistant rows as an index.
-    for (const { event } of loadTranscriptEventRowsAfterSeqSync(scope, transcriptStart.afterSeq)) {
-      const row = asOptionalRecord(event);
-      const message = asOptionalRecord(row?.message);
-      if (typeof row?.id !== "string") {
-        continue;
-      }
-      if (message?.role === "user") {
-        const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: row.id });
+    for (const row of initial.tail?.entries ?? []) {
+      if (row.role === "user") {
+        const anchor = row.anchor;
         if (anchor && anchor.activeMessagePosition > latestInputPosition) {
           latestInputPosition = anchor.activeMessagePosition;
           latestInputId = anchor.entryId;
         }
-      } else if (message?.role === "assistant" && readSessionTranscriptRunId(message) === runId) {
-        candidateIds.push(row.id);
+      } else if (row.role === "assistant" && row.runId === runId) {
+        candidateIds.push(row.entryId);
       }
     }
     if (minimumAssistantMessageIndex > 0 && latestInputId === input.entryId) {
@@ -287,7 +224,8 @@ export function createChatSendReplyDispatch(params: {
         currentOnly: true,
         maxBytes: Number.MAX_SAFE_INTEGER,
       });
-      if (!isCurrent() || !readActiveTranscriptEntryAnchor(admission)) {
+      const admitted = await readActiveTranscriptEntryAnchorAsync(admission);
+      if (!(await isCurrent()) || !admitted) {
         return "missing";
       }
       if (!stored.found) {
@@ -310,42 +248,50 @@ export function createChatSendReplyDispatch(params: {
         extractAssistantPhaseText(projectChatDisplayMessage(message))
       ) {
         const currentWatermark = await readSessionTranscriptWatermarkAsync(scope);
-        if (!isCurrent() || !readActiveTranscriptEntryAnchor(admission)) {
+        const assertRoutingCurrent = captureSessionMutationRouting(getRuntimeConfig());
+        if (!(await isCurrent())) {
           return "missing";
         }
-        const currentInput = readActiveTranscriptEntryAnchor({ ...scope, entryId: latestInputId });
-        if (!currentInput) {
+        // Consume final facts inside the existing writer FIFO; projection repair and
+        // message restoration above must stay outside because they can need that writer.
+        let decision: ReplyDeliveryState | undefined = "pending";
+        await readSessionTranscriptAnchorsAsync(
+          scope,
+          {
+            entryIds: [admission.entryId, latestInputId, messageId],
+            afterSeq: transcriptStart.afterSeq,
+            includeSession: true,
+          },
+          undefined,
+          (facts) => {
+            assertRoutingCurrent(getRuntimeConfig());
+            if (
+              !isRunCurrent() ||
+              facts.session?.sessionId !== admission.sessionId ||
+              facts.session.lifecycleRevision !== lifecycleRevision
+            ) {
+              decision = "missing";
+              return;
+            }
+            decision = resolveChatReplyDeliveryFromAnchors({
+              facts,
+              admissionId: admission.entryId,
+              inputId: latestInputId,
+              messageId,
+              afterSeq: transcriptStart.afterSeq,
+              watermark,
+              currentWatermark,
+            });
+          },
+        );
+        // Another worker lookup here could invalidate the completed anchor decision.
+        assertRoutingCurrent(getRuntimeConfig());
+        if (!isRunCurrent()) {
           return "missing";
         }
-        const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
-        if (
-          !anchor ||
-          anchor.rawSeq <= transcriptStart.afterSeq ||
-          anchor.activeMessagePosition <= currentInput.activeMessagePosition
-        ) {
-          continue;
+        if (decision !== undefined) {
+          return decision;
         }
-        const rows = loadTranscriptEventRowsAfterSeqSync(scope, transcriptStart.afterSeq);
-        // A worker snapshot can settle after a new input or branch has committed.
-        for (const { event } of rows) {
-          const row = asOptionalRecord(event);
-          if (asOptionalRecord(row?.message)?.role !== "user" || typeof row?.id !== "string") {
-            continue;
-          }
-          const newerInput = readActiveTranscriptEntryAnchor({ ...scope, entryId: row.id });
-          if (newerInput && newerInput.activeMessagePosition > anchor.activeMessagePosition) {
-            return "missing";
-          }
-        }
-        if (
-          currentWatermark.generation !== watermark.generation ||
-          currentWatermark.maxSeq !== watermark.maxSeq ||
-          anchor.generation !== currentWatermark.generation ||
-          rows.at(-1)?.seq !== currentWatermark.maxSeq
-        ) {
-          return "pending";
-        }
-        return "delivered";
       }
     }
     return "missing";
@@ -404,10 +350,10 @@ export function createChatSendReplyDispatch(params: {
         }
       },
     });
-    const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey, {
-      ...sessionLoadOptions,
-      ...(agentId ? { agentId } : {}),
-    });
+    const { storePath: latestStorePath, entry: latestEntry } = await readCurrentSession(
+      sessionKey,
+      agentId,
+    );
     const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
     const {
       payloads: [transcriptPayload],
@@ -471,8 +417,7 @@ export function createChatSendReplyDispatch(params: {
       // Receipt identity is not authority after asynchronous media preparation.
       if (
         transcript &&
-        loadSessionEntry(sessionKey, { ...sessionLoadOptions, agentId }).entry?.sessionId !==
-          transcript.sessionId
+        (await readCurrentSession(sessionKey, agentId)).entry?.sessionId !== transcript.sessionId
       ) {
         logGateway.warn("webchat runtime-owned media skipped: transcript session changed");
         return;
@@ -494,12 +439,8 @@ export function createChatSendReplyDispatch(params: {
     } else if (assistantMessageIndex !== undefined && transcriptScope) {
       // Embedded runtimes identify their owned turn by message index, not a persisted key.
       // Require that exact current-turn row and media set so a sibling reply cannot be rewritten.
-      if (assistantTranscriptRewriteState.sessionId !== sessionId) {
-        assistantTranscriptRewriteState = {
-          sessionId,
-          generation: null,
-          afterSeq: 0,
-        };
+      if (assistantTranscriptRewriteState?.sessionId !== sessionId) {
+        return;
       }
       const indexedRewrite = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
         afterSeq: assistantTranscriptRewriteState.afterSeq,
@@ -681,23 +622,13 @@ export function createChatSendReplyDispatch(params: {
     operation: () => Promise<T>,
   ): Promise<T> => {
     return await admission.run(async () => {
-      preparingTranscript = true;
-      const commentaryMedia = observeChatSendCommentaryMedia({
-        requesterContext: params.requesterContext,
-        session,
-        accountId,
-        getRunId: () => agentRunId,
-        isCurrent: () => isAgentRunStarted() && params.isRunCurrent?.() === true,
-        abortSignal: params.abortSignal,
-        logGateway,
-      });
       try {
-        return await operation();
+        return await commentaryMedia.run(operation);
       } finally {
-        preparingTranscript = false;
-        const commentaryRewrite = await commentaryMedia.close();
+        const commentaryRewrite = commentaryMedia.lastRewrite;
         if (
           commentaryRewrite &&
+          assistantTranscriptRewriteState &&
           commentaryRewrite.sessionId === assistantTranscriptRewriteState.sessionId
         ) {
           assistantTranscriptRewriteState.generation = commentaryRewrite.generation;
@@ -710,11 +641,12 @@ export function createChatSendReplyDispatch(params: {
   };
   return {
     captureAgentTranscriptStart,
+    notePreparedSession,
     deliveredReplies,
     dispatcherOptions,
     hasAppendedWebchatAgentMedia: () => finalizedAgentMediaTranscriptKeys.size > 0,
     onModelSelected,
-    prepareAssistantTranscriptMessage,
+    prepareAssistantTranscriptMessage: commentaryMedia.prepareAssistantTranscriptMessage,
     resolveReplyDelivery,
     runAgentMediaTranscript,
   };

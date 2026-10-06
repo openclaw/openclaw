@@ -29,6 +29,7 @@ import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sql
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
+import { registerSessionMaintenanceProtectionTests } from "./session-accessor.sqlite-maintenance-protection.test-support.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import {
   observeSessionMaintenancePlanningWorker,
@@ -153,7 +154,10 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
         );
       });
       const preservation = vi.fn(() => []);
-      const unregister = registerSessionMaintenancePreserveKeysProvider(preservation);
+      const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+        capture: preservation,
+        dispose() {},
+      }));
       const result = await (async () => {
         try {
           await patchSessionEntryCore(active, () => ({ label: "updated" }), {
@@ -348,11 +352,14 @@ it.each(["provider", "work-key", "work-id", "lifecycle-key", "lifecycle-id", "an
       };
       if (protection === "provider") {
         let reverse = false;
-        const unregister = registerSessionMaintenancePreserveKeysProvider(() => {
-          reverse = !reverse;
-          const keys = [protectedKey.toUpperCase(), active.sessionKey];
-          return reverse ? keys.toReversed() : keys;
-        });
+        const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+          capture: () => {
+            reverse = !reverse;
+            const keys = [protectedKey.toUpperCase(), active.sessionKey];
+            return reverse ? keys.toReversed() : keys;
+          },
+          dispose() {},
+        }));
         try {
           await run();
         } finally {
@@ -401,9 +408,10 @@ it("rolls back archive metadata when protection changes at planning commit", asy
       { sessionId: "stale", updatedAt: 1 },
     );
     let protectedNow = false;
-    const unregister = registerSessionMaintenancePreserveKeysProvider(() =>
-      protectedNow ? [protectedKey] : [],
-    );
+    const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+      capture: () => (protectedNow ? [protectedKey] : []),
+      dispose() {},
+    }));
     observeSessionMaintenancePlanningWorker({
       beforeAdmission(request) {
         const facts = request.facts;
@@ -652,7 +660,11 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
       expect(result).toMatchObject({
         kind: "maintenance-plan",
-        value: { archived: 1, archivedSessionKeys: [stale.sessionKey], entryRemovals: [] },
+        value: {
+          archived: 1,
+          archivedEntries: [{ sessionKey: stale.sessionKey, sessionId: "stale" }],
+          entryRemovals: [],
+        },
       });
       expect(published).toEqual([
         {
@@ -970,4 +982,5 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
   });
 });
 
+registerSessionMaintenanceProtectionTests();
 registerSessionMaintenancePreparationTests();

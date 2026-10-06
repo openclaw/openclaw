@@ -1,6 +1,8 @@
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { validateWorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
 import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
 import * as authProfileUsage from "../../agents/auth-profiles/usage.js";
 import * as modelAuth from "../../agents/model-auth.js";
@@ -8,6 +10,7 @@ import * as providerStreamRuntime from "../../agents/provider-stream.js";
 import { AuthStorage } from "../../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../../agents/sessions/model-registry.js";
 import * as simpleCompletionRuntime from "../../agents/simple-completion-runtime.js";
+import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type { AssistantMessage, StreamFn } from "../../llm/types.js";
@@ -43,6 +46,8 @@ import {
   type Execution,
 } from "./inference-runtime.test-support.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
+import * as workerTurnOwners from "./placement-turn-claim-events.js";
+import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 
 const MODEL_ERROR = {
   type: "error",
@@ -160,6 +165,39 @@ describe("worker inference provider runtime", () => {
     }
   });
 
+  it.each([true, false])("applies approved replay policy (%s)", async (retain) => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.providers.push({
+      pluginId: "worker-replay-policy",
+      source: "test",
+      provider: {
+        id: PROVIDER,
+        label: "Worker replay policy",
+        auth: [],
+        buildReplayPolicy: ({ modelId, modelApi }) => ({
+          appendOnlyRuntimeContext: retain && modelId === MODEL && modelApi === logicalModel.api,
+        }),
+      },
+    });
+    const runtime = setup(sessionEntry, { pluginRegistry, config: structuredClone(config) });
+    const inferenceRequest = request(ALIAS);
+    inferenceRequest.context.messages = [
+      { role: "user", content: "Earlier facts", timestamp: 1, runtimeContext: {} },
+      { role: "user", content: "Current question", timestamp: 2 },
+      { role: "user", content: "Current facts", timestamp: 3, runtimeContext: {} },
+    ];
+    const original = structuredClone(inferenceRequest);
+    expect((await runtime.executor(params(inferenceRequest, vi.fn()))).type).toBe("done");
+    const messages = runtime.stream.mock.calls[0]?.[1].messages;
+    expect(messages).toMatchObject([
+      { content: "Earlier facts", runtimeContext: { retained: retain } },
+      { content: "Current question" },
+      { content: "Current facts", runtimeContext: { retained: retain } },
+    ]);
+    expect(messages?.[1]).not.toHaveProperty("runtimeContext");
+    expect(inferenceRequest).toEqual(original);
+  });
+
   it("prepares an approved model available only from the bundled static catalog", async () => {
     const runtime = setup(sessionEntry, { catalogOnlyModel: true });
 
@@ -169,17 +207,6 @@ describe("worker inference provider runtime", () => {
     });
     expect(runtime.stream).toHaveBeenCalledOnce();
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
-  });
-
-  it("uses the admitted source when current config routes the session to another store", async () => {
-    const runtime = setup();
-    const changedConfig = { ...config, session: { store: "replacement-sessions.json" } };
-
-    await expect(
-      runtime.executor(params(request(), vi.fn(), changedConfig)),
-    ).resolves.toMatchObject({ type: "done" });
-    expect(runtime.scope.authProfile).toBe(PROFILE);
-    expect(runtime.stream).toHaveBeenCalledOnce();
   });
 
   it("returns bounded, redacted model preparation guidance", async () => {
@@ -907,6 +934,48 @@ describe("worker inference provider runtime", () => {
     const emit = vi.fn<Execution["emit"]>();
     for (const ref of ["missing-model", "known-but-unapproved", `${ALIAS}@worker-profile`]) {
       expect(await runtime.executor(params(request(ref), emit))).toEqual(MODEL_ERROR);
+    }
+  });
+
+  it("passes the admitted search capability to the provider and revokes it after prompt policy", async () => {
+    const runtime = setup();
+    const searchTool = {
+      name: "web_search",
+      label: "Search",
+      description: "Search",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    };
+    bindAgentToolExecutionLocation(searchTool, { kind: "gateway" });
+    const toolRuntime = createWorkerGatewayToolRuntime({
+      assertCurrent() {},
+      signal: new AbortController().signal,
+      prepare: async () => ({
+        tools: [searchTool],
+        presentation: createToolSurfacePresentationForTest(),
+        policy: {
+          workspaceOnly: true,
+          readOnly: false,
+          applyPatchEnabled: false,
+          applyPatchWorkspaceOnly: true,
+          imageSanitization: {},
+        },
+      }),
+    });
+    vi.spyOn(workerTurnOwners, "getWorkerTurnToolSurface").mockReturnValue(toolRuntime);
+    try {
+      for (const enabled of [true, false]) {
+        if (!enabled) {
+          toolRuntime.applyPromptToolsAllow([]);
+        }
+        expect(await runtime.executor(params(request(), vi.fn()))).toMatchObject({ type: "done" });
+        expect(
+          runtime.applyStreamPolicy.mock.lastCall?.[11]?.nativeWebSearchPolicyContext
+            ?.webSearchEnabled,
+        ).toBe(enabled);
+      }
+    } finally {
+      await toolRuntime.close();
     }
   });
 

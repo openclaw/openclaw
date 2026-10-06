@@ -90,6 +90,21 @@ describe("session suggestion store binding", () => {
           { suggestion: { sessionKey: key, agentId, state: "pending" } },
         ]);
         const id = responseSuggestionId(added);
+        const listed = await call(
+          "session.suggestions.list",
+          { sessionKey: key, agentId },
+          requester,
+          requestContext,
+        );
+        expect(listed.responses).toEqual([
+          [
+            true,
+            {
+              role: incognito ? "admin" : "owner",
+              suggestions: [expect.objectContaining({ id, sessionKey: key, agentId })],
+            },
+          ],
+        ]);
         await withReadySessionRows(
           requireSessionRowProjection(requestContext),
           () => [{ key, agentId }],

@@ -13,7 +13,7 @@ import {
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -443,7 +443,7 @@ it("cancels a pending age pass when its database closes without maintaining a re
   const { database, request, scope, storePath } = createStore();
   kickSessionEntryMaintenanceAfterWrite(request);
   await yieldToEventLoop();
-  closeOpenClawAgentDatabaseByPath(database.path);
+  await closeOpenClawAgentDatabaseByPathAsync(database.path);
   const reopened = openOpenClawAgentDatabase(scope);
   expect(reopened).not.toBe(database);
 
@@ -539,7 +539,10 @@ it.each([0, 32 * 24 * 60 * 60 * 1_000])(
         updatedAt: updatedAt - clockRollbackMs - 2_000,
       });
     }, scope);
-    const release = registerSessionMaintenancePreserveKeysProvider(() => [sessionKey]);
+    const release = registerSessionMaintenancePreserveKeysProvider(async () => ({
+      capture: () => [sessionKey],
+      dispose() {},
+    }));
     try {
       kickSessionEntryMaintenanceAfterWrite(request);
       await yieldToEventLoop();

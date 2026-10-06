@@ -528,10 +528,10 @@ extension OpenClawChatViewModel {
 
     /// Re-adopts or re-appends queued bubbles for the visible session after
     /// cold open, session switches, and wholesale history replacement.
-    func restoreOutboxMessages(session: SessionSnapshot) {
-        guard !self.usesWebConversation else { return }
-        guard let outbox else { return }
-        Task { [weak self] in
+    @discardableResult
+    func restoreOutboxMessages(session: SessionSnapshot) -> Task<Void, Never>? {
+        guard !self.usesWebConversation, let outbox else { return nil }
+        return Task { [weak self] in
             guard let self else { return }
             guard await outbox.recoverInterruptedSends() else { return }
             while self.isCurrentSession(session) {
@@ -594,7 +594,7 @@ extension OpenClawChatViewModel {
         _ message: OpenClawChatMessage,
         for command: OpenClawChatOutboxCommand) async
     {
-        guard let transcriptCache = transcriptCache as? any OpenClawChatCanonicalTranscriptMerging else { return }
+        guard let transcriptCache = transcriptCache as? OpenClawChatSQLiteTranscriptCache else { return }
         let sessionKey = command.sessionKey
         let cacheAgentID = Self.transcriptCacheAgentID(
             sessionKey: sessionKey,
@@ -751,18 +751,17 @@ extension OpenClawChatViewModel {
         // Health is intentionally established before sessions.list. Replays
         // need the current connection's model/runtime metadata first.
         guard self.hasCurrentSessionMetadata else { return }
-        guard !self.isFlushingOutbox else {
+        guard self.outboxFlushTask == nil else {
             // Coalesce triggers that land mid-pass (tap-to-retry, enqueue
             // race) so their commands are not stranded until the next
             // health transition.
             self.isOutboxFlushRequestedWhileActive = true
             return
         }
-        self.isFlushingOutbox = true
-        Task { [weak self] in
+        self.outboxFlushTask = Task { [weak self] in
             await self?.performOutboxFlush()
             guard let self else { return }
-            self.isFlushingOutbox = false
+            self.outboxFlushTask = nil
             if self.isOutboxFlushRequestedWhileActive {
                 self.isOutboxFlushRequestedWhileActive = false
                 self.flushOutboxIfNeeded()

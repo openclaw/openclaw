@@ -438,11 +438,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
   };
 
-  private readonly handleSelfLearningToggle = (enabled: boolean) => {
-    void this.applySelfLearningToggle(enabled);
-  };
-
-  private async applySelfLearningToggle(enabled: boolean): Promise<void> {
+  private async handleSelfLearningToggle(enabled: boolean): Promise<void> {
     if (!canCallWorkshopAdminMethod(this.context?.gateway?.snapshot, "config.patch")) {
       return;
     }
@@ -504,7 +500,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
               this.selfLearningError,
               canCallWorkshopAdminMethod(scope.context.gateway.snapshot, "config.patch"),
             ),
-            onSelfLearningToggle: this.handleSelfLearningToggle,
+            onSelfLearningToggle: (enabled) => void this.handleSelfLearningToggle(enabled),
             learningBusy: this.learningBusy,
             learningError: this.learningError,
             onLearn: this.handleLearn,

@@ -3,17 +3,22 @@ import {
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   isHeartbeatContentEffectivelyEmpty,
 } from "../auto-reply/heartbeat.js";
+import { isStoredConversationRoute } from "../auto-reply/reply/prompt-session-context.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { channelRouteTargetsMatchExact } from "../plugin-sdk/channel-route.js";
 import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../sessions/session-state-event-kinds.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { formatErrorMessage } from "./errors.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
   isCronSystemEvent,
+  isConversationExecCompletion,
   isExecCompletionEvent,
   isHeartbeatDeliveryAwarenessEvent,
   isRelayableExecCompletionEvent,
@@ -23,7 +28,11 @@ import {
   resolveConfiguredHeartbeatPrompt,
   resolveHeartbeatResponseToolPrompt,
 } from "./heartbeat-runner-config.js";
-import { resolveHeartbeatSessionSelection } from "./heartbeat-runner-session.js";
+import {
+  type HeartbeatSessionSelection,
+  resolveHeartbeatSession,
+  resolveHeartbeatSessionSelection,
+} from "./heartbeat-runner-session.js";
 import {
   resolveHeartbeatWakePayloadFlags,
   type HeartbeatWakePayloadFlags,
@@ -47,9 +56,13 @@ export function truncateHeartbeatPreview(value: string | undefined): string | un
 type HeartbeatSkipReason = "empty-heartbeat-file" | typeof HEARTBEAT_SKIP_NO_PENDING_EVENT;
 
 type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
-  session: ReturnType<typeof resolveHeartbeatSessionSelection>;
+  session: HeartbeatSessionSelection;
+  /** Selection under the heartbeat's own isolation; differs from `session` only on a continuation. */
+  heartbeatSession: HeartbeatSessionSelection;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
+  /** Route of a conversation's own command completion; that conversation owns the turn. */
+  conversationRoute?: DeliveryContext;
   shouldInspectPendingEvents: boolean;
   authoritativeScheduledTick: boolean;
   skipReason?: HeartbeatSkipReason;
@@ -57,6 +70,28 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   scratchRevision?: number;
   heartbeatScratchContent?: string;
 };
+
+/**
+ * A targeted exec wake whose pending events are all command completions started by a
+ * conversation turn, captured in the session's own conversation, continues that
+ * conversation, not the periodic monitor. Commands started by heartbeat or automation
+ * work keep heartbeat isolation and delivery.
+ */
+function resolveConversationCompletionRoute(
+  events: readonly SystemEvent[],
+  entry: SessionEntry | undefined,
+): DeliveryContext | undefined {
+  const route = events[0]?.deliveryContext;
+  return route &&
+    events.every(
+      (event) =>
+        isConversationExecCompletion(event) &&
+        channelRouteTargetsMatchExact({ left: event.deliveryContext, right: route }),
+    ) &&
+    isStoredConversationRoute({ ...route, entry })
+    ? route
+    : undefined;
+}
 
 /**
  * Terminal no-op preflight (empty scratch, consumed exec events) must resolve
@@ -102,16 +137,35 @@ export async function resolveHeartbeatPreflight(params: {
     source: params.source,
     reason: params.reason,
   });
-  const session = resolveHeartbeatSessionSelection(
+  const queue = resolveHeartbeatSession(
     params.cfg,
     params.agentId,
     params.heartbeat,
     params.sessionKey,
   );
   const pendingEventEntries = peekSystemEventEntries(
-    resolveSystemEventQueueKey(session.sessionKey, params.agentId),
+    resolveSystemEventQueueKey(queue.sessionKey, params.agentId),
   ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event));
   const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
+  const authoritativeScheduledTick =
+    typeof params.scheduledEveryMs === "number" &&
+    Number.isSafeInteger(params.scheduledEveryMs) &&
+    params.scheduledEveryMs > 0;
+  const conversationRoute =
+    wakeFlags.isExecEventWake && !authoritativeScheduledTick && !params.scheduledTasks?.length
+      ? resolveConversationCompletionRoute(pendingEventEntries, queue.entry)
+      : undefined;
+  const heartbeatSession = resolveHeartbeatSessionSelection(
+    params.cfg,
+    params.agentId,
+    params.heartbeat,
+    queue,
+    params.heartbeat?.isolatedSession === true,
+  );
+  // Isolation saves periodic-poll history cost; a conversation's continuation needs its history.
+  const session = conversationRoute
+    ? resolveHeartbeatSessionSelection(params.cfg, params.agentId, params.heartbeat, queue, false)
+    : heartbeatSession;
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -131,13 +185,12 @@ export async function resolveHeartbeatPreflight(params: {
   const basePreflight = {
     ...wakeFlags,
     session,
+    heartbeatSession,
     pendingEventEntries,
     turnSourceDeliveryContext,
+    ...(conversationRoute ? { conversationRoute } : {}),
     shouldInspectPendingEvents,
-    authoritativeScheduledTick:
-      typeof params.scheduledEveryMs === "number" &&
-      Number.isSafeInteger(params.scheduledEveryMs) &&
-      params.scheduledEveryMs > 0,
+    authoritativeScheduledTick,
     ...(monitorScratch?.jobId
       ? {
           scratchJobId: monitorScratch.jobId,

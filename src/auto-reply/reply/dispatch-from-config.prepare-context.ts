@@ -108,17 +108,23 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     if (recorder.hasPersisted()) {
       return blockedOwner();
     }
+    const assertCurrent = () => {
+      state.getPreDispatchAbortSignal()?.throwIfAborted();
+      params.replyOptions?.operatorAuthority?.assertCurrent();
+    };
     let attemptedSessionId: string | undefined;
     let lastOwner: PluginBindingTranscriptOwner | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const targetSessionStoreEntry = resolveSessionStoreLookup(
+      const targetSessionStoreEntry = await resolveSessionStoreLookup(
         {
           ...ctx,
           CommandTargetSessionKey: undefined,
           SessionKey: pluginBindingSessionKey,
         },
         cfg,
+        assertCurrent,
       );
+      assertCurrent();
       const targetSessionEntry = targetSessionStoreEntry.entry;
       if (!targetSessionEntry || targetSessionEntry.sessionId === attemptedSessionId) {
         break;
@@ -337,27 +343,35 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
 
   const sourceRunId = normalizeOptionalString(ctx.MessageSid);
   const recorder = params.replyOptions?.userTurnTranscriptRecorder;
-  const reclaimPendingInput =
+  let reclaimPendingInput: (() => boolean) | undefined;
+  if (
     recorder?.getPendingInputMessage?.() &&
     !recorder.hasPersisted() &&
     sourceRunId &&
     sessionStoreEntry.sessionKey &&
     sessionStoreEntry.entry?.sessionId
-      ? await prepareSessionPendingInputDedupeRecovery(
-          {
-            agentId: sessionStoreEntry.agentId ?? sessionAgentId,
-            storePath: sessionStoreEntry.storePath,
-            sessionKey: sessionStoreEntry.sessionKey,
-            sessionId: sessionStoreEntry.entry.sessionId,
-          },
-          sourceRunId,
-        )
-      : undefined;
-  const inboundDedupeClaim = claimInboundDedupe(ctx, {
-    reclaimPendingInput: reclaimPendingInput
-      ? () => !recorder!.hasPersisted() && reclaimPendingInput()
-      : undefined,
-  });
+  ) {
+    const recoveryScope = {
+      agentId: sessionStoreEntry.agentId ?? sessionAgentId,
+      storePath: sessionStoreEntry.storePath,
+      sessionKey: sessionStoreEntry.sessionKey,
+      sessionId: sessionStoreEntry.entry.sessionId,
+    };
+    reclaimPendingInput = await prepareSessionPendingInputDedupeRecovery(
+      recoveryScope,
+      sourceRunId,
+    );
+  }
+  const claimInput = () => {
+    const reclaim = reclaimPendingInput;
+    return claimInboundDedupe(ctx, {
+      reclaimPendingInput: reclaim ? () => !recorder!.hasPersisted() && reclaim() : undefined,
+    });
+  };
+  const inboundDedupeClaim =
+    reclaimPendingInput && recorder?.withPendingInputCurrent
+      ? await recorder.withPendingInputCurrent(claimInput)
+      : claimInput();
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     recordProcessed("skipped", { reason: "duplicate" });
     return {

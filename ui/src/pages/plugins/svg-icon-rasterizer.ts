@@ -1,3 +1,5 @@
+import { raceWithTimeout } from "@openclaw/retry";
+
 const PLUGIN_ICON_RASTER_SIZE = 256;
 const PLUGIN_ICON_SVG_DECODE_TIMEOUT_MS = 5_000;
 const PLUGIN_ICON_SVG_MAX_ELEMENTS = 4;
@@ -92,29 +94,21 @@ function isSafeSvgAttribute(attribute: Attr): boolean {
 async function loadSvgImage(url: string): Promise<HTMLImageElement> {
   const image = new Image();
   image.decoding = "async";
-  await new Promise<void>((resolve, reject) => {
-    const timeout = window.setTimeout(() => {
+  await raceWithTimeout(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        image.addEventListener("load", () => resolve(), { once: true });
+        image.addEventListener("error", () => reject(new Error("plugin SVG decode failed")), {
+          once: true,
+        });
+        image.src = url;
+      }),
+    PLUGIN_ICON_SVG_DECODE_TIMEOUT_MS,
+    () => {
       image.src = "";
-      reject(new Error("plugin SVG decode timed out"));
-    }, PLUGIN_ICON_SVG_DECODE_TIMEOUT_MS);
-    image.addEventListener(
-      "load",
-      () => {
-        window.clearTimeout(timeout);
-        resolve();
-      },
-      { once: true },
-    );
-    image.addEventListener(
-      "error",
-      () => {
-        window.clearTimeout(timeout);
-        reject(new Error("plugin SVG decode failed"));
-      },
-      { once: true },
-    );
-    image.src = url;
-  });
+      throw new Error("plugin SVG decode timed out");
+    },
+  );
   return image;
 }
 

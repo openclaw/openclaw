@@ -349,12 +349,12 @@ export class FirstRunSetup {
       this.host.resumeWizard(receipt.wizard, this.observeActivation(this.pending));
       return;
     }
-    if (this.pending && (!configured || !this.pending.modelRef)) {
+    if (!configured || !this.pending.modelRef) {
       this.started = true;
       this.showUnresolved();
       return;
     }
-    if (configured && !this.host.canVerify(snapshot.client)) {
+    if (!this.host.canVerify(snapshot.client)) {
       this.started = true;
       this.host.setVerifyState({
         phase: "failed",
@@ -507,11 +507,6 @@ export class FirstRunSetup {
     };
   }
 
-  private clearPending(): void {
-    this.pending = null;
-    clearFirstRunActivationReceipt();
-  }
-
   ownsActivation(activation: FirstRunActivation | null = this.pending): boolean {
     if (!activation) {
       return !this.host.routeData()?.firstRun;
@@ -581,7 +576,8 @@ export class FirstRunSetup {
   }
 
   private completeNavigation(): void {
-    this.clearPending();
+    this.pending = null;
+    clearFirstRunActivationReceipt();
     this.host.setRefreshWarning(null);
     this.host.context().navigate("custodian", { search: "?onboarding=1" });
   }

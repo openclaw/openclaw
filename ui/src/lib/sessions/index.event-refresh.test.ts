@@ -193,6 +193,9 @@ describe("event-driven session list refresh", () => {
     const researchRequests = dashboardRequests();
     expect(researchRequests).toHaveLength(1);
     expect(researchRequests[0]?.[1]).toEqual({
+      rowMode: "compact",
+      source: "chat-pane",
+      excludeDock: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -216,7 +219,7 @@ describe("event-driven session list refresh", () => {
     );
   });
 
-  it("refreshes a Sessions-style managed query after a terminal session message", async () => {
+  it("applies a terminal session message to a Sessions-style query without refetching", async () => {
     const key = "agent:main:main";
     const calls = { canonical: 0, main: 0, research: 0 };
     const { sessions, request, message } = harness((params) => {
@@ -227,12 +230,11 @@ describe("event-driven session list refresh", () => {
             ? "main"
             : "research";
       calls[lane] += 1;
-      const done = lane !== "research" && calls[lane] > 1;
       return sessionsResult(
         [
           sessionRow(lane === "research" ? "agent:research:other" : key, calls[lane], {
-            hasActiveRun: !done,
-            status: done ? "done" : "running",
+            hasActiveRun: true,
+            status: "running",
           }),
         ],
         calls[lane],
@@ -252,16 +254,16 @@ describe("event-driven session list refresh", () => {
     });
     request.mockClear();
     message(terminal(sessionRow(key, 2)));
-    await tick();
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
-      expect.objectContaining({ agentId: "main", includeUnknown: false }),
-    );
-    expect(calls).toEqual({ canonical: 1, main: 2, research: 1 });
     const done = { key, hasActiveRun: false, status: "done" };
     expect(sessions.state.result?.sessions[0]).toMatchObject(done);
     expect(sessions.listSnapshot(mainQuery).result?.sessions[0]).toMatchObject(done);
+    expect(sessions.listSnapshot(researchQuery).result?.sessions[0]).toMatchObject({
+      hasActiveRun: true,
+      status: "running",
+    });
+    await tick();
+    expect(request).not.toHaveBeenCalled();
+    expect(calls).toEqual({ canonical: 1, main: 1, research: 1 });
   });
 
   it("keeps an archived terminal session until the Gateway replaces the active roster", async () => {
@@ -385,6 +387,9 @@ describe("event-driven session list refresh", () => {
     firstList.resolve(sessionsResult([], 1));
     await secondListStarted.promise;
     expect(request.mock.calls[1]?.[1]).toEqual({
+      rowMode: "compact",
+      source: "sidebar",
+      excludeDock: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,

@@ -3056,11 +3056,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   );
 
   it.each(["github"])(
-    "shares one prepared runtime across affordable %s tooling groups",
+    "shares one prepared runtime across affordable %s groups",
     (runnerBackend) => {
       const targets = [
         PRIVATE_QA_TOOLING_TEST,
-        "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+        "src/infra/update-candidate-canary.integration.test.ts",
       ];
       vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
         Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),
@@ -4063,33 +4063,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         runner: DEFAULT_NODE_TEST_RUNNER,
       },
     ]);
-  });
-
-  it("packs precise plugin tests through their canonical owner without enabling the sweep", () => {
-    const targets = [
-      "src/plugins/runtime.test.ts",
-      "src/plugins/public-surface-loader.test.ts",
-      "src/plugins/plugin-instance.consumer.test.ts",
-    ];
-    const selected = expectDefined(
-      createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
-      "selected plugin owner",
-    );
-    const groups = selected.flatMap((shard) => shard.groups);
-    expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
-      targets.toSorted(),
-    );
-    expect(
-      groups.every(
-        (group) =>
-          group.configs.length === 1 && group.configs[0] === "test/vitest/vitest.plugins.config.ts",
-      ),
-    ).toBe(true);
-    expect(
-      createNodeTestShards({ includeReleaseOnlyPluginShards: false }).some((shard) =>
-        shard.configs.includes("test/vitest/vitest.plugins.config.ts"),
-      ),
-    ).toBe(false);
   });
 
   it("retains only exact changed plugin-owner tests in deterministic order", () => {

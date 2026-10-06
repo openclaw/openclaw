@@ -30,7 +30,7 @@ export const LEGACY_MEMORY_LIGHT_DREAMING_EVENT_TEXT = "__openclaw_memory_core_l
 export const LEGACY_MEMORY_REM_DREAMING_CRON_NAME = "Memory REM Dreaming";
 export const LEGACY_MEMORY_REM_DREAMING_CRON_TAG = "[managed-by=memory-core.dreaming.rem]";
 export const LEGACY_MEMORY_REM_DREAMING_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
-export const DEFAULT_MEMORY_DEEP_DREAMING_LIMIT = 10;
+const DEFAULT_MEMORY_DEEP_DREAMING_LIMIT = 10;
 // Deterministic calibration scores 3-day/3-query durable facts at 0.750-0.756,
 // versus repeated filler at 0.489-0.549 and high-relevance one-offs at 0.529-0.606.
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.75;
@@ -38,7 +38,7 @@ export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS = 14;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS = 160;
-export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION = 0.25;
+const DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION = 0.25;
 
 type MemoryDreamingSpeed = "fast" | "balanced" | "slow";
 type MemoryDreamingThinking = "low" | "medium" | "high";

@@ -2,7 +2,6 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
-import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import { loadPluginRegistryHandle } from "./loader.js";
@@ -167,8 +166,7 @@ function ensureMemoryRuntime(params: {
   if (onlyPluginIds.length === 0) {
     return undefined;
   }
-  const dir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const workspaceDir = typeof dir === "string" && dir.trim() ? resolveUserPath(dir) : undefined;
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const registry = loadPluginRegistryHandle({
     config: params.cfg,
     onlyPluginIds,

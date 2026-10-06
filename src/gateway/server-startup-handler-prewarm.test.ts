@@ -5,6 +5,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resetGatewayWorkAdmission,
+  markGatewayRestartDraining,
   tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -16,6 +17,9 @@ import {
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
   executeRequest: vi.fn(),
+  prewarmLocalWorkspaceTemplates: vi.fn<
+    typeof import("./worker-environments/local-workspace-prewarm.js").prewarmLocalWorkspaceTemplates
+  >(async () => {}),
   prewarmGatewaySessionHistory: vi.fn(async () => {}),
   ensureSkillsWatcher: vi.fn(),
   prepareWorkspaceSkillEntries: vi.fn<
@@ -41,6 +45,11 @@ const mocks = vi.hoisted(() => ({
     mocks.events.push("plugins");
     return { plugins: [] };
   }),
+}));
+
+// mock-isolation: Exercise scheduling and cancellation without allocating repository containers.
+vi.mock("./worker-environments/local-workspace-prewarm.js", () => ({
+  prewarmLocalWorkspaceTemplates: mocks.prewarmLocalWorkspaceTemplates,
 }));
 
 vi.mock("./server-history-prewarm.js", () => ({
@@ -97,7 +106,8 @@ vi.mock("../plugins/public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleSync: mocks.loadBundledPluginPublicArtifactModuleSync,
 }));
 
-const { scheduleGatewayHandlerPrewarm } = await import("./server-startup-handler-prewarm.js");
+const { scheduleGatewayHandlerPrewarm, scheduleGatewayPrewarm } =
+  await import("./server-startup-handler-prewarm.js");
 const workspaces = {
   main: path.resolve("prewarm-main"),
   research: path.resolve("prewarm-research"),
@@ -106,6 +116,7 @@ const workspaces = {
 beforeEach(() => {
   mocks.events.length = 0;
   mocks.executeRequest.mockClear();
+  mocks.prewarmLocalWorkspaceTemplates.mockClear();
   mocks.prewarmGatewaySessionHistory.mockClear();
   mocks.ensureSkillsWatcher.mockClear();
   mocks.prepareWorkspaceSkillEntries.mockClear();
@@ -447,3 +458,79 @@ it("keeps worker preparation but skips optional discovery when foreground work a
     await handle.stop();
   }
 });
+
+function scheduleDependencyPreparation(params: Parameters<typeof scheduleGatewayPrewarm>[0]) {
+  const handles = scheduleGatewayPrewarm({ ...params, items: [] });
+  return {
+    stop: async () => {
+      await Promise.all(handles.map((handle) => Promise.resolve(handle.stop())));
+    },
+  };
+}
+
+it.each([false, true])(
+  "starts dependency preparation only after readiness (stopped: %s)",
+  async (stopped) => {
+    vi.useFakeTimers();
+    const ready = createDeferred();
+    const warn = vi.fn();
+    const handle = scheduleDependencyPreparation({
+      scheduler: createTestGatewayScheduler("fake-timers"),
+      getConfig: () => ({}),
+      waitForPostReadyWork: () => ready.promise,
+      log: { warn },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.prewarmLocalWorkspaceTemplates).not.toHaveBeenCalled();
+    if (stopped) {
+      await handle.stop();
+    }
+    ready.resolve();
+    await vi.dynamicImportSettled();
+    expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledTimes(stopped ? 0 : 1);
+    await handle.stop();
+    expect(warn).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["close", "restart"] as const)(
+  "cancels dependency preparation on %s and joins installer cleanup",
+  async (kind) => {
+    vi.useFakeTimers();
+    const started = createDeferred<AbortSignal>();
+    const cleanup = createDeferred();
+    mocks.prewarmLocalWorkspaceTemplates.mockImplementationOnce(async ({ signal }) => {
+      started.resolve(signal);
+      await cleanup.promise;
+    });
+    const foreground = expectDefined(tryBeginGatewayRootWorkAdmission(), "foreground request");
+    const handle = scheduleDependencyPreparation({
+      scheduler: createTestGatewayScheduler("fake-timers"),
+      getConfig: () => ({}),
+      log: { warn: vi.fn() },
+    });
+    let stopping: Promise<void> | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const signal = await started.promise;
+      if (kind === "restart") {
+        markGatewayRestartDraining();
+      }
+      let closed = false;
+      stopping = Promise.resolve(handle.stop()).then(() => {
+        closed = true;
+      });
+      expect(signal.aborted).toBe(true);
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      cleanup.resolve();
+      await stopping;
+      expect(closed).toBe(true);
+    } finally {
+      foreground.release();
+      cleanup.resolve();
+      await handle.stop();
+      await stopping;
+    }
+  },
+);

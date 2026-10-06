@@ -202,13 +202,12 @@ function formatProxyValidationNextStep(result: ProxyValidationResult): string | 
 }
 
 function formatProxyValidationText(result: ProxyValidationResult): string {
-  const redactedProxyUrl = redactProxyUrl(result.config.proxyUrl);
   const lines = [
     result.ok ? theme.success("Proxy validation passed") : theme.error("Proxy validation failed"),
     "",
     theme.heading("Proxy"),
     `  Source: ${theme.muted(result.config.source)}`,
-    `  URL:    ${redactedProxyUrl ?? theme.muted("not configured")}`,
+    `  URL:    ${result.config.proxyUrl ?? theme.muted("not configured")}`,
   ];
 
   if (result.config.errors.length > 0) {

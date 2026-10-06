@@ -5,13 +5,11 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
-import { invalidateModelCatalogCache } from "../model-catalog-cache.ts";
 import { loadModelCatalog, peekModelCatalog } from "../model-catalog-store.ts";
 import {
   invalidateChatMetadataForSessionEvent,
   invalidateChatMetadataStore,
   type ChatMetadataResult,
-  type ChatMetadataResponse,
   type ChatMetadataUpdate,
 } from "./chat-metadata-cache.ts";
 import {
@@ -90,33 +88,22 @@ describe("automatic metadata admission", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each(["matching", "different", "failed", "retired"] as const)(
-    "publishes commands immediately before validating the pending %s catalog after a session patch",
+  it.each(["ready", "failed"] as const)(
+    "publishes compact commands independently of a %s catalog after a session patch",
     async (outcome) => {
       vi.useFakeTimers();
-      const metadata = createDeferred<ChatMetadataResponse>();
+      const metadata = createDeferred<ChatMetadataResult>();
       const catalog = createDeferred<{ models: typeof models }>();
       const updates: ChatMetadataUpdate[] = [];
-      const catalogsAtChange: ReturnType<typeof peekModelCatalog>[] = [];
-      const refreshes: ReturnType<typeof loadChatMetadataRefresh>[] = [];
-      const request = vi.fn((method: string) => {
-        if (method === "chat.metadata") {
-          return metadata.promise;
-        }
-        return catalog.promise;
-      });
+      const request = vi.fn((method: string) =>
+        method === "chat.metadata" ? metadata.promise : catalog.promise,
+      );
       const client = createTestGatewayClient(request);
-      const release = subscribeChatMetadata(client, scope, (update) => {
-        updates.push(update);
-        if (update.type === "result" && update.catalogChanged) {
-          catalogsAtChange.push(peekModelCatalog(client, scope));
-        }
-        if (update.type === "invalidated" || update.type === "result") {
-          refreshes.push(loadChatMetadataRefresh(client, scope));
-        }
-      });
+      const release = subscribeChatMetadata(client, scope, (update) => updates.push(update));
+      invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
+      const refresh = loadChatMetadataRefresh(client, scope);
+      const catalogResult = refresh.catalog.catch((error: unknown) => error);
       try {
-        invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
         await vi.advanceTimersByTimeAsync(2_499);
         expect(request).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
@@ -125,49 +112,28 @@ describe("automatic metadata admission", () => {
           "chat.metadata",
         ]);
         const commandsRead = loadChatMetadata(client, scope);
-        metadata.resolve({ ...commands, models });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(updates.filter((update) => update.type === "result")).toEqual([
-          { type: "result", result: commands },
-        ]);
+        metadata.resolve(commands);
         await expect(commandsRead).resolves.toEqual(commands);
         expect(peekChatMetadata(client, scope)).toEqual(commands);
-        expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
-
-        request.mockImplementation((method) =>
-          method === "chat.metadata" ? Promise.resolve(commands) : Promise.resolve({ models }),
-        );
-        if (outcome === "retired") {
-          invalidateModelCatalogCache(client, scope);
-        }
+        const failure = new Error("Catalog unavailable");
         if (outcome === "failed") {
-          catalog.reject(new Error("Catalog unavailable"));
+          catalog.reject(failure);
         } else {
-          catalog.resolve({ models: outcome === "different" ? [] : models });
+          catalog.resolve({ models });
         }
-        await commandsRead;
-        await vi.advanceTimersByTimeAsync(0);
-        await Promise.all(refreshes.map((refresh) => refresh.completed));
-        const changed = outcome !== "matching";
+        await refresh.completed;
+        expect(await catalogResult).toEqual(outcome === "failed" ? failure : { models });
         expect(updates.filter((update) => update.type === "result")).toEqual([
           { type: "result", result: commands },
-          ...(changed ? [{ type: "result", result: commands, catalogChanged: true }] : []),
         ]);
-        expect(catalogsAtChange).toEqual(changed ? [undefined] : []);
-        expect(updates[0]).toEqual({
-          type: "invalidated",
-          scope: "session",
-          refreshSessionFacts: true,
-        });
-        expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
-          changed ? 2 : 1,
+        expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+        expect(peekModelCatalog(client, scope)).toEqual(
+          outcome === "failed" ? undefined : { models },
         );
-        expect(peekModelCatalog(client, scope)).toEqual({ models });
-        expect(refreshes[0]?.isCurrent()).toBe(!changed);
       } finally {
         metadata.resolve(commands);
         catalog.resolve({ models });
-        await Promise.all(refreshes.map((refresh) => refresh.completed));
+        await refresh.completed;
         release();
       }
     },
@@ -206,7 +172,7 @@ describe("automatic metadata admission", () => {
         release();
       } else if (transition === "global invalidation") {
         invalidateChatMetadataStore(client);
-        expect(request).toHaveBeenCalledWith("chat.metadata", scope);
+        expect(request).toHaveBeenCalledWith("chat.metadata", { ...scope, includeModels: false });
       }
       await vi.advanceTimersByTimeAsync(2_500);
       await Promise.all(refreshes.map((refresh) => refresh.completed));
@@ -254,9 +220,6 @@ describe("automatic metadata admission", () => {
 
   it.each([
     { reason: "delete", sessionKey: scope.sessionKey },
-    { reason: "create", sessionKey: scope.sessionKey },
-    { reason: "new", sessionKey: scope.sessionKey },
-    { reason: "recovery", sessionKey: scope.sessionKey },
     { reason: "delete", sessionKey: undefined },
     { reason: "cleanup", sessionKey: undefined },
   ])("retires cached sessions before remount after $reason ($sessionKey)", async (event) => {

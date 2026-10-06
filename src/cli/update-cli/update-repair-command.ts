@@ -4,7 +4,7 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { readPackageVersion } from "../../infra/package-json.js";
-import { supersedePackageActivationAfterManualInstall } from "../../infra/package-update-activation.js";
+import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
@@ -24,6 +24,7 @@ import {
 } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
+  createUpdateRun,
   listUpdateRuns,
   reconcileAbandonedUpdateRunsAsync,
   reconcilePackageOwnerRefusal,
@@ -80,13 +81,30 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     throw new Error(admission.message);
   }
   if (opts.channel === undefined || normalizeUpdateChannel(opts.channel)) {
-    const superseded = await supersedePackageActivationAfterManualInstall(
-      resolveUpdateInstallRoot(discoveredRoot),
-    );
-    if (superseded) {
+    const settled = await settlePendingPackageActivation(resolveUpdateInstallRoot(discoveredRoot));
+    if (settled) {
       defaultRuntime.error(
-        `Warning: previous package update operation ${superseded.operationId} closed as superseded-by-manual-install. Recovery evidence retained at ${superseded.retained}.`,
+        `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
+          settled.retained
+            ? `Recovery evidence retained at ${settled.retained}.`
+            : "The original package and launchers remain unchanged."
+        }${settled.detail ? ` ${settled.detail}` : ""}`,
       );
+      if (settled.detail) {
+        // The operation UUID identifies this repair receipt, not the original failed run.
+        // Replaying it after interrupted reporting preserves the original update outcome.
+        createUpdateRun(
+          {
+            runId: settled.operationId,
+            trigger: "cli",
+            settlement: {
+              reason: settled.reason,
+              detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+            },
+          },
+          options,
+        );
+      }
     }
   }
   using handoff =

@@ -7,20 +7,25 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import * as workerStores from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { IncognitoSessionEndedError } from "./incognito-session-error.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import { IncognitoSessionEndedError } from "./openclaw-agent-execution-contract.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution.js";
+import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
+import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const references = new Set<IncognitoAgentDatabaseExecution>();
-const authority = { assertCurrent() {} };
+const authority = { assertCurrent(this: void) {} };
 let stateRoot: string;
 let tempRoot: string;
 let env: NodeJS.ProcessEnv;
@@ -38,8 +43,10 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all([...references].map((reference) => reference.close()));
   references.clear();
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -230,11 +237,17 @@ it("retains FIFO publication and rechecks authority after queue waits and before
     order.push("last");
     return scope.execute({ type: "database.incognito.memory", input: undefined });
   });
+  const competing = runOpenClawAgentWorkerWrite(
+    { target: reference.identity, assertCurrent: authority.assertCurrent },
+    async () => {
+      order.push("external reservation");
+    },
+  );
   const released = reference.release();
   allowed = false;
   release.resolve();
-  await Promise.all([first, rejected, last, released]);
-  expect(order).toEqual(["first", "published", "last"]);
+  await Promise.all([first, rejected, last, competing, released]);
+  expect(order).toEqual(["first", "published", "last", "external reservation"]);
   const next = await open();
   allowed = true;
   await expect(
@@ -261,6 +274,290 @@ it("retains FIFO publication and rechecks authority after queue waits and before
     }),
   ).rejects.toThrow(IncognitoSessionEndedError);
   await closing;
+});
+
+it("joins deferred compute cleanup before closing without disclosing its revoked result", async () => {
+  const order: string[] = [];
+  const opening = workerStores.openEphemeralAgentDatabaseSqliteWorkerStore;
+  vi.spyOn(workerStores, "openEphemeralAgentDatabaseSqliteWorkerStore").mockImplementation(
+    async (...args) => {
+      const store = await opening(...args);
+      assert(store);
+      const close = store.close.bind(store);
+      vi.spyOn(store, "close").mockImplementation(async () => {
+        order.push("transport-close");
+        await close();
+      });
+      return store;
+    },
+  );
+  const reference = await open();
+  const target = {
+    sessionKey: "agent:main:dashboard:incognito-deferred-cleanup",
+    sessionId: "deferred-cleanup",
+    lifecycleRevision: "initial",
+  };
+  await reference.sessions.create(authority, {
+    sessionKey: target.sessionKey,
+    entry: { sessionId: target.sessionId, lifecycleRevision: "initial", updatedAt: 1 },
+  });
+  const run = workerStores.runSqliteWorkerStoreOperation;
+  vi.spyOn(workerStores, "runSqliteWorkerStoreOperation").mockImplementation(
+    <Operations extends SqliteWorkerOperations, T>(
+      store: SqliteWorkerStore<Operations>,
+      operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
+      stateContext?: Parameters<typeof run>[2],
+      assertCurrent?: Parameters<typeof run>[3],
+      createAdmission?: Parameters<typeof run>[4],
+    ) =>
+      run(
+        store,
+        (scope) =>
+          operation({
+            execute: async (command, options) => {
+              const result = await scope.execute(command, options);
+              if (command.type === "session.compute.source.release") {
+                order.push("source-released");
+              }
+              if (command.type === "session.compute.usage.releaseLock") {
+                order.push("lock-released");
+              }
+              return result;
+            },
+          }),
+        stateContext,
+        assertCurrent,
+        createAdmission,
+      ),
+  );
+  const ready = createDeferredCore();
+  const resume = createDeferredCore();
+  const work = reference.sessions.withCompute(authority, target, async (compute) => {
+    await compute.execute({
+      type: "session.compute.source.open",
+      input: { ...target, sourceId: "deferred-source" },
+    });
+    await compute.execute({
+      type: "session.compute.usage.acquireLock",
+      input: {
+        ...target,
+        request: {
+          previousRaw: null,
+          previousOwnerIsRunning: false,
+          lockJson: "deferred-lock",
+          startedAt: 1,
+        },
+      },
+    });
+    ready.resolve();
+    await resume.promise;
+    return "private result";
+  });
+  void work.catch(ready.reject);
+  const rejected = expect(work).rejects.toThrow(IncognitoSessionEndedError);
+  let closing: Promise<void> | undefined;
+  try {
+    await ready.promise;
+    closing = reference.close();
+    expect(() => memory(reference)).toThrow(IncognitoSessionEndedError);
+    expect(order).toEqual([]);
+    resume.resolve();
+    await Promise.all([rejected, closing]);
+    expect(order).toEqual(["source-released", "lock-released", "transport-close"]);
+  } finally {
+    resume.resolve();
+    await Promise.allSettled([work, closing]);
+  }
+});
+
+it("settles accepted dependent writes across release and close while checking live caller authority", async () => {
+  const owner = await open();
+  const sessionKey = "agent:main:dashboard:incognito-retained-composition";
+  await owner.sessions.create(authority, {
+    sessionKey,
+    entry: { sessionId: "retained-composition", lifecycleRevision: "initial", updatedAt: 1 },
+  });
+  const committed: string[] = [];
+  for (const ending of ["release", "revoked", "close"] as const) {
+    const reference = await open();
+    let allowed = true;
+    const source = {
+      assertCurrent() {
+        reference.assertCurrent();
+        if (!allowed) {
+          throw new Error("composition caller revoked");
+        }
+      },
+    };
+    const work = reference.sessions.withSharedState(async () => {
+      await reference.sessions.transcript(
+        source,
+        {
+          type: "session.message.append",
+          input: {
+            sessionKey,
+            sessionId: "retained-composition",
+            fence: { expectedLifecycleRevision: "initial" },
+            message: { role: "assistant", content: [{ type: "text", text: ending }], timestamp: 1 },
+          },
+        },
+        undefined,
+        undefined,
+        () => committed.push(ending),
+      );
+      return "private composition result";
+    });
+    const rejected = expect(work).rejects.toThrow(
+      ending === "close"
+        ? IncognitoSessionEndedError
+        : ending === "revoked"
+          ? "composition caller revoked"
+          : "Incognito execution reference is released",
+    );
+    allowed = ending !== "revoked";
+    // Release before the accepted callback's first microtask, not just a queued SQL command.
+    const endingWork = ending === "close" ? reference.close() : reference.release();
+    expect(() => memory(reference)).toThrow();
+    await Promise.all([rejected, endingWork]);
+    if (ending !== "close") {
+      await owner.sessions.withSharedState(async () => {
+        expect(() => reference.assertCurrent()).toThrow(
+          "Incognito execution reference is released",
+        );
+      });
+    }
+    expect(committed).toEqual(ending === "close" ? ["release", "close"] : ["release"]);
+  }
+});
+
+it.each(["existing", "future"] as const)(
+  "pins only its %s shared owner across actor loss until work and retried cleanup settle",
+  async (sharedOpening) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const existing = sharedOpening === "existing" ? openOpenClawStateDatabase({ env }) : undefined;
+    let cleanupAttempted = false;
+    let nativeStore: { close(): Promise<void> } | undefined;
+    const posted = vi.spyOn(Worker.prototype, "postMessage");
+    const openNative = workerStores.openEphemeralAgentDatabaseSqliteWorkerStore;
+    vi.spyOn(workerStores, "openEphemeralAgentDatabaseSqliteWorkerStore").mockImplementation(
+      async (...args) => {
+        const store = await openNative(...args);
+        assert(store);
+        nativeStore = store;
+        return store;
+      },
+    );
+    const reference = await open();
+    if (!existing) {
+      expect(fs.readdirSync(stateRoot, { recursive: true })).toEqual([]);
+    }
+    const shared = existing ?? openOpenClawStateDatabase({ env });
+    const unrelated = openOpenClawStateDatabase({
+      path: path.join(tempDirs.make("incognito-unrelated-state-"), "state.sqlite"),
+    });
+    await reference.release();
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 1);
+    expect(shared.db.isOpen).toBe(true);
+    expect(unrelated.db.isOpen).toBe(false);
+
+    const borrower = await open();
+    assert(nativeStore);
+    const cleanup = vi.spyOn(nativeStore, "close").mockImplementationOnce(async () => {
+      cleanupAttempted = true;
+      throw new Error("native cleanup refused");
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const work = expect(
+      borrower.run(authority, async () => {
+        entered.resolve();
+        await release.promise;
+      }),
+    ).rejects.toThrow(IncognitoSessionEndedError);
+    let failedClose: Promise<unknown> | undefined;
+    try {
+      await entered.promise;
+      const openIndex = posted.mock.calls.findIndex(
+        ([message]) =>
+          isRecord(message) && message.type === "open" && message.databasePath === borrower.path,
+      );
+      const owningWorker: unknown = posted.mock.contexts[openIndex];
+      assert(owningWorker instanceof Worker);
+      await owningWorker.terminate();
+      expect(() => borrower.assertCurrent()).toThrow(IncognitoSessionEndedError);
+      failedClose = expect(borrower.close()).rejects.toThrow("native cleanup refused");
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 1);
+      expect(shared.db.isOpen).toBe(true);
+      expect(cleanupAttempted).toBe(false);
+      release.resolve();
+      await Promise.all([work, failedClose]);
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 1);
+      expect(shared.db.isOpen).toBe(true);
+      expect(() => borrower.assertCurrent()).toThrow(IncognitoSessionEndedError);
+      await borrower.close();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([work, failedClose]);
+      cleanup.mockRestore();
+      await borrower.close();
+    }
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 1);
+    expect(shared.db.isOpen).toBe(false);
+    const later = openOpenClawStateDatabase({ env });
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 1);
+    expect(later.db.isOpen).toBe(false);
+  },
+);
+
+it("keeps the outer actor reentrancy fence after nested grants consume prepared facts", async () => {
+  const reference = await open();
+  const sessionKey = "agent:main:dashboard:incognito-nested-grant";
+  const created = await reference.sessions.create(authority, {
+    sessionKey,
+    entry: { sessionId: "nested-grant", updatedAt: 1, incognito: true },
+  });
+  const reentered: Promise<unknown>[] = [];
+  const refusals: unknown[] = [];
+  const prepared: string[] = [];
+  const source: IncognitoSessionAuthority = {
+    assertCurrent() {},
+    authorize(stage, facts) {
+      created.claim.authorize(
+        {
+          assertCurrent() {},
+          authorize(_stage, nestedFacts) {
+            prepared.push(nestedFacts.sessionKey);
+          },
+        },
+        stage,
+      );
+      expect(facts.sessionKey).toBe(sessionKey);
+      const target = { authority, sessionKey, cfg: {}, env };
+      for (const reenter of [
+        () => memory(reference),
+        () => reference.sessions.withSharedState(() => memory(reference)),
+        () => reference.acp.readEntry(target),
+        () => reference.acp.upsertMeta({ ...target, mutate: () => undefined }),
+      ]) {
+        try {
+          reentered.push(reenter());
+        } catch (error) {
+          refusals.push(error);
+        }
+      }
+    },
+  };
+  const read = await reference.sessions.read(source, { sessionKey });
+  await Promise.allSettled(reentered);
+  expect(read.entry?.sessionId).toBe("nested-grant");
+  expect(prepared).toEqual([sessionKey]);
+  expect(refusals).toEqual([
+    new Error("Incognito authority callbacks cannot call their actor"),
+    new Error("Incognito authority callbacks cannot call their actor"),
+    new Error("Incognito authority callbacks cannot call their actor"),
+    new Error("Incognito authority callbacks cannot call their actor"),
+  ]);
+  expect(reentered).toEqual([]);
 });
 
 it("ends only the lost actor's sessions and refuses old handles after replacement", async () => {

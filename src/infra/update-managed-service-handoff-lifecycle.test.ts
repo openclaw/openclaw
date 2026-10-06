@@ -369,8 +369,7 @@ describe("managed service update handoff", () => {
       expect(run).toMatchObject({
         status: validationResult,
         phase: "finished",
-        reason:
-          validationResult === "failed" ? "managed-service-handoff-failed" : "already-current",
+        reason: validationResult === "failed" ? "candidate-validation-failed" : "already-current",
         finishedAtMs: expect.any(Number),
       });
       expect(commands).toEqual([]);

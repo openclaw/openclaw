@@ -558,7 +558,14 @@ it.skipIf(process.platform === "win32")(
     let checks = 0;
     expect(() =>
       recovery.admit(() => {
-        if (++checks === 2) {
+        if (++checks === 1) {
+          const beforeTouch = fs.statSync(journalPath(), { bigint: true });
+          fs.chmodSync(journalPath(), 0o644);
+          const afterTouch = fs.statSync(journalPath(), { bigint: true });
+          expect(afterTouch.ctimeNs).not.toBe(beforeTouch.ctimeNs);
+          expect(afterTouch.mtimeNs).toBe(beforeTouch.mtimeNs);
+        } else {
+          recovery.assertUnchanged();
           throw new Error("executor revoked before rollback");
         }
       }),
@@ -571,9 +578,16 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it.skipIf(process.platform === "win32").each(["database", "journal"] as const)(
-  "preserves a changed immutable %s family member instead of admitting old recovery evidence",
-  async (changed) => {
+it.skipIf(process.platform === "win32").each([
+  ["database", "inode"],
+  ["journal", "inode"],
+  ["database", "bytes"],
+  ["journal", "bytes"],
+  ["database", "size"],
+  ["journal", "size"],
+] as const)(
+  "preserves immutable %s with changed %s instead of admitting old recovery evidence",
+  async (changed, mutation) => {
     beginActivation();
     createHotSqliteRollbackJournal({
       path: journalPath(),
@@ -581,9 +595,17 @@ it.skipIf(process.platform === "win32").each(["database", "journal"] as const)(
     });
     const recovery = await readImmutableInstallRecordForRecovery(root);
     const source = changed === "database" ? journalPath() : `${journalPath()}-journal`;
-    const replacement = path.join(parent, "replacement-control-bytes");
-    fs.copyFileSync(source, replacement);
-    fs.renameSync(replacement, source);
+    if (mutation === "inode") {
+      const replacement = path.join(parent, "replacement-control-bytes");
+      fs.copyFileSync(source, replacement);
+      fs.renameSync(replacement, source);
+    } else if (mutation === "bytes") {
+      const bytes = fs.readFileSync(source);
+      bytes[bytes.length - 1] = bytes.readUInt8(bytes.length - 1) ^ 1;
+      fs.writeFileSync(source, bytes);
+    } else {
+      fs.appendFileSync(source, "changed size");
+    }
     const before = controlFiles();
     expect(recovery.assertUnchanged).toThrow(/changed/u);
     expect(() => recovery.admit(() => {})).toThrow(/changed/u);

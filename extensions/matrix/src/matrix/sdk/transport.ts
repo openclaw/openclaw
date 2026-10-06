@@ -1,6 +1,9 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  captureChannelReadAuthority,
+  captureEffectAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
@@ -164,6 +167,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   beforeDispatch?: () => Promise<void> | undefined;
   assertSendCurrent?: () => void;
 }): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
+  const effect = captureEffectAuthority();
   const assertDispatchCurrent = () => {
     params.assertCurrent?.();
     params.assertSendCurrent?.();
@@ -209,9 +213,22 @@ async function fetchWithMatrixGuardedRedirects(params: {
       };
       assertDispatchCurrent();
       signal?.throwIfAborted();
-      dispatched = true;
       // The runtime fetch preserves the validated pinned-address dispatcher.
-      const response = await fetchWithRuntimeDispatcherOrMockedGlobal(fetchUrl, requestInit);
+      let entered = false;
+      const response = await effect
+        .initiate(() => {
+          entered = true;
+          assertDispatchCurrent();
+          signal?.throwIfAborted();
+          dispatched = true;
+          return fetchWithRuntimeDispatcherOrMockedGlobal(fetchUrl, requestInit);
+        })
+        .catch((error: unknown) => {
+          if (!entered) {
+            throw new MatrixSdkAuthorityError(error);
+          }
+          throw error;
+        });
 
       if (!isRedirectStatus(response.status)) {
         return {

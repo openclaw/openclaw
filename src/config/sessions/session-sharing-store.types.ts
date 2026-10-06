@@ -3,7 +3,12 @@ import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import type { SessionActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionParticipantIdentity } from "./session-participant-identity.js";
 import type { SessionMember } from "./session-sharing-store.kernel.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionEntry, SessionProfileInvolvement } from "./types.js";
+
+export type SessionCollaborationMutation = Exclude<
+  keyof SessionSharingWorkerOperations,
+  "category.prepare" | "category.apply" | "involvement"
+>;
 
 export type SessionSharingExpectedEntry = Pick<
   SessionEntry,
@@ -79,7 +84,24 @@ type ParticipantPublication = {
   participants: Pick<SessionEntry, "participants" | "participantCount">;
 };
 
+export type SessionInvolvementMutation = {
+  expectedSessionId: string;
+  expectedEntry?: SessionMetadataExpectedEntry;
+  profileIds: readonly string[];
+  change:
+    | { kind: "visibility"; hidden: boolean }
+    | { kind: "mention"; source: NonNullable<SessionProfileInvolvement["lastMention"]> };
+};
+
 export type SessionSharingWorkerOperations = {
+  involvement: {
+    input: {
+      scope: SessionAccessScope;
+      params: SessionInvolvementMutation;
+      profiles: { profileId: string; aliases: string[] }[];
+    };
+    output: { accepted: boolean; changed: boolean };
+  };
   "owner.assign": {
     input: { scope: SessionAccessScope; params: SessionOwnerAssignParams };
     output: { value: SessionOwnerAssignment | null } & OwnerPublication;

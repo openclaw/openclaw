@@ -30,7 +30,7 @@ struct DashboardSessionShortcutDeliveryTests {
             """,
             contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
         defer { server.stop() }
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let auth = DashboardWindowAuth.unauthenticated
         let controller = DashboardWindowController(
             url: server.url(), auth: auth, websiteDataStore: .nonPersistent(),
             windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })

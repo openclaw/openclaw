@@ -5,6 +5,7 @@ import { readConversationBindingRouteFacts } from "../../channels/conversation-b
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -40,16 +41,18 @@ export function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
   );
 }
 
-export function resolveSessionStoreLookup(
+export async function resolveSessionStoreLookup(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
-): {
+  assertCurrent?: () => void,
+): Promise<{
   agentId?: string;
   sessionKey?: string;
   storePath?: string;
   entry?: SessionEntry;
   store?: Record<string, SessionEntry>;
-} {
+}> {
+  assertCurrent?.();
   const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
   const sessionKey = normalizeOptionalString(targetSessionKey ?? ctx.SessionKey);
   if (!sessionKey) {
@@ -59,17 +62,18 @@ export function resolveSessionStoreLookup(
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const target = { agentId, sessionKey, storePath };
   try {
-    const entry = loadSessionEntryReadOnly({
-      ...target,
-      readConsistency: "latest",
-      clone: false,
-    });
+    const entry = await readSessionEntryReadOnlyInWorker(
+      { ...target, readConsistency: "latest", clone: false },
+      assertCurrent,
+    );
+    assertCurrent?.();
     return {
       ...target,
       entry,
       store: entry ? { [sessionKey]: entry } : undefined,
     };
   } catch {
+    assertCurrent?.();
     return target;
   }
 }

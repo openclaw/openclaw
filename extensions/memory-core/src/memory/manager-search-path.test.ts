@@ -1,7 +1,7 @@
 // Real SQLite path search, exact-file precedence, and candidate budgets.
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
+import { bm25RankToScore } from "./keyword-query.js";
 import { searchPathKeyword } from "./manager-search.js";
 import { createMemorySearchDb, insertKeywordFixture } from "./manager-search.test-support.js";
 
@@ -20,8 +20,6 @@ function searchPathKeywordFixture(
     limit: 1,
     snippetMaxChars: 200,
     sourceFilter: { sql: "", params: [] },
-    buildFtsQuery,
-    bm25RankToScore,
     ...options,
   });
 }

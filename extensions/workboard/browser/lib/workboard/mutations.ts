@@ -270,6 +270,7 @@ export async function moveWorkboardCard(
     params.requestUpdate?.();
   }
   if (reloadAfterFailure) {
+    invalidateWorkboardLoads(params.host);
     await loadWorkboard({
       host: params.host,
       client: params.client,

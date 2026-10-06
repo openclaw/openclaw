@@ -59,6 +59,15 @@ describe("Doctor stored auth alias migration", () => {
             version: 1,
             profiles: {
               "example:default": { mode: "api_key", provider: "example", apiKey: "synthetic-key" },
+              "openai-codex:default": {
+                type: "oauth",
+                provider: "openai-codex",
+                oauthRef: {
+                  source: "openclaw-credentials",
+                  provider: "openai-codex",
+                  id: "b".repeat(32),
+                },
+              },
             },
           });
           fs.mkdirSync(path.dirname(sidecar), { recursive: true });

@@ -31,7 +31,6 @@ import {
 } from "./session-activity.ts";
 
 type ActivityQuery = SessionActivityFilters | "current";
-const ACTIVITY_FALLBACK_REFRESH_MS = 60_000;
 export const ACTIVITY_SUMMARY_ENSURE_METHOD = "sessions.activitySummary.ensure";
 const SUMMARY_BATCH_SIZE = 20;
 
@@ -85,7 +84,6 @@ export class SessionActivityController implements ReactiveController {
   private filters: ActivityQuery | null = null;
   private bucketRollover?: ReturnType<typeof setTimeout>;
   private pendingChanges: CurrentWorkChange[] = [];
-  private fallbackRefresh?: ReturnType<typeof setTimeout>;
   private changesOverflowed = false;
   private readonly currentWorkFences = new Map<string, CurrentWorkFence>();
   private retirementOverflowed = false;
@@ -142,8 +140,6 @@ export class SessionActivityController implements ReactiveController {
     clearTimeout(this.bucketRollover);
     this.bucketRollover = undefined;
     this.eventRefresh.reset();
-    clearTimeout(this.fallbackRefresh);
-    this.fallbackRefresh = undefined;
     this.pending?.controller.abort();
     this.pending = undefined;
     this.resetSummaries();
@@ -448,10 +444,7 @@ export class SessionActivityController implements ReactiveController {
           }
         }
         if (!requiresRefresh && !this.incomplete && !this.changesOverflowed) {
-          this.fallbackRefresh ??= setTimeout(() => {
-            this.fallbackRefresh = undefined;
-            this.eventRefresh.schedule();
-          }, ACTIVITY_FALLBACK_REFRESH_MS);
+          this.eventRefresh.scheduleFallback();
           return;
         }
       }
@@ -504,6 +497,8 @@ export class SessionActivityController implements ReactiveController {
       );
     }
     const request = {
+      source: "activity",
+      excludeDock: true,
       rowMode: "compact",
       archived: "all",
       includeGlobal: true,
@@ -542,8 +537,6 @@ export class SessionActivityController implements ReactiveController {
     }
     this.pending?.controller.abort();
     this.eventRefresh.absorb();
-    clearTimeout(this.fallbackRefresh);
-    this.fallbackRefresh = undefined;
     const pending = { controller: new AbortController(), completion: createDeferredCore() };
     this.pending = pending;
     this.client = client;

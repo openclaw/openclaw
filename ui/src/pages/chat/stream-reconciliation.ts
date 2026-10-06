@@ -23,7 +23,6 @@ import {
   resolveAssistantTextTail,
   streamCausalInsertIndex,
   streamCausalInterval,
-  streamCausalTimestamp,
   type StreamCausalBoundaryState,
 } from "./stream-causal-boundary.ts";
 import {
@@ -512,12 +511,8 @@ export function materializeVisibleStreamState(
     const streamMessage = {
       role: "assistant",
       content: [{ type: "text", text: part.text }],
-      timestamp: streamCausalTimestamp(
-        nextMessages,
-        insertIndex,
-        part.timestamp,
-        messageTimestampMs,
-      ),
+      // User intervals own placement; retiming the saved stream would reorder live tools.
+      timestamp: part.timestamp,
       openclawStreamFallback: {
         replacementText: part.replacementText,
         source: part.source,

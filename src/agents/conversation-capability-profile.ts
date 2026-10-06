@@ -232,6 +232,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       sandboxSessionRenameOnly,
       subagentPolicy,
       inheritedToolPolicy,
+      inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
       delegated: requesterPolicies.delegated,
       requesterPolicySource: requesterPolicies.requesterPolicySource,
       runtimeToolPolicyForInheritance,

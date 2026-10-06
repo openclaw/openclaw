@@ -86,6 +86,11 @@ artifact through `artifacts.download`, which returns inline base64 bytes when
 the artifact is byte-backed or a short-lived, ticketed URL when it is
 Gateway-managed.
 
+Managed download tickets check current session access and the selected message's
+attachment reference in visible history. For indexed messages, issuing a ticket
+does not read the original file or validate unrelated transcript payloads. The
+HTTP request transfers the file separately.
+
 Download filenames preserve Unicode characters and literal percent sequences
 such as `%20`.
 

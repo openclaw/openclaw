@@ -440,8 +440,6 @@ export function createCliEventHandlers(params: {
 
   return {
     emitLiveEvents,
-    emitCliToolUseStart: (event: CliToolUseStartDelta) => emitToolUseStart(event, true),
-    emitCliToolResult: (event: CliToolResultDelta) => emitToolResult(event, true),
     // Display-only native events never enter host-tool correlation or delivery accounting.
     emitCliDisplayToolUseStart: (event: CliToolUseStartDelta) => emitToolUseStart(event, false),
     emitCliDisplayToolResult: (event: CliToolResultDelta) => emitToolResult(event, false),

@@ -126,7 +126,7 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   expect(prepare).not.toHaveBeenCalled();
   expect(observation.queries.filter((sql) => configSelect.test(sql))).toHaveLength(10);
   expect(observation.queries.filter((sql) => contentVersionSelect.test(sql))).toHaveLength(10);
-  expect(observation.queries.filter((sql) => dataVersion.test(sql))).toHaveLength(20);
+  expect(observation.queries.filter((sql) => dataVersion.test(sql))).toHaveLength(10);
   expect(countOpens()).toBe(1);
   const peer = new native.DatabaseSync(pathname);
   try {
@@ -147,7 +147,7 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   expect(countOpens()).toBe(2);
   expect(prepare.mock.calls.filter(([sql]) => configSelect.test(sql))).toHaveLength(1);
   expect(prepare.mock.calls.filter(([sql]) => contentVersionSelect.test(sql))).toHaveLength(1);
-  expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(2);
+  expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(1);
   observation.restore();
 });
 

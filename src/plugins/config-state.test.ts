@@ -6,7 +6,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePolicyPluginActivationState } from "./config-policy.js";
+import { resolvePluginActivationStateShared } from "./config-activation-shared.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -417,7 +417,7 @@ describe("resolveEffectivePluginActivationState", () => {
         };
         for (const resolve of [
           resolveEffectivePluginActivationState,
-          resolvePolicyPluginActivationState,
+          resolvePluginActivationStateShared,
         ]) {
           expect(resolve(params)).toMatchObject({ enabled: expected, activated: expected });
         }

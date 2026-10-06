@@ -4,6 +4,7 @@ import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statem
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OpenClawStateExternalOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
@@ -125,7 +126,9 @@ describe("node worker launch admitted schema", () => {
       const measure = (receipt: typeof pending) => {
         // Warm outside the transaction after lazy DDL invalidates transactional facts.
         expect(kernel.get(receipt.launchId)).toEqual(receipt);
-        expect(readNodeWorkerLaunchReceipt(db, receipt.launchId)).toEqual(receipt);
+        expect(
+          runSqliteReadOperationSync(db, () => readNodeWorkerLaunchReceipt(db, receipt.launchId)),
+        ).toEqual(receipt);
         const reads = trackSqliteStatementExecutions(
           db,
           ["schema", "dataVersion", "launch"],
@@ -145,7 +148,11 @@ describe("node worker launch admitted schema", () => {
           for (let index = 0; index < 3; index += 1) {
             expect(kernel.get(receipt.launchId)).toEqual(receipt);
             expect(kernel.listNonterminal()).toEqual([receipt]);
-            expect(readNodeWorkerLaunchReceipt(db, receipt.launchId)).toEqual(receipt);
+            expect(
+              runSqliteReadOperationSync(db, () =>
+                readNodeWorkerLaunchReceipt(db, receipt.launchId),
+              ),
+            ).toEqual(receipt);
           }
           // Each launch read probes freshness once, not once per optional companion join.
           expect(reads.counts).toEqual({ schema: 0, dataVersion: 9, launch: 9 });

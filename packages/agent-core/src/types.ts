@@ -346,6 +346,16 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     signal?: AbortSignal,
   ) => Promise<InternalBeforeToolBatchResult | undefined>;
 
+  /**
+   * @internal OpenClaw-owned turn completion. Runs once after every tool call from one
+   * assistant message has settled; returning true ends the turn even when not every
+   * result asked to terminate. Not a plugin or session SDK hook.
+   */
+  completesToolTurn?: (context: {
+    message: AssistantMessage;
+    toolResults: ToolResultMessage[];
+  }) => boolean;
+
   /** @internal Preserves the one-shot recovery budget across Agent.continue() retries. */
   toolLoopRecoveryState?: ToolLoopRecoveryState;
 
@@ -627,6 +637,8 @@ export type AgentEvent =
   | {
       type: "tool_execution_end";
       toolCallId: string;
+      /** Issuing assistant response identity; provider call ids are only unique within one response. */
+      assistantTurnId?: string;
       toolName: string;
       result: unknown;
       isError: boolean;

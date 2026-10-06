@@ -190,13 +190,6 @@ function commandPreview(command: string): string {
   );
 }
 
-function compactToolTarget(target: string, kind: ToolCallView["kind"]): string {
-  if (kind !== "edit" && kind !== "write") {
-    return target;
-  }
-  return pathDisplayName(target);
-}
-
 export function syncToolDisclosureOverflow(event: Event): void {
   const disclosure = event.currentTarget;
   if (!(disclosure instanceof HTMLElement)) {
@@ -232,6 +225,8 @@ function renderToolRowContent(
 
   const verb = resolveToolRowVerb(view, outcome);
   if (verb && view.target) {
+    const target =
+      view.kind === "edit" || view.kind === "write" ? pathDisplayName(view.target) : view.target;
     const stat =
       outcome === "succeeded"
         ? view.stat
@@ -251,11 +246,9 @@ function renderToolRowContent(
                 onOpenWorkspaceFile({ path: workspaceFilePath });
               }}
             >
-              ${compactToolTarget(view.target, view.kind)}
+              ${target}
             </button>`
-          : html`<span class="chat-tool-row__target"
-              >${compactToolTarget(view.target, view.kind)}</span
-            >`
+          : html`<span class="chat-tool-row__target">${target}</span>`
       }
       ${stat ? renderDiffStatChips(stat) : nothing}
       ${

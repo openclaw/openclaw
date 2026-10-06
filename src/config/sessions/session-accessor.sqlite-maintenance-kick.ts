@@ -43,7 +43,7 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
-import { captureSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
+import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   normalizeResolvedMaintenanceConfigInput,
@@ -339,6 +339,15 @@ async function runPendingMaintenance(
   let nextMaintenanceAt: number | undefined = Infinity;
   let planningChanged = false;
   let finalized = false;
+  let preservation: Awaited<ReturnType<typeof prepareSessionMaintenancePreservation>> | undefined;
+  const capturePreservation = () => {
+    try {
+      return preservation?.capture() ?? null;
+    } catch (error) {
+      planningChanged = true;
+      throw error;
+    }
+  };
   try {
     owner.execution ??= owner.captureExecution();
     const prepared = await runExclusiveSqliteSessionWrite(
@@ -410,10 +419,7 @@ async function runPendingMaintenance(
         ) ||
         (admitted &&
           operation.input.preservation !== null &&
-          !isDeepStrictEqual(
-            operation.input.preservation,
-            captureSessionMaintenancePreservation(operation.input.storePath),
-          ))
+          !isDeepStrictEqual(operation.input.preservation, capturePreservation()))
       ) {
         planningChanged = true;
         throw new SqliteReclamationInputsChangedError(
@@ -434,9 +440,7 @@ async function runPendingMaintenance(
           activeSessionKeys = [...new Set([...activeSessionKeys, ...owner.activeSessionKeys])];
           operation.input.activeSessionKeys = activeSessionKeys;
           if (operation.input.preservation !== null) {
-            operation.input.preservation = captureSessionMaintenancePreservation(
-              operation.input.storePath,
-            );
+            operation.input.preservation = capturePreservation();
           }
           admitted = true;
           return { activeSessionKeys, preservation: operation.input.preservation };
@@ -451,16 +455,9 @@ async function runPendingMaintenance(
     };
     let result = await runPlanning();
     if (result.kind === "maintenance-preservation-required") {
-      await runExclusiveSqliteSessionWrite(
-        owner.scope,
-        async () => {
-          assertInputsCurrent();
-          operation.input.preservation = captureSessionMaintenancePreservation(
-            operation.input.storePath,
-          );
-        },
-        "session.maintenance.plan",
-      );
+      preservation = await prepareSessionMaintenancePreservation(operation.input.storePath);
+      assertInputsCurrent();
+      operation.input.preservation = capturePreservation();
       result = await runPlanning();
     }
     if (result.kind === "maintenance-plan-stale") {
@@ -523,6 +520,7 @@ async function runPendingMaintenance(
     }
     owner.rejections = 0;
   } catch (error) {
+    preservation?.dispose();
     if (planningChanged && isCurrent()) {
       if (finalized && owner.generation !== generation) {
         owner.rejections = 0;
@@ -556,6 +554,7 @@ async function runPendingMaintenance(
       );
     }
   } finally {
+    preservation?.dispose();
     releaseMaintenanceExecution(databasePath, owner);
   }
   // Writes during finalization also coalesce behind the next quiet window.

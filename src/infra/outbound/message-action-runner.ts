@@ -49,6 +49,7 @@ import { MessageActionDeniedError } from "./message-action-denial.js";
 import {
   assertMessageDeliveryCurrent,
   beforeMessageDeliveryAttempt,
+  withMessageActionEffectAuthority,
   executeMessagePlugin,
   executeMessagePoll,
 } from "./message-action-execution.js";
@@ -515,6 +516,12 @@ async function handleInternalSourceReplySendAction(
 }
 
 export async function runMessageAction(input: MessageActionInput): Promise<MessageActionResult> {
+  return withMessageActionEffectAuthority(input, () => runMessageActionWithAuthority(input));
+}
+
+async function runMessageActionWithAuthority(
+  input: MessageActionInput,
+): Promise<MessageActionResult> {
   throwIfAborted(input.abortSignal);
   const cfg = input.cfg;
   let params = { ...input.params };
@@ -666,7 +673,6 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
             channel,
             channelPlugin,
             mediaAccess,
-            extraActionMediaSourceParamKeys,
             accountId,
             dryRun,
             gateway,

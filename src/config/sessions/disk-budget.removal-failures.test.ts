@@ -62,7 +62,6 @@ describe("session artifact deletion failures", () => {
         if (!blockedPath) {
           throw new Error("expected oldest artifact path");
         }
-        const onRemoveFile = vi.fn();
         const rmSpy = rejectRemoval(blockedPath, code);
         try {
           if (boundary === "archives") {
@@ -85,7 +84,6 @@ describe("session artifact deletion failures", () => {
               storePath,
               maintenance: { maxDiskBytes: 150, highWaterBytes: 102 },
               warnOnly: false,
-              onRemoveFile,
             });
             expect.soft(result).toMatchObject({
               removedFiles: 2,
@@ -94,7 +92,6 @@ describe("session artifact deletion failures", () => {
               totalBytesBefore: 202,
               totalBytesAfter: 102,
             });
-            expect.soft(onRemoveFile.mock.calls).toEqual(paths.slice(1).map((file) => [file]));
           }
           expect.soft(await fs.readFile(blockedPath)).toEqual(Buffer.alloc(100, 1));
           for (const filePath of paths.slice(1)) {
@@ -112,7 +109,6 @@ describe("session artifact deletion failures", () => {
     { artifact: "transcript", code: "EPERM", mode: "enforce" },
     { artifact: "promptBlob", code: "EACCES", mode: "enforce" },
     { artifact: "all", code: "EPERM", mode: "enforce" },
-    { artifact: "transcript", code: "EPERM", mode: "dry-run" },
     { artifact: "transcript", code: "EPERM", mode: "warn" },
   ] as const)(
     "continues eviction after $artifact deletion failure ($code, $mode)",
@@ -183,7 +179,6 @@ describe("session artifact deletion failures", () => {
         const highWaterBytes =
           Buffer.byteLength(JSON.stringify(retainedStore, null, 2)) + 2 * 64 + 1000;
         const blocked = artifacts.filter(({ kind }) => artifact === "all" || kind === artifact);
-        const onRemoveFile = vi.fn();
         const log = { warn: vi.fn(), info: vi.fn() };
         const commitEvictedIndex = vi.fn(async () => {
           await writeTextAtomic(storePath, JSON.stringify(store, null, 2), { durable: true });
@@ -210,32 +205,25 @@ describe("session artifact deletion failures", () => {
           const result = await enforceSessionDiskBudget({
             store,
             storePath,
-            activeSessionKey: activeKey,
             preserveKeys: new Set([preservedKey]),
             maintenance: { maxDiskBytes: highWaterBytes + 1, highWaterBytes },
             warnOnly: mode === "warn",
-            dryRun: mode === "dry-run",
             commitEvictedIndex,
-            onRemoveFile,
             log,
           });
           if (mode !== "enforce") {
             expect(commitEvictedIndex).not.toHaveBeenCalled();
             expect(rmSpy).not.toHaveBeenCalled();
-            expect(onRemoveFile).not.toHaveBeenCalled();
             expect(await fs.readFile(storePath, "utf8")).toBe(originalStoreJson);
             for (const { file, size } of artifacts) {
               expect(await fs.readFile(file)).toEqual(Buffer.alloc(size, 1));
             }
-            const preview = mode === "dry-run";
-            expect(store).toEqual(preview ? retainedStore : JSON.parse(originalStoreJson));
+            expect(store).toEqual(JSON.parse(originalStoreJson));
             expect(result).toMatchObject({
-              removedEntries: preview ? 1 : 0,
-              removedFiles: preview ? 4 : 0,
-              freedBytes: preview ? 1200 : 0,
-              totalBytesAfter: preview
-                ? highWaterBytes
-                : (await measureSessionPhysicalDiskUsage(storePath)).totalBytes,
+              removedEntries: 0,
+              removedFiles: 0,
+              freedBytes: 0,
+              totalBytesAfter: (await measureSessionPhysicalDiskUsage(storePath)).totalBytes,
             });
             return;
           }
@@ -258,7 +246,6 @@ describe("session artifact deletion failures", () => {
             freedBytes: removed.reduce((sum, file) => sum + file.size, 0),
             totalBytesAfter: usage.totalBytes,
           });
-          expect.soft(onRemoveFile.mock.calls).toEqual(removed.map(({ file }) => [file]));
           if (artifact === "all") {
             expect.soft(usage.totalBytes).toBeGreaterThan(highWaterBytes);
             expect

@@ -8,6 +8,7 @@ import {
 } from "./service-inspection-error.js";
 import {
   createServiceRuntimeInspectionFailure,
+  resolveSystemdServiceStartRefusal,
   type GatewayServiceRuntime,
 } from "./service-runtime.js";
 import type {
@@ -179,11 +180,46 @@ export async function readLoadedSystemdServiceRuntime(
           "StartLimitBurst",
           "ActiveEnterTimestampMonotonic",
           "InactiveEnterTimestampMonotonic",
+          "UnitFileState",
+          "RefuseManualStart",
+          "CanStart",
         ],
-        ["s", "s", "s", "s", "u", "t", "t"],
+        ["s", "s", "s", "s", "u", "t", "t", "s", "b", "b"],
       );
     const before = await readUnit();
-    const [id, load, active, sub, burst, entered, left] = before;
+    const [
+      id,
+      load,
+      active,
+      sub,
+      burst,
+      entered,
+      left,
+      unitFileState,
+      refuseManualStart,
+      canStart,
+    ] = before;
+    const startRefusal = resolveSystemdServiceStartRefusal({
+      unit: unitName,
+      scope,
+      loadState: typeof load === "string" ? load : undefined,
+      unitFileState: typeof unitFileState === "string" ? unitFileState : undefined,
+      activeState: typeof active === "string" ? active : undefined,
+      refuseManualStart: refuseManualStart === true,
+      canStart: typeof canStart === "boolean" ? canStart : undefined,
+    });
+    if (
+      load === "masked" &&
+      id === unitName &&
+      isDeepStrictEqual(before, await readUnit()) &&
+      owner === (await readOwner())
+    ) {
+      return {
+        status: "unknown",
+        detail: startRefusal?.message,
+        systemd: { scope, unit: unitName, startRefusal },
+      };
+    }
     const [result, restarts, pid, exitStatus, exitCode, killMode, tasks, memory, controlGroup] =
       await query(
         [
@@ -268,6 +304,7 @@ export async function readLoadedSystemdServiceRuntime(
           : (active === "inactive" || active === "failed") && pid === 0 && drained
             ? "stopped"
             : "unknown",
+      ...(startRefusal ? { detail: startRefusal.message } : {}),
       state: active,
       subState: sub,
       pid: pid > 0 ? pid : undefined,
@@ -279,6 +316,7 @@ export async function readLoadedSystemdServiceRuntime(
         scope,
         ...(scope === "user" ? { transport: await readSystemdUserTransport(env) } : {}),
         unit: id,
+        ...(startRefusal ? { startRefusal } : {}),
         managerUid,
         result,
         nRestarts: restarts,

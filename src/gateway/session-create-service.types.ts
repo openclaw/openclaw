@@ -192,6 +192,7 @@ export type CreateGatewaySessionParams = {
   /** Trusted in-process creation provenance; never populated from public Gateway params. */
   creation?: {
     via: SessionCreatedVia;
+    surface?: SessionEntry["createdSurface"];
     actor?: SessionCreatedActor;
     /** Host-verified human requester for matching spawn-owner inheritance. */
     requesterProfileId?: string;

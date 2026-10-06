@@ -19,16 +19,12 @@ import type {
   OverlayOptions,
   TUI,
 } from "@earendil-works/pi-tui";
-import type {
-  AssistantMessageEvent,
-  ImageContent,
-  Model,
-  TextContent,
-  ToolResultMessage,
-} from "openclaw/plugin-sdk/llm";
+import type { ImageContent, Model, TextContent } from "openclaw/plugin-sdk/llm";
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import type {
+  AfterToolCallResult,
+  AgentEvent,
   AgentMessage,
   AgentTool,
   AgentToolResult,
@@ -55,7 +51,7 @@ import type {
 } from "../session-manager.js";
 import type { SlashCommandInfo } from "../slash-commands.js";
 import type { SourceInfo } from "../source-info.js";
-import type { BuildSystemPromptOptions } from "../system-prompt.js";
+import type { BuildSystemPromptOptions } from "../system-prompt-metadata.js";
 import type { BashOperations } from "../tools/bash-operations.js";
 import type {
   BashToolDetails,
@@ -414,7 +410,10 @@ export interface ToolRenderResultOptions {
 }
 
 /** Context passed to tool renderers. */
-export interface ToolRenderContext<TState = unknown, TArgs = unknown> {
+export interface ToolRenderContext<
+  TState = unknown,
+  TArgs = unknown,
+> extends ToolRenderResultOptions {
   /** Current tool call arguments. Shared across call/result renders for the same tool call. */
   args: TArgs;
   /** Unique id for this tool execution. Stable across call/result renders for the same tool call. */
@@ -452,38 +451,23 @@ export interface ToolDefinition<
   TParams extends TSchema = TSchema,
   TDetails = unknown,
   TState = unknown,
+> extends Pick<
+  AgentTool<TParams, TDetails>,
+  | "name"
+  | "label"
+  | "hideFromChannelProgress"
+  | "resultContentSource"
+  | "description"
+  | "parameters"
+  | "outputSchema"
+  | "prepareArguments"
 > {
-  /** Tool name (used in LLM tool calls) */
-  name: string;
-  /** Human-readable label for UI */
-  label: string;
-  /** Preserve lifecycle telemetry without rendering transient channel progress. */
-  hideFromChannelProgress?: boolean;
-  /** Tool results contain externally controlled network content. */
-  resultContentSource?: AgentTool["resultContentSource"];
-  /** Description for LLM */
-  description: string;
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */
   promptSnippet?: string;
   /** Optional guideline bullets appended to the default system prompt Guidelines section when this tool is active. */
   promptGuidelines?: string[];
-  /** Parameter schema (TypeBox) */
-  parameters: TParams;
-  /** Exact schema for the structured value returned in AgentToolResult.details. */
-  outputSchema?: TSchema;
   /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
   renderShell?: "default" | "self";
-
-  /** Optional compatibility shim to prepare raw tool call arguments before schema validation. Must return an object conforming to TParams. */
-  prepareArguments?: (args: unknown) => Static<TParams>;
-
-  /**
-   * Per-tool execution mode override.
-   * - "sequential": this tool must execute one at a time with other tool calls.
-   * - "parallel": this tool can execute concurrently with other tool calls.
-   *
-   * If omitted, the default execution mode applies.
-   */
   executionMode?: ToolExecutionMode;
 
   /** Execute the tool. */
@@ -672,16 +656,13 @@ export interface BeforeAgentStartEvent {
   systemPromptOptions: BuildSystemPromptOptions;
 }
 
+type RuntimeAgentEvent<Type extends AgentEvent["type"]> = Extract<AgentEvent, { type: Type }>;
+
 /** Fired when an agent loop starts */
-interface AgentStartEvent {
-  type: "agent_start";
-}
+interface AgentStartEvent extends RuntimeAgentEvent<"agent_start"> {}
 
 /** Fired when an agent loop ends */
-interface AgentEndEvent {
-  type: "agent_end";
-  messages: AgentMessage[];
-}
+interface AgentEndEvent extends RuntimeAgentEvent<"agent_end"> {}
 
 /** Fired once the session has no automatic retry, compaction, or queued continuation left. */
 interface AgentSettledEvent {
@@ -689,64 +670,42 @@ interface AgentSettledEvent {
 }
 
 /** Fired at the start of each turn */
-export interface TurnStartEvent {
-  type: "turn_start";
+export interface TurnStartEvent extends RuntimeAgentEvent<"turn_start"> {
   turnIndex: number;
   timestamp: number;
 }
 
 /** Fired at the end of each turn */
-export interface TurnEndEvent {
-  type: "turn_end";
+export interface TurnEndEvent extends RuntimeAgentEvent<"turn_end"> {
   turnIndex: number;
-  message: AgentMessage;
-  toolResults: ToolResultMessage[];
 }
 
 /** Fired when a message starts (user, assistant, or toolResult) */
-export interface MessageStartEvent {
-  type: "message_start";
-  message: AgentMessage;
-}
+export interface MessageStartEvent extends RuntimeAgentEvent<"message_start"> {}
 
 /** Fired during assistant message streaming with token-by-token updates */
-export interface MessageUpdateEvent {
-  type: "message_update";
-  message: AgentMessage;
-  assistantMessageEvent: AssistantMessageEvent;
-}
+export interface MessageUpdateEvent extends RuntimeAgentEvent<"message_update"> {}
 
 /** Fired when a message ends */
-export interface MessageEndEvent {
-  type: "message_end";
-  message: AgentMessage;
-}
+export interface MessageEndEvent extends RuntimeAgentEvent<"message_end"> {}
 
 /** Fired when a tool starts executing */
-export interface ToolExecutionStartEvent {
-  type: "tool_execution_start";
-  toolCallId: string;
-  toolName: string;
-  args: unknown;
-}
+export interface ToolExecutionStartEvent extends Omit<
+  RuntimeAgentEvent<"tool_execution_start">,
+  "hideFromChannelProgress"
+> {}
 
 /** Fired during tool execution with partial/streaming output */
-export interface ToolExecutionUpdateEvent {
-  type: "tool_execution_update";
-  toolCallId: string;
-  toolName: string;
-  args: unknown;
-  partialResult: unknown;
-}
+export interface ToolExecutionUpdateEvent extends Omit<
+  RuntimeAgentEvent<"tool_execution_update">,
+  "hideFromChannelProgress"
+> {}
 
 /** Fired when a tool finishes executing */
-export interface ToolExecutionEndEvent {
-  type: "tool_execution_end";
-  toolCallId: string;
-  toolName: string;
-  result: unknown;
-  isError: boolean;
-}
+export interface ToolExecutionEndEvent extends Omit<
+  RuntimeAgentEvent<"tool_execution_end">,
+  "assistantTurnId" | "executionStarted" | "errorKind" | "hideFromChannelProgress"
+> {}
 
 // Model Events
 
@@ -989,12 +948,7 @@ export interface UserBashEventResult {
   result?: BashResult;
 }
 
-export interface ToolResultEventResult {
-  content?: (TextContent | ImageContent)[];
-  details?: unknown;
-  isError?: boolean;
-  terminate?: boolean;
-}
+export interface ToolResultEventResult extends AfterToolCallResult {}
 
 export interface MessageEndEventResult {
   /** Replace the finalized message. The replacement must keep the original message role. */
@@ -1145,21 +1099,11 @@ export interface ExtensionAPI {
   /** Register a keyboard shortcut. */
   registerShortcut(
     shortcut: KeyId,
-    options: {
-      description?: string;
-      handler: (ctx: ExtensionContext) => Promise<void> | void;
-    },
+    options: Omit<ExtensionShortcut, "shortcut" | "extensionPath">,
   ): void;
 
   /** Register a CLI flag. */
-  registerFlag(
-    name: string,
-    options: {
-      description?: string;
-      type: "boolean" | "string";
-      default?: boolean | string;
-    },
-  ): void;
+  registerFlag(name: string, options: Omit<ExtensionFlag, "name" | "extensionPath">): void;
 
   /** Get the value of a registered CLI flag. */
   getFlag(name: string): boolean | string | undefined;

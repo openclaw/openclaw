@@ -86,10 +86,10 @@ export function readPendingCanonicalSessionValidationBatch(
   ) {
     throw new Error("Canonical validation batch limits must be positive safe integers");
   }
-  if (!hasCanonicalSessionValidationProjection(database)) {
-    return { mainKey: "main", rows: [], absentKeys: [], hasMore: false, oversizedRows: 0 };
-  }
   return runSqliteDeferredTransactionSync(database.db, () => {
+    if (!hasCanonicalSessionValidationProjection(database)) {
+      return { mainKey: "main", rows: [], absentKeys: [], hasMore: false, oversizedRows: 0 };
+    }
     const mainKey = readCanonicalSessionMainKey(database);
     const db = getNodeSqliteKysely<PendingDatabase>(database.db);
     const candidates = executeSqliteQuerySync(
@@ -223,11 +223,12 @@ export function compareAndCertifyCanonicalSessionValidationBatch(
   return Number(result.numAffectedRows ?? 0n);
 }
 
-function prepareCanonicalWriterQueries(database: Pick<ValidationDatabase, "db">) {
-  const db = getNodeSqliteKysely<PendingDatabase>(database.db);
+// Retain compiled shapes only; fresh bindings and native statement lifecycle stay with the executor.
+const canonicalWriterQueries = createSqliteQueryCache((database) => {
+  const db = getNodeSqliteKysely<PendingDatabase>(database);
   return {
     pending: prepareSqliteQueryTakeFirstSync<string, { session_key: string }>(
-      database.db,
+      database,
       (parameter) =>
         db
           .selectFrom("session_canonical_validation_pending")
@@ -239,15 +240,15 @@ function prepareCanonicalWriterQueries(database: Pick<ValidationDatabase, "db">)
           ),
     ),
     row: prepareSqliteQueryTakeFirstSync<string, CanonicalSessionValidationRow>(
-      database.db,
+      database,
       (parameter) =>
-        canonicalSessionValidationQuery(database).where(
+        canonicalSessionValidationQuery({ db: database }).where(
           "session_nodes.session_key",
           "=",
           parameter((key) => key),
         ),
     ),
-    certify: prepareSqliteQuerySync<string>(database.db, (parameter) =>
+    certify: prepareSqliteQuerySync<string>(database, (parameter) =>
       db.deleteFrom("session_canonical_validation_pending").where(
         "session_key",
         "=",
@@ -255,12 +256,7 @@ function prepareCanonicalWriterQueries(database: Pick<ValidationDatabase, "db">)
       ),
     ),
   };
-}
-
-// Retain compiled shapes only; fresh bindings and native statement lifecycle stay with the executor.
-const canonicalWriterQueries = createSqliteQueryCache((db) =>
-  prepareCanonicalWriterQueries({ db }),
-);
+});
 
 /** Canonical writers certify their final row within their existing transaction. */
 export function certifyCanonicalSessionValidationRow(

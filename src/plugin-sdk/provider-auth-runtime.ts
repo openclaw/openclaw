@@ -290,7 +290,7 @@ async function loadRuntimeModelAuthModule(): Promise<RuntimeModelAuthModule> {
 }
 
 /**
- * Resolves provider API-key auth through the runtime auth module when available.
+ * Resolves provider API-key auth through the runtime auth module.
  */
 export async function resolveApiKeyForProvider(
   /** Provider auth lookup params forwarded to the runtime auth module. */
@@ -299,11 +299,7 @@ export async function resolveApiKeyForProvider(
   params.signal?.throwIfAborted();
   const runtimeAuth = await loadRuntimeModelAuthModule();
   params.signal?.throwIfAborted();
-  const resolveApiKeyForProviderLocal =
-    typeof runtimeAuth.resolveProviderRuntimeApiKey === "function"
-      ? runtimeAuth.resolveProviderRuntimeApiKey
-      : (await import("../agents/model-auth.js")).resolveApiKeyForProviderCore;
-  return resolveApiKeyForProviderLocal(params);
+  return runtimeAuth.resolveProviderRuntimeApiKey(params);
 }
 
 /**

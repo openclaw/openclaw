@@ -171,6 +171,8 @@ original prompt in transcript, use `before_agent_run` on a supported runner.
 To short-circuit an agent turn with a synthetic reply or silence, use
 `before_agent_reply`.
 
+<a id="sessions-and-compaction" />
+
 **Sessions and compaction**
 
 | Hook                                     | Kind    | Purpose                                                      |

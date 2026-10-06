@@ -63,7 +63,7 @@ export function resolveMediaFactLocalRef(fact: MediaFact): MediaFileRef | undefi
   };
 }
 
-function mediaFactToImageRef(fact: MediaFact, factIndex: number): MediaImageRef | undefined {
+export function mediaFactToImageRef(fact: MediaFact, factIndex: number): MediaImageRef | undefined {
   if (!isImageMediaFact(fact)) {
     return undefined;
   }
@@ -84,14 +84,6 @@ function mediaFactToImageRef(fact: MediaFact, factIndex: number): MediaImageRef 
     hydrate: Boolean(usableRef) && fact.hydrationSuppressed !== true,
     ...(fact.workspaceDir ? { workspaceDir: fact.workspaceDir } : {}),
   };
-}
-
-export function collectMediaImageRefs(
-  media?: readonly MediaFact[],
-): Array<MediaImageRef | undefined> {
-  return normalizeMediaFacts(media).flatMap((fact, factIndex) =>
-    isImageMediaFact(fact) ? [mediaFactToImageRef(fact, factIndex)] : [],
-  );
 }
 
 // Guards for transports that cannot carry attachments (paired-node CLI): only

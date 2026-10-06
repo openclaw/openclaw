@@ -192,12 +192,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   sessionManager: ReturnType<typeof guardSessionManager>;
   settingsManager: AgentSession["settingsManager"];
   sandbox?: SandboxContext | null;
-}): {
-  getAfterTurnCheckpoint: () => number | null;
-  recordCacheTouch: (startedAt: number) => void;
-  remove: () => void;
-  takePendingMidTurnPrecheckRequest: () => MidTurnPrecheckRequest | null;
-} {
+}) {
   const { activeContextEngine, activeSession, attempt, settingsManager } = input;
   const contextTokenBudget = Math.max(
     1,
@@ -393,7 +388,7 @@ export function installEmbeddedAttemptContextGuards(input: {
 
   return {
     getAfterTurnCheckpoint: () => afterTurnCheckpoint,
-    recordCacheTouch: (startedAt) => {
+    recordCacheTouch: (startedAt: number) => {
       lastCacheTouchAt = startedAt;
     },
     remove: () => {
@@ -417,11 +412,7 @@ export type EmitDiagnosticRunCompleted = (
   extra?: { blockedBy?: string },
 ) => void;
 
-export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams): {
-  diagnosticTrace: ReturnType<typeof freezeDiagnosticTraceContext>;
-  runTrace: ReturnType<typeof freezeDiagnosticTraceContext>;
-  emitCompleted: EmitDiagnosticRunCompleted;
-} {
+export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams) {
   const diagnosticTrace = freezeDiagnosticTraceContext(
     getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
   );

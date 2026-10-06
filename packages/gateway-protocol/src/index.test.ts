@@ -76,6 +76,11 @@ describe("lazy protocol validators", () => {
     ]);
   });
 
+  it("accepts bounded session-list attribution without requiring it from other clients", () => {
+    expectAccepted(validateSessionsListParams, [{}, { source: "dashboard", rowMode: "compact" }]);
+    expectRejected(validateSessionsListParams, [{ source: "arbitrary-private-caller" }]);
+  });
+
   it("keeps validation errors readable and clears them after success", () => {
     expectRejected(validateConnectParams, [{}]);
     expect(formatValidationErrors(validateConnectParams.errors)).toContain("must have required");

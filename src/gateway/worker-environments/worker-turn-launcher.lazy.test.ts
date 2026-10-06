@@ -246,7 +246,7 @@ describe("worker turn execution loading", () => {
         environments: { ...fixture.unusedEnvironments(), get: vi.fn(() => environment) },
         placements: fixture.placements,
       });
-      const sandbox = provider.resolveSandbox({
+      const sandbox = provider.prepareSandbox({
         sessionId: fixture.SESSION_ID,
         sessionKey: fixture.SESSION_KEY,
         agentId: "main",
@@ -278,13 +278,14 @@ describe("worker turn execution loading", () => {
         }
         releaseLoad.resolve();
         if (scenario === "current") {
-          await expect(sandbox).resolves.toMatchObject({
+          using prepared = await sandbox;
+          expect(prepared.sandbox).toMatchObject({
             backendId: "node",
             placementNodeId: "fixture-node",
           });
           expect(sandboxCalls).toBe(1);
         } else {
-          await expect(sandbox).rejects.toThrow("changed while preparing its sandbox");
+          await expect(sandbox).rejects.toThrow("placement authority changed");
           expect(sandboxCalls).toBe(0);
         }
       } finally {
@@ -311,9 +312,10 @@ describe("worker turn execution loading", () => {
       agentId: "main",
       workspaceDir: fixture.root,
     };
-    await expect(provider.resolveSandbox({ ...request, agentId: "other" })).resolves.toBeNull();
+    using prepared = await provider.prepareSandbox({ ...request, agentId: "other" });
+    expect(prepared.sandbox).toBeNull();
     expect(load).not.toHaveBeenCalled();
-    await expect(provider.resolveSandbox(request)).rejects.toMatchObject({ cause: failure });
+    await expect(provider.prepareSandbox(request)).rejects.toMatchObject({ cause: failure });
     expect(load).toHaveBeenCalledOnce();
   });
 });

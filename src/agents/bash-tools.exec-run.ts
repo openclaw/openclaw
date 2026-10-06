@@ -30,6 +30,7 @@ import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
+import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
 import { EXEC_MANUAL_COLLECTION_FOLLOW_UP } from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
@@ -44,7 +45,6 @@ import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
   type ExecProcessHandle,
-  ExecProcessPreflightError,
   execSchema,
   normalizePathPrepend,
   resolveApprovalRunningNoticeMs,
@@ -153,6 +153,7 @@ export function createExecTool(
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
+    notifyFromConversationTurn,
   } = resolveExecNotificationDefaults(defaults);
   const backgroundFollowUp =
     notifyOnExit && notifyOnExitEmptySuccess
@@ -226,7 +227,7 @@ export function createExecTool(
       let params = requestPreparation.normalizeParams(args);
       // A required command remains an owned tool call until its terminal result is collected.
       // Explicit detached services retain their existing independent process lifetime.
-      const allowBackground = backgroundAvailable && params.required !== true;
+      const allowBackground = backgroundAvailable && params.awaitResults !== true;
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,
       );
@@ -260,43 +261,39 @@ export function createExecTool(
       const elevatedDefaults = defaults?.elevated;
       const elevatedMode = resolveExecElevatedMode(defaults, params.elevated);
       const elevatedRequested = elevatedMode !== "off";
-      if (elevatedRequested) {
-        if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
-          const runtime = defaults?.sandbox ? "sandboxed" : "direct";
-          const gates: string[] = [];
-          const contextParts: string[] = [];
-          const provider = normalizeOptionalString(defaults?.messageProvider);
-          const sessionKey = normalizeOptionalString(defaults?.sessionKey);
-          if (provider) {
-            contextParts.push(`provider=${provider}`);
-          }
-          if (sessionKey) {
-            contextParts.push(`session=${sessionKey}`);
-          }
-          if (!elevatedDefaults?.enabled) {
-            gates.push(
-              "enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)",
-            );
-          } else {
-            gates.push(
-              "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)",
-            );
-          }
-          throw new Error(
-            [
-              `elevated is not available right now (runtime=${runtime}).`,
-              `Failing gates: ${gates.join(", ")}`,
-              contextParts.length > 0 ? `Context: ${contextParts.join(" ")}` : undefined,
-              "Fix-it keys:",
-              "- tools.elevated.enabled",
-              "- tools.elevated.allowFrom.<provider>",
-              "- agents.entries.*.tools.elevated.enabled",
-              "- agents.entries.*.tools.elevated.allowFrom.<provider>",
-            ]
-              .filter(Boolean)
-              .join("\n"),
+      if (elevatedRequested && (!elevatedDefaults?.enabled || !elevatedDefaults.allowed)) {
+        const runtime = defaults?.sandbox ? "sandboxed" : "direct";
+        const gates: string[] = [];
+        const contextParts: string[] = [];
+        const provider = normalizeOptionalString(defaults?.messageProvider);
+        const sessionKey = normalizeOptionalString(defaults?.sessionKey);
+        if (provider) {
+          contextParts.push(`provider=${provider}`);
+        }
+        if (sessionKey) {
+          contextParts.push(`session=${sessionKey}`);
+        }
+        if (!elevatedDefaults?.enabled) {
+          gates.push("enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)");
+        } else {
+          gates.push(
+            "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)",
           );
         }
+        throw new Error(
+          [
+            `elevated is not available right now (runtime=${runtime}).`,
+            `Failing gates: ${gates.join(", ")}`,
+            contextParts.length > 0 ? `Context: ${contextParts.join(" ")}` : undefined,
+            "Fix-it keys:",
+            "- tools.elevated.enabled",
+            "- tools.elevated.allowFrom.<provider>",
+            "- agents.entries.*.tools.elevated.enabled",
+            "- agents.entries.*.tools.elevated.allowFrom.<provider>",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        );
       }
       const requestedTarget = requireValidExecTarget(params.host);
       const target = resolveExecTarget({
@@ -413,7 +410,7 @@ export function createExecTool(
       }
       let run: ExecProcessHandle;
       let settled = false;
-      let effectiveTimeout: number;
+      const effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
       try {
         if (elevatedRequested) {
           logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
@@ -508,7 +505,7 @@ export function createExecTool(
             : undefined;
 
         if (host === "gateway" && !bypassApprovals) {
-          const gatewayResult = await processGatewayAllowlist({
+          gatewayApproval = await processGatewayAllowlist({
             command: params.command,
             workdir,
             env,
@@ -557,15 +554,14 @@ export function createExecTool(
             processContinuationAvailable: allowBackground,
             trustedSafeBinDirs,
           });
-          const immediateResult = gatewayResult.pendingResult ?? gatewayResult.deniedResult;
+          const immediateResult = gatewayApproval.pendingResult ?? gatewayApproval.deniedResult;
           if (immediateResult) {
             return attachExecApprovalReview(immediateResult, approvalReview);
           }
           signal?.throwIfAborted();
-          gatewayApproval = gatewayResult;
-          execCommandOverride = gatewayResult.allowWithoutEnforcedCommand
+          execCommandOverride = gatewayApproval.allowWithoutEnforcedCommand
             ? undefined
-            : gatewayResult.execCommandOverride;
+            : gatewayApproval.execCommandOverride;
         }
 
         // Pending approvals have not started the command. Add fallback warnings only
@@ -574,7 +570,6 @@ export function createExecTool(
           warnings.push(foregroundFallbackWarning);
         }
 
-        effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
         const usePty = params.pty === true && !sandbox;
 
         // Preflight: check Python shell-syntax mistakes and ambiguous interpreter commands
@@ -612,18 +607,22 @@ export function createExecTool(
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
+          notifyFromConversationTurn,
           timeoutSec: effectiveTimeout,
           processContinuationAvailable: allowBackground,
           startupSignal: signal,
           onUpdate,
           beforeSpawn: gatewayApproval?.revalidateBeforeExecution,
           assertCurrent: gatewayApproval?.assertCurrent,
+          initiateSpawn: gatewayApproval?.initiateSpawn,
+          releaseSpawn: gatewayApproval?.releaseSpawn,
           onSettledBeforeNotify: () => {
             settled = true;
           },
         });
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
+        gatewayApproval?.releaseSpawn?.();
         discardPreparedSandboxWorkdir?.();
         return attachExecApprovalReview(ExecProcessPreflightError.unwrap(error), approvalReview);
       }

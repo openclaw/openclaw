@@ -23,6 +23,7 @@ import { retryAsync } from "../../infra/retry.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs-scheduling.js";
 import type { CronJob } from "../types.js";
@@ -205,9 +206,11 @@ export async function maybeApplyTtsToCronPayloads(params: {
   agentId: string;
   ttsAuto?: TtsAutoMode;
 }): Promise<ReplyPayload[]> {
+  const preparedTtsPreferences = await prepareTtsPreferences();
   if (
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
+      preparedTtsPreferences,
       ttsAuto: params.ttsAuto,
       agentId: params.agentId,
       channelId: params.delivery.channel,
@@ -221,6 +224,7 @@ export async function maybeApplyTtsToCronPayloads(params: {
     params.payloads.map((payload) =>
       maybeApplyTtsToPayload({
         payload,
+        preparedTtsPreferences,
         cfg: params.cfg,
         channel: params.delivery.channel,
         kind: "final",

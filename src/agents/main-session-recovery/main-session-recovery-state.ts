@@ -344,6 +344,10 @@ export function transitionMainSessionRecovery(
 ): MainSessionRecoveryTransitionResult {
   switch (command.kind) {
     case "mark_interrupted": {
+      // Queued announcements add fences too. Retain the executing turn before
+      // releasing its lifecycle identity so retries can join this recovery.
+      entry.restartRecoveryDeliverySourceRunId ??=
+        entry.restartRecoveryDeliveryRunId ?? entry.lifecycleRunId;
       const state = entry.mainRestartRecovery;
       if (!state) {
         entry.mainRestartRecovery = createCycle(command.cycleId);

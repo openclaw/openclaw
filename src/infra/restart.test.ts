@@ -351,7 +351,6 @@ describe("gateway restart delivery and delay", () => {
     try {
       const restart = scheduleGatewayRestart({
         delayMs: 2_147_153_648,
-        skipCooldown: true,
       });
 
       expect(restart.delayMs).toBe(60_000);

@@ -21,6 +21,7 @@ import {
   createPreparedSessionHistorySubagentProjection,
   isAppendOnlySessionHistoryDelta,
 } from "../session-history-delta-visibility.js";
+import type { IncognitoSessionHistoryReader } from "../session-history-snapshot.js";
 import { createSessionHistorySubagentProjection } from "../session-history-subagent-projection.js";
 import { projectTranscriptEntryMessage } from "../session-transcript-entry-message.js";
 import {
@@ -61,8 +62,22 @@ type ChatHistoryDeltaParams = {
 export async function readChatHistoryDelta(
   params: ChatHistoryDeltaParams & { incognito?: boolean },
   signal?: AbortSignal,
+  incognito?: IncognitoSessionHistoryReader,
 ): Promise<ChatHistoryDeltaRead> {
   signal?.throwIfAborted();
+  if (incognito) {
+    const actorDelta = await incognito.delta(
+      params.scope,
+      {
+        cursor: params.cursor,
+        maxBytes: Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES),
+        maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
+      },
+      (delta, subagents) => projectChatHistoryDelta(params, delta, subagents),
+    );
+    signal?.throwIfAborted();
+    return actorDelta;
+  }
   if (params.incognito || isIncognitoSessionKey(params.sessionKey)) {
     return readRestoredSessionTranscript(params.scope, () => readLocalChatHistoryDelta(params));
   }

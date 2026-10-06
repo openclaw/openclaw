@@ -71,12 +71,9 @@ export function resolveRegisteredSqliteTranscriptArchiveName(params: {
   );
 }
 
-function findMatchingSqliteTranscriptArchive(params: {
-  archiveDirectory: string;
-  content: string;
-  reason: SessionArchiveReason;
-  sessionId: string;
-}): string | null {
+function findMatchingSqliteTranscriptArchive(
+  params: Parameters<typeof writeTranscriptArchive>[0],
+): string | null {
   let entries: string[];
   try {
     entries = fs.readdirSync(params.archiveDirectory);

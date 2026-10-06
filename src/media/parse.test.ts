@@ -598,6 +598,11 @@ describe("splitMediaFromOutput", () => {
     "MEDIA:https://169.254.169.254/latest/meta-data",
     'MEDIA:"https://169.254.169.254/a.png)"',
     "MEDIA:https://[::1]/a.png",
+    "MEDIA:https://[fe80::1]/a.png",
+    "MEDIA:https://[fd00::1]/a.png",
+    "MEDIA:https://[fd00:ec2::254]/a.png",
+    "MEDIA:https://[::ffff:127.0.0.1]/a.png",
+    "MEDIA:https://[64:ff9b::169.254.169.254]/a.png",
     "MEDIA:https://metadata.google.internal/a.png",
     "MEDIA:https://metadata.google.internal../a.png",
     "MEDIA:https://example..com/a.png",
@@ -606,6 +611,13 @@ describe("splitMediaFromOutput", () => {
   ] as const)("rejects unsafe remote media URL: %s", (input) => {
     expectPolicyRejectedMediaUrlCase(input);
   });
+
+  it.each(["https://[2606:4700::1111]/a.png", "https://[2001:4860:4860::8888]/a.png"] as const)(
+    "accepts public IPv6 remote media URL: %s",
+    (url) => {
+      expectParsedMediaOutputCase(`MEDIA:${url}`, { mediaUrls: [url], text: "" });
+    },
+  );
 
   it.each([
     {
@@ -909,6 +921,53 @@ describe("splitMediaFromOutput", () => {
       },
       extractMarkdownImages,
     );
+  });
+
+  it.each(["\n", "\r\n", "\r"])(
+    "extracts multiline Markdown images across %j line endings",
+    (newline) => {
+      const url = "https://example.com/chart.png";
+      for (const image of [
+        `![chart](${newline}${url}${newline})`,
+        `![quarterly${newline}chart](${url})`,
+        `![chart](${url}${newline}"Quarterly chart")`,
+      ]) {
+        const input = `Before${newline}${image}${newline}After`;
+        expect(splitMediaFromOutput(input, extractMarkdownImages)).toEqual(
+          splitMediaFromOutput(
+            `Before${newline}![chart](${url})${newline}After`,
+            extractMarkdownImages,
+          ),
+        );
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves multiline image captions and media order (whitespace=%s)",
+    (preserveTrailingWhitespace) => {
+      const url = "https://example.com/chart.png";
+      const options = { ...extractMarkdownImages, preserveTrailingWhitespace };
+      expect(
+        splitMediaFromOutput(
+          `Before ![chart](\n${url}\n) after\nMEDIA:/tmp/next.png\nTail`,
+          options,
+        ),
+      ).toEqual(
+        splitMediaFromOutput(`Before ![chart](${url}) after\nMEDIA:/tmp/next.png\nTail`, options),
+      );
+    },
+  );
+
+  it("applies the image allowlist to complete multiline spans", () => {
+    const selected = "file:///tmp/selected.png";
+    const unselected = "![other](\nhttps://example.com/other.png\n)";
+    expect(
+      splitMediaFromOutput(`![selected](\n${selected}\n)\n${unselected}`, {
+        markdownImageAllowlist: [selected],
+        preserveTrailingWhitespace: true,
+      }),
+    ).toMatchObject({ text: unselected, mediaUrls: [selected] });
   });
 
   it("strips markdown image title suffixes from extracted urls", () => {

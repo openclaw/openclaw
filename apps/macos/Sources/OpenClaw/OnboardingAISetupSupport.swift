@@ -131,67 +131,6 @@ extension OnboardingAISetupModel {
         }
     }
 
-    @MainActor
-    struct PersistedActivationVerification {
-        let expectedModel: String
-        let modelTarget: ModelTarget?
-        let routeIdentity: String
-        let activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner
-        let before: PersistedActivationState?
-
-        func reconcile(
-            gateway: GatewayConnection,
-            defaults: UserDefaults,
-            serverLease: GatewayConnection.ServerLease,
-            deadline: ReconciliationDeadline,
-            isCurrentAttempt: () -> Bool,
-            onVerified: (ActivateResult) -> Bool) async -> Bool
-        {
-            let detectTimeoutMs = deadline.remainingMilliseconds(
-                cappedAt: OnboardingAISetupModel.setupDetectionRequestTimeoutMs)
-            guard detectTimeoutMs > 0,
-                  isCurrentAttempt(),
-                  !Task.isCancelled,
-                  OnboardingSystemAgentResumeStore.isOwned(
-                      by: self.activationOwner,
-                      for: self.routeIdentity,
-                      defaults: defaults),
-                  await gateway.activationOwnershipFingerprint(ifCurrentServerLease: serverLease) ==
-                  self.activationOwner.routeFingerprint
-            else { return false }
-            guard let detectData = try? await gateway.request(
-                method: "openclaw.setup.detect",
-                params: [:],
-                timeoutMs: Double(detectTimeoutMs),
-                ifCurrentServerLease: serverLease),
-                await gateway.isCurrentServerLease(serverLease),
-                isCurrentAttempt(),
-                !Task.isCancelled,
-                let detection = try? JSONDecoder().decode(DetectResult.self, from: detectData),
-                OnboardingAISetupModel.activationTransitionWasPersisted(
-                    expectedModel: self.expectedModel,
-                    modelTarget: self.modelTarget,
-                    before: self.before,
-                    after: detection.persistedActivationState)
-            else { return false }
-            let verifyTimeoutMs = deadline.remainingMilliseconds(
-                cappedAt: OnboardingAISetupModel.setupDetectionRequestTimeoutMs)
-            guard verifyTimeoutMs > 0 else { return false }
-            guard let verifyData = try? await gateway.request(
-                method: "openclaw.setup.verify",
-                params: self.modelTarget == .utility ? ["modelTarget": AnyCodable("utility")] : [:],
-                timeoutMs: Double(verifyTimeoutMs),
-                ifCurrentServerLease: serverLease),
-                await gateway.isCurrentServerLease(serverLease),
-                isCurrentAttempt(),
-                !Task.isCancelled,
-                let result = try? JSONDecoder().decode(ActivateResult.self, from: verifyData),
-                result.verifies(modelRef: self.expectedModel, modelTarget: self.modelTarget)
-            else { return false }
-            return onVerified(result)
-        }
-    }
-
     struct DetectResult: Decodable {
         let candidates: [Candidate]
         let unavailableCandidates: [UnavailableCandidate]?

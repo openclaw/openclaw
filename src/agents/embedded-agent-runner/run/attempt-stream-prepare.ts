@@ -90,6 +90,7 @@ type PrepareEmbeddedAttemptStreamInput = {
     | "coreBuiltinToolNames"
     | "replaySafeToolNames"
     | "codeModeExecToolNames"
+    | "sourceReplyCapableToolNames"
     | "sideEffectToolOwners"
     | "trustedLocalMediaToolNames"
   >;
@@ -307,8 +308,7 @@ function prepareStream(
               {
                 customType: "openclaw.plan-completion-check",
                 display: false,
-                content:
-                  "This run’s latest successfully saved plan still has unfinished steps. Before ending, check whether those steps remain required and authorized under the latest user instructions. Continue feasible work from the current transcript; do not repeat completed actions, and reconcile uncertain effects before retrying. If work is complete, reconcile the plan. If user input, approval, an external dependency, or an explicit pause prevents further work, report that concrete limitation. Do not invent completion or new authority.",
+                content: `This run’s latest successfully saved plan still has unfinished steps. Before ending, check whether those steps remain required and authorized under the latest user instructions. Continue feasible work from the current transcript; do not repeat completed actions, and reconcile uncertain effects before retrying. If work is complete, reconcile the plan. If user input, approval, an external dependency, or an explicit pause prevents further work, report that concrete limitation; if your previous reply already reported it, end with only ${SILENT_REPLY_TOKEN}. Do not invent completion or new authority.`,
               },
               { deliverAs: "followUp" },
             );
@@ -420,6 +420,7 @@ function prepareStream(
     coreBuiltinToolNames: agentSession.coreBuiltinToolNames,
     replaySafeToolNames: agentSession.replaySafeToolNames,
     codeModeExecToolNames: agentSession.codeModeExecToolNames,
+    sourceReplyCapableToolNames: agentSession.sourceReplyCapableToolNames,
     sideEffectToolOwners: agentSession.sideEffectToolOwners,
     trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
     internalEvents: attempt.internalEvents,
@@ -494,6 +495,8 @@ function prepareStream(
     options?: EmbeddedAgentQueueMessageOptions,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    prepareCurrent?: () => Promise<void>,
+    compatAssertCurrent = assertCurrent,
   ) => {
     const canInjectMessage = composeInjectionGuard(assertCurrent);
     if (!canInjectMessage()) {
@@ -510,7 +513,8 @@ function prepareStream(
         options,
         attempt.sessionKey,
         canInjectMessage,
-        questionAuthority(assertCurrent, authorityKind),
+        questionAuthority(compatAssertCurrent, authorityKind),
+        prepareCurrent,
       );
     } finally {
       activeQueueAdmissions--;
@@ -545,7 +549,16 @@ function prepareStream(
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
-  };
+    queueMessageAsync: (text, options, preparation, kind) =>
+      queueMessage(
+        text,
+        options,
+        preparation.assertCurrent,
+        kind,
+        preparation.prepareCurrent,
+        preparation.compatAssertCurrent,
+      ),
+  } satisfies NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>;
   const heartbeatReplyOperation =
     attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
   const applyPermissionMode = input.applyPermissionMode;

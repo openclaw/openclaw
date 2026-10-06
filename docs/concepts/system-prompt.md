@@ -16,6 +16,18 @@ Assembly has three layers:
 
 This keeps exported/debug prompt surfaces aligned with live runs without turning every runtime detail into one monolithic builder.
 
+Node-hosted OpenClaw sessions use the same prompt and bootstrap preparation as
+Gateway-local sessions. The Gateway selects agent instructions, persona files,
+skills, memory guidance, and conversation context under the session's existing
+privacy and tool policies. The node supplies its own workspace path, host, OS,
+shell, and active process facts. Moving execution to a node does not switch the
+agent to a generic coding prompt or make unselected node-local bootstrap files
+part of its context.
+
+Context-engine selection, history preparation, and turn settlement remain
+Gateway-owned. Direct post-turn hooks run after the node's workspace results
+are accepted and before its placement claim is released.
+
 Provider plugins can contribute cache-aware guidance without replacing the OpenClaw-owned prompt. A provider runtime can:
 
 - replace one of three named core sections: `interaction_style`, `tool_call_style`, `execution_bias`
@@ -112,9 +124,9 @@ Branches and restored history keep the source version, as do reset boundaries
 and compaction within an existing transcript. Adoption leaves retained history
 untouched; Doctor repairs legacy headerless history with version 3. Unknown projection versions are
 rejected before model submission. Provider message roles remain unchanged to
-preserve retained-thinking prefix compatibility. Cloud-worker prompt assembly
-uses a separate launch contract and still needs this hardening; see
-[the cloud-worker follow-up](https://github.com/openclaw/openclaw/issues/140666).
+preserve retained-thinking prefix compatibility. Cloud-worker turns use the same
+Gateway-owned prompt projection before launch and carry trusted runtime context
+separately to the worker, which adds its execution-host facts.
 
 Resumed room CLI turns retain new thread notes, system events, and MCP App context.
 

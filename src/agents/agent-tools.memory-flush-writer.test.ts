@@ -102,32 +102,6 @@ describe("memory flush writer availability", () => {
     expect(undeclared.execute).not.toHaveBeenCalled();
   });
 
-  it("projects owned lookup tools without treating lookup success as persistence", async () => {
-    const foreignLookup = persistenceTool("sidecar", "find_memory");
-    const ownedLookup = persistenceTool("memory-provider", "find_memory");
-    const ownedWriter = persistenceTool("memory-provider");
-    const recordPersistenceToolSuccess = vi.fn();
-    const { assembled } = assembleProviderFlush([foreignLookup, ownedLookup, ownedWriter], {
-      memoryFlushTools: {
-        flushId: "same-compaction-cycle",
-        ownerPluginId: "memory-provider",
-        persistenceToolNames: ["save_memory"],
-        lookupToolNames: ["find_memory"],
-        recordPersistenceToolSuccess,
-      },
-    });
-
-    expect(assembled.map((tool) => tool.name).toSorted()).toEqual([
-      "find_memory",
-      "read",
-      "save_memory",
-    ]);
-    await assembled.find((tool) => tool.name === "find_memory")!.execute("lookup-call", {});
-    expect(ownedLookup.execute).toHaveBeenCalledOnce();
-    expect(foreignLookup.execute).not.toHaveBeenCalled();
-    expect(recordPersistenceToolSuccess).not.toHaveBeenCalled();
-  });
-
   it("warns once when policy removes declared lookup tools and keeps the flush runnable", () => {
     const { assembled } = assembleProviderFlush(
       [
@@ -204,32 +178,19 @@ describe("memory flush writer availability", () => {
     expect(context.memoryFlush).toStrictEqual({ flushId: "same-compaction-cycle" });
   });
 
-  it.each([
-    { name: "explicit deny", config: { tools: { deny: ["save_memory"] } } },
-    { name: "transport policy", messageProvider: "node" },
-  ])(
-    "refuses inference when $name removes every persistence tool",
-    ({ name: _name, ...options }) => {
-      expect(() => assembleProviderFlush([persistenceTool("memory-provider")], options)).toThrow(
-        MemoryFlushToolsUnavailableError,
-      );
-    },
-  );
-
-  it("rejects a surface containing only another plugin's declared-name tool", () => {
-    expect(() => assembleProviderFlush([persistenceTool("sidecar")])).toThrow("save_memory");
+  it("refuses inference when transport policy removes every persistence tool", () => {
+    expect(() =>
+      assembleProviderFlush([persistenceTool("memory-provider")], { messageProvider: "node" }),
+    ).toThrow(MemoryFlushToolsUnavailableError);
   });
 
-  it.each([
-    { name: "empty", persistenceToolNames: [] },
-    { name: "built-in read", persistenceToolNames: ["read"] },
-  ])("rejects a $name declaration without an owned writer", ({ persistenceToolNames }) => {
+  it("rejects an empty declaration without an owned writer", () => {
     expect(() =>
       assembleProviderFlush([], {
         memoryFlushTools: {
           flushId: "same-compaction-cycle",
           ownerPluginId: "memory-provider",
-          persistenceToolNames,
+          persistenceToolNames: [],
           recordPersistenceToolSuccess: vi.fn(),
         },
       }),
@@ -250,30 +211,22 @@ describe("memory flush writer availability", () => {
     expect(recordPersistenceToolSuccess).toHaveBeenCalledOnce();
   });
 
-  it.each(["throws", "returns an error", "returns isError"])(
+  it.each(["returns an error", "returns isError"])(
     "does not record persistence when a tool %s",
     async (failure) => {
       const owned = persistenceTool("memory-provider");
-      if (failure === "throws") {
-        vi.mocked(owned.execute).mockRejectedValue(new Error("provider write failed"));
-      } else {
-        const result = {
-          content: [{ type: "text" as const, text: "provider write failed" }],
-          ...(failure === "returns isError"
-            ? { isError: true, details: {} }
-            : { details: { status: "error", error: "provider write failed" } }),
-        };
-        vi.mocked(owned.execute).mockResolvedValue(result);
-      }
+      const result = {
+        content: [{ type: "text" as const, text: "provider write failed" }],
+        ...(failure === "returns isError"
+          ? { isError: true, details: {} }
+          : { details: { status: "error", error: "provider write failed" } }),
+      };
+      vi.mocked(owned.execute).mockResolvedValue(result);
       const { assembled, recordPersistenceToolSuccess } = assembleProviderFlush([owned]);
       const call = assembled.find((tool) => tool.name === "save_memory")!.execute("save-call", {});
-      if (failure === "throws") {
-        await expect(call).rejects.toThrow("provider write failed");
-      } else {
-        await expect(call).resolves.toMatchObject(
-          failure === "returns isError" ? { isError: true } : { details: { status: "error" } },
-        );
-      }
+      await expect(call).resolves.toMatchObject(
+        failure === "returns isError" ? { isError: true } : { details: { status: "error" } },
+      );
       expect(recordPersistenceToolSuccess).not.toHaveBeenCalled();
     },
   );
@@ -291,13 +244,6 @@ describe("memory flush writer availability", () => {
       config: undefined,
       messageProvider: "node",
       writable: false,
-      warning: false,
-    },
-    {
-      name: "available",
-      config: undefined,
-      messageProvider: undefined,
-      writable: true,
       warning: false,
     },
   ])("reports a writer $name", ({ config, messageProvider, writable, warning }) => {

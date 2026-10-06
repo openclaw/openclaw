@@ -13,10 +13,4 @@ export type Action = messagingApi.Action;
 export interface ListItem {
   title: string;
   subtitle?: string;
-  action?: Action;
-}
-
-export interface CardAction {
-  label: string;
-  action: Action;
 }

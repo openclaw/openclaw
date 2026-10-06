@@ -130,9 +130,9 @@ export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
 
 export type SessionDatabaseCleanup = { run: () => Promise<void> };
 
-/** Physical path for work; the caller's lexical requestedPath selects the owner for cleanup. */
+/** Physical path for work; callers' lexical paths select the same owner for cleanup. */
 export type SessionHistoryDatabaseTarget = OpenClawAgentDatabaseOptions & {
-  requestedPath?: string;
+  requestedPaths?: readonly string[];
 };
 
 export type HistoryDatabaseResource = {
@@ -420,8 +420,8 @@ export function acquireHistoryDatabaseResource(
     created = true;
   }
   try {
-    if (options.requestedPath !== undefined) {
-      const alias = resolveOpenClawAgentSqlitePath({ ...options, path: options.requestedPath });
+    for (const requestedPath of options.requestedPaths ?? []) {
+      const alias = resolveOpenClawAgentSqlitePath({ ...options, path: requestedPath });
       if (alias !== database.path) {
         resource.retainAlias(alias);
       }

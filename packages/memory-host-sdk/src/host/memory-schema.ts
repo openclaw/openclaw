@@ -20,7 +20,10 @@ import {
 import * as provenanceSchema from "./memory-schema-provenance.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
-import { migrateSqliteSchemaToStrict } from "./openclaw-runtime-sqlite.js";
+import {
+  migrateSqliteSchemaToStrict,
+  migrateSqliteSchemaToStrictInTransaction,
+} from "./openclaw-runtime-sqlite.js";
 export {
   markInvalidImportedMemoryEmbeddings,
   migrateMemoryIndexStorage,
@@ -345,8 +348,7 @@ export function ensureMemoryIndexSchema(params: {
       ON ${MEMORY_INDEX_SOURCES_TABLE}(source);
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path_source
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(path, source);
-    CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
-      ON ${MEMORY_INDEX_CHUNKS_TABLE}(path);
+    DROP INDEX IF EXISTS idx_memory_index_chunks_path;
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(source);
   `);
@@ -362,7 +364,11 @@ export function ensureMemoryIndexSchema(params: {
         ON ${embeddingCacheTable}(updated_at);
     `);
   }
-  migrateSqliteSchemaToStrict(
+  // Worker admission owns BEGIN, foreign-key policy, and the guarded commit.
+  const migrateStrict = params.db.isTransaction
+    ? migrateSqliteSchemaToStrictInTransaction
+    : migrateSqliteSchemaToStrict;
+  migrateStrict(
     params.db,
     buildMemoryIndexStrictSchema({
       embeddingCacheTable,
@@ -389,9 +395,7 @@ export function ensureMemoryIndexSchema(params: {
         dropMemoryChunkFtsTriggers(params.db);
         dropMemoryPathFtsTriggers(params.db);
       }
-      const message = formatErrorMessage(err);
-      ftsAvailable = false;
-      ftsError = message;
+      ftsError = formatErrorMessage(err);
     }
   }
 

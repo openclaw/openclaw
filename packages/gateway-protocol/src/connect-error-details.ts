@@ -45,6 +45,8 @@ export const ConnectErrorDetailCodes = {
   DEVICE_AUTH_SIGNATURE_INVALID: "DEVICE_AUTH_SIGNATURE_INVALID",
   DEVICE_AUTH_PUBLIC_KEY_INVALID: "DEVICE_AUTH_PUBLIC_KEY_INVALID",
   PAIRING_REQUIRED: "PAIRING_REQUIRED",
+  PAIRING_REJECTED: "PAIRING_REJECTED",
+  PAIRING_EXPIRED: "PAIRING_EXPIRED",
   CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH",
 } as const;
 
@@ -79,6 +81,7 @@ type PairingConnectErrorDetails = {
   recommendedNextStep?: ConnectRecoveryNextStep;
   retryable?: boolean;
   pauseReconnect?: boolean;
+  waitForResolution?: boolean;
   deviceId?: string;
   requestedRole?: string;
   requestedScopes?: string[];
@@ -234,6 +237,9 @@ function createPairingConnectErrorDetails(
     ...(params.recommendedNextStep ? { recommendedNextStep: params.recommendedNextStep } : {}),
     ...(params.retryable !== undefined ? { retryable: params.retryable } : {}),
     ...(params.pauseReconnect !== undefined ? { pauseReconnect: params.pauseReconnect } : {}),
+    ...(params.waitForResolution !== undefined
+      ? { waitForResolution: params.waitForResolution }
+      : {}),
     ...(params.deviceId ? { deviceId: params.deviceId } : {}),
     ...(params.requestedRole ? { requestedRole: params.requestedRole } : {}),
     ...(params.requestedScopes ? { requestedScopes: params.requestedScopes } : {}),
@@ -281,6 +287,7 @@ export function buildPairingConnectErrorDetails(
     recommendedNextStep: params.recommendedNextStep,
     retryable: params.retryable,
     pauseReconnect: params.pauseReconnect,
+    waitForResolution: params.waitForResolution,
   });
 }
 
@@ -331,6 +338,8 @@ export function readPairingConnectErrorDetails(
     retryable: typeof details.retryable === "boolean" ? details.retryable : undefined,
     pauseReconnect:
       typeof details.pauseReconnect === "boolean" ? details.pauseReconnect : undefined,
+    waitForResolution:
+      typeof details.waitForResolution === "boolean" ? details.waitForResolution : undefined,
   });
 }
 
@@ -342,7 +351,7 @@ export function readConnectPairingRequiredMessage(
   if (!normalizedMessage) {
     return null;
   }
-  const normalized = normalizedMessage.trim().toLowerCase();
+  const normalized = normalizedMessage.toLowerCase();
   let reason: ConnectPairingRequiredReason | undefined;
   for (const [candidate, metadata] of Object.entries(PAIRING_CONNECT_REASON_METADATA) as Array<
     [ConnectPairingRequiredReason, { message: string }]
@@ -501,10 +510,11 @@ export function formatConnectPairingRequiredMessage(details: unknown): string {
 
 /** Formats connect errors using structured details before falling back to raw messages. */
 export function formatConnectErrorMessage(params: { message?: string; details?: unknown }): string {
-  if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
+  const code = readConnectErrorDetailCode(params.details);
+  if (code === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
     return formatConnectPairingRequiredMessage(params.details);
   }
-  if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+  if (code === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
     return formatProtocolMismatchMessage(params.message, params.details);
   }
   return normalizeOptionalProtocolString(params.message) ?? "gateway request failed";
