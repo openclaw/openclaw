@@ -18,9 +18,30 @@ import type {
   RestartRecoveryTerminalDeliveryEvidenceResult,
   SessionRestartRecoveryState,
 } from "./restart-recovery-types.js";
-import type { InternalSessionEntry, SessionEntry } from "./types.js";
+import type { InternalSessionEntry, RestartRecoveryRun, SessionEntry } from "./types.js";
 
 const MAX_TERMINAL_RUN_IDS = 64;
+
+/** Keeps distinct concurrent runs while transferring each run id to its newest lifecycle owner. */
+export function normalizeMainSessionRecoveryRunFences(
+  runs: Iterable<RestartRecoveryRun>,
+): RestartRecoveryRun[] {
+  return [...new Map([...runs].map((run) => [run.runId, run] as const)).values()].toSorted(
+    (left, right) => left.runId.localeCompare(right.runId),
+  );
+}
+
+export function recordLifecycleFence(
+  entry: Pick<InternalSessionEntry, "restartRecoveryRuns">,
+  run: RestartRecoveryRun,
+): void {
+  // A resumed run keeps its id across Gateway generations. Leaving its old fence
+  // behind makes terminal settlement preserve a dead owner and blocks every later turn.
+  entry.restartRecoveryRuns = normalizeMainSessionRecoveryRunFences([
+    ...(entry.restartRecoveryRuns ?? []),
+    run,
+  ]);
+}
 
 export function isMainRestartRecoveryCandidate(
   entry: { spawnDepth?: unknown; subagentRole?: unknown },

@@ -9,6 +9,7 @@ import {
   hasMainSessionRecoveryClaim,
   isMainRestartRecoveryCandidate,
   isRetryableUnadoptedChatClaim,
+  normalizeMainSessionRecoveryRunFences,
 } from "../../config/sessions/restart-recovery-state.js";
 import {
   applySessionEntryReplacements,
@@ -33,7 +34,6 @@ import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-ow
 import {
   hasCompletedMainSessionRecoveryOutcome,
   isMainRestartRecoveryTerminalOnly,
-  normalizeMainSessionRecoveryRunFences,
   transitionMainSessionRecovery,
 } from "./main-session-recovery-state.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";

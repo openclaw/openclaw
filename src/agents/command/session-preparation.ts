@@ -1,7 +1,10 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
-import { isMainRestartRecoveryCandidate } from "../../config/sessions/restart-recovery-state.js";
+import {
+  isMainRestartRecoveryCandidate,
+  normalizeMainSessionRecoveryRunFences,
+} from "../../config/sessions/restart-recovery-state.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -21,7 +24,6 @@ import {
   prepareCommandHarnessCompletionRecovery,
 } from "../agent-command-restart-recovery.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
-import { normalizeMainSessionRecoveryRunFences } from "../main-session-recovery/main-session-recovery-state.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";

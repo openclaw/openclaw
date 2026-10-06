@@ -5,13 +5,13 @@ import {
 import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
-  RestartRecoveryRun,
 } from "../../config/sessions.js";
 import {
   hasMainSessionRecoveryClaim,
   isMainRestartRecoveryCandidate,
   hasRestartRecoveryTerminalRun,
   isRetryableUnadoptedChatClaim,
+  recordLifecycleFence,
 } from "../../config/sessions/restart-recovery-state.js";
 import { isTerminalSessionStatus } from "../../config/sessions/types.js";
 import {
@@ -120,27 +120,6 @@ function validateRecoveryAdmission(
     return "stale_reservation";
   }
   return hasCurrentForegroundClaim(state, command.lifecycleGeneration) ? "foreground_active" : null;
-}
-
-/** Keeps distinct concurrent runs while transferring each run id to its newest lifecycle owner. */
-export function normalizeMainSessionRecoveryRunFences(
-  runs: Iterable<RestartRecoveryRun>,
-): RestartRecoveryRun[] {
-  return [...new Map([...runs].map((run) => [run.runId, run] as const)).values()].toSorted(
-    (left, right) => left.runId.localeCompare(right.runId),
-  );
-}
-
-export function recordLifecycleFence(
-  entry: Pick<SessionEntry, "restartRecoveryRuns">,
-  run: RestartRecoveryRun,
-): void {
-  // A resumed run keeps its id across Gateway generations. Leaving its old fence
-  // behind makes terminal settlement preserve a dead owner and blocks every later turn.
-  entry.restartRecoveryRuns = normalizeMainSessionRecoveryRunFences([
-    ...(entry.restartRecoveryRuns ?? []),
-    run,
-  ]);
 }
 
 export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: string): boolean {
