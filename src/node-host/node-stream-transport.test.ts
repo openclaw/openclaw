@@ -753,8 +753,10 @@ describe("node stream close acknowledgement", () => {
         callback();
       }
       expect(terminate).toHaveBeenCalledOnce();
-      expect(terminate.mock.contexts[0]).toBeInstanceOf(WebSocket);
       const client = terminate.mock.contexts[0];
+      if (!(client instanceof WebSocket)) {
+        throw new Error("Expected cleanup to terminate the client WebSocket");
+      }
       await once(client, "close");
       expect(client.readyState).toBe(WebSocket.CLOSED);
     } finally {
