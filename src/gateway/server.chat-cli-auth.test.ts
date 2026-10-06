@@ -16,6 +16,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { waitForCatalogPublication } from "./server-methods/models-auth-catalog.test-support.js";
 import { createClaudeAuthFixture } from "./server.chat-cli-auth.test-support.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
@@ -462,13 +463,13 @@ it(
     expect(await probes()).toBe(startupProbes);
 
     elapsed += 5 * 60_000;
-    await expect.poll(available).toBe(true);
+    await waitForCatalogPublication({ signal, read: available, ready: (value) => value === true });
     const loginProbes = await probes();
     expect(loginProbes).toBe(startupProbes + 1);
 
     await fs.rm(credentials);
     elapsed += 5 * 60_000;
-    await expect.poll(available).toBe(false);
+    await waitForCatalogPublication({ signal, read: available, ready: (value) => value === false });
     expect(await probes()).toBe(loginProbes + 1);
   },
 );
