@@ -343,6 +343,17 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                     params.modelOptions.length > 0,
                     hasSelectableModelOptions,
                     params.onModelSetup,
+                    undefined,
+                    undefined,
+                    // Claude Code logs in outside OpenClaw, so name the command instead of "no models".
+                    params.modelOptions.some(
+                      (option) =>
+                        option.unavailableReason === "missing-auth" &&
+                        resolveModelRuntimeRoute(option.provider, option.agentRuntimeId) ===
+                          "claudeCli",
+                    )
+                      ? t("chat.modelControls.claudeCliLoginRequired")
+                      : undefined,
                   )}
                   ${
                     hasOptions || params.accountSection

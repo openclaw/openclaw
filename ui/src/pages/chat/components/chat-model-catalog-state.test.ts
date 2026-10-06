@@ -152,4 +152,45 @@ describe("model catalog refresh presentation", () => {
       expect(input.value).toBe("model");
     }
   });
+
+  it.each([
+    ["anthropic", "claude-cli", "Claude Code needs login — run claude auth login"],
+    ["openai", undefined, "No models available"],
+  ] as const)(
+    "explains an empty picker of logged-out %s rows (runtime %s)",
+    (provider, agentRuntimeId, label) => {
+      const container = document.createElement("div");
+      render(
+        renderChatModelPicker({
+          disabled: false,
+          modelSelectionLocked: false,
+          modelCatalogState: { hasSnapshot: true, status: "ready" },
+          modelOptions: [
+            {
+              agentRuntimeId,
+              commitValue: `${provider}/model`,
+              disabled: true,
+              unavailableReason: "missing-auth",
+              isDefault: true,
+              label: "Model",
+              provider,
+              value: `${provider}/model`,
+            },
+          ],
+          open: true,
+          selectedModelValue: `${provider}/model`,
+          sessionModelPinned: false,
+          sessionKey: "main",
+          triggerModelLabel: "Model",
+          onModelSelect: async () => {},
+          onModelSetup: () => {},
+        }),
+        container,
+      );
+      expect(
+        container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
+      ).toContain(label);
+      expect(container.querySelector("[data-chat-model-setup]")).not.toBeNull();
+    },
+  );
 });
