@@ -1,6 +1,7 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import { styleMap } from "lit/directives/style-map.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { LazyCustomElementRequestController } from "../../app/lazy-custom-element.ts";
@@ -557,6 +558,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     const panelLoad = this.attachmentPanelLoader.visibleState;
     return html`
       <div
+        style=${styleMap({ "--chat-thread-max-width": this.context?.theme.settings.chatMessageMaxWidth })}
         class="new-session-page ${pendingMessage ? "chat" : ""} ${
           incognito ? "new-session-page--incognito" : ""
         }"

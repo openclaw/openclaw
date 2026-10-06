@@ -340,7 +340,7 @@ openclaw-pending-session-create {
   align-items: center;
   gap: 10px;
   width: calc(100% - 36px);
-  max-width: var(--chat-thread-max-width, 48rem);
+  max-width: var(--chat-thread-drag-width, var(--chat-thread-max-width, 48rem));
   min-height: 52px;
   margin: 8px auto 0;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
@@ -413,7 +413,7 @@ openclaw-pending-session-create {
 .chat-composer-neighbor-card.chat-cloud-disk-space-notice,
 .chat-composer-neighbor-card.chat-workspace-conflict-notice {
   width: calc(100% - 36px);
-  max-width: var(--chat-thread-max-width, 48rem);
+  max-width: var(--chat-thread-drag-width, var(--chat-thread-max-width, 48rem));
   margin: 8px auto 0;
   background: var(--chat-composer-surface, var(--popover));
   box-shadow: none;

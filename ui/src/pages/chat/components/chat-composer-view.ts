@@ -33,6 +33,7 @@ import {
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
 import { renderChatGoal, renderChatGoalRecovery } from "./chat-composer-goal.ts";
+import { composerLayout } from "./chat-composer-layout.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
 import type { resolveComposerMenus } from "./chat-composer-menus.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
@@ -409,6 +410,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 focusComposerFromChrome(event, canCompose);
               }}
               ${ref(state.composerInputRef ?? undefined)}
+              ${composerLayout({ width: props.chatMessageMaxWidth, onWidthChange: props.onComposerWidthChange })}
             >
               ${
                 slashMenuVisible

@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { patchSettings } from "../../app/settings.ts";
 import {
   lobsterPetSeed,
   resolveLobsterPetMode,
@@ -105,6 +106,12 @@ export function renderNewSessionDraftComposer(
   );
   return renderNewSessionComposer({
     ...options,
+    columnWidth: options.context?.theme.settings.chatMessageMaxWidth,
+    onColumnWidthChange: (value) => {
+      patchSettings({ chatMessageMaxWidth: value });
+      options.context?.theme.refresh();
+      options.requestUpdate();
+    },
     renderCritters: (floorEnabled) => html`<openclaw-lobster-pet
       .seed=${lobsterPetSeed(`${options.textareaController.critterVisit}:${options.draftOwnerKey}`)}
       .mode=${resolveLobsterPetMode(!gateway?.snapshot.offlineStable, options.context?.sessions.state.result?.sessions)}

@@ -7,8 +7,8 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
-import "../../components/tooltip.ts";
 import { renderChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.ts";
+import "../../components/tooltip.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
@@ -16,6 +16,7 @@ import {
   renderAttachmentReadStatus,
 } from "../chat/components/chat-attachments.ts";
 import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
+import { composerLayout } from "../chat/components/chat-composer-layout.ts";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu.ts";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
 import { renderSelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.ts";
@@ -315,6 +316,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         class="agent-chat__input agent-chat__input--mobile-toolbar${
           options.dictationActive ? " agent-chat__input--dictating" : ""
         }"
+        ${composerLayout({ width: options.columnWidth, onWidthChange: options.onColumnWidthChange })}
         @openclaw-composer-dismiss-invocations=${() => {
           mentionMenu.close();
           emojiMenu.dismiss(options.textareaController.getTextarea());
@@ -380,7 +382,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 }
                 // SAFETY: this input listener is attached directly to the textarea below.
                 const target = event.target as HTMLTextAreaElement;
-                adjustTextareaHeight(target);
+                adjustTextareaHeight(target, { nativeInput: true });
                 const mentions = mentionMenuHost.getMentions();
                 options.onInput(
                   target.value,

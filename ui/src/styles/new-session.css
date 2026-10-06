@@ -151,7 +151,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page__scroll > .new-session-page__draft {
-  max-width: var(--chat-thread-max-width, 48rem);
+  /* The composer owns the width cap; its canvas must remain expandable. */
+  max-width: none;
   margin-inline: auto;
 }
 
@@ -162,7 +163,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   box-sizing: border-box;
   width: calc(100% - 36px);
   max-height: 0;
-  max-width: var(--chat-thread-max-width, 48rem);
+  max-width: var(--chat-thread-drag-width, var(--chat-thread-max-width, 48rem));
   margin: -8px auto 0;
   padding-inline: var(--chat-composer-editor-inset-inline, 14px);
   overflow: hidden;
@@ -971,7 +972,10 @@ wa-popover.new-session-page__where-popover::part(body) {
    decision, and a left-only override here put the draft further from one edge
    than the other while the chat composer stayed symmetric. */
 .new-session-page__composer .new-session-page__message {
-  max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
+  max-height: var(
+    --chat-composer-editor-height-limit,
+    calc(10lh + var(--chat-box-inset) + var(--chat-box-inset))
+  );
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
 }
@@ -1450,7 +1454,7 @@ wa-popover.new-session-page__where-popover::part(body) {
     align-items: flex-start;
     width: calc(100% - 2 * var(--chat-mobile-edge-inset));
     max-height: 0;
-    max-width: var(--chat-thread-max-width, 48rem);
+    max-width: var(--chat-thread-drag-width, var(--chat-thread-max-width, 48rem));
     margin-inline: auto;
     padding-inline: 0;
     white-space: normal;

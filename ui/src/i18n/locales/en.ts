@@ -165,6 +165,7 @@ export const en: TranslationMap & {
     expandedTable: "Expanded table",
     closeTable: "Close expanded table",
     resizeSplitView: "Resize split view",
+    resizeMessageWidth: "Resize message width",
     delete: "Delete",
     remove: "Remove",
     dismiss: "Dismiss",
