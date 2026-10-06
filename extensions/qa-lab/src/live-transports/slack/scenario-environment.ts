@@ -11,6 +11,8 @@ import type {
   SlackObservedMessage,
   SlackQaScenarioImplementation,
   SlackQaScenarioContext,
+  SlackQaScenarioMetadata,
+  SlackQaScenarioRun,
   SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import { assertSlackCodexApprovalModelSupported } from "./slack-live.contracts.js";
@@ -20,9 +22,23 @@ type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 type FlowPreparationInput = Parameters<NonNullable<AdapterDefinition["prepareFlow"]>>[0];
 
-export type SlackQaScenarioEnvironment = Awaited<
-  ReturnType<ReturnType<typeof createSlackQaScenarioEnvironment>["prepareFlow"]>
->["slackScenarioContext"];
+export type SlackQaScenarioEnvironment = {
+  channelId: string;
+  configureScenario: (implementation: SlackQaScenarioImplementation) => Promise<{
+    cfg: OpenClawConfig;
+    primaryModel: string;
+    run: SlackQaScenarioRun;
+  }>;
+  context: Omit<SlackQaScenarioContext, "sentTs">;
+  getMessageWriteCursor: () => Promise<number>;
+  observedMessages: SlackObservedMessage[];
+  readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
+  scenario: SlackQaScenarioMetadata;
+  stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
+  sutAccountId: string;
+  sutIdentity: SlackAuthIdentity;
+  sutWriteClient: WebClient;
+};
 
 function resolveSlackQaReplacePaths(accountId: string, channelId: string): string[] {
   return [
@@ -52,14 +68,16 @@ export function createSlackQaScenarioEnvironment(params: {
 }) {
   const observedMessages: SlackObservedMessage[] = [];
 
-  const prepareFlow = async (input: FlowPreparationInput) => {
-    const context: Omit<SlackQaScenarioContext, "sentTs"> = {
+  const prepareFlow = async (
+    input: FlowPreparationInput,
+  ): Promise<{ slackScenarioContext: SlackQaScenarioEnvironment }> => {
+    const context = {
       channelId: params.channelId,
       driverClient: params.driverClient,
       gateway: input.gateway as never,
       sutIdentity: params.sutIdentity,
       sutReadClient: params.sutReadClient,
-    };
+    } satisfies Omit<SlackQaScenarioContext, "sentTs">;
     return {
       slackScenarioContext: {
         channelId: params.channelId,
@@ -116,7 +134,7 @@ export function createSlackQaScenarioEnvironment(params: {
         sutAccountId: params.accountId,
         sutIdentity: params.sutIdentity,
         sutWriteClient: params.sutWriteClient,
-      },
+      } satisfies SlackQaScenarioEnvironment,
     };
   };
 
