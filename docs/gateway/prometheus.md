@@ -349,6 +349,12 @@ applies.
 
 The `transcripts` request family includes canonical event appends and retention.
 
+Shared-state reads use kind `stateRead` (formerly `state_read`) and the same
+bounded operation-family classifier as SQLite writers. Examples include
+`devicePairing`, `acpSessions`, `workers`, and `cron`; standalone admission reads
+use `admit`. The read owner supplies the operation before queue admission, so
+queue wait and execution use the same class without labeling request payloads.
+
 Dispatch is the host scheduler's allocation of a slot, not a worker-side CPU
 timestamp. Request duration includes preparation, cold worker startup, transport,
 host exchanges, and I/O. General task pools report `task`; SQLite commands retain
@@ -370,6 +376,9 @@ histogram_quantile(0.99,
 
 # Request classes occupying dispatch slots for the most wall time
 sum by (kind, request_class) (rate(openclaw_worker_request_seconds_sum[5m]))
+
+# Shared-state read rate, by operation family
+sum by (request_class) (rate(openclaw_worker_request_seconds_count{kind="stateRead"}[5m]))
 ```
 
 ### Memory and process churn
