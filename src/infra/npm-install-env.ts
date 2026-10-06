@@ -1,4 +1,3 @@
-// Builds npm environment overrides for safe project-local installs.
 import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -10,7 +9,6 @@ import { resolveNpmCommand } from "./npm-command.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
-/** Options that scope npm config and cache paths for project-local installs. */
 export type NpmProjectInstallEnvOptions = NpmConfigScope & {
   cacheDir?: string;
 };
@@ -321,7 +319,6 @@ export function createNpmFreshnessBypassArgs(
   return [`--before=${now.toISOString()}`];
 }
 
-/** Applies the same npm freshness bypass policy through environment variables. */
 export function applyNpmFreshnessBypassEnv(
   env: NodeJS.ProcessEnv,
   now = new Date(),

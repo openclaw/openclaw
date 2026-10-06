@@ -62,7 +62,7 @@ export type CapturedSessionEntryCurrentRead =
       readCurrent(): Promise<SessionEntryCurrentFacts | undefined>;
     }
   | {
-      kind: "native" | "missing";
+      kind: "native" | "incognito" | "missing";
       source?: undefined;
       assertSourceCurrent(this: void): void;
       readCurrent(): SessionEntryCurrentFacts | undefined;

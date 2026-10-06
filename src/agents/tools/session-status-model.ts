@@ -179,3 +179,19 @@ export async function patchSessionStatusModel(params: {
     changedModel: true,
   };
 }
+
+export function withActiveStatusModelIdentity(
+  entry: SessionEntry,
+  identity: { provider?: string; model: string },
+): SessionEntry {
+  const next: SessionEntry = {
+    ...entry,
+    model: identity.model,
+    ...(identity.provider ? { modelProvider: identity.provider } : {}),
+  };
+  delete next.providerOverride;
+  delete next.modelOverride;
+  delete next.modelOverrideSource;
+  delete next.modelOverrideRouteResolution;
+  return next;
+}

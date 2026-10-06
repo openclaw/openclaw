@@ -19,6 +19,7 @@ export async function recordAgentTurnExecutionOutcome(
         sessions.set(spawn.childSessionKey, {
           sessionKey: spawn.childSessionKey,
           url: spawn.sessionUrl,
+          ...(spawn.publicRead === true ? { publicRead: true } : {}),
           ...(spawn.label ? { label: spawn.label } : {}),
         });
       }

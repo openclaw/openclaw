@@ -98,7 +98,6 @@ export function readTranscriptIdentityByEventId(
   return createTranscriptIdentityReader(database, sessionId)(eventId);
 }
 
-/** Loads raw transcript events synchronously from the additive SQLite transcript store. */
 export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
   return loadTranscriptReadSnapshotSync(scope).events;
 }
@@ -473,7 +472,6 @@ export function readTranscriptStatsBatchReadOnlySync(
   return results;
 }
 
-/** Reads the latest visible assistant text from SQLite transcript rows in reverse order. */
 export function loadLatestAssistantText(
   scope: SessionTranscriptReadScope,
 ): LatestTranscriptAssistantText | undefined {

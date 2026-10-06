@@ -163,11 +163,14 @@ export type SidebarRecentSession = {
   ownWorkspaceConflictCount?: number;
   unreadChildCount?: number;
   queuedChildCount?: number;
+  /** Unread hidden runs folded into this row; acknowledged together with it. */
+  unreadHiddenRuns?: readonly SidebarRecentSession[];
   /** Hidden run state remains visible when persistent children are expanded. */
   subagentSummary?: Pick<
     SidebarRecentSession,
     | "attention"
     | "unreadChildCount"
+    | "unreadHiddenRuns"
     | "queuedChildCount"
     | "runningChildCount"
     | "failedChildCount"

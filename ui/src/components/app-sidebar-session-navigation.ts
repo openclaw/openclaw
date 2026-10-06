@@ -44,6 +44,7 @@ import {
   collectKnownSidebarSessionCatalogIds,
   extendSidebarSessionSelection,
   findProjectedSidebarSession,
+  findSidebarSessionInTree,
   resolveActiveSidebarAgent,
   resolveLatestSidebarAgentSession,
   resolveSidebarMainSessionKey,
@@ -638,6 +639,16 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       navigationState: this.getSessionNavigationState(),
       sessionResultsByAgent: this.sessionData.sessionResultsByAgent,
     });
+  }
+
+  /** Menus act on folded hidden-run state, which only the rendered tree keeps. */
+  findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined {
+    return (
+      findSidebarSessionInTree(
+        this.selectedAgentSessionRows(this.getSessionNavigationState()),
+        (row) => row.key === sessionKey,
+      ) ?? this.findSidebarSessionByKey(sessionKey)
+    );
   }
 
   findSidebarHovercardRowByKey(sessionKey: string) {

@@ -146,27 +146,10 @@ function resolveSourceReplyThreadPlacement(
   return currentThreadId ? "unknown" : "match";
 }
 
-function resolveThreadedSourceTarget(
+/** Arms the fail-closed state before a terminal source reply can reach a provider. */
+export async function beginTerminalSourceReplyDelivery(
   params: SourceReplyTranscriptMirrorParams,
-  requestedTarget: string,
-): string {
-  const threadId = readTrimmedStringAlias(params.actionParams, ["threadId", "messageThreadId"]);
-  if (!threadId) {
-    return requestedTarget;
-  }
-  return (
-    normalizeOptionalString(
-      getChannelPlugin(params.channel as ChannelId)?.threading?.resolveCurrentChannelId?.({
-        to: requestedTarget,
-        threadId,
-      }),
-    ) ?? requestedTarget
-  );
-}
-
-function resolveTerminalSourceReplyDeliveryReceipt(
-  params: SourceReplyTranscriptMirrorParams,
-): TerminalSourceReplyDeliveryReceipt | undefined {
+): Promise<TerminalSourceReplyDeliveryStart> {
   const toolCallId = normalizeOptionalString(params.toolCallId);
   if (params.sourceReplyFinal !== true) {
     return undefined;
@@ -184,23 +167,13 @@ function resolveTerminalSourceReplyDeliveryReceipt(
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   // Agent admission promotes legacy aliases before the run starts. The signed
   // runtime session key therefore owns both the active claim and transcript.
-  return {
+  const receipt: TerminalSourceReplyDeliveryReceipt = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sourceTurnId,
     storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
     toolCallId,
   };
-}
-
-/** Arms the fail-closed state before a terminal source reply can reach a provider. */
-export async function beginTerminalSourceReplyDelivery(
-  params: SourceReplyTranscriptMirrorParams,
-): Promise<TerminalSourceReplyDeliveryStart> {
-  const receipt = resolveTerminalSourceReplyDeliveryReceipt(params);
-  if (!receipt) {
-    return undefined;
-  }
   const result = await beginRestartRecoveryTerminalDelivery(receipt);
   if (result === "not-applicable") {
     return undefined;
@@ -304,7 +277,15 @@ function matchesCurrentSourceTarget(
   if (threadPlacement === "mismatch") {
     return false;
   }
-  const threadedTarget = resolveThreadedSourceTarget(params, requestedTarget);
+  const threadId = readTrimmedStringAlias(params.actionParams, ["threadId", "messageThreadId"]);
+  const threadedTarget = threadId
+    ? (normalizeOptionalString(
+        getChannelPlugin(params.channel as ChannelId)?.threading?.resolveCurrentChannelId?.({
+          to: requestedTarget,
+          threadId,
+        }),
+      ) ?? requestedTarget)
+    : requestedTarget;
   const plugin = getChannelPlugin(params.channel as ChannelId);
   const matchesToolContextTarget = plugin?.threading?.matchesToolContextTarget;
   if (

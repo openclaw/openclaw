@@ -84,9 +84,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
     if (fromPath && (await checkBinary(fromPath))) {
       return fromPath;
     }
-  } catch {
-    // PATH lookup failed, continue
-  }
+  } catch {}
 
   const macAppPath = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
   if (await checkBinary(macAppPath)) {
@@ -104,9 +102,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
         return candidate;
       }
     }
-  } catch {
-    // locate failed, continue
-  }
+  } catch {}
 
   return null;
 }

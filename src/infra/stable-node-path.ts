@@ -1,4 +1,3 @@
-// Resolves Homebrew Node binary paths to stable symlink targets.
 import { pathExists } from "@openclaw/fs-safe/advanced";
 import { stableHomebrewNodePathCandidates } from "@openclaw/normalization-core/stable-node-path";
 

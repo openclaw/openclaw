@@ -85,7 +85,13 @@ function prepareEditArguments(input: unknown): EditToolInput {
       if (Array.isArray(parsed)) {
         args.edits = parsed;
       }
-    } catch {}
+    } catch {
+      if (typeof args.oldText !== "string" || typeof args.newText !== "string") {
+        throw new Error(
+          "Could not parse edits as JSON. Provide a complete JSON array of replacements.",
+        );
+      }
+    }
   }
 
   let edits = Array.isArray(args.edits)

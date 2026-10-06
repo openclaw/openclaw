@@ -141,12 +141,12 @@ describe("exact SQLite session batches", () => {
       const original = openOpenClawAgentDatabase(scope);
       closeOpenClawAgentDatabaseByPath(original.path);
       const database = openOpenClawAgentDatabase(scope);
-      const read = () => {
+      const read = (sessionKey = scope.sessionKey) => {
         if (reader === "single") {
-          return loadExactSessionEntryReadOnly(scope);
+          return loadExactSessionEntryReadOnly({ ...scope, sessionKey });
         }
         const result = loadExactSessionEntryCandidatesReadOnlyBatch([
-          { ...scope, sessionKeys: [scope.sessionKey] },
+          { ...scope, sessionKeys: [sessionKey] },
         ])[0]!;
         if (!result.ok) {
           throw result.error;
@@ -155,6 +155,8 @@ describe("exact SQLite session batches", () => {
       };
       if (admission !== "cold") {
         expect(read()?.entry.label).toBe("before");
+        // Keep admission warm while evicting the target row so the race reaches SQL.
+        expect(read("agent:main:missing")).toBeUndefined();
       }
       if (admission === "policy") {
         setCanonicalSqliteSessionMainKey(database, "custom");

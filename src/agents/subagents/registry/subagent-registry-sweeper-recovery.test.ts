@@ -172,7 +172,7 @@ describe("subagent registry recovery scheduling", () => {
           );
           replaceSessionEntrySync(
             { sessionKey: sibling.childSessionKey, env: state.env },
-            { ...sessionEntry, sessionId: "sibling-session", status: "running" },
+            { ...sessionEntry, sessionId: "sibling-session", status: undefined },
           );
           const completion = createDeferred();
           completeSubagentRunWithRecovery.mockReturnValueOnce(completion.promise);

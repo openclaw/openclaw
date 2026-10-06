@@ -256,7 +256,6 @@ async function collectRelativeFiles(
   }
 }
 
-/** Collects package dist files that should be present after install/update publication. */
 export async function collectPackageDistInventory(
   packageRoot: string,
   options: {
@@ -275,7 +274,6 @@ export async function collectPackageDistInventory(
   return await collectRelativeFiles(path.join(packageRoot, "dist"), packageRoot, rules, fsLimit);
 }
 
-/** Reads an existing package dist inventory, returning null when the inventory is absent. */
 export async function readPackageDistInventoryIfPresent(
   packageRoot: string,
 ): Promise<string[] | null> {

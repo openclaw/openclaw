@@ -10,11 +10,12 @@ import {
 } from "../../infra/device-identity.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { captureEnv } from "../../test-utils/env.js";
 import { runNodeIdentityShow } from "./identity.js";
 
 describe("runNodeIdentityShow", () => {
   let stateDir: string;
-  let prevStateDir: string | undefined;
+  let originalEnv: ReturnType<typeof captureEnv>;
   let stdout: string[];
   let logSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -24,7 +25,7 @@ describe("runNodeIdentityShow", () => {
 
   beforeEach(() => {
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-identity-"));
-    prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    originalEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
     process.env.OPENCLAW_STATE_DIR = stateDir;
     stdout = [];
     logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -40,11 +41,7 @@ describe("runNodeIdentityShow", () => {
 
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
-    if (prevStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = prevStateDir;
-    }
+    originalEnv.restore();
     logSpy.mockRestore();
     errorSpy.mockRestore();
     exitSpy.mockRestore();

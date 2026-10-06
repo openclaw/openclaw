@@ -1,6 +1,12 @@
 import "../../../styles/chat/side-panel.css";
 import "./chat-files-panel.ts";
-import { html, nothing, render as renderTemplate, type TemplateResult } from "lit";
+import {
+  html,
+  nothing,
+  render as renderTemplate,
+  type PropertyValues,
+  type TemplateResult,
+} from "lit";
 import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
@@ -86,11 +92,16 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) fetchFavicon?: LinkFaviconFetcher;
   @property({ attribute: false }) callbacks: SidebarRegionCallbacks | null = null;
   @property({ type: Boolean }) narrow = false;
+  /** A narrow pane shows the active panel focused whatever the layout says; nothing to restore. */
+  @property({ type: Boolean }) sideFocusLocked = false;
+  /** The control the pane saw open the panel there, taken once; see moveFocusWithSideLock. */
+  @property({ attribute: false }) sideFocusOrigin?: () => HTMLElement | null;
   @property({ type: Number }) availableWidth = 0;
   private previousGeometry = "";
   private geometryFrame: number | null = null;
   private contentMounted = false;
   private focusedSurface: Element | null = null;
+  private focusBeforeSideLock: HTMLElement | null = null;
   private nativeCloseListeners: AbortController | undefined;
 
   override connectedCallback(): void {
@@ -434,7 +445,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       }
       <span class="side-panel__action-group side-panel__action-group--close">
         ${
-          active
+          active && !this.sideFocusLocked
             ? html`<openclaw-tooltip .content=${expandLabel}>
                 <button
                   class="rail-header__action side-panel__expand"
@@ -593,11 +604,58 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       </div>`;
   }
 
-  protected override updated() {
+  protected override updated(changed: PropertyValues<this>) {
     const root = this.parentElement?.querySelector<HTMLElement>(".sidebar-region__right-runtime");
     if (root) {
       renderTemplate(this.renderPanel(), root);
       this.scheduleGeometryCommit();
+    }
+    if (changed.has("sideFocusLocked")) {
+      this.moveFocusWithSideLock(root);
+    }
+  }
+
+  /**
+   * A narrow pane puts the side panel in the main view's place, hiding whatever
+   * held focus there. Focus continues on the panel's tab, and goes back to that
+   * control once the panel is closed.
+   */
+  private moveFocusWithSideLock(side: HTMLElement | null | undefined): void {
+    const region = this.parentElement;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const inSide = Boolean(active && side?.contains(active));
+    if (this.sideFocusLocked) {
+      // The first panel a pane opens mounts this component after the browser
+      // has dropped focus from the hidden view; the pane then says what held it.
+      const given = this.sideFocusOrigin?.() ?? null;
+      const origin = active && region?.contains(active) && !inSide ? active : given;
+      // A pane that merely loads this way has neither, and takes no focus.
+      if (origin) {
+        this.focusBeforeSideLock = origin;
+        // A tab strip rendered just now is focusable from its next frame.
+        requestAnimationFrame(() => {
+          const now = document.activeElement;
+          const moved = now instanceof HTMLElement && now !== document.body && now !== origin;
+          if (this.sideFocusLocked && !moved) {
+            side?.querySelector<HTMLElement>('[data-region-header="side"] wa-tab[active]')?.focus();
+          }
+        });
+      }
+      return;
+    }
+    const before = this.focusBeforeSideLock;
+    this.focusBeforeSideLock = null;
+    const adrift = !active || active === document.body;
+    // A panel that is still open, beside or under the main view, keeps the focus it has.
+    if (!before || !(adrift || (inSide && this.layout.open !== true))) {
+      return;
+    }
+    before.focus({ preventScroll: true });
+    if (document.activeElement !== before) {
+      // That control is gone by now; carry on from the main view's own header.
+      region
+        ?.querySelector<HTMLElement>(":scope > .sidebar-region__header button:not([disabled])")
+        ?.focus({ preventScroll: true });
     }
   }
 

@@ -304,6 +304,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             },
             input: { text: approved, timestamp: Date.now(), idempotencyKey: `${runId}:user` },
             ...buildRestartSafeChatTranscriptState({
+              sourceIngress: "control-ui",
               admission: restartSafeAdmission!,
               clientRunId: runId,
               startedAt: Date.now(),

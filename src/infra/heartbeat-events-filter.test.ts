@@ -75,18 +75,16 @@ describe("heartbeat event prompts", () => {
       ],
     },
     {
-      name: "suppresses empty exec completion prompts",
-      events: ["", "   "],
-      opts: undefined,
-      expected: ["no command output was found", "Reply NO_REPLY only"],
-      unexpected: ["Please relay the command output to the user", "system messages above"],
-    },
-    {
-      name: "suppresses metadata-only successful exec completions",
+      name: "keeps metadata-only successful exec completions as continuations",
       events: ["Exec completed (abc12345, code 0)"],
       opts: undefined,
-      expected: ["no command output was found", "Reply NO_REPLY only"],
-      unexpected: ["Please relay the command output to the user", "abc12345"],
+      expected: [
+        "Exec completed (abc12345, code 0) without captured stdout/stderr.",
+        "continue any outstanding authorized work",
+        "Do not ask the user to provide missing logs",
+        "reply NO_REPLY only",
+      ],
+      unexpected: ["Please relay the command output to the user"],
     },
     {
       name: "applies relevance guidance to failures without captured logs",
@@ -153,14 +151,6 @@ describe("heartbeat event prompts", () => {
 
   it("uses heartbeat_respond for empty cron events in response-tool mode", () => {
     const prompt = buildCronEventPrompt([""], { useHeartbeatResponseTool: true });
-
-    expect(prompt).toContain("heartbeat_respond");
-    expect(prompt).toContain("notify=false");
-    expect(prompt).not.toContain("HEARTBEAT_OK");
-  });
-
-  it("uses heartbeat_respond for quiet exec completion events in response-tool mode", () => {
-    const prompt = buildExecEventPrompt([""], { useHeartbeatResponseTool: true });
 
     expect(prompt).toContain("heartbeat_respond");
     expect(prompt).toContain("notify=false");

@@ -106,7 +106,6 @@ async function withCommittedHistoryMaintenance<T>(
   }
 }
 
-/** Resets one persisted session entry using SQLite session rows. */
 export async function resetSessionEntryLifecycle(
   params: ResetSessionEntryLifecycleParams,
 ): Promise<ResetSessionEntryLifecycleResult> {
@@ -539,7 +538,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
   }
 }
 
-/** Deletes one persisted session entry using SQLite session rows. */
 export async function deleteSessionEntryLifecycle(
   params:
     | DeleteSessionEntryLifecycleParams

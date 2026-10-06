@@ -10,7 +10,6 @@ import { runSqliteDeferredTransactionSync } from "../../../infra/sqlite-transact
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import {
-  isSettledSubagentRequesterHistory,
   projectSubagentRunForMaintenance,
   projectSubagentRunForSessionList,
 } from "./subagent-delivery-state.js";
@@ -479,28 +478,4 @@ export function subagentRunsDurableBasisMatches(
     loadSubagentRunsForSessionsInDatabase(database, basis.sessionKeys, basis.liveTopology)
       .digest === basis.digest
   );
-}
-
-/** Mutation ownership cannot discard undecodable retained rows as presentation readers do. */
-export function hasSubagentSessionOwnerInDatabase(
-  database: Pick<OpenClawStateDatabase, "db">,
-  sessionKey: string,
-): boolean {
-  return runSqliteDeferredTransactionSync(database.db, () => {
-    const child = executeSqliteQuerySync(
-      database.db,
-      getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
-        .selectFrom("subagent_runs")
-        .select("run_id")
-        .where("child_session_key", "=", sessionKey)
-        .limit(1),
-    );
-    if (child.rows.length > 0) {
-      return true;
-    }
-    return readSubagentRegistryRows({ kind: "session", sessionKey }, database).some((row) => {
-      const entry = rowToSubagentRunRecord(row);
-      return !entry || !isSettledSubagentRequesterHistory(entry);
-    });
-  });
 }

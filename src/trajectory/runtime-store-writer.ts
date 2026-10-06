@@ -15,10 +15,8 @@ import {
   resolveSqliteSessionKey,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import {
-  isNativeSessionEntryRead,
-  withSessionEntriesFromStoresInWorker,
-} from "../config/sessions/session-entry-read-runtime.js";
+import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
+import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import {

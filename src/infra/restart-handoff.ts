@@ -90,16 +90,11 @@ function formatShortDuration(ms: number): string {
 
 const DIAGNOSTIC_WHITESPACE = new RegExp(String.raw`[\u0000-\u001f\u007f\s]+`, "gu");
 
-function formatDiagnosticValue(value: string): string {
-  return value.replaceAll(DIAGNOSTIC_WHITESPACE, " ").trim();
-}
-
-/** Format a compact diagnostic for a recently consumed restart handoff. */
 export function formatGatewayRestartHandoffDiagnostic(
   handoff: GatewayRestartHandoff,
   now = Date.now(),
 ): string {
-  const reason = handoff.reason ? formatDiagnosticValue(handoff.reason) : undefined;
+  const reason = handoff.reason?.replaceAll(DIAGNOSTIC_WHITESPACE, " ").trim();
   const detail = [
     `${handoff.restartKind} via ${handoff.supervisorMode}`,
     `source=${handoff.source}`,

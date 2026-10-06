@@ -57,6 +57,7 @@ type SidebarPanelDefinitionParams = {
   processesPresented?: PresentationValue;
   onRefreshProcesses?: () => void;
   subagentsAvailable: boolean;
+  subagentsShowRequest?: () => string | null | undefined;
   onRefreshSubagents: () => void;
   onSubagentSessionSelect: (
     sessionKey: string,
@@ -311,6 +312,7 @@ export function sidebarPanelDefinitions(
             .presentationId=${params.panePresentationId}
             .inputRegion=${params.subagentsInputRegion}
             .presented=${livePresentation(params.subagentsPresented)}
+            .showRequest=${params.subagentsShowRequest}
             .onSessionSelect=${params.onSubagentSessionSelect}
           ></openclaw-chat-subagents-panel>`
         : null,

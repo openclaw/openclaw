@@ -1,4 +1,3 @@
-/** Detects mutable file operands in approved commands. */
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import {

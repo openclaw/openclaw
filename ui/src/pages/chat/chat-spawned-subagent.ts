@@ -6,6 +6,7 @@ import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   areUiSessionKeysEquivalent,
   isDashboardSessionKey,
+  isSubagentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 
 /** The session's direct children as the pane holds them. */
@@ -17,6 +18,9 @@ export type SubagentRoster = {
 
 /** What a launch row needs to show its subagent's session and open it. */
 export type SubagentRowContext = Pick<SubagentRoster, "subagentSessions"> & {
+  /** Shows a subagent the Subagents panel lists. */
+  onOpenSubagent?: (sessionKey: string) => void;
+  /** Opens a session; any other subagent opens this way. */
   onOpenSession?: (sessionKey: string) => void;
 };
 
@@ -26,6 +30,8 @@ export type SpawnedSubagent = {
   /** Its session, when the roster holds it; `runtimeMs` only once it finished. */
   session?: {
     key: string;
+    /** Whether the Subagents panel lists it. */
+    listed: boolean;
     running: boolean;
     runtimeMs: number | null;
     /** How it ended, when not by finishing its work. */
@@ -71,6 +77,14 @@ export function ownSessionLaunchCalls(cards: readonly ToolCard[]): Set<string> {
 export function spawnedSubagentLabel(card: LaunchCard): string | undefined {
   const launch = readLaunch(card);
   return launch && !launch.ownSession ? launch.label : undefined;
+}
+
+/** The children the Subagents panel lists. A swarm's workers report through its own progress. */
+export function isSubagentsPanelSession(row: GatewaySessionRow): boolean {
+  return (
+    (row.classification === "subagent" || isSubagentSessionKey(row.key)) &&
+    !row.swarmGroupId?.trim()
+  );
 }
 
 /** A subagent that handed off to its own subagents is still at work. */
@@ -121,6 +135,7 @@ export function resolveSpawnedSubagent(
     label,
     session: {
       key: row.key,
+      listed: isSubagentsPanelSession(row),
       running,
       runtimeMs: running ? null : finishedRuntimeMs(row),
       ...(ended ? { ended } : {}),
@@ -146,6 +161,7 @@ export function spawnedSubagentsRenderKey(rows: readonly GatewaySessionRow[] | u
         const running = isUnfinishedSubagent(row);
         return JSON.stringify([
           row.key,
+          isSubagentsPanelSession(row),
           running,
           running ? null : finishedRuntimeMs(row),
           running ? null : endedWithoutFinishing(row),

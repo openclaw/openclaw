@@ -1,4 +1,3 @@
-// Coordinates parsed reply directives before get-reply executes commands or agents.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

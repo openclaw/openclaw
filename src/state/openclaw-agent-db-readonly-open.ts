@@ -58,21 +58,23 @@ export function readOpenClawAgentDatabase<T>(
   }
 }
 
+function hasAdmittedAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase): boolean {
+  const userVersion = assertSupportedAgentSchemaVersion(database.db, database.path);
+  assertCanonicalAgentPersistenceVersion(database.db, database.path, userVersion);
+  const schemaMeta = readExistingAgentSchemaMeta(database.db);
+  if (!schemaMeta) {
+    return false;
+  }
+  assertExistingAgentSchemaOwner(schemaMeta, database.agentId, database.path);
+  assertCanonicalSessionValidationSchema(database.db);
+  return true;
+}
+
 /** Recheck committed admission facts before using an existing read-only connection. */
 export function hasOpenClawAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase): boolean {
   return runSqliteReadOperationSync(
     database.db,
-    () => {
-      const userVersion = assertSupportedAgentSchemaVersion(database.db, database.path);
-      assertCanonicalAgentPersistenceVersion(database.db, database.path, userVersion);
-      const schemaMeta = readExistingAgentSchemaMeta(database.db);
-      if (!schemaMeta) {
-        return false;
-      }
-      assertExistingAgentSchemaOwner(schemaMeta, database.agentId, database.path);
-      assertCanonicalSessionValidationSchema(database.db);
-      return true;
-    },
+    () => hasAdmittedAgentReadOnlySchema(database),
     "fresh",
   );
 }
@@ -145,8 +147,11 @@ export function openOpenClawAgentDatabaseReadOnly(
     enableNodeSqliteKyselyStatementCache(db);
     registerOpenClawAgentDatabaseIdentity(db);
     const database = { agentId, db, path: pathname, close };
-    admitSqliteSchema(db);
-    if (!hasOpenClawAgentReadOnlySchema(database)) {
+    const hasSchema = runSqliteReadOperationSync(db, () => {
+      admitSqliteSchema(db);
+      return hasAdmittedAgentReadOnlySchema(database);
+    });
+    if (!hasSchema) {
       close();
       return { found: false, reason: "schema-missing" };
     }

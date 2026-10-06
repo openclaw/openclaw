@@ -89,7 +89,7 @@ export function createIncognitoSessionEntryWithTranscript<TError>(
           held?.assertCurrent();
           options.onPhase?.("commit");
           const entry = await actor.sessions.entry(
-            { assertCurrent: assertHeld },
+            { assertCurrent: assertHeld, entryCreation: operation },
             {
               type: "session.entry.creation.commit",
               input,

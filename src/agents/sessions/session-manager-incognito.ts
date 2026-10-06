@@ -250,9 +250,16 @@ export async function readSessionManagerContextAsync<T>(
       actor?.assertCurrent();
       assertNative?.();
     };
-    const consumeSnapshot = async (snapshot: SessionTranscriptContextSnapshot) => {
+    const consumeSnapshot = async (
+      snapshot: SessionTranscriptContextSnapshot,
+      assertReaderCurrent?: () => void,
+    ) => {
       const messages = (function* () {
-        yield* snapshot.messages;
+        for (const message of snapshot.messages) {
+          assertCurrent();
+          assertReaderCurrent?.();
+          yield message;
+        }
       })();
       try {
         return await read(messages, snapshot.header);
@@ -288,7 +295,7 @@ export async function readSessionManagerContextAsync<T>(
     return withSessionTranscriptReadSource(
       captured,
       consume,
-      async ({ scope, expectedIdentity, assertCurrent: assertReadOwner }) => {
+      async ({ scope, expectedIdentity, owner, assertCurrent: assertReadOwner }) => {
         const readTarget = {
           ...scope,
           sessionId: captured.sessionId,
@@ -306,7 +313,7 @@ export async function readSessionManagerContextAsync<T>(
           expectedIdentity,
         );
         assertDurable();
-        const result = await consumeSnapshot(snapshot);
+        const result = await consumeSnapshot(snapshot, owner.assertCurrent);
         assertDurable();
         let accepted: { value: T } | undefined;
         await readSessionTranscriptAnchorsAsync(

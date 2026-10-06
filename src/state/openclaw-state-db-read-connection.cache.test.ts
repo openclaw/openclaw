@@ -9,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as executionIdentityContext from "../audit/execution-identity-context.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
@@ -160,12 +161,23 @@ it("observes peer commits and closes only the invalidated physical identity", ()
   const reader = first.read(({ db }) => db);
   const siblingReader = second.read(({ db }) => db);
   const peer = sqlite.openNodeSqliteDatabase(first.pathname);
+  const observation = observeSqliteReadSql(sqlite.requireNodeSqlite().StatementSync.prototype);
   try {
     peer.exec("UPDATE sample SET value = 2");
-    expect(first.value()).toBe(2);
+    expect(
+      first.read(({ db }) => {
+        const select = () =>
+          runSqliteReadOperationSync(db, () => db.prepare("SELECT value FROM sample").get()?.value);
+        return [select(), select()];
+      }),
+    ).toEqual([2, 2]);
+    expect(observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql))).toHaveLength(
+      1,
+    );
     expect(first.read(({ db }) => db)).toBe(reader);
     expect(peer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
   } finally {
+    observation.restore();
     peer.close();
   }
   closeRetainedOpenClawStateReadConnections(readDatabasePathIdentitySync(first.pathname).key);

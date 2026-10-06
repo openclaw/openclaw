@@ -13,6 +13,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import type { UserTurnOriginalInputCommit } from "../../sessions/user-turn-transcript.types.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { formatForLog } from "../ws-log.js";
@@ -43,6 +44,7 @@ type GatewayChatUserTurnController = {
 
 export function createGatewayChatUserTurnController(params: {
   admission: AdmittedChatSend;
+  isDirectExternalUser?: boolean;
   client: GatewayClient | null;
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
@@ -79,7 +81,11 @@ export function createGatewayChatUserTurnController(params: {
     ...(sender ? { sender } : {}),
     ...(sourceClients.length ? { transport: { clients: sourceClients } } : {}),
     ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
-    ...(request.systemInputProvenance ? { provenance: request.systemInputProvenance } : {}),
+    ...(request.systemInputProvenance
+      ? { provenance: request.systemInputProvenance }
+      : admission.restartSafeAdmission && params.isDirectExternalUser
+        ? { provenance: { kind: "external_user" } as const }
+        : {}),
   };
   const replyContextFieldsPromise = request.p.replyToId
     ? resolveChatSendReplyContext({
@@ -160,6 +166,7 @@ export function createGatewayChatUserTurnController(params: {
           admission: admission.restartSafeAdmission,
           clientRunId: session.clientRunId,
           startedAt: params.startedAt,
+          sourceIngress: isBrowserOperatorUiClient(request.clientInfo) ? "control-ui" : "internal",
         })
       : {}),
     errorContext: "gateway chat user turn transcript",

@@ -66,7 +66,10 @@ import { replyRunRegistry } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
-import { buildWaitingStatusPayload } from "./waiting-status.js";
+import {
+  attachWaitingStatusProgressContinuation,
+  buildWaitingStatusPayload,
+} from "./waiting-status.js";
 export async function prepareReplyAgentPayloads(state: {
   context: FinalizeReplyAgentRunInput;
   accounting: AccountedAgentTurn;
@@ -483,9 +486,6 @@ export async function prepareReplyAgentPayloads(state: {
     });
   }
 
-  // Drain any late tool/block deliveries before deciding there's "nothing to send".
-  // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
-  // keep the typing indicator stuck.
   if (
     payloadArray.length === 0 &&
     fallbackNoticePayloads.length === 0 &&
@@ -601,10 +601,18 @@ export async function prepareReplyAgentPayloads(state: {
       ? appendUnscheduledReminderNote(replyPayloads)
       : replyPayloads;
 
+  const statusPayload = guardedReplyPayloads.find(
+    (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
+  );
+  if (statusPayload) {
+    await attachWaitingStatusProgressContinuation({
+      payload: statusPayload,
+      acceptedSessionSpawns: runResult.acceptedSessionSpawns,
+      operation: replyOperation,
+    });
+  }
+
   if (continuationOwner) {
-    const statusPayload = guardedReplyPayloads.find(
-      (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
-    );
     const acceptedSessionSpawns = runResult.acceptedSessionSpawns;
     const requesterSessionKey = sessionKey ?? followupRun.run.sessionKey;
     if (!requesterSessionKey || !acceptedSessionSpawns?.length || !statusPayload) {
