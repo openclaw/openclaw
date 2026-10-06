@@ -41,18 +41,18 @@ import { captureSessionTranscriptTargetBinding } from "./transcript-target-bindi
 
 type SessionTranscriptHydrationReader = {
   target: ReturnType<typeof captureSessionTranscriptTargetBinding>;
-  assertCurrent(): void;
-  read(): Promise<PreparedSessionTranscriptHydration>;
-  readCurrentTurnEntry(
+  assertCurrent: () => void;
+  read: () => Promise<PreparedSessionTranscriptHydration>;
+  readCurrentTurnEntry: (
     request: SessionTranscriptCurrentTurnEntryRequest,
-  ): Promise<SessionTranscriptCurrentTurnEntryRead>;
-  readMaintenance(
+  ) => Promise<SessionTranscriptCurrentTurnEntryRead>;
+  readMaintenance: (
     request: SessionTranscriptMaintenanceRead,
-  ): Promise<IncognitoHistoryOperations["session.history.maintenance"]["output"]>;
-  readRecentActiveEvents(
+  ) => Promise<IncognitoHistoryOperations["session.history.maintenance"]["output"]>;
+  readRecentActiveEvents: (
     maxEvents: number,
-  ): Promise<IncognitoHistoryOperations["session.history.recent-active-events"]["output"]>;
-  readLatestActiveMessage(): Promise<
+  ) => Promise<IncognitoHistoryOperations["session.history.recent-active-events"]["output"]>;
+  readLatestActiveMessage: () => Promise<
     IncognitoHistoryOperations["session.history.latest-active-message"]["output"]
   >;
 };
