@@ -9,7 +9,6 @@ import type {
 import {
   hasMainSessionRecoveryClaim,
   isMainRestartRecoveryCandidate,
-  hasRestartRecoveryTerminalRun,
   isRetryableUnadoptedChatClaim,
   recordLifecycleFence,
 } from "../../config/sessions/restart-recovery-state.js";
@@ -19,6 +18,11 @@ import {
   buildMainSessionRecoverySettlementPatch,
   removeMainSessionRecoveryForegroundClaim,
 } from "./main-session-recovery-clear.js";
+import {
+  hasCompletedMainSessionRecoveryOutcome,
+  hasUnownedTerminalMainSessionRecoveryFence,
+  isMainRestartRecoveryTerminalOnly,
+} from "./main-session-recovery-outcome.js";
 import type {
   MainSessionRecoveryCommand,
   MainSessionRecoveryConflict,
@@ -145,19 +149,6 @@ export function isMainSessionRecoveryReconciliationCandidate(entry: SessionEntry
   );
 }
 
-/** A later foreground outcome cannot settle a different run's recovery fence. */
-export function hasCompletedMainSessionRecoveryOutcome(entry: SessionEntry): boolean {
-  return (
-    isTerminalSessionStatus(entry.status) &&
-    entry.status !== "interrupted" &&
-    !isRetryableUnadoptedChatClaim(entry) &&
-    !entry.pendingFinalDelivery &&
-    (entry.restartRecoveryRuns ?? []).every((run) =>
-      hasRestartRecoveryTerminalRun(entry, run.runId),
-    )
-  );
-}
-
 type MainRestartRecoveryRolloverEligibility =
   | { eligible: true }
   | {
@@ -185,24 +176,6 @@ export function inspectMainRestartRecoveryRolloverEligibility(
     };
   }
   return { eligible: true };
-}
-
-// Retire only proven terminal fences without remaining execution or delivery
-// custody; treating unfinished fences as residue loses crash recovery (#118873).
-export function isMainRestartRecoveryTerminalOnly(entry: SessionEntry): boolean {
-  const state = entry.mainRestartRecovery;
-  if (state?.tombstone || state?.reservation || state?.foregroundClaims) {
-    return false;
-  }
-  if (entry.restartRecoveryDeliveryRunId !== undefined || entry.pendingFinalDelivery) {
-    return false;
-  }
-  const runs = entry.restartRecoveryRuns;
-  return (
-    runs !== undefined &&
-    runs.length > 0 &&
-    runs.every((run) => hasRestartRecoveryTerminalRun(entry, run.runId))
-  );
 }
 
 function inspectMainSessionRecovery(params: {
@@ -265,6 +238,12 @@ function inspectMainSessionRecoveryForAdmission(params: {
   sessionKey: string;
 }): MainSessionRecoveryView {
   if (
+    isMainRestartRecoveryCandidate(params.entry, params.sessionKey) &&
+    hasUnownedTerminalMainSessionRecoveryFence(params.entry)
+  ) {
+    return { status: "blocked" };
+  }
+  if (
     params.entry.abortedLastRun !== true &&
     params.entry.mainRestartRecovery &&
     params.entry.restartRecoveryRuns?.length &&
@@ -292,6 +271,28 @@ export function transitionMainSessionRecovery(
   entry: SessionEntry,
   command: MainSessionRecoveryCommand,
 ): MainSessionRecoveryTransitionResult {
+  if (
+    (command.kind === "observe" || command.kind === "claim_foreground") &&
+    (command.kind !== "claim_foreground" || command.sessionId === entry.sessionId) &&
+    isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
+    hasUnownedTerminalMainSessionRecoveryFence(entry)
+  ) {
+    // Legacy failed recovery could retire a channel source but leak its runtime
+    // fence. Preserve that evidence without inventing a new execution obligation
+    // or claiming delivery. The existing tombstone exposes explicit recovery.
+    entry.mainRestartRecovery = {
+      ...createCycle(command.cycleId),
+      tombstone: {
+        reason:
+          "terminal session has an unmatched recovery fence without an execution or delivery owner; " +
+          "inspect the session and use Resume in new session, /new, or /reset to continue",
+      },
+    };
+    entry.abortedLastRun = false;
+    if (command.kind === "claim_foreground") {
+      return { kind: "rejected", reason: "already_tombstoned" };
+    }
+  }
   switch (command.kind) {
     case "mark_interrupted": {
       const startedAt = entry.lifecycleRunId ? entry.startedAt : undefined;

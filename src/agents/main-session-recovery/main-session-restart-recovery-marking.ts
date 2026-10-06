@@ -33,9 +33,10 @@ import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-life
 import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
 import {
   hasCompletedMainSessionRecoveryOutcome,
+  hasUnownedTerminalMainSessionRecoveryFence,
   isMainRestartRecoveryTerminalOnly,
-  transitionMainSessionRecovery,
-} from "./main-session-recovery-state.js";
+} from "./main-session-recovery-outcome.js";
+import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
 import {
   recordStartupRecoveryStoreResult,
@@ -382,6 +383,11 @@ async function markOrphanedMainSessionStore(
             isCurrent: () => continuation() && !hasLiveOwner(),
           };
         }
+        return undefined;
+      }
+      if (hasUnownedTerminalMainSessionRecoveryFence(entry)) {
+        // Observation owns the quiet operator handoff. Do not erase the terminal
+        // outcome by manufacturing an interruption before that adoption check.
         return undefined;
       }
       const completed = hasCompletedMainSessionRecoveryOutcome(entry);

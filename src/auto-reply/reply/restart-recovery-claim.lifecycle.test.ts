@@ -249,6 +249,11 @@ describe("restart recovery claim settlement", () => {
         abortedLastRun: false,
         lifecycleRunId: "recovery-run",
         restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: "channel-source",
+        restartRecoveryRuns: [
+          { runId: "recovery-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
+          { runId: "independent-run", lifecycleGeneration: "other-generation" },
+        ],
         sessionId,
         startedAt: 1,
         status: undefined,
@@ -284,6 +289,12 @@ describe("restart recovery claim settlement", () => {
       const persisted = loadSessionEntry({ storePath, sessionKey }) as InternalSessionEntry;
       expect(persisted.status).toBe(expectedStatus);
       expect(persisted.lifecycleRunId).toBeUndefined();
+      expect(persisted.restartRecoveryDeliveryRunId).toBeUndefined();
+      expect(persisted.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(persisted.restartRecoveryTerminalRunIds).toContain("channel-source");
+      expect(persisted.restartRecoveryRuns).toEqual([
+        { runId: "independent-run", lifecycleGeneration: "other-generation" },
+      ]);
     },
   );
 

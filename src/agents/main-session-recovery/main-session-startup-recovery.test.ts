@@ -27,6 +27,7 @@ import {
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { legacyFailedRecoveryEntry } from "./main-session-recovery-legacy.test-support.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 import {
   createRestartRecoveryStoreFixture,
@@ -297,6 +298,125 @@ describe("main-session startup recovery", () => {
     expect(entry?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(entry?.mainRestartRecovery).toBeUndefined();
     expect(entry?.restartRecoveryRuns).toBeUndefined();
+  });
+
+  it.each([
+    { origin: "canonical", abortedLastRun: true },
+    { origin: "codex-app-server", abortedLastRun: true },
+    { origin: "canonical", abortedLastRun: false },
+  ])(
+    "does not restart a completed legacy conversation with a $origin final (aborted=$abortedLastRun)",
+    async ({ origin, abortedLastRun }) => {
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionKey = "agent:main:main";
+      // v2026.7.2-beta.3 fail_recovery output: source and runtime IDs differ.
+      await writeStore(sessionsDir, {
+        [sessionKey]: {
+          ...legacyFailedRecoveryEntry({ sessionId: "main-session", abortedLastRun }),
+          deliveryContext: { channel: "telegram", to: "synthetic-topic" },
+        },
+      });
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "A completed request" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "The final answer" }],
+          stopReason: "stop",
+          ...(origin === "codex-app-server" ? { __openclaw: { mirrorOrigin: origin } } : {}),
+        },
+      ]);
+      const scope = { sessionKey, sessionId: "main-session", storePath };
+      const before = loadSessionEntry(scope);
+      const transcript = await loadTranscriptEvents(scope);
+      const info = vi.spyOn(mainSessionRecoveryLog, "info");
+      try {
+        await markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir });
+        await expect(
+          recoverRestartAbortedMainSessions({ stateDir: tmpDir }),
+        ).resolves.toMatchObject({
+          started: 0,
+          settled: 0,
+          failed: 0,
+        });
+        const retained = loadSessionEntry(scope);
+        expect(retained).toMatchObject({ ...before, abortedLastRun: false });
+        expect(retained?.mainRestartRecovery).toMatchObject({
+          chargedAttempts: 0,
+          tombstone: { reason: expect.stringContaining("unmatched recovery fence") },
+        });
+        expect(info.mock.calls.map(([line]) => line).join("\n")).toContain(
+          "unmatched recovery fence",
+        );
+        await markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir });
+        await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+        expect(loadSessionEntry(scope)).toEqual(retained);
+        expect(await loadTranscriptEvents(scope)).toEqual(transcript);
+        // All model/tool work and final delivery are downstream of this dispatch
+        // boundary; neither it nor the independent notice transport may run.
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(sendRecoveryNotice).not.toHaveBeenCalled();
+        expect(mockRecoveryRuntime.dispatchSessionMethod).not.toHaveBeenCalled();
+      } finally {
+        info.mockRestore();
+      }
+    },
+  );
+
+  it("recovers interrupted and failed-but-owned obligations once despite an earlier final", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const cases: Array<{ key: string; entry: SessionEntry }> = [
+      { key: "interrupted", entry: mainSessionEntry({ mainRestartRecovery: undefined }) },
+      { key: "failed-owned", entry: mainSessionEntry({ status: "failed" }) },
+      {
+        key: "pending-final",
+        entry: mainSessionEntry({
+          status: "failed",
+          mainRestartRecovery: undefined,
+          pendingFinalDelivery: makePendingFinalDelivery("The owed final"),
+          restartRecoveryDeliveryRunId: "owed-delivery",
+          restartRecoveryDeliverySourceRunId: "owed-source",
+        }),
+      },
+    ];
+    for (const { key, entry } of cases) {
+      await writeStore(sessionsDir, {
+        ["agent:main:" + key]: {
+          ...entry,
+          sessionId: key,
+          restartRecoveryRuns: [{ runId: key + "-runtime", lifecycleGeneration: "old-generation" }],
+        },
+      });
+      await writeTranscript(sessionsDir, key, [
+        { role: "user", content: "An earlier request" },
+        { role: "assistant", content: "An earlier final", stopReason: "stop" },
+        { role: "user", content: "The unfinished request" },
+        { role: "toolResult", content: "Current tool result" },
+      ]);
+    }
+    await markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir });
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toMatchObject({
+      started: 3,
+      settled: 0,
+      failed: 0,
+    });
+    await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+    expect(callGateway).toHaveBeenCalledTimes(3);
+    for (const { key } of cases) {
+      const entry = loadSessionEntry({ sessionKey: "agent:main:" + key, storePath });
+      expect(entry?.abortedLastRun).toBe(false);
+      expect(entry?.mainRestartRecovery?.tombstone).toBeUndefined();
+    }
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          sessionKey: "agent:main:pending-final",
+          forceRestartSafeTools: true,
+          message: expect.stringContaining("The owed final"),
+        }),
+      }),
+    );
   });
 
   it.for([

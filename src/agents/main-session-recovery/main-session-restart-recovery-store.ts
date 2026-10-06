@@ -25,10 +25,8 @@ import { resolveExecDefaults } from "../exec-defaults.js";
 import type { MainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
-import {
-  getMainSessionRecoveryRetryCount,
-  isMainRestartRecoveryTerminalOnly,
-} from "./main-session-recovery-state.js";
+import { isMainRestartRecoveryTerminalOnly } from "./main-session-recovery-outcome.js";
+import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
 import {
   commitMainSessionRecovery,
   type MainSessionRecoveryStoreTarget,
@@ -313,6 +311,9 @@ export async function recoverStore(params: {
         recoveryView.status === "tombstoned"
       ) {
         skip(recoveryView.status);
+        if (recoveryView.status === "tombstoned") {
+          decision.reason = entry.mainRestartRecovery?.tombstone?.reason ?? "tombstoned";
+        }
         if (recoveryView.status === "inactive" && isMainRestartRecoveryTerminalOnly(loadedEntry)) {
           decision = { decision: "settled", reason: "terminal-residue", nextOwner: "none" };
         }

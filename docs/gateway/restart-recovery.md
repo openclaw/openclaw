@@ -743,6 +743,15 @@ charge when a post-dispatch result is uncertain to avoid replaying work.
 Foreground work that already owns the session keeps automatic recovery out
 until that work settles.
 
+A legacy terminal session may retain an unmatched runtime fence after its
+execution and delivery owners have been cleared. That fence alone does not
+establish unfinished work. Recovery preserves the row, transcript, and fence
+behind an explicit-recovery tombstone without starting a turn or sending a
+notice. Inspect it and use **Resume in new session**, `/new`, or `/reset` if
+continuation is needed. Existing interrupted cycles, pending finals, and owned
+delivery claims keep their normal recovery behavior; neither age nor an
+uncorrelated assistant final is treated as proof of delivery.
+
 After the durable budget is exhausted, the session is tombstoned instead of
 looping forever. Inspect the failed session and use `/new` or `/reset` to start a
 replacement. `openclaw doctor --fix` can repair a stale aborted flag that
