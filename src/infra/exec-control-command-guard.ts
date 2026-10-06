@@ -245,14 +245,24 @@ function targetsLiveStateSqliteDatabase(
   });
 }
 
+function withVerticalWhitespaceAsWordCharacters(command: string): string {
+  return command.replace(/[\v\f\r]/gu, "\u00a0");
+}
+
 export async function detectUnsafeExecControlShellCommand(
   command: string,
   context: ExecControlShellCommandContext = {},
 ): Promise<UnsafeExecControlShellCommandKind | null> {
   const rawCommand = command.trim();
-  let explanation: CommandExplanation | null = null;
+  const explanations: CommandExplanation[] = [];
   try {
-    explanation = await explainShellCommand(rawCommand);
+    const explanation = await explainShellCommand(rawCommand);
+    explanations.push(explanation);
+    if (!explanation.ok && /[\v\f\r]/u.test(rawCommand)) {
+      explanations.push(
+        await explainShellCommand(withVerticalWhitespaceAsWordCharacters(rawCommand)),
+      );
+    }
   } catch (error) {
     if (error instanceof CommandExplanationWorkLimitError) {
       return "incomplete-analysis";
@@ -260,12 +270,10 @@ export async function detectUnsafeExecControlShellCommand(
     // Fall back to line-local shell splitting below.
   }
   const argvCandidates = (() => {
-    const explainedCandidates = explanation
-      ? [...explanation.topLevelCommands, ...explanation.nestedCommands].flatMap((step) =>
-          buildCommandPayloadArgvCandidates(step.argv),
-        )
-      : [];
-    if (explanation?.ok) {
+    const explainedCandidates = explanations
+      .flatMap((explanation) => [...explanation.topLevelCommands, ...explanation.nestedCommands])
+      .flatMap((step) => buildCommandPayloadArgvCandidates(step.argv));
+    if (explanations[0]?.ok) {
       return explainedCandidates;
     }
     const lineCandidates = normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
