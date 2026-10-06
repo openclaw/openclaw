@@ -7,6 +7,7 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { isNativeMobileReturn } from "../../lib/composer-keyboard.ts";
 import "../../components/tooltip.ts";
 import { renderChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.ts";
 import {
@@ -86,7 +87,8 @@ function handleComposerKeydown(
     options.messageLocked ||
     options.textareaController.composing ||
     event.isComposing ||
-    event.keyCode === 229
+    event.keyCode === 229 ||
+    isNativeMobileReturn(event)
   ) {
     return;
   }
@@ -362,6 +364,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               ${ref(options.textareaController.ref)}
               class="new-session-page__message"
               rows="1"
+              enterkeyhint="enter"
               ?autofocus=${globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
               ?disabled=${options.submitting || options.messageLocked}
               ?readonly=${options.dictationActive}

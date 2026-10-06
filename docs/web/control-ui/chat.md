@@ -12,6 +12,12 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
+On iOS and Android, Return inserts a new line in the chat and New Session
+composers instead of submitting the prompt, including while a command menu is
+open. Tap the send or start button to submit. Explicit Cmd/Ctrl+Enter shortcuts
+on an attached keyboard keep their configured behavior; desktop send shortcuts
+are unchanged.
+
 Tool activity shows a tool-specific icon beside its purpose or details instead of
 repeating the tool name. When no distinct purpose or detail is available, the row
 shows the tool label instead of leaving the text blank. Hover the icon to see the
