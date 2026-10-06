@@ -18,6 +18,7 @@ import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isSessionStateWatchAddress } from "./session-state-events.watch-address.js";
 import { acknowledgeSessionStateNoticesInWorker } from "./session-state-notice-acknowledgment.js";
 
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
@@ -173,7 +174,7 @@ export function enqueueSessionStateNotice(params: {
   queueOnly?: boolean;
 }): void {
   const agentId = parseAgentSessionKey(params.watcherSessionKey)?.agentId;
-  if (!agentId) {
+  if (!agentId || !isSessionStateWatchAddress(params)) {
     return;
   }
   const storePath = params.watcherStorePath ?? null;

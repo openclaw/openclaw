@@ -52,7 +52,13 @@ A watcher is a session that holds a cursor (`session_watch_cursors`) on a target
 - **Ambient groups.** Under `session.groupScope: "per-group"`, the agent's main session watches its isolated group, room, and channel sessions after their first human turn. This is independent of `session.dmScope`. Routing a room into main needs no watch, because it already shares the main conversation.
 - **Explicit (`sessions_send watch: true`).** A coordinator with normal status visibility can watch a non-spawned target. Pass `watch: true` on `sessions_send`. A per-agent `tools.agentToAgent.send` rule alone does not grant watch access to otherwise hidden sessions. After the send dispatches successfully, the sender is registered as a watcher of the session that actually received the message. Registration starts at the target's current state version — prior history never produces notices. The tool result reports `watched: true|false` when the parameter was set.
 
-Watcher identity must be an agent-qualified session key. Under `session.scope="global"` the shared `global` key is ambiguous across agents, so such sessions get the durable log and `changesSince` but no proactive notices.
+Both watcher and target must have valid agent-qualified session keys. An explicitly
+selected target agent must agree with the target key. Raw keys such as `global`
+are ambiguous across agents: their owner-scoped durable log and `changesSince`
+remain available, but proactive watches are refused. `sessions_send watch: true`
+reports `watched: false` with an explanation for these targets without turning an
+accepted send into a failed send. Registry-owned child completion is independent
+of a proactive state watch.
 
 A watch also records its watcher's physical store. Changing `session.store` does
 not transfer its queued notices to another conversation with the same key. Older
@@ -60,7 +66,13 @@ watches with unknown store provenance retain history but need fresh registration
 before proactive notices resume. The next group turn registers its ambient watch
 against the current store.
 
-Watches clean themselves up: cursor rows expire with signal-log retention, are removed when the watcher session resets, and are removed with either session. A reset that has committed still clears its watches if a later cleanup step fails. There is no unwatch verb in v1.
+Qualified watches clean themselves up: cursor rows expire with signal-log retention,
+are removed when the watcher session resets, and are removed with either session.
+A reset that has committed still clears its qualified watches if a later cleanup
+step fails. Historical cursors with a raw or malformed endpoint are inert, including
+after restart: they cannot advance, notify, acknowledge, or grant ambient visibility.
+Session reset or deletion does not remove these unbound cursors; their existing
+retention expiry still applies. There is no unwatch verb in v1.
 
 Watched Claude, Codex, OpenCode, and Pi sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Pi monitoring starts after the session is in its append-only v3 format. Detected activity enters the same signal log and watcher flow as other direct human turns.
 
