@@ -7,7 +7,7 @@ import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js"
 
 export type AgentRunModel = { provider: string; model: string };
 
-export type AgentRunEventState = { seq: number; terminalPublished?: boolean };
+export type AgentRunEventState = { seq: number; terminalPublication?: symbol };
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {

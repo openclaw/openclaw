@@ -159,7 +159,10 @@ suppresses later client lifecycle events for that execution, including model upd
 and duplicate terminals during abort cleanup. Retryable attempt errors leave
 the lifecycle open. Chat abort keeps its immediate terminal with `aborted: true`
 and the caller's stop reason (for example `rpc`, `restart`, or `timeout`).
-Execution settlement and cleanup continue independently of event publication.
+The abort owner reserves that terminal before invoking cancellation listeners.
+The same publication decision covers agent frames, chat finals, progress snapshots,
+and session lifecycle notifications. Execution settlement and cleanup continue
+independently of event publication.
 
 The Gateway projects lifecycle and tool start/terminal events into the bounded,
 metadata-only [audit ledger](/cli/audit). This projection records provenance and

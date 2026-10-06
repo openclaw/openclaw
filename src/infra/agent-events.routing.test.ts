@@ -11,6 +11,7 @@ import {
   getAgentEventLifecycleGeneration,
   onAgentRuntimeEvent,
   resetAgentEventsForTest,
+  reserveAgentTerminalEvent,
   withAgentRunLifecycleGeneration,
   type AgentEventRuntimePayload,
 } from "./agent-events.js";
@@ -114,6 +115,41 @@ describe("agent event routing after cancellation", () => {
     const published = captureEvents({ publishedOnly: true });
     emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1 } });
     expect(published.map((event) => event.data.phase)).toEqual(["end"]);
+  });
+
+  it("keeps retained sequences monotonic through cleanup and fresh registration", () => {
+    const runId = "retained-sequence";
+    const events = captureEvents();
+    withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), () => {
+      registerAgentRunContext(runId, {});
+      const emit = () => emitAgentEvent({ runId, stream: "tool", data: { phase: "result" } });
+      emit();
+      emit();
+      clearAgentRunContext(runId);
+      emit();
+      registerAgentRunContext(runId, {});
+      emit();
+      emit();
+    });
+    expect(events.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("keeps terminal reservations bound to their admitted registration", () => {
+    const runId = "reserved-owner";
+    const published = captureEvents({ publishedOnly: true });
+    registerAgentRunContext(runId, {});
+    const stale = reserveAgentTerminalEvent({ runId, lifecycleGeneration: "stale" });
+    stale({ phase: "end" });
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1 } });
+    const reserved = reserveAgentTerminalEvent({ runId });
+    clearAgentRunContext(runId);
+    registerAgentRunContext(runId, {});
+    reserved({ phase: "end", aborted: true });
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+    expect(published.map((event) => event.data)).toEqual([
+      { phase: "start", startedAt: 1 },
+      { phase: "end" },
+    ]);
   });
 
   it("keeps retryable errors open until the fallback execution settles", () => {

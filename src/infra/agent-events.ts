@@ -143,16 +143,45 @@ export function withAgentRunLifecycleGeneration<T>(lifecycleGeneration: string, 
   return storage.run({ lifecycleGeneration, onceByRun, routingByRun }, run);
 }
 
-/** Retains event routing when synchronous cancellation hooks retire the run context. */
-export function captureAgentEventEmitter(runId: string): typeof emitAgentEvent {
+type AgentTerminalEventData = Record<string, unknown> & { phase: "end" | "error" };
+
+/** Reserves client terminal publication without advancing execution settlement. */
+export function reserveAgentTerminalEvent(
+  identity: Omit<AgentEventPayload, "seq" | "ts" | "stream" | "data">,
+): (data: AgentTerminalEventData) => void {
+  const { runId } = identity;
   const context = getAgentRunContext(runId);
   return withAgentRunLifecycleGeneration(captureAgentRunLifecycleGeneration(runId), () => {
     if (context) {
       recordAgentEventRouting(runId, context);
     }
+    const resolved = resolveAgentEventRouting(identity);
+    if (!resolved) {
+      return () => {};
+    }
+    const state = getAgentEventState();
+    const runState = resolved.routing?.eventState ?? state.runs.get(runId) ?? { seq: 0 };
+    const publication = Symbol("agent terminal publication");
+    runState.terminalPublication ??= publication;
+    if (!state.runs.has(runId)) {
+      state.runs.set(runId, runState);
+    }
     const storage = getAgentEventExecutionContext();
     const scope = storage.getStore()!;
-    return (event) => storage.run(scope, () => emitAgentEvent(event));
+    let pending = true;
+    return (data: AgentTerminalEventData) => {
+      if (pending) {
+        pending = false;
+        storage.run(scope, () =>
+          dispatchAgentEvent(
+            { ...identity, stream: "lifecycle", data },
+            undefined,
+            undefined,
+            publication,
+          ),
+        );
+      }
+    };
   });
 }
 
@@ -343,12 +372,11 @@ function recordExecutionActivity(
   }
 }
 
-function enrichAgentEvent(
-  state: AgentEventState,
-  event: Omit<AgentEventPayload, "seq" | "ts">,
+function resolveAgentEventRouting(
+  event: Pick<AgentEventPayload, "runId" | "lifecycleGeneration">,
   claimId?: string,
   expectedContext?: AgentRunContext,
-): AgentEventRuntimePayload | undefined {
+) {
   const currentLifecycleGeneration = getAgentRunLifecycleGeneration();
   const owners = getAgentRunContextOwnership(event.runId);
   if (claimId !== undefined) {
@@ -383,9 +411,6 @@ function enrichAgentEvent(
   if (ownedLifecycleGeneration && ownedLifecycleGeneration !== currentLifecycleGeneration) {
     return undefined;
   }
-  if (hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
-    return undefined;
-  }
   const record = scope?.routingByRun?.get(event.runId);
   const captured =
     record?.routing.lifecycleGeneration === ownedLifecycleGeneration ? record : undefined;
@@ -394,6 +419,22 @@ function enrichAgentEvent(
     return undefined;
   }
   const routing = context ?? captured?.routing;
+  return { context, routing, capturedOwner, ownedLifecycleGeneration, currentLifecycleGeneration };
+}
+
+function enrichAgentEvent(
+  state: AgentEventState,
+  event: Omit<AgentEventPayload, "seq" | "ts">,
+  claimId?: string,
+  expectedContext?: AgentRunContext,
+  reservedPublication?: symbol,
+): AgentEventRuntimePayload | undefined {
+  const resolved = resolveAgentEventRouting(event, claimId, expectedContext);
+  if (!resolved || hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
+    return undefined;
+  }
+  const { context, routing, capturedOwner, ownedLifecycleGeneration, currentLifecycleGeneration } =
+    resolved;
   if (event.stream === "lifecycle" && event.data.phase === "model") {
     if (!context || (claimId === undefined && (expectedContext ?? capturedOwner) !== context)) {
       return undefined;
@@ -434,7 +475,7 @@ function enrichAgentEvent(
   if (context) {
     recordAgentEventRouting(event.runId, context);
   }
-  const nextSeq = (state.runs.get(event.runId)?.seq ?? 0) + 1;
+  const nextSeq = Math.max(runState.seq, state.runs.get(event.runId)?.seq ?? 0) + 1;
   runState.seq = nextSeq;
   state.runs.set(event.runId, runState);
   if (context) {
@@ -480,12 +521,20 @@ function enrichAgentEvent(
   if (event.stream === "lifecycle") {
     // A listener can synchronously emit a terminal before this event reaches the publisher.
     // Internal settlement observers consume the event without claiming publication.
+    const publication = reservedPublication ?? Symbol("agent lifecycle publication");
+    let consumed = false;
     Object.defineProperty(enriched, "admitLifecyclePublication", {
       value: () => {
-        if (runState.terminalPublished) {
+        if (
+          consumed ||
+          (runState.terminalPublication && runState.terminalPublication !== publication)
+        ) {
           return false;
         }
-        runState.terminalPublished = isDefinitiveRunLifecycle({ phase: data.phase, data });
+        consumed = true;
+        if (isDefinitiveRunLifecycle({ phase: data.phase, data })) {
+          runState.terminalPublication = publication;
+        }
         return true;
       },
     });
@@ -563,9 +612,10 @@ function dispatchAgentEvent(
   event: Omit<AgentEventPayload, "seq" | "ts">,
   claimId?: string,
   expectedContext?: AgentRunContext,
+  reservedPublication?: symbol,
 ): boolean {
   const state = getAgentEventState();
-  const enriched = enrichAgentEvent(state, event, claimId, expectedContext);
+  const enriched = enrichAgentEvent(state, event, claimId, expectedContext, reservedPublication);
   if (!enriched) {
     return false;
   }
