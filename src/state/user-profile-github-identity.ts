@@ -190,16 +190,17 @@ function resolveCachedGitHubIdentityInDatabase(
     return undefined;
   }
   const login = "login" in binding ? normalizeGitHubLogin(binding.login)?.toLowerCase() : undefined;
-  const email = "email" in binding ? binding.email.trim().toLowerCase() : undefined;
+  const accountBinding = "email" in binding ? binding : undefined;
+  const email = accountBinding?.email.trim().toLowerCase();
   const alias = login
     ? selectGitHubProfileAlias(db, {
         kind: "github-login",
         subject: githubAuthenticationSubject(login),
       })
     : email &&
-        "accountId" in binding &&
-        Number.isSafeInteger(binding.accountId) &&
-        binding.accountId > 0 &&
+        accountBinding &&
+        Number.isSafeInteger(accountBinding.accountId) &&
+        accountBinding.accountId > 0 &&
         tableExists(db, "user_profile_emails")
       ? selectGitHubProfileAlias(db, { kind: "email", email })
       : undefined;
@@ -212,7 +213,7 @@ function resolveCachedGitHubIdentityInDatabase(
     accounts?.some((account) =>
       login
         ? account.login.toLowerCase() === login
-        : "accountId" in binding && account.accountId === binding.accountId,
+        : account.accountId === accountBinding?.accountId,
     )
     ? { profileId: profile.id, updatedAt: profile.updated_at }
     : undefined;
