@@ -689,7 +689,10 @@ export function createReplyDispatcherWithTyping(
   const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
   const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
   let typingController: TypingController | undefined;
-  const handoff = createTypingHandoff(resolvedOnIdle, resolvedOnCleanup);
+  const handoff = createTypingHandoff(
+    () => void invokeReplyDispatcherObserver(() => resolvedOnIdle?.()),
+    resolvedOnCleanup,
+  );
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
     onIdle: async () => {
