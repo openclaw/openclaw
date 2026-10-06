@@ -15,7 +15,11 @@ import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-adm
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import { registerSubagentOrphanTaskCases } from "./subagent-registry.persistence.orphan.test-support.js";
 import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
@@ -28,7 +32,6 @@ import {
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   activateSubagentRegistry,
   addSubagentRunForTests,
@@ -242,7 +245,7 @@ describe("subagent registry persistence", () => {
     let cloneSpy: { mockRestore(): void } | undefined;
     try {
       process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE = "1";
-      getSubagentRunsSnapshotForRead(new Map());
+      await restoreSubagentRunsFromDisk({ runs: new Map() });
       cloneSpy = vi.spyOn(globalThis, "structuredClone");
       const snapshot = getSubagentRunsSnapshotForRead(new Map());
 
@@ -283,7 +286,7 @@ describe("subagent registry persistence", () => {
       controllerSessionKey: "agent:main:subagent:live-controller",
       requesterSessionKey: "agent:main:main",
     });
-    expect(getSubagentRunByChildSessionKey("agent:main:subagent:live-child")).toMatchObject({
+    expect(await getSubagentRunByChildSessionKey("agent:main:subagent:live-child")).toMatchObject({
       runId: "run-live",
     });
   });
@@ -405,7 +408,7 @@ describe("subagent registry persistence", () => {
       const held = loadSubagentRegistryFromSqlite().get(runId);
       expect(held?.cleanupHandled, "serialized lock is not retry readiness").toBe(false);
       expect(
-        getSubagentRunByChildSessionKey(childSessionKey)?.cleanupHandled,
+        (await getSubagentRunByChildSessionKey(childSessionKey))?.cleanupHandled,
         "acknowledged runtime lock remains held; decoded durable row is restart-ready",
       ).toBe(true);
       expect(
@@ -536,7 +539,9 @@ describe("subagent registry persistence", () => {
 
     // The dead pre-restart run is terminalized without querying its stale run id.
     expect(callGateway).not.toHaveBeenCalled();
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.outcome).toMatchObject({
+    expect(
+      (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.outcome,
+    ).toMatchObject({
       status: "error",
       error: expect.stringContaining("Gateway restart"),
     });

@@ -41,7 +41,7 @@ type ConversationDeliveryAttemptAuthority = Omit<
   "kind"
 >;
 
-export type { OutboundDeliveryQueuePolicy, PlatformSendRoute } from "./deliver-types.js";
+export type { PlatformSendRoute } from "./deliver-types.js";
 
 export type OutboundDeliveryIntent = {
   id: string;

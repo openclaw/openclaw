@@ -98,7 +98,7 @@ describe("createManagedWorktreeOwnerPolicy", () => {
       await withinTest(entered.promise, signal);
       pending = createManagedWorktreeOwnerPolicy(cfg).withOwnerCleanup(
         cleanupRecord,
-        remove,
+        (withOwnerMutation) => withOwnerMutation(remove),
         abort.signal,
       );
       abort.abort(reason);
@@ -123,49 +123,69 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     mocks.isSessionLifecycleMutationActive.mockReturnValue(true);
     const policy = createManagedWorktreeOwnerPolicy({});
     expect(policy.shouldRemoveOwner("session", key)).toBe(false);
-    await policy.withOwnerCleanup(cleanupRecord, async () => {
-      expect(policy.shouldRemoveOwner("session", key)).toBe(true);
-      expect(policy.shouldRemoveOwner("session", `${key}:other`)).toBe(false);
-      mocks.isSessionWorkAdmissionActive.mockReturnValue(true);
-      expect(policy.shouldRemoveOwner("session", key)).toBe(false);
-    });
+    await policy.withOwnerCleanup(cleanupRecord, async (withOwnerMutation) =>
+      withOwnerMutation(async () => {
+        expect(policy.shouldRemoveOwner("session", key)).toBe(true);
+        expect(policy.shouldRemoveOwner("session", `${key}:other`)).toBe(false);
+        mocks.isSessionWorkAdmissionActive.mockReturnValue(true);
+        expect(policy.shouldRemoveOwner("session", key)).toBe(false);
+      }),
+    );
     mocks.isSessionWorkAdmissionActive.mockReturnValue(false);
     expect(policy.shouldRemoveOwner("session", key)).toBe(false);
   });
 
-  it.each([
-    { sessionId: "replacement" },
-    { lifecycleRevision: "replacement" },
-    { archivedAt: 2 },
-    { worktree: { id: "replacement", branch: "replacement", repoRoot: "/replacement" } },
-  ])("rejects changed session custody after waiting for cleanup admission: %j", async (change) => {
-    const key = cleanupRecord.ownerId!;
-    let entry: SessionEntry = {
-      sessionId: "original",
-      updatedAt: 1,
-      lifecycleRevision: "original",
-      archivedAt: 1,
-      worktree: { id: cleanupRecord.id, branch: cleanupRecord.branch, repoRoot: "/repository" },
-    };
-    mocks.resolveSessionEntryAccessTarget.mockImplementation(() => ({
-      agentId: "main",
-      canonicalKey: key,
-      entry,
-    }));
-    const policy = createManagedWorktreeOwnerPolicy({});
-    expect(policy.shouldRemoveOwner("session", key)).toBe(true);
-    mocks.runExclusiveSessionLifecycleMutation.mockImplementationOnce(
-      async (_operation, { run }: { run: () => Promise<unknown> }) => {
-        entry = { ...entry, ...change };
-        return await run();
-      },
-    );
+  it.each(
+    [
+      { sessionId: "replacement" },
+      { lifecycleRevision: "replacement" },
+      { archivedAt: 2 },
+      { worktree: { id: "replacement", branch: "replacement", repoRoot: "/replacement" } },
+    ].flatMap((change) => [
+      { change, inPlace: false },
+      { change, inPlace: true },
+    ]),
+  )(
+    "rejects changed session custody after waiting for cleanup admission: %j",
+    async ({ change, inPlace }) => {
+      const key = cleanupRecord.ownerId!;
+      let entry: SessionEntry = {
+        sessionId: "original",
+        updatedAt: 1,
+        lifecycleRevision: "original",
+        archivedAt: 1,
+        worktree: { id: cleanupRecord.id, branch: cleanupRecord.branch, repoRoot: "/repository" },
+      };
+      mocks.resolveSessionEntryAccessTarget.mockImplementation(() => ({
+        agentId: "main",
+        canonicalKey: key,
+        entry,
+      }));
+      const policy = createManagedWorktreeOwnerPolicy({});
+      expect(policy.shouldRemoveOwner("session", key)).toBe(true);
+      mocks.runExclusiveSessionLifecycleMutation.mockImplementationOnce(
+        async (_operation, { run }: { run: () => Promise<unknown> }) => {
+          if (inPlace) {
+            if (change.worktree) {
+              Object.assign(entry.worktree!, change.worktree);
+            } else {
+              Object.assign(entry, change);
+            }
+          } else {
+            entry = { ...entry, ...change };
+          }
+          return await run();
+        },
+      );
 
-    await policy.withOwnerCleanup(cleanupRecord, async () => {
-      expect(policy.shouldRemoveOwner("session", key)).toBe(false);
-      expect(policy.shouldProtectOwner("session", key)).toBe(true);
-    });
-  });
+      await policy.withOwnerCleanup(cleanupRecord, async (withOwnerMutation) =>
+        withOwnerMutation(async () => {
+          expect(policy.shouldRemoveOwner("session", key)).toBe(false);
+          expect(policy.shouldProtectOwner("session", key)).toBe(true);
+        }),
+      );
+    },
+  );
 
   it("protects only recently active session owners", () => {
     const now = 1_800_000_000_000;

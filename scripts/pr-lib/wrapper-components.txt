@@ -240,6 +240,7 @@ src/agents/agent-scope-config.ts
 src/agents/agent-scope.ts
 src/agents/auth-profiles/sqlite-json.ts
 src/agents/auth-profiles/store-unreadable-error.ts
+src/agents/auth-profiles/store-update-commit.ts
 src/agents/auth-profiles/sqlite-read-pool.ts
 src/agents/configured-provider-fallback.ts
 src/agents/configured-provider-model.ts
@@ -871,6 +872,7 @@ src/infra/gateway-process-argv.ts
 src/infra/gateway-scheduler.ts
 src/infra/gateway-supervision.ts
 src/infra/git-commit.ts
+src/infra/git-content-budget.ts
 src/infra/git-exec.ts
 src/infra/git-network-retry.ts
 src/infra/git-operation-timing.ts
@@ -892,6 +894,7 @@ src/infra/http-response-body-timeout.ts
 src/infra/http-response-body.ts
 src/infra/inline-option-token.ts
 src/infra/install-safe-path.ts
+src/infra/json-field-transfer.ts
 src/infra/json-files.ts
 src/infra/kysely-sync-cache-state.ts
 src/infra/kysely-sync.ts
@@ -1061,6 +1064,7 @@ src/infra/sqlite-worker-client.ts
 src/infra/sqlite-worker-contract.ts
 src/infra/sqlite-worker-identity.ts
 src/infra/sqlite-worker-operation-admission.ts
+src/infra/sqlite-worker-request-class.ts
 src/infra/sqlite-worker-state-context.ts
 src/infra/sqlite-worker-store.ts
 src/infra/sqlite-worker-transfer.ts
@@ -1134,6 +1138,7 @@ src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
 src/infra/worker-request-diagnostics.ts
+src/infra/worker-request-kind.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-host.ts
 src/infra/worker-task-pool-registry.ts
@@ -1224,6 +1229,7 @@ src/plugins/compat/model-account-connect-record.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
+src/plugins/compat/reply-tool-authority-record.ts
 src/plugins/compat/session-persistence-records.ts
 src/plugins/compat/tts-preferences-record.ts
 src/plugins/compat/watched-sessions.ts
@@ -1346,7 +1352,6 @@ src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-instance-owned-values.ts
-src/plugins/plugin-instance-runtime-scope.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
@@ -1596,6 +1601,7 @@ src/state/openclaw-agent-context-engine-turn-outbox-schema.ts
 src/state/openclaw-agent-db-additive-columns.ts
 src/state/openclaw-agent-db-admission.ts
 src/state/openclaw-agent-db-contract.ts
+src/state/openclaw-agent-db-disposal.ts
 src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts
 src/state/openclaw-agent-db-lease-provenance.ts
@@ -1614,6 +1620,7 @@ src/state/openclaw-agent-db-readonly.ts
 src/state/openclaw-agent-db-registry-listing.ts
 src/state/openclaw-agent-db-registry.read.ts
 src/state/openclaw-agent-db-registry.ts
+src/state/openclaw-agent-db-registry.worker.ts
 src/state/openclaw-agent-db-resources.ts
 src/state/openclaw-agent-db-schema-compatibility.ts
 src/state/openclaw-agent-db-schema-helpers.ts

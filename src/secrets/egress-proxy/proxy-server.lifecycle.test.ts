@@ -86,7 +86,7 @@ async function openTlsTunnel(env = grant.env): Promise<tls.TLSSocket> {
   return socket;
 }
 
-function onClose(socket: Socket | IncomingMessage): Promise<void> {
+function onClose(socket: Socket | IncomingMessage | ServerResponse): Promise<void> {
   return new Promise((resolve) => {
     socket.once("close", () => resolve());
   });
@@ -793,6 +793,8 @@ describe("secret egress registration lifecycle", () => {
       );
       await vi.waitFor(() => expect(bodyReceived.has("cleanup")).toBe(true));
       expect(responses.get("cleanup")?.headersSent).toBe(false);
+      // Client close can precede the proxy response closing and releasing its reservation.
+      const serverClosed = onClose(responses.get("cleanup")!);
       let stopped: Promise<void> | undefined;
       if (action === "disconnect") {
         socket.destroy();
@@ -806,7 +808,7 @@ describe("secret egress registration lifecycle", () => {
           grant = register();
         }
       }
-      await Promise.all([clientClosed, stopped]);
+      await Promise.all([clientClosed, serverClosed, stopped]);
       expect(observed).toEqual([]);
       if (action !== "stop") {
         const next = await openTlsTunnel(register().env);

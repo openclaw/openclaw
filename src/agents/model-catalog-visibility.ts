@@ -35,20 +35,14 @@ export type ModelCatalogAuthChecker = (
   ref?: ModelAuthAvailabilityRef,
 ) => boolean | Promise<boolean>;
 
-type LogicalModelCatalogEntryState = {
-  authBacked: boolean;
-  compatible: boolean;
-  routeManaged: boolean;
-  routeProjection: ModelCatalogRouteProjection;
-  nativeRuntime?: string;
-};
+type LogicalModelCatalogEntryState = ReturnType<typeof resolveLogicalModelCatalogEntryState>;
 
 /** Maps one shared auth evaluation into logical catalog selection state. */
 export function resolveLogicalModelCatalogEntryState(params: {
   evaluation: ModelAuthAvailabilityEvaluation;
   authBacked?: boolean;
   routePolicy: ModelCatalogRoutePolicy;
-}): LogicalModelCatalogEntryState {
+}) {
   const routeManaged = params.evaluation.routeResolution !== null;
   const selectedRoute = params.evaluation.selectedRoute;
   const routeProjection: ModelCatalogRouteProjection = !routeManaged

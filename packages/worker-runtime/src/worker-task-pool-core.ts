@@ -119,7 +119,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     private readonly publicDispatch?: WorkerTaskPoolDispatch,
     private readonly ownerOptions: WorkerTaskPoolOwnerOptions = {},
   ) {
-    this.observeTask = host.createTaskObserver?.(options.workerUrl, options.sharedCompute);
+    this.observeTask = host.createTaskObserver?.(options.workerUrl);
     this.maxWorkers = options.maxWorkers ?? availableParallelism();
     this.maxPendingTasks = options.maxPendingTasks ?? DEFAULT_WORKER_PENDING_TASKS;
     this.maxPendingBytes = options.maxPendingBytes ?? DEFAULT_WORKER_PENDING_BYTES;
@@ -249,7 +249,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     task.admitted = true;
     this.pendingTasks++;
     this.pendingBytes += inputBytes;
-    task.observation = this.observeTask?.();
+    task.observation = this.observeTask?.(task.options.diagnosticOperation);
     if (options.timeoutMs !== undefined) {
       this.armTimeout(task, options.timeoutMs);
     }

@@ -26,7 +26,6 @@ import {
   testing as sessionBindingServiceTesting,
   type SessionBindingAdapter,
   type SessionBindingPlacement,
-  type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
@@ -39,6 +38,7 @@ import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { expectRecordFields } from "../../subagent-test-fixtures.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { registerAcpSpawnPolicyTests } from "./acp-spawn-policy.test-support.js";
+import { createAcpSpawnSessionBinding as createSessionBinding } from "./acp-spawn-store.test-support.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import {
   expectRegisteredSubagentRun,
@@ -77,7 +77,7 @@ const hoisted = vi.hoisted(() => ({
   closeRuntimeOnFailureMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
   countActiveRunsForSessionMock: vi.fn(),
-  getSubagentRunByChildSessionKeyMock: vi.fn(),
+  getSubagentRunMock: vi.fn(),
   upsertSessionEntryMock: vi.fn(),
   normalizeChannelIdMock: vi.fn((channelId: string) => channelId.trim().toLowerCase() || null),
   state: { cfg: createDefaultSpawnConfig() },
@@ -149,8 +149,9 @@ vi.mock("../registry/subagent-registry.js", () => ({
   registerSubagentRun: hoisted.registerSubagentRunMock,
 }));
 
+// mock-isolation: This ACP admission fixture owns its synthetic registry inventory.
 vi.mock("../registry/subagent-registry-read.js", () => ({
-  getSubagentRunByChildSessionKey: hoisted.getSubagentRunByChildSessionKeyMock,
+  getSubagentSessionListRunByChildSessionKey: hoisted.getSubagentRunMock,
 }));
 
 const { spawnAcpDirect } = await import("./acp-spawn.js");
@@ -200,27 +201,6 @@ function gatewayResponse(method?: string) {
     return { runId: "run-1" };
   }
   return method === "sessions.patch" || method === "sessions.delete" ? { ok: true } : {};
-}
-
-function createSessionBinding(overrides?: Partial<SessionBindingRecord>): SessionBindingRecord {
-  return {
-    bindingId: "default:child-thread",
-    targetSessionKey: "agent:codex:acp:s1",
-    targetKind: "session",
-    conversation: {
-      channel: "discord",
-      accountId: "default",
-      conversationId: "child-thread",
-      parentConversationId: "parent-channel",
-    },
-    status: "active",
-    boundAt: Date.now(),
-    metadata: {
-      agentId: "codex",
-      boundBy: "system",
-    },
-    ...overrides,
-  };
 }
 
 function mockConversationBinding(channel: string, agentId = "codex", parentRoom?: string): void {
@@ -516,7 +496,7 @@ describe("spawnAcpDirect", () => {
     hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
     hoisted.registerSubagentRunMock.mockReset().mockResolvedValue(undefined);
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
-    hoisted.getSubagentRunByChildSessionKeyMock.mockReset().mockReturnValue(null);
+    hoisted.getSubagentRunMock.mockReset().mockReturnValue(null);
     hoisted.upsertSessionEntryMock
       .mockReset()
       .mockImplementation(async (_scope: unknown, patch: Partial<SessionEntry>) => ({
@@ -952,7 +932,7 @@ describe("spawnAcpDirect", () => {
       () => hoisted.registerSubagentRunMock.mock.calls.length,
     );
     if (cap === 2) {
-      hoisted.getSubagentRunByChildSessionKeyMock.mockImplementation((childSessionKey: string) =>
+      hoisted.getSubagentRunMock.mockImplementation((childSessionKey: string) =>
         hoisted.registerSubagentRunMock.mock.calls.some(
           ([run]) => run.childSessionKey === childSessionKey,
         )

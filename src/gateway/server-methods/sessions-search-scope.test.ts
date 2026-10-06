@@ -19,7 +19,6 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
@@ -147,28 +146,22 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
     const key = await seed("fifth", "old-target", owner, "distant uniqueneedle", {
       updatedAt: 1,
     });
-    // Keep settled writers alive so idle-close checkpoints cannot invalidate the search snapshot.
-    const executions = agents.map((agentId) => captureOpenClawAgentDatabaseExecution({ agentId }));
-    try {
-      await Promise.all(
-        agents.map((agentId) =>
-          expect(readSessionTranscriptIndexStatus({ agentId })).resolves.toBe(false),
-        ),
-      );
-      const result = await search(requestContext(cfg), identifiedClient(owner), {
-        query: "uniqueneedle",
-        limit: 1,
-        scope: paletteScope,
-      });
-      expect(result.ok, result.error?.message).toBe(true);
-      expect(result.payload).toMatchObject({ results: [{ sessionKey: key }], sessions: [{ key }] });
-      expect(result.payload?.results).toHaveLength(1);
-      expect(result.payload?.sessions).toHaveLength(1);
-      expect(result.payload).not.toHaveProperty("indexing");
-      expect(result.payload).not.toHaveProperty("truncated");
-    } finally {
-      await Promise.all(executions.map((execution) => execution.release()));
-    }
+    await Promise.all(
+      agents.map((agentId) =>
+        expect(readSessionTranscriptIndexStatus({ agentId })).resolves.toBe(false),
+      ),
+    );
+    const result = await search(requestContext(cfg), identifiedClient(owner), {
+      query: "uniqueneedle",
+      limit: 1,
+      scope: paletteScope,
+    });
+    expect(result.ok, result.error?.message).toBe(true);
+    expect(result.payload).toMatchObject({ results: [{ sessionKey: key }], sessions: [{ key }] });
+    expect(result.payload?.results).toHaveLength(1);
+    expect(result.payload?.sessions).toHaveLength(1);
+    expect(result.payload).not.toHaveProperty("indexing");
+    expect(result.payload).not.toHaveProperty("truncated");
   });
 });
 

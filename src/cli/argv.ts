@@ -173,16 +173,7 @@ export function isSimpleCommandHelpInvocation(
 
 type HelpNormalizationPositional = { value: string; index: number };
 
-type HelpNormalizationScanResult =
-  | {
-      ok: true;
-      positionals: HelpNormalizationPositional[];
-      rootOptions: string[];
-      helpFlagIndex: number | null;
-    }
-  | { ok: false };
-
-function scanHelpNormalizationArgv(argv: string[]): HelpNormalizationScanResult {
+function scanHelpNormalizationArgv(argv: string[]) {
   const positionals: HelpNormalizationPositional[] = [];
   const rootOptions: string[] = [];
   let helpFlagIndex: number | null = null;
@@ -203,12 +194,12 @@ function scanHelpNormalizationArgv(argv: string[]): HelpNormalizationScanResult 
       continue;
     }
     if (arg.startsWith("-")) {
-      return { ok: false };
+      return { ok: false as const };
     }
     positionals.push({ value: arg, index });
   }
 
-  return { ok: true, positionals, rootOptions, helpFlagIndex };
+  return { ok: true as const, positionals, rootOptions, helpFlagIndex };
 }
 
 export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {

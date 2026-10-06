@@ -13,7 +13,6 @@ import {
 import { listManagedPluginNpmRootsSync } from "../plugins/npm-project-roots.js";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
-  type OpenClawPeerLinkAuditIssue,
   reconcileRegisteredOpenClawHostLinks,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "../plugins/plugin-peer-link.js";
@@ -27,13 +26,6 @@ type PluginHostLinkDoctorParams = InstalledPluginIndexRecordStoreOptions & {
 type PluginPackageReadFailure = {
   packageDir: string;
   reason: string;
-};
-
-type PluginHostLinkAudit = {
-  peerLinkIssues: OpenClawPeerLinkAuditIssue[];
-  packageReadFailures: PluginPackageReadFailure[];
-  registeredPeerLinkIssues: OpenClawPeerLinkAuditIssue[];
-  registeredPackageReadFailures: PluginPackageReadFailure[];
 };
 
 function resolveRegisteredPluginExtensionsRoot(
@@ -56,7 +48,7 @@ export function resolveDoctorPluginNpmRoots(
 /** Audits managed npm and registered plugin host links without mutating either root. */
 export async function listPluginOpenClawHostLinkIssues(
   params: InstalledPluginIndexRecordStoreOptions,
-): Promise<PluginHostLinkAudit> {
+) {
   const packageReadFailures: PluginPackageReadFailure[] = [];
   const registeredPackageReadFailures: PluginPackageReadFailure[] = [];
   const audits = await Promise.all(

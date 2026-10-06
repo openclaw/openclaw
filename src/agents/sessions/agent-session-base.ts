@@ -295,7 +295,6 @@ export abstract class AgentSessionBase {
       this.emitQueueUpdate();
       return true;
     });
-    this.emitQueueUpdate();
   }
 
   // Track last assistant message for auto-compaction check

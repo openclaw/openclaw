@@ -24,7 +24,7 @@ import {
   createQueueSettings,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { resolveFollowupDeliveryContextKey } from "./queue/delivery-context.js";
+import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 type InternalFollowupRun = FollowupRun & {
@@ -1153,7 +1153,7 @@ describe("followup authorization delivery context", () => {
   it("changes when the approval reviewer device changes", () => {
     const run = createRun({ prompt: "one" });
     const keyFor = (approvalReviewerDeviceId: string) =>
-      resolveFollowupDeliveryContextKey({
+      resolveFollowupDeliveryStorageKey({
         ...run,
         run: { ...run.run, approvalReviewerDeviceId },
       });

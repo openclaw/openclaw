@@ -3,18 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
+import type { PluginPackageInstall } from "../src/plugins/package-manifest.types.js";
 import officialExternalChannelSeed from "./lib/official-external-channel-seed.json" with { type: "json" };
 import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mts";
 import { isRecord, trimString } from "./lib/record-shared.mjs";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 
 type CatalogParams = { repoRoot?: string; cwd?: string };
-type CatalogInstall = Partial<
-  Record<"clawhubSpec" | "npmSpec" | "localPath" | "minHostVersion" | "expectedIntegrity", string>
-> & {
-  defaultChoice?: "clawhub" | "npm" | "local";
-  allowInvalidConfigRecovery?: boolean;
-};
+type CatalogInstall = Omit<PluginPackageInstall, "requiredPlatformPackages">;
 type CatalogEntry = Partial<Record<"version" | "description" | "source" | "kind", string>> & {
   name: string;
   openclaw: {
@@ -98,13 +94,10 @@ function readExcludedPackagedExtensionDirs(repoRoot: string) {
   return collectExcludedPackagedExtensionDirs({ files: Array.isArray(files) ? files : undefined });
 }
 
-function toCatalogInstall(value: unknown, packageName: string): CatalogInstall | null {
+function toCatalogInstall(value: unknown, packageName: string): CatalogInstall {
   const install = isRecord(value) ? value : {};
   const clawhubSpec = trimString(install.clawhubSpec);
   const npmSpec = trimString(install.npmSpec) || packageName;
-  if (!clawhubSpec && !npmSpec) {
-    return null;
-  }
   const rawDefaultChoice = trimString(install.defaultChoice);
   const defaultChoice =
     rawDefaultChoice === "clawhub" || rawDefaultChoice === "npm" || rawDefaultChoice === "local"
@@ -181,9 +174,6 @@ function buildCatalogEntry(packageJson: unknown, pluginManifest: unknown): Catal
     return null;
   }
   const install = toCatalogInstall(manifest?.install, packageName);
-  if (!install) {
-    return null;
-  }
   const version = trimString(packageJson.version);
   const description = trimString(packageJson.description);
   return {
@@ -208,17 +198,13 @@ function getCatalogChannelId(entry: CatalogEntry) {
   return trimString(entry.openclaw.channel.id) || trimString(entry.name);
 }
 
-function getCatalogChannelKey(entry: CatalogEntry) {
-  return getCatalogChannelId(entry).toLowerCase();
-}
-
 function setUniqueCatalogEntry(
   entriesByChannelId: Map<string, CatalogOwnerEntry>,
   entry: CatalogEntry,
   owner: string,
 ) {
   const channelId = getCatalogChannelId(entry);
-  const channelKey = getCatalogChannelKey(entry);
+  const channelKey = channelId.toLowerCase();
   if (!channelKey) {
     throw new Error(`official channel catalog entry from ${owner} is missing a channel id`);
   }
@@ -304,8 +290,8 @@ export function buildOfficialChannelCatalog(params: CatalogParams = {}): {
   }
   const entries = [...entriesByChannelId.values()].map(({ entry }) => entry);
   entries.sort((left, right) => {
-    const leftId = trimString(left.openclaw?.channel?.id) || left.name;
-    const rightId = trimString(right.openclaw?.channel?.id) || right.name;
+    const leftId = getCatalogChannelId(left);
+    const rightId = getCatalogChannelId(right);
     return leftId.localeCompare(rightId);
   });
 

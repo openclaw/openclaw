@@ -42,10 +42,11 @@ async function dispatchReplyFromConfigWithQueuePolicy(
   params: DispatchFromConfigParams,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  const ticket = reserveReplyAdmissionTicket([
-    params.ctx.SessionKey,
-    params.ctx.CommandTargetSessionKey,
-  ]);
+  // Gateway ingress reserves before ACK so deferred preparation cannot reorder sends.
+  const inheritedTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
+  const ticket =
+    inheritedTicket ??
+    reserveReplyAdmissionTicket([params.ctx.SessionKey, params.ctx.CommandTargetSessionKey]);
   const ticketedParams = ticket
     ? {
         ...params,
@@ -80,7 +81,10 @@ async function dispatchReplyFromConfigWithQueuePolicy(
       }
     }
   } finally {
-    ticket?.release();
+    // Ingress owns retries until queue handoff or terminal dispatch cleanup.
+    if (!inheritedTicket) {
+      ticket?.release();
+    }
   }
 }
 

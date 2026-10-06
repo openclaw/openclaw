@@ -8,19 +8,21 @@ import {
 } from "../../node-host/gateway-cloudflare-access.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
 
-type NodeGatewayOptions = {
-  host?: string;
+type NodeGatewayOptions = Pick<
+  NodeHostGatewayConfig,
+  "host" | "contextPath" | "tls" | "tlsFingerprint"
+> & {
   port?: string | number;
-  contextPath?: string;
-  tls?: boolean;
-  tlsFingerprint?: string;
 };
 
 type NodePairGatewayOptions = ReturnType<typeof resolveNodePairGatewayPayload>;
 
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 
-function gatewayConfigFromUrl(url: string, tlsFingerprint?: string): NodeHostGatewayConfig {
+function gatewayConfigFromUrl(
+  url: string,
+  tlsFingerprint?: string,
+): NodeHostGatewayConfig & Required<Pick<NodeHostGatewayConfig, "host" | "port" | "tls">> {
   const parsed = new URL(url);
   const tls = parsed.protocol === "wss:";
   return {
@@ -46,10 +48,10 @@ export function resolveNodePairGatewayPayload(payload: PairingSetupPayload) {
   );
   const primary = candidates[0]!;
   return {
-    host: primary.host ?? "127.0.0.1",
-    port: primary.port ?? 18789,
+    host: primary.host,
+    port: primary.port,
     ...(primary.contextPath ? { contextPath: primary.contextPath } : {}),
-    tls: primary.tls ?? false,
+    tls: primary.tls,
     ...(primary.tlsFingerprint ? { tlsFingerprint: primary.tlsFingerprint } : {}),
     bootstrapToken: payload.bootstrapToken,
     ...(payload.expiresAtMs !== undefined ? { expiresAtMs: payload.expiresAtMs } : {}),

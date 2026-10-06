@@ -62,6 +62,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 
 const hooks = vi.hoisted((): PreparedAdmissionHooks => ({}));
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -767,21 +768,27 @@ it.each(
   },
 );
 
-function maintenancePlan(f: ReturnType<typeof maintenanceFixture>) {
-  return runOpenClawAgentWriteTransaction(
-    (database) =>
-      applySessionEntryMaintenance(database, {
-        activeSessionKey: f.input.sessionKey,
-        archiveDirectory: f.archiveDirectory,
-        storePath: f.databasePath,
-      }),
-    f.options,
-  );
+async function maintenancePlan(f: ReturnType<typeof maintenanceFixture>) {
+  const preservation = await prepareSessionMaintenancePreservation(f.databasePath);
+  try {
+    return runOpenClawAgentWriteTransaction(
+      (database) =>
+        applySessionEntryMaintenance(database, {
+          preservation: preservation.capture,
+          activeSessionKey: f.input.sessionKey,
+          archiveDirectory: f.archiveDirectory,
+          storePath: f.databasePath,
+        }),
+      f.options,
+    );
+  } finally {
+    preservation.dispose();
+  }
 }
 
 it("revalidates expired proof before the maintenance finalizer commits", async () => {
   const f = maintenanceFixture();
-  const plan = maintenancePlan(f);
+  const plan = await maintenancePlan(f);
   const database = openOpenClawAgentDatabase(f.options);
   const retained = observeRetainedMaintenanceFinalizer(f.databasePath);
   const probe = observeWorkerAdmission(f.databasePath, "cold");
@@ -824,7 +831,7 @@ it("revalidates expired proof before the maintenance finalizer commits", async (
 
 it("rechecks maintenance lifetime after cold finalizer admission", async () => {
   const f = maintenanceFixture();
-  const plan = maintenancePlan(f);
+  const plan = await maintenancePlan(f);
   const probe = observeWorkerAdmission(f.databasePath, "cold");
   hooks.afterMaterialize = async () => {
     await closeForIntegrityAdmission(f);
@@ -849,7 +856,7 @@ it.each([false, true])(
   "rechecks native deletion ownership after cold maintenance admission (revoked: %s)",
   async (revoked) => {
     const f = maintenanceFixture(true);
-    const plan = maintenancePlan(f);
+    const plan = await maintenancePlan(f);
     const registry = createEmptyPluginRegistry();
     const commit = vi.fn();
     const rollback = vi.fn();

@@ -16,8 +16,10 @@ import {
   settleRequesterTurnAfterSessionSpawns,
 } from "./subagent-registry-requester-yield.js";
 import { createRequesterInitialTransferFixture } from "./subagent-registry-requester-yield.test-support.js";
-import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryChangesToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const REQUESTER = "agent:main:main";
