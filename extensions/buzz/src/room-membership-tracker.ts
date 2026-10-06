@@ -56,12 +56,7 @@ export async function createBuzzRoomMembershipTracker(params: {
   onMembershipsChanged?: (memberships: ReadonlyMap<string, BuzzRoomMembership>) => void;
   onRoomMetadataChanged?: (channelId: string) => void;
   signal?: AbortSignal;
-}): Promise<{
-  memberships: () => ReadonlyMap<string, BuzzRoomMembership>;
-  catchUpHistory: () => Promise<void>;
-  handleNotification: (notification: BuzzRoomMembershipNotification) => boolean;
-  close: () => Promise<void>;
-}> {
+}) {
   type ExpectedMembership = "present" | "absent";
   type RefreshState = {
     generation: number;
@@ -541,7 +536,7 @@ export async function createBuzzRoomMembershipTracker(params: {
   return {
     memberships: effectiveMemberships,
     catchUpHistory: () => catchUpHistory(initialRoomIds),
-    handleNotification: (notification) => {
+    handleNotification: (notification: BuzzRoomMembershipNotification) => {
       if (params.signal?.aborted || seenEventIds.has(notification.eventId)) {
         return true;
       }

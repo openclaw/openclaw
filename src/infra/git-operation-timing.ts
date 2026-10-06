@@ -20,6 +20,11 @@ const operations = {
     message: "slow managed worktree removal",
     phases: ["admissionMs", "bodyMs", "finalizeMs"],
   },
+  "content-read": {
+    stateKey: "openclaw.gitContentReadDiagnostics",
+    message: "slow Git content read",
+    phases: ["firstHostRequestMs", "workerMs", "settlementMs"],
+  },
 } as const;
 
 const removalStages = [
@@ -33,6 +38,7 @@ type RemovalStage = (typeof removalStages)[number][0];
 export function startGitOperationTiming(
   kind: keyof typeof operations,
   log: Pick<SubsystemLogger, "isEnabled" | "info">,
+  details?: () => Record<string, unknown>,
 ) {
   try {
     if (!areDiagnosticsEnabledForProcess() || !log.isEnabled("info")) {
@@ -114,6 +120,7 @@ export function startGitOperationTiming(
                 (kind === "ref-mutation" ? secondPhaseEnd : firstPhaseEnd) !== undefined,
               outcome,
               omittedObservations: state.omitted,
+              ...details?.(),
             }),
           );
           state.omitted = 0;

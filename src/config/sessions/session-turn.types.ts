@@ -14,6 +14,8 @@ import type {
   SessionTranscriptTurnPersistOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.types.js";
+import type { SessionSourcePredicate } from "./session-source-authority.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
@@ -71,7 +73,11 @@ export type SessionTurnPlan = {
         | "beforeFreshMessageCommit"
         | "workerPreparation"
       > & {
+        preparationVersion?: SessionTranscriptContextVersion;
+        sources?: SessionSourcePredicate[];
+        freshGuard?: true;
         preparation?: {
+          prepared: boolean;
           expected: { messageId: string; message: unknown } | undefined;
           message: unknown;
         };

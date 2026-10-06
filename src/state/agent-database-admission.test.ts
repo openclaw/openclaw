@@ -95,16 +95,31 @@ describe("agent database admission", () => {
     database.exec("UPDATE schema_meta SET agent_id = NULL WHERE meta_key = 'primary'");
     database.close();
     const before = fs.readFileSync(pathname);
-    await withAgentDatabaseStartupAdmission(async () => {
+    await withAgentDatabaseStartupAdmission(async (admission) => {
       await expect(
         assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }),
       ).resolves.toBeUndefined();
-      expect(readAgentDatabaseAdmissionRefusal("worker", { env })).toMatchObject({
-        code: "agent-database-inspection-failed",
-        reason: expect.stringContaining("no agent owner"),
-      });
       expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
-      deepStrictEqual(fs.readFileSync(pathname), before);
+      const owner = admission.adopt();
+      const prepareAgent = vi.fn(async () => {});
+      try {
+        admission.activate({
+          isCurrent: () => true,
+          preparationReady: Promise.resolve(),
+          openAgent: prepareAgent,
+          migrateAgent: prepareAgent,
+          publishAgent: prepareAgent,
+        });
+        await admission.pendingPreparation;
+        expect(readAgentDatabaseAdmissionRefusal("worker", { env })).toMatchObject({
+          code: "agent-database-inspection-failed",
+          reason: expect.stringContaining("no agent owner"),
+        });
+        expect(prepareAgent).not.toHaveBeenCalled();
+        deepStrictEqual(fs.readFileSync(pathname), before);
+      } finally {
+        await owner.stop();
+      }
     });
   });
 

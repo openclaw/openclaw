@@ -49,6 +49,7 @@ packages/llm-core/src/model-contracts/anthropic.ts
 packages/llm-core/src/model-data.ts
 packages/llm-core/src/types.ts
 packages/llm-core/src/usage-cost.ts
+packages/llm-core/src/utils/assistant-message-events.ts
 packages/llm-core/src/utils/diagnostics.ts
 packages/llm-core/src/utils/event-stream.ts
 packages/llm-core/src/utils/provider-refusal.ts
@@ -1060,6 +1061,7 @@ src/infra/sqlite-worker-client.ts
 src/infra/sqlite-worker-contract.ts
 src/infra/sqlite-worker-identity.ts
 src/infra/sqlite-worker-operation-admission.ts
+src/infra/sqlite-worker-request-class.ts
 src/infra/sqlite-worker-state-context.ts
 src/infra/sqlite-worker-store.ts
 src/infra/sqlite-worker-transfer.ts
@@ -1133,6 +1135,7 @@ src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
 src/infra/worker-request-diagnostics.ts
+src/infra/worker-request-kind.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-host.ts
 src/infra/worker-task-pool-registry.ts

@@ -369,4 +369,28 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     releaseNote:
       "Released Memory readers retain their argument and return contracts while incognito actor sources remain internal and inactive. Storage and update behavior are unchanged.",
   },
+  {
+    code: "transcript-strict-sync-message-preparation",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-08",
+    deprecated: "2026-10-05",
+    warningStarts: "2026-10-05",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Use prepareMessageAfterIdempotencyCheckAsync with appendSessionTranscriptMessageByIdentityStrict. The released synchronous callback retains its result and transaction ordering until the next Plugin SDK major and explicit breaking-release approval. Keep live authority assertions in beforeFreshMessageCommit.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-strict-transcript-message-preparation",
+    surfaces: [
+      "appendSessionTranscriptMessageByIdentityStrict.prepareMessageAfterIdempotencyCheck",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/session-transcript-runtime.worker-preparation.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Strict transcript preparation can await work outside the existing writer transaction. Released synchronous callbacks remain compatible; stored data and update behavior are unchanged.",
+  },
 ] as const satisfies readonly PluginCompatRecord[];

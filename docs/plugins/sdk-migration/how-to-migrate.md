@@ -737,3 +737,21 @@ write `agents.entries`. This compatibility window adds no runtime warnings.
     ```
   </Step>
 </Steps>
+
+## Await strict transcript message preparation
+
+For `appendSessionTranscriptMessageByIdentityStrict`, use
+`prepareMessageAfterIdempotencyCheckAsync` when a message needs preparation after
+duplicate detection. The callback runs outside the writer transaction; returning
+`undefined` suppresses a fresh message. Replayed messages retain their stored bytes
+and skip preparation. A transcript change during awaited message preparation
+refuses that prepared write.
+
+Keep live, synchronous authority assertions in `beforeFreshMessageCommit`. They
+run only for fresh inserts and are checked again at commit. They must not perform
+blocking reads or query the target database from a worker admission callback;
+use the host owner's prepared source authority when storage facts are needed.
+
+The released `prepareMessageAfterIdempotencyCheck` callback keeps its synchronous
+result and transaction ordering until the next Plugin SDK major and an explicitly
+approved breaking release. This change requires no data migration or update step.

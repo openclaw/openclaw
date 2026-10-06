@@ -45,7 +45,12 @@ vi.mock("./runtime-worker-url.js", () => ({ resolveRuntimeWorkerThreadExecArgv: 
 
 const pools: WorkerTaskPool<string, string>[] = [];
 function createPool(
-  options: { sharedCompute?: boolean; maxPendingBytes?: number; maxPendingTasks?: number } = {},
+  options: {
+    workerUrl?: URL;
+    sharedCompute?: boolean;
+    maxPendingBytes?: number;
+    maxPendingTasks?: number;
+  } = {},
 ) {
   const pool = new WorkerTaskPool<string, string>({
     workerUrl: new URL("file:///fixture/preparation-worker.js"),
@@ -74,8 +79,9 @@ describe("public worker task preparation custody", () => {
     );
     const now = vi.spyOn(performance, "now").mockReturnValue(0);
     const gate = createDeferredCore<string>();
-    const pool = createPool({ sharedCompute: true });
-    const secondPool = createPool({ sharedCompute: true });
+    const workerUrl = new URL("file:///fixture/git-operation.worker.js");
+    const pool = createPool({ sharedCompute: true, workerUrl });
+    const secondPool = createPool({ sharedCompute: true, workerUrl });
     const controller = new AbortController();
     try {
       const active = pool.run(() => gate.promise, {});
@@ -97,7 +103,7 @@ describe("public worker task preparation custody", () => {
       expect(Math.max(...events.map((event) => event.queueDepth))).toBe(2);
       expect(events.at(-1)?.queueDepth).toBe(0);
       expect(new Set(events.map((event) => `${event.kind}/${event.requestClass}`))).toEqual(
-        new Set(["compute/task"]),
+        new Set(["gitOperations/task"]),
       );
       expect(JSON.stringify(events)).not.toContain("private-session");
     } finally {
@@ -106,6 +112,35 @@ describe("public worker task preparation custody", () => {
       await waitForDiagnosticEventsDrained();
       unsubscribe();
       now.mockRestore();
+    }
+  });
+
+  it.each([
+    ["prepared-model-catalog.worker.ts", "preparedModelCatalog"],
+    ["disk-budget.worker.mjs", "diskBudget"],
+    ["synthetic-private-worker.js", "extension"],
+  ])("attributes %s without publishing private paths or inputs", async (script, kind) => {
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
+      include: ["worker.request"],
+    });
+    const pool = createPool({ workerUrl: new URL(`file:///synthetic-private-root/${script}`) });
+    try {
+      await expect(pool.run("synthetic-private-input", {})).resolves.toBe(
+        "synthetic-private-input",
+      );
+      await waitForDiagnosticEventsDrained();
+      expect(
+        events.map((event) => event.type === "worker.request" && [event.kind, event.phase]),
+      ).toEqual([
+        [kind, "queued"],
+        [kind, "started"],
+        [kind, "completed"],
+      ]);
+      expect(JSON.stringify(events)).not.toContain("synthetic-private");
+    } finally {
+      await pool.close();
+      unsubscribe();
     }
   });
 

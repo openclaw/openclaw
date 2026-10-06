@@ -60,7 +60,7 @@ export type SignalReactionMessage = {
   } | null;
 };
 
-export type SignalAttachment = {
+type SignalAttachment = {
   id?: string | null;
   contentType?: string | null;
   filename?: string | null;

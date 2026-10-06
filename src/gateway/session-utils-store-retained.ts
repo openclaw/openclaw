@@ -86,10 +86,10 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
           selected.result.databaseIdentity,
         );
         const assertCurrent = () => {
-          selected.assertCurrent();
           if (changed) {
             throw new GatewaySessionFactsChangedDuringReadError();
           }
+          selected.assertCurrent();
           if (
             params.target.readSource &&
             !isDeepStrictEqual(capturedReadSource, params.target.readSource)
@@ -115,7 +115,14 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
           assertCurrent,
         );
       },
-      { prepareSource: (_input, ...source) => publication.prepareSource(...source) },
+      {
+        ordered: true,
+        onReadAdmitted: () => {
+          // The snapshot includes every write that settled before this FIFO turn.
+          changed = false;
+        },
+        prepareSource: (_input, ...source) => publication.prepareSource(...source),
+      },
     );
   } finally {
     stop();

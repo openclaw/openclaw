@@ -68,12 +68,6 @@ export class LineWebhookTerminalDeliveryError extends Error {
   }
 }
 
-type LineWebhookSpool = {
-  accept: (body: webhook.CallbackRequest) => Promise<"durable" | "ignored">;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
 function parseStoredEvent(rawEvent: string): webhook.Event {
   let event: unknown;
   try {
@@ -123,7 +117,7 @@ function resolveLineInboundImageSet(
     : undefined;
 }
 
-export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWebhookSpool {
+export function createLineWebhookSpool(options: LineWebhookSpoolOptions) {
   // Parts of one multi-image send arrive as separate claims; they are grouped
   // here so the whole set becomes one delivery with one fanned-in ownership.
   const imageSets = createLineImageSetIngressBuffer<
@@ -357,7 +351,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
   let stopTask: Promise<void> | undefined;
 
   return {
-    accept: async (body) => {
+    accept: async (body: webhook.CallbackRequest): Promise<"durable" | "ignored"> => {
       // Standby deliveries belong to the channel holding LINE chat control.
       const events = (body.events ?? []).filter((event) => event.mode !== "standby");
       if (events.length === 0) {
