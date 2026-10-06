@@ -191,15 +191,13 @@ it(
           };
           config.tools = { codeMode: true };
           config.agents = {
+            ownership: "explicit",
             defaults: {
               workspace: instance.state.workspaceDir,
               model: "mock-openai/compat-alice",
-              models: Object.fromEntries(
-                ["alice", "bob"].map((user) => [
-                  "mock-openai/compat-" + user,
-                  { agentRuntime: { id: "openclaw" } },
-                ]),
-              ),
+              modelPolicy: {
+                allow: ["alice", "bob"].map((user) => "mock-openai/compat-" + user),
+              },
             },
             entries: {},
           };
