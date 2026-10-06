@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { text as consumeText } from "node:stream/consumers";
@@ -99,7 +100,9 @@ function resolveStateDir() {
     }
     return path.join(home, `.openclaw-${profile}`);
   }
-  return path.join(home, ".openclaw");
+  const current = path.join(home, ".openclaw");
+  const legacy = path.join(home, ".clawdbot");
+  return fsSync.existsSync(current) || !fsSync.existsSync(legacy) ? current : legacy;
 }
 
 function readServiceAccountToken() {
