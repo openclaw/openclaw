@@ -3493,7 +3493,6 @@
 ["src/agents/tools/computer-tool.test-helpers.ts","../../utils/sleep.js","dc28ab20c0ea2e1d7b667ff01659f615677b92186d572e556be7ebc1c00ffe42",1]
 ["src/agents/tools/computer-tool.test-helpers.ts","./computer-tool-gateway.js","0bf5045a4a8ec9e2248ff4c2a746e82a67624695278d051f2c5cfc01dca0e169",1]
 ["src/agents/tools/cron-tool.test.ts","../../config/sessions/delivery-info.js","13dc9b81f33f44e88e2c57e413785be902f0f064a6b261cfc6851b0937f778ed",1]
-["src/agents/tools/embedded-gateway-stub.test.ts","./embedded-gateway-stub.runtime.js","8596ff86ccf87c40c964ef8dbdbcc01e0e553b3aee206c615fafe26aeaf5db03",1]
 ["src/agents/tools/gateway-tool.assembly.test.ts","../openclaw-plugin-tools.js","5f4cec3553f307631c831e2fb9157c52af96afde0a174251d4e53d04a9ac3697",1]
 ["src/agents/tools/gateway-tool.routing.test.ts","../../gateway/call.js","35ab1e2b30c8cb44553036ae7d9afb8676b84f0339e9739b63d8c24551b57668",1]
 ["src/agents/tools/gateway-tool.routing.test.ts","../../gateway/server-methods.js","5d2c3b31abc25611376b005642c98a50bedfce70d22b677c2d5f9163aa1ac01c",1]
