@@ -435,20 +435,20 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
           `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
         );
       }
-      parentPort.postMessage({
-        type: "done",
-        results: [result],
-      } satisfies TranscriptArchiveWorkerMessage);
+      parentPort.postMessage(
+        { type: "done", results: [result] } satisfies TranscriptArchiveWorkerMessage,
+        [],
+      );
     }
     parentPort.close();
   } else if (operation === "publish") {
     // SAFETY: the paired archive owner constructs this private typed boot payload.
     const data = workerData as Extract<SqliteArchiveOneShotWorkerData, { operation: "publish" }>;
     const results = data.plans.map((plan) => publishTranscriptArchiveInWorker(plan));
-    parentPort.postMessage({
-      type: "published",
-      results,
-    } satisfies TranscriptArchivePublishWorkerMessage);
+    parentPort.postMessage(
+      { type: "published", results } satisfies TranscriptArchivePublishWorkerMessage,
+      [],
+    );
     parentPort.close();
   } else if (operation === "cold-prepare") {
     const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-worker.js");
