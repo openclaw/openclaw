@@ -575,6 +575,7 @@ describe("config io write", () => {
         io.writeConfigFile(
           {},
           {
+            allowConfigSizeDrop: true,
             preCommitRuntimePreflight: async () => {
               throw new Error("blocked");
             },
