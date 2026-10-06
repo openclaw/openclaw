@@ -822,7 +822,7 @@ describe("node stream close acknowledgement", () => {
     });
     const delays: number[] = [];
     let retire: (() => void) | undefined;
-    const armed = createDeferred<void>();
+    const armed = createDeferred();
     const controller = new AbortController();
     let failure: unknown;
     const running = runNodeStreamTransport({
