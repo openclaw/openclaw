@@ -25,6 +25,7 @@ export function observeTranscript(container: HTMLElement, cleanups: Array<() => 
       state.scrollCommand = null;
       state.pendingScrollOffset = null;
     },
+    onLayoutCorrection() {},
     requestUpdate() {},
     onOffset() {
       return false;
