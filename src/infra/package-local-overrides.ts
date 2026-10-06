@@ -14,7 +14,6 @@ import {
 } from "./package-local-overrides-preflight.js";
 import {
   assertLocalOverrideMutationTopology,
-  buildLocalOverrideInventoryEntry,
   emptyResult,
   fileModesHaveSameExecutableSemantics,
   mergeLocalOverrideFileMode,
@@ -516,11 +515,14 @@ export async function applyLocalPackageOverrides(params: {
         });
         rollbackEntries.push({ path: change.path, backupPath, backupMode });
       } else {
-        const appliedEntry = await buildLocalOverrideInventoryEntry({
-          relativePath: change.path,
-          sourcePath: change.savedPath,
-          mode: change.mode,
-        });
+        const content = await fs.readFile(change.savedPath);
+        const stats = await fs.stat(change.savedPath);
+        const appliedEntry: PackageDistContentInventoryEntry = {
+          path: change.path,
+          sha256: createHash("sha256").update(content).digest("hex"),
+          mode: change.mode ?? normalizeFileMode(stats.mode),
+          size: content.length,
+        };
         const cleanupPaths = await replaceLocalOverrideTarget({
           packageFs,
           runtimeUrls,

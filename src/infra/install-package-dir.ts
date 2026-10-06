@@ -210,18 +210,6 @@ function resolvePackageDirInstallTransactionRequest(
   )[PACKAGE_DIR_INSTALL_TRANSACTION_REQUEST];
 }
 
-function attachPackageDirInstallTransaction<T extends object>(
-  result: T,
-  transaction: PackageDirInstallTransaction,
-): T {
-  Object.defineProperty(result, PACKAGE_DIR_INSTALL_TRANSACTION, {
-    configurable: false,
-    enumerable: true,
-    value: transaction,
-  });
-  return result;
-}
-
 export function resolvePackageDirInstallTransaction(
   result: object,
 ): PackageDirInstallTransaction | undefined {
@@ -681,25 +669,30 @@ export async function installPackageDir<
       });
     return settlement;
   };
-  return attachPackageDirInstallTransaction(
-    { ok: true },
+  return Object.defineProperty(
+    { ok: true } satisfies InstallPackageDirSuccess,
+    PACKAGE_DIR_INSTALL_TRANSACTION,
     {
-      commit: () =>
-        settle(async () => {
-          if (quarantine) {
-            throw new Error("cannot commit an install after rollback has started");
-          }
-          assertOwned();
-          if (published.backup) {
-            await removeInstallTree({
-              directory: published.backup.path,
-              identity: published.backup,
-              assertOwner: assertRollbackOwned,
-              bestEffort: true,
-            });
-          }
-        }),
-      rollback: () => settle(rollback),
+      configurable: false,
+      enumerable: true,
+      value: {
+        commit: () =>
+          settle(async () => {
+            if (quarantine) {
+              throw new Error("cannot commit an install after rollback has started");
+            }
+            assertOwned();
+            if (published.backup) {
+              await removeInstallTree({
+                directory: published.backup.path,
+                identity: published.backup,
+                assertOwner: assertRollbackOwned,
+                bestEffort: true,
+              });
+            }
+          }),
+        rollback: () => settle(rollback),
+      } satisfies PackageDirInstallTransaction,
     },
   );
 }

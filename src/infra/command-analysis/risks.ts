@@ -24,7 +24,6 @@ import {
 } from "../shell-wrapper-resolution.js";
 import { detectInterpreterInlineEvalArgv, type InterpreterInlineEvalHit } from "./inline-eval.js";
 
-/** Command and flag pair that can carry nested command text. */
 type CommandCarrierHit = {
   command: string;
   flag?: string;
@@ -41,7 +40,6 @@ function isCommandCarrierExecutable(executable: string) {
   return COMMAND_CARRIER_EXECUTABLES.has(executable) || executable === "exec";
 }
 
-/** Builds candidate command argv arrays from nested carriers and shell wrappers. */
 export function buildCommandPayloadArgvCandidates(
   argv: string[],
   seenArgv = new Set<string>(),
@@ -68,11 +66,22 @@ export function buildCommandPayloadArgvCandidates(
           : [[shellWrapperPayload]];
       })()
     : [];
-  return uniqueCommandPayloadArgvCandidates([
+  const seenCandidates = new Set<string>();
+  return [
     ...(executableArgv.length > 0 ? [executableArgv] : []),
     ...carriedCandidates,
     ...shellWrapperCandidates,
-  ]);
+  ].filter((candidate) => {
+    if (candidate.length === 0) {
+      return false;
+    }
+    const candidateKey = commandArgvKey(candidate);
+    if (seenCandidates.has(candidateKey)) {
+      return false;
+    }
+    seenCandidates.add(candidateKey);
+    return true;
+  });
 }
 
 function stripLeadingEnvAssignments(argv: string[]): string[] {
@@ -81,21 +90,6 @@ function stripLeadingEnvAssignments(argv: string[]): string[] {
     index += 1;
   }
   return index > 0 ? argv.slice(index) : argv;
-}
-
-function uniqueCommandPayloadArgvCandidates(candidates: string[][]): string[][] {
-  const seen = new Set<string>();
-  return candidates.filter((candidate) => {
-    if (candidate.length === 0) {
-      return false;
-    }
-    const key = commandArgvKey(candidate);
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
 }
 
 type ShellPositionalCarrierPlan = { kind: "all" } | { kind: "indexes"; indexes: number[] };

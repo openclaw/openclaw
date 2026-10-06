@@ -8,9 +8,6 @@ import { readPackageManagerSpec } from "./package-json.js";
 import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import {
-  managerInstallArgs,
-  managerInstallIgnoreScriptsArgs,
-  managerScriptArgs,
   parsePnpmPackageManagerVersion,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
@@ -375,11 +372,15 @@ async function testPreflightCandidate(
   try {
     const preferIgnoreScripts =
       !params.referenceSource && shouldInstallWithoutScriptsOnWindows(manager.manager);
-    const installArgv = preferIgnoreScripts
-      ? managerInstallIgnoreScriptsArgs(manager.manager)
-      : managerInstallArgs(manager.manager, {
-          compatFallback: manager.fallback && manager.manager === "npm",
-        });
+    const installArgv = [
+      manager.manager,
+      "install",
+      ...(preferIgnoreScripts
+        ? ["--ignore-scripts"]
+        : manager.fallback && manager.manager === "npm"
+          ? ["--no-package-lock", "--legacy-peer-deps"]
+          : []),
+    ];
     const installName = preferIgnoreScripts ? "deps-install-ignore-scripts" : "deps-install";
     if (params.referenceSource || params.frozenLockfile) {
       installArgv.push("--frozen-lockfile");
@@ -391,25 +392,21 @@ async function testPreflightCandidate(
       params.runCommand,
       params.timeoutMs,
     );
-    const buildArgs = managerScriptArgs(manager.manager, "build");
+    const scriptArgs = (script: string) =>
+      manager.manager === "pnpm" ? ["pnpm", script] : [manager.manager, "run", script];
     const buildEnv = resolveBuildEnv(
       candidateCommand.env,
       path.join(params.artifactRoot, ".artifacts", "build-all-cache"),
     );
     buildEnv.sourceRuntimePrepared = params.sourceRuntimePrepared?.toString();
-    const lintArgs = managerScriptArgs(manager.manager, "lint");
     let failure =
       (await runCandidateCheck(installName, installArgv, candidateCommand.env)) ??
-      (await runCandidateCheck("build", buildArgs, buildEnv));
+      (await runCandidateCheck("build", scriptArgs("build"), buildEnv));
     if (
       !failure &&
       (await resolveControlUiAssetHealth({ root: params.worktreeDir })).kind !== "ready"
     ) {
-      failure = await runCandidateCheck(
-        "ui-build",
-        managerScriptArgs(manager.manager, "ui:build"),
-        candidateCommand.env,
-      );
+      failure = await runCandidateCheck("ui-build", scriptArgs("ui:build"), candidateCommand.env);
     }
     if (
       !failure &&
@@ -428,7 +425,7 @@ async function testPreflightCandidate(
     if (!failure && params.runLint) {
       failure = await runCandidateCheck(
         "lint",
-        lintArgs,
+        scriptArgs("lint"),
         resolveDevPreflightLintEnv(candidateCommand.env),
       );
     }

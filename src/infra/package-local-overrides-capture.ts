@@ -11,7 +11,6 @@ import {
 } from "./package-dist-inventory.js";
 import {
   assertRecoveryRootOutsidePackageRoot,
-  countChanges,
   emptyResult,
   fileModesHaveSameExecutableSemantics,
   normalizeDistPath,
@@ -329,7 +328,9 @@ export async function captureLocalPackageOverrides(params: {
 
     const result = {
       ...emptyResult("none"),
-      ...countChanges(changes),
+      added: changes.filter((change) => change.kind === "added").length,
+      modified: changes.filter((change) => change.kind === "modified").length,
+      deleted: changes.filter((change) => change.kind === "deleted").length,
       recoveryDir: finalRecoveryDir,
     };
     await fs.writeFile(

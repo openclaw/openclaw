@@ -17,20 +17,12 @@ import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
-import {
-  buildUpdateCanaryCommands,
-  type UpdateCanaryCommand,
-} from "./update-candidate-canary-commands.js";
 import { launchCanary, stopCanary, waitBounded } from "./update-candidate-canary-process.js";
 import { UPDATE_CANARY_PROGRESS_ARGS } from "./update-candidate-canary-progress.js";
 import {
   observeUpdateCandidateStartup,
   waitForUpdateCandidateReadiness,
 } from "./update-candidate-canary-readiness.js";
-import {
-  createCanaryReceiptObserver,
-  type CanaryReceiptCallbacks,
-} from "./update-candidate-canary-receipts.js";
 import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
@@ -55,11 +47,13 @@ import {
   type UpdateFailureFact,
 } from "./update-failure-facts.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
+import type { UpdateRunStep } from "./update-run-record.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-type CanaryPhase = UpdateCanaryCommand["phase"] | "snapshot" | "startup" | "readiness";
+type CanaryCommandPhase = "doctor" | "lint" | "config" | "plugins" | "runtime";
+type CanaryPhase = CanaryCommandPhase | "snapshot" | "startup" | "readiness";
 
 type CanaryResult = {
   phase: CanaryPhase;
@@ -83,20 +77,21 @@ type CanaryResult = {
 );
 
 /** Rehearse the exact candidate against private SQLite snapshots while the serving generation stays up. */
-export async function validateUpdateCandidateCanary(
-  params: {
-    root: string;
-    config: OpenClawConfig;
-    stateDir: string;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-    env?: NodeJS.ProcessEnv;
-    nodeRunner?: string;
-    assertCurrent?: () => void;
-    /** Startup-only callers must prove the preserved input boots without Doctor repair. */
-    migrationPolicy?: "rehearse" | "startup-only";
-  } & CanaryReceiptCallbacks,
-): Promise<CanaryResult> {
+export async function validateUpdateCandidateCanary(params: {
+  root: string;
+  config: OpenClawConfig;
+  stateDir: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
+  nodeRunner?: string;
+  assertCurrent?: () => void;
+  /** Startup-only callers must prove the preserved input boots without Doctor repair. */
+  migrationPolicy?: "rehearse" | "startup-only";
+  /** Emit at completion; replaying after the canary shifts persisted step timestamps. */
+  onStep?: (step: UpdateStepResult) => void | Promise<void>;
+  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
+}): Promise<CanaryResult> {
   const started = Date.now();
   let rehearsal: UpdateCandidateRehearsal | undefined;
   let cleanupUncertain = false;
@@ -108,13 +103,25 @@ export async function validateUpdateCandidateCanary(
   let stepStartedAt = started;
   let activeLintStep: UpdateStepResult | undefined;
   const steps: UpdateStepResult[] = [];
-  const receipts = createCanaryReceiptObserver(params);
+  const { onStep, onProgress } = params;
+  let receiptFailed = false;
+  const reportReceipt = async <Value>(
+    callback: ((value: Value) => void | Promise<void>) | undefined,
+    value: Value,
+  ) => {
+    try {
+      await callback?.(value);
+    } catch (error) {
+      receiptFailed = true;
+      throw error;
+    }
+  };
   // Each check is announced before it runs; the awaited receipt admits the progress writer first.
   const beginStep = async (step: typeof activeStep) => {
     activeStep = step;
     stepStartedAt = Date.now();
     stepLogTail.length = 0;
-    await receipts.onProgress?.({
+    await reportReceipt(onProgress, {
       step: step.name,
       status: "in_progress",
       startedAtMs: stepStartedAt,
@@ -123,7 +130,7 @@ export async function validateUpdateCandidateCanary(
   };
   const recordStep = async (step: UpdateStepResult) => {
     steps.push(step);
-    await receipts.onStep?.(step);
+    await reportReceipt(onStep, step);
   };
   const cleanupRehearsal = async () => {
     if (!rehearsal) {
@@ -263,9 +270,30 @@ export async function validateUpdateCandidateCanary(
       gateway: { host: "127.0.0.1", port },
       mcpAppSandbox: "disabled",
     };
-    const commands = buildUpdateCanaryCommands({
-      continuationEntry,
-      migrationPolicy: params.migrationPolicy,
+    const commands: { phase: CanaryCommandPhase; name: string; args: string[]; entry?: string }[] =
+      params.migrationPolicy === "startup-only"
+        ? []
+        : [
+            {
+              phase: "doctor",
+              name: "candidate-doctor",
+              args: ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+            },
+            {
+              phase: "lint",
+              name: "candidate-doctor-lint",
+              args: ["doctor", "--lint", "--json", "--severity-min", "error"],
+            },
+            { phase: "config", name: "candidate-config", args: ["config", "validate", "--json"] },
+            { phase: "plugins", name: "candidate-plugins", args: ["plugins", "list", "--json"] },
+          ];
+    // After a schema bump only a fresh candidate may finalize the run;
+    // prove its full recovery import graph before live state changes.
+    commands.push({
+      phase: "runtime",
+      name: "candidate-recovery",
+      entry: continuationEntry,
+      args: ["--check"],
     });
     // Each fresh process may inspect the private state again, including the Gateway.
     const processBudget = resolveSqliteInspectionBudget(
@@ -540,7 +568,7 @@ export async function validateUpdateCandidateCanary(
       if (code !== 0 && !doctorAdvisory) {
         throw new Error(failureMessage);
       }
-      await receipts.onStep?.(step);
+      await reportReceipt(onStep, step);
     }
     if (!candidateSchemaVersions) {
       throw new Error("The update did not report its supported database versions");
@@ -633,7 +661,7 @@ export async function validateUpdateCandidateCanary(
       cleanupUncertain = true;
       throw error;
     }
-    if (receipts.hasFailed()) {
+    if (receiptFailed) {
       // A receipt refusal must not become a failed candidate check or be reported again.
       throw error;
     }
@@ -676,7 +704,7 @@ export async function validateUpdateCandidateCanary(
       );
     failed.stderrTail ??= stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
     try {
-      await receipts.onStep?.(failed);
+      await reportReceipt(onStep, failed);
     } catch (recordingError) {
       cleanupUncertain = hasCommandProcessCleanupError(recordingError);
       throw recordingError;
