@@ -6,21 +6,7 @@ import { delay } from "./gateway-bench-child.ts";
 import { requestProbeStatus } from "./gateway-bench-probes.ts";
 import { parseStrictIntegerOption } from "./strict-integer-option.ts";
 
-type GatewayBenchCase = {
-  config: Record<string, unknown>;
-  env?: Record<string, string>;
-  id: string;
-  name: string;
-};
-
-export type SummaryStats = {
-  avg: number;
-  max: number;
-  min: number;
-  p50: number;
-  p95: number;
-};
-
+export type SummaryStats = NonNullable<ReturnType<typeof summarizeNumbers>>;
 export type InitialProbeResult = {
   firstErrorKind: string | null;
   firstRecoveryMs: number | null;
@@ -28,11 +14,7 @@ export type InitialProbeResult = {
   status: number | null;
   transitions: Array<{ errorKind?: string; ms: number; status: number | null }>;
 };
-
-type PluginFixtureResult = {
-  pluginIds: string[];
-  pluginsDir: string;
-};
+type PluginFixtureResult = ReturnType<typeof writePluginFixtures>;
 
 export const STALLED_CATALOG_PROVIDER_ID = "bench-catalog-stall";
 export const STALLED_CATALOG_MODEL_ID = "bench-model";
@@ -127,7 +109,7 @@ export function resolveOutputPath(raw: string | undefined): string | undefined {
   return output;
 }
 
-export function resolveCases<T extends GatewayBenchCase>(
+export function resolveCases<T extends { id: string }>(
   caseIds: string[],
   cases: readonly T[],
   options: { allByDefault: boolean; validateDuplicatesFirst?: boolean },
@@ -161,7 +143,7 @@ export function resolveCases<T extends GatewayBenchCase>(
   });
 }
 
-export function summarizeNumbers(values: number[]): SummaryStats | null {
+export function summarizeNumbers(values: number[]) {
   if (values.length === 0) {
     return null;
   }
@@ -262,7 +244,7 @@ export function writePluginFixtures(
     providerStaticCatalogModelCount?: number | undefined;
     providerStaticCatalogStallMs?: number | undefined;
   },
-): PluginFixtureResult {
+) {
   const pluginIds: string[] = [];
   const pluginsDir = path.join(root, "plugins");
   mkdirSync(pluginsDir, { recursive: true });

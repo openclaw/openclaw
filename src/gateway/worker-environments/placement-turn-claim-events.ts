@@ -6,8 +6,10 @@ import type {
 } from "../../agents/admitted-run-context.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import {
+  captureAgentRunDelegatedSourceAssertion,
   claimAgentRunApprovalAuthority,
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
@@ -203,23 +205,40 @@ export async function bindWorkerTurnOwner(
   const authority = claimAuthority;
   claim = authority.claim;
   const owners = workerTurnOwners.get(path) ?? new Map();
+  const refuseOwner: () => never = () => {
+    throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+  };
+  const delegatedSource = captureAgentRunDelegatedSourceAssertion(delegatedAuthority, refuseOwner);
+  if (!delegatedSource) {
+    approvalLifetime.abort();
+    authority.release();
+    scope?.release();
+    refuseOwner();
+  }
   const assertOwnerCurrent = () => {
     if (
       owners.get(claim.sessionId) !== owner ||
       workerTurnOwners.get(path) !== owners ||
-      !authority.isCurrent() ||
-      !validateAgentRunDelegatedAuthority(delegatedAuthority)
+      !authority.isCurrent()
     ) {
-      throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+      refuseOwner();
     }
+    delegatedSource.assertBinding();
   };
-  const assertActive = () => {
-    // A closed claim must not consult its retired source. Callbacks can also revoke it.
-    assertOwnerCurrent();
-    assertRunActive();
-    operatorAuthority?.assertCurrent();
-    assertOwnerCurrent();
-  };
+  const assertActive = composeSessionSourceAssertion(
+    [
+      delegatedSource.assertCurrent,
+      assertRunActive,
+      operatorAuthority?.assertCurrent,
+      delegatedSource.assertCurrent,
+    ],
+    (assertSources) => {
+      // A closed claim must not consult its retired source. Callbacks can also revoke it.
+      assertOwnerCurrent();
+      assertSources();
+      assertOwnerCurrent();
+    },
+  );
   const identity = Object.freeze({
     agentId: sessionTarget.agentId,
     delegatedAuthority,

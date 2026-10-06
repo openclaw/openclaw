@@ -8,12 +8,10 @@ import {
 } from "../../agents/exec-defaults.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  patchSessionEntryCore,
-  updateSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { captureSessionTranscriptStorageEnvironment } from "../../config/sessions/transcript-target-binding.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -56,7 +54,7 @@ async function persistSkillSnapshot(params: {
   currentEntry: SessionEntry;
   skillsSnapshot: SessionEntry["skillsSnapshot"];
   isFirstTurnInSession: boolean;
-  assertCurrent?: () => void;
+  assertCurrent?: SessionSourceAssertion;
 }): Promise<{ entry: SessionEntry | undefined; updated: boolean }> {
   params.assertCurrent?.();
   const updates = {
@@ -82,7 +80,7 @@ async function persistSkillSnapshot(params: {
     return { entry: nextEntry, updated: true };
   }
   let updated = false;
-  const persistedEntry = await updateSessionEntry(
+  const persistedEntry = await patchSessionEntryCore(
     {
       storePath: params.storePath,
       sessionKey: params.sessionKey,
@@ -94,6 +92,7 @@ async function persistSkillSnapshot(params: {
         entry.lifecycleRevision === params.expectedSession?.lifecycleRevision;
       return updated ? updates : null;
     },
+    { workerGuard: { source: params.assertCurrent } },
   );
   params.assertCurrent?.();
   publishSessionEntry(params, persistedEntry ?? undefined);
@@ -117,7 +116,7 @@ export async function ensureSkillSnapshot(params: {
   /** If provided, only load skills with these names (for per-channel skill filtering) */
   skillFilter?: string[];
   skillOverrides?: Record<string, boolean>;
-  assertCurrent?: () => void;
+  assertCurrent?: SessionSourceAssertion;
 }): Promise<{
   sessionEntry?: SessionEntry;
   skillsSnapshot?: SessionEntry["skillsSnapshot"];

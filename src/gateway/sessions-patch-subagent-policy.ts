@@ -55,9 +55,6 @@ export function applySessionsPatchSubagentPolicy(params: {
       if (unsupported) {
         return unsupported;
       }
-      if (raw !== 1) {
-        return "invalid inheritedToolPolicyVersion (expected 1)";
-      }
       next.inheritedToolPolicyVersion = 1;
     }
   }
@@ -70,9 +67,6 @@ export function applySessionsPatchSubagentPolicy(params: {
     }
     if (raw === undefined) {
       continue;
-    }
-    if (!Array.isArray(raw)) {
-      return `invalid ${field} (use an array of tool names)`;
     }
     const unsupported = unsupportedField(field, storeKey);
     if (unsupported) {

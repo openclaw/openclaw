@@ -18,6 +18,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveSessionLifecycleTimestampsAsync } from "./lifecycle-read.js";
 import { retainPreparedSessionGenerationFacts } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readExactSessionEntryRow,
@@ -506,6 +507,30 @@ it("settles false before CAS and later throwing authority, while null updates st
     expect(nativeAdmission).not.toBe(previousAdmission);
     expect(nativeAdmission?.settlement).toMatchObject({ kind: "completed" });
     expect(nativeAdmission?.committed).toBeUndefined();
+  });
+});
+
+it("recovers missing lifecycle timestamps during worker patch planning", async ({ signal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const startedAt = 1_700_000_000_000;
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        appendTranscriptEventsInTransaction(database, { ...f.scope, sessionId: "original" }, [
+          { type: "session", id: "original", version: 3, timestamp: startedAt },
+        ]),
+      { agentId: f.database.agentId, path: f.database.path },
+    );
+    const entry = await patchSessionEntryCore(f.scope, async (current) => {
+      const timestamps = await resolveSessionLifecycleTimestampsAsync({
+        ...f.scope,
+        entry: current,
+        signal,
+      });
+      return { sessionStartedAt: timestamps.sessionStartedAt };
+    });
+    expect(entry?.sessionStartedAt).toBe(startedAt);
+    expect(f.read()?.sessionStartedAt).toBe(startedAt);
   });
 });
 

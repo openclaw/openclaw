@@ -1,5 +1,6 @@
 import { registerReplyOperationSuccessorBarrier } from "../auto-reply/reply/reply-run-registry.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
@@ -185,20 +186,21 @@ export async function withSessionPlacementTurnAdmission(
   const assertAdmittedRunCurrent = params.admittedRunContext
     ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
     : undefined;
-  const assertCurrent = () => {
-    params.abortSignal?.throwIfAborted();
-    // Setup waits must not carry revoked ingress or an already-closed execution
-    // into workspace preparation. Runtime admission still owns allocation.
-    params.preparedRunAdmission?.assertSourceCurrent();
-    if (params.admittedRunContext && !assertAdmittedRunCurrent) {
-      throw createAbortError("admitted run authority is no longer active");
-    }
-    assertAdmittedRunCurrent?.();
-    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-    if (state.provider !== provider) {
-      throw createAbortError("session placement owner changed during turn admission");
-    }
-  };
+  const assertCurrent = composeSessionSourceAssertion(
+    [params.preparedRunAdmission?.assertSourceCurrent, assertAdmittedRunCurrent],
+    (assertSources) => {
+      params.abortSignal?.throwIfAborted();
+      // Setup waits retain the ingress and execution owners through worker preparation.
+      assertSources();
+      if (params.admittedRunContext && !assertAdmittedRunCurrent) {
+        throw createAbortError("admitted run authority is no longer active");
+      }
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+      if (state.provider !== provider) {
+        throw createAbortError("session placement owner changed during turn admission");
+      }
+    },
+  );
   const result = await withPlacementTurnCallerScope(params, () =>
     withoutSessionPlacementForcedTerminalSettlement(() =>
       provider
