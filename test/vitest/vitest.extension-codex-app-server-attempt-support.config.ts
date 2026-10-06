@@ -14,6 +14,7 @@ function createExtensionCodexAppServerAttemptSupportVitestConfig(
       "extensions/codex/src/app-server/attempt-startup*.test.ts",
       "extensions/codex/src/app-server/attempt-timeouts.test.ts",
       "extensions/codex/src/app-server/run-attempt.native-followup-custody.test.ts",
+      "extensions/codex/src/app-server/run-attempt-server-request-admission.test.ts",
     ],
     {
       dir: "extensions",

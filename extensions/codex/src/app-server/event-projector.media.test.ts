@@ -400,7 +400,7 @@ describe("CodexAppServerEventProjector media projection", () => {
   );
 
   it.each(["replaced", "file-url", "error"] as const)(
-    "preserves the processed internal UI attachment: %s",
+    "preserves the committed final-source attachment despite later presentation: %s",
     async (presentation) => {
       const replacementUrl = "https://example.test/filtered-preview.png";
       installCodexToolResultMiddleware((event) => {
@@ -447,23 +447,17 @@ describe("CodexAppServerEventProjector media projection", () => {
       await projector.handleNotification(turnCompleted());
       const result = projector.buildResult(bridge.telemetry);
 
-      expect(result.messagingToolSourceReplyPayloads).toEqual(
-        presentation === "error"
-          ? []
-          : [
-              {
-                text: presentation === "replaced" ? "Filtered attachment." : "Attached.",
-                mediaUrls: [
-                  presentation === "replaced" ? replacementUrl : pathToFileURL(stagedPath).href,
-                ],
-              },
-            ],
-      );
+      expect(result.messagingToolSourceReplyPayloads).toEqual([
+        {
+          text: "Attached.",
+          mediaUrls: [stagedPath],
+          sourceReplyFinal: true,
+        },
+      ]);
       expect(result.messagingToolSentTargets).toEqual([]);
       expect(result.messagingToolSentMediaUrls).toEqual([]);
       expect(result.messagingToolSentTexts).toEqual([]);
-      const sentGeneratedImage = presentation === "file-url";
-      expect(result.toolMediaUrls).toHaveLength(sentGeneratedImage ? 1 : 2);
+      expect(result.toolMediaUrls).toHaveLength(1);
       expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
       const remainingImages = await Promise.all(
         (result.toolMediaUrls ?? []).map(async (url) =>
@@ -471,11 +465,7 @@ describe("CodexAppServerEventProjector media projection", () => {
         ),
       );
       expect(remainingImages).toContain(SECOND_PNG_BASE64);
-      if (sentGeneratedImage) {
-        expect(remainingImages).not.toContain(tinyPngBase64);
-      } else {
-        expect(remainingImages).toContain(tinyPngBase64);
-      }
+      expect(remainingImages).not.toContain(tinyPngBase64);
     },
   );
 

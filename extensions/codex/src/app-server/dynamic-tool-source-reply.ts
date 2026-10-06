@@ -10,7 +10,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
-import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolCallParams,
+} from "./protocol.js";
 
 type ToolAuthoredSourceReplyPayload = NonNullable<
   ReturnType<typeof captureToolAuthoredSourceReply>
@@ -105,4 +108,26 @@ function isToolResultYield(result: AgentToolResult<unknown>): boolean {
     return false;
   }
   return details.status.trim().toLowerCase() === "yielded";
+}
+
+export function canProduceFinalSourceReplyDelivery(call: CodexDynamicToolCallParams): boolean {
+  // before_tool_call may rewrite finality, so the original arguments cannot
+  // safely narrow which message calls can produce an authoritative receipt.
+  return call.tool === "message";
+}
+
+export function applyCurrentMessageProvider(
+  toolName: string,
+  args: Record<string, unknown>,
+  currentProvider: string | undefined,
+): Record<string, unknown> {
+  const hasProvider =
+    typeof args.provider === "string" && args.provider.trim().length > 0
+      ? true
+      : typeof args.channel === "string" && args.channel.trim().length > 0;
+  const provider = currentProvider?.trim();
+  if (toolName !== "message" || hasProvider || !provider) {
+    return args;
+  }
+  return { ...args, provider };
 }

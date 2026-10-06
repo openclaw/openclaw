@@ -39,6 +39,7 @@ export function createCodexAttemptNotificationController(
     pendingOpenClawDynamicToolCompletionIds,
     openClawDynamicToolExecutions,
     completeTurn,
+    clearTerminalReleaseDeadline,
     noteProgress,
     deadlines,
   } = turnRuntime;
@@ -228,6 +229,7 @@ export function createCodexAttemptNotificationController(
     if (completedTurn) {
       projector.settlement.terminalReceipt = completedTurn;
       state.terminalTurnNotificationQueued = true;
+      clearTerminalReleaseDeadline();
       steeringQueueRef.current?.sealAdmission();
       deadlines.beginSettlement(receivedAtMs);
     }

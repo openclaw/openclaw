@@ -4,6 +4,7 @@ import { createCodexDynamicToolSpecs, projectCodexDynamicTools } from "./dynamic
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec } from "./protocol.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
+import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 function createAttemptParams(
   overrides: Partial<EmbeddedRunAttemptParams> = {},
@@ -53,6 +54,10 @@ function flattenSpecsWithNamespace(
       ? spec.tools.map((tool) => ({ ...tool, namespace: spec.name }))
       : [spec],
   );
+}
+
+function specNames(specs: readonly CodexDynamicToolSpec[]): string[] {
+  return flattenSpecsWithNamespace(specs).map((tool) => tool.name);
 }
 
 describe("Codex direct tool loading", () => {
@@ -149,4 +154,77 @@ it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", ()
   expect(sessionsSpawn).not.toHaveProperty("deferLoading");
   expect(sessionsYield).not.toHaveProperty("namespace");
   expect(sessionsYield).not.toHaveProperty("deferLoading");
+});
+
+it("keeps message in the registered schema when disabled for an internal turn", async () => {
+  const params = createAttemptParams({
+    disableTools: false,
+    disableMessageTool: true,
+    sourceReplyDeliveryMode: "message_tool_only",
+  });
+  const availableTools: RuntimeDynamicToolForTest[] = [];
+  const registeredTools = [createRuntimeDynamicTool("message")];
+  const bridge = createCodexToolBridgeForTest(params, availableTools, registeredTools);
+  const normalParams = createAttemptParams({
+    disableTools: false,
+    sourceReplyDeliveryMode: "message_tool_only",
+  });
+  const normalTools = [createRuntimeDynamicTool("message")];
+  const normalRegisteredTools = [createRuntimeDynamicTool("message")];
+  const normalBridge = createCodexToolBridgeForTest(
+    normalParams,
+    normalTools,
+    normalRegisteredTools,
+  );
+  expect(bridge.availableSpecs.map((tool) => tool.name)).not.toContain("message");
+  expect(bridge.specs.map((tool) => tool.name)).toContain("message");
+  expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
+    codexDynamicToolsFingerprint(normalBridge.specs),
+  );
+  await expect(
+    bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "message",
+      arguments: {},
+    }),
+  ).resolves.toMatchObject({
+    success: false,
+    contentItems: [
+      {
+        type: "inputText",
+        text: "OpenClaw tool is not available for this turn: message",
+      },
+    ],
+  });
+});
+
+it("keeps the persistent dynamic schema stable across heartbeat-only turns", async () => {
+  const createHeartbeatRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) =>
+    createAttemptParams({ disableTools: false, ...(trigger ? { trigger } : {}) });
+  const registeredTools = [
+    createRuntimeDynamicTool("message"),
+    createRuntimeDynamicTool("web_search"),
+    createRuntimeDynamicTool("heartbeat_respond"),
+  ];
+  const normalBridge = createCodexToolBridgeForTest(
+    createHeartbeatRunParams(),
+    registeredTools,
+    registeredTools,
+  );
+  const heartbeatBridge = createCodexToolBridgeForTest(
+    createHeartbeatRunParams("heartbeat"),
+    [createRuntimeDynamicTool("heartbeat_respond")],
+    registeredTools,
+  );
+  const nextNormalBridge = createCodexToolBridgeForTest(
+    createHeartbeatRunParams(),
+    registeredTools,
+    registeredTools,
+  );
+  expect(specNames(heartbeatBridge.availableSpecs)).toEqual(["heartbeat_respond"]);
+  expect(specNames(heartbeatBridge.specs)).toEqual(specNames(normalBridge.specs));
+  expect(specNames(nextNormalBridge.specs)).toEqual(specNames(normalBridge.specs));
 });
