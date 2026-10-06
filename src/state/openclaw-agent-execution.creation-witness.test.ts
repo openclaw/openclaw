@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
@@ -275,19 +275,23 @@ it.each(["missing", "schema-missing"] as const)(
       const claims = executions.map((execution) => execution.captureGenerationClaim());
       expect(new Set(claims.map((claim) => claim.incarnation)).size).toBe(1);
       expect(new Set(claims.map((claim) => claim.identity)).size).toBe(1);
-      const late = await create(observations[0]);
-      expect(late.incarnation).toBe(claims[0].incarnation);
-      expect(late.identity).toBe(claims[0].identity);
+      const firstObservation = observations[0];
+      const firstClaim = claims[0];
+      assert(firstObservation);
+      assert(firstClaim);
+      const late = await create(firstObservation);
+      expect(late.incarnation).toBe(firstClaim.incarnation);
+      expect(late.identity).toBe(firstClaim.identity);
       expect(() =>
         captureOpenClawAgentDatabaseExecution(
           { ...options, agentId: "other" },
-          { expectedCreationIdentity: observations[0] },
+          { expectedCreationIdentity: firstObservation },
         ),
       ).toThrow(/requested agent other/);
       expect(() =>
         captureOpenClawAgentDatabaseExecution(
           { ...options, env: fixture().env },
-          { expectedCreationIdentity: observations[0] },
+          { expectedCreationIdentity: firstObservation },
         ),
       ).toThrow(/another shared-state database/);
       await Promise.all(
