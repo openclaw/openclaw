@@ -432,6 +432,38 @@ it("seals equivalent original bytes under isolated steps and one maintenance-own
   }
 });
 
+it("seals the original capture when the filesystem rejects RENAME_NOREPLACE", async () => {
+  const f = await originalCaptureFixture();
+  const nativeModule = (await import(
+    new URL("native.js", import.meta.resolve("@openclaw/fs-safe/root")).href
+  )) as { requireNativeBinding(): { renameNoReplace(...args: unknown[]): void } };
+  // Linux reports an unsupported renameat2 flag as this native status, never a raw errno.
+  const rename = vi
+    .spyOn(nativeModule.requireNativeBinding(), "renameNoReplace")
+    .mockImplementation(() => {
+      throw Object.assign(new Error("renameat2 RENAME_NOREPLACE: EINVAL"), {
+        code: "FS_SAFE_INTERNAL_RENAME_NOREPLACE_UNSUPPORTED",
+      });
+    });
+  const result = await f.captureOriginal("no-replace-unsupported");
+  expect(rename).toHaveBeenCalled();
+  const manifest = parseUpdateRecoveryBackupManifest(
+    await fs.readFile(result.ref.manifestPath, "utf8"),
+  );
+  await expect(fs.lstat(`${result.ref.manifestPath}.partial`)).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect((await fs.lstat(result.ref.manifestPath)).nlink).toBe(1);
+  const shared = manifest.entries.find((entry) => entry.sourcePath === f.shared);
+  assert(shared?.kind === "file" && shared.sqlite, "Missing captured shared database");
+  const payloadPath = path.join(result.ref.directory, shared.archivePath);
+  expect((await fs.lstat(payloadPath)).nlink).toBe(1);
+  using snapshot = new DatabaseSync(payloadPath, { readOnly: true });
+  expect(snapshot.prepare("SELECT rowid,value FROM payload").all()).toEqual([
+    { rowid: 42, value: "retained" },
+  ]);
+});
+
 it.each(["large", "live-reads-admitted"] as const)(
   "keeps maintenance capture isolated for %s sources",
   async (mode) => {

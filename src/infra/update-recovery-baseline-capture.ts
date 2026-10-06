@@ -29,8 +29,8 @@ import { resolveBackupConfigCapture } from "./backup-config-capture.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
+  moveFileNoClobber,
   pinDirectory,
-  publishFileExclusive,
   requireDirectorySync,
   sha256File,
   syncDirectory,
@@ -403,11 +403,10 @@ export function captureUpdateRecoveryBaseline(params: {
         assertCurrent();
         await pin.assertCurrent();
         assertCurrent();
-        const publication = await publishFileExclusive({
+        const publication = await moveFileNoClobber({
           sourcePath: file.snapshotPath,
           targetPath: payloadPath,
           expectedSourceIdentity: sourceIdentity,
-          strategy: "rename-noreplace",
           onSyncFailure: "preserve",
         });
         assertCurrent();
@@ -594,12 +593,11 @@ export function captureUpdateRecoveryBaseline(params: {
       }
       await pin.assertCurrent();
       assertCurrent();
-      const publication = await publishFileExclusive({
+      const publication = await moveFileNoClobber({
         sourcePath: temporaryManifestPath,
         targetPath: manifestPath,
         expectedSourceIdentity: manifestIdentity,
         parentReceipt: pin.receipt,
-        strategy: "rename-noreplace",
         onSyncFailure: "preserve",
       });
       requireDirectorySync(publication.directorySync, "Original update capture seal");

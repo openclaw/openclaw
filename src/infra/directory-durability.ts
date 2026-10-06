@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import {
   publishFileExclusive,
   syncDirectory,
@@ -8,6 +10,7 @@ import {
   type PublishFileExclusiveFailurePhase,
   type PublishFileExclusiveResult,
 } from "@openclaw/fs-safe/durability";
+import { isNoReplaceUnsupported } from "@openclaw/fs-safe/errors";
 import { FsSafeError } from "./fs-safe.js";
 
 export {
@@ -139,6 +142,41 @@ export async function publishFileNoClobber(
   }
 
   return { ...published, durability: degraded ? "degraded" : "durable" };
+}
+
+/**
+ * Move one file to an absent name. fs-safe keeps explicit rename-noreplace
+ * publication fail-closed, so filesystems that reject RENAME_NOREPLACE get an
+ * exclusive hard link plus an identity-checked source unlink instead.
+ * Like rename, a source directory that differs from the target's is the caller's to sync.
+ */
+export async function moveFileNoClobber(
+  params: Omit<Parameters<typeof publishFileExclusive>[0], "strategy">,
+): Promise<PublishFileExclusiveResult> {
+  try {
+    return await publishFileExclusive({ ...params, strategy: "rename-noreplace" });
+  } catch (error) {
+    // The rejection precedes publication: the source keeps its name and no target exists.
+    if (!isNoReplaceUnsupported(error) || getFsSafeNativeConfig().mode === "require") {
+      throw error;
+    }
+  }
+  const published = await publishFileExclusive({ ...params, strategy: "link-required" });
+  let directorySync = published.directorySync;
+  try {
+    const source = await fs.lstat(params.sourcePath, { bigint: true });
+    if (!source.isFile() || !sameFileIdentity(source, published.identity)) {
+      throw new Error(`File move source changed before removal: ${params.sourcePath}`);
+    }
+    await fs.unlink(params.sourcePath);
+    if (path.dirname(params.sourcePath) === path.dirname(params.targetPath)) {
+      // The link was synced before the unlink; the removal needs its own sync.
+      directorySync = await syncDirectory(path.dirname(params.targetPath));
+    }
+  } catch (error) {
+    throw postPublicationFailure({ error, phase: "hardlink-verify", published });
+  }
+  return { ...published, directorySync };
 }
 
 /** Compatibility adapter for former best-effort call sites. */
