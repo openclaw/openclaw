@@ -1,10 +1,8 @@
 import { performance } from "node:perf_hooks";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import { buildSystemdUnit } from "../../daemon/systemd-unit.js";
 import { GatewayConnectionWork } from "../../gateway/server-connection-work.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
-import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
-import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createActiveWorkSnapshot,
@@ -13,6 +11,7 @@ import {
   setPlatform,
   waitForStart,
   withIsolatedSignals,
+  type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
 const shutdownBudgetCases: {
@@ -51,20 +50,7 @@ export function registerShutdownBudgetTests({
   waitForGatewayActiveWork,
   gatewayLog,
   writeDiagnosticStabilityBundleForFailureSync,
-}: {
-  runLoopWithStart: (params: {
-    start: ReturnType<typeof createSignaledStart>["start"];
-    runtime: ReturnType<typeof createRuntimeWithExitSignal>["runtime"];
-  }) => Promise<unknown>;
-  systemctl: Mock<() => Promise<{ code: number; stdout: string; stderr: string }>>;
-  consumeGatewayRestartIntent: Mock<() => GatewayRestartIntent | null>;
-  createGatewayActiveWorkSnapshot: Mock<() => GatewayActiveWorkSnapshot>;
-  waitForGatewayActiveWork: Mock<
-    typeof import("../../infra/gateway-active-work.js").waitForGatewayActiveWork
-  >;
-  gatewayLog: { info: Mock; warn: Mock };
-  writeDiagnosticStabilityBundleForFailureSync: Mock;
-}) {
+}: UpdateRespawnFixtures) {
   it.each(shutdownBudgetCases)(
     "bounds $supervisor $signal cleanup when a long provider call honors abort=$honorsAbort (wait=$waitMs, installedStop=$installedStopMs, shutdownStop=$shutdownStopMs)",
     async ({

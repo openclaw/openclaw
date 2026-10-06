@@ -313,7 +313,7 @@ export function createWorkerSessionPlacementStore(
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker session placement ${sessionId} changed before retirement`);
         }
-        publishPlacementTurnClaimCleared(db, sessionId);
+        publishPlacementTurnClaimCleared(db, sessionId, input.expectedState);
       });
       workspaceResultConflicts.delete(sessionId);
     },

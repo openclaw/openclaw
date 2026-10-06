@@ -421,6 +421,7 @@ describe("runDoctorSessionSqlite", () => {
         history: loadTranscriptEventsSync(transcriptScope),
       });
       expect(current.entry?.label).toBe("Current metadata after import");
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const restored = await runDoctorSessionSqlite({
         env: store.env,

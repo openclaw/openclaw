@@ -19,7 +19,10 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { prepareSessionDeletionInDatabase } from "./session-accessor.sqlite-deletion-plan.js";
-import { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
+import {
+  captureNativeSessionWorkerDeletion,
+  preparedSessionDeletionRequiresNativeTransaction,
+} from "./session-accessor.sqlite-deletion.js";
 import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { publishSessionEntryWorkerInvalidations } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type {
@@ -66,6 +69,7 @@ export async function runSessionDeletionPlanning(
   const databaseOptions = toDatabaseOptions(resolved);
   // Cross-store handoffs retain their original connection identity comparison.
   if (
+    preparedSessionDeletionRequiresNativeTransaction() ||
     params.expectedDatabaseIdentity !== undefined ||
     !isMainThread ||
     !supportsOpenClawAgentDatabaseExecution(databaseOptions)
@@ -119,7 +123,9 @@ export async function runSqliteSessionReclamation(params: {
   if (params.diagnostics) {
     params.diagnostics.kind = params.plan.kind;
   }
+  const nativeAuthority = preparedSessionDeletionRequiresNativeTransaction();
   if (
+    !nativeAuthority &&
     (params.plan.kind === "entry" ||
       params.plan.kind === "lifecycle-artifacts" ||
       params.plan.kind === "maintenance-finalize" ||
@@ -141,6 +147,7 @@ export async function runSqliteSessionReclamation(params: {
     }
   }
   if (
+    nativeAuthority ||
     params.forceInProcess ||
     ((params.plan.kind === "maintenance-plan" ||
       params.plan.kind === "maintenance-statistics" ||

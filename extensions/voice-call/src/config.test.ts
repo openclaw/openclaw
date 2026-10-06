@@ -757,6 +757,7 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
     expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
     expect(normalized.realtime.consultPolicy).toBe("auto");
+    expect(normalized.realtime.idleHangupMs).toBeUndefined();
     expect(normalized.realtime.fastContext).toEqual({
       enabled: false,
       timeoutMs: 800,
@@ -902,6 +903,22 @@ describe("resolveVoiceCallConfig realtime settings", () => {
 
     expect(resolved.realtime.consultThinkingLevel).toBe("ultra");
     expect(resolved.realtime.consultFastMode).toBe(true);
+  });
+
+  it("accepts only positive integer realtime idle hangup values", () => {
+    const parsed = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "mock",
+      realtime: { idleHangupMs: 45_000 },
+    });
+    expect(resolveVoiceCallConfig(parsed).realtime.idleHangupMs).toBe(45_000);
+    expect(
+      VoiceCallConfigSchema.safeParse({
+        enabled: true,
+        provider: "mock",
+        realtime: { idleHangupMs: 0 },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects invalid realtime consult thinking levels", () => {

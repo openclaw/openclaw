@@ -87,6 +87,7 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readBranchSummaries: reader("branch-summaries", "branch summaries", (value) => value.result),
     readMessagePresence: reader(
       "transcript-message-presence",
       "message presence",

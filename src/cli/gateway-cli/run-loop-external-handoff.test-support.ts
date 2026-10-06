@@ -1,5 +1,5 @@
 /** Registers external handoff shutdown contracts in the shared run-loop fixture. */
-import { expect, it, type Mock } from "vitest";
+import { expect, it } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   expectRestartCloseCall,
@@ -19,21 +19,7 @@ export function registerExternalHandoffShutdownTests(
     cancelShutdownHardExitWatchdog,
     gatewayLog,
     isGatewayWorkAdmissionClosed,
-  }: Pick<
-    UpdateRespawnFixtures,
-    | "createSignaledLoopHarness"
-    | "waitForGatewayActiveWork"
-    | "restartGatewayProcessWithFreshPid"
-    | "respawnGatewayProcessForUpdate"
-    | "writeGatewayRestartHandoffSync"
-    | "gatewayLog"
-    | "isGatewayWorkAdmissionClosed"
-  > & {
-    consumeGatewaySuspendHandoff: Mock<
-      typeof import("../../infra/gateway-suspend-coordinator.js").consumeGatewaySuspendHandoff
-    >;
-    cancelShutdownHardExitWatchdog: Mock;
-  },
+  }: UpdateRespawnFixtures,
   restartDeferralTimeoutMs: number,
 ): void {
   it.each([

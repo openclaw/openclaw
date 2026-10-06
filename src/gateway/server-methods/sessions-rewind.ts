@@ -148,6 +148,7 @@ async function listBranches(
       key: sessionKey,
       cfg,
       agentId: requestedAgent.agentId,
+      projection: "list",
     });
     if (!current.entry?.sessionId) {
       // A session key that has not materialized yet (fresh chat, no first

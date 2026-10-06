@@ -21,6 +21,7 @@ import {
   resolveCoreToolExecutionLocation,
 } from "../../agents/tool-catalog.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -269,7 +270,10 @@ describe("worker turn execution", () => {
         expect(outcome).toBeInstanceOf(SessionTranscriptMessageCommittedError);
         expect(outcome).toMatchObject({
           committedMessageId,
-          committedTarget: sessionTarget,
+          committedTarget: {
+            ...sessionTarget,
+            storePath: resolveSqliteReadScope(sessionTarget).path,
+          },
           cause: expectedFailure,
         });
         expect(isRecordedModelFallbackStop(outcome)).toBe(true);

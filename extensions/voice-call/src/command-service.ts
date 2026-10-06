@@ -131,9 +131,13 @@ export function createVoiceCallCommandService(ensureRuntime: () => Promise<Voice
       return { success: true };
     },
 
-    async endCall(callId?: string) {
+    async endCall(
+      callId?: string,
+      execution?: { runtime?: VoiceCallRuntime; assertAuthority?: () => void },
+    ) {
       const resolvedCallId = requireInput(callId, "callId required");
-      const rt = await ensureRuntime();
+      const rt = execution?.runtime ?? (await ensureRuntime());
+      execution?.assertAuthority?.();
       const result = await rt.manager.endCall(resolvedCallId);
       requireSuccess(result, "end failed");
       return { success: true };

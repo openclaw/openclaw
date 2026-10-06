@@ -1,5 +1,7 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/gateway/worker-environments/worker-turn-transcript-target.test.ts",
+  "src/state/openclaw-agent-db.worker-admission.test.ts",
   "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
   "src/channels/feedback-reflection.worker.test.ts",
   "src/config/sessions/session-accessor.sqlite-bounded-context.test.ts",
@@ -619,6 +621,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/update-cohort.test.ts",
   "src/plugins/update.test.ts",
   "src/plugins/update.work-deadline.test.ts",
+  "src/state/agent-database-admission.test.ts",
   "src/state/openclaw-agent-canonical-validation-schema.test.ts",
   "src/state/openclaw-agent-db-maintenance.test.ts",
   "src/state/openclaw-agent-db-retired-lease-repair.test.ts",

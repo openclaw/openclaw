@@ -10,6 +10,7 @@ import {
   applySessionGroupCategoryMutation,
   prepareSessionGroupCategoryMutation,
 } from "./session-group-categories.kernel.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
 
 /** Prepared rows stay with the broker; only target identities cross the admission boundary. */
@@ -21,8 +22,9 @@ export function updateSessionGroupCategoriesInWorker(params: {
 }): Promise<number> {
   const { scope, from, to, assertTargetCurrent } = params;
   const agentId = scope.agentId;
-  if (scope.incognito) {
-    const { actor, authority } = scope.incognito;
+  const incognito = scope.incognito ?? captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    const { actor, authority } = incognito;
     const resolved = resolveSqliteScope(scope);
     const options = toDatabaseOptions(resolved);
     if (actor.agentId !== resolved.agentId || actor.path !== options.path) {
