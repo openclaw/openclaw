@@ -6,6 +6,7 @@ import { resolveAgentMainSessionKey, type SessionEntry } from "../config/session
 import { collectCanonicalSessionLookupKeys } from "../config/sessions/main-session-key.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
+import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionMember } from "../config/sessions/session-sharing-store.kernel.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
@@ -45,6 +46,8 @@ import {
 } from "./session-utils-store-retained.js";
 import {
   resolveGatewaySessionStoreReadResults,
+  prepareGatewaySessionStoreReadPlan,
+  type GatewaySessionStorePlan,
   type GatewaySessionStoreLookup,
 } from "./session-utils-store-selection.js";
 import type {
@@ -69,11 +72,6 @@ type GatewaySessionStoreLookupParams = {
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   readStore?: typeof readGatewaySessionStore;
-};
-
-type GatewaySessionStorePlan<T> = {
-  reads: GatewaySessionStoreRead[];
-  resolve: () => T;
 };
 
 function storeReadOptions(
@@ -310,14 +308,19 @@ export function resolveGatewaySessionStoreTargetWithStore(
 export async function withGatewaySessionStoreTarget<T>(
   params: Pick<
     GatewaySessionStoreLookupParams,
-    "cfg" | "key" | "agentId" | "env" | "projection"
+    "cfg" | "key" | "agentId" | "env" | "projection" | "preserveQualifiedAddress"
   > & {
     includeMembership?: boolean;
+    ordered?: boolean;
+    relatedKeys?: ReadonlyArray<
+      Pick<GatewaySessionStoreLookupParams, "key" | "agentId" | "preserveQualifiedAddress">
+    >;
   },
   consume: (
     target: GatewaySessionStoreTargetWithStore,
     membership: ReadonlyMap<string, readonly SessionMember[]>,
     assertCurrent: () => void,
+    relatedTargets: readonly GatewaySessionStoreTargetWithStore[],
   ) => T,
 ): Promise<T> {
   const normalized = {
@@ -330,20 +333,48 @@ export async function withGatewaySessionStoreTarget<T>(
     cfg: params.cfg,
     sessionKey: normalized.key,
     agentId: params.agentId,
+    preserveQualifiedAddress: params.preserveQualifiedAddress,
   });
   if (isIncognitoSessionKey(identity.canonicalKey)) {
+    if (params.relatedKeys?.length) {
+      throw new Error("Related incognito rows require their captured actor");
+    }
     return withIncognitoGatewaySessionStoreTarget({
       env: params.env,
       includeMembership: params.includeMembership,
       identity,
       resolve: () => resolveGatewaySessionStoreTargetWithStore(normalized),
-      consume,
+      consume: (target, membership, assertCurrent) =>
+        consume(target, membership, assertCurrent, []),
     });
   }
-  const parsedAgentId = parseAgentSessionKey(normalized.key)?.agentId;
+  const related = (params.relatedKeys ?? []).map((selection) =>
+    Object.assign({}, normalized, selection, {
+      key: normalizeOptionalString(selection.key) ?? "",
+    }),
+  );
+  const identities = [
+    identity,
+    ...related.map((selection) =>
+      resolveSessionStoreIdentity({
+        cfg: params.cfg,
+        sessionKey: selection.key,
+        agentId: selection.agentId,
+        preserveQualifiedAddress: selection.preserveQualifiedAddress,
+      }),
+    ),
+  ];
+  if (identities.some((selected) => isIncognitoSessionKey(selected.canonicalKey))) {
+    throw new Error("Related incognito rows require their captured actor");
+  }
   const inventory = prepareSessionStoreTargetInventory(
     params.cfg,
-    [identity.agentId, ...(parsedAgentId ? [parsedAgentId] : [])],
+    [
+      ...identities.map((selected) => selected.agentId),
+      ...[normalized, ...related].flatMap(
+        (selection) => parseAgentSessionKey(selection.key)?.agentId ?? [],
+      ),
+    ],
     params.env,
   );
   const inventoryRead = prepareSessionStoreTargetInventoryRead(inventory);
@@ -363,13 +394,16 @@ export async function withGatewaySessionStoreTarget<T>(
         },
       });
     }
-    const plan = prepareGatewaySessionStoreTargetLookup({
-      ...normalized,
-      cfg: inventory.config,
-      env: inventory.env,
-      targetDiscoveryCache,
-    });
-    const publications = plan.reads.map((read) => ({
+    const plans = [normalized, ...related].map((selection) =>
+      prepareGatewaySessionStoreTargetLookup({
+        ...selection,
+        cfg: inventory.config,
+        env: inventory.env,
+        targetDiscoveryCache,
+      }),
+    );
+    const reads = plans.flatMap((plan) => plan.reads);
+    const publications = reads.map((read) => ({
       read,
       scope: prepareSessionRowPublicationScope([read.storePath]),
     }));
@@ -390,17 +424,22 @@ export async function withGatewaySessionStoreTarget<T>(
     let consumed = false;
     try {
       for (let attempt = 0; ; attempt += 1) {
+        const ordered = params.ordered || params.includeMembership || attempt > 0;
         changed = false;
         assertDiscoveryCurrent();
         try {
           return await withSessionEntriesFromStoresInWorker(
-            plan.reads.map((read) => ({
+            reads.map((read) => ({
               agentId: read.agentId ?? identity.agentId,
               storePath: read.storePath,
               sessionKeys: read.options.exactKeys ?? [],
               // Admission needs complete member rows; list-only readers need sharing identities.
               projection:
-                params.projection === "list" && !params.includeMembership ? "sharing" : "full",
+                typeof params.projection === "object" && !params.includeMembership
+                  ? "exact"
+                  : params.projection === "list" && !params.includeMembership
+                    ? "sharing"
+                    : "full",
               snapshotFields:
                 typeof params.projection === "object"
                   ? params.projection
@@ -421,7 +460,7 @@ export async function withGatewaySessionStoreTarget<T>(
                   owner.assertCurrent();
                 }
               };
-              for (const [index, read] of plan.reads.entries()) {
+              for (const [index, read] of reads.entries()) {
                 const owner = prepared[index]!;
                 read.result = ok(
                   Object.fromEntries(
@@ -429,13 +468,12 @@ export async function withGatewaySessionStoreTarget<T>(
                   ),
                 );
                 read.readSource = { agentId: owner.database.agentId, path: owner.database.path };
-                read.capturedReadSource = captureGatewaySessionReadSource(
-                  read.readSource,
-                  owner.result.databaseIdentity,
-                );
+                read.capturedReadSource =
+                  captureGatewaySessionReadSource(read.readSource, owner.result.databaseIdentity) ??
+                  read.capturedReadSource;
               }
               assertCurrent();
-              const target = plan.resolve();
+              const target = plans[0]!.resolve();
               const memberships = new Map<string, readonly SessionMember[]>();
               for (const owner of prepared) {
                 if (owner.database.path === target.readSource?.path) {
@@ -445,9 +483,22 @@ export async function withGatewaySessionStoreTarget<T>(
                 }
               }
               consumed = true;
-              return consume(target, memberships, assertCurrent);
+              return consume(
+                target,
+                memberships,
+                assertCurrent,
+                plans.slice(1).map((plan) => plan.resolve()),
+              );
             },
             {
+              ordered,
+              onReadAdmitted: ordered
+                ? () => {
+                    assertDiscoveryCurrent();
+                    // The ordered snapshot includes writes that settled before FIFO admission.
+                    changed = false;
+                  }
+                : undefined,
               prepareSource(input, database, source) {
                 for (const { read, scope } of publications) {
                   if (
@@ -455,17 +506,25 @@ export async function withGatewaySessionStoreTarget<T>(
                     (read.agentId ?? identity.agentId) === input.agentId
                   ) {
                     scope.prepareSource(database, source);
+                    read.capturedReadSource = captureGatewaySessionReadSource(
+                      database,
+                      source.key.startsWith("file:")
+                        ? { identity: source.key.slice(5), birthtime: source.birthtime }
+                        : undefined,
+                    );
                   }
                 }
               },
             },
           );
         } catch (error) {
-          // The inventory still pins the original stores. Never repeat a consumer's effects.
+          // Re-read a raced speculative snapshot inside the writer FIFO; retain discovery.
+          // Never repeat a consumer's effects.
           if (
             consumed ||
             attempt >= 1 ||
-            !(error instanceof GatewaySessionFactsChangedDuringReadError)
+            (!(error instanceof GatewaySessionFactsChangedDuringReadError) &&
+              (!params.includeMembership || !(error instanceof SessionEntryChangedDuringReadError)))
           ) {
             throw error;
           }
@@ -485,6 +544,20 @@ export async function prepareGatewaySessionStoreTargetReadOnly(
   },
   prepareReads: <T>(reads: readonly GatewaySessionStoreRead[], select: () => T) => Promise<T>,
 ): Promise<GatewaySessionStoreTargetWithStore> {
+  return (await prepareGatewaySessionStoreTargetReadPlan(params, prepareReads)).target;
+}
+
+/** Keep every scanned stage so final admission can repeat selection without discovery. */
+export async function prepareGatewaySessionStoreTargetReadPlan(
+  params: GatewaySessionStoreLookupParams & {
+    agentId: string;
+    targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
+  },
+  prepareReads: <T>(reads: readonly GatewaySessionStoreRead[], select: () => T) => Promise<T>,
+): Promise<{
+  target: GatewaySessionStoreTargetWithStore;
+  plan: GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>;
+}> {
   const normalized = {
     ...params,
     key: normalizeOptionalString(params.key) ?? "",
@@ -492,22 +565,11 @@ export async function prepareGatewaySessionStoreTargetReadOnly(
     readOnly: true,
     projection: params.projection ?? ("list" as const),
   };
-  const resolve = async <T>(plan: GatewaySessionStorePlan<T>) => {
-    return await prepareReads(plan.reads, () => {
-      if (plan.reads.some((read) => read.result === undefined)) {
-        throw new Error("Session lookup facts were not prepared");
-      }
-      return plan.resolve();
-    });
-  };
-  const deletedMain = prepareExplicitDeletedLegacyMainStoreTarget(normalized);
-  if (deletedMain) {
-    const target = await resolve(deletedMain);
-    if (target) {
-      return target;
-    }
-  }
-  return await resolve(prepareGatewaySessionStoreTarget(normalized));
+  return prepareGatewaySessionStoreReadPlan({
+    legacy: prepareExplicitDeletedLegacyMainStoreTarget(normalized),
+    prepareCurrent: () => prepareGatewaySessionStoreTarget(normalized),
+    prepareReads,
+  });
 }
 
 /** Read an already-stored lineage address without applying request aliases. */

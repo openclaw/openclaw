@@ -33,7 +33,6 @@ import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
-type AgentEntry = AgentConfig;
 
 const commandsStatusLoader = createLazyImportLoader(() => import("./commands-status.runtime.js"));
 const directiveLevelsLoader = createLazyImportLoader(
@@ -114,7 +113,7 @@ export async function applyInlineDirectiveOverrides(params: {
   agentDir: string;
   workspaceDir: string;
   agentCfg: AgentDefaults;
-  agentEntry?: AgentEntry;
+  agentEntry?: AgentConfig;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
@@ -257,7 +256,7 @@ export async function applyInlineDirectiveOverrides(params: {
     effectiveModelDirective &&
     isModelSelectionLocked(sessionEntry)
   ) {
-    const lockedModelResolution = resolveEffectiveModelSelection();
+    const lockedModelResolution = await resolveEffectiveModelSelection();
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
       return directiveRejection("model-selection-locked", MODEL_SELECTION_LOCKED_MESSAGE);
@@ -378,7 +377,7 @@ export async function applyInlineDirectiveOverrides(params: {
     // Only the exact model-only case uses the focused service; mixed directives
     // fall through so their settings remain one broad atomic session transaction.
     if (hasOnlyModelDirective(directives) && effectiveModelDirective) {
-      const modelResolution = resolveEffectiveModelSelection();
+      const modelResolution = await resolveEffectiveModelSelection();
       if (modelResolution.errorText) {
         typing.cleanup();
         return directiveRejection("model-selection-rejected", modelResolution.errorText);

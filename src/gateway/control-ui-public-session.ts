@@ -7,165 +7,18 @@ import {
 } from "@openclaw/session-url-contract/public-share";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
+import {
+  createControlUiPublicSessionRequestGate,
+  type ControlUiPublicSessionRequestGate,
+} from "./control-ui-public-session-admission.js";
+import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
 import { resolveControlUiShareOrigin } from "./control-ui-share.js";
 import type { GatewayAttributedIngress } from "./ingress-attribution.js";
-import { isLoopbackHost, resolveHostName } from "./net.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 
-const PUBLIC_SESSION_RATE_WINDOW_MS = 60_000;
-const PUBLIC_SESSION_CLIENT_REQUEST_LIMIT = 20;
-const PUBLIC_SESSION_PUBLICATION_REQUEST_LIMIT = 120;
-const PUBLIC_SESSION_MAX_CLIENTS = 4_096;
-const PUBLIC_SESSION_MAX_PUBLICATIONS = 2_048;
-const PUBLIC_SESSION_MAX_CONCURRENT_READS = 8;
-const PUBLIC_SESSION_MAX_CONCURRENT_READS_PER_PUBLICATION = 2;
-
-type RateWindow = {
-  timestamps: number[];
-};
-
-type PublicSessionAdmissionResult =
-  | { kind: "ok"; value: string | null }
-  | { kind: "rate-limited"; retryAfterSeconds: number }
-  | { kind: "unavailable" };
-
-type ControlUiPublicSessionRequestGate = {
-  admitClient(
-    clientKey: string,
-  ): { kind: "ok" } | { kind: "rate-limited"; retryAfterSeconds: number };
-  run(params: {
-    publicationKey: string;
-    requestKey: string;
-    config: OpenClawConfig;
-    work: () => Promise<string | null>;
-  }): Promise<PublicSessionAdmissionResult>;
-};
-
-function admitRateWindow(
-  windows: Map<string, RateWindow>,
-  key: string,
-  limit: number,
-  maxEntries: number,
-  now: number,
-): number | undefined {
-  const cutoff = now - PUBLIC_SESSION_RATE_WINDOW_MS;
-  let window = windows.get(key);
-  if (!window) {
-    if (windows.size >= maxEntries) {
-      for (const [candidateKey, candidate] of windows) {
-        candidate.timestamps = candidate.timestamps.filter((timestamp) => timestamp > cutoff);
-        if (candidate.timestamps.length === 0) {
-          windows.delete(candidateKey);
-        }
-      }
-    }
-    if (windows.size >= maxEntries) {
-      // Anonymous identities are attacker-controlled. Evict the oldest bucket
-      // instead of letting map saturation deny every previously unseen viewer.
-      pruneMapToMaxSize(windows, maxEntries - 1);
-    }
-    window = { timestamps: [] };
-    windows.set(key, window);
-  }
-  window.timestamps = window.timestamps.filter((timestamp) => timestamp > cutoff);
-  const oldest = window.timestamps[0];
-  if (window.timestamps.length >= limit && oldest !== undefined) {
-    return Math.max(1, oldest + PUBLIC_SESSION_RATE_WINDOW_MS - now);
-  }
-  window.timestamps.push(now);
-  return undefined;
-}
-
-/** Creates the fixed, process-local abuse boundary for anonymous transcript reads. */
-function createControlUiPublicSessionRequestGate(): ControlUiPublicSessionRequestGate {
-  const clientWindows = new Map<string, RateWindow>();
-  const publicationWindows = new Map<string, RateWindow>();
-  const activeByPublication = new Map<string, number>();
-  const inFlight = new Map<string, Promise<string | null>>();
-  const configIds = new WeakMap<object, number>();
-  let nextConfigId = 1;
-  let activeReads = 0;
-
-  const configId = (config: OpenClawConfig): number => {
-    const existing = configIds.get(config);
-    if (existing !== undefined) {
-      return existing;
-    }
-    const created = nextConfigId++;
-    configIds.set(config, created);
-    return created;
-  };
-
-  return {
-    admitClient(clientKey) {
-      const retryMs = admitRateWindow(
-        clientWindows,
-        clientKey,
-        PUBLIC_SESSION_CLIENT_REQUEST_LIMIT,
-        PUBLIC_SESSION_MAX_CLIENTS,
-        Date.now(),
-      );
-      return retryMs === undefined
-        ? { kind: "ok" }
-        : { kind: "rate-limited", retryAfterSeconds: Math.ceil(retryMs / 1_000) };
-    },
-    async run(params) {
-      const now = Date.now();
-      const publicationRetryMs = admitRateWindow(
-        publicationWindows,
-        params.publicationKey,
-        PUBLIC_SESSION_PUBLICATION_REQUEST_LIMIT,
-        PUBLIC_SESSION_MAX_PUBLICATIONS,
-        now,
-      );
-      if (publicationRetryMs !== undefined) {
-        return {
-          kind: "rate-limited",
-          retryAfterSeconds: Math.ceil(publicationRetryMs / 1_000),
-        };
-      }
-
-      const inFlightKey = `${configId(params.config)}:${params.requestKey}`;
-      const existing = inFlight.get(inFlightKey);
-      if (existing) {
-        return { kind: "ok", value: await existing };
-      }
-      const publicationActive = activeByPublication.get(params.publicationKey) ?? 0;
-      if (
-        activeReads >= PUBLIC_SESSION_MAX_CONCURRENT_READS ||
-        publicationActive >= PUBLIC_SESSION_MAX_CONCURRENT_READS_PER_PUBLICATION
-      ) {
-        return { kind: "unavailable" };
-      }
-
-      activeReads += 1;
-      activeByPublication.set(params.publicationKey, publicationActive + 1);
-      const pending = Promise.resolve().then(params.work);
-      inFlight.set(inFlightKey, pending);
-      try {
-        return { kind: "ok", value: await pending };
-      } finally {
-        inFlight.delete(inFlightKey);
-        activeReads -= 1;
-        const remaining = (activeByPublication.get(params.publicationKey) ?? 1) - 1;
-        if (remaining > 0) {
-          activeByPublication.set(params.publicationKey, remaining);
-        } else {
-          activeByPublication.delete(params.publicationKey);
-        }
-      }
-    },
-  };
-}
-
-function isControlUiPublicSessionPath(pathname: string, basePath: string): boolean {
+export function isControlUiPublicSessionPath(pathname: string, basePath: string): boolean {
   return pathname === `${basePath}/share/session`;
-}
-
-function hasSingleHttpsForwardedProto(req: IncomingMessage): boolean {
-  const value = req.headers["x-forwarded-proto"];
-  return typeof value === "string" && value.trim().toLowerCase() === "https";
 }
 
 async function serveControlUiPublicSession(
@@ -178,6 +31,7 @@ async function serveControlUiPublicSession(
   clientKey: string,
   secureIngress: boolean,
   publicOrigin?: string,
+  projection?: SessionRowProjection,
 ): Promise<void> {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
@@ -240,11 +94,16 @@ async function serveControlUiPublicSession(
       unavailable(404);
       return;
     }
+    if (!projection) {
+      unavailable(503);
+      return;
+    }
     const { isPublicSessionShareActive, readPublicSessionShare } =
       await import("./control-ui-public-session-read.js");
     const { renderPublicSessionDocument } = await import("./control-ui-public-session-render.js");
     const admitted = await requestGate.run({
       publicationKey: locator.shareId,
+      sessionKey: locator.sessionKey,
       requestKey: JSON.stringify([
         createHash("sha256").update(publicShare.token).digest("base64url"),
         offset,
@@ -252,7 +111,7 @@ async function serveControlUiPublicSession(
       ]),
       config: cfg,
       work: async () => {
-        const session = await readPublicSessionShare(cfg, locator, { offset });
+        const session = await readPublicSessionShare(cfg, locator, { offset, projection });
         if (!session) {
           return null;
         }
@@ -282,9 +141,20 @@ async function serveControlUiPublicSession(
       unavailable(503);
       return;
     }
-    const body = admitted.value;
-    if (!body || !isPublicSessionShareActive(cfg, locator)) {
+    const representation = admitted.value;
+    if (!representation || !isPublicSessionShareActive(cfg, locator, projection)) {
       unavailable(404);
+      return;
+    }
+    if (!representation.isCurrent()) {
+      unavailable(503);
+      return;
+    }
+    const { body, etag } = representation;
+    res.setHeader("ETag", etag);
+    if (req.headers["if-none-match"] === etag) {
+      res.statusCode = 304;
+      res.end();
       return;
     }
     res.statusCode = 200;
@@ -296,10 +166,12 @@ async function serveControlUiPublicSession(
   }
 }
 
-export function createControlUiPublicSessionRoute() {
-  const requestGate = createControlUiPublicSessionRequestGate();
+export function createControlUiPublicSessionRoute(
+  requestGate = createControlUiPublicSessionRequestGate(),
+) {
   return {
     matches: isControlUiPublicSessionPath,
+    dispose: () => requestGate.dispose(),
     reject(res: ServerResponse): true {
       respondNotFound(res);
       return true;
@@ -310,6 +182,7 @@ export function createControlUiPublicSessionRoute() {
       basePath: string;
       config: OpenClawConfig;
       ingress: GatewayAttributedIngress;
+      projection?: SessionRowProjection;
     }): Promise<true> {
       const url = params.req.url ? new URL(params.req.url, "http://localhost") : undefined;
       if (!url) {
@@ -317,20 +190,7 @@ export function createControlUiPublicSessionRoute() {
         return true;
       }
       const publicOrigin = resolveGatewayPublicOrigin(params.config);
-      const advertisedHttps = publicOrigin?.startsWith("https://") === true;
-      const trustedProxyHttps =
-        params.ingress.kind === "trusted-proxy" &&
-        advertisedHttps &&
-        hasSingleHttpsForwardedProto(params.req);
-      const managedHttps =
-        (params.ingress.kind === "tailscale-serve" || params.ingress.kind === "tailscale-funnel") &&
-        advertisedHttps;
-      const secureIngress =
-        params.req.socket instanceof TLSSocket ||
-        (params.ingress.kind === "direct-local" &&
-          isLoopbackHost(resolveHostName(params.req.headers.host))) ||
-        trustedProxyHttps ||
-        managedHttps;
+      const secureIngress = isSecurePublicSessionIngress(params.req, params.ingress, publicOrigin);
       await serveControlUiPublicSession(
         params.req,
         params.res,
@@ -341,6 +201,7 @@ export function createControlUiPublicSessionRoute() {
         params.ingress.rateLimit.subject.key,
         secureIngress,
         publicOrigin,
+        params.projection,
       );
       return true;
     },

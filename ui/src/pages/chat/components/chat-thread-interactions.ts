@@ -39,7 +39,6 @@ import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
-import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
@@ -136,7 +135,6 @@ export type ChatThreadProps = ChatSendStatusActions & {
   /** Browser-local active run identity, retained across transient disconnects. */
   runId?: string | null;
   runUsageById?: ReadonlyMap<string, RunOutputUsage>;
-  runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
   initialTurnId?: string;
   pendingInputs?: ChatPendingInputsPage["items"];
@@ -148,6 +146,8 @@ export type ChatThreadProps = ChatSendStatusActions & {
   startupLabel?: string;
   waitingApproval?: boolean;
   subagentSessions?: readonly GatewaySessionRow[];
+  /** True once `subagentSessions` holds every child, not just rows seeded from another list. */
+  subagentSessionsHydrated?: boolean;
   questionPrompts?: readonly QuestionPrompt[];
   asyncQuestions?: AsyncQuestionPresentation;
   sessions: SessionsListResult | null;
@@ -206,6 +206,10 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
   onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
   onOpenSession?: (sessionKey: string) => void;
+  /** Shows one of the session's subagents. */
+  onOpenSubagent?: (sessionKey: string) => void;
+  /** Shows the session's subagents; absent where the pane has no list of them to show. */
+  onOpenSubagents?: () => void;
   modelSetupRequired?: boolean;
   onModelSetup?: () => void;
 };
@@ -223,8 +227,14 @@ type TranscriptInteractionProps = Pick<
   | "onCompanionSelection"
 >;
 
-function createTranscriptState(): ChatThreadState {
-  return {
+const transcriptStates = new Map<string, ChatThreadState>();
+
+export function getTranscriptState(paneId: string): ChatThreadState {
+  const existing = transcriptStates.get(paneId);
+  if (existing) {
+    return existing;
+  }
+  const state: ChatThreadState = {
     asyncQuestionDrafts: new Map(),
     asyncQuestionRevision: 0,
     turnRecapWatch: null,
@@ -236,16 +246,6 @@ function createTranscriptState(): ChatThreadState {
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
   };
-}
-
-const transcriptStates = new Map<string, ChatThreadState>();
-
-export function getTranscriptState(paneId: string): ChatThreadState {
-  const existing = transcriptStates.get(paneId);
-  if (existing) {
-    return existing;
-  }
-  const state = createTranscriptState();
   transcriptStates.set(paneId, state);
   return state;
 }

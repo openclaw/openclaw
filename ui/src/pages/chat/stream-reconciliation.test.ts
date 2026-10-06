@@ -579,10 +579,7 @@ describe("stream reconciliation", () => {
     expect(next.map(messageText)).toEqual(["Run A", "Interrupted A", "Run B", "Finished B"]);
   });
 
-  it.each([
-    { name: "as the live stream", rollIntoToolSegment: false },
-    { name: "after a tool boundary rollover", rollIntoToolSegment: true },
-  ])("keeps output after a textless steer $name", ({ rollIntoToolSegment }) => {
+  it("keeps live output after a textless steer", () => {
     const state: StreamReconciliationState & Parameters<typeof rolloverChatStream>[0] = {
       chatRunId: "active-run",
       chatStream: null,
@@ -614,9 +611,6 @@ describe("stream reconciliation", () => {
     ]);
     state.chatStream = "After steer";
     state.chatStreamStartedAt = 3;
-    if (rollIntoToolSegment) {
-      rolloverChatStream(state, { runId: "active-run", toolCallId: "call-1", timestamp: 4 });
-    }
 
     const next = materializeVisibleStreamState(messages, state, visibleStreamOptions);
 

@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   publishTranscriptUpdate,
   resolveSessionTranscriptRuntimeTarget,
@@ -7,6 +8,7 @@ import {
   type TranscriptMessageAppendResult,
   type TranscriptUpdatePayload,
 } from "../config/sessions/session-accessor.js";
+import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   formatSessionTranscriptMemoryHitKey,
@@ -28,7 +30,7 @@ export type InternalSessionTranscriptWriteLockParams = SessionTranscriptReadPara
 
 export type InternalSessionTranscriptWriteLockContext = {
   appendMessage: <TMessage>(
-    options: Omit<TranscriptMessageAppendOptions<TMessage>, "config">,
+    options: Omit<LockedTranscriptMessageAppendOptions<TMessage>, "config">,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<unknown[]>;
@@ -66,24 +68,55 @@ export async function withProjectedSessionTranscriptWriteLock<
   // Keep the selected store and owner through awaits and publication. Individual appends
   // commit independently, but a failed callback must not publish its queued updates.
   const queuedUpdates: Array<TranscriptUpdatePayload | undefined> = [];
+  let callbackClosed = false;
+  const whileOpen = <R>(operation: () => Promise<R>): Promise<R> => {
+    if (callbackClosed) {
+      return Promise.reject(new Error("Transcript write context is closed"));
+    }
+    return operation();
+  };
+  const guardProjectedContext = (
+    locked: SessionTranscriptWriteLockAccessorContext,
+  ): SessionTranscriptWriteLockAccessorContext => ({
+    readEvents: () => whileOpen(locked.readEvents),
+    readMessageFacts: (query) => whileOpen(() => locked.readMessageFacts(query)),
+    replaceEvents: (events) => whileOpen(() => locked.replaceEvents(events)),
+    appendMessage: (options) => whileOpen(() => locked.appendMessage(options)),
+    appendMessageWithMessageSequence: (options) =>
+      whileOpen(() => locked.appendMessageWithMessageSequence(options)),
+  });
+  const runOpen = async (context: TContext) => {
+    try {
+      const result = run(context);
+      if (!isPromiseLike(result)) {
+        callbackClosed = true;
+      }
+      return await result;
+    } finally {
+      callbackClosed = true;
+    }
+  };
   const result = await withTranscriptWriteLock(
     boundScope,
     async (locked) =>
-      await run(
+      await runOpen(
         projectContext(
           {
             target,
-            readEvents: locked.readEvents,
+            readEvents: () => whileOpen(locked.readEvents),
             appendMessage: (options) =>
-              locked.appendMessage({
-                ...options,
-                ...(params.config !== undefined ? { config: params.config } : {}),
+              whileOpen(() =>
+                locked.appendMessage({
+                  ...options,
+                  ...(params.config !== undefined ? { config: params.config } : {}),
+                }),
+              ),
+            publishUpdate: (update) =>
+              whileOpen(async () => {
+                queuedUpdates.push(update ? { ...update } : undefined);
               }),
-            publishUpdate: async (update) => {
-              queuedUpdates.push(update ? { ...update } : undefined);
-            },
           },
-          locked,
+          guardProjectedContext(locked),
         ),
       ),
   );

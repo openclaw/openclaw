@@ -2982,12 +2982,13 @@ describe("createBackupArchive", () => {
         expect(db.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
           count: 1,
         });
-        const runtime = createTestRuntime();
         await expect(
-          backupVerifyCommand(runtime, { archive: result.archivePath }),
+          backupVerifyCommand(createTestRuntime(), { archive: result.archivePath }),
         ).resolves.toMatchObject({ ok: true });
       } finally {
         db.close();
+        // Remove the cross-directory hardlink before recursive fixture cleanup.
+        await fs.rm(hardlinkedDbPath, { force: true });
       }
     });
   });

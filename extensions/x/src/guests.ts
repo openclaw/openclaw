@@ -3,7 +3,7 @@ import { resolveChannelInboundRouteEnvelope } from "openclaw/plugin-sdk/channel-
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ResolvedXAccount } from "./accounts.js";
-import { resolveXGuestSettings } from "./guest-policy.js";
+import { resolveXGuestSettings, supportsXGuestHelpers } from "./guest-policy.js";
 import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
 
 export function resolveXGuestContainmentError(
@@ -22,6 +22,10 @@ export function resolveXGuestContainmentError(
   const defaults = cfg.agents?.defaults?.sandbox;
   if ((sandbox?.mode ?? defaults?.mode ?? "off") !== "off") {
     return `X guest mode requires agents.entries.${agentId}.sandbox.mode="off" and workspace-only file tools; sandbox mounts can expose files outside the repository.`;
+  }
+  const queueMode = cfg.messages?.queue?.byChannel?.x ?? cfg.messages?.queue?.mode ?? "steer";
+  if (queueMode !== "followup" && queueMode !== "collect") {
+    return 'X guest mode requires messages.queue.byChannel.x="followup" or "collect" (or messages.queue.mode with either value) so guests cannot steer or interrupt an active turn.';
   }
   return undefined;
 }
@@ -63,18 +67,22 @@ function resolveXGuestReadinessError(
 }
 
 export async function getXGuestStatus(
-  runtime: { state: Pick<PluginRuntime["state"], "openKeyedStore" | "resolveStateDir"> },
+  runtime: Pick<PluginRuntime, "capabilities"> & {
+    state: Pick<PluginRuntime["state"], "openKeyedStore" | "resolveStateDir">;
+  },
   account: ResolvedXAccount,
   cfg: OpenClawConfig,
   routedAgentId?: string,
 ) {
   const { enabled, maxMentionsPerAuthorPerDay } = resolveXGuestSettings(account);
+  const helpersAvailable = supportsXGuestHelpers(runtime);
   const blockedReason = enabled
     ? resolveXGuestReadinessError(cfg, account.accountId, routedAgentId)
     : undefined;
   try {
     return {
       enabled,
+      helpersAvailable,
       maxMentionsPerAuthorPerDay,
       ...(blockedReason ? { blockedReason } : {}),
       ...(await openXGuestUsage(runtime).counts(account.accountId)),
@@ -85,6 +93,7 @@ export async function getXGuestStatus(
     }
     return {
       enabled,
+      helpersAvailable,
       maxMentionsPerAuthorPerDay,
       admittedToday: 0,
       rateLimitedToday: 0,

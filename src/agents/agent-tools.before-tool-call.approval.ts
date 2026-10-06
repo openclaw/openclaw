@@ -435,7 +435,6 @@ export async function requestDeferredPluginToolApproval(params: {
   });
 }
 
-/** Notify plugin approval callbacks that a deferred approval was cancelled. */
 export function cancelDeferredPluginToolApproval(
   deferredApproval: DeferredPluginToolApproval,
 ): void {

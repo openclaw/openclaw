@@ -2,13 +2,20 @@
 // inside the accessor's write transactions (session-transcript-index.ts);
 // this module owns the query path and schedules the shared reconcile owner
 // when doctor imports or out-of-band writes leave derived rows behind.
+import { randomUUID } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
+import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import {
+  getSqliteReadOperationRevision,
+  runSqliteReadOperationSync,
+} from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -18,19 +25,30 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import {
+  captureOpenClawAgentDatabaseExecution,
+  supportsOpenClawAgentDatabaseExecution,
+} from "../../state/openclaw-agent-execution.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
   captureLifecycleDatabaseScope,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { hasSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import {
+  prepareIncognitoSessionHistoryRead,
+  type IncognitoSessionHistoryBinding,
+} from "./session-incognito-history-read.js";
+import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   startSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
 import type {
   SessionTranscriptSearchParams,
+  SessionTranscriptSearchReadResult,
   SessionTranscriptSearchResult,
 } from "./session-transcript-search.types.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -38,10 +56,42 @@ import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-ru
 const SEARCH_SNIPPET_MAX_CHARS = 500;
 const SEARCH_LIMIT_MAX = 25;
 const SEARCH_QUERY_MAX_CHARS = 4096;
+// SQLite data_version values are comparable only on the same live connection.
+const searchConnections = new WeakMap<DatabaseSync, string>();
+
+function readSearchRevision(database: DatabaseSync): string | undefined {
+  return runSqliteReadOperationSync(database, () => {
+    const revision = getSqliteReadOperationRevision(database);
+    if (!revision) {
+      return undefined;
+    }
+    let connection = searchConnections.get(database);
+    if (!connection) {
+      connection = randomUUID();
+      searchConnections.set(database, connection);
+      const unregister = registerNodeSqliteDisposeCallback(database, () => {
+        searchConnections.delete(database);
+        unregister();
+      });
+    }
+    return `${connection}:${revision.schema.revision}:${revision.dataVersion}:${revision.mutationRevision}`;
+  });
+}
+
+/** A later clean status certifies hits only while their reader's snapshot is unchanged. */
+export function isSessionTranscriptSearchCurrentSync(
+  revision: string,
+  options: OpenClawAgentDatabaseOptions,
+): boolean {
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSearchRevision(database.db) === revision,
+    options,
+  );
+  return result.found && result.value;
+}
 
 function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]): string {
   return query
-    .trim()
     .split(/\s+/u)
     .map(
       (token, index, tokens) =>
@@ -54,8 +104,119 @@ function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]
 export async function searchSessionTranscripts(
   params: SessionTranscriptSearchParams,
   preparedDatabase?: { agentId: string; path: string },
+  incognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTranscriptSearchResult> {
   validateSearchQuery(params.query);
+  const shared = incognito
+    ? undefined
+    : captureIncognitoSessionBinding({
+        ...params,
+        storePath: preparedDatabase?.path ?? params.storePath,
+      });
+  const binding: Pick<IncognitoSessionHistoryBinding, "actor" | "authority"> | undefined =
+    incognito ??
+    (shared && {
+      actor: shared.actor,
+      authority: {
+        assertCurrent() {
+          shared.admissionSignal?.throwIfAborted();
+          shared.actor.assertReadable();
+        },
+      },
+    });
+  if (binding) {
+    if (
+      incognito &&
+      params.sessionKeys &&
+      (params.sessionKeys.length !== 1 || params.sessionKeys[0] !== incognito.target.sessionKey)
+    ) {
+      throw new Error("Incognito search requires its captured session selection");
+    }
+    const prepared =
+      incognito &&
+      prepareIncognitoSessionHistoryRead(incognito, {
+        ...params,
+        sessionId: params.sessionId ?? incognito.target.sessionId,
+        storePath: preparedDatabase?.path ?? params.storePath,
+      });
+    const { actor, authority } = prepared ?? binding;
+    const selected = new Set(params.sessionKeys);
+    const currentSelection = () =>
+      actor.sessions
+        .deadlines()
+        .filter(({ sessionKey }) => !selected.size || selected.has(sessionKey));
+    const sessions = prepared
+      ? [prepared.target]
+      : currentSelection().map(({ sessionKey, sessionId }) => ({
+          sessionKey,
+          sessionId,
+          lifecycleRevision: actor.sessions.readSharing(sessionKey)?.entry?.lifecycleRevision,
+        }));
+    const claims = new Map(
+      sessions.map(({ sessionKey }) => [sessionKey, actor.sessions.captureCurrent(sessionKey)]),
+    );
+    const snapshots = new Map<string, ReturnType<typeof actor.sessions.captureSnapshot>>();
+    const assertCurrent = () => {
+      authority.assertCurrent();
+      actor.assertReadable();
+      if (!prepared) {
+        const current = currentSelection();
+        if (
+          current.length !== claims.size ||
+          current.some(({ sessionKey }) => !claims.has(sessionKey))
+        ) {
+          throw new Error("Incognito search selection changed during preparation");
+        }
+      }
+      for (const [key, claim] of claims) {
+        claim.assertCurrent();
+        snapshots.get(key)?.assertCurrent();
+      }
+    };
+    const selection = {
+      sessions,
+      sessionId: prepared ? (params.sessionId ?? prepared.target.sessionId) : params.sessionId,
+      query: params.query,
+      limit: params.limit,
+      match: params.match,
+      role: params.role,
+      order: params.order,
+    };
+    assertCurrent();
+    const projection = { actor, authority: binding.authority };
+    const database = captureLifecycleDatabaseScope({
+      agentId: actor.agentId,
+      path: actor.path,
+      env: params.env,
+    });
+    const result = await actor.sessions.withSharedState(() =>
+      actor.sessions.history(
+        { assertCurrent, authorize: (stage, facts) => authority.authorize?.(stage, facts) },
+        { type: "session.history.search", input: selection },
+        undefined,
+        () => {
+          for (const key of claims.keys()) {
+            snapshots.set(key, actor.sessions.captureSnapshot(key));
+          }
+        },
+      ),
+    );
+    assertCurrent();
+    for (const claim of claims.values()) {
+      claim.authorize(authority, "commit");
+    }
+    if (result.result.indexing) {
+      startSessionTranscriptIndexReconcile(
+        { ...database, preferredSessionId: selection.sessionId },
+        projection,
+      );
+    }
+    return {
+      ...result.result,
+      indexing:
+        result.result.indexing || isSessionTranscriptIndexReconcileRunning(database, projection),
+    };
+  }
   const scope = captureLifecycleDatabaseScope(
     preparedDatabase
       ? {
@@ -73,24 +234,62 @@ export async function searchSessionTranscripts(
     env: scope.env,
     sessionKeys: params.sessionKeys?.slice(),
   };
-  const finish = (result: SessionTranscriptSearchResult): SessionTranscriptSearchResult => {
-    if (result.indexing) {
+  let statusOwnerFailure: { error: unknown } | undefined;
+  const finish = async (
+    { found, revision, ...result }: SessionTranscriptSearchReadResult,
+    isCurrent: (revision: string) => boolean | Promise<boolean>,
+    assertCurrent?: () => void,
+  ): Promise<SessionTranscriptSearchResult> => {
+    assertCurrent?.();
+    let indexing: boolean;
+    try {
+      if (found && statusOwnerFailure) {
+        throw statusOwnerFailure.error;
+      }
+      indexing = found && (await readSessionTranscriptIndexStatus(options, assertCurrent));
+    } catch {
+      // Writable maintenance failure must not discard an authorized read-only result.
+      assertCurrent?.();
+      return { ...result, indexing: true };
+    }
+    assertCurrent?.();
+    if (indexing) {
       startSessionTranscriptIndexReconcile(options);
     }
+    const current = !found || (!indexing && revision !== undefined && (await isCurrent(revision)));
+    assertCurrent?.();
     return {
       ...result,
-      indexing: result.indexing || isSessionTranscriptIndexReconcileRunning(options),
+      indexing: !current || isSessionTranscriptIndexReconcileRunning(options),
     };
   };
   if (isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options)) {
     // Process-local SQLite cannot cross the worker boundary without changing its lifetime.
-    return finish(searchSessionTranscriptsReadOnlySync(request, options));
+    return finish(searchSessionTranscriptsReadOnlySync(request, options), (revision) =>
+      isSessionTranscriptSearchCurrentSync(revision, options),
+    );
   }
-  return await withSessionHistoryWorkerDatabase(options, async (owner) => {
-    const result = await owner.searchTranscripts(request);
-    owner.assertCurrent();
-    return finish(result);
-  });
+  let execution: OpenClawAgentDatabaseExecution | undefined;
+  try {
+    try {
+      // Status reads must not idle-close and checkpoint the writer between the hit
+      // snapshot and its revision check. Native opening remains lazy and off-thread.
+      if (supportsOpenClawAgentDatabaseExecution(options)) {
+        execution = captureOpenClawAgentDatabaseExecution(options);
+      }
+    } catch (error) {
+      statusOwnerFailure = { error };
+    }
+    return await withSessionHistoryWorkerDatabase(options, async (owner) => {
+      return await finish(
+        await owner.searchTranscripts(request),
+        (revision) => owner.isTranscriptSearchCurrent({ revision, env: scope.env }),
+        owner.assertCurrent,
+      );
+    });
+  } finally {
+    await execution?.release();
+  }
 }
 
 function validateSearchQuery(input: string): string {
@@ -104,20 +303,21 @@ function validateSearchQuery(input: string): string {
   return query;
 }
 
-/** Native read kernel; indexing reports dirty rows without scheduling a writer. */
+/** Native query kernel; projection readiness belongs to the maintenance owner. */
 export function searchSessionTranscriptsReadOnlySync(
   params: SessionTranscriptSearchParams,
   preparedDatabase?: OpenClawAgentDatabaseOptions,
-): SessionTranscriptSearchResult {
+): SessionTranscriptSearchReadResult {
   const query = validateSearchQuery(params.query);
   const scope = preparedDatabase ? { agentId: params.agentId } : resolveSqliteReadScope(params);
   const databaseOptions = preparedDatabase ?? toDatabaseOptions(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      runSqliteDeferredTransactionSync(
+    (database) => ({
+      // Capture before BEGIN to detect commits during or after the hit snapshot.
+      revision: readSearchRevision(database.db),
+      ...runSqliteDeferredTransactionSync(
         database.db,
         () => {
-          const indexing = hasSessionsNeedingTranscriptIndexReconcile(database.db);
           const limit = Math.min(Math.max(1, params.limit ?? 10), SEARCH_LIMIT_MAX);
           // Shared databases hold multiple logical agents. Filter before LIMIT;
           // reserved global/unknown sentinels retain their store-wide scope.
@@ -255,15 +455,16 @@ export function searchSessionTranscriptsReadOnlySync(
             ];
           });
           return {
+            found: true,
             hits: hits.slice(0, limit),
-            indexing,
             truncated: hits.length > limit,
             ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
           };
         },
         { databaseLabel: database.path, operationLabel: "session transcript search" },
       ),
+    }),
     databaseOptions,
   );
-  return result.found ? result.value : { hits: [], indexing: false, truncated: false };
+  return result.found ? result.value : { found: false, hits: [], truncated: false };
 }

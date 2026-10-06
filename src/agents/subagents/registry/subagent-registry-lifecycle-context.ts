@@ -34,7 +34,11 @@ export type SubagentLifecycleOptions = {
   emitSubagentEndedHookForRun: ContextCleanup["emitSubagentEndedHookForRun"];
   emitSubagentProgressEndedForRun(entry: SubagentRunRecord): Promise<void>;
   notifyContextEngineSubagentEnded: ContextCleanup["notifyContextEngineSubagentEnded"];
-  retireSupersededRun(runId: string, entry: SubagentRunRecord): Promise<void>;
+  retireSupersededRun(
+    runId: string,
+    entry: SubagentRunRecord,
+    assertCurrent?: () => void,
+  ): Promise<void>;
   resumeSubagentRun(runId: string): void;
   callGateway: typeof defaultCallGateway;
   captureSubagentCompletionReply: CaptureSubagentCompletionReply;
@@ -67,7 +71,7 @@ export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCom
 }
 
 export interface SubagentLifecycleCleanupContext extends SubagentLifecycleCommonContext {
-  readonly scheduledResumeTimers: Set<ReturnType<typeof setTimeout>>;
+  readonly scheduledResumeTimers: Map<object, ReturnType<typeof setTimeout>>;
   readonly cleanupFailureCounts: WeakMap<object, number>;
   readonly cleanupReservations: Set<object>;
   readonly activeCleanupAttempts: Map<object, number>;

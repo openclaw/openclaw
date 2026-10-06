@@ -1,7 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
-import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import {
   mutateRequesterSettleWakeBatch,
@@ -10,6 +9,7 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { countActiveDescendantRunsFromRuns } from "./subagent-registry-queries.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
+import { createRequesterYieldTool } from "./subagent-registry.requester-wake-receipts.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
 export function registerRequesterWakeSettlementBoundaryTests({
@@ -73,16 +73,10 @@ export function registerRequesterWakeSettlementBoundaryTests({
       expectsCompletionMessage: true,
     };
     await spawnVisibleChild({ ...child, requesterTurnRunId });
-    await createSessionsYieldTool({
-      sessionId: "sess-main",
-      claimYield: async () =>
-        (await registry.markRequesterTurnYielded({
-          requesterSessionKey,
-          requesterAgentId: "main",
-          requesterTurnRunId,
-        })) > 0,
-      onYield: () => {},
-    }).execute("yield-current-result", {});
+    await createRequesterYieldTool(requesterSessionKey, requesterTurnRunId).execute(
+      "yield-current-result",
+      {},
+    );
     const { withLocalSessionPlacementTurnSettlement } =
       await import("../../session-placement-admission.js");
     await withLocalSessionPlacementTurnSettlement(

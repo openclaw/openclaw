@@ -390,6 +390,7 @@ it.each([
     const resolve = vi.fn(() => events.push("reply"));
     const reject = vi.fn(() => events.push("reject"));
     const job: Job = {
+      observation: { started() {}, completed() {} },
       request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
       bytes: 0,
       nativeDispatched: true,

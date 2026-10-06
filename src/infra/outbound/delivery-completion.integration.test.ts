@@ -340,7 +340,6 @@ describe("pending-final durable delivery completion", () => {
       { sessionKey, storePath },
       {
         ...entry,
-        status: "running",
         updatedAt: Date.now(),
         pendingFinalDelivery: { ...entry.pendingFinalDelivery, context, createdAt: Date.now() },
       },

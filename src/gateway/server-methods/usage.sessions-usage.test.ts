@@ -11,11 +11,13 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: vi.fn(() => TEST_RUNTIME_CONFIG) }));
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+vi.mock("../../config/sessions/combined-store-gateway-read.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/combined-store-gateway-read.js")
+  >("../../config/sessions/combined-store-gateway-read.js");
   return {
     ...actual,
-    loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
+    loadCombinedSessionStoreForGatewayCoreAsync: vi.fn(() => ({
       targetsBySessionKey: new Map(),
       durableTargets: [],
       storePath: "(multiple)",
@@ -64,6 +66,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
     loadSessionLogs: vi.fn(async () => []),
   };
 });
+import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
@@ -72,7 +75,6 @@ import {
   resolveUsageSessionSource,
 } from "../../infra/session-cost-usage.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { usageHandlers } from "./usage.js";
 
 let TEST_RUNTIME_CONFIG: OpenClawConfig = {
@@ -108,7 +110,7 @@ function mockCombinedStore(
   store: Record<string, SessionEntry>,
   owners: ReadonlyArray<readonly [string, string]>,
 ) {
-  vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+  vi.mocked(loadCombinedSessionStoreForGatewayCoreAsync).mockResolvedValue({
     durableTargets: [],
     storePath: "(multiple)",
     store,

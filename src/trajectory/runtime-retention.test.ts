@@ -129,7 +129,6 @@ it("retains failed cleanup custody and exposes the original failure to lifecycle
     database,
     options: { agentId: "main", path: pathname, env: { OPENCLAW_STATE_DIR: directory } },
     input: { sessionId: "current" },
-    revision: { incarnation: "unused-before-admission", dataVersion: 0, mutationRevision: 0 },
     assertCurrent() {},
   };
   try {

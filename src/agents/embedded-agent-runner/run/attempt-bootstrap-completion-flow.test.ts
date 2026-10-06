@@ -20,12 +20,15 @@ const hoisted = vi.hoisted(() => ({
   shouldWaitForCompletionRequiredAsyncTasks: vi.fn((): boolean => false),
 }));
 
+// mock-isolation: The marker write is finalization's own job; the real fan-out would start another turn.
 vi.mock("../../harness/agent-end-side-effects.js", () => ({
   runAgentEndSideEffects: hoisted.runAgentEndSideEffects,
 }));
+// mock-isolation: Building the end-context graph needs plugin and hook registries this flow does not exercise.
 vi.mock("./agent-end-context.js", () => ({
   buildEmbeddedAgentEndContext: () => ({}),
 }));
+// mock-isolation: Waiting on the async-task registry would trade the real timers for unrelated background work.
 vi.mock("./attempt-async-tasks.js", () => ({
   shouldWaitForCompletionRequiredAsyncTasks: hoisted.shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks: vi.fn(),

@@ -77,8 +77,11 @@ reader until conditional deletion can validate metadata at the mutation owner.
 Their inactive incognito composition accepts a prepared session reader whose
 current-source assertion reaches the binding transaction and commit grants.
 The preparation retains the original actor revision and ACP metadata publication
-fence until cleanup releases it. Production does not supply that reader until
-the atomic incognito activation; guarded durable cleanup remains separate work.
+fence until cleanup releases it. The local `prepareAcpSessionEntryRead` helper captures an existing private actor
+binding and supplies that retained reader; it returns `undefined` without a binding.
+Discord and Telegram startup cleanup use it by default. Ordinary production
+acquisition stays native until atomic incognito activation; guarded durable
+cleanup remains separate work.
 `IncognitoSessionEndedError` and `IncognitoSessionSyncAccessError`, exposed through
 the local `openclaw/plugin-sdk/acp-runtime` facade, must propagate through cleanup and status
 probes. Use `rethrowIncognitoSessionError(error)` before treating other failures
@@ -86,6 +89,18 @@ as an absent session or an uncertain probe; it also recognizes nested refusals.
 Removing the synchronous contracts
 requires a separately announced breaking SDK release. Incognito reads retain
 their existing native in-memory owner until that owner's worker migration.
+
+### Session reset freshness
+
+Channel runtime consumers should await
+`runtime.channel.session.resolveEntryResetFreshnessAsync(...)` when deciding
+whether a session needs reset. File-backed entries and transcript lifecycle
+timestamps are read from the same worker snapshot, with the original database
+owner retained through validation and cleanup. The synchronous
+`resolveEntryResetFreshness(...)` method shipped in `v2026.9.8` remains available
+for existing JavaScript consumers and is deprecated for runtime use; removal
+requires the next Plugin SDK major and explicit breaking-release approval. Both methods retain the
+existing reset policy and process-held incognito behavior.
 
 ### Why
 

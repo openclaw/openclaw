@@ -1,4 +1,3 @@
-import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -341,8 +340,7 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
     return null;
   }
   const snapshotRoot = snapshot.payload.stats?.root;
-  const expectedRoot =
-    typeof snapshotRoot === "string" ? resolveUpdateInstallRoot(snapshotRoot) : null;
+  const expectedRoot = snapshotRoot === undefined ? null : resolveUpdateInstallRoot(snapshotRoot);
   const discoveredRoot = expectedRoot
     ? (runningRoot ??
       (await resolveOpenClawPackageRoot({
@@ -409,13 +407,15 @@ function currentSentinel(current: RestartSentinelRowState | undefined): RestartS
   return current?.kind === "valid" ? current.sentinel : null;
 }
 
-export async function readRestartSentinel(
-  env: NodeJS.ProcessEnv = process.env,
+async function readCurrentRestartSentinel(
+  env: NodeJS.ProcessEnv,
+  existingOnly: boolean,
 ): Promise<RestartSentinel | null> {
   try {
     const reply = await readSentinelState(
       "restartSentinel.current",
       captureOpenClawStateWorkerContext({ env }),
+      existingOnly,
     );
     return currentSentinel(
       reply?.ok && reply.type === "restartSentinel.current" ? reply.state : undefined,
@@ -426,23 +426,17 @@ export async function readRestartSentinel(
   }
 }
 
-/** Read the restart sentinel without creating or mutating shared state. */
-export async function readRestartSentinelReadOnly(
+export function readRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  try {
-    const reply = await readSentinelState(
-      "restartSentinel.current",
-      captureOpenClawStateWorkerContext({ env }),
-      true,
-    );
-    return currentSentinel(
-      reply?.ok && reply.type === "restartSentinel.current" ? reply.state : undefined,
-    );
-  } catch (err) {
-    sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
-    return null;
-  }
+  return readCurrentRestartSentinel(env, false);
+}
+
+/** Read the restart sentinel without creating or mutating shared state. */
+export function readRestartSentinelReadOnly(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RestartSentinel | null> {
+  return readCurrentRestartSentinel(env, true);
 }
 
 async function readUpdateInstallReceiptPayload(
@@ -462,19 +456,16 @@ async function readUpdateInstallReceiptPayload(
   }
 }
 
-function normalizeVerifiedGitUpdateReceipt(
-  payload: RestartSentinelPayload | null,
-): VerifiedGitUpdateReceipt | null {
+export async function readVerifiedGitUpdateReceipt(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<VerifiedGitUpdateReceipt | null> {
+  const payload = await readUpdateInstallReceiptPayload(env);
   // Receipt rows are only written after the running install verifies root and revision.
   // An error status records a post-install failure, not an untrusted install.
-  if (
-    payload?.kind !== "update" ||
-    payload.stats?.mode !== "git" ||
-    !isPlainRecord(payload.stats.after)
-  ) {
+  if (payload?.kind !== "update" || payload.stats?.mode !== "git" || !payload.stats.after) {
     return null;
   }
-  const root = typeof payload.stats.root === "string" ? payload.stats.root.trim() : "";
+  const root = payload.stats.root?.trim() ?? "";
   const sha = typeof payload.stats.after.sha === "string" ? payload.stats.after.sha.trim() : "";
   if (!root || !sha) {
     return null;
@@ -489,12 +480,6 @@ function normalizeVerifiedGitUpdateReceipt(
     ...(upstreamRef ? { upstreamRef } : {}),
     installedAtMs: payload.ts,
   };
-}
-
-export async function readVerifiedGitUpdateReceipt(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<VerifiedGitUpdateReceipt | null> {
-  return normalizeVerifiedGitUpdateReceipt(await readUpdateInstallReceiptPayload(env));
 }
 
 export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
@@ -533,19 +518,15 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   return lines.join("\n");
 }
 
-function isRestartRequiredConfigWriteSentinel(payload: RestartSentinelPayload): boolean {
-  return (
-    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
-    payload.status === "ok" &&
-    payload.stats?.requiresRestart === true
-  );
-}
-
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
   if (payload.kind === "config-auto-recovery") {
     return "Gateway auto-recovery";
   }
-  if (isRestartRequiredConfigWriteSentinel(payload)) {
+  if (
+    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
+    payload.status === "ok" &&
+    payload.stats?.requiresRestart === true
+  ) {
     const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
     return `Gateway restart required${mode}`.trim();
   }

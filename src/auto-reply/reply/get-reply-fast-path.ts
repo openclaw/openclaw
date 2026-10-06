@@ -1,4 +1,3 @@
-// Runs lightweight get-reply fast-path commands before full agent setup.
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -105,7 +104,7 @@ export async function initFastReplySessionState(params: {
       sessionStore[key] = entry;
     }
   }
-  const commandSource = ctx.commandText ?? "";
+  const commandSource = ctx.commandText;
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup = normalizedChatType != null && normalizedChatType !== "direct";
   const resetCommand = resolveSessionResetCommand({
@@ -130,7 +129,7 @@ export async function initFastReplySessionState(params: {
   const previousSessionEntry = resetTriggered && existingEntry ? { ...existingEntry } : undefined;
   const sessionId =
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
-  const bodyStripped = resetTriggered ? (resetCommand.payload ?? "") : (ctx.agentText ?? "");
+  const bodyStripped = resetTriggered ? (resetCommand.payload ?? "") : ctx.agentText;
   const now = Date.now();
   const resetPreservedSelection = resetTriggered
     ? resolveResetPreservedSelection({ entry: existingEntry })
@@ -193,9 +192,9 @@ export async function initFastReplySessionState(params: {
   });
   const sessionCtx: TemplateContext = {
     ...ctx,
-    commandText: ctx.commandText ?? "",
+    commandText: ctx.commandText,
     agentText: bodyStripped,
-    rawText: ctx.rawText ?? "",
+    rawText: ctx.rawText,
     SessionKey: sessionKey,
     CommandAuthorized: commandAuthorized,
     BodyStripped: bodyStripped,

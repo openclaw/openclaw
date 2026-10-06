@@ -93,7 +93,6 @@ interface Job {
 
 interface UpdateJobContext {
   append(chunk: string | Uint8Array): void;
-  logPath: string;
   signal: AbortSignal;
 }
 
@@ -447,35 +446,36 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
     provider: "openai",
     updateTarget: "",
   };
+  const valueHandlers: Record<string, (value: string) => void> = {
+    "--package-spec": (value) => (options.packageSpec = value),
+    "--update-target": (value) => (options.updateTarget = value),
+    "--target-tarball": (value) => (options.targetTarball = value),
+    "--dependency-tarball": (value) => options.dependencyTarballs.push(value),
+    "--registry-package-tarball": (value) => options.registryPackageTarballs.push(value),
+    "--fresh-target": (value) => (options.freshTargetSpec = value),
+    "--platform": (value) => (options.platforms = parsePlatformList(value)),
+    "--only": (value) => (options.platforms = parsePlatformList(value)),
+    "--macos-vm": (value) => (options.macosVm = value),
+    "--windows-vm": (value) => (options.windowsVm = value),
+    "--macos-snapshot-hint": (value) => (options.macosSnapshotHint = value),
+    "--provider": (value) => (options.provider = parseProvider(value)),
+    "--model": (value) => (options.modelId = value),
+    "--host-ip": (value) => (options.hostIp = value),
+    "--api-key-env": (value) => (options.apiKeyEnv = value),
+    "--openai-api-key-env": (value) => (options.apiKeyEnv = value),
+  };
   parseArgv: for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+    const valueHandler =
+      arg !== undefined && Object.hasOwn(valueHandlers, arg) ? valueHandlers[arg] : undefined;
+    if (arg !== undefined && valueHandler) {
+      valueHandler(ensureValue(args, i, arg));
+      i++;
+      continue;
+    }
     switch (arg) {
       case "--":
         break parseArgv;
-      case "--package-spec":
-        options.packageSpec = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--update-target":
-        options.updateTarget = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--target-tarball":
-        options.targetTarball = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--dependency-tarball":
-        options.dependencyTarballs.push(ensureValue(args, i, arg));
-        i++;
-        break;
-      case "--registry-package-tarball":
-        options.registryPackageTarballs.push(ensureValue(args, i, arg));
-        i++;
-        break;
-      case "--fresh-target":
-        options.freshTargetSpec = ensureValue(args, i, arg);
-        i++;
-        break;
       case "--beta-validation": {
         const next = args[i + 1];
         if (next && !next.startsWith("-")) {
@@ -486,40 +486,6 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
         }
         break;
       }
-      case "--platform":
-      case "--only":
-        options.platforms = parsePlatformList(ensureValue(args, i, arg));
-        i++;
-        break;
-      case "--macos-vm":
-        options.macosVm = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--windows-vm":
-        options.windowsVm = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--macos-snapshot-hint":
-        options.macosSnapshotHint = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--provider":
-        options.provider = parseProvider(ensureValue(args, i, arg));
-        i++;
-        break;
-      case "--model":
-        options.modelId = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--host-ip":
-        options.hostIp = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--api-key-env":
-      case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(args, i, arg);
-        i++;
-        break;
       case "--json":
         options.json = true;
         break;
@@ -606,7 +572,6 @@ export class NpmUpdateSmoke {
   private tgzDir = "";
   private latestVersion = "";
   private packageSpec = "";
-  currentHead = "";
   private currentHeadShort = "";
   private harnessCheckoutVersion = "";
   private harnessTargetFamily = "";
@@ -675,10 +640,7 @@ export class NpmUpdateSmoke {
   protected async runSteps(): Promise<void> {
     this.latestVersion = resolveLatestVersion();
     this.packageSpec = this.options.packageSpec || `openclaw@${this.latestVersion}`;
-    this.currentHead = run("git", ["rev-parse", "HEAD"], { quiet: true }).stdout.trim();
-    this.currentHeadShort = run("git", ["rev-parse", "--short=7", "HEAD"], {
-      quiet: true,
-    }).stdout.trim();
+    this.currentHeadShort = run("git", ["rev-parse", "--short=7", "HEAD"]).stdout.trim();
     this.harnessCheckoutVersion = readHarnessCheckoutVersion();
     this.hostIp = resolveHostIp(this.options.hostIp ?? "");
     await this.configureTargets();
@@ -944,7 +906,6 @@ export class NpmUpdateSmoke {
       ],
       {
         check: false,
-        quiet: true,
         timeoutMs: 150_000,
       },
     ).stdout.trim();
@@ -970,7 +931,6 @@ export class NpmUpdateSmoke {
     const spec = target.startsWith("openclaw@") ? target : `openclaw@${target}`;
     const output = run("npm", ["view", spec, "version", "dist.tarball", "gitHead", "--json"], {
       check: false,
-      quiet: true,
     }).stdout;
     return parseRegistryPackageMetadata(output);
   }
@@ -1032,10 +992,9 @@ export class NpmUpdateSmoke {
       return await runTimedUpdateJob({
         append,
         label,
-        run: ({ signal }) => fn({ append, logPath, signal }),
+        run: ({ signal }) => fn({ append, signal }),
         timeoutDescription: `${this.updateTimeouts.seconds}s plus cleanup backstop`,
         timeoutMs: this.updateTimeouts.withCleanupMs,
-        writeLog: async () => undefined,
       });
     })().finally(() => {
       job.durationMs = Date.now() - job.startedAt;
@@ -1157,7 +1116,6 @@ export class NpmUpdateSmoke {
       ["exec", this.macosVm, "--current-user", "whoami"],
       {
         check: false,
-        quiet: true,
         timeoutMs: 45_000,
       },
     );
@@ -1206,7 +1164,6 @@ export class NpmUpdateSmoke {
   private readMacosDesktopUserOutput(args: string[]): string {
     return runMacosHostCommand("prlctl", ["exec", this.macosVm, ...args], {
       check: false,
-      quiet: true,
       timeoutMs: 30_000,
     }).stdout;
   }
@@ -1274,7 +1231,6 @@ export class NpmUpdateSmoke {
       const write = runCommand("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
         check: false,
         input: script,
-        quiet: true,
         timeoutMs: 120_000,
       });
       if (write.status !== 0) {
@@ -1285,7 +1241,6 @@ export class NpmUpdateSmoke {
         ["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath],
         {
           check: false,
-          quiet: true,
           timeoutMs: 30_000,
         },
       );
@@ -1303,7 +1258,6 @@ export class NpmUpdateSmoke {
     try {
       runCommand("prlctl", ["exec", vm, "/bin/rm", "-f", scriptPath], {
         check: false,
-        quiet: true,
         timeoutMs: 30_000,
       });
     } catch {
@@ -1424,7 +1378,7 @@ export class NpmUpdateSmoke {
   }
 
   private dumpLogTail(logPath: string): void {
-    const log = run("tail", ["-n", "80", logPath], { check: false, quiet: true }).stdout;
+    const log = run("tail", ["-n", "80", logPath], { check: false }).stdout;
     if (log) {
       process.stderr.write(`\n--- tail ${logPath} ---\n`);
       process.stderr.write(log);

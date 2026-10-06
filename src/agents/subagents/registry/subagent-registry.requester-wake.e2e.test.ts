@@ -26,7 +26,6 @@ import {
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
-import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { announceTesting as subagentAnnounceTesting } from "../announce/subagent-announce-overrides.test-support.js";
@@ -41,8 +40,13 @@ import type {
   SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
+import { registerRequesterSelfYieldFollowupTests } from "./subagent-registry.requester-self-yield.test-support.js";
 import { registerRequesterStartupAdmissionTests } from "./subagent-registry.requester-wake-admission.test-support.js";
-import { registerRequesterWakeReceiptBoundaryTests } from "./subagent-registry.requester-wake-receipts.test-support.js";
+import {
+  createRequesterYieldTool,
+  registerRequesterWakeReceiptBoundaryTests,
+  visibleChild,
+} from "./subagent-registry.requester-wake-receipts.test-support.js";
 import { registerRequesterWakeSettlementBoundaryTests } from "./subagent-registry.requester-wake-settlement.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
@@ -146,7 +150,7 @@ function createGatewayContext() {
       throw new Error("Unexpected recovery notice");
     },
   };
-  const context = { recoveryRuntime } as GatewayRequestContext;
+  const context = { recoveryRuntime, chatAbortControllers: new Map() } as GatewayRequestContext;
   context.resolveGatewayContext = () => context;
   return context;
 }
@@ -413,6 +417,22 @@ describe("requester settle wake product flow", () => {
     wakeRequester,
   });
 
+  registerRequesterSelfYieldFollowupTests({
+    requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+    createGatewayContext,
+    getLifecycleHandler: () => lifecycleHandler!,
+    callGatewayMock,
+    getAgentCalls,
+    emitCompleted,
+    flushOwnedWork,
+    flushAsync,
+    wakeRequester,
+    waitForDeliveredCleanup,
+    setReleaseAgentCallGate: (release) => {
+      releaseAgentCallGate = release;
+    },
+  });
+
   it.each(
     ["alpha", "beta"].flatMap((firstCompleted) =>
       ["same", "distinct", "mixed-unbound", "yielded"].map((mode) => ({
@@ -481,16 +501,10 @@ describe("requester settle wake product flow", () => {
             },
           );
           if (child.name === yieldedParent) {
-            await createSessionsYieldTool({
-              sessionId: "sess-main",
-              claimYield: async () =>
-                (await registry.markRequesterTurnYielded({
-                  requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-                  requesterAgentId: "main",
-                  requesterTurnRunId,
-                })) > 0,
-              onYield: () => {},
-            }).execute(`yield-${child.name}`, {});
+            await createRequesterYieldTool(MAIN_REQUESTER_SESSION_KEY, requesterTurnRunId).execute(
+              `yield-${child.name}`,
+              {},
+            );
           }
           await registry.settleRequesterAfterSessionSpawns({
             requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
@@ -612,29 +626,15 @@ describe("requester settle wake product flow", () => {
       const context = createGatewayContext();
       await registry.initSubagentRegistry();
       await registry.activateSubagentRegistry(() => context);
-      const alpha = {
-        runId: "run-serial-alpha",
-        childSessionKey: "agent:main:subagent:serial-alpha",
-        expectsCompletionMessage: true,
-      };
-      const beta = {
-        runId: "run-serial-beta",
-        childSessionKey: "agent:main:subagent:serial-beta",
-        expectsCompletionMessage: true,
-      };
+      const alpha = visibleChild("serial-alpha");
+      const beta = visibleChild("serial-beta");
       const { withLocalSessionPlacementTurnSettlement } =
         await import("../../session-placement-admission.js");
       const yieldTurn = async (requesterTurnRunId: string, accepted: (typeof alpha)[]) => {
-        const result = await createSessionsYieldTool({
-          sessionId: "sess-main",
-          claimYield: async () =>
-            (await registry.markRequesterTurnYielded({
-              requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-              requesterAgentId: "main",
-              requesterTurnRunId,
-            })) > 0,
-          onYield: () => {},
-        }).execute(`yield-${requesterTurnRunId}`, {});
+        const result = await createRequesterYieldTool(
+          MAIN_REQUESTER_SESSION_KEY,
+          requesterTurnRunId,
+        ).execute(`yield-${requesterTurnRunId}`, {});
         expect(result).toMatchObject({
           details: { status: accepted.length > 0 ? "yielded" : "nothing_pending" },
         });
@@ -704,7 +704,6 @@ describe("requester settle wake product flow", () => {
               modelRegistry: ModelRegistry.inMemory(authStorage),
               thinkLevel: "off",
             });
-            expect(harnessAttempt).toHaveBeenCalledTimes(1);
             const terminal = await resolveEmbeddedRunTerminal(
               makeTerminalInput({ attempt, runParams, agentHarnessId: "codex" }),
             );

@@ -1,7 +1,4 @@
 import type { AssistantMessageEvent } from "../../../llm/types.js";
-/**
- * Wraps stream object events with mutable assistant-message transforms.
- */
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";

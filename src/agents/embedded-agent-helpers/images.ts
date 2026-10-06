@@ -1,6 +1,3 @@
-/**
- * Sanitizes historical embedded-agent message images and empty content blocks.
- */
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage, AgentToolResult } from "../runtime/index.js";
@@ -32,7 +29,6 @@ function ensureNonEmptyContent<T>(content: T[]): T[] {
   return [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }] as T[];
 }
 
-/** Resize/remove unsafe image payloads while keeping transcript turns valid. */
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,

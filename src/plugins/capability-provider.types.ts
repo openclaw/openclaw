@@ -46,7 +46,6 @@ import type {
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 
-/** JSON-compatible provider settings for one configured worker profile. */
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 
 /** Provider-authored picker metadata for one machine class or exact machine type. */
@@ -127,7 +126,6 @@ export type WorkerDesktopEndpoint = {
   apps?: WorkerDesktopApp[];
 };
 
-/** Placement execution modes a worker provider can carry. */
 export type { WorkerExecutionMode } from "../../packages/gateway-protocol/src/schema/environments.js";
 
 /** Grant-free identity of the runtime bytes a provider may retain in a prepared image. */
@@ -434,7 +432,6 @@ export type WorkerProvider = {
   resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
 };
 
-/** Speech capability registered by a plugin. */
 export type SpeechProviderPlugin = {
   id: SpeechProviderId;
   label: string;
@@ -466,7 +463,6 @@ export type SpeechProviderPlugin = {
   listVoices?: (req: SpeechListVoicesRequest) => Promise<SpeechVoiceOption[]>;
 };
 
-/** Realtime transcription capability registered by a plugin. */
 export type RealtimeTranscriptionProviderPlugin = {
   id: RealtimeTranscriptionProviderId;
   label: string;
@@ -481,10 +477,8 @@ export type RealtimeTranscriptionProviderPlugin = {
   createSession: (req: RealtimeTranscriptionSessionCreateRequest) => RealtimeTranscriptionSession;
 };
 
-/** Transcript source capability registered by a channel or meeting plugin. */
 export type TranscriptSourceProvider = TranscriptsSourceProviderCapability;
 
-/** Realtime voice capability registered by a plugin. */
 export type RealtimeVoiceProviderPlugin = {
   id: RealtimeVoiceProviderId;
   label: string;

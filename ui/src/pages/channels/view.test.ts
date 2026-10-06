@@ -2,13 +2,10 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelsStatusSnapshot, WhatsAppStatus } from "../../api/types.ts";
+import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { renderChannelDetail } from "./view.detail.ts";
-import {
-  channelEnabled,
-  resolveChannelConfigured,
-  resolveChannelDisplayState,
-} from "./view.shared.ts";
+import { resolveChannelDisplayState } from "./view.shared.ts";
 import { createChannelsViewProps } from "./view.test-support.ts";
 import { renderChannels } from "./view.ts";
 import type { ChannelsProps } from "./view.types.ts";
@@ -686,7 +683,7 @@ describe("channel detail", () => {
         ["Running", "Yes"],
         ...extraFacts,
         ["Last start", "n/a"],
-        ["Last probe", "n/a"],
+        ["Last connection check", "n/a"],
       ]);
       container.querySelector<HTMLButtonElement>(".settings-row--actions button")!.click();
       expect(onRefresh).toHaveBeenCalledWith(true);
@@ -771,7 +768,6 @@ describe("channel display selectors", () => {
       channelDefaultAccountId: { guildchat: "guild-main" },
     });
 
-    expect(resolveChannelConfigured("guildchat", props)).toBe(false);
     expect(resolveChannelDisplayState("guildchat", props).configured).toBe(false);
   });
 
@@ -792,9 +788,9 @@ describe("channel display selectors", () => {
 
     const displayState = resolveChannelDisplayState("guildchat", props);
 
-    expect(resolveChannelConfigured("guildchat", props)).toBe(true);
+    expect(displayState.configured).toBe(true);
     expect(displayState.defaultAccount?.accountId).toBe("guild-main");
-    expect(channelEnabled("guildchat", props)).toBe(true);
+    expect(channelSnapshotEntryIsActive(props.channels.channelsSnapshot, "guildchat")).toBe(true);
   });
 
   it("falls back to the first account when no default account id is available", () => {
@@ -811,7 +807,7 @@ describe("channel display selectors", () => {
 
     const displayState = resolveChannelDisplayState("workspace", props);
 
-    expect(resolveChannelConfigured("workspace", props)).toBe(true);
+    expect(displayState.configured).toBe(true);
     expect(displayState.defaultAccount?.accountId).toBe("workspace-a");
   });
 
@@ -832,7 +828,7 @@ describe("channel display selectors", () => {
     expect(displayState.configured).toBe(false);
     expect(displayState.running).toBeNull();
     expect(displayState.connected).toBeNull();
-    expect(channelEnabled("quietchat", props)).toBe(false);
+    expect(channelSnapshotEntryIsActive(props.channels.channelsSnapshot, "quietchat")).toBe(false);
   });
 });
 

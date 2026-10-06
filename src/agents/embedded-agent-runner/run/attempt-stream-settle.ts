@@ -6,7 +6,6 @@ import type { ModelCompatConfig } from "../../../config/types.models.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createOpenAIServiceTierObservationWrapper } from "../../../llm/providers/stream-wrappers/openai-service-tier-observation.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
-import type { AssistantMessage } from "../../../llm/types.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
@@ -16,12 +15,11 @@ import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscri
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
-import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
-import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
+import { hasNonzeroUsage, normalizeUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import {
@@ -66,27 +64,11 @@ import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
 import { materializeProviderContext } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSession>;
 type PromptCacheRetention = Parameters<typeof buildContextEnginePromptCacheInfo>[0]["retention"];
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
-
-type StreamSettleResult = {
-  promptError: unknown;
-  promptErrorSource: AgentRunAttemptFailureSource | null;
-  timedOutDuringCompaction: boolean;
-  compactionOccurredThisAttempt: boolean;
-  messagesSnapshot: AgentMessage[];
-  sessionIdUsed: string;
-  lastAssistant: EmbeddedRunAttemptResult["lastAssistant"];
-  currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
-  currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
-  successfulNestedToolNames: string[];
-  attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
-  lastCallUsage: NormalizedUsage | undefined;
-  promptCache: EmbeddedRunAttemptResult["promptCache"];
-};
 
 export async function settleEmbeddedAttemptStream(input: {
   attempt: EmbeddedRunAttemptParams;
@@ -122,9 +104,9 @@ export async function settleEmbeddedAttemptStream(input: {
     retention: PromptCacheRetention;
   };
   shouldFlushForContextEngine: boolean;
-}): Promise<StreamSettleResult> {
+}) {
   const { attempt, activeSession, sessionManager, subscription, state } = input;
-  let { promptError, promptErrorSource, sessionIdUsed } = state;
+  let { promptError, promptErrorSource } = state;
 
   try {
     if (
@@ -240,18 +222,9 @@ export async function settleEmbeddedAttemptStream(input: {
     }
   }
 
-  let compactionOccurredThisAttempt = false;
-  let messagesSnapshot: AgentMessage[] = [];
-  let lastAssistant: AssistantMessage | undefined;
-  let currentAttemptAssistant: AssistantMessage | undefined;
-  let currentAttemptCompletedAssistant: AssistantMessage | undefined;
-  let attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
-  let lastCallUsage: NormalizedUsage | undefined;
-  let promptCache: EmbeddedRunAttemptResult["promptCache"];
-
   const captureStreamSnapshot = () => {
     const { timedOutDuringCompaction } = input.readLifecycleState();
-    compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
+    const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
     const snapshotSelection = selectCompactionTimeoutSnapshot({
       timedOutDuringCompaction,
       preCompactionSnapshot,
@@ -265,22 +238,21 @@ export async function settleEmbeddedAttemptStream(input: {
           `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
       );
     }
-    messagesSnapshot = snapshotSelection.messagesSnapshot;
-    sessionIdUsed = snapshotSelection.sessionIdUsed;
-    lastAssistant = messagesSnapshot.findLast((message) => message.role === "assistant");
-    currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+    const messagesSnapshot = snapshotSelection.messagesSnapshot;
+    const lastAssistant = messagesSnapshot.findLast((message) => message.role === "assistant");
+    const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
       messagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
     });
-    currentAttemptCompletedAssistant = subscription.getCurrentAttemptAssistant();
-    attemptUsage = subscription.getUsageTotals();
+    const currentAttemptCompletedAssistant = subscription.getCurrentAttemptAssistant();
+    const attemptUsage = subscription.getUsageTotals();
     const transcriptUsageSnapshot = findLatestUncompactedAttemptUsageSnapshot({
       messagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
       compactionOccurred: compactionOccurredThisAttempt,
     });
     const completedAssistantUsage = normalizeUsage(currentAttemptCompletedAssistant?.usage);
-    lastCallUsage =
+    const lastCallUsage =
       subscription.getLastAssistantUsage() ??
       (hasNonzeroUsage(completedAssistantUsage)
         ? completedAssistantUsage
@@ -294,7 +266,7 @@ export async function settleEmbeddedAttemptStream(input: {
       provider: attempt.provider,
       modelId: attempt.modelId,
     });
-    promptCache = buildContextEnginePromptCacheInfo({
+    const promptCache = buildContextEnginePromptCacheInfo({
       retention: input.cache.retention,
       lastCallUsage,
       observation: input.cache.getObservation?.(),
@@ -304,13 +276,25 @@ export async function settleEmbeddedAttemptStream(input: {
         fallbackLastCacheTouchAt,
       }),
     });
+    return {
+      compactionOccurredThisAttempt,
+      messagesSnapshot,
+      sessionIdUsed: snapshotSelection.sessionIdUsed,
+      lastAssistant,
+      currentAttemptAssistant,
+      currentAttemptCompletedAssistant,
+      attemptUsage,
+      lastCallUsage,
+      promptCache,
+    };
   };
 
+  let captured: ReturnType<typeof captureStreamSnapshot>;
   try {
-    await input.withOwnedTranscriptWrite(() =>
+    captured = await input.withOwnedTranscriptWrite(() =>
       withSessionManagerWrite(sessionManager, async () => {
         const { timedOutDuringCompaction } = input.readLifecycleState();
-        compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
+        const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
         const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
         await appendAttemptCacheTtlIfNeeded({
           sessionManager,
@@ -341,12 +325,12 @@ export async function settleEmbeddedAttemptStream(input: {
           }
         }
 
-        captureStreamSnapshot();
+        const streamSnapshot = captureStreamSnapshot();
 
         if (
           promptError &&
           promptErrorSource === "prompt" &&
-          !compactionOccurredThisAttempt &&
+          !streamSnapshot.compactionOccurredThisAttempt &&
           !attempt.abortSignal?.aborted
         ) {
           try {
@@ -367,6 +351,7 @@ export async function settleEmbeddedAttemptStream(input: {
         if (input.shouldFlushForContextEngine) {
           sessionManager.flushPendingPersistence();
         }
+        return streamSnapshot;
       }),
     );
   } catch (error) {
@@ -376,23 +361,15 @@ export async function settleEmbeddedAttemptStream(input: {
       throw error;
     }
     // Cancellation fences writes, but after-turn still needs the settled messages and usage.
-    captureStreamSnapshot();
+    captured = captureStreamSnapshot();
   }
 
   return {
     promptError,
     promptErrorSource,
     timedOutDuringCompaction: input.readLifecycleState().timedOutDuringCompaction,
-    compactionOccurredThisAttempt,
-    messagesSnapshot,
-    sessionIdUsed,
-    lastAssistant,
-    currentAttemptAssistant,
-    currentAttemptCompletedAssistant,
+    ...captured,
     successfulNestedToolNames: [...input.nestedToolActivityState.successfulToolNames],
-    attemptUsage,
-    lastCallUsage,
-    promptCache,
   };
 }
 
@@ -665,22 +642,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
     session.agent.streamFn = createOpenAIServiceTierObservationWrapper(
       session.agent.streamFn,
-      (model, serviceTiers) =>
+      (model, observation) =>
         !input.abortSignal.aborted &&
         record({
           modelId: model.id,
           runtimeId: "openclaw",
           api: model.api,
           baseUrl: model.baseUrl,
-          serviceTiers,
-        }),
-      (model) =>
-        runtime.accountCatalog?.readServiceTiers({
-          identityKey: selectedCredential.identityKey,
-          modelId: model.id,
-          runtimeId: "openclaw",
-          api: model.api,
-          baseUrl: model.baseUrl,
+          ...observation,
         }),
     );
   }

@@ -71,7 +71,6 @@ export function isSilentAgentReplyText(
     : isSilentReplyText(value, SILENT_REPLY_TOKEN);
 }
 
-/** Returns whether payload metadata contains user-visible content. */
 export function hasVisibleAgentPayload(
   result: { payloads?: unknown },
   options: PayloadVisibilityOptions = {},
@@ -125,7 +124,6 @@ export function hasExplicitlyVisibleAgentPayload(payload: unknown): boolean {
   );
 }
 
-/** Returns whether a payload intentionally contains only the silent-reply marker. */
 export function hasIntentionalSilentAgentPayload(result: { payloads?: unknown }): boolean {
   const payloads = Array.isArray(result.payloads) ? result.payloads : [];
   return payloads.some((payload) => {
@@ -140,13 +138,11 @@ export function hasIntentionalSilentAgentPayload(result: { payloads?: unknown })
   });
 }
 
-/** Reads a transcript message role without trusting its boundary shape. */
 export function getTranscriptMessageRole(message: unknown): string | undefined {
   const role = asOptionalObjectRecord(message)?.role;
   return typeof role === "string" ? role : undefined;
 }
 
-/** Reads a committed final source-reply mirror from a transcript message. */
 export function readTerminalSourceReplyDeliveryMirror(
   message: unknown,
 ): { sourceTurnId: string; toolCallId?: string } | undefined {

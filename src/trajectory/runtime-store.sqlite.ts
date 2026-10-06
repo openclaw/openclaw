@@ -22,10 +22,13 @@ import {
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES } from "./paths.js";
+import type { TrajectoryRuntimeRetentionPlan } from "./runtime-retention.contract.js";
 import {
+  beginTrajectoryRuntimeRetention,
+  captureTrajectoryRuntimeRetentionMutation,
+  selectTrajectoryRuntimeRetentionBatch,
   deleteTrajectoryRuntimeRetention,
   prepareTrajectoryRuntimeRetention,
-  readTrajectoryRuntimeRetentionRevision,
   trajectoryRuntimeRetentionDue,
   trajectoryRuntimeRetentionState,
 } from "./runtime-retention.sqlite.js";
@@ -100,29 +103,43 @@ export function appendSqliteTrajectoryRuntimeEvents(
       { operationLabel: label },
     );
   const input = { ...scope, events };
-  const { database, revision } = appendSqliteTrajectoryRuntimeEventsWithWriter(input, write);
+  const database = appendSqliteTrajectoryRuntimeEventsWithWriter(input, write);
   const state = trajectoryRuntimeRetentionState(database);
   const now = Date.now();
   // A nested append cannot commit maintenance independently of its caller.
   if (!database.db.isTransaction && trajectoryRuntimeRetentionDue(state, now)) {
+    const lease = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.store(lease, 0, 1);
     try {
-      let currentRevision = revision;
+      let refreshes = 0;
+      let sweepId = beginTrajectoryRuntimeRetention(database.db, lease);
+      let snapshot: TrajectoryRuntimeRetentionPlan | undefined = prepareTrajectoryRuntimeRetention(
+        database.db,
+        input,
+        now,
+      );
       for (;;) {
-        const plan = prepareTrajectoryRuntimeRetention(database.db, input, now);
+        const batch = selectTrajectoryRuntimeRetentionBatch(database.db, { sweepId, snapshot });
+        snapshot = undefined;
         const result = write("trajectory.runtime.retention.delete", (current) =>
-          deleteTrajectoryRuntimeRetention(current, plan, currentRevision),
+          deleteTrajectoryRuntimeRetention(current, batch),
         );
-        if (!result) {
-          break;
-        }
         if (result.complete) {
           state.sweptAt = now;
           break;
         }
-        currentRevision = result.revision;
+        if (result.refresh) {
+          if (++refreshes > 1) {
+            break;
+          }
+          sweepId = beginTrajectoryRuntimeRetention(database.db, lease);
+          snapshot = prepareTrajectoryRuntimeRetention(database.db, input, now);
+        }
       }
     } catch (error) {
       log.warn(`Trajectory retention deferred until the next append: ${String(error)}`);
+    } finally {
+      Atomics.store(lease, 0, 0);
     }
   }
 }
@@ -140,6 +157,7 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
     seq: 0,
   }));
   return write("trajectory.runtime.append", (database) => {
+    const publishRetention = captureTrajectoryRuntimeRetentionMutation(database.db);
     const db = getTrajectoryKysely(database.db);
     let seq = readNextTrajectorySeq(database, sessionId);
     const discardBeforeSeq = input.discardPrevious ? seq : undefined;
@@ -160,7 +178,8 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
       Math.max(1, Math.floor(input.maxRuntimeBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES)),
       discardBeforeSeq,
     );
-    return { database, revision: readTrajectoryRuntimeRetentionRevision(database) };
+    publishRetention?.(sessionId);
+    return database;
   });
 }
 

@@ -109,7 +109,8 @@ vi.mock("../../agents/main-session-recovery/main-session-recovery-owner-release.
   scheduleMainSessionRecoveryPendingTarget: vi.fn(),
 }));
 
-vi.mock("../../agents/main-session-recovery/main-session-recovery-state.js", () => ({
+vi.mock("../../config/sessions/restart-recovery-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/restart-recovery-state.js")>()),
   isMainRestartRecoveryCandidate: vi.fn().mockReturnValue(false),
 }));
 
@@ -455,11 +456,10 @@ async function useActualSystemEventDrain() {
 }
 
 function requireRunReplyAgentCall(index = 0) {
-  const call = vi.mocked(runReplyAgent).mock.calls.at(index)?.[0];
-  if (!call) {
-    throw new Error(`runReplyAgent call ${index} missing`);
-  }
-  return call;
+  return expectDefined(
+    vi.mocked(runReplyAgent).mock.calls.at(index)?.[0],
+    `runReplyAgent call ${index}`,
+  );
 }
 
 describe("runPreparedReply media-only handling", () => {

@@ -21,6 +21,7 @@ import {
   resolveCoreToolExecutionLocation,
 } from "../../agents/tool-catalog.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -38,6 +39,7 @@ import {
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import { registerWorkerTurnInferenceTests } from "./worker-turn-execution.inference.suite.js";
 import {
   acknowledgeCompletedWorkerTurn,
   createWorkerTurnTunnel,
@@ -268,7 +270,10 @@ describe("worker turn execution", () => {
         expect(outcome).toBeInstanceOf(SessionTranscriptMessageCommittedError);
         expect(outcome).toMatchObject({
           committedMessageId,
-          committedTarget: sessionTarget,
+          committedTarget: {
+            ...sessionTarget,
+            storePath: resolveSqliteReadScope(sessionTarget).path,
+          },
           cause: expectedFailure,
         });
         expect(isRecordedModelFallbackStop(outcome)).toBe(true);
@@ -421,7 +426,8 @@ describe("worker turn execution", () => {
           {
             ...input,
             abortSignal: abort.signal,
-            onExecutionStarted: async () => {
+            onExecutionStarted: async (info) => {
+              expect(info?.backend).toBe("cloud-worker");
               // Earlier workspace recovery and externally owned writes retain their own ordering.
               hydration.mockClear();
               acquireTurnCredential.mockClear();
@@ -848,6 +854,8 @@ describe("worker turn execution", () => {
       });
     },
   );
+
+  registerWorkerTurnInferenceTests();
 
   it.each([
     [WORKER_LAUNCH_V2_PROTOCOL_FEATURE],

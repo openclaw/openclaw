@@ -413,7 +413,7 @@ internal suspend fun probeGatewayTlsFingerprint(
         override fun checkClientTrusted(
           chain: Array<X509Certificate>,
           authType: String,
-        ): Unit = throw CertificateException("gateway TLS probe does not accept client certificates")
+        ): Unit = throw CertificateException("gateway TLS check does not accept client certificates")
 
         override fun checkClientTrusted(
           chain: Array<X509Certificate>,
@@ -434,7 +434,7 @@ internal suspend fun probeGatewayTlsFingerprint(
           if (chain.isEmpty()) throw CertificateException("empty certificate chain")
           fingerprintRef.set(chain[0].sha256Fingerprint())
           // Abort validation after capture; the probe is not deciding trust.
-          throw CertificateException("gateway TLS probe captured fingerprint")
+          throw CertificateException("gateway TLS check captured fingerprint")
         }
 
         override fun checkServerTrusted(

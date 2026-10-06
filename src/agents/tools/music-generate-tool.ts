@@ -1,4 +1,3 @@
-/** Runs music generation, persistence, and detached completion. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { createSubsystemLogger } from "../../logging/subsystem.js";

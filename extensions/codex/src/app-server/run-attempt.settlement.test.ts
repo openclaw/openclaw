@@ -385,16 +385,30 @@ describe("Codex app-server terminal settlement", () => {
         );
         await writerAcquired.promise;
       };
+      // Database worker requests arm 60-second timeouts on the fake clock. A write parked behind
+      // the held writer starts after the deadline jump, which would otherwise expire its I/O.
+      const deadlineJumped = createDeferred<void>();
+      if (termination !== "timeout") {
+        deadlineJumped.resolve();
+      }
+      const mirrorCheckpoint = codexTranscriptMirrorRuntime.mirror;
       const checkpointMirror = vi.spyOn(codexTranscriptMirrorRuntime, "mirror");
+      if (boundary === "checkpoint") {
+        checkpointMirror.mockImplementationOnce(async (input) => {
+          await deadlineJumped.promise;
+          return await mirrorCheckpoint(input);
+        });
+      }
       const finalMirrorStarted = createDeferred<void>();
       if (boundary === "final") {
         const finalMirror = codexTranscriptMirrorRuntime.mirrorBestEffort;
         vi.spyOn(codexTranscriptMirrorRuntime, "mirrorBestEffort").mockImplementationOnce(
           async (input) => {
             await holdWriter();
+            finalMirrorStarted.resolve();
+            await deadlineJumped.promise;
             const writing = finalMirror(input);
             checkpointWrites.push(writing);
-            finalMirrorStarted.resolve();
             return await writing;
           },
         );
@@ -498,6 +512,7 @@ describe("Codex app-server terminal settlement", () => {
             receivedAt + TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS - Date.now(),
           );
           expect(onAttemptTimeout).not.toHaveBeenCalled();
+          deadlineJumped.resolve();
         } else if (boundary === "publication") {
           await vi.waitFor(() => expect(publishedTerminal).toHaveBeenCalledOnce(), fastWait);
         } else {
@@ -652,6 +667,7 @@ describe("Codex app-server terminal settlement", () => {
         }
       } finally {
         unsubscribe();
+        deadlineJumped.resolve();
         checkpoint.resolve();
         abort.abort("test cleanup");
         successorAbort.abort("test cleanup");

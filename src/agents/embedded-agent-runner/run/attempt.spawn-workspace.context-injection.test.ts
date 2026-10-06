@@ -6,76 +6,35 @@ import type { ContextEngine } from "../../../context-engine/types.js";
 import { resolveWorkspaceBootstrapRouting } from "../../bootstrap-routing.js";
 import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { limitHistoryTurns } from "../history.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers.js";
+import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 
 describe("embedded attempt context injection", () => {
-  it.each([
-    {
-      name: "explicit never",
-      mode: "never",
-      bootstrap: "full",
-      runKind: "default",
-      continuation: false,
-      resolve: false,
-      delivers: false,
-      completedCalls: 0,
-    },
-    {
-      name: "pending bootstrap overrides stale completion",
-      mode: "continuation-skip",
-      bootstrap: "full",
-      runKind: "default",
-      continuation: false,
-      resolve: true,
-      delivers: true,
-      completedCalls: 0,
-    },
-    {
-      name: "heartbeat always filters bootstrap",
-      mode: "continuation-skip",
-      bootstrap: "none",
-      runKind: "heartbeat",
-      continuation: false,
-      resolve: true,
-      delivers: false,
-      completedCalls: 0,
-    },
-    {
-      name: "limited bootstrap permits continuation skip",
-      mode: "continuation-skip",
-      bootstrap: "limited",
-      runKind: "default",
-      continuation: true,
-      resolve: false,
-      delivers: false,
-      completedCalls: 1,
-    },
-  ] as const)("$name", async (testCase) => {
-    const files =
-      testCase.bootstrap === "full"
-        ? {
-            bootstrapFiles: [{ name: "BOOTSTRAP.md" }],
-            contextFiles: [{ path: "BOOTSTRAP.md" }],
-          }
-        : { bootstrapFiles: [], contextFiles: [] };
+  it("skips context injection for completed limited bootstrap turns", async () => {
     const hasCompletedBootstrapTurn = vi.fn(async () => true);
-    const resolveBootstrapContextForRun = vi.fn(async () => files);
-    const result = await resolveAttemptBootstrapContext({
-      contextInjectionMode: testCase.mode,
-      bootstrapMode: testCase.bootstrap,
-      bootstrapContextRunKind: testCase.runKind,
-      bootstrapContextMode: testCase.runKind === "heartbeat" ? "lightweight" : "full",
-      deliversCompleteWorkspaceContext: testCase.delivers,
-      hasCompletedBootstrapTurn,
-      resolveBootstrapContextForRun,
+    const resolveBootstrapContextForRun = vi.fn(async () => ({
+      bootstrapFiles: [],
+      contextFiles: [],
+    }));
+    expect(
+      await resolveAttemptBootstrapContext({
+        contextInjectionMode: "continuation-skip",
+        bootstrapMode: "limited",
+        bootstrapContextRunKind: "default",
+        bootstrapContextMode: "full",
+        deliversCompleteWorkspaceContext: false,
+        hasCompletedBootstrapTurn,
+        resolveBootstrapContextForRun,
+      }),
+    ).toEqual({
+      bootstrapFiles: [],
+      contextFiles: [],
+      isContinuationTurn: true,
+      shouldRecordCompletedBootstrapTurn: false,
     });
-    expect(result).toEqual({
-      ...(testCase.resolve ? files : { bootstrapFiles: [], contextFiles: [] }),
-      isContinuationTurn: testCase.continuation,
-      shouldRecordCompletedBootstrapTurn: testCase.bootstrap === "full" && testCase.resolve,
-    });
-    expect(hasCompletedBootstrapTurn).toHaveBeenCalledTimes(testCase.completedCalls);
-    expect(resolveBootstrapContextForRun).toHaveBeenCalledTimes(Number(testCase.resolve));
+    expect(hasCompletedBootstrapTurn).toHaveBeenCalledOnce();
+    expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });
 
   it("records completion for a workspace whose onboarding is already done", async () => {
@@ -125,6 +84,26 @@ describe("embedded attempt context injection", () => {
       resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
     });
 
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+  });
+
+  it("withholds the marker from a turn that did not deliver every workspace file", async () => {
+    // A guarded-read placeholder reports the fault instead of the file, so certifying
+    // this turn would let the next continuation skip content the session never saw.
+    const result = await resolveAttemptBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      bootstrapContextMode: "full",
+      bootstrapContextRunKind: "default",
+      bootstrapMode: "none",
+      deliversCompleteWorkspaceContext: false,
+      hasCompletedBootstrapTurn: async () => false,
+      resolveBootstrapContextForRun: async () => ({
+        bootstrapFiles: [{ name: "AGENTS.md", content: "workspace rules" }],
+        contextFiles: [{ path: "AGENTS.md", content: "workspace rules" }],
+      }),
+    });
+
+    expect(result.isContinuationTurn).toBe(false);
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
   });
 
@@ -210,5 +189,30 @@ describe("embedded attempt context injection", () => {
       { role: "user", content: "real question" },
       { role: "assistant", content: "real answer" },
     ]);
+  });
+
+  it("records cache continuity without compaction", async () => {
+    const sessionManager = { appendCustomEntryAsync: vi.fn(async () => undefined) };
+    const appended = await appendAttemptCacheTtlIfNeeded({
+      sessionManager,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+      timedOutDuringCompaction: false,
+      compactionOccurredThisAttempt: false,
+      config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      modelApi: "anthropic-messages",
+      isCacheTtlEligibleProvider: () => true,
+      now: 123,
+    });
+    expect(appended).toBe(true);
+    expect(sessionManager.appendCustomEntryAsync).toHaveBeenCalledWith("openclaw.cache-ttl", {
+      timestamp: 123,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      prunedToolResults: [],
+      ambiguousToolResultBaseKeys: [],
+      frozenToolResults: [],
+    });
   });
 });

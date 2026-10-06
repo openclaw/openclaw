@@ -43,19 +43,16 @@ import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunne
 import { boundedWorkerError } from "./worker-error.js";
 
 export function nodeWorkerSpawnResultFromReceipt(
-  receipt: NodeWorkerSupervisorReceipt,
+  receipt: TerminalNodeWorkerSupervisorReceipt,
 ): SpawnResult {
-  if (isTerminalReceipt(receipt)) {
-    return {
-      stdout: receipt.state === "completed" ? receipt.resultJson : "",
-      stderr: receipt.state === "completed" ? "" : receipt.errorText,
-      code: receipt.state === "completed" ? 0 : 1,
-      signal: null,
-      killed: receipt.state === "cancelled" || receipt.state === "interrupted",
-      termination: "exit",
-    };
-  }
-  throw new Error("node worker launch returned without a terminal receipt");
+  return {
+    stdout: receipt.state === "completed" ? receipt.resultJson : "",
+    stderr: receipt.state === "completed" ? "" : receipt.errorText,
+    code: receipt.state === "completed" ? 0 : 1,
+    signal: null,
+    killed: receipt.state === "cancelled" || receipt.state === "interrupted",
+    termination: "exit",
+  };
 }
 
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
@@ -536,6 +533,15 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
             ...(!pollStatus && !mayHaveLaunched
               ? {
                   prepareLaunch: (node: NodeWorkerSupervisorNodeProof) => {
+                    if (
+                      input.descriptor.assignment.inference === "runtime-local" &&
+                      node.workerHost.nativeInference !== 1
+                    ) {
+                      throw createNodeRunnerInventoryIssueError(
+                        node.nodeId,
+                        NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+                      );
+                    }
                     if (
                       node.workerHost.idleRetention === true &&
                       input.descriptor.admission.handshake.protocolFeatures.includes(

@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readMemoryResultFromSessionRecord,
@@ -100,54 +101,35 @@ export function watchTerminalMemorySearchResult(params: {
   abortSignal: AbortSignal;
   toolsAllow: readonly string[];
 }): TerminalMemorySearchWatch {
-  let stopped = false;
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, params.abortSignal]);
   const { promise, resolve: resolveWatch } = createDeferred<TerminalMemorySearchResult>();
-  const stop = () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      timeoutId = undefined;
-    }
-    params.abortSignal.removeEventListener("abort", stop);
-  };
-  const tick = async () => {
-    if (stopped) {
-      return;
-    }
-    if (params.abortSignal.aborted) {
-      stop();
-      return;
-    }
-    try {
-      const result = await readTerminalMemorySearchResultFromSources(
-        params.getTranscriptSources(),
-        params.toolsAllow,
+  const stop = () => controller.abort();
+  const poll = async () => {
+    while (!signal.aborted) {
+      try {
+        const result = await readTerminalMemorySearchResultFromSources(
+          params.getTranscriptSources(),
+          params.toolsAllow,
+        );
+        // Execution can settle while this transcript read is still in flight.
+        if (signal.aborted) {
+          return;
+        }
+        if (result) {
+          stop();
+          resolveWatch(result);
+          return;
+        }
+      } catch {
+        // Transcript polling is opportunistic; normal timeout handling remains authoritative.
+      }
+      await sleepWithAbort(TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS, signal, { ref: false }).catch(
+        () => undefined,
       );
-      // Execution can settle while this transcript read is still in flight.
-      if (stopped || params.abortSignal.aborted) {
-        return;
-      }
-      if (result) {
-        stop();
-        resolveWatch(result);
-        return;
-      }
-    } catch {
-      // Transcript polling is opportunistic; normal timeout handling remains authoritative.
-    }
-    if (!stopped) {
-      timeoutId = setTimeout(() => {
-        void tick();
-      }, TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS);
-      timeoutId.unref?.();
     }
   };
-  params.abortSignal.addEventListener("abort", stop, { once: true });
-  void tick();
+  void poll();
   return {
     promise,
     stop,

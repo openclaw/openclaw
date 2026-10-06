@@ -25,10 +25,10 @@ import {
   retireSupersededCleanupIfNeeded,
   beginSubagentCleanup,
   runDetachedCleanupAttempt,
+  runWithSubagentCleanupWorkAdmission,
 } from "./subagent-registry-lifecycle-attempt.js";
 import {
   isSubagentCompletionDeliveryAllowed,
-  retireSupersededCleanupInBackground,
   suspendPendingFinalDelivery,
 } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
@@ -467,7 +467,16 @@ export const startSubagentAnnounceCleanupFlow = (
     onDeliveryResult: async (delivery) => {
       assertPersistenceCurrent();
       if (!context.isCleanupAttemptCurrent(entry, cleanupGeneration)) {
-        retireSupersededCleanupInBackground(context, runId, entry, cleanupGeneration, stateContext);
+        const retiredEntry = entry;
+        const retiredRunId = runId;
+        void runWithSubagentCleanupWorkAdmission(async () => {
+          assertSubagentRegistryWriteSourceCurrent(stateContext);
+          await retireSupersededCleanupIfNeeded(context, retiredEntry, cleanupGeneration);
+        }).catch((error: unknown) => {
+          defaultRuntime.log(
+            `[warn] subagent superseded cleanup retirement failed (${retiredRunId}): ${String(error)}`,
+          );
+        });
         return;
       }
       assertCurrent();

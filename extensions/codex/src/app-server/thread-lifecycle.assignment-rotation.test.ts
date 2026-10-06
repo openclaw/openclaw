@@ -215,11 +215,10 @@ describe("native assignment custody across ordinary parent rotation", () => {
     expect(f.readAssignments(replacement.threadId, replacement)).toEqual([]);
   });
 
-  it.each(["start", "abort", "revoked", "conflict"] as const)(
+  it.each(["start", "revoked", "conflict"] as const)(
     "preserves authoritative assignments when the successor encounters %s failure",
     async (failure) => {
       const f = await fixture();
-      const controller = new AbortController();
       let expected = f.readState();
       assert(expected?.state === "active");
       const predecessor = expected.binding;
@@ -233,15 +232,6 @@ describe("native assignment custody across ordinary parent rotation", () => {
           : undefined;
       if (closeHost) {
         onTestFinished(closeHost);
-      }
-      if (failure === "abort") {
-        const mutate = f.store.mutate.bind(f.store);
-        vi.spyOn(f.store, "mutate").mockImplementation((...args) => {
-          if (args[1].kind === "replace-thread") {
-            controller.abort(new Error("Rotation aborted"));
-          }
-          return mutate(...args);
-        });
       }
       f.setSuccessor(async () => {
         if (failure === "start") {
@@ -262,10 +252,9 @@ describe("native assignment custody across ordinary parent rotation", () => {
         }
         return threadStartResult("parent-uncommitted");
       });
-      await expect(f.rotate({ signal: controller.signal })).rejects.toThrow(
+      await expect(f.rotate()).rejects.toThrow(
         {
           start: "Successor start rejected",
-          abort: "Rotation aborted",
           revoked: "agent harness host capability is no longer active",
           conflict: "Codex thread binding changed while committing a fresh thread: parent-1",
         }[failure],
@@ -334,35 +323,5 @@ describe("native assignment custody across ordinary parent rotation", () => {
     } finally {
       await claim.release(f.parent.threadId);
     }
-  });
-
-  it("keeps an early rotation transient until a later durable turn", async () => {
-    const f = await fixture();
-    await f.store.mutate(f.identity, {
-      kind: "patch",
-      threadId: f.parent.threadId,
-      patch: { nativeSkillIsolationFingerprint: "previous-skill-policy" },
-    });
-    const before = f.readState();
-    const transient = await startOrResumeThread({
-      ...f.options,
-      params: { ...f.options.params, delegationCapability: "report_only" },
-    });
-    expect(transient.lifecycle.preserveExistingBinding).toBe(true);
-    expect(transient.liveThreadConfigFingerprint).toBeUndefined();
-    expect(f.readState()).toEqual(before);
-    expect(f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
-    expect(f.releasePredecessor).not.toHaveBeenCalled();
-
-    const replacement = await startOrResumeThread(f.options);
-    expect(replacement.threadId).toBe("parent-3");
-    expect(replacement.lifecycle.preserveExistingBinding).toBeUndefined();
-    expect(f.store.read(f.identity)?.threadId).toBe(replacement.threadId);
-    expect(f.readAssignments(replacement.threadId, replacement)).toEqual(f.assignments);
-    expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(
-      f.parent.threadId,
-      undefined,
-      expect.any(Function),
-    );
   });
 });

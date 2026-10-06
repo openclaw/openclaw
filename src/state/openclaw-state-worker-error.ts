@@ -16,7 +16,6 @@ import {
   createError,
   identifyError,
   parseIdentity,
-  type ErrorIdentity,
 } from "./openclaw-state-worker-error-identity.js";
 
 type ErrorValue =
@@ -24,17 +23,7 @@ type ErrorValue =
   | { value: string | number | boolean | null }
   | { undefined: true };
 
-type ErrorNode = ErrorIdentity & {
-  name: string;
-  message: string;
-  code?: string | number;
-  errcode?: number;
-  errno?: number;
-  nativeOpen?: true;
-  stateDatabasePath?: string;
-  cause?: ErrorValue;
-  errors?: ErrorValue[];
-};
+type ErrorNode = NonNullable<ReturnType<typeof parseNode>>;
 
 /** A closed error graph; references preserve shared causes and cyclic aggregates. */
 export type OpenClawStateWorkerErrorPayload = {
@@ -137,7 +126,7 @@ function isErrorValue(value: unknown, count: number): value is ErrorValue {
   return "value" in value ? isScalar(value.value) : value.undefined === true;
 }
 
-function parseNode(value: unknown, count: number): ErrorNode | undefined {
+function parseNode(value: unknown, count: number) {
   if (!isRecord(value) || typeof value.name !== "string" || typeof value.message !== "string") {
     return undefined;
   }
@@ -191,7 +180,7 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
       : {}),
     ...(isNativeErrorCode(value.errcode) ? { errcode: value.errcode } : {}),
     ...(typeof value.errno === "number" ? { errno: value.errno } : {}),
-    ...(value.nativeOpen === true ? { nativeOpen: true } : {}),
+    ...(value.nativeOpen === true ? { nativeOpen: true as const } : {}),
     ...(typeof value.stateDatabasePath === "string"
       ? { stateDatabasePath: value.stateDatabasePath }
       : {}),

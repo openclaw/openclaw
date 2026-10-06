@@ -364,6 +364,9 @@ describe("Plugin ClawHub New workflow", () => {
     expect(step(publish, "Publish exact ClawHub bootstrap artifacts").run).toContain(
       "OPENCLAW_CLAWHUB_TARGET_SHA",
     );
+    expect(step(publish, "Publish exact ClawHub bootstrap artifacts").run).toContain(
+      "OPENCLAW_CLAWHUB_PACKAGE_FAMILY",
+    );
   });
 
   it("preserves configure-only repair and exact registry byte readback", () => {

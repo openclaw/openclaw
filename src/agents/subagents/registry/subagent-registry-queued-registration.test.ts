@@ -32,7 +32,7 @@ import { registerQueuedRegistrationClaimCases } from "./subagent-registry-queued
 import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
 import { registerQueuedUnknownKillAuthorityTest } from "./subagent-registry-queued-uncertain-kill.test-support.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
-import * as runManager from "./subagent-registry-run-manager.js";
+import * as runPause from "./subagent-registry-run-pause.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
 
@@ -282,9 +282,9 @@ it.each(["open", "restart", "suspend"] as const)(
     await withQueuedRegistrationFixture(async (f) => {
       await f.register();
       const release = createDeferred();
-      const preserve = runManager.preserveSubagentRunForRestart;
+      const preserve = runPause.preserveSubagentRunForRestart;
       const preservation = vi
-        .spyOn(runManager, "preserveSubagentRunForRestart")
+        .spyOn(runPause, "preserveSubagentRunForRestart")
         .mockImplementation((params) => f.track(release.promise.then(() => preserve(params))));
       let emit: ((event: AgentEventPayload) => void) | undefined;
       const complete = vi.fn(async () => {});

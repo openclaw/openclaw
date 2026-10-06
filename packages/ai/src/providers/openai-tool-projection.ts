@@ -283,3 +283,21 @@ export function reconcileOpenAICompletionsToolChoice(
 ): OpenAICompletionsSdkToolChoice | undefined {
   return reconcileToolChoice(choice, projection, false);
 }
+
+/** Re-expresses an object Chat Completions tool choice in the Responses wire shape. */
+export function toOpenAIResponsesToolChoice(
+  choice: Exclude<NonNullable<OpenAICompletionsToolChoice>, string>,
+): OpenAIResponsesToolChoice {
+  if (choice.type === "function") {
+    return { type: "function", name: choice.function.name };
+  }
+  return {
+    type: "allowed_tools",
+    mode: choice.allowed_tools.mode,
+    tools: choice.allowed_tools.tools.map((tool) =>
+      tool.type === "function" && isRecord(tool.function) && typeof tool.function.name === "string"
+        ? { type: "function", name: tool.function.name }
+        : tool,
+    ),
+  };
+}

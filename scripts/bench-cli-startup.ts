@@ -71,26 +71,7 @@ type SampleMemory = {
   error?: string;
 };
 
-type CaseRuns = {
-  warmupSamples: Sample[];
-  samples: Sample[];
-};
-
-type SummaryStats = {
-  avg: number;
-  p50: number;
-  p95: number;
-  min: number;
-  max: number;
-};
-
-type CaseSummary = {
-  sampleCount: number;
-  durationMs: SummaryStats;
-  firstOutputMs: SummaryStats | null;
-  maxRssMb: SummaryStats | null;
-  exitSummary: string;
-};
+type CaseSummary = ReturnType<typeof summarizeSamples>;
 
 type SuiteResult = {
   entry: string;
@@ -124,18 +105,6 @@ type CaseDelta = {
   durationAvgDeltaPct: number;
   maxRssAvgDeltaMb: number | null;
   maxRssAvgDeltaPct: number | null;
-};
-
-type BenchmarkComparison = {
-  baseline: string;
-  candidate: string;
-  deltas: CaseDelta[];
-};
-
-type BenchmarkComparisonResult = {
-  baseline: SuiteResult;
-  candidate: SuiteResult;
-  comparison: BenchmarkComparison;
 };
 
 type CliOptions = {
@@ -567,7 +536,7 @@ function resolveCases(options: { presets: string[]; caseIds: string[] }): Comman
   );
 }
 
-function summarizeNumbers(values: number[]): SummaryStats {
+function summarizeNumbers(values: number[]) {
   const sorted = values.toSorted((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   const total = values.reduce((sum, value) => sum + value, 0);
@@ -587,7 +556,7 @@ function summarizeNumbers(values: number[]): SummaryStats {
   };
 }
 
-function summarizeSamples(samples: Sample[]): CaseSummary {
+function summarizeSamples(samples: Sample[]) {
   const durations = summarizeNumbers(samples.map((sample) => sample.ms));
   const firstOutputValues = samples
     .map((sample) => sample.firstOutputMs)
@@ -819,20 +788,8 @@ function memoryInvocationEntries(entry: string): string[] {
   return entries;
 }
 
-function buildCpuOrHeapFlags(options: { cpuProfDir?: string; heapProfDir?: string }): string[] {
-  const flags: string[] = [];
-  if (options.cpuProfDir) {
-    flags.push("--cpu-prof", "--cpu-prof-dir", options.cpuProfDir);
-  }
-  if (options.heapProfDir) {
-    flags.push("--heap-prof", "--heap-prof-dir", options.heapProfDir);
-  }
-  return flags;
-}
-
-function appendLimited(current: string, chunk: Buffer | string, maxLength: number): string {
-  const next = current + String(chunk);
-  return next.length > maxLength ? next.slice(next.length - maxLength) : next;
+function appendLimited(current: string, chunk: Buffer | string): string {
+  return (current + String(chunk)).slice(-32 * 1024 * 1024);
 }
 
 async function runSample(params: {
@@ -874,10 +831,8 @@ async function runSample(params: {
       : []),
     "--import",
     pathToFileURL(rssHookPath).href,
-    ...buildCpuOrHeapFlags({
-      cpuProfDir: params.cpuProfDir,
-      heapProfDir: params.heapProfDir,
-    }),
+    ...(params.cpuProfDir ? ["--cpu-prof", "--cpu-prof-dir", params.cpuProfDir] : []),
+    ...(params.heapProfDir ? ["--heap-prof", "--heap-prof-dir", params.heapProfDir] : []),
     params.entry,
     ...params.commandCase.args,
   ];
@@ -890,7 +845,6 @@ async function runSample(params: {
   let timedOut = false;
   let forceKillAt: number | null = null;
   let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
-  const maxOutputLength = 32 * 1024 * 1024;
   const memoryDirectory = params.runtimeRss
     ? mkdtempSync(path.join(path.dirname(params.rssHookPath), "sample-"))
     : undefined;
@@ -987,19 +941,15 @@ async function runSample(params: {
 
       proc.stdout?.on("data", (chunk) => {
         markFirstOutput();
-        stdout = appendLimited(stdout, chunk, maxOutputLength);
+        stdout = appendLimited(stdout, chunk);
       });
       proc.stderr?.on("data", (chunk) => {
         markFirstOutput();
-        stderr = appendLimited(stderr, chunk, maxOutputLength);
+        stderr = appendLimited(stderr, chunk);
       });
       proc.once("error", (error) => {
         clearTimeout(timeout);
-        stderr = appendLimited(
-          stderr,
-          error instanceof Error ? error.message : String(error),
-          maxOutputLength,
-        );
+        stderr = appendLimited(stderr, error instanceof Error ? error.message : String(error));
         finish({
           exitCode: null,
           signal: null,
@@ -1099,7 +1049,7 @@ async function runCase(params: {
   cpuProfDir?: string;
   heapProfDir?: string;
   rssHookPath: string;
-}): Promise<CaseRuns> {
+}) {
   const warmupSamples: Sample[] = [];
   const samples: Sample[] = [];
   const totalRuns = params.warmup + params.runs;
@@ -1359,23 +1309,6 @@ function writeJsonOutput(filePath: string, value: unknown): void {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function readBenchmarkComparison(
-  baselinePath: string,
-  candidatePath: string,
-): BenchmarkComparisonResult {
-  const baseline = readBenchmarkReport(baselinePath);
-  const candidate = readBenchmarkReport(candidatePath);
-  return {
-    baseline: baseline.primary,
-    candidate: candidate.primary,
-    comparison: {
-      baseline: baselinePath,
-      candidate: candidatePath,
-      deltas: buildCaseDeltas(baseline.primary, candidate.primary),
-    },
-  };
-}
-
 async function main(): Promise<void> {
   const flags = validateCliArgs();
   if (flags.has("--help")) {
@@ -1397,10 +1330,13 @@ async function main(): Promise<void> {
     if (!options.compareBaseline || !options.compareCandidate) {
       throw new Error("--compare-baseline and --compare-candidate must be provided together");
     }
-    const { baseline, candidate, comparison } = readBenchmarkComparison(
-      options.compareBaseline,
-      options.compareCandidate,
-    );
+    const baseline = readBenchmarkReport(options.compareBaseline).primary;
+    const candidate = readBenchmarkReport(options.compareCandidate).primary;
+    const comparison = {
+      baseline: options.compareBaseline,
+      candidate: options.compareCandidate,
+      deltas: buildCaseDeltas(baseline, candidate),
+    };
     if (options.output) {
       writeJsonOutput(options.output, comparison);
     }

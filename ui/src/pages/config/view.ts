@@ -79,7 +79,6 @@ export function renderConfig(props: ConfigProps) {
   const displayFormMode = showModeToggle && rawAvailable ? props.formMode : "form";
   const formMode = rawDraftPending ? "raw" : displayFormMode;
   const requestUpdate = props.onViewStateChange;
-  // Scroll helper: target-based (nav clicks) with global fallback (form/raw toggle)
   const resetContentScroll = (target: EventTarget | null) => {
     queueMicrotask(() => {
       // Flat layout: the settings shell owns the scroll viewport; the sibling

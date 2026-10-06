@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-accessor.entry.js";
@@ -164,7 +165,12 @@ it.each([
             );
           },
         });
-        await result.authorization!.withCurrent!(() => result.authorization!.assertCurrent());
+        await result.authorization!.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
+          expect(facts.entry).toBeUndefined();
+          expect(facts.members).toEqual([]);
+          assertCurrent();
+          result.authorization!.assertCurrent();
+        });
         expect(effect).toHaveBeenCalledOnce();
         expect(host.queries).toEqual([]);
       } finally {
@@ -254,83 +260,113 @@ it("does not replay an authorization consumer after its own effect changes the r
         replaceSessionEntrySync(scope, { ...entry, updatedAt: effect.mock.calls.length + 1 });
         result.authorization!.assertCurrent();
       }),
-    ).rejects.toThrow("Session sharing facts changed during read");
+    ).rejects.toThrow(/changed during read/);
     expect(effect).toHaveBeenCalledOnce();
   });
 });
 
-it.each(["before-read", "before-consume"] as const)(
-  "rejects membership revoked %s without retaining an allow decision",
-  async (boundary) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = rolePolicyConfig();
-      const client = roleClient("view", "worker-member");
-      const scope = { agentId: "main", sessionKey: "agent:main:worker-sharing" };
-      replaceSessionEntrySync(scope, {
-        sessionId: "sharing-current",
-        updatedAt: 1,
-        visibility: "read-only",
-        createdActor: { type: "human", source: "profile", id: "another-profile" },
+it.each([
+  "worker-before-read",
+  "foreign-before-read",
+  "native-before-consume",
+  "owner-before-consume",
+] as const)("rejects %s authority revocation before disclosure", async (boundary) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = rolePolicyConfig();
+    const client = roleClient("view", "worker-member");
+    const scope = { agentId: "main", sessionKey: "agent:main:worker-sharing" };
+    replaceSessionEntrySync(scope, {
+      sessionId: "sharing-current",
+      updatedAt: 1,
+      visibility: "read-only",
+      createdActor: { type: "human", source: "profile", id: "another-profile" },
+    });
+    await addSessionMember(scope, {
+      identityId: client.authenticatedUserProfile!.profileId,
+      addedBy: "another-profile",
+    });
+    const database = openOpenClawAgentDatabase(scope);
+    const host = observeHostDataSql();
+    let authorization: SessionMutationAuthorization | undefined;
+    try {
+      const result = await resolveSessionMutationAuthorizationAsync({
+        client,
+        method: "chat.send",
+        requestParams: scope,
+        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
       });
-      await addSessionMember(scope, {
-        identityId: client.authenticatedUserProfile!.profileId,
-        addedBy: "another-profile",
-      });
-      const host = observeHostDataSql();
-      let authorization: SessionMutationAuthorization | undefined;
-      try {
-        const result = await resolveSessionMutationAuthorizationAsync({
-          client,
-          method: "chat.send",
-          requestParams: scope,
-          context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-        });
-        expect(result.error).toBeNull();
-        const currentAuthorization = result.authorization;
-        if (!currentAuthorization) {
-          throw new Error("expected session authorization");
-        }
-        authorization = currentAuthorization;
-        await currentAuthorization.withCurrent!(() => currentAuthorization.assertCurrent());
-        expect(host.calls.flatMap((call) => call.mock.calls)).toEqual([]);
-      } finally {
-        host.restore();
-      }
-      if (!authorization) {
+      expect(result.error).toBeNull();
+      const currentAuthorization = result.authorization;
+      if (!currentAuthorization) {
         throw new Error("expected session authorization");
       }
-      const revoke = () => removeSessionMember(scope, client.authenticatedUserProfile!.profileId);
-      const read = historyLane.pool.run.bind(historyLane.pool);
-      let revoked = false;
-      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-        const reply = await read(...args);
-        if (
-          boundary === "before-consume" &&
-          !revoked &&
-          reply.ok &&
-          typeof reply.value === "object" &&
-          reply.value !== null &&
-          "kind" in reply.value &&
-          reply.value.kind === "session-exact-entries"
-        ) {
-          revoked = true;
-          await revoke();
-        }
-        return reply;
+      authorization = currentAuthorization;
+      await currentAuthorization.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
+        expect(facts.entry?.sessionId).toBe("sharing-current");
+        expect(facts.members.map((member) => member.identityId)).toEqual([
+          client.authenticatedUserProfile!.profileId,
+        ]);
+        assertCurrent();
+        currentAuthorization.assertCurrent();
       });
-      const effect = vi.fn();
-      try {
-        if (boundary === "before-read") {
-          await revoke();
+      expect(host.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+    } finally {
+      host.restore();
+    }
+    if (!authorization) {
+      throw new Error("expected session authorization");
+    }
+    const read = historyLane.pool.run.bind(historyLane.pool);
+    let revoked = false;
+    let closing: Promise<void> | undefined;
+    const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      const reply = await read(...args);
+      if (
+        boundary.endsWith("before-consume") &&
+        !revoked &&
+        reply.ok &&
+        typeof reply.value === "object" &&
+        reply.value !== null &&
+        "kind" in reply.value &&
+        reply.value.kind === "session-exact-entries"
+      ) {
+        revoked = true;
+        if (boundary === "owner-before-consume") {
+          closing = closeOpenClawAgentDatabasesAsync();
+        } else {
+          // Raw SDK DML has no sessionChanges publication and cannot join the held writer FIFO.
+          database.db
+            .prepare("DELETE FROM session_members WHERE session_key = ? AND identity_id = ?")
+            .run(scope.sessionKey, client.authenticatedUserProfile!.profileId);
         }
-        await expect(authorization.withCurrent!(effect)).rejects.toThrow();
-        expect(effect).not.toHaveBeenCalled();
-      } finally {
-        spy.mockRestore();
       }
+      return reply;
     });
-  },
-);
+    const effect = vi.fn();
+    try {
+      if (boundary === "worker-before-read") {
+        await removeSessionMember(scope, client.authenticatedUserProfile!.profileId);
+      } else if (boundary === "foreign-before-read") {
+        const foreign = new DatabaseSync(database.path);
+        try {
+          foreign
+            .prepare("DELETE FROM session_members WHERE session_key = ? AND identity_id = ?")
+            .run(scope.sessionKey, client.authenticatedUserProfile!.profileId);
+        } finally {
+          foreign.close();
+        }
+      }
+      await expect(authorization.admittedInputAuthority!.withCurrent(effect)).rejects.toThrow();
+      expect(effect).not.toHaveBeenCalled();
+      if (boundary.endsWith("before-consume")) {
+        expect(revoked).toBe(true);
+      }
+    } finally {
+      spy.mockRestore();
+      await closing;
+    }
+  });
+});
 
 it.each(["membership", "owner", "routing", "policy", "unrelated-config"] as const)(
   "rechecks %s changes within the consuming frame",

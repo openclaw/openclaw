@@ -1,4 +1,3 @@
-// Loads startup context snippets injected into the first reply turn.
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -8,14 +7,6 @@ import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import { openRootFile, readFileDescriptorBounded } from "../../infra/boundary-file-read.js";
 
-const STARTUP_MEMORY_FILE_MAX_BYTES = 16_384;
-const STARTUP_MEMORY_FILE_MAX_CHARS = 1_200;
-const STARTUP_MEMORY_TOTAL_MAX_CHARS = 2_800;
-const STARTUP_MEMORY_DAILY_DAYS = 2;
-const STARTUP_MEMORY_FILE_MAX_BYTES_CAP = 64 * 1024;
-const STARTUP_MEMORY_FILE_MAX_CHARS_CAP = 10_000;
-const STARTUP_MEMORY_TOTAL_MAX_CHARS_CAP = 50_000;
-const STARTUP_MEMORY_DAILY_DAYS_CAP = 14;
 const STARTUP_MEMORY_MAX_SLUGGED_FILES_PER_DAY = 4;
 
 export function shouldApplyStartupContext(params: {
@@ -31,32 +22,6 @@ export function shouldApplyStartupContext(params: {
     return true;
   }
   return applyOn.includes(params.action);
-}
-
-function resolveStartupContextLimits(cfg?: OpenClawConfig) {
-  const startupContext = cfg?.agents?.defaults?.startupContext;
-  return {
-    dailyMemoryDays: resolveIntegerOption(
-      startupContext?.dailyMemoryDays,
-      STARTUP_MEMORY_DAILY_DAYS,
-      { min: 1, max: STARTUP_MEMORY_DAILY_DAYS_CAP },
-    ),
-    maxFileBytes: resolveIntegerOption(
-      startupContext?.maxFileBytes,
-      STARTUP_MEMORY_FILE_MAX_BYTES,
-      { min: 1, max: STARTUP_MEMORY_FILE_MAX_BYTES_CAP },
-    ),
-    maxFileChars: resolveIntegerOption(
-      startupContext?.maxFileChars,
-      STARTUP_MEMORY_FILE_MAX_CHARS,
-      { min: 1, max: STARTUP_MEMORY_FILE_MAX_CHARS_CAP },
-    ),
-    maxTotalChars: resolveIntegerOption(
-      startupContext?.maxTotalChars,
-      STARTUP_MEMORY_TOTAL_MAX_CHARS,
-      { min: 1, max: STARTUP_MEMORY_TOTAL_MAX_CHARS_CAP },
-    ),
-  };
 }
 
 function shiftDateStampByCalendarDays(stamp: string, offsetDays: number): string {
@@ -235,7 +200,22 @@ export async function buildSessionStartupContextPrelude(params: {
 }): Promise<string | null> {
   const nowMs = params.nowMs ?? Date.now();
   const timezone = resolveUserTimezone(params.cfg?.agents?.defaults?.userTimezone);
-  const limits = resolveStartupContextLimits(params.cfg);
+  const startupContext = params.cfg?.agents?.defaults?.startupContext;
+  const limits = {
+    dailyMemoryDays: resolveIntegerOption(startupContext?.dailyMemoryDays, 2, { min: 1, max: 14 }),
+    maxFileBytes: resolveIntegerOption(startupContext?.maxFileBytes, 16_384, {
+      min: 1,
+      max: 64 * 1024,
+    }),
+    maxFileChars: resolveIntegerOption(startupContext?.maxFileChars, 1_200, {
+      min: 1,
+      max: 10_000,
+    }),
+    maxTotalChars: resolveIntegerOption(startupContext?.maxTotalChars, 2_800, {
+      min: 1,
+      max: 50_000,
+    }),
+  };
   const stamps = buildStartupMemoryDateStamps({
     nowMs,
     timezone,

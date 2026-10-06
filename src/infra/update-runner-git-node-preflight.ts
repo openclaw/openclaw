@@ -12,16 +12,6 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 
-async function readCandidateNodeEngine(root: string): Promise<string | null> {
-  const manifest = asNullableRecord(
-    await tryReadJson<unknown>(path.join(root, "package.json"), {
-      maxBytes: MAX_PACKAGE_JSON_BYTES,
-    }),
-  );
-  const engines = asNullableRecord(manifest?.engines);
-  return normalizeNullableString(engines?.node);
-}
-
 async function resolveCandidateNode(env: NodeJS.ProcessEnv, engine: string | null) {
   let firstAvailable: Awaited<ReturnType<typeof resolveSystemNodeInfo>> = null;
   const directories = (resolveEnvironmentValue(env, "PATH") ?? "")
@@ -58,7 +48,12 @@ export async function prepareGitCandidateNodeRuntime(
   mode: "package-tooling" | "current-runtime" = "package-tooling",
 ): Promise<{ env: NodeJS.ProcessEnv; step?: never } | { step: UpdateStepResult; env?: never }> {
   const startedAt = Date.now();
-  const engine = await readCandidateNodeEngine(root);
+  const manifest = asNullableRecord(
+    await tryReadJson<unknown>(path.join(root, "package.json"), {
+      maxBytes: MAX_PACKAGE_JSON_BYTES,
+    }),
+  );
+  const engine = normalizeNullableString(asNullableRecord(manifest?.engines)?.node);
   let currentVersion = process.versions.node;
   let currentPath = process.execPath;
   let capabilityError = process.versions.bun
@@ -127,7 +122,7 @@ export async function prepareGitCandidateNodeRuntime(
   });
   let systemDiagnostic: string;
   if (systemNode?.status === "probe-failed") {
-    systemDiagnostic = `System Node compatibility remains unknown because its probe failed: ${systemNode.error.message}`;
+    systemDiagnostic = `System Node compatibility remains unknown because its check failed: ${systemNode.error.message}`;
   } else if (
     systemNode?.status === "supported" &&
     nodeVersionSatisfiesEngine(systemNode.version, engine) !== false

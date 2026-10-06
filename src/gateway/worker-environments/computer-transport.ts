@@ -246,7 +246,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
         ),
       );
       if (input.operation === "capabilities") {
-        throw new Error("Session computer cannot request another capability probe");
+        throw new Error("Session computer cannot request another capability check");
       }
       return input;
     };

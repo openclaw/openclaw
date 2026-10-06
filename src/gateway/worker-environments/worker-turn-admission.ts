@@ -8,8 +8,9 @@ import { withSessionPlacementForcedTerminalSettlement } from "../../agents/sessi
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { createAbortError } from "../../infra/abort-signal.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
@@ -22,6 +23,7 @@ import type {
 import { matchesWorkerPlacementTarget } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import type { WorkerRuntimeRefreshInFlight } from "./provider-runtime-refresh.js";
+import { captureWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 import {
   projectWorkspaceResultConflict,
   type WorkerWorkspaceResultConflict,
@@ -96,27 +98,34 @@ export async function waitForInitialWorkerPlacement(params: {
     storePath: params.turn.sessionTarget?.storePath ?? resolveSessionStorePathForScope(identity),
   };
   const original = loadSessionEntryReadOnly(target);
-  const assertSessionCurrent = () => {
-    params.turn.abortSignal?.throwIfAborted();
-    params.assertRunCurrent?.();
-    const current = loadSessionEntryReadOnly(target);
-    if (
-      !original ||
-      !current ||
-      current.sessionId !== identity.sessionId ||
-      current.archivedAt !== undefined ||
-      current.lifecycleRevision !== original.lifecycleRevision ||
-      current.activeWriterRunId !== original.activeWriterRunId
-    ) {
-      throw createAbortError("Session changed while waiting for worker setup");
-    }
+  const refuseSession = (): never => {
+    throw createAbortError("Session changed while waiting for worker setup");
   };
+  const source = original
+    ? captureWorkerTurnTranscriptSource(target, {
+        fields: ["sessionId", "archivedAt", "lifecycleRevision", "activeWriterRunId"],
+        expected: {
+          sessionId: identity.sessionId,
+          archivedAt: undefined,
+          lifecycleRevision: original.lifecycleRevision,
+          activeWriterRunId: original.activeWriterRunId,
+        },
+        refuse: refuseSession,
+      })
+    : refuseSession;
+  const assertSessionCurrent = composeSessionSourceAssertion(
+    [params.assertRunCurrent, source],
+    (assertSources) => {
+      params.turn.abortSignal?.throwIfAborted();
+      assertSources();
+    },
+  );
   assertSessionCurrent();
   const completed = await params.wait(params.placement, params.turn.abortSignal);
   // Setup completion is a notification, not authority: read the durable owner again.
   assertSessionCurrent();
-  const assertCurrent = () => {
-    assertSessionCurrent();
+  const assertCurrent = composeSessionSourceAssertion([assertSessionCurrent], (assertSession) => {
+    assertSession();
     const current = params.placements.get(identity.sessionId);
     if (
       !current ||
@@ -127,7 +136,7 @@ export async function waitForInitialWorkerPlacement(params: {
     ) {
       throw createAbortError("Worker placement changed while waiting for setup");
     }
-  };
+  });
   assertCurrent();
   return {
     placement: requireActivePlacement(params.placements.get(identity.sessionId)!),
@@ -186,20 +195,7 @@ export async function waitForTurnOperation<T>(params: {
     signal.reason instanceof Error
       ? signal.reason
       : new Error("Cloud worker operation aborted", { cause: signal.reason });
-  if (signal.aborted) {
-    throw abortError();
-  }
-  // Never start for a cancelled caller; always observe a started operation.
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(abortError());
-    signal.addEventListener("abort", onAbort, { once: true });
-    params
-      .start()
-      .then(resolve, reject)
-      .finally(() => {
-        signal.removeEventListener("abort", onAbort);
-      });
-  });
+  return await racePromiseWithAbortSignal(params.start, signal, abortError);
 }
 
 function resolvePlacementIdentityField(

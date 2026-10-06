@@ -499,7 +499,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       threadId: thread.threadId,
       timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
       assertCurrent,
-      withCurrent: connection.withCurrent,
+      withCurrent: cleanupAuthority.withCurrent,
     });
     if (!released) {
       await closeCodexStartupClientBestEffort(client);

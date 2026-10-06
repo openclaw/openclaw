@@ -58,6 +58,7 @@ numeric X user ID to `allowFrom`:
       dmPolicy: "disabled",
       events: { mode: "auto", pollSeconds: 60 },
       threadContext: { maxPosts: 50 },
+      costLimits: { dailyUsd: 100, monthlyUsd: 1000, cycleStartDay: 1 },
     },
   },
   bindings: [{ agentId: "main", match: { channel: "x" } }],
@@ -78,6 +79,38 @@ For multiple bots, put account-specific values under
 `channels.x.accounts.<accountId>`. Root fields are shared defaults; the default
 account ID is `default`.
 
+## Public work sessions
+
+Set `channels.x.accounts.<accountId>.autoPublishWorkSessions: true` (or the
+shared root default `channels.x.autoPublishWorkSessions`) to publish fresh,
+isolated visible work sessions spawned directly by admitted maintainer mentions.
+Guest mentions remain limited to hidden helpers and cannot publish work sessions.
+This is **off by default**. It exposes that child's conversation to anonymous readers
+at the same canonical `/chat` link; it does not change Team collaboration rights.
+Only enable it for an agent whose work is intended to be public.
+
+Publication requires a configured **app-only** `bearerToken`. Before admission,
+the plugin looks up every post included in the supplied thread context using
+application-only authentication and requires explicit `protected: false`
+author metadata. Missing, edited, protected, withheld, or unavailable posts and
+failed lookups deny automatic publication. A permalink or successful
+user-context lookup is not proof of a public audience. Verification reads share
+the account's X API budget; insufficient budget denies publication without
+bypassing the cost limits.
+
+The permission belongs only to that incoming invocation: it is not stored on
+the X conversation, inherited by grandchildren, or accepted in model-authored
+spawn arguments. Forks, private/draft sessions, incognito sessions, and existing
+sessions cannot be automatically published. Changing the account configuration
+or allowlist retires in-flight publication authority. The creation owner commits
+the public grant with the child before its first turn, and the spawn receipt
+reports `publicRead` only for the committed grant. Links without that receipt
+are labeled as requiring sign-in. This lane requires the live in-process Gateway;
+it does not downgrade to a transport that loses the invocation's authority.
+
+Manual publication remains governed by the existing creator/administrator
+sharing controls. No X identity is promoted to a Team profile or administrator.
+
 ## Manage the allowlist
 
 Open **X replies** in the Control UI as an administrator. The page shows the
@@ -86,6 +119,10 @@ Add a username to resolve it to a stable numeric X user ID. Stored entries retai
 the resolved username, display name, adding operator, and timestamp. Remove a
 stored entry from the page; config entries are read-only and must be removed
 from config.
+
+The page also shows this account's estimated X API spend for today and the
+current billing cycle against its limits. Select **Refresh** to update the
+read-only totals. The same spend snapshot is included in `x.allowlist.list`.
 
 A locally linked installation uses the [Custom plugin UI setting](/plugins/feature-plugins#enable-custom-plugin-ui).
 Enable **Settings → Labs → Custom plugin UI**, then use the Control UI served by
@@ -119,12 +156,23 @@ For an explicitly configured account, the switch writes that account's override;
 otherwise it writes `channels.x.guests.enabled`. Account overrides inherit the
 other guest settings from the channel root.
 
-Guests receive only the core `read` and `ls` tools, further restricted by the
-agent's normal policy. They cannot edit files, run commands, browse or fetch the
-web, use memory, send messages, inspect other sessions, or create work sessions.
-Subagents, `sessions_spawn`, and `sessions_yield` are currently excluded. The
-optional `guests.tools.allow` can narrow access to `read`, `ls`, or neither;
-`guests.tools.deny` takes precedence. It cannot add stronger tools.
+Guests receive the core `read`, `ls`, `sessions_spawn`, `sessions_yield`, and
+`subagents` tools, further restricted by the agent's normal policy. They can
+start hidden helpers of the same agent. Helpers inherit the guest's restricted
+tools and repository root; they cannot become visible work sessions or target
+another agent. `sessions_yield` waits for helper completion, and `subagents`
+lists, waits for, or cancels helpers.
+
+Guests cannot edit files, run commands, browse or fetch the web, use memory,
+send messages, or inspect unrelated sessions. The optional `guests.tools.allow`
+can narrow the five default tools; an empty array disables all tools.
+`guests.tools.deny` takes precedence. Neither setting can add stronger tools.
+
+Hidden helpers require a host that advertises enforcement of these restrictions.
+Older hosts keep the `read` and `ls` defaults, even when they report the same
+OpenClaw version. The X replies settings page shows upgrade guidance when helper
+support is missing. Explicitly selecting only helper tools on an older host
+disables all guest tools; it does not restore the default read tools.
 
 Each guest mention gets a separate channel session and the quoted X thread
 context. It does not reuse a maintainer's conversation history, permission mode,
@@ -157,6 +205,21 @@ The effective filesystem setting is
 when that setting is absent or false, skills are enabled, or sandbox mode is
 active. Channel status reports the required correction as
 `guestModeBlockedReason`; maintainer mentions continue normally.
+
+Guest mode also requires a queue mode that cannot steer or interrupt an active
+turn. Set the channel override before enabling guests:
+
+```json5
+{
+  messages: { queue: { byChannel: { x: "followup" } } },
+}
+```
+
+`collect` is also supported. Without a channel override, `messages.queue.mode`
+must be `followup` or `collect`; the default `steer` and explicit `interrupt`
+block guest admission before thread expansion. The **X replies** page shows
+the required setting in its existing guest-readiness message. Changing the
+queue mode back to either unsafe value blocks subsequent guest mentions.
 
 Core owns path and symlink containment and rejects reads outside the session
 root with `Path escapes sandbox root`. Keep guest channel sessions in their
@@ -211,10 +274,22 @@ subscriptions require the user to grant `tweet.read`. The persistent
 by [X's Activity Stream API](https://docs.x.com/x-api/activity/activity-stream).
 
 Streaming reads `post.mention.create` events from X's `data.payload` envelope,
-checks that the post addresses the bot, and ignores other event types and blank
-keep-alives. It reconnects with backoff after a stalled or disconnected stream.
+checks that the post addresses the bot, and ignores blank keep-alives. Other
+event types do not create inbound turns; delivered `post.*` events still count
+toward the budget. It reconnects with backoff after a stalled or disconnected
+stream.
 Each connection runs a mentions backfill with the user token from the saved
-cursor; post IDs deduplicate stream and polling events.
+cursor, then repeats it every `events.pollSeconds × 4`
+(minimum 60 seconds, default 240 seconds) while streaming. This safety backfill
+recovers mentions missed by the stream. Only completed backfill pages advance
+the cursor, so newer stream events cannot hide older missed mentions. Post IDs
+deduplicate stream and polling events.
+
+After three consecutive unparseable mention events or malformed lines, the
+plugin logs one warning and shows it in the channel status `message`. Blank
+keep-alives and intentionally ignored event types do not count toward this
+warning. It includes the event type and top-level keys, without post content.
+The next parseable mention event clears the warning.
 
 In `auto` mode, any subscription setup failure switches to polling. In `stream`
 mode, subscription HTTP `403` switches to polling; other setup errors stop the
@@ -231,6 +306,9 @@ Unreadable error bodies still report the HTTP status. Network and token-refresh
 failures report their client error without provider response details.
 
 Polling defaults to 60 seconds; `events.pollSeconds` cannot be less than 15.
+Each request asks for 10 mentions, X's minimum page size, and follows pagination
+when a backlog remains. This keeps each request's reservation small while still
+catching up on all available mentions.
 Inbound posts are durably queued before the cursor advances. Completed event
 IDs are retained for up to 30 days with a limit of 2,000 completed entries per
 account, preventing duplicate turns after reconnects and restarts while those
@@ -245,14 +323,22 @@ conversation, and includes quoted posts. `threadContext.maxPosts` defaults to
 coverage is limited to seven days, and unavailable or deleted posts cannot be
 included.
 
+Conversation searches request between 10 and 100 posts, bounded by the remaining
+context allowance; X requires a minimum of 10. Pagination stops when the context
+limit is reached. If the budget cannot cover more context, the agent receives
+the mention and any context already fetched, marked "thread context truncated
+by budget."
+
 Replies are split into a self-reply chain with at most 280 weighted characters
 per post; each URL counts as 23 characters. The last chunk receives
 `replySignature`, whose default is `🤖 automated reply`. Set it to an
 empty string to disable the signature.
 
 When a maintainer turn starts a visible work session, its first session URL is appended
-to the reply unless the text already contains that URL. This is a public link
-in a public reply and uses X's URL-containing reply price.
+to the reply unless the text already contains that URL. The canonical link is
+publicly readable only when the creation receipt confirms publication; otherwise
+it is labeled "Work session (sign-in required)." Both use X's URL-containing
+reply price.
 
 For direct replies through the message tool or CLI, target the post ID with an
 `x:` prefix or its full X status URL:
@@ -264,23 +350,84 @@ openclaw message send --channel x --target x:1234567890123456789 --message "Repl
 The target must satisfy X's reply eligibility: its author mentioned or quoted
 the app account. Sending media or creating an original post is unsupported.
 
-## Costs
+<a id="costs" />
 
-| Operation              | X API price                                        |
-| ---------------------- | -------------------------------------------------- |
-| Post read              | $0.005 per returned post, deduplicated per UTC day |
-| Reply without a URL    | $0.015 per reply post                              |
-| Reply containing a URL | $0.20 per reply post                               |
-| Username lookup        | $0.01 per lookup                                   |
-| Empty mentions poll    | No post-read charge                                |
+## Costs and limits
+
+The plugin defaults to **$100 per UTC day** and **$1,000 per billing cycle** for
+each account. These limits cover X API calls only; model tokens are separate.
+Set `costLimits.cycleStartDay` to the UTC day of the month on which your X
+billing cycle starts, from 1 to 28. For example, `20` makes a cycle run from the
+20th at 00:00 UTC until the next month's 20th. Account entries inherit these
+fields from `channels.x` and can override them individually.
+
+Both limits accept nonnegative dollar amounts. `0` blocks paid requests. There
+is no unlimited setting; use large limits if you want a higher ceiling. X's own
+per-cycle cap still applies and can reject requests independently.
+
+The estimates use X's [published pay-per-use rates](https://docs.x.com/x-api/getting-started/pricing),
+verified October 4, 2026:
+
+| Operation                                                   | Estimated X API price                              |
+| ----------------------------------------------------------- | -------------------------------------------------- |
+| Post read                                                   | $0.005 per returned post, including expanded posts |
+| User read                                                   | $0.01 per returned user, including expanded users  |
+| Activity `post.*` event                                     | $0.005 per delivered event                         |
+| Reply without a URL                                         | $0.015 per reply post                              |
+| Reply containing a URL                                      | $0.20 per reply post                               |
+| Empty resource response                                     | $0                                                 |
+| Subscription management, token refresh, resource-free lists | $0                                                 |
 
 Thread expansion reads additional posts. A long answer creates multiple billed
 reply posts. Adding a handle in the allowlist UI performs a paid username
 lookup. These are X API costs, separate from the agent's model usage.
 
+Spend is stored in the plugin's worker-backed state as integer micro-dollars,
+with separate daily and billing-cycle buckets per account. The plugin reserves
+the worst-case cost before each paid request and settles against returned
+resources, releasing any unused reservation. Concurrent requests share the
+same account budget. A lost response, HTTP 5xx, or unparseable success retains
+the full reservation because dispatch may have succeeded; only proven
+non-dispatch or an explicit HTTP 4xx rejection releases it without resources.
+Displayed spend includes pending reservations. A request spanning UTC midnight
+counts conservatively toward both days, but only once toward a shared billing
+cycle. Crossing the billing-cycle boundary counts toward both cycles.
+Interrupted requests retain their full reservation after a restart.
+
+Accounting deliberately ignores X's resource deduplication within a UTC day,
+so repeated reads count again. Whether X bills expanded users is not confirmed;
+the plugin includes them to avoid underestimating spend, including expansions
+returned with Activity events. All delivered
+`post.*` Activity events count, even if they do not produce an agent turn. The
+estimate can therefore exceed X's invoice.
+X's Activity and pricing pages disagree about whether `post.delete` is billed;
+the plugin conservatively counts it at the same rate as other post events.
+
+Activity streaming uses a fixed **$0.50 headroom**. If either remaining budget
+falls below it, the plugin closes the stream and uses gated mention polling
+until the affected budget resets. Events X already delivers before the stream
+closes are still charged and admitted; they can push recorded spend over a
+limit. The headroom reduces that risk, but it is not a strict bound on a burst
+already delivered by X. Polling requests continue only when their full
+reservation fits.
+
+When no paid poll fits, ingress pauses until reset without advancing its
+`since_id` cursor. Already fetched mentions are durably admitted, and their
+next-page token is saved beside the cursor so backfill can continue through
+older pages after reset or restart. If X rejects a saved token, the plugin
+restarts that backfill from `since_id`; the ingress queue deduplicates mentions
+already admitted. Channel status reports the current
+spend, limits, cycle start, and resume time, with a reason such as
+`X API daily budget of $100 reached; resumes at 2026-10-06T00:00Z`.
+The plugin logs once when a limit is reached and once when it resets. A reply
+that cannot be afforded is refused with a non-retryable error; a reply chain
+is charged per chunk.
+
 When an Activity event omits mention entities, the plugin looks up the post to
-verify that it targets this bot before queueing it. Events for another bot do
-not advance this account's cursor. If a mention entity provides only a username,
+verify that it targets this bot. If the budget cannot cover verification, the
+mention is durably queued and verified after reset before any agent turn.
+Unverified events and events for another bot do not advance this account's
+cursor. If a mention entity provides only a username,
 the plugin performs a $0.01 user lookup to verify the numeric recipient ID;
 configured usernames alone cannot authorize a reply.
 
@@ -288,30 +435,34 @@ configured usernames alone cannot authorize a reply.
 
 These fields work at `channels.x` and on individual account entries unless noted.
 
-| Field                               | Default              | Purpose                                                                 |
-| ----------------------------------- | -------------------- | ----------------------------------------------------------------------- |
-| `enabled`                           | `true`               | Enables the channel or account.                                         |
-| `name`                              | Unset                | Optional account display name.                                          |
-| `userId`                            | Required             | Numeric user ID of the bot account.                                     |
-| `username`                          | Required             | Bot username without `@`.                                               |
-| `clientId`                          | Required             | OAuth2 confidential application client ID.                              |
-| `clientSecret`                      | Required             | Application secret; supports SecretRef.                                 |
-| `refreshToken`                      | Required             | Bot's user-context OAuth2 refresh token; supports SecretRef.            |
-| `bearerToken`                       | Unset                | App-only Activity API bearer token; supports SecretRef.                 |
-| `events.mode`                       | `auto`               | `auto`, `stream`, or `poll`.                                            |
-| `events.pollSeconds`                | `60`                 | Mentions polling interval, minimum 15 seconds.                          |
-| `allowFrom`                         | `[]`                 | Numeric author IDs, optionally prefixed with `x:`.                      |
-| `groupPolicy`                       | `allowlist`          | `allowlist`, `open`, or `disabled`.                                     |
-| `dmPolicy`                          | `disabled`           | Only `disabled` is accepted.                                            |
-| `threadContext.maxPosts`            | `50`                 | Maximum posts included in agent thread context, from 2 to 100.          |
-| `guests.enabled`                    | `false`              | Enables repository-only answers for non-allowlisted authors.            |
-| `guests.maxMentionsPerAuthorPerDay` | `5`                  | Per-author, per-account UTC-day limit, from 0 to 1000.                  |
-| `guests.threadContextMaxPosts`      | `10`                 | Guest thread context cap, from 2 to 100 posts.                          |
-| `guests.tools.allow`                | `["read", "ls"]`     | Narrows the read-only guest tools; an empty array disables all tools.   |
-| `guests.tools.deny`                 | `[]`                 | Further denies guest tools; deny wins.                                  |
-| `replySignature`                    | `🤖 automated reply` | Added to the last reply chunk; up to 140 characters, empty disables it. |
-| `accounts`                          | Unset                | Named account overrides; channel root only.                             |
-| `defaultAccount`                    | `default`            | Account selected when none is specified; channel root only.             |
+| Field                               | Default                 | Purpose                                                                           |
+| ----------------------------------- | ----------------------- | --------------------------------------------------------------------------------- |
+| `enabled`                           | `true`                  | Enables the channel or account.                                                   |
+| `name`                              | Unset                   | Optional account display name.                                                    |
+| `userId`                            | Required                | Numeric user ID of the bot account.                                               |
+| `username`                          | Required                | Bot username without `@`.                                                         |
+| `clientId`                          | Required                | OAuth2 confidential application client ID.                                        |
+| `clientSecret`                      | Required                | Application secret; supports SecretRef.                                           |
+| `refreshToken`                      | Required                | Bot's user-context OAuth2 refresh token; supports SecretRef.                      |
+| `bearerToken`                       | Unset                   | App-only bearer for Activity and public-context verification; supports SecretRef. |
+| `autoPublishWorkSessions`           | `false`                 | Publish fresh visible work sessions for verified-public maintainer mentions.      |
+| `events.mode`                       | `auto`                  | `auto`, `stream`, or `poll`.                                                      |
+| `events.pollSeconds`                | `60`                    | Mentions polling interval, minimum 15 seconds.                                    |
+| `allowFrom`                         | `[]`                    | Numeric author IDs, optionally prefixed with `x:`.                                |
+| `groupPolicy`                       | `allowlist`             | `allowlist`, `open`, or `disabled`.                                               |
+| `dmPolicy`                          | `disabled`              | Only `disabled` is accepted.                                                      |
+| `threadContext.maxPosts`            | `50`                    | Maximum posts included in agent thread context, from 2 to 100.                    |
+| `guests.enabled`                    | `false`                 | Enables repository-only answers for non-allowlisted authors.                      |
+| `guests.maxMentionsPerAuthorPerDay` | `5`                     | Per-author, per-account UTC-day limit, from 0 to 1000.                            |
+| `guests.threadContextMaxPosts`      | `10`                    | Guest thread context cap, from 2 to 100 posts.                                    |
+| `guests.tools.allow`                | Host-supported defaults | Narrows the default guest tools; an empty array disables all tools.               |
+| `guests.tools.deny`                 | `[]`                    | Further denies guest tools; deny wins.                                            |
+| `costLimits.dailyUsd`               | `100`                   | Maximum estimated X API spend per UTC day; `0` blocks paid calls.                 |
+| `costLimits.monthlyUsd`             | `1000`                  | Maximum estimated X API spend per billing cycle; `0` blocks paid calls.           |
+| `costLimits.cycleStartDay`          | `1`                     | UTC billing-cycle start day of the month, from 1 to 28.                           |
+| `replySignature`                    | `🤖 automated reply`    | Added to the last reply chunk; up to 140 characters, empty disables it.           |
+| `accounts`                          | Unset                   | Named account overrides; channel root only.                                       |
+| `defaultAccount`                    | `default`               | Account selected when none is specified; channel root only.                       |
 
 ## Troubleshooting
 
@@ -325,6 +476,13 @@ HTTP status, and X error detail. Verify the app bearer and the bot's OAuth2
 grant, including `tweet.read`. Without an app bearer, `auto` and `stream` use
 polling. Check the reported event mode, stream connection/backoff, last event,
 and cursor.
+Streaming also switches to polling when less than $0.50 remains in either
+budget, and resumes after that budget resets.
+
+**Budget paused:** check `spend` in channel status or the **X replies** page.
+The status message gives the affected limit and reset time. Align
+`costLimits.cycleStartDay` with your X billing cycle and increase the applicable
+limit if needed. Changing limits does not erase recorded spend.
 
 **Token refresh fails:** check the client ID, client secret, refresh token, and
 granted OAuth2 scopes. Status reports refresh state without exposing secrets.

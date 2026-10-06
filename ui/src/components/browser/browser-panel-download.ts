@@ -55,11 +55,8 @@ export class BrowserPanelDownload {
     if (!url) {
       return null;
     }
-    try {
-      return ["http:", "https:"].includes(new URL(url).protocol) ? url : null;
-    } catch {
-      return null;
-    }
+    const protocol = URL.parse(url)?.protocol;
+    return protocol === "http:" || protocol === "https:" ? url : null;
   }
 
   get available(): boolean {

@@ -24,7 +24,6 @@ type ConversationLabelAttempt = {
   phase: LabelModelPhase;
 };
 
-/** Inputs for generating a short conversation label from the configured utility model. */
 export type ConversationLabelParams = {
   userMessage: string;
   prompt: string;

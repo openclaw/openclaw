@@ -140,7 +140,7 @@ describe("worker inference account service tiers", () => {
         baseUrl: model.baseUrl,
       };
       transport.requests.length = 0;
-      for (const echo of ["ultrafast", "default"]) {
+      for (const echo of ["priority", "priority", "ultrafast"]) {
         transport.echo = echo;
         await expect(
           runtime.executor(params(request(), vi.fn(), runtimeConfig)),
@@ -148,13 +148,16 @@ describe("worker inference account service tiers", () => {
           type: "done",
         });
         expect(transport.requests.at(-1)?.service_tier).toBe("ultrafast");
-        expect(accountCatalog.readServiceTiers(route)).toEqual(
-          echo === "default" ? ["priority"] : undefined,
+        expect(accountCatalog.readServiceTierObservation(route)).toEqual(
+          echo === "ultrafast" ? undefined : { requestedTier: "ultrafast", responseTier: echo },
         );
       }
       expect(runtime.prepareModel.mock.calls[0]?.[0].profileId).toBeUndefined();
       expect(
-        accountCatalog.readServiceTiers({ ...route, identityKey: "profile:openai:other" }),
+        accountCatalog.readServiceTierObservation({
+          ...route,
+          identityKey: "profile:openai:other",
+        }),
       ).toBeUndefined();
       for (const fastMode of [false, true]) {
         runtime.readPromptCacheContext.mockReturnValue({ boundaryCount: 0, fastMode });

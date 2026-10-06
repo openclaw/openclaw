@@ -179,6 +179,9 @@ export function renderSidebarRegion(params: {
   callbacks: SidebarRegionCallbacks;
   layout: SidebarLayout;
   narrow: boolean;
+  /** The layout given is a narrow pane's view of the saved one; see presentNarrowSidebarLayout. */
+  sideFocusLocked?: boolean;
+  sideFocusOrigin?: () => HTMLElement | null;
   panelDefinitions?: SidebarPanelDefinition[];
   header?: TemplateResult | typeof nothing;
   primary: TemplateResult;
@@ -237,6 +240,8 @@ export function renderSidebarRegion(params: {
             .panelDefinitions=${panelDefinitions}
             .callbacks=${params.callbacks}
             .narrow=${params.narrow}
+            .sideFocusLocked=${params.sideFocusLocked === true}
+            .sideFocusOrigin=${params.sideFocusOrigin}
             .availableWidth=${params.availableWidth}
           ></openclaw-chat-sidebar-region>`
     }

@@ -20,6 +20,7 @@ import {
   runOutsidePluginCache,
   withPluginCache,
 } from "../plugins/plugin-cache.js";
+import { hasPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -111,9 +112,9 @@ async function withPreflightPluginFixture(
 
 const readPluginPreflight = () =>
   readConfigPreflightSnapshot({
+    purpose: "doctor",
     allowCurrentPluginMetadata: true,
     includePluginMetadata: true,
-    preparePluginMetadataSnapshot: true,
     skipPluginValidation: false,
     observe: false,
   });
@@ -137,11 +138,18 @@ describe("startup plugin persistence", () => {
             timeoutMs: 0,
           });
           let replaced = false;
+          let admittedUnderPluginLease = false;
           try {
             const preflight = () =>
               runStartupConfigPreflight({
                 gateway: true,
                 observe: false,
+                validateStartupConfig: () => {
+                  if (replaced) {
+                    expect(hasPluginLifecycleLease()).toBe(true);
+                    admittedUnderPluginLease = true;
+                  }
+                },
                 beforeStatePreparation: async () => {
                   if (!replaced) {
                     // Commit after the initial read, before preflight acquires its lease.
@@ -168,6 +176,7 @@ describe("startup plugin persistence", () => {
             const result = await (independentWriter
               ? runOutsidePluginCache(() => withPluginCache(createPluginCache(), preflight))
               : preflight());
+            expect(admittedUnderPluginLease).toBe(true);
             expect(result.pluginMetadataSnapshot?.registrySource).toBe("persisted");
             expect(
               result.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
@@ -426,9 +435,9 @@ describe("startup plugin persistence", () => {
         await writeVersion("2.0.0");
         let producer: ReturnType<typeof getPluginCache> | undefined;
         const refreshed = await readConfigPreflightSnapshot({
+          purpose: "doctor",
           allowCurrentPluginMetadata: false,
           includePluginMetadata: true,
-          preparePluginMetadataSnapshot: true,
           skipPluginValidation: false,
           observe: false,
           measure: async (_name, operation) => {

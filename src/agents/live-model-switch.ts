@@ -23,9 +23,6 @@ export {
   type LiveSessionModelSelection,
 } from "./live-model-switch-error.js";
 
-const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_PROVIDER_ID = "openai";
-
 /**
  * Entry-snapshot variant of the selection resolver, so atomic patch callbacks
  * can evaluate the persisted selection against the exact row they may rewrite.
@@ -84,18 +81,14 @@ function isAlreadyAppliedOpenAICodexRuntimePromotion(
   // The embedded Codex runtime reports openai after applying a canonical
   // openai selection. Other runtime aliases remain real live-switch targets.
   return (
-    normalizeProviderId(current.provider) === OPENAI_CODEX_PROVIDER_ID &&
-    normalizeProviderId(next.provider) === OPENAI_PROVIDER_ID &&
+    normalizeProviderId(current.provider) === "openai" &&
+    normalizeProviderId(next.provider) === "openai" &&
     current.model === next.model
   );
 }
 
 function hasDifferentLiveSessionModelSelection(
-  current: {
-    provider: string;
-    model: string;
-    agentRuntimeOverride?: string;
-    authProfileId?: string;
+  current: Omit<LiveSessionModelSelection, "authProfileIdSource"> & {
     authProfileIdSource?: string;
   },
   next: LiveSessionModelSelection,
@@ -113,25 +106,9 @@ function hasDifferentLiveSessionModelSelection(
 }
 
 /**
- * Check whether a user-initiated live model switch is pending for the given
- * session.  Returns the persisted model selection when the session's
- * `liveModelSwitchPending` flag is `true` AND the persisted selection differs
- * from the currently running model; otherwise returns `undefined`.
- *
- * When the flag is set but the current model already matches the persisted
- * selection (e.g. the switch was applied as an override and the current
- * attempt is already using the new model), the flag is consumed (cleared)
- * eagerly to prevent it from persisting as stale state.
- *
- * **Deferral semantics:** The caller in `run.ts` only acts on the returned
- * selection when `canRestartForLiveSwitch` is `true`.  If the run cannot
- * restart (e.g. a tool call is in progress), the flag intentionally remains
- * set so the switch fires on the next clean retry opportunity — even if that
- * falls into a subsequent user turn.
- *
- * This replaces the previous approach that used an in-memory run-state map,
- * which could not distinguish between
- * user-initiated `/model` switches and system-initiated fallback rotations.
+ * Return a pending user selection and eagerly clear switches already applied.
+ * The runner consumes an unapplied switch only when canRestartForLiveSwitch
+ * permits it; otherwise the flag survives tool execution and later user turns.
  */
 export async function shouldSwitchToLiveModel(params: {
   cfg?: OpenClawConfig | undefined;
@@ -203,15 +180,9 @@ export async function shouldSwitchToLiveModel(params: {
 }
 
 /**
- * Post-run consolidation: once a completed run has actually executed the
- * persisted selection, the pending live-switch flag is spent. CLI harness runs
- * never pass through the embedded attempt-recovery clear, so without this the
- * flag survives forever and `/status` keeps reporting a switch that already
- * happened. Unlike `shouldSwitchToLiveModel`, runtime/auth-profile drift is
- * ignored here: the selected model demonstrably ran, so keeping the flag would
- * only re-arm mid-run restarts that have nothing left to apply. Compare and
- * clear happen inside one atomic patch so a concurrent `/model` that persists
- * a newer selection is never consumed by this run's result.
+ * Completed runs, including CLI harness runs, consume their applied switch
+ * regardless of runtime/auth drift. Compare and clear atomically so a concurrent
+ * /model request cannot lose its newer selection.
  */
 export async function consolidateLiveModelSwitchAfterRun(params: {
   cfg?: OpenClawConfig | undefined;
@@ -237,9 +208,6 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
     agentId: params.agentId,
   });
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  if (!storePath) {
-    return;
-  }
   await patchSessionEntryCore(
     { storePath, sessionKey },
     (entry) => {
@@ -289,9 +257,6 @@ export async function clearLiveModelSwitchPending(params: {
   const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
-  if (!storePath) {
-    return;
-  }
   await patchSessionEntryCore(
     { storePath, sessionKey },
     (entry) => {

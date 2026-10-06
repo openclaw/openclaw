@@ -58,14 +58,10 @@ export type VideoGenerationProviderConfiguredContext = {
 };
 
 /** Context passed when resolving model-specific video generation capabilities. */
-export type VideoGenerationModelCapabilitiesContext = {
-  provider: string;
-  model: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  timeoutMs?: number;
-};
+export type VideoGenerationModelCapabilitiesContext = Pick<
+  VideoGenerationRequest,
+  "provider" | "model" | "cfg" | "agentDir" | "authStore" | "timeoutMs"
+>;
 
 /** Normalized request object passed to a selected video generation provider. */
 export type VideoGenerationRequest = {

@@ -30,10 +30,13 @@ import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
   createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptors,
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
+import {
+  bindChatSendDiagnostics,
+  startChatSendDiagnostics,
+} from "./server-methods/chat-send-diagnostics.js";
 import {
   coreGatewayHandlers,
   gatewayRouterUploadPolicyError,
@@ -100,7 +103,7 @@ export function createRequestGatewayMethodRegistry(
   return createGatewayMethodRegistry(
     [
       ...createCoreGatewayMethodDescriptors(coreDescriptorHandlers),
-      ...(gatewayPluginRegistry ? createPluginGatewayMethodDescriptors(gatewayPluginRegistry) : []),
+      ...(gatewayPluginRegistry?.gatewayMethodDescriptors ?? []),
       ...createGatewayMethodDescriptorsFromHandlers({
         handlers: Object.fromEntries(auxHandlers),
         owner: { kind: "aux", area: "gateway-extra" },
@@ -275,6 +278,9 @@ export async function handleGatewayRequest(
   let respondCancelled = opts.respond;
   const dispatch = async (retainRoot?: () => void) => {
     const observationSignal = observation ? getAsyncWorkSignal() : undefined;
+    using chatSendDiagnostics =
+      req.method === "chat.send" ? startChatSendDiagnostics(context.logGateway) : undefined;
+    const chatSendPhase = chatSendDiagnostics?.scope("authority");
     using subscribeDiagnostics =
       req.method === "sessions.messages.subscribe"
         ? startSlowRequestDiagnostics<SessionSubscribePhase>(
@@ -446,6 +452,7 @@ export async function handleGatewayRequest(
       const invokeHandler = async () => {
         retainRoot?.();
         subscribeDiagnostics?.mark("handlerPreparation");
+        chatSendPhase?.mark("preparation");
         const preparedHandler = await prepareGatewayRequestHandler(handler, entry, opts);
         // Lazy preparation may yield across a hot config change. Keep the router fence
         // unless the canonical owner reconciles accepted input before new admission.
@@ -477,6 +484,7 @@ export async function handleGatewayRequest(
           profileBinding,
           authorization.sessionScope,
         );
+        bindChatSendDiagnostics(handlerOptions, chatSendDiagnostics);
         sessionMutationCommitGuard?.();
         assertOperatorCurrent();
         authorization.sessionAccessAuthority?.assertCurrent();
@@ -492,6 +500,7 @@ export async function handleGatewayRequest(
         const sharing = opts.acceptsSerializedJson
           ? methodRegistry.getReadSharing?.(req.method)
           : undefined;
+        chatSendPhase?.finish();
         return GatewayRpcDiagnostics.runHandler(
           () =>
             sharing

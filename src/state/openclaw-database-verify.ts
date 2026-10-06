@@ -8,8 +8,12 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const log = createSubsystemLogger("state/database-verify");
 type IntegrityCheck = OpenClawDatabaseVerifyTarget["check"];
+type IntegrityCheckRequest = {
+  check: IntegrityCheck;
+  proof?: { identity: string; complete: (assertCurrent: () => void) => Promise<boolean> };
+};
 type IntegrityCheckQueue = {
-  paths: Map<string, IntegrityCheck>;
+  paths: Map<string, IntegrityCheckRequest>;
   subscribers: Set<() => void>;
   active?: object;
 };
@@ -34,18 +38,25 @@ function wakeSubscribers(queue: IntegrityCheckQueue): void {
   }
 }
 
-function enqueueCheck(queue: IntegrityCheckQueue, pathname: string, check: IntegrityCheck): void {
-  queue.paths.set(pathname, queue.paths.get(pathname) === "full" ? "full" : check);
+function enqueueCheck(
+  queue: IntegrityCheckQueue,
+  pathname: string,
+  request: IntegrityCheckRequest,
+): void {
+  if (request.check === "full" || queue.paths.get(pathname)?.check !== "full") {
+    queue.paths.set(pathname, request);
+  }
 }
 
 /** Admitted opens queue work; only the listening Gateway starts the verifier. */
-export function requestOpenClawAgentDatabaseIntegrityCheck(options: {
-  path: string;
-  env: NodeJS.ProcessEnv;
-  check: IntegrityCheck;
-}): void {
+export function requestOpenClawAgentDatabaseIntegrityCheck(
+  options: IntegrityCheckRequest & {
+    path: string;
+    env: NodeJS.ProcessEnv;
+  },
+): void {
   const queue = integrityCheckQueue(options.env);
-  enqueueCheck(queue, path.resolve(options.path), options.check);
+  enqueueCheck(queue, path.resolve(options.path), { check: options.check, proof: options.proof });
   wakeSubscribers(queue);
 }
 
@@ -59,7 +70,7 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let activeWorker: ChildProcess | undefined;
   let activeRun: Promise<void> | undefined;
-  let claimedChecks: Array<[string, IntegrityCheck]> = [];
+  let claimedChecks = new Map<string, IntegrityCheckRequest>();
   let stopPromise: Promise<void> | undefined;
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -96,7 +107,7 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
     timer.unref?.();
   };
   const run = async () => {
-    const checks = [...queue.paths];
+    const checks = new Map(queue.paths);
     claimedChecks = checks;
     queue.paths.clear();
     try {
@@ -105,15 +116,28 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
       if (stopped) {
         return;
       }
-      const targets: OpenClawDatabaseVerifyTarget[] = checks.map(([pathname, check]) => ({
+      const targets: OpenClawDatabaseVerifyTarget[] = Array.from(checks, ([pathname, request]) => ({
         kind: "agent",
         label: "OpenClaw agent database",
         path: pathname,
-        check,
+        check: request.check,
+        ...(request.proof ? { identity: request.proof.identity } : {}),
       }));
       const results = await runDatabaseVerifyWorker(targets, workerLifetime);
       if (!stopped) {
-        await applyOpenClawDatabaseVerificationResults({ env, results, targets, workerLifetime });
+        await applyOpenClawDatabaseVerificationResults({
+          env,
+          results,
+          targets,
+          workerLifetime,
+          onVerified: async (pathname) => {
+            const request = checks.get(pathname);
+            if (request?.check === "full") {
+              return request.proof?.complete(workerLifetime.assertCurrent);
+            }
+            return undefined;
+          },
+        });
       }
     } catch (error) {
       if (!stopped) {
@@ -121,7 +145,7 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
       }
     } finally {
       activeWorker = undefined;
-      claimedChecks = [];
+      claimedChecks.clear();
     }
   };
 
@@ -141,7 +165,10 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
       } else {
         // Replay before yielding so a later final stop can still discard this work.
         for (const [pathname, check] of claimedChecks) {
-          enqueueCheck(queue, pathname, check);
+          // A newer full request carries its own writer's publication authority.
+          if (queue.paths.get(pathname)?.check !== "full") {
+            enqueueCheck(queue, pathname, check);
+          }
         }
         wakeSubscribers(queue);
       }

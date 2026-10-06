@@ -8,10 +8,7 @@ import type {
   ChatFastModeSelectState,
   ChatFastModeSelectValue,
 } from "../../../lib/chat/model-select-state.ts";
-import {
-  normalizeThinkingOptionValue,
-  type ChatThinkingSelectState,
-} from "../../../lib/chat/thinking.ts";
+import type { ChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 registerModelControlsEnglish();
@@ -40,7 +37,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
     return nothing;
   }
   const selection = params.thinking.selection;
-  const effortIsOff = normalizeThinkingOptionValue(selection.value) === "off";
+  const effortIsOff = selection.value === "off";
   const effortFraction =
     effortIsOff || selection.kind === "unanchored"
       ? 0
@@ -75,11 +72,16 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
       ? params.fastMode.label
       : t("chat.modelControls.fast");
   const triggerLabel = showReasoning ? reasoningValueText : t("chat.modelControls.speed");
-  const triggerTitle = showReasoning
-    ? params.fastMode.active
-      ? `${triggerLabel} · ${speedLabel}`
-      : triggerLabel
-    : `${triggerLabel}: ${params.fastMode.label}`;
+  const triggerTitle = [
+    showReasoning
+      ? params.fastMode.active
+        ? `${triggerLabel} · ${speedLabel}`
+        : triggerLabel
+      : `${triggerLabel}: ${params.fastMode.label}`,
+    params.fastMode.hint,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const commitThinking = (value: string) => {
     void params
       .onThinkingSelect(value, params.sessionKey)

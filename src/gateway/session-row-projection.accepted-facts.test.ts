@@ -25,12 +25,12 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
 import * as canonical from "../config/sessions/session-canonical-key.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -702,7 +702,13 @@ it.each([false, true])(
           expect(suffix.pendingDatabaseFacts).toBeUndefined();
           expect(ready(suffix)).toBe(false);
         }
-        const current = projection.describe(query)!;
+        const pending = withReadySessionRows(
+          projection,
+          () => [query],
+          (read) => read.describe(query)!,
+        );
+        await resume();
+        const current = await pending;
         expect(current.generation).toBe(suffix.generation);
         expect(current.pendingDatabaseFacts).toBeUndefined();
         expect(current.entry).toMatchObject({ updatedAt: entry.updatedAt, label });
@@ -711,9 +717,8 @@ it.each([false, true])(
           expect(isColdArchivedSessionRow(current)).toBe(false);
           expect(current.materialized.row.label).toBe(label);
         }
-        await resume();
         if (!archived) {
-          expect(reads).toHaveLength(1);
+          expect(reads).toHaveLength(2);
           expect(projection.snapshot(query).row?.label).toBe(label);
         }
         expect(projection.dirtyRowCount).toBe(0);

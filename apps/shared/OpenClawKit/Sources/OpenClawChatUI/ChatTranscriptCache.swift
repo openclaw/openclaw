@@ -39,7 +39,6 @@ private final class CanonicalMessageProofHub: @unchecked Sendable {
 /// databases. The facade owns no SQLite connection; every gateway store from
 /// one container shares exactly one GRDB queue per database file.
 public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
-    OpenClawChatCanonicalTranscriptMerging,
     OpenClawChatCommandOutbox
 {
     public static let maxCachedSessions = 50
@@ -1346,37 +1345,17 @@ extension OpenClawChatSQLiteTranscriptCache {
         scope: OpenClawChatOutboxScope? = nil) throws -> [OpenClawChatOutboxScope]
     {
         let cutoff = Date().timeIntervalSince1970 - 5 * 60
-        // if/else keeps these SQL literals out of the ternary shape the native
-        // i18n extractor treats as user-facing conditional text.
-        let sql: String
-        let arguments: StatementArguments
-        if let scope {
-            sql = """
-            SELECT session_key, agent_id FROM outbox_branch_scopes
-            WHERE gateway_id = ? AND session_key = ? AND agent_id = ? AND switch_pending_since <= ?
-            """
-            arguments = [gatewayID, scope.sessionKey, scope.agentID ?? "", cutoff]
-        } else {
-            sql = """
-            SELECT session_key, agent_id FROM outbox_branch_scopes
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+            UPDATE outbox_branch_scopes
+            SET switch_pending_since = NULL, needs_reconciliation = 1,
+                branch_state_revision = branch_state_revision + 1
             WHERE gateway_id = ? AND switch_pending_since <= ?
-            """
-            arguments = [gatewayID, cutoff]
-        }
-        let rows = try Row.fetchAll(db, sql: sql, arguments: arguments)
-        guard !rows.isEmpty else { return [] }
-        for row in rows {
-            let sessionKey: String = row["session_key"]
-            let agentID: String = row["agent_id"]
-            try db.execute(
-                sql: """
-                UPDATE outbox_branch_scopes
-                SET switch_pending_since = NULL, needs_reconciliation = 1,
-                    branch_state_revision = branch_state_revision + 1
-                WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
-                """,
-                arguments: [gatewayID, sessionKey, agentID])
-        }
+              AND (? IS NULL OR (session_key = ? AND agent_id = ?))
+            RETURNING session_key, agent_id
+            """,
+            arguments: [gatewayID, cutoff, scope?.sessionKey, scope?.sessionKey, scope?.agentID ?? ""])
         return rows.map { row in
             OpenClawChatOutboxScope(sessionKey: row["session_key"], agentID: row["agent_id"])
         }
@@ -1508,10 +1487,6 @@ extension OpenClawChatSQLiteTranscriptCache {
     private static func encodeJSON(_ value: some Encodable) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(value)
-        guard let result = String(data: data, encoding: .utf8) else {
-            throw CocoaError(.fileWriteInapplicableStringEncoding)
-        }
-        return result
+        return try String(bytes: encoder.encode(value), encoding: .utf8)!
     }
 }

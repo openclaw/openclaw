@@ -69,7 +69,7 @@ export async function resolveStartupInstallStatus(
     }
     const message = failure
       ? formatErrorMessage(failure)
-      : `Git update facts unavailable after two ${timeoutMs / 1000}s probes`;
+      : `Git update facts unavailable after two ${timeoutMs / 1000}s checks`;
     status = {
       ...(status ?? { root, installKind: "unknown", packageManager: "unknown" }),
       ...(status?.git ? { git: { ...status.git, error: message } } : {}),
@@ -117,20 +117,6 @@ export async function prepareStartupUpdateInstall(
 
 type GitScheduleStatus = NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>;
 
-function resolveGitInstalledAtMs(
-  git: NonNullable<UpdateCheckResult["git"]>,
-  installReceipt: VerifiedGitUpdateReceipt | null,
-  root: string | null,
-): number | undefined {
-  return installReceipt &&
-    root !== null &&
-    updateInstallRootsMatch(root, installReceipt.root) &&
-    git.sha &&
-    gitCommitPrefixesMatch(installReceipt.sha, git.sha)
-    ? installReceipt.installedAtMs
-    : undefined;
-}
-
 function resolveGitScheduleStatus(
   update: UpdateCheckResult,
   installReceipt: VerifiedGitUpdateReceipt | null,
@@ -143,7 +129,15 @@ function resolveGitScheduleStatus(
     return undefined;
   }
   const git = update.git;
-  const installedAtMs = git ? resolveGitInstalledAtMs(git, installReceipt, root) : undefined;
+  const installedAtMs =
+    git &&
+    installReceipt &&
+    root !== null &&
+    updateInstallRootsMatch(root, installReceipt.root) &&
+    git.sha &&
+    gitCommitPrefixesMatch(installReceipt.sha, git.sha)
+      ? installReceipt.installedAtMs
+      : undefined;
   const metadata = git
     ? {
         ...(git.sha ? { currentSha: git.sha } : {}),

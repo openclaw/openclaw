@@ -65,11 +65,11 @@ enum ExecShellWrapperParser {
         let preferredRaw = trimmedRaw.isEmpty ? nil : trimmedRaw
         let base0 = ExecCommandToken.basenameLower(token0)
         if base0 == "env" {
-            guard let unwrapped = ExecEnvInvocationUnwrapper.unwrap(command) else {
+            guard let unwrapped = ExecEnvInvocationUnwrapper.unwrapWithMetadata(command) else {
                 return .notWrapper
             }
             return self.extract(
-                command: unwrapped,
+                command: unwrapped.command,
                 rawCommand: preferredRaw,
                 failClosedOnStartupWrappers: failClosedOnStartupWrappers,
                 depth: depth + 1)

@@ -125,24 +125,15 @@ export type DeliveryFailureSettlement = {
   terminals?: readonly IndexedOutboundAuditTerminal[];
 } & ({ outcome: "unknown" } | { outcome: "failed"; rejectionError?: string });
 
-export type QueuedDelivery = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> & {
-  preparedBatch: PreparedOutboundBatch;
-  id: string;
-  enqueuedAt: number;
-  retryCount: number;
-  attemptCount: number;
-  availableAt?: number;
-  producerClaimId?: string;
-  lastAttemptAt?: number;
-  lastError?: string;
-  platformSendAttemptId?: string;
-  platformSendStartedAt?: number;
-  effectiveReplyToId?: string | null;
-  recoveryState?:
-    | "producer_claimed"
-    | "send_attempt_started"
-    | "unknown_after_send"
-    | "settlement_pending";
-  settlement?: DeliveryFailureSettlement;
-  retainOnFailure?: true;
-};
+export type QueuedDelivery = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> &
+  Omit<DeliveryQueueEntryState, "attemptCount" | "recoveryState" | "acknowledgedAt"> & {
+    preparedBatch: PreparedOutboundBatch;
+    attemptCount: number;
+    effectiveReplyToId?: string | null;
+    recoveryState?:
+      | "producer_claimed"
+      | "send_attempt_started"
+      | "unknown_after_send"
+      | "settlement_pending";
+    settlement?: DeliveryFailureSettlement;
+  };

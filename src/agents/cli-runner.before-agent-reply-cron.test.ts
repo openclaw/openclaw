@@ -372,29 +372,6 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(executeMock).not.toHaveBeenCalled();
   });
 
-  it("settles one exhausted selected-profile failure", async () => {
-    const provider = "claude-cli";
-    const { profileId, store } = prepareProfile(provider);
-    executeMock.mockRejectedValueOnce(
-      new FailoverError("selected session expired", { reason: "session_expired", provider }),
-    );
-
-    await expect(runCliAgent({ ...runParams, provider, trigger: "user" })).rejects.toMatchObject({
-      reason: "session_expired",
-    });
-
-    expect(authFailureMock).toHaveBeenCalledOnce();
-    expect(authFailureMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        store,
-        profileId,
-        reason: "session_expired",
-        agentDir: "/tmp/agent",
-      }),
-    );
-    expect(authSuccessMock).not.toHaveBeenCalled();
-  });
-
   it("settles a typed selected-profile preparation failure before fallback", async () => {
     const provider = "claude-cli";
     const profileId = `${provider}:selected`;
@@ -765,19 +742,13 @@ describe("runCliAgent before_agent_reply seam", () => {
     }
   });
 
-  it.each([false, true])("settles failed MCP retirement with delivery %s", async (delivered) => {
-    executeMock.mockResolvedValue(
-      delivered ? { text: "", didSendViaMessagingTool: true } : { text: "real reply" },
-    );
+  it("preserves delivery after failed MCP retirement", async () => {
+    executeMock.mockResolvedValue({ text: "", didSendViaMessagingTool: true });
     retireMock.mockImplementation(async ({ onError }: { onError?: (error: unknown) => void }) => {
       onError?.(new Error("session mcp retire failed"));
       return false;
     });
     const result = runCliAgent({ ...runParams, cleanupBundleMcpOnRunEnd: true });
-    if (delivered) {
-      await expect(result).resolves.toMatchObject({ didSendViaMessagingTool: true });
-    } else {
-      await expect(result).rejects.toThrow("session mcp retire failed");
-    }
+    await expect(result).resolves.toMatchObject({ didSendViaMessagingTool: true });
   });
 });

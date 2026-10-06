@@ -1,4 +1,4 @@
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { listAgentIds } from "../agents/agent-scope-config.js";
@@ -10,7 +10,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
-import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import type { SqliteSchemaIssue } from "../infra/sqlite-schema-contract.js";
 import { readSqliteWriterAppVersion as readWriterAppVersion } from "../infra/sqlite-schema-header.js";
@@ -37,6 +36,7 @@ import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-ag
 import { cleanupOpenClawStatePreflight } from "./openclaw-database-preflight-cleanup.js";
 import {
   collectAgentDatabasePreflightTargets,
+  inspectDatabaseCandidatePresence,
   recordAgentDatabaseRecoveryInspection,
 } from "./openclaw-database-preflight-targets.js";
 import {
@@ -62,6 +62,7 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
   openClawStateMigrationAssertions,
 } from "./openclaw-state-db-maintenance.js";
+import { getActiveOpenClawStateDatabaseReadSnapshot } from "./openclaw-state-db-readonly.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
 import {
@@ -330,34 +331,28 @@ export async function preflightOpenClawDatabaseSchemas(
   let closeStateSchemaReadAdmission: (() => void) | undefined;
   let stateSnapshot: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
   const stateInspectionErrors: unknown[] = [];
-  const inspectCandidatePresence = (
-    databasePath: string,
-  ): { status: "present" | "absent" } | { status: "indeterminate"; reason: string } => {
-    try {
-      statSync(databasePath);
-      return { status: "present" };
-    } catch (error) {
-      return hasNodeErrorCode(error, "ENOENT")
-        ? { status: "absent" }
-        : { status: "indeterminate", reason: formatErrorMessage(error) };
-    }
-  };
-  const statePresence = inspectCandidatePresence(statePath);
+  const statePresence = inspectDatabaseCandidatePresence(statePath);
   if (statePresence.status === "indeterminate") {
     result.indeterminate.push({ kind: "state", path: statePath, reason: statePresence.reason });
     return result;
   }
   try {
     if (statePresence.status === "present") {
-      // Native source opens stay in the copy worker, preserving this process's locks.
-      // Updates opt into online backup; other inspections retain artifact preservation.
-      stateSnapshot = await prepareSqliteReadOnlyLocation(realpathSync.native(statePath), {
-        preserveSourceArtifacts: options.preserveSourceArtifacts ?? true,
-        allowLiveOwner: options.preserveSourceArtifacts !== false,
-        signal: options.signal,
-      });
+      // Admission must inspect the same private generation as config recovery and discovery.
+      // Without an enclosing snapshot, the copy worker still owns native source opens.
+      let stateLocation = getActiveOpenClawStateDatabaseReadSnapshot({
+        env: options.env,
+      })?.location;
+      if (stateLocation === undefined) {
+        stateSnapshot = await prepareSqliteReadOnlyLocation(realpathSync.native(statePath), {
+          preserveSourceArtifacts: options.preserveSourceArtifacts ?? true,
+          allowLiveOwner: options.preserveSourceArtifacts !== false,
+          signal: options.signal,
+        });
+        stateLocation = stateSnapshot.location;
+      }
       options.signal?.throwIfAborted();
-      stateDatabase = openNodeSqliteDatabase(stateSnapshot.location, {
+      stateDatabase = openNodeSqliteDatabase(stateLocation, {
         readOnly: true,
       });
       closeStateSchemaReadAdmission = options.openStateSchemaReadAdmission?.(stateDatabase);
@@ -512,7 +507,7 @@ export async function preflightOpenClawDatabaseSchemas(
       }
       return false;
     })
-    .map((row) => Object.assign({}, row, { presence: inspectCandidatePresence(row.path) }))
+    .map((row) => Object.assign({}, row, { presence: inspectDatabaseCandidatePresence(row.path) }))
     .filter((row) => row.presence.status !== "absent");
   const stats = await preflightAgentDatabasesBounded(
     inspectionTargets,
@@ -660,9 +655,7 @@ export async function preflightOpenClawDatabaseSchemas(
           });
         }
         recordPreparedSchemaHeader?.(schemaInspection);
-        if (schemaInspection.integrityGateOutcome === "pending") {
-          return "defer";
-        }
+        return schemaInspection.preparationPending ? "defer" : undefined;
       } catch (error) {
         if (options.signal?.aborted) {
           throw error;

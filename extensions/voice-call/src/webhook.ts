@@ -27,7 +27,6 @@ import {
   sendHttpRequestRejection,
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
-import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 import {
   normalizeVoiceCallConfig,
   resolveVoiceCallEffectiveConfig,
@@ -46,6 +45,7 @@ import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { acceptRealtimeInboundRequest } from "./webhook/realtime-inbound-admission.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 import {
   StreamDisconnectGrace,
@@ -733,7 +733,15 @@ export class VoiceCallWebhookServer {
           const isInboundRealtimeRequest = !direction || direction === "inbound";
           if (
             isInboundRealtimeRequest &&
-            !this.shouldAcceptRealtimeInboundRequest(realtimeParams)
+            !(await acceptRealtimeInboundRequest({
+              request: ctx,
+              form: realtimeParams,
+              verifiedRequestKey: verification.verifiedRequestKey,
+              config: this.config,
+              manager: this.manager,
+              provider: this.provider,
+              processEvents: (events) => this.processParsedEvents(events),
+            }))
           ) {
             this.logger.info("Realtime inbound call rejected before stream setup");
             return buildTwilioResponse('<Reject reason="rejected" />');
@@ -910,7 +918,7 @@ export class VoiceCallWebhookServer {
       return null;
     }
 
-    if (ctx.query?.type === "status") {
+    if (ctx.query?.type === "status" || ctx.query?.type === "amd") {
       return null;
     }
 
@@ -922,21 +930,6 @@ export class VoiceCallWebhookServer {
     // Initial TwiML fetches without gathered input may enter realtime handling.
     // Replay checks run before this helper so retries cannot mint new stream tokens.
     return !params.get("SpeechResult") && !params.get("Digits") ? params : null;
-  }
-
-  private shouldAcceptRealtimeInboundRequest(params: URLSearchParams): boolean {
-    switch (this.config.inboundPolicy) {
-      case "open":
-        return true;
-      case "allowlist":
-      case "pairing":
-        return isAllowlistedCaller(
-          normalizePhoneNumber(params.get("From") ?? undefined),
-          this.config.allowFrom,
-        );
-      default:
-        return false;
-    }
   }
 
   private async processParsedEvents(events: NormalizedEvent[]): Promise<boolean> {

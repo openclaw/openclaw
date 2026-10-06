@@ -1,4 +1,4 @@
-import { constants, type Dirent } from "node:fs";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
@@ -256,9 +256,11 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
     }
   }
   const isStagedInput = createStagedInputPathMatcher(await fsRoot(input.checkoutPath));
+  let untracked = 0;
   const otherNested = await inspectOtherPaths(input.checkoutPath, {
     unstattedIndexPaths: unstattedIndexPaths(index),
     untracked: async (entry) => {
+      untracked++;
       add(entry);
     },
     ignored: async (entry) => {
@@ -271,6 +273,10 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
   if (otherNested || (await containsGitMarker(input.checkoutPath, paths.values()))) {
     throw new Error("nested git repositories cannot be snapshotted losslessly");
   }
+  await requestGitWorkerEffect({
+    type: "worktree.snapshot-inventory",
+    input: { tracked: sourcePaths.size, untracked },
+  });
   return { head, headPaths, paths };
 }
 
@@ -301,7 +307,24 @@ async function seedSnapshotIndex(
   const destination = indexEnv.GIT_INDEX_FILE;
   try {
     const stat = await fs.stat(source);
-    await fs.copyFile(source, destination, constants.COPYFILE_FICLONE);
+    // Git owns this administrative path, including an explicitly symlinked index.
+    const sourceIndex = await fs.realpath(source);
+    const [sourceRoot, destinationRoot] = await Promise.all([
+      fsRoot(path.dirname(sourceIndex)),
+      fsRoot(path.dirname(destination)),
+    ]);
+    await destinationRoot.copyIn(
+      path.basename(destination),
+      { root: sourceRoot, relativePath: `./${path.basename(sourceIndex)}` },
+      {
+        clone: "auto",
+        durable: false,
+        mkdir: false,
+        overwrite: true,
+        preserveSourceMode: true,
+        sourceHardlinks: "allow",
+      },
+    );
     // A newly dated copy would make Git trust entries that were racy against the
     // original index. Round down rather than lose precision toward a newer time.
     const timestamp = Math.floor(stat.mtimeMs / 1000);

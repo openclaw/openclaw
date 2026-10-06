@@ -66,87 +66,20 @@ export type MemoryWikiCompiledClaim = {
   lastTouchedAt?: string;
 };
 
-export type MemoryWikiImportInsightItem = {
-  pagePath: string;
-  title: string;
-  riskLevel: "low" | "medium" | "high" | "unknown";
-  riskReasons: string[];
-  labels: string[];
-  topicKey: string;
-  topicLabel: string;
-  digestStatus: "available" | "withheld";
-  activeBranchMessages: number;
-  userMessageCount: number;
-  assistantMessageCount: number;
-  firstUserLine?: string;
-  lastUserLine?: string;
-  assistantOpener?: string;
-  summary: string;
-  candidateSignals: string[];
-  correctionSignals: string[];
-  preferenceSignals: string[];
-  createdAt?: string;
-  updatedAt?: string;
-};
+export type MemoryWikiImportInsightItem = NonNullable<
+  ReturnType<typeof import("./import-insights.js").projectMemoryWikiImportInsight>
+>;
+type MemoryWikiImportInsightsStatus = ReturnType<
+  typeof import("./import-insights.js").buildMemoryWikiImportInsights
+>;
 
-export type MemoryWikiImportInsightCluster = {
-  key: string;
-  label: string;
-  itemCount: number;
-  highRiskCount: number;
-  withheldCount: number;
-  preferenceSignalCount: number;
-  updatedAt?: string;
-  items: MemoryWikiImportInsightItem[];
-};
-
-export type MemoryWikiImportInsightsStatus = {
-  sourceType: "chatgpt";
-  totalItems: number;
-  totalClusters: number;
-  clusters: MemoryWikiImportInsightCluster[];
-  truncated: boolean;
-};
-
-export type MemoryWikiOverviewItem = {
-  pagePath: string;
-  title: string;
-  kind: WikiPageKind;
-  id?: string;
-  updatedAt?: string;
-  sourceType?: string;
-  claimCount: number;
-  questionCount: number;
-  contradictionCount: number;
-  claims: string[];
-  questions: string[];
-  contradictions: string[];
-  snippet?: string;
-};
-
-export type MemoryWikiOverviewCluster = {
-  key: WikiPageKind;
-  label: string;
-  itemCount: number;
-  claimCount: number;
-  questionCount: number;
-  contradictionCount: number;
-  updatedAt?: string;
-  items: MemoryWikiOverviewItem[];
-};
-
+export type MemoryWikiOverviewItem = ReturnType<
+  typeof import("./wiki-overview.js").projectMemoryWikiOverviewItem
+>;
+type MemoryWikiOverviewStatus = ReturnType<
+  typeof import("./wiki-overview.js").buildMemoryWikiOverview
+>;
 export type MemoryWikiOverviewPageCounts = Record<WikiPageKind, number>;
-
-export type MemoryWikiOverviewStatus = {
-  totalItems: number;
-  totalPages: number;
-  pageCounts: MemoryWikiOverviewPageCounts;
-  totalClaims: number;
-  totalQuestions: number;
-  totalContradictions: number;
-  clusters: MemoryWikiOverviewCluster[];
-  truncated: boolean;
-};
 
 export type MemoryWikiCompiledCacheSnapshot = {
   digest: {
@@ -210,22 +143,7 @@ type DurableVaultIdentity = {
   compiledCachePublicationId: string | null;
 };
 
-type MemoryWikiCompiledCacheStore = {
-  read(config: ResolvedMemoryWikiConfig): Promise<MemoryWikiCompiledCacheSnapshot | null>;
-  write(
-    config: ResolvedMemoryWikiConfig,
-    snapshot: MemoryWikiCompiledCacheSnapshot,
-    generation: string,
-    publicationId: string,
-  ): Promise<{ activeVault: ActiveVault; serializedSnapshot: string }>;
-  reconcile(
-    config: ResolvedMemoryWikiConfig,
-    loadDurableIdentity: () => Promise<DurableVaultIdentity>,
-  ): Promise<void>;
-  delete(config: ResolvedMemoryWikiConfig): Promise<void>;
-  deletePublication(config: ResolvedMemoryWikiConfig, publicationId: string): Promise<void>;
-  deleteOwnersExcept(ownerIds: ReadonlySet<string>): Promise<number>;
-};
+type MemoryWikiCompiledCacheStore = ReturnType<typeof createMemoryWikiCompiledCacheStore>;
 
 let configuredStore: MemoryWikiCompiledCacheStore | undefined;
 const activeVaults = new Map<string, ActiveVault>();
@@ -383,7 +301,7 @@ export function resolveMemoryWikiCompiledCacheGeneration(
 export function createMemoryWikiCompiledCacheStore(
   openBlobStore: <TMetadata>(options: OpenBlobStoreOptions) => PluginBlobStore<TMetadata>,
   options: { onReadError?: (error: unknown) => void } = {},
-): MemoryWikiCompiledCacheStore {
+) {
   const store = openBlobStore<CompiledCacheMetadata>({
     namespace: COMPILED_CACHE_NAMESPACE,
     maxEntries: COMPILED_CACHE_MAX_ENTRIES,
@@ -392,7 +310,7 @@ export function createMemoryWikiCompiledCacheStore(
     overflowPolicy: "evict-oldest",
   });
   return {
-    async read(config) {
+    async read(this: void, config: ResolvedMemoryWikiConfig) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       const activeVault = resolveActiveVault(config);
       if (!activeVault?.reconciled || !activeVault.compiledCachePublicationId) {
@@ -436,7 +354,13 @@ export function createMemoryWikiCompiledCacheStore(
       return snapshot;
     },
 
-    async write(config, snapshot, generation, publicationId) {
+    async write(
+      this: void,
+      config: ResolvedMemoryWikiConfig,
+      snapshot: MemoryWikiCompiledCacheSnapshot,
+      generation: string,
+      publicationId: string,
+    ) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       const vaultPath = path.resolve(config.vault.path);
       const activeVault = resolveActiveVault(config);
@@ -460,7 +384,11 @@ export function createMemoryWikiCompiledCacheStore(
       return { activeVault, serializedSnapshot: serialized };
     },
 
-    async reconcile(config, loadDurableIdentity) {
+    async reconcile(
+      this: void,
+      config: ResolvedMemoryWikiConfig,
+      loadDurableIdentity: () => Promise<DurableVaultIdentity>,
+    ) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       const activeVault = resolveActiveVault(config);
       if (!activeVault) {
@@ -497,7 +425,7 @@ export function createMemoryWikiCompiledCacheStore(
       });
     },
 
-    async delete(config) {
+    async delete(this: void, config: ResolvedMemoryWikiConfig) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       for (const entry of await store.entries()) {
         if (isMetadata(entry.metadata) && entry.metadata.ownerId === ownerId) {
@@ -506,13 +434,13 @@ export function createMemoryWikiCompiledCacheStore(
       }
     },
 
-    async deletePublication(config, publicationId) {
+    async deletePublication(this: void, config: ResolvedMemoryWikiConfig, publicationId: string) {
       await store.delete(
         publicationKey(resolveMemoryWikiCompiledCacheOwnerId(config), publicationId),
       );
     },
 
-    async deleteOwnersExcept(ownerIds) {
+    async deleteOwnersExcept(this: void, ownerIds: ReadonlySet<string>) {
       let deleted = 0;
       for (const entry of await store.entries()) {
         const metadata = entry.metadata;

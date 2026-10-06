@@ -145,7 +145,7 @@ and scene readiness; it does not compare pixels against a baseline.
 CI's `setup-test-bun` action consumes `scripts/lib/openclaw-bun.json` through
 `scripts/stage-openclaw-bun.sh`, the same owner used by the macOS and Tauri apps.
 Every pin bump requires **both** the paired CI Bun-lane replay and Bun-only smoke,
-and the macOS runtime probes plus two-binary test set, against the same published
+and the macOS runtime checks plus two-binary test set, against the same published
 fork tag. Neither app nor CI advances if either gate fails; Linux-only runtime
 regressions stop the shared repin too. Preserve the last jointly admitted tag
 and attach exact-tag evidence to the repin PR. Publication alone is not admission.
@@ -165,7 +165,7 @@ and Node test selections retain their existing cache settings.
 
 Bun's Vitest parent completes the canonical SQLite native-close admission before
 creating test threads. Each worker inherits that decision, allowing capable
-runtimes to reuse readers while negative probes retain conservative cleanup.
+runtimes to reuse readers while negative checks retain conservative cleanup.
 
 Audited ordinary unit-fast tests use Bun's native test runner, including
 qualified async callbacks and self-contained zero-argument setup hooks. Hooks
@@ -213,8 +213,8 @@ Control UI tests support Bun. Control UI WeakRef-collection proofs in
 `chat-thread-retention.test.ts`, `session-snapshot-store.test.ts`, and
 `usage-page-retention.test.ts` stay on Node because JavaScriptCore's
 conservative stack scanning can keep an unreachable target alive after a forced
-collection. V8-specific heap and worker-limit assertions and the remaining
-qualified Node-only selections still run on Node.
+collection. Unqualified V8-specific heap and worker-limit assertions and the
+remaining Node-only selections still run on Node.
 The missing-Docker test also runs on Bun, using an empty executable directory
 instead of an empty `PATH`, which Bun resolves through its default search path.
 Other families retain Node until they pass on the pinned fork within their
@@ -237,6 +237,17 @@ The pinned hooks-capable fork extends that whole-file qualification to proven
 tooling, update, Doctor, handoff, QA, and workspace-hash fixtures. The Crabbox
 wrapper suite retains Node because its retained-allocation and source-capsule
 short-write cases still fail on Bun.
+Whole-file qualification also covers test-project discovery, worker memory
+accounting, Gateway and native Codex session-catalog sampling, and diagnostic
+memory logging in their existing scoped owners. The native allocation-attribution
+case in `diagnostic-heap-profile.test.ts` still skips on Bun, so that file retains
+Node ownership.
+Five exact UI E2E selections also support Bun: boot module boundaries, device
+platform identity, new-session cloud startup recovery, phone stale-build recovery,
+and service-worker updates. They retain the ordinary E2E config's resource
+projects, pools, bundle ownership and exclusions. This qualification does not
+change the dedicated broad or sharded UI E2E jobs or the separate prebuilt config;
+those jobs retain their existing Node execution.
 
 The gateway-client leaf config also supports Bun. Its existing ordered
 gateway-core/gateway-client stripes use the core leaf's exact-file qualification
@@ -258,7 +269,7 @@ wall time from 58.72s to 52.79s cold and from 43.51s to 38.68s with warm caches
 and reversed runtime order: 10–11% faster, with warm aggregate RSS near 3.94 GiB
 on both. PR selections use Bun. Full Release Validation's plugin prerelease
 batch retains its complete Node inventory and adds Bun after each qualified
-memory group in the same worker slot. Separate database-worker tests remain
+memory group in the same worker slot. Unqualified database-worker tests remain
 on Node. Both runtimes preserve the selected files, exclusions, and worker caps;
 either failing fails the job. Historical targets without dual batch support
 retain their original Node execution.
@@ -268,7 +279,7 @@ Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs
 the complete original selection on Node and its compatible portion on Bun
 within the same job and worker slot. Other selections run on Node. Main pushes retain Node. Historical targets
 without the runtime-selection capability keep their original Node behavior.
-The UI job probes its actual config and arguments through the target's runtime
+The UI job checks its actual config and arguments through the target's runtime
 owner, so older unit-only helpers, helpers requiring the retired global FTL flag,
 and legacy compatibility targets retain Node.
 Current-runner targets use three native shards and three workers per row,
@@ -280,7 +291,7 @@ complete shard on Bun. Dual validation runs the complete UI selection on Node
 and then on Bun, including the six retention assertions. Partial runtime
 partitions still require the original shard inventory before omitting Node work.
 Partitions without browser files retain browser discovery for native sharding
-but omit Chromium version probing and Playwright's speculative browser startup.
+but omit Chromium version checking and Playwright's speculative browser startup.
 
 On both runtimes, non-isolated UI projects without cached test results group
 files by environment and options after native sharding. The sequencer targets
@@ -311,15 +322,15 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `c999d9cb92704b50fa8b15a3663b74e39d9b57c7` with WebKit
-`1600131e46b5af48bbda3559af8d8a3327230b6e` in prerelease
-`openclaw-v1.4.3-20261003-c999d9cb92-webkit-1600131e46`.
-WebKit advances from `fb1167ebf2` in the previous `e167be5c8f` pin. This build fixes idle
-HTTP connection shutdown and filesystem read/write argument defaults. It also
-retains newly assigned Windows environment variables in copies, resets Windows
-pipe standard I/O after completion, and preserves prepared ESM records for
-equivalent filesystem paths. Package resolution now reports selected invalid
-package metadata with Node 24.21 diagnostics.
+The pinned build pairs Bun `667c4ab22cbf6b101b3376c550b81cabc8c00518` with WebKit
+`f1e1ca1156c8cb3b468bec0e1989fbfa08899661` in prerelease
+`openclaw-v1.4.3-20261005-667c4ab22c-webkit-f1e1ca1156`.
+WebKit advances from `1ee09069fe` in the previous `bf0b6cde28` pin. This build
+syncs Bun to canary `9bd19c98`, fixes namespace interoperability and embedded
+module suffix keys, and supports `module.stripTypeScriptTypes`. It adds allocation
+sampling, Node-compatible stack positions, and ArrayBuffer/external accounting
+with busy-worker snapshots. The release publishes the four Darwin/Linux targets;
+Windows publication remains gated on signing.
 
 The build adds an adaptive, bounded `node:vm` compilation cache for large module
 graphs. It activates after 1,750 distinct compiled sources and defaults to a
@@ -358,7 +369,7 @@ native readable `ref`/`unref`, the default `module-sync` condition, and
 It retains the upstream Bun sync through `4b02e1031d` and fixes for thread-safe
 function ownership, shared-environment deletion, and a module-key crash.
 The shared provider-catalog retention test is qualified on this build and runs
-on Bun; tests that assert V8 heap behavior continue to run on Node.
+on Bun; unqualified tests that assert V8 heap behavior continue to run on Node.
 UI retention tests use the local inspector's `HeapProfiler.collectGarbage` on
 both runtimes. Only an unavailable inspector method permits the older Bun GC
 fallback. The qualified UI inventory has no Node-only subset, so each native
@@ -969,7 +980,7 @@ Every restored receipt still validates its compiler, configuration, source,
 resolution lookups, and output hashes; the negative boundary canary always runs.
 Receipts include missing candidates, directory listings, and symlink resolutions,
 so an unrelated new test can retain a hit while a newly effective type dependency
-invalidates it. Each validation snapshot shares actual probe results across
+invalidates it. Each validation snapshot shares actual check results across
 receipts, while comparing every recorded fact. Fresh compiles still seal the
 whole resolution namespace against changes during compilation. Old or malformed
 receipts recompile. This adds no producer job or package-selection exemption.

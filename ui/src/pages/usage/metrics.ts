@@ -165,13 +165,6 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     }));
 }
 
-type UsageMosaicStats = {
-  hasData: boolean;
-  totalTokens: number;
-  hourTotals: number[];
-  weekdayTotals: Array<{ label: string; tokens: number }>;
-};
-
 function getZonedHour(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCHours() : date.getHours();
 }
@@ -338,10 +331,7 @@ function sessionTouchesSelectedHours(
   return sessionSpanTouchesSelectedHours(session, hours, timeZone);
 }
 
-function buildUsageMosaicStats(
-  sessions: UsageSessionEntry[],
-  timeZone: "local" | "utc",
-): UsageMosaicStats {
+function buildUsageMosaicStats(sessions: UsageSessionEntry[], timeZone: "local" | "utc") {
   const hourTotals = Array.from({ length: 24 }, () => 0);
   const weekdayTotals = Array.from({ length: 7 }, () => 0);
   let totalTokens = 0;

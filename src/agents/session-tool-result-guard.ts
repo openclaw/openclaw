@@ -10,7 +10,10 @@ import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../sessions/transcript-events.js";
-import { withRuntimeUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript-runtime-context.js";
+import {
+  withRuntimeUserTurnTranscriptRecorder,
+  withCurrentRuntimeUserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -37,8 +40,8 @@ import type {
   CompactionAppendPersistence,
   CompactionAppendPersistenceAsync,
 } from "./sessions/session-compaction-persistence.js";
+import { prepareSessionManagerSync } from "./sessions/session-manager-incognito-scope.js";
 import { withSessionManagerWrite } from "./sessions/session-manager-write-admission.js";
-import { warnSessionPersistenceDeprecation } from "./sessions/session-persistence-deprecation.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -251,8 +254,11 @@ export function installSessionToolResultGuard(
   const runAsync = async <T>(operation: Generator<AppendRequest, T, AppendReceipt>): Promise<T> => {
     let next = operation.next();
     while (!next.done) {
+      const request = next.value;
       next = operation.next(
-        await appendRequest(next.value, originalAppendWithTranscriptAnchorAsync),
+        await withCurrentRuntimeUserTurnTranscriptRecorder(request.message, () =>
+          appendRequest(request, originalAppendWithTranscriptAnchorAsync),
+        ),
       );
     }
     return next.value;
@@ -608,7 +614,7 @@ export function installSessionToolResultGuard(
 
   // Retained third-party synchronous adapter; bundled runtime uses the awaited guard below.
   sessionManager.appendMessage = ((message, options) => {
-    warnSessionPersistenceDeprecation("SessionManager.appendMessage", "appendMessageAsync");
+    prepareSessionManagerSync("appendMessage", sessionManager.getSessionTarget(), sessionManager);
     return withCodeModeSourceAppend(message, options, (sourceAppend) =>
       runSync(guardedAppend(message, options, sourceAppend)),
     );

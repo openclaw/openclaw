@@ -14,18 +14,23 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
+import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import * as workerCpu from "../infra/worker-cpu.js";
 import * as logging from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import * as spawnBroker from "../process/spawn-broker/context.js";
-import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import {
+  activateSecretsRuntimeSnapshotWithSource,
+  getActiveSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -49,7 +54,12 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.runtime-state.js";
-import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.server.js";
+import {
+  installGatewayTestHooks,
+  rpcReq,
+  startConnectedServerWithClient,
+  startTestGatewayServer,
+} from "./test-helpers.server.js";
 
 installGatewayTestHooks();
 let pendingFixtureCleanup: Promise<void> | undefined;
@@ -153,6 +163,7 @@ it.for([
     const restorationEntered = createDeferredCore();
     const restorationRelease = createDeferredCore();
     let startupSettled = false;
+    let recoverySource: OpenClawConfig | undefined;
     let bootstrapSecrets: ReturnType<typeof getActiveSecretsRuntimeSnapshot> | undefined;
     if (holdSubagentRestoration) {
       vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", undefined);
@@ -468,7 +479,7 @@ it.for([
           : getActiveSecretsRuntimeSnapshot();
         expect(snapshot?.authStores.some((entry) => entry.databasePath === agentPath)).toBe(false);
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
-          true,
+          false,
         );
       }
       if (agentId === "main") {
@@ -536,6 +547,41 @@ it.for([
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-pending",
         });
+        if (outcome === "recover") {
+          const active = getActiveSecretsRuntimeSnapshot()!;
+          const source = structuredClone(active.sourceConfig);
+          source.models = {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                models: [
+                  {
+                    id: "gpt-5.6-sol",
+                    name: "GPT-5.6",
+                    api: "openai-responses",
+                    agentRuntime: { id: "openclaw" },
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 4096,
+                  },
+                ],
+              },
+            },
+          };
+          const runtime = structuredClone(source);
+          recoverySource = source;
+          runtime.models!.providers!.openai!.models[0]!.compat = {
+            supportsTemperature: false,
+            codeMode: "preferred",
+          };
+          // Startup keeps catalog defaults in the secrets input, separate from authored config.
+          activateSecretsRuntimeSnapshotWithSource(
+            { ...active, config: runtime, sourceConfig: runtime },
+            source,
+          );
+        }
         preparationRelease.resolve();
         if (outcome === "superseded") {
           await vi.waitFor(
@@ -563,6 +609,11 @@ it.for([
         );
         expect(input).toBeDefined();
         expect(input && getPreparedModelRuntimeSnapshot(input)).toBeDefined();
+        expect(getRuntimeConfig().models?.providers?.openai?.models[0]?.compat).toEqual({
+          supportsTemperature: false,
+          codeMode: "preferred",
+        });
+        expect(getRuntimeConfigSourceSnapshot()).toEqual(recoverySource);
         const snapshot = getActiveSecretsRuntimeSnapshot();
         expect(
           snapshot?.authStores.find((entry) => entry.databasePath === agentPath)?.store.profiles[
@@ -760,5 +811,44 @@ it("admits a version-changed fleet in parallel without gating readiness on an un
       release.resolve();
     }
     await server?.close();
+  }
+});
+
+it("reports history in a skipped unconfigured agent store as not found", async () => {
+  const sessionKey = "agent:gemini:acp:skipped-history";
+  await upsertSessionEntryCore(
+    { agentId: "gemini", sessionKey },
+    { sessionId: "skipped-history", updatedAt: 1 },
+  );
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeStateDatabaseForTest();
+  testState.agentsConfig = { ownership: "explicit", entries: { main: {} } };
+  testState.agentConfig = { systemAgent: { agentId: "main" } };
+  const env = { ...process.env };
+  const started = await withAgentDatabaseStartupAdmission(async () => {
+    await assertOpenClawDatabasesReady({
+      env,
+      operation: "gateway-startup",
+      config: loadGatewayTestConfig(),
+    });
+    return await startConnectedServerWithClient();
+  });
+  try {
+    await started.server.startupSettled;
+    const listed = await rpcReq<{ sessions: Array<{ key: string }> }>(started.ws, "sessions.list", {
+      limit: 1000,
+    });
+    expect(listed.payload?.sessions.map((row) => row.key)).not.toContain(sessionKey);
+    for (const method of ["chat.history", "chat.startup"]) {
+      expect(await rpcReq(started.ws, method, { sessionKey })).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: `Session "${sessionKey}" was not found.` },
+      });
+    }
+  } finally {
+    started.ws.close();
+    await started.server.close();
+    started.envSnapshot.restore();
   }
 });

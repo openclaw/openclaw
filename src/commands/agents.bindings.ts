@@ -14,8 +14,6 @@ import { listPluginContributionIds } from "../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
-export { describeBinding } from "./agents.binding-format.js";
-
 function bindingMatchKey(match: AgentRouteBinding["match"]) {
   const accountId = normalizeOptionalString(match.accountId) || DEFAULT_ACCOUNT_ID;
   const identityKey = bindingMatchIdentityKey(match);
@@ -34,16 +32,7 @@ function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   ]);
 }
 
-export function applyAgentBindings(
-  cfg: OpenClawConfig,
-  bindings: AgentRouteBinding[],
-): {
-  config: OpenClawConfig;
-  added: AgentRouteBinding[];
-  updated: AgentRouteBinding[];
-  skipped: AgentRouteBinding[];
-  conflicts: Array<{ binding: AgentRouteBinding; existingAgentId: string }>;
-} {
+export function applyAgentBindings(cfg: OpenClawConfig, bindings: AgentRouteBinding[]) {
   const existingRoutes = [...listRouteBindings(cfg)];
   const nonRouteBindings = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
   const existingMatchMap = new Map<string, string>();
@@ -121,15 +110,7 @@ export function applyAgentBindings(
   };
 }
 
-export function removeAgentBindings(
-  cfg: OpenClawConfig,
-  bindings: AgentRouteBinding[],
-): {
-  config: OpenClawConfig;
-  removed: AgentRouteBinding[];
-  missing: AgentRouteBinding[];
-  conflicts: Array<{ binding: AgentRouteBinding; existingAgentId: string }>;
-} {
+export function removeAgentBindings(cfg: OpenClawConfig, bindings: AgentRouteBinding[]) {
   const existingRoutes = listRouteBindings(cfg);
   const nonRouteBindings = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
   const removeIndexes = new Set<number>();

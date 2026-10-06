@@ -16,6 +16,11 @@ import {
 import { prepareSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
 import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-accessor.transcript-target.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { captureIncognitoSessionHistoryBinding } from "../config/sessions/session-incognito-binding.js";
+import {
+  readIncognitoSessionHistory,
+  type IncognitoSessionHistoryBinding,
+} from "../config/sessions/session-incognito-history-read.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { LruCache } from "../infra/lru-cache.js";
@@ -270,7 +275,16 @@ export function readSessionTitleFieldsFromTranscript(
 export async function readSessionTitleFieldsFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
   opts?: { includeInterSession?: boolean },
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTitleFields> {
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
+  if (incognito) {
+    const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({
+      type: "session.history.title",
+      input: { ...target, includeInterSession: opts?.includeInterSession },
+    }));
+    return result.fields;
+  }
   const target = prepareSessionTranscriptReadTargetCore(scope);
   const readScope: SessionTranscriptReadScope = {
     agentId: target.agentId,

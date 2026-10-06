@@ -33,10 +33,10 @@ export async function runPnpmPreflightProbe(params: {
   env?: NodeJS.ProcessEnv;
   name?: string;
   cwd?: string;
-}): Promise<{
-  result: Awaited<ReturnType<CommandRunner>> | null;
-  failedStep: UpdateStepResult | null;
-}> {
+}): Promise<
+  | { result: Awaited<ReturnType<CommandRunner>>; failedStep: null }
+  | { result: null; failedStep: UpdateStepResult }
+> {
   const startedAt = Date.now();
   const argv = [params.installTarget.command, ...params.args];
   const probeCwd = params.cwd ?? params.installTarget.globalRoot ?? undefined;
@@ -132,7 +132,7 @@ export async function validatePnpmIsolatedUpdate(params: {
   }
 
   const rootProbe = await runPnpmPreflightProbe({ ...params, args: ["root", "-g"] });
-  if (rootProbe.failedStep || !rootProbe.result) {
+  if (rootProbe.failedStep) {
     return {
       globalBinDir: null,
       failedStep: rootProbe.failedStep,

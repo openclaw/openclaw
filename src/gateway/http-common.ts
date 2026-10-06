@@ -220,6 +220,10 @@ export function retainGatewayHttpResponseWork(res: ServerResponse): () => void {
   };
   res.once("finish", release);
   res.once("close", release);
+  // Input preparation can outlive a response that already closed or finished.
+  if (res.destroyed || res.writableFinished) {
+    release();
+  }
   return release;
 }
 
@@ -244,9 +248,6 @@ export function watchClientDisconnect(
       ),
     ),
   );
-  if (sockets.length === 0) {
-    return () => {};
-  }
   const stopWatchingDisconnect = () => {
     for (const socket of sockets) {
       socket.off("close", handleClose);

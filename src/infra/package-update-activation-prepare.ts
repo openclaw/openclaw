@@ -54,14 +54,6 @@ export type PackageActivationPreparation = {
   launchers: Array<{ name: string; previous: string | null }>;
 };
 
-function readPackageActivationRuntime(): Buffer {
-  const source = resolveRuntimeWorkerUrl(packageActivationRuntimeEntrypoint);
-  if (!source.pathname.endsWith(".mjs")) {
-    throw new Error("Package publication recovery requires its built sealed helper.");
-  }
-  return fs.readFileSync(source);
-}
-
 function packageActivationRecoveryCommand(
   node: string,
   anchor: string,
@@ -232,10 +224,11 @@ export async function preparePackageActivationJournal(
     sourceParentIdentity: packageActivationIdentity(path.dirname(entry.source), "parent"),
   }));
   // Preflight the sealed helper before creating any blocking recovery artifact.
-  const helperBytes = sealPackageActivationSqliteLibrary(
-    readPackageActivationRuntime(),
-    sqliteLibrary,
-  );
+  const source = resolveRuntimeWorkerUrl(packageActivationRuntimeEntrypoint);
+  if (!source.pathname.endsWith(".mjs")) {
+    throw new Error("Package publication recovery requires its built sealed helper.");
+  }
+  const helperBytes = sealPackageActivationSqliteLibrary(fs.readFileSync(source), sqliteLibrary);
   assertCurrent();
   assertRuntime();
   // These objects remain inside the existing stage cleanup owner's prefix

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
@@ -10,8 +11,14 @@ import {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
-import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import {
+  readRefusedSessionSource,
+  transferSessionEntryWorkerCandidate,
+} from "./session-entry-patch.worker.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -48,7 +55,17 @@ function inCustody<T>(
     ? runWithSessionPendingInputWorkerCustody(
         input.custody,
         input.relocation,
-        () => context.admit("transaction", { kind: "session-turn-custody" }),
+        () =>
+          context.admit("transaction", {
+            kind: "session-turn-custody",
+            authority: input.custody!.preparedAuthority
+              ? readSessionPendingInputAuthorityFacts(
+                  context.open(),
+                  input.custody!.sessionKey,
+                  input.custody!.agentId,
+                )
+              : undefined,
+          }),
         owned,
       ).value
     : owned();
@@ -114,6 +131,7 @@ export function prepareSessionTurn(input: SessionTurnPlan, context: AgentWorkerO
   return {
     result,
     messages,
+    version: readTranscriptContextVersionInTransaction(database, scope.sessionId),
     goalId:
       mutation && !result && expectedEntry && input.options.messages.length
         ? applySessionGoalOperation(expectedEntry, mutation.operation, Date.now())?.id
@@ -134,10 +152,36 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
         sessionKey: input.sessionKey,
         sessionId: input.options.expectedSessionId,
       };
-      const messages = input.options.messages.map((append) => ({
+      const transactionVersion = input.options.messages.some((append) => append.preparationVersion)
+        ? { ...readTranscriptContextVersionInTransaction(database, scope.sessionId) }
+        : undefined;
+      const messages = input.options.messages.map((append, index) => ({
         ...append,
         ...(append.preparation
           ? { prepareMessageAfterIdempotencyCheck: () => append.preparation!.message }
+          : {}),
+        ...(append.freshGuard || append.preparation
+          ? {
+              beforeFreshMessageCommit: () => {
+                // The append kernel invokes this only after replay and custody recognition.
+                if (append.preparation && !append.preparation.prepared) {
+                  throw new SqliteTranscriptMutationConflictError(scope.sessionId);
+                }
+                if (
+                  append.preparationVersion &&
+                  !isDeepStrictEqual(append.preparationVersion, transactionVersion)
+                ) {
+                  throw new SqliteTranscriptMutationConflictError(scope.sessionId);
+                }
+                if (append.freshGuard) {
+                  context.admit("transaction", {
+                    kind: "session-turn-fresh",
+                    index,
+                    refusedSource: readRefusedSessionSource(database, append.sources),
+                  });
+                }
+              },
+            }
           : {}),
       }));
       const kernel = createSessionTranscriptTurnKernel(
@@ -151,7 +195,7 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
       );
       // Prepared host hooks are never replayed after a foreign writer changes their idempotency decision.
       for (const append of input.options.messages) {
-        if (!append.preparation) {
+        if (!append.preparation?.prepared) {
           continue;
         }
         const key = readMessageIdempotencyKey(append.message);
@@ -181,6 +225,16 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
         projectionNeedsReconcile,
         sequences: committed.result.appendedMessages.map(readCommittedTranscriptMessageSequence),
         custody: readSessionPendingInputWorkerReceipt(database),
+        authority:
+          input.custody?.preparedAuthority &&
+          input.custody.databasePath ===
+            (readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path)
+            ? readSessionPendingInputAuthorityFacts(
+                database,
+                input.custody.sessionKey,
+                input.custody.agentId,
+              )
+            : undefined,
         publication: committed.identity
           ? prepareSessionEntryReplacementPublication(
               {

@@ -9,6 +9,7 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
+import { readSessionTranscriptIndexStatus } from "../../config/sessions/session-transcript-projection-writer.js";
 import * as transcriptSearch from "../../config/sessions/session-transcript-search.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -145,6 +146,11 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
     const key = await seed("fifth", "old-target", owner, "distant uniqueneedle", {
       updatedAt: 1,
     });
+    await Promise.all(
+      agents.map((agentId) =>
+        expect(readSessionTranscriptIndexStatus({ agentId })).resolves.toBe(false),
+      ),
+    );
     const result = await search(requestContext(cfg), identifiedClient(owner), {
       query: "uniqueneedle",
       limit: 1,

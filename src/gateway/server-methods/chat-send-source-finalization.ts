@@ -29,11 +29,11 @@ import {
   type WebchatReplyMediaRequesterContext,
 } from "./chat-reply-media.js";
 import {
+  buildTranscriptReplyTextFromInputs,
   readChatSendReplyPayload,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
 import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
-import { buildTranscriptReplyTextFromInputs } from "./chat-send-reply-dispatch.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import {
   assistantTranscriptScope,
@@ -80,11 +80,13 @@ export function createChatSendLateReplyFinalizer(
   params: Omit<FinalizeChatSendAgentRepliesBase, "emitFirstAssistantServerTiming">,
 ) {
   return async ({
-    runId,
+    runId: runtimeRunId,
+    clientRunId: runId,
     payloads,
     completion,
     isCurrent,
   }: Pick<QueuedFollowupReplyBatch, "runId" | "payloads" | "completion"> & {
+    clientRunId: string;
     isCurrent: () => boolean;
   }): Promise<ChatSendAgentReplyFinalization> => {
     const { context, session } = params;
@@ -131,6 +133,9 @@ export function createChatSendLateReplyFinalizer(
           }
         },
       });
+      if (!isCurrent()) {
+        return { kind: "dropped", reason: "no-visible-content" };
+      }
       if (
         completion.kind === "failed" ||
         completion.kind === "aborted" ||
@@ -181,7 +186,7 @@ export function createChatSendLateReplyFinalizer(
         : result;
     } catch (error) {
       // Preparation failure can still complete the run. An uncertain broadcast cannot be replayed.
-      if (terminal && !publicationStarted) {
+      if (terminal && !publicationStarted && isCurrent()) {
         context.chatRunState.flushPendingText(runId);
         broadcastChatTerminal({
           ...broadcastParams,
@@ -192,9 +197,12 @@ export function createChatSendLateReplyFinalizer(
       throw error;
     } finally {
       if (terminal) {
-        context.removeChatRun(runId, runId, session.sessionKey);
-        context.chatRunState.clearRun(runId);
-        context.agentRunSeq.delete(runId);
+        context.removeChatRun(runtimeRunId, runId, session.sessionKey);
+        if (isCurrent()) {
+          context.chatRunState.clearRun(runId);
+          context.agentRunSeq.delete(runId);
+        }
+        context.agentRunSeq.delete(runtimeRunId);
       }
     }
   };

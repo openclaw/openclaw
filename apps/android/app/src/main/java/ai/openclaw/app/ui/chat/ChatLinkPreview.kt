@@ -67,7 +67,7 @@ internal fun parseOpenGraph(
   var ogDescription: String? = null
   var ogImage: String? = null
 
-  for (tag in findTags(html, "meta")) {
+  for (tag in findMetaTags(html)) {
     val attributes = parseTagAttributes(tag)
     val property = (attributes["property"] ?: attributes["name"])?.lowercase(Locale.US)
     val content = attributes["content"] ?: continue
@@ -162,21 +162,18 @@ private fun findTitle(html: String): String? =
     ?.groupValues
     ?.getOrNull(1)
 
-private fun findTags(
-  html: String,
-  tagName: String,
-): Sequence<String> =
+private fun findMetaTags(html: String): Sequence<String> =
   sequence {
     var searchFrom = 0
     while (searchFrom < html.length) {
-      val start = html.indexOf("<$tagName", searchFrom, ignoreCase = true)
+      val start = html.indexOf("<meta", searchFrom, ignoreCase = true)
       if (start < 0) break
-      val boundary = html.getOrNull(start + tagName.length + 1)
+      val boundary = html.getOrNull(start + 5)
       if (boundary != null && !boundary.isWhitespace() && boundary != '/' && boundary != '>') {
-        searchFrom = start + tagName.length + 1
+        searchFrom = start + 5
         continue
       }
-      val end = findTagEnd(html, start + tagName.length + 1)
+      val end = findTagEnd(html, start + 5)
       if (end < 0) break
       yield(html.substring(start, end + 1))
       searchFrom = end + 1

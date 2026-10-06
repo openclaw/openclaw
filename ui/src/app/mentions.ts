@@ -23,13 +23,7 @@ type MentionsSnapshot = {
   error: string | null;
 };
 
-export type MentionsCapability = {
-  readonly snapshot: MentionsSnapshot;
-  refresh: () => Promise<void>;
-  dismiss: (ids: readonly string[]) => Promise<void>;
-  subscribe: (listener: () => void) => () => void;
-  dispose: () => void;
-};
+export type MentionsCapability = ReturnType<typeof createMentionsCapability>;
 
 type MentionConnection = {
   client: GatewayBrowserClient;
@@ -48,7 +42,7 @@ type MentionConnection = {
 export function createMentionsCapability(
   gateway: ApplicationGateway,
   options: { connectionBootstrap?: ConnectionBootstrapCoordinator } = {},
-): MentionsCapability {
+) {
   let snapshot: MentionsSnapshot = {
     phase: "unavailable",
     items: [],
@@ -235,7 +229,7 @@ export function createMentionsCapability(
       }
       return connection ? refreshOwner(connection) : Promise.resolve();
     },
-    async dismiss(ids) {
+    async dismiss(this: void, ids: readonly string[]) {
       const owner = connection;
       if (
         !owner ||
@@ -266,7 +260,7 @@ export function createMentionsCapability(
         }
       }
     },
-    subscribe: (listener) => registerListener(listeners, listener),
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
     dispose() {
       disposed = true;
       connection = null;

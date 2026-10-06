@@ -304,12 +304,7 @@ enum ApplicationRelocator {
         fileManager: FileManager = .default,
         processInfo: ProcessInfo = .processInfo) -> Bool
     {
-        #if DEBUG
-        let debugBuild = true
-        #else
-        let debugBuild = false
-        #endif
-        if debugBuild || processInfo.isRunningTests || processInfo.isPreview {
+        if CLIInstallBuild.isDebug || processInfo.isRunningTests || processInfo.isPreview {
             return true
         }
 
@@ -343,10 +338,6 @@ extension ApplicationRelocator {
         homeDirectory: URL) -> KeepAliveSupervisor?
     {
         guard let serviceName = xpcServiceName?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !serviceName.isEmpty,
-              serviceName != "0",
-              !serviceName.hasPrefix("application."),
-              URL(fileURLWithPath: serviceName).lastPathComponent == serviceName,
               let executableURL
         else {
             return nil
@@ -561,11 +552,6 @@ extension ApplicationRelocator {
                 } ?? false,
                 identity: installedBundle.flatMap(self.identity(for:)))
         }
-        #if DEBUG
-        let debugBuild = true
-        #else
-        let debugBuild = false
-        #endif
         let isReadOnlyVolume = (try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?
             .volumeIsReadOnly ?? false
         return Environment(
@@ -574,7 +560,7 @@ extension ApplicationRelocator {
             currentIdentity: self.identity(for: bundle),
             candidates: candidates,
             isReadOnlyVolume: isReadOnlyVolume,
-            isDebugOrTesting: debugBuild || processInfo.isRunningTests || processInfo.isPreview)
+            isDebugOrTesting: CLIInstallBuild.isDebug || processInfo.isRunningTests || processInfo.isPreview)
     }
 
     private static func identity(for bundle: Bundle) -> ApplicationIdentity? {
@@ -1198,25 +1184,16 @@ extension ApplicationRelocator {
         }
         // The detached child is no longer owned by the current launchd job. Do not
         // let it inherit that job's identity and attempt a second bootout later.
-        let arguments = [
-            "/usr/bin/env",
-            "-u",
+        let arguments = ["/usr/bin/env"] + [
             "XPC_SERVICE_NAME",
-            "-u",
             replacementSourceBundleEnvironmentKey,
-            "-u",
             replacementParentPIDEnvironmentKey,
-            "-u",
             replacementCodeHashEnvironmentKey,
-            "-u",
             replacementReadyFDEnvironmentKey,
-            "-u",
             replacementBootoutTargetEnvironmentKey,
-            "-u",
             replacementSupervisorLabelEnvironmentKey,
-            "-u",
             replacementSupervisorPlistEnvironmentKey,
-        ] + environmentAssignments +
+        ].flatMap { ["-u", $0] } + environmentAssignments +
             [launchReference.executableURL.path] + forwardedArguments
         var cArguments = arguments.map { strdup($0) } + [nil]
         defer { cArguments.compactMap(\.self).forEach { free($0) } }

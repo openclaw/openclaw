@@ -545,6 +545,7 @@ export class ChatPane extends ChatPaneLayoutRender {
                 composerState.capabilityMenuView.startsWith("library:")),
           ),
       swarm: readTarget ? { ...readTarget, sessions: this.swarmHydrator?.rows ?? [] } : undefined,
+      subagentSessionsHydrated: Boolean(readTarget && this.swarmHydrator?.hydrated),
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
         agentsList: state.agentsList,

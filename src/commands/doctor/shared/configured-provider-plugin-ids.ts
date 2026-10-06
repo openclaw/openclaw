@@ -16,25 +16,17 @@ export function collectConfiguredOfficialProviderPluginIds(params: {
 }): string[] {
   const configuredProviderIds = collectConfiguredModelProviderSelectionIds(params.cfg);
   const configuredMediaProviderIds = collectConfiguredMediaProviderSelectionIds(params.cfg);
-  const pluginIds = new Set(
-    resolveOfficialExternalProviderPluginIds({ providerIds: configuredProviderIds }),
-  );
-  for (const pluginId of resolveOfficialExternalProviderPluginIdsForEnv(
-    params.env ?? process.env,
-  )) {
-    pluginIds.add(pluginId);
-  }
-  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
-    contract: "mediaUnderstandingProviders",
-    providerIds: configuredMediaProviderIds,
-  })) {
-    pluginIds.add(pluginId);
-  }
-  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
-    contract: "speechProviders",
-    providerIds: configuredProviderIds,
-  })) {
-    pluginIds.add(pluginId);
-  }
+  const pluginIds = new Set([
+    ...resolveOfficialExternalProviderPluginIds({ providerIds: configuredProviderIds }),
+    ...resolveOfficialExternalProviderPluginIdsForEnv(params.env ?? process.env),
+    ...resolveOfficialExternalProviderContractPluginIds({
+      contract: "mediaUnderstandingProviders",
+      providerIds: configuredMediaProviderIds,
+    }),
+    ...resolveOfficialExternalProviderContractPluginIds({
+      contract: "speechProviders",
+      providerIds: configuredProviderIds,
+    }),
+  ]);
   return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
 }

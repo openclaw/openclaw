@@ -1,9 +1,11 @@
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import {
   type OpenClawStateDatabaseOptions,
@@ -33,6 +35,9 @@ export function readAcpSessionMeta(params: {
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
 }): SessionAcpMeta | undefined {
+  if (params.sessionKey.trim() && captureIncognitoSessionBinding(params)) {
+    throw new IncognitoSessionSyncAccessError("readAcpSessionMeta", "readAcpSessionMetaAsync");
+  }
   return readAcpSessionEntry({
     ...params,
     sessionKey: params.sessionKey.trim(),
@@ -129,10 +134,10 @@ export function readAcpSessionEntry(params: {
   if (!sessionKey) {
     return null;
   }
-  const storeEntry = readSessionEntryFromStore(params);
-  if (!storeEntry.storePath) {
-    return null;
+  if (captureIncognitoSessionBinding(params)) {
+    throw new IncognitoSessionSyncAccessError("readAcpSessionEntry", "readAcpSessionEntryAsync");
   }
+  const storeEntry = readSessionEntryFromStore(params);
   const acp = readAcpSessionMetaForEntry({
     sessionKey: storeEntry.storeSessionKey,
     agentId: storeEntry.agentId,

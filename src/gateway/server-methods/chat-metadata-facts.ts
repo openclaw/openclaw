@@ -58,6 +58,26 @@ export class ChatMetadataSnapshotUnavailableError extends Error {
   }
 }
 
+// Only publication can replace a retired owner's facts; retrying the same generation cannot.
+export function assertPreparedAgentCurrent(agent: ChatMetadataProjectionFacts) {
+  if (!agent.owner.isCurrent()) {
+    throw new ChatMetadataSnapshotUnavailableError(
+      `prepared chat metadata owner retired for agent "${agent.agentId}"`,
+    );
+  }
+}
+
+export function authStoresCurrent(
+  facts: PreparedGenerationFacts,
+  deps: Pick<ChatMetadataRuntimeDeps, "getAuthStoreRevision">,
+) {
+  return facts.agents.every(
+    ({ owner, authStoreRevision }) =>
+      authStoreRevision ===
+      `${deps.getAuthStoreRevision(owner.agentDir)}:${deps.getAuthStoreRevision(owner.inheritedAuthDir)}`,
+  );
+}
+
 export function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerationFacts {
   const config = deps.getConfig();
   const agents = withPreparedModelRuntimeReadBatch(() =>

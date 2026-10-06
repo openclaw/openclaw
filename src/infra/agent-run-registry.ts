@@ -108,6 +108,7 @@ function storeRunContext(runId: string, context: AgentRunContext, predecessor?: 
   // Scheduler leases and observed activity never transfer to a fresh registration.
   context.capacityWaits = undefined;
   context.executionActivity = undefined;
+  context.eventState = { seq: 0 };
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);
@@ -488,7 +489,8 @@ export function captureAgentRunDelegatedSourceAssertion(
       refuse();
     }
   };
-  if (readActiveAgentRunDelegatedAuthority(instance, () => {}) !== authority) {
+  const active = readActiveAgentRunDelegatedAuthority(instance, () => {});
+  if (!active || !isCurrentAgentRunApprovalAuthority(active, context?.approvalLeases, authority)) {
     return undefined;
   }
   return {

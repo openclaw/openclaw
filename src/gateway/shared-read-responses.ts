@@ -46,6 +46,8 @@ function captureRevision(context: GatewayRequestContext): Pick<Entry, "current" 
   const policy = context.getCommittedRuntimeConfig?.();
   const access = readGatewayAccessRevision();
   const projection = getSessionRowProjection(context);
+  const runners = context.workerPlacementRunnerAvailabilityReader;
+  const runnerRevision = runners?.version();
   let rows = projection?.sharingRevision;
   return {
     publishRows: () => {
@@ -56,6 +58,8 @@ function captureRevision(context: GatewayRequestContext): Pick<Entry, "current" 
       context.getCommittedRuntimeConfig?.() === policy &&
       readGatewayAccessRevision() === access &&
       getSessionRowProjection(context) === projection &&
+      context.workerPlacementRunnerAvailabilityReader === runners &&
+      runners?.version() === runnerRevision &&
       projection?.sharingRevision === rows,
   };
 }
@@ -97,11 +101,6 @@ export async function dispatchSharedRead(
   assertCurrent: () => void,
 ): Promise<void> {
   const owner = options.context.broadcast;
-  let entries = owners.get(owner);
-  if (!entries) {
-    entries = new Map();
-    owners.set(owner, entries);
-  }
   await withPreparedGatewayRead(handler, options, async (read) => {
     const deliver: RespondFn = (...response) => {
       assertCurrent();
@@ -122,6 +121,11 @@ export async function dispatchSharedRead(
       return;
     }
     read.assertCurrent?.();
+    let entries = owners.get(owner);
+    if (!entries) {
+      entries = new Map();
+      owners.set(owner, entries);
+    }
     const key = JSON.stringify([options.req.method, shareKey]);
     const existing = entries.get(key);
     const valid = (entry: Entry) =>

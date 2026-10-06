@@ -1,8 +1,3 @@
-/**
- * Token usage normalization helpers.
- * Converts provider-specific usage shapes into OpenClaw's normalized input,
- * output, cache, reasoning, and total token accounting fields.
- */
 import {
   asFiniteNumber,
   asNonNegativeFiniteNumber,
@@ -21,7 +16,6 @@ type PromptTokenDetails = {
   cache_creation_input_tokens?: number;
 };
 
-/** Provider/SDK usage payload variants accepted by usage normalization. */
 export type UsageLike = {
   input?: number;
   output?: number;
@@ -70,7 +64,6 @@ export type UsageLike = {
   cost?: Partial<Usage["cost"]>;
 };
 
-/** Normalized token counts used by runtime accounting. */
 export type NormalizedUsage = {
   input?: number;
   output?: number;
@@ -84,31 +77,10 @@ export type NormalizedUsage = {
     Partial<Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">>;
 };
 
-/** OpenAI chat-completions compatible usage shape. */
-export type OpenAiChatCompletionsUsage = {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  prompt_tokens_details?: { cached_tokens: number };
-  completion_tokens_details?: { reasoning_tokens: number };
-};
+export type OpenAiChatCompletionsUsage = ReturnType<typeof toOpenAiChatCompletionsUsage>;
 
-/** OpenAI Responses compatible usage shape. */
-type OpenAiResponsesUsage = {
-  input_tokens: number;
-  input_tokens_details: {
-    cached_tokens: number;
-    cache_write_tokens: number;
-  };
-  output_tokens: number;
-  output_tokens_details: { reasoning_tokens: number };
-  total_tokens: number;
-};
-
-/** Assistant usage snapshot with token counts and computed cost buckets. */
 export type AssistantUsageSnapshot = Usage;
 
-/** Build a zeroed assistant usage snapshot. */
 export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
   return {
     input: 0,
@@ -126,7 +98,6 @@ export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
   };
 }
 
-/** Return true when any normalized usage bucket is positive. */
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
   if (!usage) {
     return false;
@@ -183,7 +154,6 @@ const normalizeTokenCount = (value: unknown): number | undefined => {
   return Math.min(Math.trunc(numeric), Number.MAX_SAFE_INTEGER);
 };
 
-/** Normalize provider-specific token usage fields into OpenClaw usage buckets. */
 export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefined {
   if (!raw) {
     return undefined;
@@ -360,9 +330,7 @@ export function toDiagnosticUsage(usage: NormalizedUsage) {
  * cost. Field name and shape match OpenAI's documented usage breakdown:
  * https://platform.openai.com/docs/guides/prompt-caching
  */
-export function toOpenAiChatCompletionsUsage(
-  usage: NormalizedUsage | undefined,
-): OpenAiChatCompletionsUsage {
+export function toOpenAiChatCompletionsUsage(usage: NormalizedUsage | undefined) {
   const input = usage?.input ?? 0;
   const output = usage?.output ?? 0;
   const cacheRead = usage?.cacheRead ?? 0;
@@ -390,7 +358,7 @@ export function toOpenAiChatCompletionsUsage(
  * recombine OpenClaw's separately priced buckets and retain their details.
  * Reasoning tokens remain a detail of `output_tokens`, not an extra bucket.
  */
-export function toOpenAiResponsesUsage(usage: NormalizedUsage | undefined): OpenAiResponsesUsage {
+export function toOpenAiResponsesUsage(usage: NormalizedUsage | undefined) {
   const input = Math.max(0, usage?.input ?? 0);
   const output = Math.max(0, usage?.output ?? 0);
   const cacheRead = Math.max(0, usage?.cacheRead ?? 0);
@@ -412,7 +380,6 @@ export function toOpenAiResponsesUsage(usage: NormalizedUsage | undefined): Open
   };
 }
 
-/** Derive prompt/context tokens from normalized input and cache buckets. */
 export function derivePromptTokens(usage?: {
   input?: number;
   cacheRead?: number;
@@ -438,7 +405,6 @@ function derivePromptTokensFromTotal(usage?: NormalizedUsage): number | undefine
   return promptTokens > 0 ? promptTokens : undefined;
 }
 
-/** Resolve context prompt tokens from explicit override, last call, or aggregate usage. */
 export function deriveContextPromptTokens(params: {
   lastCallUsage?: NormalizedUsage;
   promptTokens?: number;
@@ -469,7 +435,6 @@ export function deriveContextPromptTokens(params: {
   return derivePromptTokens(params.usage);
 }
 
-/** Derive the session prompt-token snapshot stored for context display. */
 export function deriveSessionTotalTokens(params: {
   lastCallUsage?: NormalizedUsage;
   usage?: NormalizedUsage;

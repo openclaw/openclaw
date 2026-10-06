@@ -232,11 +232,7 @@ export function isActiveRunSafeCommandTurn(params: {
 
 function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): CommandArgValues {
   const values: CommandArgValues = {};
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return values;
-  }
-  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  const tokens = raw.split(/\s+/);
   let index = 0;
   for (const definition of definitions) {
     if (index >= tokens.length) {

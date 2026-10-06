@@ -302,7 +302,6 @@ export function serverUiPrefsSnapshotDelta(
   return changed;
 }
 
-/** Local-settings patch that brings the browser mirror in line with the server. */
 export function serverPrefsLocalPatch(
   prefs: ServerUiPrefs,
   settings: UiSettings,

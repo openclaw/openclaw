@@ -143,6 +143,8 @@ describe("createSlackBoltApp", () => {
       socketModeLogger.warn(
         "The logLevel given to Socket Mode was ignored as you also gave logger",
       );
+      socketModeLogger.warn("Received unexpected ping diagnostics message format");
+      socketModeLogger.warn("Received unexpected pong diagnostics message format");
       socketModeLogger.warn("another socket warning");
       socketModeLogger.error("failed to retrieve WSS URL", {
         data: { error: "missing_scope", needed: "connections:write" },

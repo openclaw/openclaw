@@ -10,7 +10,7 @@ import { applyQueueDropPolicy, countPendingQueueItems } from "../../../utils/que
 import {
   createOverflowSummaryRetrySource,
   resolveFollowupAuthorizationKey,
-  resolveFollowupDeliveryContextKey,
+  resolveFollowupDeliveryStorageKey,
 } from "./delivery-context.js";
 import {
   clearFollowupDrainCallback,
@@ -212,7 +212,7 @@ function applyFollowupQueueOverflow(
         if (summaryLine === undefined) {
           throw new Error("followup queue summary source lost its elided line");
         }
-        const contextKey = resolveFollowupDeliveryContextKey(item);
+        const contextKey = resolveFollowupDeliveryStorageKey(item);
         const lastElision = queue.summaryElisions.at(-1);
         const compactSource = createOverflowSummaryRetrySource(item);
         if (lastElision?.contextKey === contextKey) {

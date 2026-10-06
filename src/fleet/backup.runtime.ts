@@ -63,24 +63,6 @@ type FleetBackupManifest = {
   runtime: "docker" | "podman";
 };
 
-type FleetBackupResult = {
-  tenant: string;
-  archivePath: string;
-  fileCount: number;
-  skippedSymlinks: number;
-  skippedSpecial: number;
-  note: string;
-};
-
-type FleetRestoreResult = {
-  tenant: string;
-  archivePath: string;
-  token: string;
-  tokenNote: string;
-  started: boolean;
-  url: string;
-};
-
 function timestampBasename(tenant: string, nowMs: number): string {
   const stamp = new Date(nowMs)
     .toISOString()
@@ -134,7 +116,7 @@ export async function backupFleetCell(params: {
   out?: string;
   maxBytes?: number;
   maxEntries?: number;
-}): Promise<FleetBackupResult> {
+}) {
   await params.containers.assertLocal(params.record.runtime);
   const inspection = await params.containers.inspect(
     params.record.runtime,
@@ -435,7 +417,7 @@ export async function restoreFleetCell(params: {
   force?: boolean;
   maxBytes?: number;
   maxEntries?: number;
-}): Promise<FleetRestoreResult> {
+}) {
   await params.containers.assertLocal(params.record.runtime);
   const archivePath = path.resolve(params.from);
   const archiveStat = await fs.lstat(archivePath);

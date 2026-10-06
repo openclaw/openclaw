@@ -8,7 +8,6 @@ import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { moveLegacyConfigKey, visitAgentEntries } from "./legacy-config-record-shared.js";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
-const LEGACY_TTS_PLUGIN_IDS = new Set(["voice-call"]);
 const CHANNEL_ROOT_TTS_UNSUPPORTED_IDS = new Set(["discord"]);
 
 function isLegacyEdgeProviderId(value: unknown): boolean {
@@ -192,13 +191,9 @@ function* visitKnownTtsConfigLocations(
   }
 
   const pluginEntries = getRecord(getRecord(raw.plugins)?.entries);
-  for (const [pluginId, entryValue] of Object.entries(pluginEntries ?? {})) {
-    if (!isBlockedObjectKey(pluginId) && LEGACY_TTS_PLUGIN_IDS.has(pluginId)) {
-      yield [
-        getRecord(getRecord(getRecord(entryValue)?.config)?.tts),
-        `plugins.entries.${pluginId}.config.tts`,
-      ];
-    }
+  if (pluginEntries && Object.prototype.propertyIsEnumerable.call(pluginEntries, "voice-call")) {
+    const voiceCall = getRecord(pluginEntries["voice-call"]);
+    yield [getRecord(getRecord(voiceCall?.config)?.tts), "plugins.entries.voice-call.config.tts"];
   }
 }
 

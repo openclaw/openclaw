@@ -162,40 +162,43 @@ internal fun loadSizedImageAttachment(
   uri: Uri,
 ): PendingAttachment {
   val fileName = normalizeAttachmentFileName(sharedAttachmentFileName(resolver, uri))
-  val bitmap = decodeScaledBitmap(resolver, uri, maxDimension = CHAT_ATTACHMENT_MAX_WIDTH)
-  if (bitmap == null) {
-    throw IllegalStateException("unsupported attachment")
-  }
+  val bitmap =
+    decodeScaledBitmap(resolver, uri, maxDimension = CHAT_ATTACHMENT_MAX_WIDTH)
+      ?: throw IllegalStateException("unsupported attachment")
   val maxBytes = (CHAT_IMAGE_MAX_BASE64_CHARS / 4) * 3
   // Reuse the node JPEG limiter so chat attachments and node photo payloads
   // stay within the same gateway frame budget.
   val encoded =
-    JpegSizeLimiter.compressToLimit(
-      initialWidth = bitmap.width,
-      initialHeight = bitmap.height,
-      startQuality = CHAT_ATTACHMENT_START_QUALITY,
-      maxBytes = maxBytes,
-      minSize = 240,
-      encode = { width, height, quality ->
-        val working =
-          if (width == bitmap.width && height == bitmap.height) {
-            bitmap
-          } else {
-            bitmap.scale(width, height, true)
+    try {
+      JpegSizeLimiter.compressToLimit(
+        initialWidth = bitmap.width,
+        initialHeight = bitmap.height,
+        startQuality = CHAT_ATTACHMENT_START_QUALITY,
+        maxBytes = maxBytes,
+        minSize = 240,
+        encode = { width, height, quality ->
+          val working =
+            if (width == bitmap.width && height == bitmap.height) {
+              bitmap
+            } else {
+              bitmap.scale(width, height, true)
+            }
+          try {
+            val out = ByteArrayOutputStream()
+            if (!working.compress(Bitmap.CompressFormat.JPEG, quality, out)) {
+              throw IllegalStateException("attachment encode failed")
+            }
+            out.toByteArray()
+          } finally {
+            if (working !== bitmap) {
+              working.recycle()
+            }
           }
-        try {
-          val out = ByteArrayOutputStream()
-          if (!working.compress(Bitmap.CompressFormat.JPEG, quality, out)) {
-            throw IllegalStateException("attachment encode failed")
-          }
-          out.toByteArray()
-        } finally {
-          if (working !== bitmap) {
-            working.recycle()
-          }
-        }
-      },
-    )
+        },
+      )
+    } finally {
+      bitmap.recycle()
+    }
   val base64 = Base64.encodeToString(encoded.bytes, Base64.NO_WRAP)
   return PendingAttachment(
     id = uri.toString() + "#" + System.currentTimeMillis().toString(),

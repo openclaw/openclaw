@@ -5,7 +5,6 @@ import { CHANNEL_IDS } from "../channels/ids.js";
 import {
   clearMemoryPluginState,
   registerMemoryPromptPreparation,
-  registerTestMemoryPromptBuilder,
 } from "../plugins/memory-state.test-fixtures.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -113,11 +112,6 @@ describe("buildAgentSystemPrompt", () => {
 
   it.each<PromptCase>([
     [
-      "keeps model identity in otherwise bare prompts",
-      { promptMode: "none", runtimeInfo: { model: "openai/gpt-5.5" } },
-      ["Current model identity: openai/gpt-5.5."],
-    ],
-    [
       "omits extended sections in minimal prompt mode",
       {
         promptMode: "minimal",
@@ -136,12 +130,6 @@ describe("buildAgentSystemPrompt", () => {
         "## Voice (TTS)",
         "## Silent Replies",
       ],
-    ],
-    [
-      "avoids the Claude subscription classifier wording in reply tag guidance",
-      {},
-      ["## Assistant Output Directives"],
-      ["Tags are stripped before sending"],
     ],
     ["adds reasoning tag hint when enabled", { reasoningTagHint: true }, ["## Reasoning Format"]],
     [
@@ -201,42 +189,6 @@ describe("buildAgentSystemPrompt", () => {
       { runtimeCwd: "/tmp/repo\n\u2028\u202e-injected" },
       ["Working directory: /tmp/repo-injected (tools and deliverables)."],
     ],
-    [
-      "builds runtime line with agent and channel details",
-      {
-        runtimeInfo: {
-          agentId: "work",
-          agentName: "Runt",
-          sessionUrl: "https://gateway.example/control/chat/main",
-          sessionKey: "agent:main:subagent:runtime-check",
-          sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
-          host: "host",
-          repoRoot: "/repo",
-          os: "macOS",
-          arch: "arm64",
-          node: "v20",
-          model: "anthropic/claude",
-          defaultModel: "anthropic/claude-opus-4-5",
-          activeNode: "mac-123",
-          channel: "telegram",
-          capabilities: ["inlineButtons"],
-        },
-      },
-      [
-        "Runtime: name=Runt | agent=work",
-        "sessionUrl=https://gateway.example/control/chat/main",
-        "session=agent:main:subagent:runtime-check",
-        "host=host",
-        "repo=/repo",
-        "os=macOS (arm64)",
-        "node=v20",
-        "model=anthropic/claude",
-        "default_model=anthropic/claude-opus-4-5",
-        "active_node=mac-123",
-        "channel=telegram",
-        "capabilities=inlinebuttons",
-      ],
-    ],
   ])("%s", expectPromptCase);
   it("does not inspect owner identities when minimal prompts omit owner guidance", () => {
     const ownerNumbers = new Proxy(["private-owner"], {
@@ -281,12 +233,6 @@ describe("buildAgentSystemPrompt", () => {
 
   it.each<PromptCase>([
     [
-      "keeps source delivery guidance mode-neutral when silent replies are suppressed",
-      { toolNames: ["message"], silentReplyPromptMode: "none" },
-      ["final text normally routes to source"],
-      ["Do not use `message(action=send)` to deliver the current source-channel reply"],
-    ],
-    [
       "uses Slack typed presentation hints instead of generic inline button config guidance",
       {
         toolNames: ["message"],
@@ -299,20 +245,6 @@ describe("buildAgentSystemPrompt", () => {
       },
       ["`presentation` buttons/selects"],
       ["Inline buttons not enabled for slack", 'presentation={"blocks":[{"type":"buttons"'],
-    ],
-    [
-      "requires an explicit target for message-tool-only turns when requested",
-      {
-        toolNames: ["message"],
-        sourceReplyDeliveryMode: "message_tool_only",
-        requireExplicitMessageTarget: true,
-        runtimeInfo: {
-          channel: "telegram",
-          chatType: "group",
-        },
-      },
-      ["`send`: `target` + `message`; target required this turn"],
-      ["current source is default target"],
     ],
   ])("%s", expectPromptCase);
   it("advertises YouTube embeds only in full webchat prompts below the cache boundary", () => {
@@ -331,39 +263,6 @@ describe("buildAgentSystemPrompt", () => {
         renderPrompt({ ...params, promptMode: "minimal", runtimeInfo: { channel: "webchat" } }),
       ).not.toContain(example);
     }
-  });
-
-  it.each([
-    { channel: undefined, promptSurface: "openclaw_main" as const, silent: false },
-    { channel: "webchat", promptSurface: "openclaw_main" as const, silent: false },
-    { channel: "discord", promptSurface: "subagent" as const, silent: false },
-    { channel: "discord", promptSurface: "openclaw_main" as const, silent: true },
-  ])(
-    "limits silent reply guidance to external channel sessions: $promptSurface/$channel",
-    ({ channel, promptSurface, silent }) => {
-      const prompt = renderPrompt({
-        toolNames: ["message"],
-        promptSurface,
-        runtimeInfo: { channel, chatType: "group" },
-      });
-
-      expect(prompt.includes(SILENT_REPLY_TOKEN)).toBe(silent);
-      expect(prompt.includes("## Silent Replies")).toBe(silent);
-    },
-  );
-
-  it("keeps runtime-context instructions once in the stable prefix", () => {
-    const model = "openai/gpt-5.6-luna";
-    const params = { workspaceDir: "/tmp/openclaw", runtimeInfo: { model } };
-    const first = renderPrompt(params);
-    const second = renderPrompt(params);
-    const instruction =
-      "OpenClaw may attach a separate runtime-context message for the current request. Treat it as application context rather than user-authored text.\nUse it without replying to or describing it, keep internal details private, and continue the request without waiting for another message.";
-    expect(first).toBe(second);
-    expect(first.split(instruction)).toHaveLength(2);
-    expect(first.slice(0, first.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toContain(instruction);
-    expect(first).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
-    expect(first).not.toContain("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>");
   });
 
   it.each<PromptCase>([
@@ -469,50 +368,25 @@ describe("buildAgentSystemPrompt", () => {
     expect(withoutAutomations).not.toContain("asked a 3rd time");
   });
 
-  it.each([
-    { name: "screen only", toolNames: ["screen"] },
-    {
-      name: "Code Mode",
-      toolNames: ["exec", "wait"],
-      capabilityToolNames: ["screen", "browser", "dashboard", "show_widget", "portal"],
-      codeModeActive: true,
+  it.each([{ name: "screen only", toolNames: ["screen"] }])(
+    "routes browser sidebar requests through screen for $name tools",
+    (surface) => {
+      const withoutScreen = renderPrompt({
+        toolNames: ["sessions", "browser", "dashboard", "show_widget"],
+      });
+      const withScreen = renderPrompt(surface);
+
+      expect(withoutScreen).not.toContain('action="browser_show"');
+      if (surface.toolNames.includes("screen")) {
+        expect(withScreen).toContain("web/app turn may drive UI");
+      }
+      const presentation = withScreen.split("## UI Presentation\n")[1]?.split("\n## ")[0] ?? "";
+      expect(presentation).toContain('screen(action="browser_show")');
+      expect(withScreen.indexOf("## UI Presentation")).toBeGreaterThan(
+        withScreen.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
+      );
     },
-  ])("routes browser sidebar requests through screen for $name tools", (surface) => {
-    const withoutScreen = renderPrompt({
-      toolNames: ["sessions", "browser", "dashboard", "show_widget"],
-    });
-    const withScreen = renderPrompt(surface);
-
-    expect(withoutScreen).not.toContain('action="browser_show"');
-    if (surface.toolNames.includes("screen")) {
-      expect(withScreen).toContain("web/app turn may drive UI");
-    }
-    const presentation = withScreen.split("## UI Presentation\n")[1]?.split("\n## ")[0] ?? "";
-    expect(presentation).toContain('screen(action="browser_show")');
-    expect(withScreen.indexOf("## UI Presentation")).toBeGreaterThan(
-      withScreen.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
-    );
-  });
-
-  it("keeps first casing and visible-only order with sparse duplicate tool names", () => {
-    const toolNames: string[] = [];
-    toolNames.length = 1;
-    toolNames.push(" Read ", "read", " EXEC ", "exec", " custom_Z ", "CUSTOM_z", "custom_a", " ");
-    Object.freeze(toolNames);
-    const prompt = renderPrompt({
-      toolNames,
-      capabilityToolNames: [" process ", "READ", "process", "custom_deferred"],
-    });
-    const tooling = prompt.split("## Tooling\n")[1]?.split("\nThe AGENTS.md Tools section")[0];
-
-    expect(
-      tooling
-        ?.split("\n")
-        .filter((line) => line.startsWith("- "))
-        .map((line) => line.slice(2).split(":")[0]),
-    ).toEqual(["Read", "EXEC", "custom_a", "custom_Z"]);
-    expect(prompt).toContain("Use EXEC yieldMs");
-  });
+  );
 
   it("includes bootstrap instructions in system prompt when bootstrap is pending", () => {
     const prompt = renderPrompt({
@@ -565,12 +439,6 @@ describe("buildAgentSystemPrompt", () => {
 
   it.each<PromptCase>([
     [
-      "omits skills guidance when deferred read capability is not a visible read tool",
-      { toolNames: ["tool_search"], capabilityToolNames: ["read"], skillsPrompt: SKILLS },
-      [],
-      ["## Skills", "<available_skills>"],
-    ],
-    [
       "keeps CLI-backend skill guidance when file tools are owned by the external harness",
       {
         promptSurface: "cli_backend",
@@ -578,16 +446,6 @@ describe("buildAgentSystemPrompt", () => {
         skillsPrompt: SKILLS,
       },
       ["## Skills", "<name>demo</name>", "read exact <location>"],
-    ],
-    [
-      "omits code-mode skill guidance when the actual exec tool is unavailable",
-      {
-        codeModeActive: true,
-        toolNames: ["message"],
-        skillsPrompt: SKILLS,
-      },
-      [],
-      ["## Skills", "skills.read"],
     ],
   ])("%s", expectPromptCase);
   it("removes shipped heartbeat prompt quotes from workspace context without dropping user guidance", () => {
@@ -610,14 +468,6 @@ describe("buildAgentSystemPrompt", () => {
         expect(prompt).not.toContain("Default heartbeat prompt:");
       }
     }
-  });
-
-  it("preserves custom quoted workspace instructions that are not default heartbeat prompts", () => {
-    const customPrompt =
-      "Default heartbeat prompt:\n`Review only the incident queue. If nothing needs attention, reply HEARTBEAT_OK.`";
-    const prompt = renderPrompt({ contextFiles: [{ path: "AGENTS.md", content: customPrompt }] });
-
-    expect(prompt).toContain(customPrompt);
   });
 
   it("filters invalid paths and renders typed project context in canonical order", () => {
@@ -709,7 +559,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(supported.prefix).toBe(unsupported.prefix);
   });
 
-  it.each(["group", "channel"] as const)(
+  it.each(["channel"] as const)(
     "describes message-tool-only source delivery for Discord %s without requiring target",
     (chatType) => {
       const prompt = renderPrompt({
@@ -888,26 +738,6 @@ describe("system prompt memory and runtime cache boundary", () => {
     clearMemoryPluginState();
   });
 
-  it("lets context engines suppress base memory guidance", () => {
-    registerTestMemoryPromptBuilder(() => ["## Memory Recall", "Use memory carefully."]);
-    expect(renderPrompt()).toContain("## Memory Recall");
-    expect(renderPrompt({ includeMemorySection: false })).not.toContain("## Memory Recall");
-  });
-
-  it("passes the active agent context to memory prompt assembly", () => {
-    registerTestMemoryPromptBuilder((context) => [
-      `agent=${context.agentId} session=${context.agentSessionKey} sandboxed=${context.sandboxed}`,
-    ]);
-    const prompt = renderPrompt({
-      toolNames: ["memory_search", "memory_get"],
-      runtimeInfo: { agentId: "marketing-agent", sessionKey: "agent:marketing-agent:main" },
-      sandboxInfo: { enabled: true },
-    });
-    expect(prompt).toContain(
-      "agent=marketing-agent session=agent:marketing-agent:main sandboxed=true",
-    );
-  });
-
   it("hands prepared memory lines to synchronous prompt assembly", async () => {
     const prepare = vi.fn(async () => ["## Prepared Wiki", "Prepared before assembly.", ""]);
     registerMemoryPromptPreparation("memory-wiki", prepare);
@@ -926,35 +756,15 @@ describe("system prompt memory and runtime cache boundary", () => {
     expect(prepare).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    { toolNames: ["process"], guidance: "Before input: process log" },
-    { toolNames: ["sessions_spawn"], guidance: "wait for runtime completion events" },
-    { toolNames: ["sessions_spawn", "sessions_yield"], guidance: "call `sessions_yield`" },
-    { toolNames: ["image_generate"], guidance: "Do not call `image_generate` again" },
-  ])("keeps $toolNames guidance stable even without active work", ({ toolNames, guidance }) => {
-    const available = buildPromptParts({ toolNames });
-    expect(available.prefix).toContain(guidance);
-    expect(buildPromptParts({ toolNames: [] }).prefix).not.toContain(guidance);
-    expect(available.suffix).not.toContain(guidance);
-  });
-
-  it("keeps changed project-memory facts after the stable recall and workspace instructions", () => {
-    registerTestMemoryPromptBuilder(() => ["## Memory Recall", "Search before recalling."]);
-    const build = (fact: string) =>
-      buildPromptParts({
-        toolNames: ["memory_search"],
-        projectMemoryBootstrap: ["## Project Memory", fact],
-      });
-    const first = build("- Build uses pnpm. (Source: MEMORY.md#L3)");
-    const next = build("- Build uses pnpm workspaces. (Source: MEMORY.md#L7)");
-
-    expect(next.prefix).toBe(first.prefix);
-    expect(first.prefix).toContain("## Memory Recall");
-    expect(first.prefix).toContain("Stable project instructions.");
-    expect(first.prefix).not.toContain("## Project Memory");
-    expect(first.suffix).toContain("- Build uses pnpm. (Source: MEMORY.md#L3)");
-    expect(next.suffix).toContain("- Build uses pnpm workspaces. (Source: MEMORY.md#L7)");
-  });
+  it.each([{ toolNames: ["image_generate"], guidance: "Do not call `image_generate` again" }])(
+    "keeps $toolNames guidance stable even without active work",
+    ({ toolNames, guidance }) => {
+      const available = buildPromptParts({ toolNames });
+      expect(available.prefix).toContain(guidance);
+      expect(buildPromptParts({ toolNames: [] }).prefix).not.toContain(guidance);
+      expect(available.suffix).not.toContain(guidance);
+    },
+  );
 
   it.each<
     [

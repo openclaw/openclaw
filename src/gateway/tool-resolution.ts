@@ -22,7 +22,6 @@ import {
   createSwarmCollectorWriteAuthority,
   resolveSwarmCollectorToolContext,
 } from "../agents/openclaw-tools.swarm.js";
-import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { createScheduledMessageInvocationAdmission } from "../agents/scheduled-message-invocation.js";
@@ -67,10 +66,11 @@ import {
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../security/dangerous-tools.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
-import { captureGatewayToolResolutionAuthority } from "./tool-resolution-authority.js";
+import {
+  captureGatewayToolResolutionAuthority,
+  resolveGatewayRequesterToolPolicies,
+} from "./tool-resolution-authority.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
@@ -87,6 +87,8 @@ export async function resolveGatewayScopedTools(
     | "cronCreatorCallerOrigin"
   > & {
     cfg: OpenClawConfig;
+    /** Workspace from the invocation owner's exact session read. */
+    preparedSessionWorkspaceDir?: string;
     rootedExecution?: PreparedRootedExecutionCapability;
     messageActionTurnCapability?: string;
     authProfileStore?: AuthProfileStore;
@@ -201,49 +203,18 @@ export async function resolveGatewayScopedTools(
   } = configuredToolPolicies;
   const policyAgentId = resolvedPolicyAgentId ?? runtimePolicyAgentId;
   const senderId = params.channelContext?.sender?.id;
-  // Only immutable Gateway-launched grants can opt into node exec. Match the
-  // embedded runner's wildcard sender policy while preserving owner WebChat.
-  const isOwnerInternalSession =
-    nodeExecSurface &&
-    params.senderIsOwner === true &&
-    normalizeMessageChannel(params.messageProvider) === INTERNAL_MESSAGE_CHANNEL;
-  const requesterPolicies = resolveRequesterToolPolicies({
-    config: params.cfg,
-    sessionKey: runtimePolicySessionKey,
-    subagentSessionKey: runtimePolicySessionKey,
-    agentId: policyAgentId,
-    spawnedBy: params.spawnedBy,
-    messageProvider: params.messageProvider,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    accountId: gatewayCaller.accountId ?? null,
-    senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    inputProvenance: params.inputProvenance,
-    trustedInternalHandoff: params.trustedInternalHandoff,
-    sessionId: params.sessionId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-    senderPolicyMode: params.scheduledToolPolicy
-      ? "never"
-      : nodeExecSurface
-        ? isOwnerInternalSession
-          ? "never"
-          : "always"
-        : "when-sender-id",
-    groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
-    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
+  const requesterPolicies = resolveGatewayRequesterToolPolicies(params, {
+    runtimePolicySessionKey,
+    policyAgentId,
+    nodeExecSurface,
+    accountId: gatewayCaller.accountId,
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
-  if (
-    params.trustedInternalHandoff &&
-    requesterPolicies.requesterPolicySource !== "completion-handoff"
-  ) {
-    throw new Error("CLI completion tool grant no longer matches its requester policy");
-  }
+  const sessionPermissionPolicy = params.rootedExecution
+    ? params.rootedExecution.sessionPermissionPolicy
+    : requesterPolicies.inheritedToolPolicySource === "sender"
+      ? params.sessionPermissionPolicy
+      : undefined;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -313,7 +284,11 @@ export async function resolveGatewayScopedTools(
   // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir =
     params.rootedExecution?.workspaceDir ??
-    (params.workspaceDir?.trim() || resolveAgentWorkspaceDir(params.cfg, sessionAgentId));
+    ((requesterPolicies.inheritedToolPolicySource === "sender"
+      ? params.preparedSessionWorkspaceDir?.trim()
+      : undefined) ||
+      params.workspaceDir?.trim() ||
+      resolveAgentWorkspaceDir(params.cfg, sessionAgentId));
   const basePolicies = [
     profilePolicy,
     providerProfilePolicy,
@@ -451,11 +426,11 @@ export async function resolveGatewayScopedTools(
     pinnedWidgetAuthoring: surface === "loopback" ? params.pinnedWidgetAuthoring : undefined,
     workspaceDir,
     sandboxed,
+    sessionPermissionPolicy,
     ...(params.rootedExecution
       ? {
           cwd: params.rootedExecution.cwd,
           fsPolicy: { workspaceOnly: true, root: params.rootedExecution.root },
-          sessionPermissionPolicy: params.rootedExecution.sessionPermissionPolicy,
           sandboxRoot: params.rootedExecution.sandbox?.workspaceDir,
           sandboxContainerWorkdir: params.rootedExecution.sandbox?.containerWorkdir,
           sandboxFsBridge: params.rootedExecution.sandbox?.fsBridge,
@@ -471,6 +446,7 @@ export async function resolveGatewayScopedTools(
     cronCreatorToolAllowlistCaptureRef,
     inheritedToolAllowlist,
     inheritedToolDenylist,
+    inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
   };
   const openClawTools = await createOpenClawToolsAsync(openClawToolOptions, { assertCurrent });
   assertCurrent();
@@ -512,6 +488,7 @@ export async function resolveGatewayScopedTools(
           workspaceDir,
           cwd: params.cwd?.trim() || workspaceDir,
           ...params.rootedExecution,
+          sessionPermissionPolicy,
           sandbox: params.rootedExecution?.sandbox ?? undefined,
           modelProvider: params.modelProvider,
           modelId: params.modelId,
@@ -537,6 +514,7 @@ export async function resolveGatewayScopedTools(
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
+          conversationToolPolicy: params.conversationToolPolicy,
           inputProvenance: params.inputProvenance,
           trustedInternalHandoff: params.trustedInternalHandoff,
           trigger: params.trigger,

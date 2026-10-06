@@ -187,7 +187,7 @@ class McpServersCard extends OpenClawLightDomElement {
   }
 
   private async addServer(form: McpServerForm) {
-    const name = form.name.trim();
+    const name = form.name;
     if (!MCP_SERVER_NAME_PATTERN.test(name)) {
       this.message = { kind: "error", text: t("mcpServers.nameInvalid") };
       return;

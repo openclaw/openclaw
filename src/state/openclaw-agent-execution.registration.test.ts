@@ -102,6 +102,10 @@ vi.mock("./openclaw-agent-db.js", () => ({
   openOpenClawAgentDatabase: edge.open,
   getOpenClawAgentDatabaseIfOpen: () => edge.database,
 }));
+vi.mock("./openclaw-agent-db-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-agent-db-schema.js")>()),
+  refreshOpenClawAgentDatabaseSchema: () => undefined,
+}));
 vi.mock("./openclaw-agent-db-identity.js", () => ({
   readOpenClawAgentDatabaseIdentity: () => ({
     identity: "fixture",
@@ -167,6 +171,7 @@ function retireFailedReply(
   const reject = vi.fn((error: unknown) => completion.resolve(error));
   const settleNative = vi.fn();
   const job: Job = {
+    observation: { started() {}, completed() {} },
     request,
     bytes: 0,
     nativeDispatched: true,

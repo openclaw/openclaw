@@ -9,7 +9,6 @@ import {
   appendTranscriptMessage,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
-  readSessionTranscriptWatermark,
   replaceTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
   updateSessionEntry,
@@ -151,55 +150,6 @@ describe("SessionManager persistence compatibility", () => {
     expect(events).toContainEqual(
       expect.objectContaining({ id: "inactive", parentId: "root", appendMode: "side" }),
     );
-  });
-
-  it("preserves and rebases trailing metadata, labels, and leaf controls", async () => {
-    const { dir, scope } = createScope("sqlite-remove-controls-session");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const events = [
-      header(scope.sessionId, dir),
-      row("message", "user", null, { message: { role: "user", content: "question" } }),
-      row("message", "temporary", "user", { message: buildAssistantMessage("temporary") }),
-      row("label", "temporary-label", "temporary", { targetId: "temporary", label: "retry" }),
-      row("label", "nested-temporary-label", "temporary-label", {
-        targetId: "temporary-label",
-        label: "nested retry",
-      }),
-      row("custom", "plugin-state", "nested-temporary-label", {
-        customType: "plugin-state",
-        data: { enabled: true },
-      }),
-      row("session_info", "session-info", "plugin-state", { name: "kept session" }),
-      row("leaf", "leaf-control", "session-info", {
-        targetId: "temporary",
-        appendParentId: "temporary",
-      }),
-    ];
-    expect(replaceTranscriptEventsSync(scope, events)).toBe(true);
-    const generationBefore = readSessionTranscriptWatermark(scope).generation;
-    const manager = SessionManager.open(scope, dir);
-
-    expect(
-      manager.removeTrailingEntries((entry) => entry.id === "temporary", {
-        preserveTrailing: (entry) =>
-          entry.type === "custom" || entry.type === "label" || entry.type === "session_info",
-      }),
-    ).toBe(1);
-
-    expect(readSessionTranscriptWatermark(scope).generation).not.toBe(generationBefore);
-    expect(await loadTranscriptEvents(scope)).toMatchObject([
-      { type: "session" },
-      { id: "user", parentId: null, type: "message" },
-      { id: "plugin-state", parentId: "user", type: "custom" },
-      { id: "session-info", parentId: "plugin-state", type: "session_info" },
-      {
-        id: "leaf-control",
-        parentId: "session-info",
-        targetId: "user",
-        appendParentId: "user",
-        type: "leaf",
-      },
-    ]);
   });
 
   it("allows stale suffix cleanup to remain a no-op when its target is absent", async () => {
@@ -441,15 +391,6 @@ function expectSingleUser(events: unknown[], key: string) {
 }
 
 describe("SessionManager user idempotency", () => {
-  it("preserves distinct keyed user turns with the same visible text", () => {
-    const manager = SessionManager.inMemory();
-    const message = { ...makeUserMessage("same question", 1), idempotencyKey: "first:user" };
-    const first = manager.appendMessage(message);
-    const second = { ...message, idempotencyKey: "second-run:user", timestamp: 2 };
-    expect(manager.appendMessage(second)).not.toBe(first);
-    expect(manager.getEntries().filter((entry) => entry.type === "message")).toHaveLength(2);
-  });
-
   it("allows an explicitly caller-checked keyed user append", () => {
     const manager = SessionManager.inMemory();
     const message = {

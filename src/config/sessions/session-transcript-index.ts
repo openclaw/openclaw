@@ -479,6 +479,8 @@ export function reconcileSessionTranscriptIndexInTransaction(
   return true;
 }
 
+// Native synchronous SDK callbacks and operator maintenance retain their owning connection.
+// Runtime disk reconciliation consumes the publication worker's maintained facts.
 function selectSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync) {
   const kysely = getIndexKysely(db);
   return (
@@ -535,16 +537,6 @@ function selectSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync) {
   );
 }
 
-/** Search needs only one pending session; the reconcile owner selects its complete work list. */
-export function hasSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): boolean {
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      selectSessionsNeedingTranscriptIndexReconcile(db).limit(1),
-    ) !== undefined
-  );
-}
-
 /**
  * Sessions whose index needs reconcile work: flagged rebuilds, transcripts
  * that gained rows without index state (doctor imports), and watermarks
@@ -577,16 +569,6 @@ function selectOrphanedTranscriptOwners(
   );
 }
 
-/** Orphan-only cleanup is independent of live sessions' projection watermarks. */
-export function hasOrphanedTranscriptIndexRows(db: DatabaseSync): boolean {
-  return transcriptIndexTables.some(
-    (table) =>
-      executeSqliteQueryTakeFirstSync(db, selectOrphanedTranscriptOwners(db, table).limit(1)) !==
-      undefined,
-  );
-}
-
-/** Drops index rows for sessions whose transcript rows are gone. */
 export function deleteOrphanedTranscriptIndexRowsInTransaction(db: DatabaseSync): void {
   const kysely = getIndexKysely(db);
   for (const table of transcriptIndexTables) {

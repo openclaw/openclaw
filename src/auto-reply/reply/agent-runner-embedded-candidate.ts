@@ -208,7 +208,7 @@ export async function runEmbeddedFallbackCandidate(
           if (info?.lifecycleGeneration) {
             params.onLifecycleGeneration(info.lifecycleGeneration);
           }
-          if (agentHarnessPolicy.runtime !== "openclaw") {
+          if (agentHarnessPolicy.runtime !== "openclaw" || info?.backend === "cloud-worker") {
             await params.prepareAgentRunStart();
           }
         },

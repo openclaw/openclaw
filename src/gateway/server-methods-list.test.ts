@@ -277,6 +277,8 @@ describe("listGatewayMethods", () => {
       "worktrees.retireSnapshot",
       "sessions.processes.list",
       "sessions.processes.stop",
+      "catalog.browse",
+      "catalog.searchKeywords",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -360,6 +362,8 @@ describe("listGatewayMethods", () => {
       "worktrees.retireSnapshot",
       "sessions.processes.list",
       "sessions.processes.stop",
+      "catalog.browse",
+      "catalog.searchKeywords",
     ]);
   });
 
@@ -571,6 +575,8 @@ describe("listGatewayMethods", () => {
       "worktrees.retireSnapshot",
       "sessions.processes.list",
       "sessions.processes.stop",
+      "catalog.browse",
+      "catalog.searchKeywords",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

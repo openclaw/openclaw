@@ -30,7 +30,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import java.util.UUID
 import java.util.concurrent.Executor
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -84,7 +83,7 @@ internal class WearProxyBridge(
   private val peers = LinkedHashMap<String, Long>()
   private val missingPeers = LinkedHashSet<String>()
   private var peerGeneration = 0L
-  private val nextSequence = AtomicLong()
+  private var nextSequence = 0L
   private val eventStreamId = UUID.randomUUID().toString()
   private val overflowLock = Any()
   private val pendingTerminalEvents = ArrayDeque<WearMessage.Event>()
@@ -232,7 +231,7 @@ internal class WearProxyBridge(
     val event =
       WearMessage.Event(
         streamId = eventStreamId,
-        sequence = nextSequence.incrementAndGet(),
+        sequence = ++nextSequence,
         event = type,
         payload = payload,
       )
@@ -267,7 +266,7 @@ internal class WearProxyBridge(
         add(
           WearMessage.Event(
             streamId = eventStreamId,
-            sequence = nextSequence.incrementAndGet(),
+            sequence = ++nextSequence,
             event = WearEventType.Resync,
           ),
         )
@@ -300,7 +299,7 @@ internal class WearProxyBridge(
     val terminalChatEvent = event.isTerminalChatEvent()
     // A terminal reply may need to notify a watch that has not contacted this phone
     // process yet, even while another remembered watch remains healthy.
-    discoverPeers(forceRefresh = terminalChatEvent, bypassNegativeCache = terminalChatEvent)
+    discoverPeers(forceRefresh = terminalChatEvent)
     val initialPeers = peerSnapshot()
     if (initialPeers.isEmpty()) return
     val delivered = sendToPeers(initialPeers, encoded)
@@ -308,7 +307,7 @@ internal class WearProxyBridge(
 
     // Refresh after any stale peer, but do not redeliver the sequence to watches
     // that already accepted it. Newly reachable and recovered peers get one retry.
-    discoverPeers(forceRefresh = true, bypassNegativeCache = true)
+    discoverPeers(forceRefresh = true)
     val retryPeers = peerSnapshot().filterNot { it.nodeId in delivered }
     sendToPeers(retryPeers, encoded)
   }
@@ -354,15 +353,12 @@ internal class WearProxyBridge(
     return true
   }
 
-  private suspend fun discoverPeers(
-    forceRefresh: Boolean,
-    bypassNegativeCache: Boolean,
-  ) {
+  private suspend fun discoverPeers(forceRefresh: Boolean) {
     if (!forceRefresh && hasPeers() && !needsPeerRefresh()) return
     val now = monotonicMillis()
     val previousDiscovery = lastPeerDiscoveryAtMillis
     if (
-      !bypassNegativeCache &&
+      !forceRefresh &&
       previousDiscovery != null &&
       now >= previousDiscovery &&
       now - previousDiscovery < PEER_DISCOVERY_RETRY_MILLIS

@@ -183,7 +183,7 @@ function makeDeviceRequiredShortCircuitResult(url: string): GatewayProbeResult {
   const close = {
     code: DEVICE_IDENTITY_REQUIRED_CLOSE_CODE,
     reason: DEVICE_IDENTITY_REQUIRED_CLOSE_REASON,
-    hint: "probe short-circuited by recent device-required rejections",
+    hint: "check short-circuited by recent device-required rejections",
   };
   return {
     ok: false,

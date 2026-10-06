@@ -41,7 +41,7 @@ export function registerNodesNotifyCommand(nodes: Command) {
             throw new Error("missing --title or --body");
           }
           const invokeTimeout = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
-          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
           const invokeParams = buildNodeInvokeParams({
             nodeId,
             command: "system.notify",

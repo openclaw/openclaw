@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { statRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
@@ -463,9 +464,19 @@ export async function removeClawWorkspaceFile(
     if (!(await workspace.exists(record.path))) {
       return { path: record.path, action: "missing" };
     }
+    const moveFile = (source: string, target: string) =>
+      workspace.move(source, target, {
+        overwrite: false,
+        assertBeforeMutation: () => {
+          // Keep file admission separate from authority: restoration survives ownership loss.
+          if (statRegularFileSync(path.join(workspace.rootReal, source)).missing) {
+            throw new Error("Claw workspace file no longer exists");
+          }
+        },
+      });
     const stagedPath = `${record.path}.openclaw-claw-remove-${randomUUID()}`;
     assertCurrent();
-    await workspace.move(record.path, stagedPath, { overwrite: false });
+    await moveFile(record.path, stagedPath);
     let outcome: Result<void, unknown>;
     try {
       const content = await workspace.readBytes(stagedPath, { maxBytes });
@@ -481,7 +492,7 @@ export async function removeClawWorkspaceFile(
     }
     // Undo this attempt's staging even after ownership loss; never replace new content.
     try {
-      await workspace.move(stagedPath, record.path, { overwrite: false });
+      await moveFile(stagedPath, record.path);
     } catch (error) {
       throw new AggregateError(
         [...(outcome.ok ? [] : [outcome.error]), error],

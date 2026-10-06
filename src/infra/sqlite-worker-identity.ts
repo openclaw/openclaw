@@ -193,6 +193,18 @@ export async function readDatabasePathIdentity(
   }
 }
 
+/** Revalidate the captured file, or keep an observed absence from adopting a replacement. */
+export function assertDatabasePathIdentity(
+  databasePath: string,
+  expected: DatabasePathIdentity,
+): void {
+  if (expected.key.startsWith("file:")) {
+    assertExistingDatabaseIdentity(databasePath, expected.key, expected.birthtime);
+  } else if (readDatabasePathIdentitySync(databasePath).key !== expected.key) {
+    throw new Error(`SQLite database path identity changed: ${databasePath}`);
+  }
+}
+
 export function assertExistingDatabaseIdentity(
   databasePath: string,
   expected: string,

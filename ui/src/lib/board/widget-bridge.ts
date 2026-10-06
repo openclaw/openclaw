@@ -34,13 +34,6 @@ export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidget
   );
 }
 
-function assertWidgetRequestRecord(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error("widget host request params are invalid");
-  }
-  return value;
-}
-
 function requiredString(params: Record<string, unknown>, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -127,7 +120,10 @@ export class BoardWidgetBridgeController {
     if (request.ticket !== this.ticket) {
       throw new Error("widget view ticket does not match the active frame");
     }
-    const params = assertWidgetRequestRecord(request.params);
+    const params = request.params;
+    if (!isRecord(params)) {
+      throw new Error("widget host request params are invalid");
+    }
     switch (request.method) {
       // Opening a link the user clicked is navigation, not a granted capability,
       // so this stays outside the tool-grant checks. Opening goes through the

@@ -161,10 +161,7 @@ async function tryRunGatewayRunFastPath(
   return true;
 }
 
-async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaunchTarget | null> {
-  if (!shouldHandleBareRoot(argv)) {
-    return null;
-  }
+async function resolveBareRootLaunchTarget(): Promise<BareRootLaunchTarget> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (await shouldStartLocalOnboarding(snapshot)) {
@@ -422,15 +419,12 @@ function pauseNonTtyStdinForCliExit(): void {
   }
 }
 
-function shouldLoadCliDotEnv(
-  loadGlobalEnv: boolean,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
   const cwd = tryProcessCwd();
   if (cwd && existsSync(path.join(cwd, ".env"))) {
     return true;
   }
-  return loadGlobalEnv && existsSync(path.join(resolveStateDir(env), ".env"));
+  return loadGlobalEnv && existsSync(path.join(resolveStateDir(), ".env"));
 }
 
 function isCommanderParseExit(error: unknown): error is { exitCode: number } {
@@ -513,13 +507,6 @@ function normalizeRootNoColorArgvForProgram(argv: string[], program: CommanderCo
   return normalizeRootNoColorArgv(argv, {
     shouldPreserveNoColor: ({ remainingArgs, noColorIndex }) =>
       resolveRootOptionRole(program, remainingArgs, noColorIndex) === "value",
-  });
-}
-
-function normalizeRootLogLevelArgvForProgram(argv: string[], program: CommanderCommand): string[] {
-  return normalizeRootLogLevelArgv(argv, {
-    shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
-      resolveRootOptionRole(program, remainingArgs, logLevelIndex) !== "root",
   });
 }
 
@@ -716,7 +703,7 @@ async function resolveExpectedPluginPolicyError(params: {
 
 async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
-  options: { ensureDispatcher?: boolean } = {},
+  ensureDispatcher: boolean,
 ): Promise<void> {
   // Capture init and coverage warnings no-op unless the
   // debug-proxy env requests capture; importing their sqlite-store graph anyway
@@ -732,7 +719,7 @@ async function bootstrapCliProxyCaptureAndDispatcher(
     await initializeDebugProxyCaptureAsync("cli");
     maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
   }
-  if (options.ensureDispatcher !== false) {
+  if (ensureDispatcher) {
     await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
   }
 }
@@ -1206,7 +1193,7 @@ async function runCliWithPreparedOutputMode(
       await ensureCliEnvProxyDispatcher();
     }
     const bareRootLaunchTarget = shouldRunBareRootCommand
-      ? await resolveBareRootLaunchTarget(normalizedArgv)
+      ? await resolveBareRootLaunchTarget()
       : null;
 
     if (bareRootLaunchTarget) {
@@ -1294,9 +1281,7 @@ async function runCliWithPreparedOutputMode(
     }
 
     if (!isHelpOrVersionInvocation && !isDatabaseInvocation) {
-      await bootstrapCliProxyCaptureAndDispatcher(startupTrace, {
-        ensureDispatcher: shouldUseCliEnvProxy,
-      });
+      await bootstrapCliProxyCaptureAndDispatcher(startupTrace, shouldUseCliEnvProxy);
     }
 
     if (
@@ -1436,9 +1421,12 @@ async function runCliWithPreparedOutputMode(
         }
       }
 
-      parseArgv = normalizeRootLogLevelArgvForProgram(
+      parseArgv = normalizeRootLogLevelArgv(
         normalizeRootNoColorArgvForProgram(parseArgv, program),
-        program,
+        {
+          shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
+            resolveRootOptionRole(program, remainingArgs, logLevelIndex) !== "root",
+        },
       );
       startupProgress.done();
 

@@ -88,6 +88,25 @@ it requires no extra Gateway request. See [Feature plugins](/plugins/feature-plu
 for registration. Other plugin accessories, including their custom HTML, CSS,
 and JavaScript, keep their existing contract.
 
+## Opted-in public child sessions
+
+The ingress resolver accepts an optional host-invocation intent,
+`childSessionPublication: { audience: "public", assertCurrent }`. Supply it only
+after explicit operator opt-in and provider-native proof that the entire
+supplied context is public. Unknown audience metadata must deny publication.
+`assertCurrent` synchronously rechecks account policy and the live ingress
+owner; never derive this field from message text, stored permalinks, or model
+arguments. The ordinary decision-only resolver does not grant authority.
+
+An exact host resolver-to-context handoff binds the intent to one admitted
+run. Only its fresh immediate isolated visible children can receive public
+grants, in their creation commits before launch. Private/draft, incognito, existing,
+forked, retargeted, and descendant sessions do not qualify. The intent cannot
+be serialized for future turns or transport fallback. This does not grant
+creator/admin authority or change Team collaboration permissions. Consumers
+of `onVisibleWorkSessions` may use `publicRead: true` as the creation receipt;
+a canonical URL alone is not proof of anonymous access.
+
 ## Walkthrough
 
 <Steps>
@@ -176,7 +195,7 @@ and JavaScript, keep their existing contract.
     for read-only diagnostics, including disabled or configured-but-unavailable
     accounts. Return `enabled`, `configured`, and applicable credential status
     fields without requiring secret resolution. Its result is not a resolved
-    account: operational hooks such as probes and account status builders receive
+    account: operational hooks such as checks and account status builders receive
     `config.resolveAccount` results instead.
     Diagnostics expose only status-safe fields from the inspection result.
     Include the same account enablement and configuration decisions used by the

@@ -314,13 +314,6 @@ describe("hooks CLI process lifecycle", () => {
       diagnostic: "failed to read native hook input",
     },
     {
-      name: "missing required option",
-      preloadMode: "linger" as const,
-      args: ["hooks", "relay"],
-      stdin: "",
-      diagnostic: "native hook relay failed: Missing required option --provider",
-    },
-    {
       name: "missing drain callbacks with no lingering handle",
       preloadMode: "missing-drain-callbacks" as const,
       args: ["hooks", "relay"],

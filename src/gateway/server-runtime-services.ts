@@ -2,6 +2,7 @@
 // Starts delayed maintenance, cron, heartbeat, recovery, and pricing refresh work.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   captureDeliveryQueueStateContext,
   resolveDeliveryQueueStateEnv,
@@ -116,6 +117,37 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
 }): void {
+  if (process.platform === "linux") {
+    params.scheduler.schedule({
+      id: "database:page-cache",
+      delayMs: params.delayMs,
+      everyMs: 15 * 60 * 1000,
+      run: () =>
+        runWithGatewayIndependentRootWorkAdmission(
+          async () => {
+            await racePromiseWithAbortSignal(params.waitForPostReadyWork(), params.signal);
+            if (params.isClosing()) {
+              return;
+            }
+            const { warmGatewayDatabasePageCache } =
+              await import("./server-database-page-cache.js");
+            params.signal.throwIfAborted();
+            await warmGatewayDatabasePageCache({
+              databases: params.startupMaintenance.startupSessionDatabases,
+              signal: params.signal,
+              startupTrace: params.startupMaintenance.startupTrace,
+              log: params.log,
+            });
+          },
+          "runtime:database-page-cache",
+          params.signal,
+        ).catch((error: unknown) => {
+          if (!params.isClosing()) {
+            params.log.warn(`database page-cache probe failed: ${String(error)}`);
+          }
+        }),
+    });
+  }
   params.scheduler.schedule({
     id: "startup:maintenance",
     delayMs: params.delayMs,
@@ -372,6 +404,9 @@ function startPendingSessionDeliveryRuntime(params: {
   const queueContext = captureOpenClawStateWorkerContext();
   const scheduler = params.scheduler.scope();
   const { signal } = scheduler;
+  const runDelivery = createScheduledGatewayRunner(
+    fenceScheduledGatewayContextResolver(params.resolveGatewayContext),
+  );
   let stopPromise: Promise<void> | undefined;
   let stopRuntime: (() => Promise<void>) | undefined;
   // Delay session continuation recovery so the gateway has time to publish ready state and
@@ -395,27 +430,27 @@ function startPendingSessionDeliveryRuntime(params: {
             scheduler: params.scheduler,
             queueContext,
             deliver: (entry, { queueContext: deliveryContext }) =>
-              deliverQueuedSessionDelivery({
-                deps: params.deps,
-                entry,
-                queueContext: deliveryContext,
-                ...(params.resolveGatewayContext
-                  ? { resolveGatewayContext: params.resolveGatewayContext }
-                  : {}),
-              }),
+              runDelivery(() =>
+                deliverQueuedSessionDelivery({
+                  deps: params.deps,
+                  entry,
+                  queueContext: deliveryContext,
+                  resolveGatewayContext: params.resolveGatewayContext,
+                }),
+              ),
             log: logRecovery,
             onSettled: settleQueuedSessionDelivery,
           });
           try {
-            await recoverPendingRestartContinuationDeliveries({
-              deps: params.deps,
-              queueContext,
-              log: logRecovery,
-              maxEnqueuedAt: params.maxEnqueuedAt,
-              ...(params.resolveGatewayContext
-                ? { resolveGatewayContext: params.resolveGatewayContext }
-                : {}),
-            });
+            await runDelivery(() =>
+              recoverPendingRestartContinuationDeliveries({
+                deps: params.deps,
+                queueContext,
+                log: logRecovery,
+                maxEnqueuedAt: params.maxEnqueuedAt,
+                resolveGatewayContext: params.resolveGatewayContext,
+              }),
+            );
           } finally {
             // Recovery and scheduling are independent safeguards. A transient
             // recovery failure must not leave persisted rows without timers.

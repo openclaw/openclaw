@@ -10,7 +10,6 @@ import {
 import { mutateConfigFileWithRetry } from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
 import type { AgentConfig } from "../../config/types.agents.js";
-import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 type AgentDeleteMutationResult = {
@@ -24,13 +23,8 @@ export class AgentConfigPreconditionError extends Error {}
 
 export class AgentModelSelectionError extends Error {}
 
-type AgentConfigUpdate = {
-  agentId: string;
-  name?: string;
-  workspace?: string;
-  model?: string | null;
+type AgentConfigUpdate = Omit<Parameters<typeof applyAgentConfig>[1], "agentDir"> & {
   agentRuntime?: string;
-  identity?: IdentityConfig;
 };
 
 function isModelOnlyUpdate(params: AgentConfigUpdate): boolean {

@@ -274,6 +274,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       },
       plugins: { enabled: false },
       agents: {
+        defaults: { heartbeat: { every: "0m" } },
         list: [
           { id: "main", default: true, workspace: path.join(runtime, "workspaces", "main") },
           { id: "second", workspace: path.join(runtime, "workspaces", "second") },
@@ -284,6 +285,21 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       fs.mkdirSync(agent.workspace, { recursive: true });
     }
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(config)}\n`);
+    // 2026.9.7 Doctor keeps unreferenced OAuth sidecars; the update must carry them unchanged.
+    const orphanSidecar = path.join(state, "credentials/auth-profiles", `${"e".repeat(32)}.json`);
+    const orphanSidecarBytes = `${JSON.stringify({
+      version: 1,
+      profileId: "openai-codex:default",
+      provider: "openai-codex",
+      encrypted: {
+        algorithm: "aes-256-gcm",
+        iv: "c3ludGg=",
+        tag: "c3ludGg=",
+        ciphertext: "c3ludGg=",
+      },
+    })}\n`;
+    fs.mkdirSync(path.dirname(orphanSidecar), { recursive: true });
+    fs.writeFileSync(orphanSidecar, orphanSidecarBytes, { mode: 0o600 });
     await run("fixture", "bash", [
       "-c",
       'source "$1"; install_update_restart_systemctl_shim absent',
@@ -447,6 +463,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     assert.equal(recorded.status, "succeeded");
     assert.equal(result.after?.version, build.version);
     assert.deepEqual(readJson(path.join(packageRoot, "dist/build-info.json")), build);
+    assert.equal(fs.readFileSync(orphanSidecar, "utf8"), orphanSidecarBytes);
     assert.notEqual(
       fs.readFileSync(env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "utf8"),
       beforePid,
