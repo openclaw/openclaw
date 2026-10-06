@@ -89,8 +89,9 @@ describe("startup recovery admission", () => {
         sessionId: "main-session",
         permissionMode: "guarded",
         updatedAt: Date.now() - 10_000,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "interrupted-cycle", revision: 1, chargedAttempts: 0 },
         ...entry,
       },
     );
@@ -253,10 +254,10 @@ describe("startup recovery admission", () => {
         expect(callGateway).toHaveBeenCalledTimes(action === "stop" ? 0 : 2);
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         for (const scope of [first, second]) {
-          expect(loadSessionEntry(scope)).toMatchObject({
-            status: "running",
-            abortedLastRun: action === "stop",
-          });
+          expect(loadSessionEntry(scope)?.status).toBe(
+            action === "stop" ? "interrupted" : undefined,
+          );
+          expect(loadSessionEntry(scope)?.abortedLastRun).toBe(action === "stop");
         }
         if (action === "continue") {
           expect(waitSpy).not.toHaveBeenCalled();
@@ -431,7 +432,7 @@ describe("startup recovery admission", () => {
               {
                 sessionId: "fresh-session",
                 updatedAt: Date.now(),
-                status: "running",
+                status: "interrupted",
                 abortedLastRun: true,
                 mainRestartRecovery: {
                   cycleId: "cycle-fresh-exhausted",
@@ -472,7 +473,7 @@ describe("startup recovery admission", () => {
         const freshEntry = loadSessionEntry({ sessionKey: "agent:main:fresh", storePath });
         expect(freshEntry).toMatchObject({
           sessionId: "fresh-session",
-          status: "running",
+          status: "interrupted",
           abortedLastRun: true,
           mainRestartRecovery: { chargedAttempts: 3 },
         });
@@ -527,7 +528,7 @@ describe("startup recovery admission", () => {
       expect(suspension.lease?.rollback()).toBe(true);
       expect(callGateway).toHaveBeenCalledTimes(2);
       expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         mainRestartRecovery: { chargedAttempts: 3 },
       });

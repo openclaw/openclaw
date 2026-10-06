@@ -84,7 +84,7 @@ describe("typed Goal operation persistence", () => {
         },
       ],
       sessionTurnMutation: { kind: "goal", operation, runId: "run-1" },
-      sessionLifecyclePatch: { status: "running", lastRunId: "run-1" },
+      sessionLifecyclePatch: { status: undefined, lastRunId: "run-1" },
       updateMode: "none",
     });
 
@@ -159,8 +159,8 @@ describe("typed Goal operation persistence", () => {
       action: "start",
       goal: { objective: startOperation().objective, tokenStart: 100 },
     });
+    expect(loadSessionEntry(scope())?.status).toBeUndefined();
     expect(loadSessionEntry(scope())).toMatchObject({
-      status: "running",
       lastRunId: "run-1",
       goal: receipt?.goal,
       skillsSnapshot,
@@ -216,7 +216,8 @@ describe("typed Goal operation persistence", () => {
     }
     expect(identityMutation).not.toHaveBeenCalled();
     expect(hasPendingCanonicalSessionValidation(database())).toBe(false);
-    expect(edited.sessionEntry).toMatchObject({ sessionId, status: "running", lastRunId: "run-1" });
+    expect(edited.sessionEntry).toMatchObject({ sessionId, lastRunId: "run-1" });
+    expect(edited.sessionEntry?.status).toBeUndefined();
     expect(edited.result.goal?.objective).toBe(editedObjective);
     expect(edited.sessionEntry?.skillsSnapshot).toEqual(skillsSnapshot);
     expect(loadSessionEntry(scope())?.goal?.objective).toBe(editedObjective);
@@ -453,7 +454,7 @@ describe("typed Goal operation persistence", () => {
           },
         },
       ],
-      sessionLifecyclePatch: { status: "running" },
+      sessionLifecyclePatch: { status: undefined },
       updateMode: "none",
     });
     expect(resumed.sessionTurnMutationResult?.result.goal).toMatchObject({

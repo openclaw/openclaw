@@ -200,6 +200,12 @@ it(
       // The queued input stays pending until delivery, so wait for its actual
       // registration before releasing the first reply that currently blocks it.
       await withinTest(queuedRunRegistered.promise, signal);
+      await expect(
+        withinTest(
+          gateway.client.request("agent.wait", { runId: "rpc-queued", timeoutMs: 30_000 }),
+          signal,
+        ),
+      ).resolves.toMatchObject({ runId: "rpc-queued", status: "pending", timeoutPhase: "queue" });
       expect(context?.chatQueuedTurns.has("rpc-queued")).toBe(true);
       firstGate.resolve();
       await withinTest(finalReached.promise, signal);

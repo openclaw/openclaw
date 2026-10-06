@@ -57,7 +57,6 @@ async function makePendingFinalFixture() {
     { sessionKey, storePath },
     {
       sessionId: "session-1",
-      status: "running",
       updatedAt: Date.now(),
       pendingFinalDelivery: {
         kind: "replayable",

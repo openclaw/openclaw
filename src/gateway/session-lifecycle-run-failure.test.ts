@@ -59,7 +59,6 @@ async function seed(assistantBranch?: "active" | "inactive" | "other-run") {
     sessionId: target.sessionId,
     updatedAt: 1_000,
     startedAt: 1_000,
-    status: "running",
     lifecycleRunId: runId,
     activeWriterRunId: runId,
     goal: {
@@ -185,12 +184,12 @@ describe("durable pre-reply run failure", () => {
                   key: target.sessionKey,
                   sessionId: target.sessionId,
                   kind: "direct",
-                  status: "running",
                   updatedAt: before.updatedAt,
                   startedAt: before.startedAt,
                   goal: before.goal,
                 },
                 lifecycleRunId: runId,
+                activeRunState: { active: true, runIds: [runId] },
                 event: queuedEvent,
                 includeSession: true,
                 lifecycle: true,
@@ -468,7 +467,7 @@ describe("durable pre-reply run failure", () => {
             },
           }),
         ).rejects.toThrow("Run authority expired");
-        expect(loadSessionEntry(target)?.status).toBe(when === "after" ? "failed" : "running");
+        expect(loadSessionEntry(target)?.status).toBe(when === "after" ? "failed" : undefined);
         expect(await reports()).toEqual([]);
       });
     },
@@ -513,7 +512,6 @@ async function createCliHistoryFixture() {
     startedAt: 1_000,
     lifecycleRunId: cliRunId,
     activeWriterRunId: cliRunId,
-    status: "running",
   });
   const scope = await resolveSessionTranscriptRuntimeTarget(cliTarget);
   const admission = prepareSystemAgentRunAdmission({}, cliRunId, "main", "cli-timeout-test");

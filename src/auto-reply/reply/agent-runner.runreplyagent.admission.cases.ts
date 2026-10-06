@@ -77,7 +77,7 @@ export function registerReplyAdmissionCases({
     "settles a tracked reply after lifecycle rotation during %s completion",
     async (stage) => {
       const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-        status: "running",
+        status: undefined,
         restartRecoveryDeliveryRunId: "msg",
       });
       let operation: ReplyOperation | undefined;
@@ -169,13 +169,13 @@ export function registerReplyAdmissionCases({
   });
 
   it.each([
-    { storage: "durable", orphanedRecovery: false, claimedRecovery: false },
-    { storage: "durable", orphanedRecovery: true, claimedRecovery: false },
-    { storage: "incognito", orphanedRecovery: false, claimedRecovery: false },
-    { storage: "durable", orphanedRecovery: false, claimedRecovery: true },
+    { storage: "durable", terminalRecovery: false, claimedRecovery: false },
+    { storage: "durable", terminalRecovery: true, claimedRecovery: false },
+    { storage: "incognito", terminalRecovery: false, claimedRecovery: false },
+    { storage: "durable", terminalRecovery: false, claimedRecovery: true },
   ])(
-    "publishes the admitted rotation without rereading it ($storage, orphaned recovery=$orphanedRecovery, claimed recovery=$claimedRecovery)",
-    async ({ storage, orphanedRecovery, claimedRecovery }) => {
+    "publishes the admitted rotation without rereading it ($storage, terminal recovery=$terminalRecovery, claimed recovery=$claimedRecovery)",
+    async ({ storage, terminalRecovery, claimedRecovery }) => {
       const sessionKey = "agent:main:main";
       const initial = {
         sessionId: "pre-compact-session",
@@ -220,16 +220,17 @@ export function registerReplyAdmissionCases({
         ...sessionEntry,
         ...expected,
         updatedAt: sessionEntry.updatedAt + 1,
-        ...(orphanedRecovery
+        ...(terminalRecovery
           ? {
-              status: "running" as const,
+              status: undefined,
               abortedLastRun: false,
-              restartRecoveryRuns: [{ runId: "orphaned-run", lifecycleGeneration: "retired" }],
+              restartRecoveryRuns: [{ runId: "terminal-run", lifecycleGeneration: "retired" }],
+              restartRecoveryTerminalRunIds: ["terminal-run"],
             }
           : {}),
         ...(claimedRecovery
           ? {
-              status: "running" as const,
+              status: undefined,
               abortedLastRun: true,
               mainRestartRecovery: { cycleId: "admitted-cycle", revision: 1, chargedAttempts: 0 },
             }

@@ -26,6 +26,23 @@ const params = {
   phase: "inspect" as const,
 };
 
+async function withEffectiveUid<T>(uid: number, run: () => Promise<T>): Promise<T> {
+  const existingGeteuid = Object.getOwnPropertyDescriptor(process, "geteuid");
+  Object.defineProperty(process, "geteuid", {
+    configurable: true,
+    value: () => uid,
+  });
+  try {
+    return await run();
+  } finally {
+    if (existingGeteuid) {
+      Object.defineProperty(process, "geteuid", existingGeteuid);
+    } else {
+      Reflect.deleteProperty(process, "geteuid");
+    }
+  }
+}
+
 function mockService(
   home: string,
   managerUid: () => number | undefined,
@@ -104,3 +121,64 @@ it("retains the inspected systemd manager route during preparation", () =>
     expect(stop).toHaveBeenCalledOnce();
     expect(new Set(seenRoutes.slice(readsBeforePreparation))).toEqual(new Set([admittedRoute]));
   }));
+
+it("loads a collected systemd unit from a shipped stopped handoff", () =>
+  withServiceHome(async (home) =>
+    withEffectiveUid(2001, async () => {
+      const managerUid = 2001;
+      let collected = false;
+      const loadUids: Array<number | undefined> = [];
+      const service = createMockGatewayService({
+        readCommand: async (_env, options) => {
+          if (collected) {
+            loadUids.push(options?.loadForInspection?.managerUid);
+          }
+          return {
+            programArguments: [
+              process.execPath,
+              path.join(process.cwd(), "openclaw.mjs"),
+              "gateway",
+            ],
+            environment: { HOME: home },
+          };
+        },
+        readRuntime: async (_env, options) => {
+          if (collected) {
+            loadUids.push(options?.loadForInspection?.managerUid);
+          }
+          return {
+            status: collected ? "stopped" : "running",
+            ...(collected ? {} : { pid: fixtureGatewayPid }),
+            systemd: { managerUid },
+          };
+        },
+        isLoaded: async () => true,
+      });
+      mocks.service.mockReturnValue(service);
+
+      const before = await maybeStopManagedServiceBeforeMutableUpdate(params);
+      expect(before).toMatchObject({
+        stopped: false,
+        serviceManagerUid: managerUid,
+        serviceUpdateVerdict: { kind: "owned" },
+      });
+      before.stopped = true;
+      before.stoppedAtMs = Date.now();
+      before.serviceManagerUid = undefined;
+      collected = true;
+
+      await expect(
+        maybeStopManagedServiceBeforeMutableUpdate({
+          ...params,
+          expectedService: before,
+          assertCurrent: () => {},
+        }),
+      ).resolves.toMatchObject({
+        stopped: false,
+        serviceManagerUid: managerUid,
+        serviceUpdateVerdict: { kind: "owned" },
+      });
+      expect(loadUids).not.toHaveLength(0);
+      expect(new Set(loadUids)).toEqual(new Set([managerUid]));
+    }),
+  ));
