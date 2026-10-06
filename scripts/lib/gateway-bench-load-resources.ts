@@ -4,6 +4,9 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const now = () => Number(process.hrtime.bigint() / 1_000n) / 1_000;
+export function gatewayProcessDisappeared(error: unknown): boolean {
+  return ["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException)?.code ?? "");
+}
 export function gatewayAffinityMatches(actual: string, expected: string): boolean {
   const allowed = new Set(expected.split(",").map(Number));
   return actual.split(",").every((part) => {
@@ -133,13 +136,13 @@ export function createGatewayLoadResources(parent: string) {
             threads.set(key, item);
             threadCount++;
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            if (!gatewayProcessDisappeared(error)) {
               throw error;
             }
           }
         }
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        if (!gatewayProcessDisappeared(error)) {
           throw error;
         }
       }

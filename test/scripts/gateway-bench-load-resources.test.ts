@@ -3,9 +3,18 @@ import {
   parseGatewayCounters,
   parseGatewayThreadStat,
   gatewayAffinityMatches,
+  gatewayProcessDisappeared,
 } from "../../scripts/lib/gateway-bench-load-resources.ts";
 
 describe("Gateway load kernel counters", () => {
+  it.each([
+    ["ENOENT", true],
+    ["ESRCH", true],
+    ["EACCES", false],
+    ["EIO", false],
+  ])("handles disappearing procfs targets without hiding %s failures", (code, gone) => {
+    expect(gatewayProcessDisappeared({ code })).toBe(gone);
+  });
   it("checks observed ranges and subsets against the requested CPU set", () => {
     expect(gatewayAffinityMatches("0-3", "0,1,2,3")).toBe(true);
     expect(gatewayAffinityMatches("2", "0,1,2,3")).toBe(true);
