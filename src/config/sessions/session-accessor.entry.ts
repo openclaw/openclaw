@@ -183,23 +183,33 @@ export async function readResolvedSessionEntriesInWorker(
   projection: "exact" | "worktree" = "exact",
 ): Promise<Map<string, ResolvedSessionEntryAccessTarget>> {
   const scope = { ...input, env: cloneEnvWithPlatformSemantics(input.env ?? process.env) };
+  const actorEnv = input.env === undefined ? undefined : scope.env;
   const result = new Map<string, ResolvedSessionEntryAccessTarget>();
-  const requests: Array<{
-    agentId: string;
-    canonicalKey: string;
-    requestedKey: string;
-    storePath: string;
-    sessionKeys: string[];
-  }> = [];
-  for (const requestedKey of new Set(scope.sessionKeys)) {
+  const prepared = [...new Set(scope.sessionKeys)].map((requestedKey) => {
     const { agentId, canonicalKey } = resolveSessionStoreIdentity({
       ...scope,
       sessionKey: requestedKey.trim(),
     });
+    return {
+      agentId,
+      canonicalKey,
+      requestedKey,
+      storePath: resolveSessionStorePathCore(scope.cfg.session?.store, { agentId, env: scope.env }),
+      sessionKeys: collectCanonicalSessionLookupKeys({
+        agentId,
+        canonicalKey,
+        requestedKey: requestedKey.trim(),
+        mainKey: scope.cfg.session?.mainKey,
+      }),
+    };
+  });
+  const requests: typeof prepared = [];
+  for (const request of prepared) {
+    const { agentId, canonicalKey, requestedKey, storePath } = request;
     const actorScope = {
       ...scope,
       // Omitted environments belong to the captured actor's root, not process.env.
-      env: input.env === undefined ? undefined : scope.env,
+      env: actorEnv,
       sessionKey: canonicalKey,
     };
     if (captureIncognitoSessionBinding(actorScope)) {
@@ -212,10 +222,6 @@ export async function readResolvedSessionEntriesInWorker(
       });
       continue;
     }
-    const storePath = resolveSessionStorePathCore(scope.cfg.session?.store, {
-      agentId,
-      env: scope.env,
-    });
     if (isNativeSessionEntryRead({ ...scope, storePath, sessionKey: canonicalKey }, agentId)) {
       result.set(
         requestedKey,
@@ -226,74 +232,49 @@ export async function readResolvedSessionEntriesInWorker(
       );
       continue;
     }
-    requests.push({
-      agentId,
-      canonicalKey,
-      requestedKey,
-      storePath,
-      sessionKeys: collectCanonicalSessionLookupKeys({
-        agentId,
-        canonicalKey,
-        requestedKey: requestedKey.trim(),
-        mainKey: scope.cfg.session?.mainKey,
-      }),
-    });
+    requests.push(request);
   }
   if (!requests.length) {
     return result;
   }
+  const agents = new Set(requests.map(({ agentId }) => agentId));
   const read = async (targets: readonly SessionStoreTarget[], assertCurrent: () => void) => {
-    const stores = new Map<string, SessionStoreTarget & { sessionKeys: Set<string> }>();
-    const byRequest = new Map<string, string[]>();
-    for (const request of requests) {
-      const candidates = new Map<string, SessionStoreTarget>();
-      candidates.set(request.storePath, request);
-      for (const target of targets) {
-        if (target.agentId === request.agentId) {
-          candidates.set(target.storePath, target);
-        }
-      }
-      const ids: string[] = [];
-      for (const target of candidates.values()) {
-        const id = JSON.stringify([target.agentId, target.storePath]);
-        ids.push(id);
-        let store = stores.get(id);
-        if (!store) {
-          store = { ...target, sessionKeys: new Set() };
-          stores.set(id, store);
-        }
-        for (const key of request.sessionKeys) {
-          store.sessionKeys.add(key);
-        }
-      }
-      byRequest.set(request.requestedKey, ids);
-    }
-    const ids = [...stores.keys()];
+    // Each agent's requests share their captured default path and recovery inventory.
+    const stores = [
+      ...new Map(
+        [...requests, ...targets.filter(({ agentId }) => agents.has(agentId))].map((target) => [
+          JSON.stringify([target.agentId, target.storePath]),
+          target,
+        ]),
+      ).values(),
+    ];
     return withSessionEntriesFromStoresInWorker(
-      [...stores.values()].map(({ agentId, storePath, sessionKeys }) => ({
+      stores.map(({ agentId, storePath }) => ({
         agentId,
         storePath,
-        sessionKeys: [...sessionKeys],
+        sessionKeys: [
+          ...new Set(
+            requests
+              .filter((request) => request.agentId === agentId)
+              .flatMap((request) => request.sessionKeys),
+          ),
+        ],
         projection,
         snapshotFields: [],
         env: scope.env,
       })),
       (loaded) => {
         assertCurrent();
-        const entries = new Map(
-          loaded.map(({ result: loadedResult }, index) => [
-            expectDefined(ids[index], "session store request"),
-            new Map(loadedResult.entries.map((entry) => [entry.sessionKey, entry])),
-          ]),
-        );
+        const entries = loaded.map(({ result: loadedResult }, index) => ({
+          agentId: expectDefined(stores[index], "session store request").agentId,
+          rows: new Map(loadedResult.entries.map((entry) => [entry.sessionKey, entry])),
+        }));
         for (const request of requests) {
-          const matches = expectDefined(
-            byRequest.get(request.requestedKey),
-            "session owner request",
-          ).flatMap((id) => {
-            const storeEntries = expectDefined(entries.get(id), "session store response");
-            return request.sessionKeys.flatMap((key) => storeEntries.get(key) ?? []);
-          });
+          const matches = entries.flatMap(({ agentId, rows }) =>
+            agentId === request.agentId
+              ? request.sessionKeys.flatMap((key) => rows.get(key) ?? [])
+              : [],
+          );
           const selected = selectCanonicalSessionEntryMatch(matches, request.canonicalKey);
           result.set(request.requestedKey, {
             agentId: request.agentId,
@@ -312,12 +293,7 @@ export async function readResolvedSessionEntriesInWorker(
   }
   const inventory = prepareSessionStoreTargetInventory(
     scope.cfg,
-    [
-      ...new Set([
-        ...requests.map(({ agentId }) => agentId),
-        ...listConfiguredSessionStoreAgentIds(scope.cfg),
-      ]),
-    ],
+    [...new Set([...agents, ...listConfiguredSessionStoreAgentIds(scope.cfg)])],
     scope.env,
     "recovery",
   );
