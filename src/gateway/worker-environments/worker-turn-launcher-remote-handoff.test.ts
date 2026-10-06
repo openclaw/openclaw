@@ -5,10 +5,12 @@ import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkerConnectRequestFrameSchema } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { createEmptyPreparedModelRuntimeSnapshot } from "../../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
 import {
   configureExecutionIdentityAdmissionSink,
   type ExecutionIdentityAdmissionWork,
@@ -52,7 +54,24 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 
 describe("worker turn launcher remote handoff", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
+  beforeEach(async () => {
+    await setupWorkerTurnLauncherTest();
+    vi.spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
+      async (input) => {
+        const snapshot = createEmptyPreparedModelRuntimeSnapshot(input);
+        return {
+          snapshot,
+          pluginGeneration: {
+            configuredCatalogEntries: [],
+            inlineProviderModels: [],
+            pluginMetadataSnapshot: snapshot.metadataSnapshot,
+            pluginRegistry: snapshot.pluginRegistry,
+          },
+          [Symbol.asyncDispose]: async () => {},
+        };
+      },
+    );
+  });
   afterEach(cleanupWorkerTurnLauncherTest);
   afterEach(() => setActiveNodeContexts([]));
 

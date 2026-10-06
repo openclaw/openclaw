@@ -78,7 +78,7 @@ export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): Plugin
   };
 }
 
-function createEmptyPreparedModelRuntimeSnapshot(
+export function createEmptyPreparedModelRuntimeSnapshot(
   input: PreparedModelRuntimeInput,
   pluginRegistry?: PreparedModelRuntimeSnapshot["pluginRegistry"],
 ): PreparedModelRuntimeSnapshot {
