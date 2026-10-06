@@ -157,6 +157,10 @@ and admitted writes keep their normal drain and recovery behavior. This also
 applies to update restarts once the running Gateway contains this fix; installing
 new files cannot change a wait already held by an older Gateway process.
 
+For an accepted WebChat turn, `agent.wait` reports `pending` with
+`timeoutPhase: "queue"` when queue admission completes, including when the wait
+began before admission. Queuing does not complete the turn's run ID.
+
 Cron shutdown gives execution cleanup and durable result writes the same cleanup
 window. Finishing the job's execution does not by itself complete the drain:
 result persistence must also settle, or the Gateway reports the remaining work
