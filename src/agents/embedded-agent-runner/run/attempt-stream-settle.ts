@@ -325,12 +325,12 @@ export async function settleEmbeddedAttemptStream(input: {
           }
         }
 
-        const captured = captureStreamSnapshot();
+        const streamSnapshot = captureStreamSnapshot();
 
         if (
           promptError &&
           promptErrorSource === "prompt" &&
-          !captured.compactionOccurredThisAttempt &&
+          !streamSnapshot.compactionOccurredThisAttempt &&
           !attempt.abortSignal?.aborted
         ) {
           try {
@@ -351,7 +351,7 @@ export async function settleEmbeddedAttemptStream(input: {
         if (input.shouldFlushForContextEngine) {
           sessionManager.flushPendingPersistence();
         }
-        return captured;
+        return streamSnapshot;
       }),
     );
   } catch (error) {
