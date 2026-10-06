@@ -1,10 +1,15 @@
 import "./session-accessor.sqlite-replacement-publication.test-support.js";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import {
+  resolveMemoryAudienceFromEntry,
+  assertMemoryAudienceCurrent,
+} from "../../plugins/memory-audience.js";
+import { bindMemoryProvider } from "../../plugins/memory-provider-adapter.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -27,13 +32,46 @@ it.for(["metadata", "replacement"] as const)(
         sessionKey: "agent:main:generation-readiness",
       };
       const original = {
-        sessionId: "generation-readiness",
+        sessionId: "a1234567-1234-1234-1234-123456789abc",
+        chatType: "direct" as const,
         lifecycleRevision: "original-lifecycle",
         updatedAt: 1,
       };
       replaceSessionEntrySync(scope, original);
       const generation = await prepareSessionGenerationFacts({ ...scope, ...original });
       const releasedGeneration = await prepareSessionGenerationFacts({ ...scope, ...original });
+      const grant = await resolveMemoryAudienceFromEntry(
+        { ...scope, sessionId: original.sessionId, senderIsOwner: true },
+        original,
+      );
+      if (grant.status !== "granted") {
+        throw new Error(grant.reason);
+      }
+      const health = vi.fn(async () => ({ status: "ready" as const }));
+      const provider = bindMemoryProvider(
+        {
+          capabilities: {
+            sources: ["memory"],
+            pagination: false,
+            candidates: [],
+            projectFilter: false,
+          },
+          health,
+          search: async () => ({ hits: [] }),
+          get: async () => ({ status: "not_found" }),
+          close: async () => {},
+        },
+        "test",
+        {
+          authority: {
+            kind: "session",
+            sessionKey: scope.sessionKey,
+            sandboxed: false,
+            audience: grant.audience,
+          },
+          assertCurrent: () => {},
+        },
+      );
       const writes: Promise<unknown>[] = [];
       const readiness: Promise<unknown>[] = [];
       let releaseReply = () => {};
@@ -81,6 +119,13 @@ it.for(["metadata", "replacement"] as const)(
           expect(generation.assertCurrent).toThrow(
             expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
           );
+          const priorCalls = health.mock.calls.length;
+          const providerRead = provider.health().catch((error: unknown) => error);
+          readiness.push(providerRead);
+          expect(health).toHaveBeenCalledTimes(priorCalls);
+          expect(() => assertMemoryAudienceCurrent(grant.audience)).toThrow(
+            "currency is unavailable",
+          );
           const pending = generation.prepareRead();
           expect(pending).toBeInstanceOf(Promise);
           if (!pending) {
@@ -115,10 +160,14 @@ it.for(["metadata", "replacement"] as const)(
           }
           expect(generation.prepareRead()).toBeUndefined();
           if (kind === "replacement") {
+            expect(await providerRead).toBeInstanceOf(Error);
+            expect(health).toHaveBeenCalledTimes(priorCalls);
             expect(generation.assertCurrent).toThrow(
               expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
             );
           } else {
+            await expect(providerRead).resolves.toEqual({ status: "ready" });
+            expect(health).toHaveBeenCalledTimes(priorCalls + 1);
             generation.assertCurrent();
           }
         }
@@ -148,6 +197,8 @@ it.for(["metadata", "replacement"] as const)(
         signal.removeEventListener("abort", onAbort);
         releasedGeneration.release();
         generation.release();
+        grant.release();
+        await provider.close();
       }
     });
   },
