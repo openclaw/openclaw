@@ -203,6 +203,11 @@ export async function handleChatHistoryRequest({
     });
     const max = limit ?? 200;
     const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
+    // Recovery lookahead keeps its read budget; anchored pages have no continuation cursor.
+    const maxResponseBytes = Math.min(
+      maxBytes ?? (messageId ? maxHistoryBytes : 512 * 1024),
+      maxHistoryBytes,
+    );
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
       sessionId && sessionId === entry?.sessionId
@@ -267,6 +272,7 @@ export async function handleChatHistoryRequest({
                   canonicalKey,
                   max,
                   maxHistoryBytes,
+                  responseHistoryBytes: maxResponseBytes,
                   effectiveMaxChars,
                   offset,
                   messageId,
@@ -299,6 +305,7 @@ export async function handleChatHistoryRequest({
       : prepareChatHistoryResponsePage(historyPage, {
           entry: historyEntry,
           maxHistoryBytes,
+          responseHistoryBytes: maxResponseBytes,
           messageId,
         });
     const { messages, messagesBytes, responseHistoryBytes, omission, ...responseFields } =
@@ -504,7 +511,7 @@ export async function handleChatHistoryRequest({
               {
                 agentId: sessionAgentId,
                 cursor,
-                maxBytes: maxHistoryBytes,
+                maxBytes: maxResponseBytes,
                 scope,
                 sessionKey: canonicalKey,
                 sessionSnapshot,
@@ -546,7 +553,7 @@ export async function handleChatHistoryRequest({
               snapshot: inFlightRun,
               messages: delta.messages,
               getMessagesBytes: () => delta.messagesBytes,
-              maxBytes: maxHistoryBytes - delta.activityBytes,
+              maxBytes: maxResponseBytes - delta.activityBytes,
             });
             const payload = {
               kind: "delta",
