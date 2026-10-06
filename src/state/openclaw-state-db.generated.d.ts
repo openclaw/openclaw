@@ -425,6 +425,42 @@ export interface CurrentConversationBindings {
   updated_at: number;
 }
 
+export interface DelegatedExecutionOwnership {
+  authority_ref: string | null;
+  context_id: string | null;
+  created_at: number;
+  delegate_goal_ref: string | null;
+  delegation_ref: string;
+  enforcement_floor: number;
+  execution_id: string | null;
+  last_event: string;
+  lineage_ref: string | null;
+  owner_id: string;
+  owner_kind: string;
+  owner_state: string;
+  release_event: string | null;
+  released_at: number | null;
+  revision: number;
+  run_id: string | null;
+  state: string;
+  task_scope_ref: string;
+  updated_at: number;
+}
+
+export interface DelegatedExecutionOwnershipEvents {
+  actor_kind: string;
+  actor_ref: string;
+  authority_ref: string | null;
+  delegation_ref: string;
+  detail_json: string;
+  event: string;
+  event_id: string;
+  from_state: string | null;
+  occurred_at: number;
+  revision: number;
+  to_state: string;
+}
+
 export interface DeliveryQueueEntries {
   account_id: string | null;
   channel: string | null;
@@ -1806,6 +1842,8 @@ export interface DB {
   cron_run_receipts: CronRunReceipts;
   cron_run_trigger_state_retirements: CronRunTriggerStateRetirements;
   current_conversation_bindings: CurrentConversationBindings;
+  delegated_execution_ownership: DelegatedExecutionOwnership;
+  delegated_execution_ownership_events: DelegatedExecutionOwnershipEvents;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;
   device_bootstrap_tokens: DeviceBootstrapTokens;

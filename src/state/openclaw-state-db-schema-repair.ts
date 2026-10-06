@@ -433,6 +433,9 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   ) {
     migrations.push({ kind: "github-publication-requester-authority-v18", path: pathname });
   }
+  if (userVersion < 19 && !tableExists(db, "delegated_execution_ownership")) {
+    migrations.push({ kind: "delegated-execution-ownership-v19", path: pathname });
+  }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
   }

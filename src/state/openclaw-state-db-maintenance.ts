@@ -25,6 +25,7 @@ import {
 } from "./openclaw-state-db-doctor-schema.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
+import { migrateDelegatedExecutionOwnershipV19 } from "./openclaw-state-db-schema-v19.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -558,6 +559,10 @@ export const versionedStateMigrations: ReadonlyArray<{
   {
     migrate: migrateGitHubPublicationRequesterAuthority,
     applied: "Added original requester authority to GitHub publication receipts (v18)",
+  },
+  {
+    migrate: migrateDelegatedExecutionOwnershipV19,
+    applied: "Installed the durable delegated execution ownership registry (v19)",
   },
 ];
 
