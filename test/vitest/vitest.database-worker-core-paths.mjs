@@ -74,7 +74,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/reply-run-registry.preparation.test.ts",
   "src/auto-reply/reply/reply-run-registry.question-registration.test.ts",
   "src/auto-reply/reply/reply-tool-authority.worker.test.ts",
-  "src/auto-reply/reply/session-updates.exec-preparation.test.ts",
   "src/auto-reply/reply/session-reset-prompt.test.ts",
   "src/auto-reply/reply/session-updates.exec-preparation.test.ts",
   "src/auto-reply/reply/session-updates.lifecycle.test.ts",
