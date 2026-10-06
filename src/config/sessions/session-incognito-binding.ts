@@ -11,6 +11,7 @@ import { bindPreparedSessionEntryPublication } from "./session-accessor.sqlite-e
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
+import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type { SessionEntry } from "./types.js";
 
 export type IncognitoSessionBinding = Readonly<{
@@ -59,7 +60,11 @@ export function captureIncognitoSessionBinding(target?: {
       return binding;
     }
     const options = toDatabaseOptions(
-      resolveSqliteScope({ ...target, sessionKey: target.sessionKey ?? "" }),
+      resolveSqliteScope({
+        ...target,
+        env: target.env ?? { OPENCLAW_STATE_DIR: path.resolve(binding.actor.path, "../../../..") },
+        sessionKey: target.sessionKey ?? "",
+      }),
     );
     if (
       options.agentId !== binding.actor.agentId ||
@@ -69,6 +74,18 @@ export function captureIncognitoSessionBinding(target?: {
     }
   }
   return binding;
+}
+
+/** Capture admission once; accepted persistence keeps its actor authority during close. */
+export function captureIncognitoSessionOperation(
+  target: Parameters<typeof captureIncognitoSessionBinding>[0],
+): (IncognitoSessionBinding & { authority: IncognitoSessionAuthority }) | undefined {
+  const binding = captureIncognitoSessionBinding(target);
+  if (!binding) {
+    return undefined;
+  }
+  binding.admissionSignal?.throwIfAborted();
+  return { ...binding, authority: { assertCurrent: () => binding.actor.assertCurrent() } };
 }
 
 /** Facts have already been installed under actor FIFO custody before observers run. */

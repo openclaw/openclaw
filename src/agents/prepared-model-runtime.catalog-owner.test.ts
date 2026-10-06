@@ -152,6 +152,31 @@ describe("prepared catalog owner lifecycle", () => {
         agentId: "beta",
         workspaceDir,
       });
+      const events = vi.fn();
+      const stopObserving = registerPreparedModelRuntimePublicationListener(events);
+      try {
+        snapshot.accountCatalog?.prepareServiceTierObserver({
+          selectedCredential: {
+            source: "direct",
+            provider: "openai",
+            identityKey: "direct:openai",
+          },
+        })({
+          modelId: "fixture-model",
+          runtimeId: "openclaw",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          requestedTier: "ultrafast",
+          responseTier: "priority",
+        });
+        expect(events).toHaveBeenCalledExactlyOnceWith({
+          phase: "catalog-observation",
+          modelFactsChanged: false,
+          agentId: "beta",
+        });
+      } finally {
+        stopObserving();
+      }
     } finally {
       source.resolve({ agentDir, wrote: false });
       await Promise.allSettled([fresh, refreshed]);

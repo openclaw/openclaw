@@ -1,12 +1,4 @@
-/**
- * Sessions compact command.
- *
- * Wraps the `sessions.compact` Gateway RPC behind `openclaw sessions compact <key>`
- * so wedged sessions have a documented, first-class recovery path. The command
- * propagates a non-zero exit whenever the gateway reports a failed compaction
- * (transport error or an `ok:false` payload) so automation never mistakes a
- * silent no-op for success.
- */
+// Failed compaction must exit nonzero so automation cannot mistake a silent no-op for success.
 import { rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -68,7 +60,6 @@ function describeCompaction(result: SessionsCompactResult, fallbackKey: string):
   return `Compacted session ${sessionKey}${detail}.`;
 }
 
-/** Run `openclaw sessions compact <key>` against the running gateway. */
 export async function sessionsCompactCommand(
   opts: SessionsCompactCliOptions,
   runtime: RuntimeEnv,

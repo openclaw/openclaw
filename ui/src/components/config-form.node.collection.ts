@@ -33,6 +33,7 @@ import { renderMapField } from "./config-form.node.collection-map.ts";
 import {
   configChildRenderOptions,
   getSensitiveRenderState,
+  removeCollectionRow,
   renderFieldRow,
   renderSchemaDefaultDescription,
   type ConfigNodeRenderer,
@@ -448,22 +449,10 @@ function renderArrayContent(
                         aria-label=${t("configForm.removeItem")}
                         ?disabled=${disabled || arrayValue.length <= minimumItems || !canRemove}
                         @click=${(event: MouseEvent) => {
-                          const focused = event.currentTarget === document.activeElement;
-                          const add = document.activeElement
-                            ?.closest(".cfg-array")
-                            ?.querySelector<HTMLButtonElement>("button[aria-controls]");
-                          if (
-                            canRemove &&
-                            patch(nextValue, rowIdentities.toSpliced(index, 1)) &&
-                            focused
-                          ) {
-                            // A keyed removal retires the focused button; keep keyboard
-                            // navigation in this array without stealing a later focus choice.
-                            queueMicrotask(() => {
-                              if (document.activeElement === document.body) {
-                                add?.focus();
-                              }
-                            });
+                          if (canRemove) {
+                            removeCollectionRow(event, () =>
+                              patch(nextValue, rowIdentities.toSpliced(index, 1)),
+                            );
                           }
                         }}
                       >

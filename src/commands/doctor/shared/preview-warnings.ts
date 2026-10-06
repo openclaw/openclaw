@@ -1,4 +1,3 @@
-// Doctor preview warning aggregation for config that can surprise users before repair.
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   listAgentEntriesWithSource,
@@ -95,7 +94,6 @@ function formatTargets(targets: string[]): string {
   return `${targets.slice(0, 2).join(", ")}, and ${targets.length - 2} more`;
 }
 
-/** Warn when visible-reply policy selects message_tool but message is unavailable. */
 function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   const groupPolicy = resolveGroupVisibleReplyPolicy(cfg);
   const warnings: string[] = [];
@@ -126,7 +124,6 @@ function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   return warnings;
 }
 
-/** Warn when routed channel agents lack the message tool required for channel actions. */
 function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   return collectChannelRouteTargets(cfg).flatMap((target) => {
     const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
@@ -391,7 +388,6 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
   });
 }
 
-/** Warn when configured tool sections no longer widen restrictive tool profiles. */
 function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
@@ -475,7 +471,6 @@ export async function resolveDoctorChannelPreviewConfig(params: {
   return { cfg: resolved.resolvedConfig, diagnostics: resolved.diagnostics };
 }
 
-/** Collect info and warning notes for doctor preview mode. */
 export async function collectDoctorPreviewNotes(params: {
   cfg: unknown;
   activationSourceConfig?: OpenClawConfigWithLegacyRoster;
@@ -533,9 +528,7 @@ export async function collectDoctorPreviewNotes(params: {
       doctorFixCommand: params.doctorFixCommand,
       env,
     });
-    if (channelDoctorWarnings.length > 0) {
-      warnings.push(...channelDoctorWarnings);
-    }
+    warnings.push(...channelDoctorWarnings);
 
     const { collectOpenPolicyAllowFromWarnings, maybeRepairOpenPolicyAllowFrom } =
       await import("./open-policy-allowfrom.js");

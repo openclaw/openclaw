@@ -34,7 +34,7 @@ import type {
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
 } from "../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-contract.js";
 import {
@@ -225,7 +225,7 @@ function buildSqliteTrajectoryRuntimeSink(
         if (pendingEvents.size === 0) {
           return;
         }
-        await withOpenClawAgentDatabaseAsync(databaseOptions, async (database) => {
+        await withOpenClawAgentDatabaseRuntime(databaseOptions, async (database) => {
           // Admission transfers the batch; later arrivals cannot evict accepted rows.
           const batch = { events: pendingEvents, bytes: queuedBytes, discardPrevious };
           inFlight = batch;

@@ -400,6 +400,15 @@ export function readSqliteDataVersion(database: DatabaseSync): number {
   return row.data_version;
 }
 
+function matchesSqliteSchemaFacts(database: DatabaseSync, facts: SqliteSchemaFacts): boolean {
+  return runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
+    const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
+      s.get(),
+    );
+    return facts.schemaVersion === schemaVersion && facts.userVersion === userVersion?.user_version;
+  });
+}
+
 /** Admission observes foreign commits; explicit fresh reads never reuse an operation's probe. */
 export function readSqliteCacheDataVersion(
   database: DatabaseSync,
@@ -420,16 +429,7 @@ export function readSqliteCacheDataVersion(
     if (owner.dataVersion !== dataVersion) {
       const facts = owner.facts;
       // Data commits preserve schema-derived caches; compare both markers in one snapshot.
-      const unchanged =
-        facts &&
-        runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
-          const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
-            s.get(),
-          );
-          return (
-            facts.schemaVersion === schemaVersion && facts.userVersion === userVersion?.user_version
-          );
-        });
+      const unchanged = facts && matchesSqliteSchemaFacts(database, facts);
       if (!unchanged) {
         invalidate(owner);
       }
@@ -469,6 +469,24 @@ export function admitSqliteSchema(database: DatabaseSync): void {
   owner.admitted = true;
   readSqliteCacheDataVersion(database);
   getAdmittedSqliteSchemaFacts(database);
+}
+
+/** A sibling's facts require this connection's committed schema markers, never its data_version. */
+export function adoptSqliteSchemaFacts(database: DatabaseSync, facts: SqliteSchemaFacts): boolean {
+  const owner = owners.get(database);
+  if (!owner || owner.authorizerActive || database.isTransaction) {
+    return false;
+  }
+  const dataVersion = readSqliteDataVersion(database);
+  if (!matchesSqliteSchemaFacts(database, facts)) {
+    return false;
+  }
+  owner.scopeRevision = bindScope(database, owner).revision;
+  owner.snapshot = getSqlitePinnedReadSnapshot(database);
+  owner.admitted = true;
+  owner.dataVersion = dataVersion;
+  owner.facts = { ...facts, revision: owner.revision };
+  return true;
 }
 
 /** Consume admitted facts; operation admission owns foreign-commit freshness. */

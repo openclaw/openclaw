@@ -267,16 +267,6 @@ export async function readSessionEntryInWorker(
             }
           : { expectedCreationIdentity: targetIdentity },
       );
-      const assertRetainedTarget = () => {
-        execution.assertCurrent();
-        const currentIdentity = readDatabasePathIdentitySync(options.path);
-        if (
-          currentIdentity.key !== targetIdentity.key ||
-          currentIdentity.canonicalPath !== targetIdentity.canonicalPath
-        ) {
-          throw new Error("Session database identity changed while awaiting admission");
-        }
-      };
       const assertCurrent = () => {
         execution.assertCurrent();
         owner.assertCurrent();
@@ -303,8 +293,8 @@ export async function readSessionEntryInWorker(
       let entry: SessionEntry | undefined;
       try {
         entry = await runOpenClawAgentWorkerWrite(options, async () => {
-          await owner.refreshBeforeDispatch(assertRetainedTarget);
-          assertRetainedTarget();
+          await owner.refreshBeforeDispatch(() => execution.assertCurrent());
+          execution.assertCurrent();
           await execution.prepare(source);
           return execution.runExisting(source, (worker) =>
             worker.execute({ type: "session.entry.read", input: { sessionKey } }),

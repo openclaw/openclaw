@@ -207,11 +207,17 @@ Legacy ordinary queue preparation stays inside its FIFO reservation, with
 synchronous final checks outside worker grants. Complete worker preparations
 bind their final policy and target reads to enqueue; cleanup or notification
 failure after enqueue preserves input custody and cannot authorize replay.
-Question claims and cancellation retain their existing synchronous contracts.
+Question claims and cancellation retain their existing synchronous assertions,
+with optional awaited companions for prepared backends.
 Native session binding authorities retain their original `withCurrent` contract.
 The optional `withPreparedCurrent` companion composes fresh tool policy with native
 lineage admission; older authority implementations remain valid and use the full
 synchronous compatibility check.
+
+Custom question dispatchers retain their original `authority.assertCurrent`
+callback and can add the optional awaited companion. Legacy external V2
+dispatchers retain fresh native policy checks. Retained commit guards for
+store-bound secret answers still recheck their original session owner.
 
 Removal requires the next Plugin SDK major and explicit breaking-release
 approval. TypeScript annotations and migration documentation provide diagnostics;

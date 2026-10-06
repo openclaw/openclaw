@@ -13,10 +13,9 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import type { SubagentKillSession } from "./subagent-control-session.js";
 import * as runtime from "./subagent-control.runtime.js";
-import {
-  SUBAGENT_KILL_TASK_ERROR,
-  type SubagentCancellationControl,
-  type SubagentKillTargetState,
+import type {
+  SubagentCancellationControl,
+  SubagentKillTargetState,
 } from "./subagent-control.types.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
@@ -261,9 +260,7 @@ export async function mutateSubagentRunForKill(
     }
   };
   const isKilledTarget = (target: SubagentKillTargetState) =>
-    target.state === "terminal" &&
-    target.task.status === "cancelled" &&
-    target.task.error === SUBAGENT_KILL_TASK_ERROR;
+    target.state === "terminal" && target.task.status === "cancelled";
   const ownsKillIntent = (
     current: SubagentRunRecord | undefined,
     claim: NonNullable<typeof killClaim>,

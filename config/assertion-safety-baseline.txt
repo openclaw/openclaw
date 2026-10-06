@@ -1717,7 +1717,6 @@ src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	6
 src/cli/capability-cli/web.ts	5
 src/cli/channel-auth.ts	4
-src/cli/channel-options.ts	1
 src/cli/channels-cli.ts	5
 src/cli/claws-cli.gateway-readiness.ts	1
 src/cli/claws-cli.runtime.ts	2

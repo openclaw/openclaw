@@ -203,9 +203,14 @@ final borrower releases them; active reclamation requests settle before closing.
 External cleanup can still be pending. Cancellation alone never certifies a
 receipt: the last lease must still complete its checkpoint and native close.
 Restart recovery markers and reply cancellation precede background-service
-joins, including scheduled continuation delivery. An interrupted external restart
-can exit after accepted terminal writes, memory preparation, and database close
-settle, without waiting for unrelated service teardown. Scheduled deliveries retain
+joins, including scheduled continuation delivery. After a drain timeout, a process-owned
+stop or external restart exits after accepted persistence, memory preparation,
+and database close settle, without waiting for unrelated service teardown. The timeout
+log records the remaining work counts. Database owners revoke abandoned resources,
+join their accepted writes, and release their leases before certifying the receipt;
+an active or failed writer still prevents certification. Accepted auth usage, account
+saves, mentions, worktree settlement, and sandbox removals join before database close,
+including their preparation before acquiring a native writer. Scheduled deliveries retain
 their Gateway owner so restart cancellation reaches their reply admissions.
 Database retirement completes independently for each path. A database whose
 resources have settled can publish its clean-close receipt while another database
