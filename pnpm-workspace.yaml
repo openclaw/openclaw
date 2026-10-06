@@ -10,6 +10,8 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # Security fix for GHSA-68fv-2mgg-jv7q (released 2026-09-30); remove after 2026-10-07T14:08:09.382Z.
+  - "source-map-js@1.2.2"
   - "@openai/codex"
   - "@openai/codex-*"
   # Reviewed fs-safe 0.23.1 release and native helpers; remove after 2026-10-12T05:31:03.967Z.
