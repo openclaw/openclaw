@@ -56,16 +56,11 @@ async function promptDiscordAllowFrom(params: {
     parseId: parseDiscordAllowFromId,
     invalidWithoutTokenNote: t("wizard.discord.allowFromInvalidWithoutToken"),
     resolveEntries: async ({ token, entries }) =>
-      (
-        await resolveDiscordUserAllowlist({
-          token,
-          entries,
-        })
-      ).map((entry) => ({
-        input: entry.input,
-        resolved: entry.resolved,
-        id: entry.id ?? null,
-      })),
+      await resolveBasicAllowFromEntries({
+        token,
+        entries,
+        resolveEntries: resolveDiscordUserAllowlist,
+      }),
   });
   return patchChannelConfigForAccount({
     cfg: params.cfg,

@@ -24,6 +24,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { startAwaitedReadMock } from "../state/openclaw-state-read-mock.test-support.js";
 import * as stateReader from "../state/openclaw-state-read-worker.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -55,24 +56,30 @@ test("joins a direct history projection's accepted read before retiring the Gate
   await projection.ensureMaterialized();
   const entered = createDeferred();
   const release = createDeferred();
-  const createTransport = stateReader.createOpenClawStateReadTransport;
-  const reader = vi
-    .spyOn(stateReader, "createOpenClawStateReadTransport")
-    .mockImplementation((command) => {
-      const transport = createTransport(command);
-      if (command.type !== "acpSessions.metadata") {
-        return transport;
-      }
-      return {
-        ...transport,
-        async read(...args) {
-          const reply = await transport.read(...args);
-          entered.resolve();
-          await release.promise;
-          return reply;
-        },
-      };
-    });
+  const captureSource = stateReader.captureOpenClawStateReadSource;
+  const reader = vi.spyOn(stateReader, "captureOpenClawStateReadSource").mockImplementation(() => {
+    const source = captureSource();
+    return {
+      ...source,
+      createTransport(command) {
+        const transport = source.createTransport(command);
+        if (command.type !== "acpSessions.metadata") {
+          return transport;
+        }
+        return {
+          ...transport,
+          startRead(...args) {
+            return startAwaitedReadMock(async () => {
+              const reply = await transport.startRead(...args).result;
+              entered.resolve();
+              await release.promise;
+              return reply;
+            });
+          },
+        };
+      },
+    };
+  });
   const dispose = projection.dispose;
   const disposing = vi.spyOn(projection, "dispose").mockImplementation(() => {
     dispose();

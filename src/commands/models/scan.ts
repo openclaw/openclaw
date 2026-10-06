@@ -1,4 +1,3 @@
-/** OpenRouter free-model scanner and fallback updater for model commands. */
 import { cancel, type CANCEL_SYMBOL, multiselect as clackMultiselect } from "@clack/prompts";
 import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import {
@@ -44,11 +43,7 @@ function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
 
     const aToolLatency = a.tool.latencyMs ?? Number.POSITIVE_INFINITY;
     const bToolLatency = b.tool.latencyMs ?? Number.POSITIVE_INFINITY;
-    if (aToolLatency !== bToolLatency) {
-      return aToolLatency - bToolLatency;
-    }
-
-    return compareScanMetadata(a, b);
+    return aToolLatency === bToolLatency ? compareScanMetadata(a, b) : aToolLatency - bToolLatency;
   });
 }
 
@@ -56,11 +51,7 @@ function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
   return results.toSorted((a, b) => {
     const aLatency = a.image.latencyMs ?? Number.POSITIVE_INFINITY;
     const bLatency = b.image.latencyMs ?? Number.POSITIVE_INFINITY;
-    if (aLatency !== bLatency) {
-      return aLatency - bLatency;
-    }
-
-    return compareScanMetadata(a, b);
+    return aLatency === bLatency ? compareScanMetadata(a, b) : aLatency - bLatency;
   });
 }
 
@@ -73,11 +64,7 @@ function compareScanMetadata(a: ModelScanResult, b: ModelScanResult): number {
 
   const aParams = a.inferredParamB ?? 0;
   const bParams = b.inferredParamB ?? 0;
-  if (aParams !== bParams) {
-    return bParams - aParams;
-  }
-
-  return a.modelRef.localeCompare(b.modelRef);
+  return aParams === bParams ? a.modelRef.localeCompare(b.modelRef) : bParams - aParams;
 }
 
 function buildScanHint(result: ModelScanResult): string {
@@ -150,24 +137,17 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   }
 }
 
-function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): number | undefined {
+function parseOptionalFiniteOption(
+  raw: unknown,
+  label: string,
+  allowZero = false,
+): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
   const parsed = parseStrictFiniteNumber(raw);
-  if (parsed === undefined || parsed < 0) {
-    throw new Error(`${label} must be >= 0`);
-  }
-  return parsed;
-}
-
-function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null) {
-    return undefined;
-  }
-  const parsed = parseStrictFiniteNumber(raw);
-  if (parsed === undefined || parsed <= 0) {
-    throw new Error(`${label} must be > 0`);
+  if (parsed === undefined || (allowZero ? parsed < 0 : parsed <= 0)) {
+    throw new Error(`${label} must be ${allowZero ? ">=" : ">"} 0`);
   }
   return parsed;
 }
@@ -183,7 +163,6 @@ function parsePositiveIntegerOption(raw: unknown, label: string, fallback: numbe
   return parsed;
 }
 
-/** Scans OpenRouter candidates, optionally probes them, then writes fallback defaults. */
 export async function modelsScanCommand(
   opts: {
     minParams?: string;
@@ -201,10 +180,10 @@ export async function modelsScanCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const minParams = parseOptionalNonNegativeFiniteOption(opts.minParams, "--min-params");
-  const maxAgeDays = parseOptionalNonNegativeFiniteOption(opts.maxAgeDays, "--max-age-days");
+  const minParams = parseOptionalFiniteOption(opts.minParams, "--min-params", true);
+  const maxAgeDays = parseOptionalFiniteOption(opts.maxAgeDays, "--max-age-days", true);
   const maxCandidates = parsePositiveIntegerOption(opts.maxCandidates, "--max-candidates", 6);
-  const timeout = parseOptionalPositiveFiniteOption(opts.timeout, "--timeout");
+  const timeout = parseOptionalFiniteOption(opts.timeout, "--timeout");
   const concurrency =
     opts.concurrency === undefined
       ? undefined
@@ -369,8 +348,9 @@ export async function modelsScanCommand(
           }
         : cfg.agents?.defaults?.imageModel;
     const existingModel = toAgentModelListLike(cfg.agents?.defaults?.model);
-    const defaults = {
-      ...cfg.agents?.defaults,
+    cfg.agents ??= {};
+    cfg.agents.defaults = {
+      ...cfg.agents.defaults,
       model: {
         ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
         fallbacks: selected,
@@ -378,14 +358,8 @@ export async function modelsScanCommand(
       },
       ...(nextImageModel ? { imageModel: nextImageModel } : {}),
       models: nextModels,
-    } satisfies NonNullable<NonNullable<typeof cfg.agents>["defaults"]>;
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults,
-      },
     };
+    return cfg;
   });
 
   if (opts.json) {

@@ -26,8 +26,8 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       workspaceDir: os.tmpdir(),
     }));
   });
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
     config = createSubagentSpawnTestConfig(os.tmpdir());
     callGatewayMock.mockReset();
     loadSessionStoreMock.mockReset().mockReturnValue({});
@@ -140,6 +140,13 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       parentMode: true,
       override: false,
       expected: false,
+    },
+    {
+      name: "explicit child Ultrafast",
+      model: "custom/model-b",
+      parentMode: true,
+      override: "ultrafast" as const,
+      expected: "ultrafast",
     },
     {
       name: "explicit child auto",

@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { RunExit } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 
 const supervisorMockState = vi.hoisted(() => ({
   cancelReasons: [] as Array<"manual-cancel" | "overall-timeout">,
@@ -85,7 +86,6 @@ const TEST_EXEC_DEFAULTS = {
   ask: "off" as const,
 };
 
-let createExecTool: typeof import("./bash-tools.exec-run.js").createExecTool;
 let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
 let getSession: typeof import("./bash-process-registry.js").getSession;
 let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
@@ -96,7 +96,6 @@ const createTestExecTool = (
 ): ReturnType<typeof createExecTool> => createExecTool({ ...TEST_EXEC_DEFAULTS, ...defaults });
 
 beforeAll(async () => {
-  ({ createExecTool } = await import("./bash-tools.exec-run.js"));
   ({ getFinishedSession, getSession } = await import("./bash-process-registry.js"));
   ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
 });

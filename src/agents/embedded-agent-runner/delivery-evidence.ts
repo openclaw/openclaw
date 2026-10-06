@@ -1,3 +1,4 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -49,6 +50,7 @@ export type AgentDeliveryEvidence = {
     error?: unknown;
     aborted?: unknown;
     finalAssistantVisibleText?: unknown;
+    terminalReply?: unknown;
     toolSummary?: {
       calls?: unknown;
     };
@@ -119,10 +121,6 @@ export function hasCompletedMessagingToolDeliveryEvidence(
     resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
     hasMessagingToolDeliveryEvidence(result)
   );
-}
-
-function hasNonEmptyArray(value: unknown): boolean {
-  return Array.isArray(value) && value.length > 0;
 }
 
 function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {
@@ -230,25 +228,13 @@ function hasDeliverableAgentPayload(payload: unknown): boolean {
 /** Collect automatic-delivery media proven sent by aggregate or per-payload evidence. */
 export function collectAutomaticDeliveredMediaUrls(
   result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
-  options: {
-    includeAmbiguousSinglePayloadFailure?: boolean;
-    includeSuppressedOutcomes?: boolean;
-  } = {},
 ): string[] {
-  const outcomes = getPayloadDeliveryOutcomes(result);
-  if (outcomes) {
-    const payloads = Array.isArray(result.payloads) ? result.payloads : [];
+  if (getPayloadDeliveryOutcomes(result)) {
     return collectPayloadOutcomeMediaUrls(
       result,
       (outcome) =>
         normalizeEvidenceStatus(outcome.status) === "sent" ||
-        (options.includeSuppressedOutcomes !== false &&
-          normalizeEvidenceStatus(outcome.status) === "suppressed") ||
-        (options.includeAmbiguousSinglePayloadFailure === true &&
-          normalizeEvidenceStatus(outcome.status) === "failed" &&
-          outcome.sentBeforeError === true &&
-          outcomes.length === 1 &&
-          payloads.length === 1),
+        normalizeEvidenceStatus(outcome.status) === "suppressed",
     );
   }
   const status = normalizeEvidenceStatus(result.deliveryStatus?.status);
@@ -344,10 +330,6 @@ export function getAutomaticDeliveryEvidence(
   return { mayHaveSent, suppressionReason };
 }
 
-function hasPositiveNumber(value: unknown): boolean {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
 /** Extracts a gateway result payload when the response carries delivery evidence fields. */
 export function getGatewayAgentResult(response: unknown): AgentDeliveryEvidence | null {
   const record = asOptionalObjectRecord(response);
@@ -391,7 +373,7 @@ export function hasCommittedMessagingToolDeliveryEvidence(
   return (
     hasNonEmptyStringArray(result.messagingToolSentTexts) ||
     hasNonEmptyStringArray(result.messagingToolSentMediaUrls) ||
-    hasNonEmptyArray(result.messagingToolSentTargets)
+    (Array.isArray(result.messagingToolSentTargets) && result.messagingToolSentTargets.length > 0)
   );
 }
 
@@ -484,7 +466,7 @@ export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence
       result.messagingToolSentMediaUrls === undefined &&
       result.messagingToolSentTargets === undefined) ||
     hasAcceptedSessionSpawnEvidence(result.acceptedSessionSpawns) ||
-    hasPositiveNumber(result.successfulCronAdds)
+    asPositiveFiniteNumber(result.successfulCronAdds) !== undefined
   );
 }
 
@@ -493,7 +475,7 @@ export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEviden
   return (
     hasMessagingToolDeliveryEvidence(result) ||
     hasAcceptedSessionSpawnEvidence(result.acceptedSessionSpawns) ||
-    hasPositiveNumber(result.successfulCronAdds)
+    asPositiveFiniteNumber(result.successfulCronAdds) !== undefined
   );
 }
 
@@ -501,7 +483,7 @@ export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEviden
 export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasCommittedOutboundDeliveryEvidence(result) ||
-    hasPositiveNumber(result.meta?.toolSummary?.calls)
+    asPositiveFiniteNumber(result.meta?.toolSummary?.calls) !== undefined
   );
 }
 

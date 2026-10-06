@@ -21,6 +21,7 @@ import {
 } from "../../sessions/model-overrides.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
+import { formatFastModeConfirmation } from "../../shared/fast-mode.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -42,11 +43,11 @@ import {
   canPersistSessionDirectiveDefaults,
   DIRECTIVE_ACK_MESSAGES,
   type IgnoredSessionDirectiveFlag,
+  formatElevatedEvent,
   formatElevatedUnavailableText,
   formatModelSelectionScopeAck,
-  enqueueModeSwitchEvents,
+  formatReasoningEvent,
   persistSessionDirectiveSnapshot,
-  rejectSessionDirectiveTransaction,
   resolveDirectiveTouchedSessionFields,
   withOptions,
 } from "./directive-handling.shared.js";
@@ -87,9 +88,12 @@ export async function handleDirectiveOnly(
     currentElevatedLevel,
   } = params;
   const allowPrivilegedPersistence = canPersistSessionDirectiveDefaults(params);
-  const rejectModelTransaction = (errorText: string) => {
+  const rejectModelTransaction = (errorText: string): ReplyPayload => {
     params.onRejection?.();
-    return rejectSessionDirectiveTransaction(params.persistenceState, errorText);
+    if (params.persistenceState) {
+      params.persistenceState.outcome = { kind: "rejected", errorText };
+    }
+    return { text: errorText, isError: true };
   };
   const acknowledgeIgnoredDirective = (
     reply: ReplyPayload,
@@ -143,7 +147,7 @@ export async function handleDirectiveOnly(
     return acknowledgeIgnoredDirective(modelInfo, "hasModelDirective");
   }
 
-  const modelResolution = resolveModelSelectionFromDirective({
+  const modelResolution = await resolveModelSelectionFromDirective({
     directives,
     cfg: params.cfg,
     agentDir,
@@ -297,7 +301,7 @@ export async function handleDirectiveOnly(
     }
     return acknowledgeIgnoredDirective(
       {
-        text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: on, off, auto, default, status.`,
+        text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: on, off, ultrafast, auto, default, status.`,
       },
       "hasFastDirective",
     );
@@ -573,13 +577,19 @@ export async function handleDirectiveOnly(
     }
   }
   if (!params.persistenceState) {
-    enqueueModeSwitchEvents({
-      enqueueSystemEvent,
-      sessionEntry,
-      sessionKey: resolveSystemEventQueueKey(sessionKey, activeAgentId),
-      elevatedChanged,
-      reasoningChanged,
-    });
+    const eventSessionKey = resolveSystemEventQueueKey(sessionKey, activeAgentId);
+    if (elevatedChanged) {
+      enqueueSystemEvent(formatElevatedEvent(sessionEntry.elevatedLevel), {
+        sessionKey: eventSessionKey,
+        contextKey: "mode:elevated",
+      });
+    }
+    if (reasoningChanged) {
+      enqueueSystemEvent(formatReasoningEvent(sessionEntry.reasoningLevel), {
+        sessionKey: eventSessionKey,
+        contextKey: "mode:reasoning",
+      });
+    }
   }
   if (params.persistenceState) {
     params.persistenceState.outcome = {
@@ -603,13 +613,7 @@ export async function handleDirectiveOnly(
   if (directives.clearFastMode) {
     parts.push(prefixSystemMessage("Fast mode reset to default."));
   } else if (directives.hasFastDirective && directives.fastMode !== undefined) {
-    parts.push(
-      directives.fastMode === "auto"
-        ? prefixSystemMessage("Fast mode set to auto.")
-        : directives.fastMode
-          ? prefixSystemMessage("Fast mode enabled.")
-          : prefixSystemMessage("Fast mode disabled."),
-    );
+    parts.push(prefixSystemMessage(formatFastModeConfirmation(directives.fastMode)));
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     const message = allowPrivilegedPersistence
@@ -703,11 +707,7 @@ export async function handleDirectiveOnly(
   }
   if (fastModeChanged && !params.persistenceState) {
     const nextFastMode = directives.clearFastMode ? fastModeState.mode : sessionEntry.fastMode;
-    const nextFastModeText =
-      nextFastMode === "auto"
-        ? "Fast mode set to auto."
-        : `Fast mode ${nextFastMode ? "enabled" : "disabled"}.`;
-    enqueueSystemEvent(nextFastModeText, {
+    enqueueSystemEvent(formatFastModeConfirmation(nextFastMode), {
       sessionKey: resolveSystemEventQueueKey(sessionKey, activeAgentId),
       contextKey: `fast:${formatFastModeValue(nextFastMode)}`,
     });

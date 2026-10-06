@@ -6,7 +6,6 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-  readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import {
@@ -102,14 +101,10 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-async function readJsonBody(
-  req: IncomingMessage,
-  maxBytes = 64 * 1024,
-  timeoutMs = 30_000,
-): Promise<unknown> {
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const result = await readJsonBodyWithLimit(req, {
-    maxBytes,
-    timeoutMs,
+    maxBytes: 64 * 1024,
+    timeoutMs: 30_000,
     emptyObjectOnEmpty: true,
   });
   if (result.ok) {
@@ -122,11 +117,6 @@ async function readJsonBody(
     throw new Error(requestBodyErrorToText(result.code));
   }
   throw new Error(result.code === "INVALID_JSON" ? "Invalid JSON" : result.error);
-}
-
-function parseAccountIdFromPath(pathname: string): string | null {
-  const match = pathname.match(/^\/api\/channels\/nostr\/([^/]+)\/profile/);
-  return match?.[1] ?? null;
 }
 
 function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
@@ -162,10 +152,7 @@ function isLoopbackOriginLike(value: string): boolean {
 }
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return readStringValue(value);
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function normalizeIpCandidate(raw: string): string {
@@ -206,52 +193,38 @@ function hasNonLoopbackForwardedClient(req: IncomingMessage): boolean {
   return false;
 }
 
-function enforceLoopbackMutationGuards(
-  ctx: NostrProfileHttpContext,
-  req: IncomingMessage,
-  res: ServerResponse,
-): boolean {
+function resolveLoopbackMutationRejection(req: IncomingMessage): string | undefined {
   // Mutation endpoints are local-control-plane only.
   const remoteAddress = req.socket.remoteAddress;
   if (!isLoopbackRemoteAddress(remoteAddress)) {
-    ctx.log?.warn?.(`Rejected mutation from non-loopback remoteAddress=${String(remoteAddress)}`);
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return `Rejected mutation from non-loopback remoteAddress=${String(remoteAddress)}`;
   }
 
   // If a proxy exposes client-origin headers showing a non-loopback client,
   // treat this as a remote request and deny mutation.
   if (hasNonLoopbackForwardedClient(req)) {
-    ctx.log?.warn?.("Rejected mutation with non-loopback forwarded client headers");
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return "Rejected mutation with non-loopback forwarded client headers";
   }
 
   const secFetchSite = normalizeOptionalLowercaseString(
     firstHeaderValue(req.headers["sec-fetch-site"]),
   );
   if (secFetchSite === "cross-site") {
-    ctx.log?.warn?.("Rejected mutation with cross-site sec-fetch-site header");
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return "Rejected mutation with cross-site sec-fetch-site header";
   }
 
   // CSRF guard: browsers send Origin/Referer on cross-site requests.
   const origin = firstHeaderValue(req.headers.origin);
   if (typeof origin === "string" && !isLoopbackOriginLike(origin)) {
-    ctx.log?.warn?.(`Rejected mutation with non-loopback origin=${origin}`);
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return `Rejected mutation with non-loopback origin=${origin}`;
   }
 
   const referer = firstHeaderValue(req.headers.referer ?? req.headers.referrer);
   if (typeof referer === "string" && !isLoopbackOriginLike(referer)) {
-    ctx.log?.warn?.(`Rejected mutation with non-loopback referer=${referer}`);
-    sendJson(res, 403, { ok: false, error: "Forbidden" });
-    return false;
+    return `Rejected mutation with non-loopback referer=${referer}`;
   }
 
-  return true;
+  return undefined;
 }
 
 function enforceGatewayMutationScope(
@@ -279,7 +252,7 @@ export function createNostrProfileHttpHandler(
       return false;
     }
 
-    const accountId = parseAccountIdFromPath(url.pathname);
+    const accountId = url.pathname.match(/^\/api\/channels\/nostr\/([^/]+)\/profile/)?.[1];
     if (!accountId) {
       return false;
     }
@@ -293,14 +266,24 @@ export function createNostrProfileHttpHandler(
 
     try {
       if (req.method === "GET" && !isImport) {
-        return await handleGetProfile(accountId, ctx, res);
+        const configProfile = ctx.getConfigProfile(accountId);
+        const publishState = await getNostrProfileState(accountId);
+        sendJson(res, 200, {
+          ok: true,
+          profile: configProfile ?? null,
+          publishState: publishState ?? null,
+        });
+        return true;
       }
 
       if ((req.method === "PUT" && !isImport) || (req.method === "POST" && isImport)) {
-        if (
-          !enforceGatewayMutationScope(ctx, accountId, res) ||
-          !enforceLoopbackMutationGuards(ctx, req, res)
-        ) {
+        if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+          return true;
+        }
+        const rejection = resolveLoopbackMutationRejection(req);
+        if (rejection) {
+          ctx.log?.warn?.(rejection);
+          sendJson(res, 403, { ok: false, error: "Forbidden" });
           return true;
         }
         return await (isImport ? handleImportProfile : handleUpdateProfile)(
@@ -322,22 +305,6 @@ export function createNostrProfileHttpHandler(
       return true;
     }
   };
-}
-
-async function handleGetProfile(
-  accountId: string,
-  ctx: NostrProfileHttpContext,
-  res: ServerResponse,
-): Promise<true> {
-  const configProfile = ctx.getConfigProfile(accountId);
-  const publishState = await getNostrProfileState(accountId);
-
-  sendJson(res, 200, {
-    ok: true,
-    profile: configProfile ?? null,
-    publishState: publishState ?? null,
-  });
-  return true;
 }
 
 async function handleUpdateProfile(

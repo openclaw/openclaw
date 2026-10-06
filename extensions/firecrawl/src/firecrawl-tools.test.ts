@@ -149,16 +149,11 @@ describe("firecrawl tools", () => {
       ),
     ) as typeof fetch;
 
-    const failure = firecrawlClientTesting.postFirecrawlJson(
-      {
-        url: "https://api.firecrawl.dev/v2/search",
-        timeoutSeconds: 5,
-        apiKey: "firecrawl-key",
-        body: { query: "openclaw" },
-        errorLabel: "Firecrawl search",
-      },
-      async () => "ok",
-    );
+    const failure = runActualFirecrawlSearch({
+      cfg: firecrawlConfig({ webSearch: { apiKey: "firecrawl-key" } }),
+      query: "bounded Firecrawl HTTP failure",
+      timeoutSeconds: 5,
+    });
     await expect(failure).rejects.toMatchObject({ status: 400, statusCode: 400 });
     await expect(failure).rejects.toSatisfy(
       (error: unknown) =>
@@ -365,6 +360,31 @@ describe("firecrawl tools", () => {
     expect(JSON.stringify(result).length).toBeLessThan(23_000);
   });
 
+  it.each(["news", "images"] as const)(
+    "returns Firecrawl %s source results from the matching response array",
+    async (source) => {
+      global.fetch = vi.fn(async () =>
+        Response.json({
+          success: true,
+          data: {
+            [source]: [{ url: `https://example.com/firecrawl/${source}`, title: source }],
+          },
+        }),
+      ) as typeof fetch;
+
+      const result = await runActualFirecrawlSearch({
+        query: `source-specific Firecrawl ${source}`,
+        sources: [source],
+        access: "keyless",
+      });
+
+      expect(result).toMatchObject({
+        count: 1,
+        results: [{ url: `https://example.com/firecrawl/${source}` }],
+      });
+    },
+  );
+
   it("bounds final Firecrawl search text after short special-token replacement expands", async () => {
     mockJsonResponse({
       success: true,
@@ -433,16 +453,11 @@ describe("firecrawl tools", () => {
     });
     global.fetch = fetchSpy as typeof fetch;
 
-    await firecrawlClientTesting.postFirecrawlJson(
-      {
-        url: "https://api.firecrawl.dev/v2/search",
-        timeoutSeconds: 5,
-        apiKey: "firecrawl-test-\r\nkey",
-        body: { query: "openclaw" },
-        errorLabel: "Firecrawl search",
-      },
-      async () => "ok",
-    );
+    await runActualFirecrawlSearch({
+      cfg: firecrawlConfig({ webSearch: { apiKey: "firecrawl-test-\r\nkey" } }),
+      query: "normalized Firecrawl authorization",
+      timeoutSeconds: 5,
+    });
 
     const authHeader = new Headers(capturedInit?.headers).get("Authorization");
     expect(authHeader).toBe("Bearer firecrawl-test-key");
@@ -1160,19 +1175,16 @@ describe("firecrawl tools", () => {
     const fetchSpy = vi.fn(async () => Response.json({ success: true, data: [] }));
     global.fetch = fetchSpy as typeof fetch;
 
-    const result = await firecrawlClientTesting.postFirecrawlJson(
-      {
-        url: "http://127.0.0.1:8787/v2/search",
-        timeoutSeconds: 5,
-        apiKey: "firecrawl-key",
-        body: { query: "openclaw" },
-        errorLabel: "Firecrawl Search",
-      },
-      async (response) => (await response.json()) as Record<string, unknown>,
-    );
+    const result = await runActualFirecrawlSearch({
+      cfg: firecrawlConfig({
+        webSearch: { apiKey: "firecrawl-key", baseUrl: "http://127.0.0.1:8787" },
+      }),
+      query: "self-hosted Firecrawl search",
+      timeoutSeconds: 5,
+    });
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(result.success).toBe(true);
+    expect(result).toMatchObject({ provider: "firecrawl", results: [] });
   });
 
   describe.each(["search", "scrape"] as const)("malformed Firecrawl %s responses", (operation) => {

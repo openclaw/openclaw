@@ -76,21 +76,9 @@ function normalizePromptSectionText(value: string | undefined): string | undefin
   if (!trimmed) {
     return undefined;
   }
-  let sanitized = "";
-  for (const char of trimmed) {
-    const code = char.charCodeAt(0);
-    if (
-      (code >= 0 && code <= 8) ||
-      code === 11 ||
-      code === 12 ||
-      (code >= 14 && code <= 31) ||
-      code === 127
-    ) {
-      continue;
-    }
-    sanitized += char;
-  }
-  return sanitized;
+  return trimmed.replace(/\p{Cc}/gu, (char) =>
+    "\t\n\r".includes(char) || char.charCodeAt(0) > 127 ? char : "",
+  );
 }
 
 export function isOpenClawGoogleAudioProfilePrompt(text: string): boolean {
@@ -242,7 +230,7 @@ export async function synthesizeGoogleTtsPcmOnce(params: {
   }
   const { assertOkOrThrowProviderError, postJsonRequest, readProviderJsonResponse } =
     await import("openclaw/plugin-sdk/provider-http");
-  const { resolveGoogleGenerativeAiHttpRequestConfig } = await import("./api.js");
+  const { resolveGoogleGenerativeAiHttpRequestConfig } = await import("./http-request.js");
   const { canonicalizeGoogleProviderBase64 } = await import("./base64.js");
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveGoogleGenerativeAiHttpRequestConfig({

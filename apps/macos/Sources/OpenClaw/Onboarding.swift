@@ -2,11 +2,8 @@ import AppKit
 import CryptoKit
 import Observation
 import OpenClawDiscovery
+import OpenClawKit
 import SwiftUI
-
-enum UIStrings {
-    static let welcomeTitle = "Welcome to OpenClaw"
-}
 
 struct RemoteGatewayProbeInput: Equatable {
     let transport: AppState.RemoteTransport
@@ -78,7 +75,7 @@ enum OnboardingSystemAgentResumeStore {
         var phase: RecordPhase
         let startedAt: Date?
         var deadline: Date?
-        let activationOwner: ActivationOwner?
+        let activationOwner: ActivationOwner? // nil identifies ownerless records; it is not a wildcard.
         let modelTarget: OnboardingAISetupModel.ModelTarget?
         var utilityModel: String?
     }
@@ -123,7 +120,7 @@ enum OnboardingSystemAgentResumeStore {
             remoteTransport: state.remoteTransport,
             remoteURL: state.remoteUrl,
             remoteTarget: state.remoteTarget,
-            localStateDir: OpenClawConfigFile.stateDirURL(),
+            localStateDir: OpenClawPaths.stateDirURL,
             sshRemotePort: sshRemotePort)
     }
 
@@ -133,7 +130,7 @@ enum OnboardingSystemAgentResumeStore {
         remoteTransport: AppState.RemoteTransport,
         remoteURL: String,
         remoteTarget: String,
-        localStateDir: URL = OpenClawConfigFile.stateDirURL(),
+        localStateDir: URL = OpenClawPaths.stateDirURL,
         sshRemotePort: Int = 18789) -> String?
     {
         switch connectionMode {
@@ -150,7 +147,7 @@ enum OnboardingSystemAgentResumeStore {
             }
             return "local:\(self.nonSecretFingerprint(stateDir))"
         case .remote:
-            if let gatewayID = normalized(preferredGatewayID) {
+            if let gatewayID = preferredGatewayID?.trimmedNonEmpty {
                 return "remote:id:\(gatewayID)"
             }
             let endpoint = switch remoteTransport {
@@ -182,18 +179,17 @@ enum OnboardingSystemAgentResumeStore {
         now: Date = Date())
         -> Date?
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return nil }
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty else { return nil }
         let duration = max(0, activationTimeoutMs / 1000) + self.activationDeadlineSafetySeconds
         let deadline = now.addingTimeInterval(duration)
-        var records = self.loadRecords(defaults: defaults, now: now)
-        records[routeIdentity] = Record(
-            phase: .activating,
-            startedAt: now,
-            deadline: deadline,
+        self.restorePending(
+            routeIdentity: routeIdentity,
             activationOwner: activationOwner,
             modelTarget: modelTarget,
-            utilityModel: modelTarget == .utility ? self.normalized(utilityModel) : nil)
-        self.writeRecords(records, defaults: defaults)
+            utilityModel: utilityModel,
+            deadline: deadline,
+            defaults: defaults,
+            now: now)
         return deadline
     }
 
@@ -206,7 +202,7 @@ enum OnboardingSystemAgentResumeStore {
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return }
+        guard let routeIdentity = routeIdentity.trimmedNonEmpty else { return }
         var records = self.loadRecords(defaults: defaults, now: now)
         records[routeIdentity] = Record(
             phase: .activating,
@@ -214,7 +210,7 @@ enum OnboardingSystemAgentResumeStore {
             deadline: deadline,
             activationOwner: activationOwner,
             modelTarget: modelTarget,
-            utilityModel: modelTarget == .utility ? self.normalized(utilityModel) : nil)
+            utilityModel: modelTarget == .utility ? utilityModel?.trimmedNonEmpty : nil)
         self.writeRecords(records, defaults: defaults)
     }
 
@@ -224,10 +220,10 @@ enum OnboardingSystemAgentResumeStore {
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return }
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty else { return }
         var records = self.loadRecords(defaults: defaults, now: now)
         guard var record = records[routeIdentity],
-              ownerMatches(record, activationOwner: activationOwner)
+              record.activationOwner == activationOwner
         else { return }
         record.phase = .verified
         record.deadline = record.deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds)
@@ -242,10 +238,10 @@ enum OnboardingSystemAgentResumeStore {
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> Bool
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return false }
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty else { return false }
         var records = self.loadRecords(defaults: defaults, now: now)
         guard var record = records[routeIdentity],
-              ownerMatches(record, activationOwner: activationOwner)
+              record.activationOwner == activationOwner
         else { return false }
         record.phase = .completed
         records[routeIdentity] = record
@@ -258,7 +254,7 @@ enum OnboardingSystemAgentResumeStore {
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> ActivationOwner?
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return nil }
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty else { return nil }
         return self.loadRecords(defaults: defaults, now: now)[routeIdentity]?.activationOwner
     }
 
@@ -267,9 +263,9 @@ enum OnboardingSystemAgentResumeStore {
         activationOwner: ActivationOwner?,
         defaults: UserDefaults = AppDefaults.standard) -> ActivationModel?
     {
-        guard let routeIdentity = normalized(routeIdentity),
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty,
               let record = loadRecords(defaults: defaults)[routeIdentity],
-              ownerMatches(record, activationOwner: activationOwner)
+              record.activationOwner == activationOwner
         else { return nil }
         return ActivationModel(modelTarget: record.modelTarget, utilityModel: record.utilityModel)
     }
@@ -280,10 +276,11 @@ enum OnboardingSystemAgentResumeStore {
         activationOwner: ActivationOwner,
         defaults: UserDefaults = AppDefaults.standard)
     {
-        guard let routeIdentity = normalized(routeIdentity), let modelRef = normalized(modelRef) else { return }
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty,
+              let modelRef = modelRef.trimmedNonEmpty else { return }
         var records = self.loadRecords(defaults: defaults)
         guard var record = records[routeIdentity], record.modelTarget == .utility,
-              ownerMatches(record, activationOwner: activationOwner) else { return }
+              record.activationOwner == activationOwner else { return }
         record.utilityModel = modelRef
         records[routeIdentity] = record
         self.writeRecords(records, defaults: defaults)
@@ -295,7 +292,7 @@ enum OnboardingSystemAgentResumeStore {
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> Bool
     {
-        guard let routeIdentity = normalized(routeIdentity),
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty,
               let record = loadRecords(defaults: defaults, now: now)[routeIdentity]
         else { return false }
         return record.activationOwner == activationOwner
@@ -306,7 +303,7 @@ enum OnboardingSystemAgentResumeStore {
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> PendingState
     {
-        guard let routeIdentity = normalized(routeIdentity),
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty,
               let record = loadRecords(defaults: defaults, now: now)[routeIdentity]
         else { return .none }
 
@@ -328,10 +325,10 @@ enum OnboardingSystemAgentResumeStore {
         activationOwner: ActivationOwner? = nil,
         defaults: UserDefaults = AppDefaults.standard) -> Bool
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return false }
+        guard let routeIdentity = routeIdentity.trimmedNonEmpty else { return false }
         var records = self.loadRecords(defaults: defaults)
         guard let record = records[routeIdentity],
-              ownerMatches(record, activationOwner: activationOwner)
+              record.activationOwner == activationOwner
         else { return false }
         records.removeValue(forKey: routeIdentity)
         self.writeRecords(records, defaults: defaults)
@@ -360,7 +357,7 @@ enum OnboardingSystemAgentResumeStore {
         now: Date = Date()) -> [String: Record]
     {
         guard let stored = self.storedPendingPayload(defaults: defaults) else { return [:] }
-        if let legacyRoute = normalized(stored as? String) {
+        if let legacyRoute = (stored as? String)?.trimmedNonEmpty {
             let records = [legacyRoute: conservativeLegacyRecord(now: now)]
             self.writeRecords(records, defaults: defaults)
             return records
@@ -371,7 +368,7 @@ enum OnboardingSystemAgentResumeStore {
         }
         let version = (container["version"] as? NSNumber)?.intValue
         if version == self.legacyRecordVersion,
-           let routeIdentity = normalized(container["routeIdentity"] as? String)
+           let routeIdentity = (container["routeIdentity"] as? String)?.trimmedNonEmpty
         {
             let record = self.decodeLegacyRecord(container, now: now)
             let records = [routeIdentity: record]
@@ -388,7 +385,7 @@ enum OnboardingSystemAgentResumeStore {
             // Strip the unsafe/absent auth owner immediately, but retain active
             // deadlines so a possibly running activation cannot overlap a new one.
             let records: [String: Record] = storedRecords.reduce(into: [:]) { result, entry in
-                guard let routeIdentity = normalized(entry.key),
+                guard let routeIdentity = entry.key.trimmedNonEmpty,
                       let payload = entry.value as? [String: Any],
                       let record = decodeRecord(payload),
                       record.phase != .completed
@@ -411,7 +408,7 @@ enum OnboardingSystemAgentResumeStore {
             return [:]
         }
         return storedRecords.reduce(into: [:]) { result, entry in
-            guard let routeIdentity = normalized(entry.key),
+            guard let routeIdentity = entry.key.trimmedNonEmpty,
                   let payload = entry.value as? [String: Any],
                   let record = decodeRecord(payload)
             else { return }
@@ -448,8 +445,8 @@ enum OnboardingSystemAgentResumeStore {
         guard let phaseRaw = payload["phase"] as? String,
               let phase = RecordPhase(rawValue: phaseRaw)
         else { return nil }
-        let activationID = self.normalized(payload["activationId"] as? String)
-        let routeFingerprint = self.normalized(payload["routeFingerprint"] as? String)
+        let activationID = (payload["activationId"] as? String)?.trimmedNonEmpty
+        let routeFingerprint = (payload["routeFingerprint"] as? String)?.trimmedNonEmpty
         let activationOwner: ActivationOwner? = if let activationID, let routeFingerprint {
             ActivationOwner(id: activationID, routeFingerprint: routeFingerprint)
         } else {
@@ -463,7 +460,7 @@ enum OnboardingSystemAgentResumeStore {
             deadline: self.date(payload["deadlineAt"]),
             activationOwner: activationOwner,
             modelTarget: modelTarget,
-            utilityModel: modelTarget == .utility ? self.normalized(payload["utilityModel"] as? String) : nil)
+            utilityModel: modelTarget == .utility ? (payload["utilityModel"] as? String)?.trimmedNonEmpty : nil)
     }
 
     private static func writeRecords(_ records: [String: Record], defaults: UserDefaults) {
@@ -501,20 +498,6 @@ enum OnboardingSystemAgentResumeStore {
         return Date(timeIntervalSince1970: interval)
     }
 
-    private static func normalized(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
-    }
-
-    private static func ownerMatches(
-        _ record: Record,
-        activationOwner: ActivationOwner?) -> Bool
-    {
-        // A missing owner names legacy ownerless records; it is not a wildcard.
-        // Otherwise stale UI paths can verify, complete, or clear a newer activation.
-        record.activationOwner == activationOwner
-    }
-
     private static func nonSecretFingerprint(_ value: String) -> String {
         let raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return "" }
@@ -531,47 +514,13 @@ enum OnboardingSystemAgentResumeStore {
         components.user = nil
         components.password = nil
         components.queryItems = components.queryItems?.filter { queryItem in
-            !self.isSensitiveQueryItemName(queryItem.name)
+            !GatewayEndpointID.isSensitiveQueryItemName(queryItem.name)
         }
         if components.queryItems?.isEmpty == true {
             components.query = nil
         }
         components.fragment = nil
         return components.string ?? normalized
-    }
-
-    private static func isSensitiveQueryItemName(_ value: String) -> Bool {
-        let normalized = value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .replacingOccurrences(of: "-", with: "_")
-        return [
-            "access_token",
-            "api_key",
-            "apikey",
-            "app_secret",
-            "auth",
-            "auth_token",
-            "authorization",
-            "client_secret",
-            "code",
-            "credential",
-            "hook_token",
-            "id_token",
-            "jwt",
-            "key",
-            "pass",
-            "passwd",
-            "password",
-            "private_key",
-            "refresh_token",
-            "secret",
-            "session",
-            "signature",
-            "token",
-            "x_amz_security_token",
-            "x_amz_signature",
-        ].contains(normalized)
     }
 }
 
@@ -580,6 +529,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     static let shared = OnboardingController()
     static let windowStyleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
     private var window: NSWindow?
+    private var closeConfirmationPending = false
     var sheetPresentationWindow: NSWindow? {
         self.window
     }
@@ -604,14 +554,14 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         }
         if let window {
             DockIconManager.shared.temporarilyShowDock()
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            AppActivation.shared.makeKeyAndOrderFront(window: window)
+            AppActivation.shared.activate()
             return
         }
         let hosting = NSHostingController(rootView: OnboardingView())
         let window = NSWindow(contentViewController: hosting)
         window.isRestorable = false
-        window.title = UIStrings.welcomeTitle
+        window.title = "Welcome to OpenClaw"
         window.styleMask = Self.windowStyleMask
         window.setContentSize(NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight))
         if let visibleFrame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame {
@@ -631,8 +581,8 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         window.isMovableByWindowBackground = true
         window.delegate = self
         DockIconManager.shared.temporarilyShowDock()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.makeKeyAndOrderFront(window: window)
+        AppActivation.shared.activate()
         self.window = window
     }
 
@@ -666,8 +616,10 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         self.show()
     }
 
-    func windowShouldClose(_: NSWindow) -> Bool {
+    func windowShouldClose(_ window: NSWindow) -> Bool {
         guard let busyReason else { return true }
+        guard !self.closeConfirmationPending else { return false }
+        self.closeConfirmationPending = true
         let alert = NSAlert()
         alert.messageText = "Setup is still working"
         alert.informativeText =
@@ -676,8 +628,17 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Continue Setup")
         alert.addButton(withTitle: "Quit Setup")
-        let response = alert.runModal()
-        return response == .alertSecondButtonReturn
+        var shouldClose = false
+        AppActivation.shared.presentAlert(alert) { [weak self, weak window] response in
+            self?.closeConfirmationPending = false
+            guard response == .alertSecondButtonReturn else { return }
+            if AppLaunchRuntimePlan.current.allowsActivation {
+                shouldClose = true
+            } else if let window, self?.window === window {
+                window.close()
+            }
+        }
+        return shouldClose
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -699,6 +660,8 @@ struct OnboardingView: View {
     @State var installingCLI = false
     @State var cliInstallPhase: CLIInstallPhase = .idle
     @State var cliStatus: String?
+    @State var updatingGatewayHosting = false
+    @State var gatewayHostingError: String?
     @State var monitoringDiscovery = false
     @State var cliExecutableReady = false
     @State var cliInstalled = false
@@ -826,7 +789,7 @@ struct OnboardingView: View {
     }
 
     var canAdvance: Bool {
-        !self.isCLIBlocking && !self.isAISetupBlocking
+        !self.isCLIBlocking && !self.isAISetupBlocking && !self.updatingGatewayHosting
     }
 
     static func remoteGatewayAdvanceDecision(

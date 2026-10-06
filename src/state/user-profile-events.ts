@@ -33,6 +33,7 @@ type ProfileAuthorityStore = {
   identityRevision: object;
   profiles: Map<string, object>;
   profileIdentities: Map<string, object>;
+  modelAccountLinks: Map<string, object>;
   channelIdentities: Map<string, object>;
   pending: Map<string, Set<Promise<void>>>;
   uncertain: Set<string>;
@@ -58,6 +59,7 @@ function authorityStore(identity: DatabasePathIdentity): ProfileAuthorityStore {
       identityRevision: {},
       profiles: new Map(),
       profileIdentities: new Map(),
+      modelAccountLinks: new Map(),
       channelIdentities: new Map(),
       pending: new Map(),
       uncertain: new Set(),
@@ -105,13 +107,83 @@ export function publishUserProfileIdentityChange(db: DatabaseSync, ...profileIds
   publishAuthorityStoreChange(db, "profileIdentities", profileIds);
 }
 
+/** Default-link changes do not revoke explicit selections or saved session account pins. */
+export function publishUserProfileModelAccountLinksChange(
+  db: DatabaseSync,
+  ...profileIds: string[]
+): void {
+  publishAuthorityStoreChange(db, "modelAccountLinks", profileIds);
+}
+
+/** A retained catalog assertion consumes only the canonical writer’s committed facts. */
+export function captureUserProfileModelAccountLinksAuthority(
+  admission: OpenClawStateDatabaseReadAdmission,
+  profileId: string,
+): () => boolean {
+  observeAuthorityLifecycle();
+  admission.assertCurrent();
+  const store = authorityStore(admission.identity);
+  const links = store.modelAccountLinks.get(profileId);
+  const identity = store.profileIdentities.get(profileId);
+  const key = mutationKey("identity", profileId);
+  const linksKey = mutationKey("modelAccountLinks", profileId);
+  return () => {
+    try {
+      admission.assertCurrent();
+      return (
+        changes.authorityStores.get(admission.identity.key) === store &&
+        store.modelAccountLinks.get(profileId) === links &&
+        store.profileIdentities.get(profileId) === identity &&
+        !store.pending.get(key)?.size &&
+        !store.uncertain.has(key) &&
+        !store.pending.get(linksKey)?.size &&
+        !store.uncertain.has(linksKey)
+      );
+    } catch {
+      return false;
+    }
+  };
+}
+
+/** Fence link readers until the original worker's native outcome is acknowledged. */
+export function fenceUserProfileModelAccountLinks(
+  admission: OpenClawStateDatabaseReadAdmission,
+  profileId: string,
+): { settle: (known: boolean) => void } {
+  observeAuthorityLifecycle();
+  admission.assertCurrent();
+  const store = authorityStore(admission.identity);
+  const key = mutationKey("modelAccountLinks", profileId);
+  const pending = createDeferredCore();
+  store.modelAccountLinks.set(profileId, {});
+  const entries = store.pending.get(key) ?? new Set<Promise<void>>();
+  store.pending.set(key, entries);
+  entries.add(pending.promise);
+  return {
+    settle(known) {
+      if (!entries.delete(pending.promise)) {
+        return;
+      }
+      if (!known) {
+        store.uncertain.add(key);
+      }
+      // Retire reads prepared while COMMIT or its acknowledgement was pending.
+      store.modelAccountLinks.set(profileId, {});
+      if (entries.size === 0) {
+        store.pending.delete(key);
+      }
+      pending.resolve();
+    },
+  };
+}
+
 export function publishUserChannelIdentityAuthorityChange(db: DatabaseSync, subject: string): void {
   publishAuthorityStoreChange(db, "channelIdentities", [subject]);
 }
 
 function publishAuthorityStoreChange(
   db: DatabaseSync,
-  kind: "profiles" | "profileIdentities" | "channelIdentities",
+  kind: "profiles" | "profileIdentities" | "channelIdentities" | "modelAccountLinks",
   ids: string[],
 ): void {
   observeAuthorityLifecycle();
@@ -122,7 +194,7 @@ function publishAuthorityStoreChange(
   const commit = () => {
     if (kind === "profileIdentities") {
       store.identityRevision = {};
-    } else {
+    } else if (kind !== "modelAccountLinks") {
       store.revision = {};
     }
     for (const id of ids) {
@@ -134,7 +206,7 @@ function publishAuthorityStoreChange(
   }
 }
 
-const mutationKey = (kind: "profile" | "identity" | "channel", id: string) =>
+const mutationKey = (kind: "profile" | "identity" | "channel" | "modelAccountLinks", id: string) =>
   JSON.stringify([kind, id]);
 
 /** Close affected preparation before granting COMMIT; settlement, not delivery, reopens it. */

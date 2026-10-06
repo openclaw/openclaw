@@ -28,8 +28,8 @@ export function resolveRestartRecoveryChannelAuthority(
 ): RestartRecoveryChannelAuthority | undefined {
   const sourceTurnId = normalizeRunId(entry.restartRecoveryDeliverySourceRunId);
   const deliveryContext = normalizeDeliveryContext(entry.restartRecoveryDeliveryContext);
-  const channel = normalizeRunId(deliveryContext?.channel);
-  const to = normalizeRunId(deliveryContext?.to);
+  const channel = deliveryContext?.channel;
+  const to = deliveryContext?.to;
   if (
     entry.restartRecoverySourceIngress !== "channel" ||
     !sourceTurnId ||
@@ -465,7 +465,8 @@ export function mergeRestartRecoveryTerminalRunIds(
   const appendedRunIds = (normalizeRestartRecoveryTerminalRunIds(appended) ?? []).filter(
     (runId) => !currentSet.has(runId),
   );
-  return normalizeRestartRecoveryTerminalRunIds([...currentRunIds, ...appendedRunIds]);
+  const bounded = [...currentRunIds, ...appendedRunIds].slice(-MAX_TERMINAL_RUN_IDS);
+  return bounded.length > 0 ? bounded : undefined;
 }
 
 export function hasRestartRecoveryTerminalRun(

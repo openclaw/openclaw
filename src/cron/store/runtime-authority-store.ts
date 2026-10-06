@@ -8,8 +8,10 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { normalizeCronRuntimeAuthority } from "../runtime-authority.js";
 import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { cronJobUsesToolRuntime } from "../tools-allow.js";
@@ -18,24 +20,10 @@ import type { CronStoredJob, CronToolsAllowProvenance } from "../types.js";
 const CRON_RUNTIME_AUTHORITY_TABLE = "cron_job_runtime_authorities";
 const CRON_RUNTIME_AUTHORITY_FINGERPRINT_VERSION = 1;
 
-const CRON_RUNTIME_AUTHORITY_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (
-  store_key TEXT NOT NULL,
-  job_id TEXT NOT NULL,
-  authority_json TEXT,
-  authority_input_fingerprint TEXT,
-  recovery_required INTEGER NOT NULL,
-  PRIMARY KEY (store_key, job_id),
-  FOREIGN KEY (store_key, job_id)
-    REFERENCES cron_jobs(store_key, job_id) ON DELETE CASCADE,
-  CHECK (recovery_required IN (0, 1)),
-  CHECK (
-    (recovery_required = 0 AND authority_json IS NOT NULL AND authority_input_fingerprint IS NOT NULL)
-    OR
-    (recovery_required = 1 AND authority_json IS NULL AND authority_input_fingerprint IS NULL)
-  )
-) STRICT;
-`;
+const CRON_RUNTIME_AUTHORITY_SCHEMA_SQL = extractSqliteTableSchema(
+  OPENCLAW_STATE_SCHEMA_SQL,
+  CRON_RUNTIME_AUTHORITY_TABLE,
+);
 
 type CronAuthorityDatabase = Pick<
   OpenClawStateKyselyDatabase,

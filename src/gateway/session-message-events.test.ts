@@ -29,12 +29,8 @@ import * as secureRandom from "../infra/secure-random.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
-import {
-  ensureProfileForEmail,
-  listProfiles,
-  setAvatar,
-  setDisplayName,
-} from "../state/user-profiles.js";
+import { setAvatar, setDisplayName } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail, listProfiles } from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -948,6 +944,7 @@ describe("session.message websocket events", () => {
         cfgWithAgentDefaults: { session: { store: storePath } },
         deps: {},
         job,
+        deliveryAttemptFence: null,
         agentId: "main",
         agentSessionKey: "cron:job-webchat",
         sourceSessionKey: sessionKey,
@@ -1496,7 +1493,7 @@ describe("session.message websocket events", () => {
               expect(payload).not.toHaveProperty(privateField);
             }
             expect(JSON.stringify(payload)).not.toContain(storePath);
-            expect(JSON.stringify(payload)).not.toContain(lifecycleRevision);
+            expect(payload).toHaveProperty("session.lifecycleRevision", lifecycleRevision);
           }
           await expect(Promise.all(unexpectedFrames)).resolves.toEqual([false, false, false]);
           expect(observedInvalidations.map((frames) => frames.length)).toEqual([1, 1, 1]);
@@ -1514,16 +1511,7 @@ describe("session.message websocket events", () => {
   });
 
   test("broadcasts appended transcript messages with the session key", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-        },
-      },
-      storePath,
-    });
+    const storePath = await createMainSessionStore();
 
     const delivered = withOperatorSessionSubscriber((ws) =>
       waitForSessionMessageEvent(ws, "agent:main:main"),
@@ -1849,7 +1837,7 @@ describe("session.message websocket events", () => {
     const storePath = await createSessionStoreFile();
     testState.agentsConfig = {
       ownership: "explicit",
-      list: [{ id: "main" }, { id: "work" }],
+      entries: { main: {}, work: {} },
     };
     testState.agentConfig = { sessionStore: { agentId: "work" } };
     const transcriptPath = path.join(path.dirname(storePath), "global-work.jsonl");
@@ -1965,7 +1953,7 @@ describe("session.message websocket events", () => {
     const storePath = await createSessionStoreFile();
     testState.agentsConfig = {
       ownership: "explicit",
-      list: [{ id: "main" }, { id: "work" }],
+      entries: { main: {}, work: {} },
     };
     testState.agentConfig = { sessionStore: { agentId: "work" } };
     await writeSessionStore({

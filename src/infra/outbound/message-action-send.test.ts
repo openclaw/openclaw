@@ -92,64 +92,64 @@ describe("runMessageAction plugin dispatch", () => {
       expect(result.payload).toEqual(receipt);
       expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(accepted ? 1 : 0);
     });
-    it.each([
-      { name: "raw base64", buffer: "SGVsbG8=" },
-      { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
-    ])("preserves $name bytes and MIME for gateway-side materialization", async ({ buffer }) => {
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat send test plugin.",
-        actions: ["send"],
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
+    it.each([{ name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" }])(
+      "preserves $name bytes and MIME for gateway-side materialization",
+      async ({ buffer }) => {
+        const gatewayPlugin = createGatewayActionPlugin({
+          pluginId: "gatewaychat",
+          label: "Gateway Chat",
+          blurb: "Gateway Chat send test plugin.",
+          actions: ["send"],
+          messaging: {
+            targetResolver: {
+              looksLikeId: () => true,
+            },
           },
-        },
-        handleAction: vi.fn(async () => jsonResult({ ok: true })),
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
-        ok: true,
-        messageId: "gw-send-buffer",
-      });
+          handleAction: vi.fn(async () => jsonResult({ ok: true })),
+        });
+        setTestPlugin(gatewayPlugin, "gatewaychat");
+        mocks.callGatewayLeastPrivilege.mockResolvedValue({
+          ok: true,
+          messageId: "gw-send-buffer",
+        });
 
-      await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
-        action: "send",
-        params: {
-          channel: "gatewaychat",
-          target: "user-123",
-          buffer,
-          filename: "gateway.txt",
-          mimeType: "text/plain",
-        },
-        gateway: {
-          clientName: "cli",
-          mode: "cli",
-        },
-      });
+        await runMessageAction({
+          cfg: createEnabledMessageActionConfig("gatewaychat"),
+          action: "send",
+          params: {
+            channel: "gatewaychat",
+            target: "user-123",
+            buffer,
+            filename: "gateway.txt",
+            mimeType: "text/plain",
+          },
+          gateway: {
+            clientName: "cli",
+            mode: "cli",
+          },
+        });
 
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
-      );
-      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
-      expectRecordFields(
-        readRecordField(gatewayParams, "params", "gateway message params"),
-        {
-          to: "user-123",
-          media: "buffer://message-send/attachment",
-          mediaUrl: "buffer://message-send/attachment",
-          mediaUrls: ["buffer://message-send/attachment"],
-          buffer,
-          filename: "gateway.txt",
-          contentType: "text/plain",
-        },
-        "gateway message params",
-      );
-      expect(mocks.executeSendAction).not.toHaveBeenCalled();
-    });
+        const gatewayCall = readMockCallArg(
+          mocks.callGatewayLeastPrivilege,
+          "gateway least privilege call",
+        );
+        const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+        expectRecordFields(
+          readRecordField(gatewayParams, "params", "gateway message params"),
+          {
+            to: "user-123",
+            media: "buffer://message-send/attachment",
+            mediaUrl: "buffer://message-send/attachment",
+            mediaUrls: ["buffer://message-send/attachment"],
+            buffer,
+            filename: "gateway.txt",
+            contentType: "text/plain",
+          },
+          "gateway message params",
+        );
+        expect(mocks.executeSendAction).not.toHaveBeenCalled();
+      },
+    );
 
     it("stages workspace-reader media before gateway dispatch", async () => {
       const gatewayPlugin = createGatewayActionPlugin({
@@ -237,69 +237,69 @@ describe("runMessageAction plugin dispatch", () => {
       expect(workspaceReadFile).toHaveBeenCalled();
     });
 
-    it.each([
-      { name: "raw base64", buffer: "SGVsbG8=" },
-      { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
-    ])("preserves $name bytes and MIME for gateway delivery-mode channels", async ({ buffer }) => {
-      const gatewayDeliveryPlugin: ChannelPlugin = {
-        id: "gatewaydeliver",
-        meta: {
+    it.each([{ name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" }])(
+      "preserves $name bytes and MIME for gateway delivery-mode channels",
+      async ({ buffer }) => {
+        const gatewayDeliveryPlugin: ChannelPlugin = {
           id: "gatewaydeliver",
-          label: "Gateway Deliver",
-          selectionLabel: "Gateway Deliver",
-          docsPath: "/channels/gatewaydeliver",
-          blurb: "Gateway delivery-mode send test plugin.",
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: createAlwaysConfiguredPluginConfig(),
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
+          meta: {
+            id: "gatewaydeliver",
+            label: "Gateway Deliver",
+            selectionLabel: "Gateway Deliver",
+            docsPath: "/channels/gatewaydeliver",
+            blurb: "Gateway delivery-mode send test plugin.",
           },
-        },
-        outbound: { deliveryMode: "gateway" },
-      };
-      setTestPlugin(gatewayDeliveryPlugin, "gatewaydeliver");
-      mocks.executeSendAction.mockResolvedValueOnce({
-        handledBy: "core",
-        payload: { ok: true },
-        sendResult: {
-          channel: "gatewaydeliver",
-          to: "user-123",
-          via: "gateway",
-          mediaUrl: "buffer://message-send/attachment",
-        },
-      });
+          capabilities: { chatTypes: ["direct"] },
+          config: createAlwaysConfiguredPluginConfig(),
+          messaging: {
+            targetResolver: {
+              looksLikeId: () => true,
+            },
+          },
+          outbound: { deliveryMode: "gateway" },
+        };
+        setTestPlugin(gatewayDeliveryPlugin, "gatewaydeliver");
+        mocks.executeSendAction.mockResolvedValueOnce({
+          handledBy: "core",
+          payload: { ok: true },
+          sendResult: {
+            channel: "gatewaydeliver",
+            to: "user-123",
+            via: "gateway",
+            mediaUrl: "buffer://message-send/attachment",
+          },
+        });
 
-      await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaydeliver"),
-        action: "send",
-        params: {
-          channel: "gatewaydeliver",
-          target: "user-123",
-          buffer,
-          filename: "delivery.txt",
-          mimeType: "text/plain",
-        },
-        gateway: {
-          clientName: "cli",
-          mode: "cli",
-        },
-      });
+        await runMessageAction({
+          cfg: createEnabledMessageActionConfig("gatewaydeliver"),
+          action: "send",
+          params: {
+            channel: "gatewaydeliver",
+            target: "user-123",
+            buffer,
+            filename: "delivery.txt",
+            mimeType: "text/plain",
+          },
+          gateway: {
+            clientName: "cli",
+            mode: "cli",
+          },
+        });
 
-      const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
-      expectRecordFields(
-        executeCall,
-        {
-          mediaUrl: "buffer://message-send/attachment",
-          mediaUrls: ["buffer://message-send/attachment"],
-          buffer,
-          filename: "delivery.txt",
-          contentType: "text/plain",
-        },
-        "execute send call",
-      );
-    });
+        const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
+        expectRecordFields(
+          executeCall,
+          {
+            mediaUrl: "buffer://message-send/attachment",
+            mediaUrls: ["buffer://message-send/attachment"],
+            buffer,
+            filename: "delivery.txt",
+            contentType: "text/plain",
+          },
+          "execute send call",
+        );
+      },
+    );
 
     it("applies TTS before gateway-executed plugin sends", async () => {
       const gatewayPlugin = createGatewayActionPlugin({

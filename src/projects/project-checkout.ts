@@ -10,10 +10,7 @@ const PROJECT_CHECKOUT_LEASE_MS = 30_000;
 const PROJECT_CHECKOUT_WAIT_MS = 30_000;
 
 export class ProjectCheckoutError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ProjectCheckoutError";
-  }
+  override name = "ProjectCheckoutError";
 }
 
 export async function withProjectCheckoutLifecycle<T>(

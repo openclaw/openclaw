@@ -172,24 +172,6 @@ describe("ollama setup", () => {
     );
   });
 
-  it("puts suggested cloud model first in cloud mode", async () => {
-    const prompter = createCloudPrompter();
-    vi.stubGlobal("fetch", createOllamaFetchMock({ tags: [] }));
-    const result = await promptAndConfigureOllama({
-      cfg: {},
-      env: {},
-      prompter,
-      allowSecretRefPrompt: false,
-    });
-    const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
-
-    expect(modelIds?.[0]).toBe("minimax-m2.7");
-    expect(result.defaultModel).toBe("ollama/minimax-m2.7");
-    expect(result.config.models?.providers?.ollama?.baseUrl).toBe("https://ollama.com");
-    expect(result.config.models?.providers?.ollama?.apiKey).toBe("test-ollama-key");
-    expect(result.credential).toBe("test-ollama-key");
-  });
-
   it("uses generic token flags for cloud-only setup", async () => {
     const prompter = createCloudPrompter();
     vi.stubGlobal("fetch", createOllamaFetchMock({ tags: [] }));
@@ -409,6 +391,10 @@ describe("ollama setup", () => {
     const modelIds = models?.map((m) => m.id);
 
     expect(modelIds).toEqual(["minimax-m2.7", "minimax-m3", "kimi-k3", "glm-5.1", "glm-5.2"]);
+    expect(result.defaultModel).toBe("ollama/minimax-m2.7");
+    expect(result.config.models?.providers?.ollama?.baseUrl).toBe("https://ollama.com");
+    expect(result.config.models?.providers?.ollama?.apiKey).toBe("test-ollama-key");
+    expect(result.credential).toBe("test-ollama-key");
     expect(models?.every((model) => model.contextTokens === undefined)).toBe(true);
     expect(models).toEqual(
       expect.arrayContaining(
@@ -923,7 +909,7 @@ describe("ollama setup", () => {
     },
   );
 
-  it("exits when Ollama is unreachable", async () => {
+  it("propagates unreachable guidance to the caller without exiting", async () => {
     const fetchMock = createOllamaFetchMock({
       tagsError: new Error("connect ECONNREFUSED"),
     });
@@ -932,24 +918,25 @@ describe("ollama setup", () => {
     const runtime: RuntimeEnv = createRuntimeSpies();
     const nextConfig = {};
 
-    const result = await configureOllamaNonInteractive({
-      nextConfig,
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11435",
-        customModelId: "llama3.2:latest",
-      },
-      runtime,
-    });
-
-    expect(runtime.error).toHaveBeenCalledWith(
+    await expect(
+      configureOllamaNonInteractive({
+        nextConfig,
+        opts: {
+          customBaseUrl: "http://127.0.0.1:11435",
+          customModelId: "llama3.2:latest",
+        },
+        runtime,
+      }),
+    ).rejects.toThrow(
       [
         "Ollama could not be reached at http://127.0.0.1:11435.",
         "Start or restart the Ollama server for this address.",
         "If Ollama is not installed on that machine, download it at https://ollama.com/download",
       ].join("\n"),
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(result).toBe(nextConfig);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(nextConfig).toEqual({});
     expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 });

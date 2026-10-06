@@ -622,14 +622,10 @@ function getCanonicalAgentRunSnapshot(
 function getAgentRunSnapshot(params: {
   runId: string;
   source?: "agent" | "chat";
-  afterVersion: number;
 }): AgentRunSnapshot | undefined {
   pruneAgentRunCache();
   const job = agentJobs.get(params.runId);
-  const snapshot = job
-    ? getCanonicalAgentRunSnapshot(job.snapshotsBySource, params.source)
-    : undefined;
-  return snapshot && snapshot.version > params.afterVersion ? snapshot : undefined;
+  return job ? getCanonicalAgentRunSnapshot(job.snapshotsBySource, params.source) : undefined;
 }
 
 function addAgentRunWaiter(runId: string, waiter: AgentJobWaiter): () => void {
@@ -649,7 +645,7 @@ function addAgentRunWaiter(runId: string, waiter: AgentJobWaiter): () => void {
   };
 }
 
-function selectedSnapshot(snapshot: AgentRunObservation): AgentJobObservation {
+export function projectAgentJobObservation(snapshot: AgentJobObservation): AgentJobObservation {
   return {
     session: snapshot.session,
     status: snapshot.status,
@@ -671,18 +667,12 @@ function selectedSnapshot(snapshot: AgentRunObservation): AgentJobObservation {
 export async function waitForAgentJob(params: {
   runId: string;
   timeoutMs: number;
-  ignoreCachedSnapshot?: boolean;
   source?: "agent" | "chat";
 }): Promise<AgentJobObservation | null> {
   ensureAgentRunListener();
-  const afterVersion = params.ignoreCachedSnapshot ? agentJobState.version : -1;
-  const cached = getAgentRunSnapshot({
-    runId: params.runId,
-    source: params.source,
-    afterVersion,
-  });
+  const cached = getAgentRunSnapshot(params);
   if (cached) {
-    return selectedSnapshot(cached);
+    return projectAgentJobObservation(cached);
   }
   const signal = getAsyncWorkSignal();
   if (params.timeoutMs <= 0 || signal?.aborted) {
@@ -710,13 +700,9 @@ export async function waitForAgentJob(params: {
         finish({ status: "timeout", timeoutPhase: "gateway_draining" });
         return;
       }
-      const snapshot = getAgentRunSnapshot({
-        runId: params.runId,
-        source: params.source,
-        afterVersion,
-      });
+      const snapshot = getAgentRunSnapshot(params);
       if (snapshot) {
-        finish(selectedSnapshot(snapshot));
+        finish(projectAgentJobObservation(snapshot));
       }
     };
     removeWaiter = addAgentRunWaiter(params.runId, onWake);
@@ -724,11 +710,11 @@ export async function waitForAgentJob(params: {
       if (!params.source) {
         const pending = pendingAgentRunErrors.get(params.runId);
         const pendingError = pending?.snapshot;
-        if (pendingError && pendingError.version > afterVersion) {
+        if (pendingError) {
           finish(
             !pending.timer ||
               isStickyAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
-              ? selectedSnapshot(pendingError)
+              ? projectAgentJobObservation(pendingError)
               : createPendingErrorTimeoutSnapshot(pendingError),
           );
           return;
@@ -736,10 +722,9 @@ export async function waitForAgentJob(params: {
         const pendingTimeout = pendingAgentRunTimeouts.get(params.runId)?.snapshot;
         if (
           pendingTimeout &&
-          pendingTimeout.version > afterVersion &&
           terminalOutcomeFromSnapshot(pendingTimeout)?.reason === "hard_timeout"
         ) {
-          finish(selectedSnapshot(pendingTimeout));
+          finish(projectAgentJobObservation(pendingTimeout));
           return;
         }
       }

@@ -1,0 +1,233 @@
+import { statSync } from "node:fs";
+import path from "node:path";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { registerSignalExitGate } from "./signal-exit-barrier.js";
+
+type LocalMutationScope = {
+  env: NodeJS.ProcessEnv;
+  config: OpenClawConfig;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+};
+
+class LocalStateOwnerError extends Error {
+  constructor(
+    readonly code: "OWNER_UNAVAILABLE" | "OWNER_REFUSED" | "OUTCOME_UNKNOWN",
+    message: string,
+    cause?: unknown,
+  ) {
+    super(message, { cause });
+    this.name = "LocalStateOwnerError";
+  }
+}
+
+/** Select one owner before domain admission and retain offline custody through resource settlement. */
+export async function runWithLocalStateOwner<T>(params: {
+  method: string;
+  params: Record<string, unknown>;
+  target: string;
+  recoveryCommand?: string;
+  requiredCapabilities?: readonly string[];
+  onForeignOwner?: "refuse";
+  assertTargetCurrent?: () => void;
+  runLocal: (scope: LocalMutationScope) => Promise<T>;
+}): Promise<T> {
+  const selectedEnv = { ...process.env };
+  const selectedStateDir = resolveStateDir(selectedEnv);
+  const stateDir = resolveIdentityPathViaExistingAncestorSync(selectedStateDir);
+  const rootIdentity = statSync(stateDir, { bigint: true, throwIfNoEntry: false });
+  const env = {
+    ...selectedEnv,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: resolveConfigPath(selectedEnv, selectedStateDir),
+  };
+  const input = structuredClone(params.params);
+  const [
+    {
+      acquireGatewayLock,
+      isGatewayLifecycleContentionError,
+      isSameGatewayLockIdentity,
+      readActiveGatewayLockIdentity,
+      readLockPayloadSync,
+      resolveGatewayLockPaths,
+    },
+    { captureGatewayStateOwner },
+    { createOpenClawDatabaseMaintenanceScope },
+  ] = await Promise.all([
+    import("../infra/gateway-lock.js"),
+    import("../infra/gateway-state-owner.js"),
+    import("../state/openclaw-state-db-async-lifecycle.js"),
+  ]);
+  const paths = resolveGatewayLockPaths(env);
+  const databasePath = path.join(paths.stateDir, "state", "openclaw.sqlite");
+  const controller = new AbortController();
+  const finished = createDeferredCore();
+  const releaseExitGate = registerSignalExitGate(finished.promise, () => controller.abort());
+  const assertTargetCurrent = () => {
+    controller.signal.throwIfAborted();
+    const ambientPaths = resolveGatewayLockPaths(process.env);
+    const currentRoot = rootIdentity
+      ? statSync(stateDir, { bigint: true, throwIfNoEntry: false })
+      : undefined;
+    if (
+      paths.stateDir !== stateDir ||
+      ambientPaths.ownerLockPath !== paths.ownerLockPath ||
+      ambientPaths.configPath !== paths.configPath ||
+      resolveIdentityPathViaExistingAncestorSync(selectedStateDir) !== stateDir ||
+      (rootIdentity &&
+        (currentRoot?.dev !== rootIdentity.dev || currentRoot?.ino !== rootIdentity.ino)) ||
+      resolveGatewayLockPaths(selectedEnv).ownerLockPath !== paths.ownerLockPath
+    ) {
+      throw new LocalStateOwnerError(
+        "OWNER_UNAVAILABLE",
+        "Selected state root changed; rerun the command.",
+      );
+    }
+    params.assertTargetCurrent?.();
+  };
+  const guidance = `Update the Gateway or fix authentication and retry. To run offline, stop the Gateway through its service owner, wait for ownership to release, then rerun this exact command.`;
+  const refuse = (cause: unknown): never => {
+    throw new LocalStateOwnerError(
+      "OWNER_UNAVAILABLE",
+      `Cannot admit ${params.method} for ${params.target} in state root ${paths.stateDir}: ${redactSensitiveUrlLikeString(formatErrorMessage(cause))}. No local mutation was attempted. Inspect openclaw gateway status. ${guidance}`,
+      cause,
+    );
+  };
+  const discover = async () => {
+    try {
+      assertTargetCurrent();
+      return await readActiveGatewayLockIdentity({
+        env,
+        requireInspection: true,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      return refuse(error);
+    }
+  };
+  const runLocal = async (assertOwnerCurrent: () => void): Promise<T> => {
+    const assertCurrent = () => {
+      assertTargetCurrent();
+      assertOwnerCurrent();
+    };
+    assertCurrent();
+    const { getRuntimeConfig } = await import("../config/config.js");
+    assertCurrent();
+    const config = getRuntimeConfig();
+    assertCurrent();
+    return await params.runLocal({ env, config, signal: controller.signal, assertCurrent });
+  };
+  const route = async (owner: GatewayLockIdentity): Promise<T> => {
+    if (params.onForeignOwner === "refuse") {
+      return refuse(new Error("This operation requires exclusive offline state ownership"));
+    }
+    if (!owner.ownerId) {
+      return refuse(new Error("Gateway lacks the expected-owner contract; update the Gateway."));
+    }
+    const { callGateway, isGatewayClientRequestError } = await import("../gateway/call.js");
+    let dispatched = false;
+    try {
+      assertTargetCurrent();
+      // The transport owns reduced connection config; full runtime loading can write state.
+      return await callGateway<T>({
+        method: params.method,
+        configPath: paths.configPath,
+        params: { ...input, expectedOwnerId: owner.ownerId },
+        localPortOverride: owner.port,
+        ignoreEnvUrlOverride: true,
+        requiredMethods: [params.method],
+        requiredCapabilities: [
+          GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING,
+          ...(params.requiredCapabilities ?? []),
+        ],
+        timeoutMs: 600_000,
+        signal: controller.signal,
+        scopes: ["operator.admin"],
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+        prepareDispatchCurrent: async () => {
+          const current = await discover();
+          if (!current || !isSameGatewayLockIdentity(owner, current)) {
+            refuse(new Error("Gateway owner changed before dispatch"));
+          }
+        },
+        assertDispatchCurrent: () => {
+          assertTargetCurrent();
+          const current = readLockPayloadSync(paths.ownerLockPath, true);
+          if (!current || current.ownerId !== owner.ownerId || current.pid !== owner.pid) {
+            refuse(new Error("Gateway owner changed before dispatch"));
+          }
+          // From this point a failure may follow an accepted effect. Never replay it.
+          dispatched = true;
+        },
+      });
+    } catch (error) {
+      const refused =
+        isGatewayClientRequestError(error) &&
+        typeof error.details === "object" &&
+        error.details !== null &&
+        "mutationAccepted" in error.details &&
+        error.details.mutationAccepted === false;
+      throw new LocalStateOwnerError(
+        dispatched && !refused ? "OUTCOME_UNKNOWN" : "OWNER_REFUSED",
+        `Gateway owning ${paths.stateDir} on local port ${owner.port} could not complete ${params.method} for ${params.target}: ${redactSensitiveUrlLikeString(formatErrorMessage(error))}. ` +
+          (dispatched && !refused
+            ? `The outcome may be partial; inspect ${params.recoveryCommand ?? "the operation's status"} and the target before retrying. No local fallback was attempted.`
+            : `No local mutation was attempted. ${guidance}`),
+        error,
+      );
+    }
+  };
+  try {
+    assertTargetCurrent();
+    const hosted = captureGatewayStateOwner(databasePath);
+    if (hosted) {
+      return await runLocal(hosted.assertCurrent);
+    }
+    const owner = await discover();
+    if (owner) {
+      return await route(owner);
+    }
+    let lock;
+    try {
+      // A losing acquisition has not entered the domain or opened a writable database.
+      lock = await acquireGatewayLock({ env, role: "agent-embedded", allowInTests: true });
+    } catch (error) {
+      if (isGatewayLifecycleContentionError(error)) {
+        const winner = await discover();
+        if (winner) {
+          return await route(winner);
+        }
+      }
+      return refuse(error);
+    }
+    if (!lock) {
+      return refuse(new Error("Offline state ownership was not acquired"));
+    }
+    const resources = createOpenClawDatabaseMaintenanceScope({
+      assertOwnerCurrent: () => lock.assertCurrent(),
+      assertDatabaseAccess: lock.assertDatabaseAccess,
+    });
+    try {
+      return await resources.run(() => runLocal(lock.assertCurrent));
+    } finally {
+      // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
+      await resources.close();
+      await lock.release();
+    }
+  } finally {
+    finished.resolve();
+    releaseExitGate();
+  }
+}

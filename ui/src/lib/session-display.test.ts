@@ -1,6 +1,7 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isCronSessionDisplayKey } from "../../../src/shared/session-list-visibility.ts";
+import { i18n } from "../i18n/index.ts";
 import {
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
@@ -26,6 +27,20 @@ describe("isCronSessionDisplayKey", () => {
 });
 
 describe("resolveSessionDisplayName", () => {
+  it.each(["Subagent (worker):", "Subagent [worker]:"])(
+    "treats translated prefix %s as literal text",
+    (prefix) => {
+      const translation = vi.spyOn(i18n, "t").mockReturnValue(prefix);
+      try {
+        const key = "agent:main:subagent:worker";
+        const row = { label: `${prefix} Research sources` };
+        expect(resolveSessionDisplayName(key, row)).toBe("Research sources");
+      } finally {
+        translation.mockRestore();
+      }
+    },
+  );
+
   it("uses the same friendly main-thread name for every agent", () => {
     for (const key of ["main", "agent:main:main", "agent:research:main", "agent:ops-team:main"]) {
       expect(resolveSessionDisplayName(key)).toBe("Main Session");
@@ -204,32 +219,25 @@ describe("resolveSessionDisplayName", () => {
     );
   });
 
-  it("can omit only the subagent prefix while preserving its untitled fallback", () => {
+  it("uses plain subagent names and preserves the unnamed fallback", () => {
     const key = "agent:main:subagent:worker";
-    expect(resolveSessionDisplayName(key, { label: "Research sources" })).toBe(
-      "Subagent: Research sources",
+    expect(resolveSessionDisplayName(key, { label: "Research sources" })).toBe("Research sources");
+    expect(resolveSessionDisplayName(key, { label: "Subagent: Research sources" })).toBe(
+      "Research sources",
+    );
+    expect(resolveSessionDisplayName(key, { displayName: "Research sources" })).toBe(
+      "Research sources",
+    );
+    expect(resolveSessionDisplayName(key, { derivedTitle: "Research sources" })).toBe(
+      "Research sources",
+    );
+    expect(resolveSessionDisplayName(key)).toBe("Subagent");
+    expect(resolveSessionDisplayName("agent:main:cron:daily", { label: "Daily" })).toBe(
+      "Automation: Daily",
     );
     expect(
-      resolveSessionDisplayName(
-        key,
-        { label: "Subagent: Research sources" },
-        {
-          includeSubagentPrefix: false,
-        },
-      ),
-    ).toBe("Research sources");
-    expect(resolveSessionDisplayName(key, undefined, { includeSubagentPrefix: false })).toBe(
-      "Subagent:",
-    );
-    expect(
-      resolveSessionDisplayName(
-        "agent:main:cron:daily",
-        { label: "Daily" },
-        {
-          includeSubagentPrefix: false,
-        },
-      ),
-    ).toBe("Automation: Daily");
+      resolveSessionDisplayName("agent:main:dashboard:task", { label: "Subagent: explicit title" }),
+    ).toBe("Subagent: explicit title");
   });
 
   it("strips persisted pre-rename Cron labels instead of double-prefixing", () => {

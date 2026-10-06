@@ -13,10 +13,14 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
+  discardEmptyChildSessionSnapshot,
   hydrateSidebarChildSessions,
   retireStaleChildSessionRows,
 } from "./app-sidebar-child-session-data.ts";
-import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
+import {
+  SessionCatalogLiveState,
+  sessionCatalogListClient,
+} from "./app-sidebar-session-catalog-live.ts";
 import type {
   SidebarSessionMutationScope,
   SidebarSessionsScrollState,
@@ -25,6 +29,7 @@ import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refre
 import {
   applySessionCatalogContinuation,
   archiveSessionCatalog as archiveSessionCatalogData,
+  importSessionCatalog as importSessionCatalogData,
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
   applySessionCatalogChanged as applySessionCatalogChangedToData,
   invalidateSessionCatalogs as invalidateSessionCatalogData,
@@ -64,13 +69,14 @@ type ChildSessionQuery = {
 /** Gateway-backed session-list and external-catalog data ownership. */
 export class SessionDataController implements ReactiveController, SessionCatalogDataOwner {
   sessionCatalogs: SessionCatalog[] = [];
-  readonly pendingCatalogArchives = new Set<string>();
+  pendingCatalogArchives: ReadonlySet<string> = new Set();
   sessionCatalogRefreshStatus: PanelRefreshStatus = createPanelRefreshStatus();
   loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
   visibleSessionLimits = new Map<string, number>();
   sessionsResult: SessionsListResult | null = null;
   sessionsAgentId: string | null = null;
   sessionsLoading = false;
+  sessionsStartupPending = false;
   childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>> = {};
   loadedChildSessionKeys: ReadonlySet<string> = new Set();
   childSessionErrorsByParent: ReadonlyMap<string, string> = new Map();
@@ -132,14 +138,12 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       },
     });
     this.subscriptions
-      .watch(
+      .watchStore(
         () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.synchronizeGateway(gateway),
       )
-      .watch(
+      .watchStore(
         () => this.context?.sessions,
-        (sessions, notify) => sessions.subscribe(notify),
         (sessions) => this.synchronizeSessions(sessions),
       )
       .effect(
@@ -154,9 +158,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
         () => this.context?.agents,
         (agents, notify) => subscribeSidebarAgentSessionCaches(agents, this, notify),
       )
-      .watch(
+      .watchStore(
         () => this.context?.agentSelection,
-        (agentSelection, notify) => agentSelection.subscribe(notify),
         () => this.synchronizeSessionScope(),
       );
   }
@@ -167,6 +170,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   get isSessionDataHostConnected(): boolean {
     return this.host.isConnected;
+  }
+
+  get sessionsStartingUp(): boolean {
+    return this.sessionsStartupPending || this.sessionCatalogLive.startupPending;
   }
 
   get sessionDataHostConnected(): boolean {
@@ -226,7 +233,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   sessionCatalogGatewayClient(): GatewayBrowserClient | null {
-    return this.gatewayClient;
+    return sessionCatalogListClient(this.context?.gateway.snapshot, this.host.connected);
   }
 
   private synchronizeOwnerSessionCounts(): void {
@@ -242,7 +249,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   retireSessionCatalogData(): void {
     this.sessionScopeGeneration += 1;
-    this.pendingCatalogArchives.clear();
+    this.pendingCatalogArchives = new Set();
     this.sessionsLoading = false;
     this.loadingMoreSessionCatalogIds = new Set();
     this.sessionCatalogLive.clear();
@@ -333,6 +340,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   invalidateSessionCatalogs = () => invalidateSessionCatalogData(this);
 
   archiveSessionCatalog = archiveSessionCatalogData.bind(null, this);
+
+  importSessionCatalog = importSessionCatalogData.bind(null, this);
 
   refreshSessionCatalogs = (): Promise<void> => refreshSessionCatalogData(this);
 
@@ -429,9 +438,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     const available = isGatewayAvailable(gateway.snapshot);
     const becameAvailable = available && !this.gatewayAvailable;
     this.gatewayAvailable = available;
-    // Presence and auth snapshots must not retire this client's in-flight
-    // native or catalog pages unless its connection phase actually changes.
+    // Presence updates preserve in-flight pages, but a new authority projection
+    // can revoke catalog ownership without replacing the socket client.
     if (!sourceOrClientChanged && !connectionChanged) {
+      this.synchronizeSessionScope();
       this.synchronizeOwnerSessionCounts();
       const { awaitingGateway, error } = this.sessionCatalogRefreshStatus;
       const requesting = this.sessionCatalogLive.requestGeneration !== null;
@@ -474,9 +484,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.cachedSessionResult = null;
     this.sessionsResult = null;
     this.sessionsAgentId = null;
+    this.sessionsStartupPending = false;
     this.sessionResultsByAgent = {};
     this.resetChildSessionState();
-    this.visibleSessionLimits.clear();
+    this.visibleSessionLimits = new Map();
     this.requestSessionDataUpdate();
   }
 
@@ -567,7 +578,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       await existing.hydration;
       return;
     }
-    const scope = childSessionListQuery(parentKey);
+    const scope = { ...childSessionListQuery(parentKey), source: "sidebar" as const };
     const query: ChildSessionQuery = {};
     this.childSessionQueries.set(parentKey, query);
     const isCurrent = () =>
@@ -676,7 +687,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
-    this.visibleSessionLimits.set(sectionId, limit);
+    this.visibleSessionLimits = new Map(this.visibleSessionLimits).set(sectionId, limit);
     this.requestSessionDataUpdate();
   }
 
@@ -688,7 +699,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   resetSessionList(): void {
     this.retireFilteredSessions();
     this.sessionsLoading = false;
-    this.visibleSessionLimits.clear();
+    this.visibleSessionLimits = new Map();
     // A filter transition owns a new child/lineage generation; otherwise a
     // pending request from the retired view can repopulate its cleared rows.
     this.resetChildSessionState();
@@ -703,15 +714,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   discardEmptyChildSessionSnapshot(sessionKey: string): void {
-    if (this.childSessionRowsByParent[sessionKey]?.length === 0) {
-      const childRows = { ...this.childSessionRowsByParent };
-      delete childRows[sessionKey];
-      this.childSessionRowsByParent = childRows;
-      const loadedKeys = new Set(this.loadedChildSessionKeys);
-      loadedKeys.delete(sessionKey);
-      this.loadedChildSessionKeys = loadedKeys;
-      this.requestSessionDataUpdate();
-    }
+    discardEmptyChildSessionSnapshot(this, sessionKey);
   }
 
   retryChildSessions(sessionKey: string): void {

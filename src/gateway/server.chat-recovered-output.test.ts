@@ -241,7 +241,7 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
       if (failed) {
         expect(completed.status).toBe("error");
         expect(messageText(history.messages.at(-1))).toBe(
-          `⚠️ LLM request failed (provider internal error). This is usually temporary — try again shortly.\n\n${prefix}`,
+          `⚠️ The AI service is having trouble. Please try again in a moment.\n\n${prefix}`,
         );
         expect(terminal.some((event) => event.state === "error")).toBe(true);
         const deltas = events.filter(

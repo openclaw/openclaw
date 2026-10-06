@@ -18,25 +18,7 @@ export type AgentExecRunResult = {
 
 type AgentExecStatus = "ok" | "error" | "timeout";
 
-export type AgentExecEnvelope = {
-  ok: boolean;
-  status: AgentExecStatus;
-  final: string;
-  payloads: AgentExecPayload[];
-  usage?: NonNullable<NonNullable<EmbeddedAgentRunMeta["agentMeta"]>["usage"]>;
-  costUsd?: number;
-  codeModeEngaged?: boolean;
-  assistantTurns?: number;
-  bridgeCalls?: NonNullable<NonNullable<EmbeddedAgentRunMeta["agentMeta"]>["bridgeCalls"]>;
-  toolSummary?: NonNullable<EmbeddedAgentRunMeta["toolSummary"]>;
-  model: string | null;
-  provider: string | null;
-  sessionId: string;
-  error?: {
-    message: string;
-    kind: string;
-  };
-};
+export type AgentExecEnvelope = ReturnType<typeof classifyAgentExecResult>;
 
 function projectAgentExecPayload(payload: AgentExecRawPayload): AgentExecPayload {
   return {
@@ -77,7 +59,7 @@ export function classifyAgentExecResult(
   result: AgentExecRunResult,
   fallbackExhausted = false,
   projectedErrorPayload?: string | true,
-): AgentExecEnvelope {
+) {
   const meta = result.meta;
   const errorPayload = result.payloads?.find((payload) => payload.isError === true);
   const errorPayloadMessage =

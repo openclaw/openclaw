@@ -96,33 +96,26 @@ function assertEd25519KeyType(key: crypto.KeyObject, label: string): void {
   }
 }
 
-function deriveRawKeyFromDer(params: { der: Buffer; label: string; prefix: Buffer }): Buffer {
-  const expectedLength = params.prefix.length + ED25519_RAW_KEY_LENGTH;
-  if (
-    params.der.length !== expectedLength ||
-    !params.der.subarray(0, params.prefix.length).equals(params.prefix)
-  ) {
-    throw new Error(`${params.label} has a noncanonical Ed25519 encoding`);
+function deriveRawKeyFromDer(der: Buffer, label: string, prefix: Buffer): Buffer {
+  const expectedLength = prefix.length + ED25519_RAW_KEY_LENGTH;
+  if (der.length !== expectedLength || !der.subarray(0, prefix.length).equals(prefix)) {
+    throw new Error(`${label} has a noncanonical Ed25519 encoding`);
   }
-  return params.der.subarray(params.prefix.length);
+  return der.subarray(prefix.length);
 }
 
 export function deriveCanonicalEd25519PublicKeyRaw(publicKeyPem: string): Buffer {
   const spki = decodeCanonicalPem("PUBLIC KEY", publicKeyPem);
   const key = crypto.createPublicKey({ key: spki, type: "spki", format: "der" });
   assertEd25519KeyType(key, "public key");
-  return deriveRawKeyFromDer({ der: spki, label: "public key", prefix: ED25519_SPKI_PREFIX });
+  return deriveRawKeyFromDer(spki, "public key", ED25519_SPKI_PREFIX);
 }
 
 export function deriveCanonicalEd25519PrivateKeyRaw(privateKeyPem: string): Buffer {
   const pkcs8 = decodeCanonicalPem("PRIVATE KEY", privateKeyPem);
   const key = crypto.createPrivateKey({ key: pkcs8, type: "pkcs8", format: "der" });
   assertEd25519KeyType(key, "private key");
-  return deriveRawKeyFromDer({
-    der: pkcs8,
-    label: "private key",
-    prefix: ED25519_PKCS8_PRIVATE_PREFIX,
-  });
+  return deriveRawKeyFromDer(pkcs8, "private key", ED25519_PKCS8_PRIVATE_PREFIX);
 }
 
 /** Parse any Node-compatible Ed25519 PEM and return its canonical raw public key. */
@@ -130,7 +123,7 @@ export function deriveEd25519PublicKeyRaw(publicKeyPem: string): Buffer {
   const key = crypto.createPublicKey(publicKeyPem);
   assertEd25519KeyType(key, "public key");
   const spki = key.export({ type: "spki", format: "der" });
-  return deriveRawKeyFromDer({ der: spki, label: "public key", prefix: ED25519_SPKI_PREFIX });
+  return deriveRawKeyFromDer(spki, "public key", ED25519_SPKI_PREFIX);
 }
 
 /** Parse any Node-compatible Ed25519 PEM and return its canonical raw private key. */
@@ -138,11 +131,7 @@ export function deriveEd25519PrivateKeyRaw(privateKeyPem: string): Buffer {
   const key = crypto.createPrivateKey(privateKeyPem);
   assertEd25519KeyType(key, "private key");
   const pkcs8 = key.export({ type: "pkcs8", format: "der" });
-  return deriveRawKeyFromDer({
-    der: pkcs8,
-    label: "private key",
-    prefix: ED25519_PKCS8_PRIVATE_PREFIX,
-  });
+  return deriveRawKeyFromDer(pkcs8, "private key", ED25519_PKCS8_PRIVATE_PREFIX);
 }
 
 export function publicKeyRawBase64UrlFromEd25519Pem(publicKeyPem: string): string {

@@ -66,7 +66,7 @@ export function resolveOpenRouterApiBaseUrl(baseUrl: string | undefined): string
   // Credentialed catalog, inference, and usage paths must share one validated provider destination.
   const normalized =
     normalizeOpenRouterBaseUrl(baseUrl) ?? normalizeBaseUrl(baseUrl, OPENROUTER_BASE_URL);
-  const parsed = URL.canParse(normalized) ? new URL(normalized) : undefined;
+  const parsed = URL.parse(normalized);
   if (
     !parsed ||
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||

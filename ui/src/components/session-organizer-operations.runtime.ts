@@ -6,6 +6,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { resolveSessionRenamePatch } from "../lib/session-rename.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
+import { formatSessionSnoozeWakeTime } from "../lib/sessions/session-snooze.ts";
 import {
   formatPreservedWorktreeConfirmation,
   formatPreservedWorktreesNotice,
@@ -65,7 +66,10 @@ export async function patchSession(
     agentId,
     ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
   };
-  if (typeof patch.archived === "boolean" && !session.sessionId?.trim()) {
+  if (
+    (typeof patch.archived === "boolean" || patch.snoozedUntil !== undefined) &&
+    !session.sessionId?.trim()
+  ) {
     host.sessionData.publishSessionMutationError(
       scope,
       "Session lifecycle action requires a durable session identity.",
@@ -131,20 +135,23 @@ export async function patchSession(
   }
 }
 
-async function patchSessions(
-  host: SessionOrganizerControllerHost,
-  rows: readonly SidebarRecentSession[],
-  patch: SidebarSessionPatch,
+export async function snoozeSessionWithUndo(
+  host: SessionActionHost,
+  session: SessionActionRow,
+  snoozedUntil: number,
   scope: SidebarSessionMutationScope,
-): Promise<SidebarSessionMutationResult> {
-  if (rows.length === 0) {
-    return "completed";
+) {
+  const result = await patchSession(host, session, { snoozedUntil }, scope, { sessionScope: true });
+  if (result !== "completed" || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return;
   }
-  const successful = await patchSessionRows(host, rows, patch, scope);
-  if (!successful) {
-    return host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
-  }
-  return successful.length === rows.length ? "completed" : "failed";
+  const undoHost = sessionUndoHost(host, scope);
+  showToast({
+    message: t("sessionsView.sessionSnoozed", { time: formatSessionSnoozeWakeTime(snoozedUntil) }),
+    actionLabel: t("common.undo"),
+    onAction: () =>
+      void patchSession(undoHost, session, { snoozedUntil: null }, scope, { sessionScope: true }),
+  });
 }
 
 export async function archiveSessionWithUndo(
@@ -220,10 +227,18 @@ function archiveUndoAction(
   archived: readonly { session: SessionActionRow; pinned: boolean }[],
   scope: SidebarSessionMutationScope,
 ): () => void {
+  const undoHost = sessionUndoHost(host, scope);
+  return () => void restoreArchivedSessions(undoHost, archived, scope);
+}
+
+function sessionUndoHost(
+  host: SessionActionHost,
+  scope: SidebarSessionMutationScope,
+): SessionActionHost {
   // The toast outlives its originating pane. The session owner fences reconnects;
   // the captured row IDs still fence replacement conversations during restore.
   const connection = scope.sessions.captureConnectionScope();
-  const undoHost: SessionActionHost = {
+  return {
     pruneSidebarSessionEntry: (key) => host.pruneSidebarSessionEntry(key),
     selectSession: (key) => host.selectSession(key),
     sidebarSessionStatusFilter: () => host.sidebarSessionStatusFilter(),
@@ -240,7 +255,6 @@ function archiveUndoAction(
       },
     },
   };
-  return () => void restoreArchivedSessions(undoHost, archived, scope);
 }
 
 // Undo restores captured rows; the roster owner refreshes whichever queries are now visible.
@@ -403,10 +417,10 @@ export async function runBatchSessionAction(
 ): Promise<void> {
   switch (action.kind) {
     case "toggle-unread":
-      await patchSessions(host, rows, { unread: !allUnread }, scope);
+      await patchSessionRows(host, rows, { unread: !allUnread }, scope);
       break;
     case "move-to-group":
-      await patchSessions(
+      await patchSessionRows(
         host,
         rows.filter((row) => (row.category ?? null) !== action.category),
         { category: action.category },
@@ -495,9 +509,14 @@ export async function createSessionGroup(
   // The Gateway checks the identities captured with the action. A bounded
   // roster can page them out or replace a key, so it cannot authorize the move.
   if (sessions.length > 0) {
-    return sessions.length === 1
-      ? patchSession(host, sessions[0]!, { category: name }, scope)
-      : patchSessions(host, sessions, { category: name }, scope);
+    if (sessions.length === 1) {
+      return patchSession(host, sessions[0]!, { category: name }, scope);
+    }
+    const successful = await patchSessionRows(host, sessions, { category: name }, scope);
+    if (!successful) {
+      return host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
+    }
+    return successful.length === sessions.length ? "completed" : "failed";
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";

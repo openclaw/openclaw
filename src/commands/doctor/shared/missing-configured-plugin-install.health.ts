@@ -61,28 +61,6 @@ function recordedInstallIdentity(record: PluginInstallRecord | undefined) {
   };
 }
 
-function missingRecordedPluginIssueKind(params: {
-  pluginId: string;
-  staleVersionBoundRuntimePluginIds: ReadonlySet<string>;
-  repairablePackageDiagnosticPluginIds: ReadonlySet<string>;
-  staleDescriptorPluginIds: ReadonlySet<string>;
-}):
-  | "missing-installed-payload"
-  | "repairable-installed-plugin"
-  | "stale-channel-config-descriptor"
-  | "stale-version-bound-runtime" {
-  if (params.staleVersionBoundRuntimePluginIds.has(params.pluginId)) {
-    return "stale-version-bound-runtime";
-  }
-  if (params.repairablePackageDiagnosticPluginIds.has(params.pluginId)) {
-    return "repairable-installed-plugin";
-  }
-  if (params.staleDescriptorPluginIds.has(params.pluginId)) {
-    return "stale-channel-config-descriptor";
-  }
-  return "missing-installed-payload";
-}
-
 /** Detect configured plugin installs that Doctor can repair without mutating package state. */
 export async function detectConfiguredPluginInstallHealthIssues(params: {
   cfg: OpenClawConfig;
@@ -176,27 +154,19 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
       reportedPluginIds.add(pluginId);
       continue;
     }
-    const kind = missingRecordedPluginIssueKind({
-      pluginId,
-      staleVersionBoundRuntimePluginIds,
-      repairablePackageDiagnosticPluginIds,
-      staleDescriptorPluginIds,
-    });
+    const kind = staleVersionBoundRuntimePluginIds.has(pluginId)
+      ? "stale-version-bound-runtime"
+      : repairablePackageDiagnosticPluginIds.has(pluginId)
+        ? "repairable-installed-plugin"
+        : staleDescriptorPluginIds.has(pluginId)
+          ? "stale-channel-config-descriptor"
+          : "missing-installed-payload";
     const installPath = resolveRecordInstallPath(record, env);
-    if (kind === "stale-channel-config-descriptor") {
-      issues.push({
-        kind,
-        pluginId,
-        ...(installPath ? { installPath } : {}),
-      });
-      reportedPluginIds.add(pluginId);
-      continue;
-    }
     issues.push({
       kind,
       pluginId,
       ...(installPath ? { installPath } : {}),
-      ...recordedInstallIdentity(record),
+      ...(kind === "stale-channel-config-descriptor" ? {} : recordedInstallIdentity(record)),
     });
     reportedPluginIds.add(pluginId);
   }
@@ -238,22 +208,14 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     }
     const record = records[candidate.pluginId];
     const installSpec = resolvePluginInstallSources(candidate)[0]?.spec;
-    if (repair.shouldReplaceBrokenOfficialInstall) {
+    if (repair.shouldReplaceBrokenOfficialInstall || record) {
       const installPath = resolveRecordInstallPath(record, env);
       issues.push({
-        kind: staleVersionBoundRuntimePluginIds.has(candidate.pluginId)
-          ? "stale-version-bound-runtime"
-          : "repairable-installed-plugin",
-        pluginId: candidate.pluginId,
-        ...(installPath ? { installPath } : {}),
-        ...recordedInstallIdentity(record),
-      });
-      continue;
-    }
-    if (record) {
-      const installPath = resolveRecordInstallPath(record, env);
-      issues.push({
-        kind: "missing-installed-payload",
+        kind: repair.shouldReplaceBrokenOfficialInstall
+          ? staleVersionBoundRuntimePluginIds.has(candidate.pluginId)
+            ? "stale-version-bound-runtime"
+            : "repairable-installed-plugin"
+          : "missing-installed-payload",
         pluginId: candidate.pluginId,
         ...(installPath ? { installPath } : {}),
         ...recordedInstallIdentity(record),
@@ -275,59 +237,44 @@ const CONFIGURED_PLUGIN_INSTALL_ISSUE_DETAILS = {
     message: (pluginId: string) => `Configured plugin ${pluginId} is not installed.`,
     fixHint: "",
     action: "would-install-configured-plugin",
-    dryRunSafe: false,
   },
   "missing-installed-payload": {
     message: (pluginId: string) =>
       `Configured plugin ${pluginId} has an install record but its package payload is missing.`,
     fixHint: null,
     action: "would-reinstall-configured-plugin",
-    dryRunSafe: false,
   },
   "missing-required-dependencies": {
     message: (pluginId: string) =>
       `Configured plugin ${pluginId} is missing required dependencies:`,
     fixHint: null,
     action: "would-repair-configured-plugin-dependencies",
-    dryRunSafe: false,
   },
   "repairable-installed-plugin": {
     message: (pluginId: string) =>
       `Configured plugin ${pluginId} has a repairable package install problem.`,
     fixHint: null,
     action: "would-repair-configured-plugin-install",
-    dryRunSafe: false,
   },
   "stale-version-bound-runtime": {
     message: (pluginId: string) =>
       `Configured runtime plugin ${pluginId} is older than this OpenClaw version.`,
     fixHint: "Run `openclaw doctor --fix` to refresh the configured runtime plugin.",
     action: "would-refresh-configured-runtime-plugin",
-    dryRunSafe: false,
   },
   "stale-channel-config-descriptor": {
     message: (pluginId: string) =>
       `Configured plugin ${pluginId} has stale channel config metadata.`,
     fixHint: "Run `openclaw doctor --fix` to repair the configured plugin install metadata.",
     action: "would-repair-configured-plugin-install",
-    dryRunSafe: false,
   },
   "deferred-package-manager-repair": {
     message: (pluginId: string) =>
       `Configured plugin ${pluginId} package repair is deferred until the package update finishes.`,
     fixHint: "Rerun `openclaw doctor --fix` after the package update completes.",
     action: "would-defer-configured-plugin-install-repair",
-    dryRunSafe: true,
   },
-} as const satisfies Record<
-  ConfiguredPluginInstallHealthIssue["kind"],
-  {
-    message: (pluginId: string) => string;
-    fixHint: string | null;
-    action: string;
-    dryRunSafe: boolean;
-  }
->;
+} as const;
 
 export function configuredPluginInstallIssueToHealthFinding(
   issue: ConfiguredPluginInstallHealthIssue,
@@ -362,6 +309,6 @@ export function configuredPluginInstallIssueToRepairEffect(
     kind: "package",
     action: detail.action,
     target: issue.pluginId,
-    dryRunSafe: detail.dryRunSafe,
+    dryRunSafe: issue.kind === "deferred-package-manager-repair",
   };
 }

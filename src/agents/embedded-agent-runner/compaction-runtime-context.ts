@@ -1,7 +1,6 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
-import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -25,9 +24,7 @@ import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { normalizeContextTokenBudget } from "./utils.js";
 
-type EmbeddedCompactionRuntimeContextParams = Omit<
-  Partial<CompactEmbeddedAgentSessionParams>,
-  | "workspaceDir"
+type NullableCompactionContextKey =
   | "sessionKey"
   | "messageChannel"
   | "messageProvider"
@@ -39,22 +36,15 @@ type EmbeddedCompactionRuntimeContextParams = Omit<
   | "authProfileId"
   | "cwd"
   | "senderId"
-  | "provider"
-  | "model"
+  | "provider";
+
+type EmbeddedCompactionRuntimeContextParams = Omit<
+  Partial<CompactEmbeddedAgentSessionParams>,
+  NullableCompactionContextKey | "workspaceDir" | "model"
 > & {
+  [Key in NullableCompactionContextKey]?: CompactEmbeddedAgentSessionParams[Key] | null;
+} & {
   workspaceDir: string;
-  sessionKey?: string | null;
-  messageChannel?: string | null;
-  messageProvider?: string | null;
-  chatType?: ChatType | null;
-  agentAccountId?: string | null;
-  currentChannelId?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
-  authProfileId?: string | null;
-  cwd?: string | null;
-  senderId?: string | null;
-  provider?: string | null;
   modelId?: string | null;
   harnessRuntime?: string | null;
   activeProcessSessions?: ActiveProcessSessionReference[];
@@ -348,6 +338,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     agentHarnessId,
     modelSelectionLocked: params.modelSelectionLocked,
     workspaceDir: params.workspaceDir,
+    bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
     cwd: params.cwd ?? undefined,
     permissionMode: params.permissionMode,
     sessionRoot: params.sessionRoot,

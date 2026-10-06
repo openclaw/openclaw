@@ -44,14 +44,19 @@ export function resolveRuntimeWorkerUrl(params: {
   return new URL(`./${params.sourceWorkerName}${extension}`, params.currentModuleUrl);
 }
 
-function isBunWorkerRuntime(execPath: string): boolean {
+function isBunTargetRuntime(execPath: string): boolean {
   // Current runtime metadata also identifies renamed binaries; foreign paths keep their own selection.
   return execPath === process.execPath ? Boolean(process.versions.bun) : isBunRuntime(execPath);
 }
 
+/** Disable implicit package installation in OpenClaw-owned Bun processes. */
+export function resolveRuntimeArgs(execPath = process.execPath): string[] {
+  return isBunTargetRuntime(execPath) ? ["--no-install"] : [];
+}
+
 /** Whether a source TypeScript module needs Node's tsx loader; Bun runs TypeScript natively. */
 export function runtimeNeedsTypeScriptLoader(modulePath: string, execPath = process.execPath) {
-  return /\.[cm]?ts$/.test(modulePath) && !isBunWorkerRuntime(execPath);
+  return /\.[cm]?ts$/.test(modulePath) && !isBunTargetRuntime(execPath);
 }
 
 export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath): string[] {
@@ -59,7 +64,7 @@ export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath):
   // Resolve the preload here: Node resolves bare imports from the child cwd.
   return runtimeNeedsTypeScriptLoader(entry, execPath)
     ? ["--import", import.meta.resolve("tsx"), entry]
-    : [entry];
+    : [...resolveRuntimeArgs(execPath), entry];
 }
 
 /** Select the source Worker preload without feeding Node's TypeScript loader to Bun. */

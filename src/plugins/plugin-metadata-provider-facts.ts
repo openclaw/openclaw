@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type {
   PluginManifestProviderEndpoint,
@@ -21,18 +22,13 @@ import { normalizeManifestProviderRequestProvider } from "./plugin-provider-requ
 import { listSetupProviderIds } from "./setup-descriptors.js";
 
 const PROVIDER_ENDPOINT_CLASSES = new Set(
-  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native opencode-go-native azure-openai openrouter xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
+  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native opencode-go-native azure-openai openrouter vercel-ai-gateway xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
     " ",
   ),
 );
 
 function normalizeProviderHosts(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value
-        .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim().toLowerCase())
-        .filter(Boolean)
-    : [];
+  return normalizeTrimmedStringList(value).map((entry) => entry.toLowerCase());
 }
 
 export function normalizePluginProviderBaseUrl(value: string): string | undefined {

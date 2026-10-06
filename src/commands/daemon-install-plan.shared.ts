@@ -1,4 +1,3 @@
-// Shared daemon install runtime/path helpers for service plan generation.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -20,9 +19,8 @@ export type GatewayInstallPlan = {
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
 };
 
-/** Detect source-checkout dev mode from the current CLI entrypoint. */
-function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
-  const entry = argv[1];
+function resolveGatewayDevMode(): boolean {
+  const entry = process.argv[1];
   const normalizedEntry = entry?.replaceAll("\\", "/");
   return (
     normalizedEntry !== undefined &&
@@ -53,7 +51,6 @@ export async function resolveRunningBunFallback(params: {
   return process.execPath;
 }
 
-/** Resolve dev-mode and executable inputs for daemon service install planning. */
 export async function resolveDaemonInstallRuntimeInputs(params: {
   env: Record<string, string | undefined>;
   runtime: GatewayDaemonRuntime;
@@ -94,7 +91,6 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
   return { devMode, runtime: params.runtime, runtimePath };
 }
 
-/** Return the runtime binary directory that should be added to daemon PATH. */
 export function resolveDaemonRuntimeBinDir(runtimePath?: string): string[] | undefined {
   const trimmed = runtimePath?.trim();
   if (!trimmed || !path.isAbsolute(trimmed)) {
@@ -115,15 +111,9 @@ function isOpenClawCommandBasename(basename: string, platform: NodeJS.Platform):
   return false;
 }
 
-function safeRealpathSync(
-  inputPath: string | undefined,
-  realpathSync: (path: string) => string,
-): string | undefined {
-  if (!inputPath) {
-    return undefined;
-  }
+function safeRealpathSync(inputPath: string): string | undefined {
   try {
-    return realpathSync(inputPath);
+    return fs.realpathSync.native(inputPath);
   } catch {
     return undefined;
   }
@@ -136,23 +126,18 @@ function addUniquePathDir(dirs: string[], dir: string | undefined): void {
   dirs.push(dir);
 }
 
-/** Resolve the OpenClaw CLI binary directory from argv/PATH for daemon PATH. */
-function resolveDaemonOpenClawBinDir(
-  params: {
-    argv?: string[];
-    env?: Record<string, string | undefined>;
-    platform?: NodeJS.Platform;
-    existsSync?: (path: string) => boolean;
-    realpathSync?: (path: string) => string;
-  } = {},
-): string[] | undefined {
+/** Merge runtime and active OpenClaw binary directories for the daemon service PATH. */
+export function resolveDaemonServicePathDirs(params: {
+  runtimePath?: string;
+  argv?: string[];
+  env?: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
+}): string[] | undefined {
   const platform = params.platform ?? process.platform;
   const argv = params.argv ?? process.argv;
   const env = params.env ?? process.env;
-  const existsSync = params.existsSync ?? fs.existsSync;
-  const realpathSync = params.realpathSync ?? fs.realpathSync.native;
   const argv1 = argv[1]?.trim();
-  const dirs: string[] = [];
+  const dirs = resolveDaemonRuntimeBinDir(params.runtimePath) ?? [];
 
   if (
     argv1 &&
@@ -162,19 +147,17 @@ function resolveDaemonOpenClawBinDir(
     addUniquePathDir(dirs, path.dirname(argv1));
   }
 
-  const argvRealpath = path.isAbsolute(argv1 ?? "")
-    ? safeRealpathSync(argv1, realpathSync)
-    : undefined;
+  const argvRealpath = argv1 && path.isAbsolute(argv1) ? safeRealpathSync(argv1) : undefined;
   for (const rawSegment of (env.PATH ?? "").split(path.delimiter)) {
     const segment = rawSegment.trim();
     if (!path.isAbsolute(segment)) {
       continue;
     }
     const candidate = path.join(segment, platform === "win32" ? "openclaw.cmd" : "openclaw");
-    if (!existsSync(candidate)) {
+    if (!fs.existsSync(candidate)) {
       continue;
     }
-    const candidateRealpath = safeRealpathSync(candidate, realpathSync);
+    const candidateRealpath = safeRealpathSync(candidate);
     if (argvRealpath && candidateRealpath && candidateRealpath !== argvRealpath) {
       // Update invokes dist/index.js; the same installation's shim targets openclaw.mjs.
       const activeRoot = resolveOpenClawPackageRootSync({ argv1: argvRealpath });
@@ -188,22 +171,5 @@ function resolveDaemonOpenClawBinDir(
     addUniquePathDir(dirs, segment);
   }
 
-  return dirs.length > 0 ? dirs : undefined;
-}
-
-/** Merge runtime and OpenClaw binary directories for the daemon service PATH. */
-export function resolveDaemonServicePathDirs(params: {
-  runtimePath?: string;
-  argv?: string[];
-  env?: Record<string, string | undefined>;
-  platform?: NodeJS.Platform;
-}): string[] | undefined {
-  const dirs: string[] = [];
-  for (const dir of resolveDaemonRuntimeBinDir(params.runtimePath) ?? []) {
-    addUniquePathDir(dirs, dir);
-  }
-  for (const dir of resolveDaemonOpenClawBinDir(params) ?? []) {
-    addUniquePathDir(dirs, dir);
-  }
   return dirs.length > 0 ? dirs : undefined;
 }

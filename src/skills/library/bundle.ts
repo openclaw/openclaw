@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import {
@@ -14,7 +15,7 @@ import { hasErrnoCode, isErrno } from "../../infra/errno.js";
 import { ensureAbsoluteDirectory, root, walkDirectory } from "../../infra/fs-safe.js";
 import { retainMutationAuthority } from "../../infra/mutation-authority.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
-import { SkillLibraryError } from "./errors.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 
 export const SKILL_LIBRARY_MAX_PATH_COMPONENTS = 16;
 export const SKILL_LIBRARY_MAX_TREE_ENTRIES = SKILL_LIBRARY_MAX_FILES * 2;
@@ -127,9 +128,7 @@ function validateSkillBundlePath(filePath: string): void {
         part === "." ||
         part === ".." ||
         /[\\<>:"|?*]/u.test(part) ||
-        Array.from(part).some(
-          (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
-        ) ||
+        containsAsciiControlCharacter(part) ||
         /[ .]$/u.test(part) ||
         part !== part.normalize("NFC") ||
         /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(part) ||

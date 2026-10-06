@@ -26,6 +26,31 @@ export function syncToolStreamMessages(host: ToolStreamState) {
     .filter((msg): msg is Record<string, unknown> => Boolean(msg));
 }
 
+export function closeToolStreamBoundary(
+  host: Partial<Pick<ToolStreamHost, "toolStreamById" | "chatToolMessages">>,
+  runId: string,
+  boundaryRunId: string,
+): number | undefined {
+  let latestTimestamp: number | undefined;
+  const replacements = new Map<Record<string, unknown>, Record<string, unknown>>();
+  for (const entry of host.toolStreamById?.values() ?? []) {
+    if (entry.runId !== runId || entry.boundaryRunId) {
+      continue;
+    }
+    latestTimestamp = Math.max(latestTimestamp ?? entry.startedAt, entry.startedAt);
+    entry.boundaryRunId = boundaryRunId;
+    const message = { ...entry.message, boundaryRunId };
+    replacements.set(entry.message, message);
+    entry.message = message;
+  }
+  if (replacements.size && host.chatToolMessages) {
+    host.chatToolMessages = host.chatToolMessages.map(
+      (message) => replacements.get(message) ?? message,
+    );
+  }
+  return latestTimestamp;
+}
+
 export function cancelToolStreamSync(host: Pick<ToolStreamState, "toolStreamSyncTimer">) {
   if (host.toolStreamSyncTimer != null) {
     clearTimeout(host.toolStreamSyncTimer);
@@ -48,14 +73,9 @@ export function resetToolStream(host: ToolStreamState) {
 
 export function resetToolStreamRun(host: ToolStreamState, runId: string) {
   cancelToolStreamSync(host);
-  const removedIdentities = new Set<string>();
-  for (const identity of host.toolStreamOrder) {
-    const entry = host.toolStreamById.get(identity);
-    if (entry?.runId !== runId) {
-      continue;
-    }
-    removedIdentities.add(identity);
-  }
+  const removedIdentities = new Set(
+    host.toolStreamOrder.filter((identity) => host.toolStreamById.get(identity)?.runId === runId),
+  );
   for (const identity of removedIdentities) {
     host.toolStreamById.delete(identity);
   }

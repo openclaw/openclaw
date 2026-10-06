@@ -193,6 +193,10 @@ export const icons = {
     <path d="M20 14h2" />
     <path d="M15 13v2" />
     <path d="M9 13v2" />`),
+  userPlus: strokeIcon(svg`<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M20 8v6" />
+    <path d="M23 11h-6" />`),
   users: strokeIcon(svg` <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
     <circle cx="9" cy="7" r="4" />
     <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
@@ -314,6 +318,8 @@ export const icons = {
     <rect width="16" height="3" x="4" y="9" rx="1" />
     <rect width="16" height="3" x="4" y="14" rx="1" />
     <rect width="16" height="3" x="4" y="19" rx="1" />`),
+  list: strokeIcon(svg`<path d="M8 6h13" /><path d="M8 12h13" /><path d="M8 18h13" />
+    <path d="M3 6h.01" /><path d="M3 12h.01" /><path d="M3 18h.01" />`),
   listFilter: strokeIcon(svg` <path d="M3 6h18" />
     <path d="M7 12h10" />
     <path d="M10 18h4" />`),
@@ -338,6 +344,8 @@ export const icons = {
   arrowRight: strokeIcon(keyboardIconShapes["→"]),
   arrowLeft: strokeIcon(keyboardIconShapes["←"]),
   cornerDownLeft: strokeIcon(keyboardIconShapes["⏎"]),
+  cornerUpLeft: strokeIcon(svg` <polyline points="9 14 4 9 9 4" />
+    <path d="M20 20v-7a4 4 0 0 0-4-4H4" />`),
   cornerDownRight: strokeIcon(svg` <polyline points="15 10 20 15 15 20" />
     <path d="M4 4v7a4 4 0 0 0 4 4h12" />`),
   copy: strokeIcon(svg` <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />

@@ -1,4 +1,3 @@
-/** Post-upgrade validation probes for persisted plugin index and package extension entries. */
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -84,7 +83,6 @@ async function resolvePackageJsonRelPath(
   }
 }
 
-/** Runs post-upgrade plugin probes and returns structured findings for the caller to render. */
 export async function runPostUpgradeProbes(params: {
   stateDir?: string;
   updateChannel?: UpdateChannel;
@@ -213,7 +211,7 @@ export async function runPostUpgradeProbes(params: {
         findings.push({
           level: "warn",
           code: "plugin.manifest_drift",
-          message: `Plugin ${record.pluginId} manifest hash drifted from installs.json snapshot. Run \`openclaw plugins registry --refresh\` to re-sync.`,
+          message: `Plugin ${record.pluginId} manifest hash drifted from the installed plugin index. Run \`openclaw plugins registry --refresh\` to re-sync.`,
           plugin: record.pluginId,
         });
       }

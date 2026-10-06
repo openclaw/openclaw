@@ -53,7 +53,7 @@ export function updateStepDiagnostics(
 export function summarizeUpdateStepFailure(
   step: Pick<
     UpdateStepResult,
-    "name" | "exitCode" | "termination" | "stdoutTail" | "stderrTail" | "failureFacts"
+    "name" | "exitCode" | "termination" | "signal" | "stdoutTail" | "stderrTail" | "failureFacts"
   >,
 ): string {
   const diagnostics = updateStepDiagnostics(step);
@@ -86,7 +86,12 @@ export function summarizeUpdateStepFailure(
           return [truncateUtf16Safe(causeOnly, 120 - outcome.length - 2), outcome].join("; ");
         });
   return truncateUtf16Safe(
-    [step.termination ?? `Exit code: ${step.exitCode ?? "unknown"}`, ...excerpts]
+    [
+      step.termination === "signal"
+        ? `signal: ${step.signal ?? "unknown"}`
+        : (step.termination ?? `Exit code: ${step.exitCode ?? "unknown"}`),
+      ...excerpts,
+    ]
       .filter(Boolean)
       .join("; "),
     300,
@@ -175,7 +180,10 @@ export function isUnacknowledgedPackageOwnerRefusal(record: UpdateRunRecord): bo
     record.steps.every(
       (step) =>
         step.step === "requested" ||
-        (step.step === "driver:adopted" && step.status === "completed") ||
+        (step.status === "completed" &&
+          (step.step === "driver:adopted" ||
+            step.step === "original-state-capture" ||
+            /^warning:original-state-capture:[1-9]\d*$/u.test(step.step))) ||
         (step.step === "installation-inspection" && step.status === "skipped"),
     ) &&
     ((record.status === "skipped" &&

@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import {
@@ -63,18 +63,12 @@ async function resolveLmstudioApiKey(
   providerId?: string,
 ): Promise<string | undefined> {
   const selectedProviderId = providerId?.trim();
-  const selectedApiKey =
-    selectedProviderId && selectedProviderId !== LMSTUDIO_PROVIDER_ID
-      ? options.config.models?.providers?.[selectedProviderId]?.apiKey
-      : undefined;
   if (selectedProviderId && selectedProviderId !== LMSTUDIO_PROVIDER_ID) {
-    return selectedApiKey === undefined || selectedApiKey === null
-      ? undefined
-      : await resolveLmstudioConfiguredApiKeyForProvider({
-          providerId: selectedProviderId,
-          config: options.config,
-          env: process.env,
-        });
+    return await resolveLmstudioConfiguredApiKeyForProvider({
+      providerId: selectedProviderId,
+      config: options.config,
+      env: process.env,
+    });
   }
   try {
     return await resolveLmstudioRuntimeApiKey({
@@ -105,19 +99,12 @@ function resolveConfiguredLmstudioProvider(options: MemoryEmbeddingProviderCreat
   if (!providers) {
     return undefined;
   }
-  const providerId = options.provider?.trim() || LMSTUDIO_PROVIDER_ID;
-  const direct = providers[providerId];
-  if (direct) {
-    return { providerId, config: direct };
-  }
-  const normalized = normalizeProviderId(providerId);
-  for (const [candidateId, candidate] of Object.entries(providers)) {
-    if (normalizeProviderId(candidateId) === normalized) {
-      return { providerId: candidateId, config: candidate };
-    }
-  }
-  const fallback = providers[LMSTUDIO_PROVIDER_ID];
-  return fallback ? { providerId: LMSTUDIO_PROVIDER_ID, config: fallback } : undefined;
+  const requestedId = options.provider?.trim() || LMSTUDIO_PROVIDER_ID;
+  const providerId = providers[requestedId]
+    ? requestedId
+    : (findNormalizedProviderKey(providers, requestedId) ?? LMSTUDIO_PROVIDER_ID);
+  const config = providers[providerId];
+  return config ? { providerId, config } : undefined;
 }
 
 function resolveLmstudioLocalServiceBaseUrl(
@@ -167,23 +154,16 @@ export async function createLmstudioEmbeddingProvider(
   const resolvedProvider = resolveConfiguredLmstudioProvider(options);
   const providerConfig = resolvedProvider?.config;
   const providerBaseUrl = providerConfig?.baseUrl?.trim();
-  const isFallbackActivation = options.fallback === "lmstudio" && options.provider !== "lmstudio";
   const remoteBaseUrl = options.remote?.baseUrl?.trim();
-  const remoteApiKey = !isFallbackActivation
-    ? resolveMemorySecretInputString({
-        value: options.remote?.apiKey,
-        path: "memory.search.remote.apiKey",
-      })
-    : undefined;
-  // memorySearch.remote is shared across primary + fallback providers.
-  // Ignore it during fallback activation to avoid inheriting another provider's
-  // endpoint/headers/credentials when LM Studio activates as a fallback.
-  const baseUrlSource = !isFallbackActivation ? remoteBaseUrl : undefined;
-  const configuredBaseUrl = baseUrlSource || providerBaseUrl || undefined;
+  const remoteApiKey = resolveMemorySecretInputString({
+    value: options.remote?.apiKey,
+    path: "memory.search.remote.apiKey",
+  });
+  const configuredBaseUrl = remoteBaseUrl || providerBaseUrl || undefined;
   const baseUrl = resolveLmstudioEmbeddingBaseUrl(configuredBaseUrl);
   const providerOwnedBaseUrl = resolveLmstudioEmbeddingBaseUrl(providerBaseUrl);
   const providerOwnsDestination =
-    !baseUrlSource ||
+    !remoteBaseUrl ||
     embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl: providerOwnedBaseUrl });
   const model = normalizeLmstudioModel(options.model, resolvedProvider?.providerId);
   const providerHeaders = providerOwnsDestination
@@ -197,16 +177,14 @@ export async function createLmstudioEmbeddingProvider(
   const headerOverrides = Object.assign(
     {},
     providerHeaders,
-    !isFallbackActivation ? sanitizeLmstudioStringHeaders(options.remote?.headers) : undefined,
+    sanitizeLmstudioStringHeaders(options.remote?.headers),
   );
   const apiKey = hasLmstudioAuthorizationHeader(headerOverrides)
     ? undefined
-    : !isFallbackActivation
-      ? remoteApiKey?.trim() ||
-        (providerOwnsDestination
-          ? await resolveLmstudioApiKey(options, resolvedProvider?.providerId)
-          : undefined)
-      : await resolveLmstudioApiKey(options, resolvedProvider?.providerId);
+    : remoteApiKey?.trim() ||
+      (providerOwnsDestination
+        ? await resolveLmstudioApiKey(options, resolvedProvider?.providerId)
+        : undefined);
   const headers =
     buildLmstudioAuthHeaders({
       apiKey,
@@ -225,7 +203,7 @@ export async function createLmstudioEmbeddingProvider(
     models: providerConfig?.models,
   });
   const localServiceTarget =
-    providerConfig?.localService && !baseUrlSource
+    providerConfig?.localService && !remoteBaseUrl
       ? {
           providerId: resolvedProvider?.providerId ?? LMSTUDIO_PROVIDER_ID,
           baseUrl: resolveLmstudioLocalServiceBaseUrl(providerBaseUrl, baseUrl),

@@ -2,6 +2,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
 import {
   isSessionStoreTopologyChange,
@@ -71,9 +72,13 @@ function isSessionGenerationFacts(value: unknown): value is SessionGenerationFac
 }
 
 /** Prepare once per delivery attempt; committed entry publications keep final I/O checks live. */
-async function prepareSessionGenerationLease(input: SessionGenerationFacts): Promise<{
+async function prepareSessionGenerationLease(
+  input: SessionGenerationFacts,
+  onRevoked?: (reason: unknown) => void,
+): Promise<{
   assertCurrent: () => void;
   assertDeliveryCurrent: () => void;
+  prepareRead: () => Promise<void> | undefined;
   release: () => void;
 }> {
   if (!isSessionGenerationFacts(input)) {
@@ -96,6 +101,10 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
     for (const stop of releases.splice(0).toReversed()) {
       stop();
     }
+  };
+  const revoke = () => {
+    release();
+    onRevoked?.(new SessionDeliveryGenerationUnavailableError());
   };
   const assertActive = () => {
     if (revoked) {
@@ -185,6 +194,10 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
   releases.push(sessionChanges.subscribeFacts(changed));
   try {
     let readCurrent: () => void;
+    let prepareRead: () => Promise<void> | undefined = () => {
+      assertActive();
+      return undefined;
+    };
     if (isIncognitoSessionKey(generation.sessionKey)) {
       const database = getOpenIncognitoAgentDatabase(generation.agentId, generation.storePath);
       if (!database && generation.sessionId !== null) {
@@ -194,8 +207,8 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
         registerOpenClawAgentDatabaseAsyncResource({
           agentId: generation.agentId,
           path: generation.storePath,
-          revoke: release,
-          close: async () => release(),
+          revoke,
+          close: async () => revoke(),
         }),
       );
       readCurrent = () => {
@@ -240,8 +253,8 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
             registerOpenClawAgentDatabaseReadCandidateResource({
               ...candidate,
               path: pathname,
-              revoke: release,
-              close: async () => release(),
+              revoke,
+              close: async () => revoke(),
             }),
           );
         }
@@ -289,7 +302,8 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
           },
         );
       }
-      readCurrent = () => {
+      const assertSourceCurrent = () => {
+        assertActive();
         for (const candidate of candidates) {
           if (
             captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
@@ -301,7 +315,14 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
         if (!source || readDatabasePathIdentitySync(source.path).key !== source.identity) {
           throw new SessionDeliveryGenerationUnavailableError();
         }
+      };
+      readCurrent = () => {
+        assertSourceCurrent();
         checkEntry(retained?.readCurrent());
+      };
+      prepareRead = () => {
+        assertSourceCurrent();
+        return retained?.prepareRead()?.then(assertSourceCurrent);
       };
     }
     const assertCurrent = (delivery = false) => {
@@ -322,17 +343,42 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
         }
         readCurrent();
       } catch (error) {
-        if (
+        const failure =
           isSessionDeliveryGenerationRevokedError(error) ||
           isSessionDeliveryGenerationUnavailableError(error)
-        ) {
-          throw error;
-        }
-        throw new SessionDeliveryGenerationUnavailableError({ cause: error });
+            ? error
+            : new SessionDeliveryGenerationUnavailableError({ cause: error });
+        onRevoked?.(failure);
+        throw failure;
       }
     };
+    for (let pending = prepareRead(); pending; pending = prepareRead()) {
+      await pending;
+    }
     assertCurrent();
-    return { assertCurrent, assertDeliveryCurrent: () => assertCurrent(true), release };
+    if (onRevoked) {
+      let checkedPublications = publications;
+      // Public notifications run after every committed generation fact is installed.
+      releases.push(
+        sessionChanges.subscribe(() => {
+          if (checkedPublications === publications && !invalidated && !revoked) {
+            return;
+          }
+          checkedPublications = publications;
+          try {
+            assertCurrent();
+          } catch {
+            // assertCurrent has already revoked the execution owner.
+          }
+        }),
+      );
+    }
+    return {
+      assertCurrent,
+      assertDeliveryCurrent: () => assertCurrent(true),
+      prepareRead,
+      release,
+    };
   } catch (error) {
     release();
     if (
@@ -347,7 +393,25 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
 
 /** Session lifecycle owners compose these facts with their own admitted mutation authority. */
 export async function prepareSessionGenerationFacts(input: SessionGenerationFacts) {
-  const { assertCurrent, release } = await prepareSessionGenerationLease(input);
+  const { assertCurrent, prepareRead, release } = await prepareSessionGenerationLease(input);
+  return { assertCurrent, prepareRead, release };
+}
+
+/** Stable cron roots retain their admitted run; exact-run keys already name one generation. */
+export async function prepareCronRootSessionGeneration(
+  input: Omit<SessionDeliveryGeneration, "lifecycleRevision"> & { lifecycleRevision?: string },
+  onRevoked?: (reason: unknown) => void,
+) {
+  if (!isCronSessionKey(input.sessionKey) || isCronRunSessionKey(input.sessionKey)) {
+    return undefined;
+  }
+  const { assertCurrent, release } = await prepareSessionGenerationLease(
+    {
+      ...input,
+      lifecycleRevision: input.lifecycleRevision ?? null,
+    },
+    onRevoked,
+  );
   return { assertCurrent, release };
 }
 

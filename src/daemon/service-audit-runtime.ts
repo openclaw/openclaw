@@ -76,9 +76,7 @@ export async function auditGatewayRuntime(
     });
   }
 
-  const pinnedPath = command
-    ? readDaemonRuntimePin({ kind: "gateway", env }, command).pin?.path
-    : undefined;
+  const pinnedPath = readDaemonRuntimePin({ kind: "gateway", env }, command).pin?.path;
   const explicitlyPinned =
     pinnedPath &&
     normalizeServicePathEntry(pinnedPath, platform) ===

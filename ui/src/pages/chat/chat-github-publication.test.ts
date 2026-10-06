@@ -458,10 +458,40 @@ describe("explicit GitHub publication", () => {
     }
   });
 
+  it("does not confirm a personal receipt with shared-only publication access", async () => {
+    const { controller, request, scope } = setup({ ...options, pendingPersonal: interrupted });
+    const staff = await settled(controller);
+    expect(staff.onConfirm).toBeTypeOf("function");
+    controller.sync({ ...scope, canPublishPersonal: false });
+    expect(controller.view()?.onConfirm).toBeUndefined();
+    staff.onConfirm?.();
+    expect(request.mock.calls.some(([method]) => method === "sessions.github.confirm")).toBe(false);
+  });
+
+  it("retires a new shared publication action when refreshed options withdraw the target", async () => {
+    const { controller, request, scope } = setup();
+    await settled(controller);
+    controller.sync({ ...scope, canPublishPersonal: false });
+    const response = createDeferred<GitHubPublicationOptions>();
+    request.mockReturnValueOnce(response.promise);
+    controller.view()?.onRefresh();
+    const refreshing = controller.view()!;
+    expect(refreshing.onPublish).toBeTypeOf("function");
+    response.resolve({ ...options, shared: null, personal: null });
+    expect((await settled(controller)).onPublish).toBeUndefined();
+    refreshing.onPublish?.();
+    expect(request.mock.calls.some(([method]) => method === "sessions.github.publish")).toBe(false);
+  });
+
   it("keeps readers nonmutating and personal publication unavailable on busy or remote workspaces", async () => {
     const { controller, request, scope } = setup();
     await settled(controller);
-    controller.sync({ ...scope, key: "reader", canWrite: false });
+    controller.sync({
+      ...scope,
+      key: "reader",
+      canPublishShared: false,
+      canPublishPersonal: false,
+    });
     const reader = await settled(controller);
     expect(reader.onSelect).toBeUndefined();
     expect(reader.onPublish).toBeUndefined();

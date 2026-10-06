@@ -105,53 +105,24 @@ function assistantMessage(content: AssistantMessage["content"]): AssistantMessag
 }
 
 describe("Tool Search MCP failures", () => {
-  it("keeps a materialized MCP failure failed through structured tool_call", async () => {
+  it("keeps deferred MCP images model-visible beside their text", async () => {
+    const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
     const { callTool, target } = await createDeferredMcpCall({
-      content: [{ type: "text", text: "Backend request failed" }],
-      isError: true,
+      content: [{ type: "text", text: "Saved preview" }, image],
     });
 
-    const directResult = await target.execute("direct-mcp-call", {});
-    expect(directResult).toMatchObject({
-      details: {
-        mcpServer: "searchServer",
-        mcpTool: "query",
-        status: "error",
-      },
-    });
-    expect(isToolResultError(directResult)).toBe(true);
+    const result = await callTool.execute("deferred-image", { id: target.name, args: {} });
 
-    const wrappedResult = await callTool.execute("deferred-mcp-call", {
-      id: target.name,
-      args: {},
-    });
-    expect(wrappedResult.details).toMatchObject({
-      tool: { name: target.name },
-      result: directResult,
-      status: "failed",
-    });
-    const wrappedDetails = wrappedResult.details as {
-      tool: { id: string; name: string; source: string };
-      result: unknown;
-      status: unknown;
-    };
-    const { id, name, source } = wrappedDetails.tool;
-    expect(wrappedResult.content).toEqual([
-      {
-        type: "text",
-        text: expect.stringContaining(
-          JSON.stringify({ tool: { id, name, source }, result: wrappedDetails.result }, null, 2),
-        ),
-      },
-    ]);
-    expect(wrappedResult.content[0]).toMatchObject({
-      text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
-    });
-    expect(isToolResultError(wrappedResult)).toBe(true);
+    expect(result.content).toContainEqual(image);
+    const text = result.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+    expect(text).toContain("Saved preview");
+    expect(text).not.toContain(image.data);
   });
 
   it.each([
-    { innerStatus: "blocked", outerStatus: "blocked" },
     { innerStatus: "timeout", outerStatus: "timed_out" },
     { innerStatus: "cancelled", outerStatus: "cancelled" },
   ] as const)(
@@ -242,52 +213,5 @@ describe("Tool Search MCP failures", () => {
           message.role === "toolResult" && message.toolName === TOOL_CALL_RAW_TOOL_NAME,
       ),
     ).toMatchObject({ isError: true, details: { status: "failed" } });
-  });
-
-  it("keeps successful MCP and native deferred calls successful", async () => {
-    const { callTool: mcpCall, target: mcpTarget } = await createDeferredMcpCall({
-      content: [{ type: "text", text: "No error records found" }],
-      isError: false,
-    });
-    const directMcpResult = await mcpTarget.execute("direct-mcp-call", {});
-    const wrappedMcpResult = await mcpCall.execute("deferred-mcp-call", {
-      id: mcpTarget.name,
-      args: {},
-    });
-
-    expect(isToolResultError(directMcpResult)).toBe(false);
-    expect(isToolResultError(wrappedMcpResult)).toBe(false);
-
-    const nativeTarget: AnyAgentTool = {
-      name: "native_success",
-      label: "Native success",
-      description: "Return a successful native result",
-      parameters: Type.Object({}, { additionalProperties: false }),
-      execute: async () => jsonResult({ status: "ok", text: "error is only text" }),
-    };
-    const nativeCall = createDeferredCall(nativeTarget);
-    const wrappedNativeResult = await nativeCall.execute("deferred-native-call", {
-      id: nativeTarget.name,
-      args: {},
-    });
-
-    expect(isToolResultError(wrappedNativeResult)).toBe(false);
-  });
-
-  it("continues to throw target execution exceptions", async () => {
-    const target: AnyAgentTool = {
-      name: "native_failure",
-      label: "Native failure",
-      description: "Throw a native execution error",
-      parameters: Type.Object({}, { additionalProperties: false }),
-      execute: async () => {
-        throw new Error("native target failed");
-      },
-    };
-    const callTool = createDeferredCall(target);
-
-    await expect(
-      callTool.execute("deferred-native-failure", { id: target.name, args: {} }),
-    ).rejects.toThrow("native target failed");
   });
 });

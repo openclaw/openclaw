@@ -38,7 +38,7 @@ Unavailable load or disk readings are omitted. Offline nodes show the saved
 snapshot with an age such as `(last known 27d ago)`, measured from the snapshot's
 original timestamp. See [Node host stats](/gateway/protocol/presence#node-host-stats).
 
-`--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If current clients share a name, use an exact ID to disambiguate. Client type does not choose the target. The legacy migration exception prefers a unique OpenClaw client only when every other tied entry is a known Clawdbot or Moldbot client.
+`--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If clients share a name, use an exact ID to disambiguate. Client type does not choose the target.
 
 ## Pairing
 

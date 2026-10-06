@@ -8,6 +8,7 @@
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import { resolveExecCode, resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
 import {
   buildWriteDiffLines,
@@ -48,20 +49,27 @@ export type ToolCallView = {
 };
 
 const COMMAND_TOOL_NAMES = new Set(["bash", "exec", "shell", "run_command", "run_terminal_cmd"]);
-const READ_TOOL_NAMES = new Set(["read", "read_file", "readfile", "notebookread", "notebook_read"]);
-const EDIT_TOOL_NAMES = new Set([
-  "edit",
-  "edit_file",
-  "multiedit",
-  "multi_edit",
-  "notebookedit",
-  "notebook_edit",
-]);
 const TEXT_EDITOR_TOOL_NAMES = new Set(["str_replace_editor", "str_replace_based_edit_tool"]);
-const WRITE_TOOL_NAMES = new Set(["write", "write_file", "create_file"]);
-const SEARCH_TOOL_NAMES = new Set(["grep", "find", "glob", "ls", "list", "codebase_search"]);
-const FETCH_TOOL_NAMES = new Set(["web_fetch", "webfetch", "fetch"]);
 const PATCH_TOOL_NAMES = new Set(["apply_patch", "applypatch", "patch"]);
+const TOOL_KINDS: ReadonlyArray<readonly [ToolCallKind, ReadonlySet<string>]> = [
+  ["command", COMMAND_TOOL_NAMES],
+  ["read", new Set(["read", "read_file", "readfile", "notebookread", "notebook_read"])],
+  [
+    "edit",
+    new Set([
+      "edit",
+      "edit_file",
+      "multiedit",
+      "multi_edit",
+      "notebookedit",
+      "notebook_edit",
+      ...PATCH_TOOL_NAMES,
+    ]),
+  ],
+  ["write", new Set(["write", "write_file", "create_file"])],
+  ["search", new Set(["grep", "find", "glob", "ls", "list", "codebase_search"])],
+  ["fetch", new Set(["web_fetch", "webfetch", "fetch"])],
+];
 
 function resolvePathArg(args: Record<string, unknown> | null): string | undefined {
   return (
@@ -84,15 +92,16 @@ function splitPathForDisplay(path: string): { base: string; dir?: string } {
   return { base: normalized.slice(slash + 1), dir: normalized.slice(0, slash) };
 }
 
-type EditPair = { oldText: string; newText: string };
-
 type ResolvedEditDiff = { diff: DiffLine[]; stat?: DiffStat };
 
 const MAX_LOCAL_DIFF_PAIRS = 8;
 const MAX_LOCAL_DIFF_INPUT_CHARS = 120_000;
 
-function readEditPairs(args: Record<string, unknown>): { pairs: EditPair[]; truncated: boolean } {
-  const pairs: EditPair[] = [];
+function resolveEditDiff(args: Record<string, unknown> | null): ResolvedEditDiff | null {
+  if (!args) {
+    return null;
+  }
+  const pairs: { oldText: string; newText: string }[] = [];
   let inputChars = 0;
   let truncated = false;
   const edits = Array.isArray(args.edits) ? args.edits : [args];
@@ -117,7 +126,18 @@ function readEditPairs(args: Record<string, unknown>): { pairs: EditPair[]; trun
       pairs.push({ oldText, newText });
     }
   }
-  return { pairs, truncated };
+  if (pairs.length === 0) {
+    return truncated ? { diff: [{ kind: "skip", text: "" }] } : null;
+  }
+  const sections = pairs.map((pair) => computeLineDiff(pair.oldText, pair.newText));
+  const result = joinDiffSections(sections, { truncated });
+  if (result.lines.length === 0) {
+    return null;
+  }
+  return {
+    diff: result.lines,
+    ...(result.kind === "complete" ? { stat: result.stat } : {}),
+  };
 }
 
 function readDetailsDiff(details: unknown): ResolvedEditDiff | null {
@@ -133,25 +153,6 @@ function readDetailsDiff(details: unknown): ResolvedEditDiff | null {
   return {
     diff: lines.lines,
     ...(lines.kind === "complete" ? { stat: lines.stat } : {}),
-  };
-}
-
-function resolveEditDiff(args: Record<string, unknown> | null): ResolvedEditDiff | null {
-  if (!args) {
-    return null;
-  }
-  const { pairs, truncated } = readEditPairs(args);
-  if (pairs.length === 0) {
-    return truncated ? { diff: [{ kind: "skip", text: "" }] } : null;
-  }
-  const sections = pairs.map((pair) => computeLineDiff(pair.oldText, pair.newText));
-  const result = joinDiffSections(sections, { truncated });
-  if (result.lines.length === 0) {
-    return null;
-  }
-  return {
-    diff: result.lines,
-    ...(result.kind === "complete" ? { stat: result.stat } : {}),
   };
 }
 
@@ -217,23 +218,10 @@ function resolveToolCallKind(
         return "generic";
     }
   }
-  if (COMMAND_TOOL_NAMES.has(key)) {
-    return "command";
-  }
-  if (READ_TOOL_NAMES.has(key)) {
-    return "read";
-  }
-  if (EDIT_TOOL_NAMES.has(key) || PATCH_TOOL_NAMES.has(key)) {
-    return "edit";
-  }
-  if (WRITE_TOOL_NAMES.has(key)) {
-    return "write";
-  }
-  if (SEARCH_TOOL_NAMES.has(key)) {
-    return "search";
-  }
-  if (FETCH_TOOL_NAMES.has(key)) {
-    return "fetch";
+  for (const [kind, names] of TOOL_KINDS) {
+    if (names.has(key)) {
+      return kind;
+    }
   }
   // Arg-shape fallback for harness-specific command tools.
   if (args && typeof args.command === "string" && Object.keys(args).length <= 3) {
@@ -251,9 +239,10 @@ const toolCallViewCache = new WeakMap<
 >();
 
 export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
-  const args = asRecord(source.args);
+  const call = unwrapToolCallForDisplay(source);
+  const args = asRecord(call.args);
   const cacheKey = args ?? asRecord(source.details);
-  const name = source.name.trim().toLowerCase();
+  const name = call.name.trim().toLowerCase();
   if (cacheKey) {
     const cached = toolCallViewCache.get(cacheKey);
     if (cached && cached.details === source.details && cached.name === name) {
@@ -265,17 +254,6 @@ export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
     toolCallViewCache.set(cacheKey, { details: source.details, name, view });
   }
   return view;
-}
-
-/**
- * Strip the `sh -lc '<command>'` wrapper harnesses add around agent commands
- * so rows show the command the model actually wrote. Display-only.
- */
-function unwrapShellWrapperCommand(command: string): string {
-  const match = command.match(
-    /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]+)\1\s*$/,
-  );
-  return match?.[2] ?? command;
 }
 
 function buildToolCallView(
@@ -290,10 +268,14 @@ function buildToolCallView(
 
   if (kind === "command") {
     const command = args ? readNonBlankString(args.command) : undefined;
+    // Display the inner command from a harness's sh -lc wrapper.
+    const shellWrapper = command?.match(
+      /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]+)\1\s*$/,
+    );
     return {
       kind,
       title: COMMAND_TOOL_NAMES.has(key) ? resolveExecTitle(args) : undefined,
-      command: command ? unwrapShellWrapperCommand(command) : command,
+      command: shellWrapper?.[2] ?? command,
       code: resolveExecCode(args),
     };
   }

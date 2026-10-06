@@ -3,7 +3,11 @@
 import type {
   EventFrame,
   SessionsCatalogStartTerminalParams,
+  TerminalAttachResult,
+  TerminalDataEvent,
+  TerminalExitEvent,
   TerminalOpenParams,
+  TerminalSessionInfo,
 } from "@openclaw/gateway-protocol";
 import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
@@ -23,27 +27,8 @@ export interface TerminalGatewayClient {
   forceReconnect(reason: string): void;
 }
 
-export type TerminalOpenResult = {
-  sessionId: string;
-  agentId: string;
-  shell: string;
-  cwd: string;
-  confined: boolean;
-  title?: string;
-  owner?: "conn" | `agent:${string}`;
-};
-
-type TerminalAttachResult = TerminalOpenResult & {
-  /** Recent output replayed into the emulator before live data resumes. */
-  buffer: string;
-  /** Cumulative UTF-16 output offset at the end of the replay snapshot. */
-  seq?: number;
-};
-
-export type TerminalSessionInfo = TerminalOpenResult & {
-  attached: boolean;
-  createdAtMs: number;
-};
+export type TerminalOpenResult = Omit<TerminalAttachResult, "buffer" | "seq">;
+export type { TerminalSessionInfo } from "@openclaw/gateway-protocol";
 
 type TerminalExitInfo = {
   exitCode: number | null;
@@ -69,8 +54,7 @@ type SessionSink = {
 type StreamState = {
   abort: AbortController;
   sink: SessionSink;
-  seqMode: "unknown" | "offset" | "counter";
-  expectedSeq: number | null;
+  expectedSeq: number;
   recovering: boolean;
 };
 
@@ -112,6 +96,19 @@ function missingTerminalSessionField(result: Partial<TerminalAttachResult>): str
     }
   }
   return null;
+}
+
+function assertTerminalReplay(
+  result: TerminalAttachResult,
+): asserts result is TerminalAttachResult & { seq: number } {
+  // The bundled UI always advertises terminal-offset-seq to its same-version Gateway.
+  const missingField =
+    missingTerminalSessionField(result) ??
+    (typeof result.buffer === "string" ? null : "buffer") ??
+    (typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? null : "seq");
+  if (missingField) {
+    throw new TerminalOpenUnusableSessionError(missingField);
+  }
 }
 
 function isTerminalOpenRequestTimeout(error: unknown): boolean {
@@ -162,9 +159,7 @@ export class TerminalConnection {
     this.unsubscribe = this.client.addEventListener((evt) => {
       if (evt.event === "terminal.data") {
         this.noteTerminalActivity();
-        const payload = evt.payload as
-          | { sessionId?: string; seq?: number; data?: string }
-          | undefined;
+        const payload = evt.payload as Partial<TerminalDataEvent> | undefined;
         if (
           payload?.sessionId &&
           typeof payload.seq === "number" &&
@@ -182,15 +177,7 @@ export class TerminalConnection {
       }
       if (evt.event === "terminal.exit") {
         this.noteTerminalActivity();
-        const payload = evt.payload as
-          | {
-              sessionId?: string;
-              exitCode?: number | null;
-              signal?: number | null;
-              reason?: string;
-              error?: string;
-            }
-          | undefined;
+        const payload = evt.payload as Partial<TerminalExitEvent> | undefined;
         if (payload?.sessionId) {
           const info: TerminalExitInfo = {
             exitCode: payload.exitCode ?? null,
@@ -258,7 +245,6 @@ export class TerminalConnection {
       return result;
     }
     const stream = this.setStream(result.sessionId, sink, {
-      seqMode: "unknown",
       expectedSeq: 0,
       recovering: false,
     });
@@ -269,23 +255,12 @@ export class TerminalConnection {
 
   /** Rebinds a session and resets the emulator to its authoritative replay. */
   async attach(sessionId: string, sink: SessionSink): Promise<TerminalAttachResult> {
-    const result = await this.requestWhileHoldingStream(() =>
-      this.client.request<TerminalAttachResult>("terminal.attach", { sessionId }),
-    );
-    // Same unchecked cast as open(): a replay without its buffer would throw on
-    // `result.buffer.length` further down instead of reporting a bad response.
-    const missingAttachField =
-      missingTerminalSessionField(result) ?? (typeof result.buffer === "string" ? null : "buffer");
-    if (missingAttachField) {
-      throw new TerminalOpenUnusableSessionError(missingAttachField);
-    }
-    const offset =
-      typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
+    const result = await this.requestReplay(sessionId);
+    const offset = result.seq;
     if (this.disposed) {
       return result;
     }
     const stream = this.setStream(sessionId, sink, {
-      seqMode: offset === null ? "counter" : "offset",
       expectedSeq: offset,
       recovering: true,
     });
@@ -309,9 +284,7 @@ export class TerminalConnection {
       return result;
     }
     stream.recovering = false;
-    // Old protocol-4 replies have no snapshot high-water. Preserve raced
-    // counter frames because they may have been emitted after the snapshot.
-    this.flushPending(sessionId, stream, offset ?? undefined, true);
+    this.flushPending(sessionId, stream, offset);
     this.scheduleLivenessCheck();
     return result;
   }
@@ -319,6 +292,16 @@ export class TerminalConnection {
   async list(): Promise<TerminalSessionInfo[]> {
     const result = await this.client.request<{ sessions?: TerminalSessionInfo[] }>("terminal.list");
     return result?.sessions ?? [];
+  }
+
+  private requestReplay(sessionId: string) {
+    return this.requestWhileHoldingStream(async () => {
+      const result = await this.client.request<TerminalAttachResult>("terminal.attach", {
+        sessionId,
+      });
+      assertTerminalReplay(result);
+      return result;
+    });
   }
 
   private async requestWhileHoldingStream<T>(run: () => Promise<T>): Promise<T> {
@@ -349,26 +332,9 @@ export class TerminalConnection {
       this.recoverGap(sessionId, stream, frame);
       return;
     }
-    if (stream.seqMode === "counter") {
-      // Shipped protocol-4 counters were diagnostic-only. Jumps cannot prove
-      // byte loss, and legacy attach replies lack a replay high-water.
-      stream.expectedSeq = frame.seq + 1;
-      stream.sink.onData(frame.data);
-      return;
-    }
     const startOfChunk = frame.seq - frame.data.length;
     if (startOfChunk === stream.expectedSeq) {
-      if (frame.data.length > 0) {
-        stream.seqMode = "offset";
-      }
       stream.expectedSeq = frame.seq;
-      stream.sink.onData(frame.data);
-      return;
-    }
-    // Shipped protocol-4 gateways started their per-frame counter at zero.
-    if (stream.seqMode === "unknown" && stream.expectedSeq === 0 && frame.seq === 0) {
-      stream.seqMode = "counter";
-      stream.expectedSeq = 1;
       stream.sink.onData(frame.data);
       return;
     }
@@ -386,35 +352,22 @@ export class TerminalConnection {
     }
     stream.recovering = true;
     const signal = stream.abort.signal;
-    void this.client
-      .request<TerminalAttachResult>("terminal.attach", { sessionId })
+    void this.requestReplay(sessionId)
       .then(async (result) => {
         if (signal.aborted) {
           return;
         }
-        const offset =
-          typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
-        if (offset === null) {
-          // Version-skew fallback: a legacy snapshot cannot identify which
-          // queued counter frames it covers. Keep the live stream exactly once.
-          stream.seqMode = "counter";
-          stream.expectedSeq = null;
-          stream.recovering = false;
-          this.deliverData(sessionId, stream, gapFrame);
-          this.flushPending(sessionId, stream, undefined, true);
-          return;
-        }
+        const offset = result.seq;
         const previouslyObservedThrough = stream.expectedSeq;
-        stream.seqMode = "offset";
         stream.expectedSeq = offset;
         // The ring may include both bytes already delivered and the gap's
         // missing suffix. Preserve that boundary so response-producing
         // emulators do not answer historical control queries twice.
         const replayStart = offset - result.buffer.length;
-        const newlyObservedFrom =
-          typeof previouslyObservedThrough === "number"
-            ? Math.max(0, Math.min(result.buffer.length, previouslyObservedThrough - replayStart))
-            : 0;
+        const newlyObservedFrom = Math.max(
+          0,
+          Math.min(result.buffer.length, previouslyObservedThrough - replayStart),
+        );
         await stream.sink.onReplay({
           data: result.buffer,
           newlyObservedFrom,
@@ -425,7 +378,7 @@ export class TerminalConnection {
           return;
         }
         stream.recovering = false;
-        this.flushPending(sessionId, stream, offset, true);
+        this.flushPending(sessionId, stream, offset);
       })
       .catch(() => {
         if (signal.aborted) {
@@ -454,12 +407,7 @@ export class TerminalConnection {
       });
   }
 
-  private flushPending(
-    sessionId: string,
-    stream: StreamState,
-    coveredThroughSeq?: number,
-    discardPreAttachDetachedExit = false,
-  ): void {
+  private flushPending(sessionId: string, stream: StreamState, coveredThroughSeq?: number): void {
     const pending = this.pending.get(sessionId);
     if (!pending) {
       return;
@@ -473,7 +421,7 @@ export class TerminalConnection {
       // A successful attach reestablishes ownership after earlier events. A
       // preceding detach notice is stale and must not kill the rebound stream.
       if (
-        discardPreAttachDetachedExit &&
+        coveredThroughSeq !== undefined &&
         event.kind === "exit" &&
         event.info.reason === "detached"
       ) {
@@ -506,7 +454,7 @@ export class TerminalConnection {
   private setStream(
     sessionId: string,
     sink: SessionSink,
-    state: Pick<StreamState, "seqMode" | "expectedSeq" | "recovering">,
+    state: Pick<StreamState, "expectedSeq" | "recovering">,
   ): StreamState {
     this.removeStream(sessionId);
     const stream = { abort: new AbortController(), sink, ...state };

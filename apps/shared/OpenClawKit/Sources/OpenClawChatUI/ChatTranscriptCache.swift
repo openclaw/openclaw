@@ -39,7 +39,6 @@ private final class CanonicalMessageProofHub: @unchecked Sendable {
 /// databases. The facade owns no SQLite connection; every gateway store from
 /// one container shares exactly one GRDB queue per database file.
 public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
-    OpenClawChatCanonicalTranscriptMerging,
     OpenClawChatCommandOutbox
 {
     public static let maxCachedSessions = 50
@@ -144,12 +143,6 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
                     // corruption in one roster must not erase another agent.
                     try db.execute(
                         sql: """
-                        DELETE FROM cached_agent_sessions
-                        WHERE gateway_id = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, normalizedAgentID])
-                    try db.execute(
-                        sql: """
                         DELETE FROM cached_session_rosters
                         WHERE gateway_id = ? AND agent_id = ?
                         """,
@@ -217,7 +210,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             cacheLogger.error("gateway session cache rejected a mixed-agent snapshot")
             return
         }
-        let bounded = Self.boundedSessions(owned)
+        let bounded = Self.boundedSessions(owned).map(Self.sessionCacheProjection)
         let gatewayID = self.gatewayID
         do {
             let encoded = try bounded.map(Self.encodeJSON)
@@ -257,29 +250,17 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
                             pair.1,
                         ])
                 }
-                let staleOwners = try String.fetchAll(
-                    db,
+                try db.execute(
                     sql: """
-                    SELECT agent_id FROM cached_session_rosters
-                    WHERE gateway_id = ?
-                    ORDER BY last_used_at DESC, agent_id
-                    LIMIT -1 OFFSET ?
+                    DELETE FROM cached_session_rosters
+                    WHERE rowid IN (
+                        SELECT rowid FROM cached_session_rosters
+                        WHERE gateway_id = ?
+                        ORDER BY last_used_at DESC, agent_id
+                        LIMIT -1 OFFSET ?
+                    )
                     """,
                     arguments: [gatewayID, Self.maxCachedSessionOwners])
-                for staleOwner in staleOwners {
-                    try db.execute(
-                        sql: """
-                        DELETE FROM cached_agent_sessions
-                        WHERE gateway_id = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, staleOwner])
-                    try db.execute(
-                        sql: """
-                        DELETE FROM cached_session_rosters
-                        WHERE gateway_id = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, staleOwner])
-                }
             }
         } catch {
             cacheLogger.error("gateway session cache write failed: \(error.localizedDescription, privacy: .public)")
@@ -303,7 +284,21 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             else { return true }
             return canonicalMessageIdempotencyKeys.contains(key)
         }
-        await writeTranscript(sessionKey: sessionKey, agentID: agentID, messages: canonicalOnly)
+        guard !self.isRetired else { return }
+        let normalizedAgentID = Self.normalizedAgentID(agentID)
+        let gatewayID = self.gatewayID
+        do {
+            try await self.databases.cacheQueue.write { db in
+                try Self.replaceTranscript(
+                    db,
+                    gatewayID: gatewayID,
+                    sessionKey: sessionKey,
+                    agentID: normalizedAgentID,
+                    messages: canonicalOnly)
+            }
+        } catch {
+            cacheLogger.error("gateway transcript cache write failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     public func mergeCanonicalTranscriptMessage(
@@ -402,28 +397,6 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 }
 
 extension OpenClawChatSQLiteTranscriptCache {
-    private func writeTranscript(
-        sessionKey: String,
-        agentID: String?,
-        messages: [OpenClawChatMessage]) async
-    {
-        guard !self.isRetired else { return }
-        let normalizedAgentID = Self.normalizedAgentID(agentID)
-        let gatewayID = self.gatewayID
-        do {
-            try await self.databases.cacheQueue.write { db in
-                try Self.replaceTranscript(
-                    db,
-                    gatewayID: gatewayID,
-                    sessionKey: sessionKey,
-                    agentID: normalizedAgentID,
-                    messages: messages)
-            }
-        } catch {
-            cacheLogger.error("gateway transcript cache write failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
     private nonisolated static func replaceTranscript(
         _ db: Database,
         gatewayID: String,
@@ -464,25 +437,17 @@ extension OpenClawChatSQLiteTranscriptCache {
                     pair.1,
                 ])
         }
-        let stale = try Row.fetchAll(
-            db,
+        try db.execute(
             sql: """
-            SELECT session_key, agent_id FROM cached_transcripts
-            WHERE gateway_id = ?
-            ORDER BY updated_at DESC, rowid DESC
-            LIMIT -1 OFFSET \(self.maxCachedTranscripts)
+            DELETE FROM cached_transcripts
+            WHERE rowid IN (
+                SELECT rowid FROM cached_transcripts
+                WHERE gateway_id = ?
+                ORDER BY updated_at DESC, rowid DESC
+                LIMIT -1 OFFSET ?
+            )
             """,
-            arguments: [gatewayID])
-        for row in stale {
-            let staleSessionKey: String = row["session_key"]
-            let staleAgentID: String = row["agent_id"]
-            try db.execute(
-                sql: """
-                DELETE FROM cached_transcripts
-                WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
-                """,
-                arguments: [gatewayID, staleSessionKey, staleAgentID])
-        }
+            arguments: [gatewayID, self.maxCachedTranscripts])
     }
 }
 
@@ -778,8 +743,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                 let hadUnacknowledgedSend: Int = row["had_unacknowledged_send"]
                 let wasPossiblyAccepted = wasBranchParked &&
                     (parkedWasAccepted != 0 || hadUnacknowledgedSend != 0)
-                let normalizedReplacementID = replacementID?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let nextID = normalizedReplacementID?.isEmpty == false ? normalizedReplacementID! : UUID().uuidString
+                let nextID = replacementID?.trimmedNonEmpty ?? UUID().uuidString
                 let updateID = wasPossiblyAccepted ? nextID : id
                 try db.execute(
                     sql: """
@@ -1381,37 +1345,17 @@ extension OpenClawChatSQLiteTranscriptCache {
         scope: OpenClawChatOutboxScope? = nil) throws -> [OpenClawChatOutboxScope]
     {
         let cutoff = Date().timeIntervalSince1970 - 5 * 60
-        // if/else keeps these SQL literals out of the ternary shape the native
-        // i18n extractor treats as user-facing conditional text.
-        let sql: String
-        let arguments: StatementArguments
-        if let scope {
-            sql = """
-            SELECT session_key, agent_id FROM outbox_branch_scopes
-            WHERE gateway_id = ? AND session_key = ? AND agent_id = ? AND switch_pending_since <= ?
-            """
-            arguments = [gatewayID, scope.sessionKey, scope.agentID ?? "", cutoff]
-        } else {
-            sql = """
-            SELECT session_key, agent_id FROM outbox_branch_scopes
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+            UPDATE outbox_branch_scopes
+            SET switch_pending_since = NULL, needs_reconciliation = 1,
+                branch_state_revision = branch_state_revision + 1
             WHERE gateway_id = ? AND switch_pending_since <= ?
-            """
-            arguments = [gatewayID, cutoff]
-        }
-        let rows = try Row.fetchAll(db, sql: sql, arguments: arguments)
-        guard !rows.isEmpty else { return [] }
-        for row in rows {
-            let sessionKey: String = row["session_key"]
-            let agentID: String = row["agent_id"]
-            try db.execute(
-                sql: """
-                UPDATE outbox_branch_scopes
-                SET switch_pending_since = NULL, needs_reconciliation = 1,
-                    branch_state_revision = branch_state_revision + 1
-                WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
-                """,
-                arguments: [gatewayID, sessionKey, agentID])
-        }
+              AND (? IS NULL OR (session_key = ? AND agent_id = ?))
+            RETURNING session_key, agent_id
+            """,
+            arguments: [gatewayID, cutoff, scope?.sessionKey, scope?.sessionKey, scope?.agentID ?? ""])
         return rows.map { row in
             OpenClawChatOutboxScope(sessionKey: row["session_key"], agentID: row["agent_id"])
         }

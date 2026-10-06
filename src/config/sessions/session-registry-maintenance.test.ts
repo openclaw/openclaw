@@ -15,6 +15,7 @@ import {
   replaceSessionEntry,
 } from "./session-accessor.js";
 import * as lifecycleProjection from "./session-accessor.sqlite-projection.js";
+import * as entryReadRuntime from "./session-entry-read-runtime.js";
 import { runSessionRegistryMaintenanceForStore } from "./session-registry-maintenance.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
@@ -174,7 +175,10 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     const sessionKey = "agent:main:cron:done-job:run:old-run";
     const sessionId = "run-1";
     const storePath = await createStore({
-      [sessionKey]: sessionEntry(sessionId, now - 8 * DAY_MS),
+      [sessionKey]: {
+        ...sessionEntry(sessionId, now - 8 * DAY_MS),
+        skillsSnapshot: { prompt: "Cron instructions retained for the deletion guard", skills: [] },
+      },
     });
     appendTranscriptEventSync(
       { sessionKey, sessionId, storePath },
@@ -204,7 +208,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual([]);
   });
 
-  it("previews pruning without changing ordinary snapshots or transcript archives", async () => {
+  it("previews pruning without transferring or changing ordinary snapshots", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:cron:done-job:run:old-run";
     const sessionId = "run-1";
@@ -237,13 +241,26 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       { type: "proof-event", data: "cron transcript must survive preview" },
     );
 
+    const readRegistry = entryReadRuntime.withSessionRegistryEntriesInWorker;
+    const reader = vi
+      .spyOn(entryReadRuntime, "withSessionRegistryEntriesInWorker")
+      .mockImplementation((scope, consume) =>
+        readRegistry(scope, async (entries, assertCurrent) => {
+          const ordinary = entries.find(({ sessionKey: key }) => key === ordinaryKey)?.entry;
+          expect(ordinary?.sessionId).toBe("ordinary");
+          expect(ordinary).not.toHaveProperty("sessionDiffBaseline");
+          expect(ordinary).not.toHaveProperty("skillsSnapshot");
+          expect(ordinary).not.toHaveProperty("systemPromptReport");
+          return await consume(entries, assertCurrent);
+        }),
+      );
     const result = await runSessionRegistryMaintenanceForStore({
       agentId: "main",
       apply: false,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
       storePath,
-    });
+    }).finally(() => reader.mockRestore());
 
     expect(result).toEqual({ beforeCount: 2, afterCount: 1, preservedRunning: 0, pruned: 1 });
     expect(loadSessionEntry({ sessionKey, storePath })).toEqual(

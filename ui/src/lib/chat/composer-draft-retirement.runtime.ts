@@ -40,7 +40,7 @@ export async function retireDeletedComposerDrafts(
     }
     const { recoveryScope, recoveryScopeReady } = scope.client;
     const stored = retireStoredComposerDrafts(
-      { settings: { gatewayUrl: scope.gatewayUrl } },
+      { settings: { gatewayUrl: scope.gatewayUrl }, client: scope.client },
       targets,
     );
     const retirements = stored.retirements.map((retirement) => ({
@@ -49,7 +49,10 @@ export async function retireDeletedComposerDrafts(
       retireBeforeRevision: retirement.retireBeforeRevision,
     }));
     const [, durable] = await Promise.all([
-      deleteStoredChatSessionSnapshots(scope, targets),
+      deleteStoredChatSessionSnapshots(
+        { ...scope, settings: { gatewayUrl: scope.gatewayUrl } },
+        targets,
+      ),
       recoveryScopeReady && recoveryScope
         ? retireDurableComposerDrafts(
             { gatewayOwner: stored.gatewayOwner, recoveryScope },

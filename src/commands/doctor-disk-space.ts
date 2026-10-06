@@ -1,4 +1,3 @@
-// Doctor contribution for low disk space around the OpenClaw state directory.
 import os from "node:os";
 import { expectDefined, formatByteSize } from "@openclaw/normalization-core";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -56,20 +55,16 @@ function buildDiskSpaceWarnings(params: {
   return warnings;
 }
 
-type DiskSpaceHealthOptions = {
-  env?: NodeJS.ProcessEnv;
-  readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
-};
-
-function collectDiskSpaceWarnings(
-  params: DiskSpaceHealthOptions = {},
-): { availableBytes: number; stateDir: string; warnings: readonly string[] } | null {
-  const env = params.env ?? process.env;
+function collectDiskSpaceWarnings(): {
+  availableBytes: number;
+  stateDir: string;
+  warnings: readonly string[];
+} | null {
+  const env = process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
 
-  const readDiskSpace = params.readDiskSpace ?? tryReadDiskSpace;
-  const snapshot = readDiskSpace(stateDir);
+  const snapshot = tryReadDiskSpace(stateDir);
   // If we cannot determine free space (no existing ancestor, unsupported FS,
   // or permission error), skip silently — other contributions already
   // handle missing directories.
@@ -91,10 +86,8 @@ function collectDiskSpaceWarnings(
 }
 
 /** Collects read-only structured findings for low disk space around the state directory. */
-export function collectDiskSpaceHealthFindings(
-  deps?: DiskSpaceHealthOptions,
-): readonly HealthFinding[] {
-  const result = collectDiskSpaceWarnings(deps);
+export function collectDiskSpaceHealthFindings(): readonly HealthFinding[] {
+  const result = collectDiskSpaceWarnings();
   if (!result || result.warnings.length === 0) {
     return [];
   }
@@ -114,8 +107,8 @@ export function collectDiskSpaceHealthFindings(
   ];
 }
 
-export function noteDiskSpace(deps?: DiskSpaceHealthOptions): void {
-  const result = collectDiskSpaceWarnings(deps);
+export function noteDiskSpace(): void {
+  const result = collectDiskSpaceWarnings();
   if (!result || result.warnings.length === 0) {
     return;
   }

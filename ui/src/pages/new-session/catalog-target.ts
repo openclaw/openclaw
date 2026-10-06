@@ -184,7 +184,7 @@ export class GroupRouteRevalidation {
 }
 
 export function resolveAgentId(
-  data: Pick<NewSessionRouteData, "agentId" | "catalogId"> | undefined,
+  data: Pick<NewSessionRouteData, "agentId"> | undefined,
   availableAgents: readonly { id: string }[],
   fallback: string,
 ): string {
@@ -210,8 +210,7 @@ export async function resolveCreateTarget(
   catalogId: string,
   agentId?: string,
 ): Promise<
-  | Pick<NewSessionRouteData, "model" | "catalogLabel" | "startTerminal" | "terminalHosts">
-  | undefined
+  Pick<NewSessionRouteData, "catalogLabel" | "startTerminal" | "terminalHosts"> | undefined
 > {
   try {
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
@@ -223,7 +222,6 @@ export async function resolveCreateTarget(
     const terminal = catalog?.capabilities.startTerminal;
     return catalog && terminal === true
       ? {
-          model: "",
           catalogLabel: catalog.label,
           startTerminal: true,
           terminalHosts: catalog.hosts

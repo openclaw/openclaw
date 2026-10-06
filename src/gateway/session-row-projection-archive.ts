@@ -16,6 +16,7 @@ export function createSessionRowProjectionArchive(params: {
   enqueue: (id: string, change?: SessionRowChange) => void;
   put: (row: records.Row) => void;
   release: (id: string) => void;
+  invalidateFacts: (row: records.Row) => void;
   config: () => records.Inputs["cfg"];
   context: () => Parameters<typeof records.readSessionRowLineage>[3];
   referenced: NonNullable<Parameters<typeof records.readSessionRowLineage>[4]>;
@@ -30,6 +31,10 @@ export function createSessionRowProjectionArchive(params: {
     params.release(id);
     const cold = records.dematerialize(row);
     params.put(cold);
+    // Eviction releases display custody, not unresolved database-fact preparation.
+    if (cold.unresolvedDatabaseFacts === "category") {
+      params.dirty.add(id);
+    }
     return cold;
   }
   function trim() {
@@ -71,7 +76,7 @@ export function createSessionRowProjectionArchive(params: {
           params.referenced,
         );
         if (
-          records.sameParents(current.parents, lineage.parents) &&
+          isDeepStrictEqual(current.parents, lineage.parents) &&
           isDeepStrictEqual(current.entry, lineage.entry)
         ) {
           continue;
@@ -115,6 +120,9 @@ export function createSessionRowProjectionArchive(params: {
     ) {
       const catalogOnly = change.scope === "catalog" && !change.factsInvalidated;
       for (const row of candidates) {
+        if (change.factsInvalidated) {
+          params.invalidateFacts(row);
+        }
         if (catalogOnly && row.entry?.archivedAt === undefined) {
           if (!params.dirty.has(records.identity(row))) {
             row.pendingDatabaseFacts = row.retainedDatabaseFacts;
@@ -184,12 +192,11 @@ export function createSessionRowProjectionArchive(params: {
       readPins.clear();
       pinCounts.clear();
     },
-    describe(initial: records.Row | undefined) {
-      if (initial?.entry?.archivedAt === undefined) {
-        return initial;
+    describe(row: records.Row | undefined) {
+      if (row?.entry?.archivedAt === undefined) {
+        return row;
       }
-      const row = initial;
-      if (records.ready(row) && row.entry.archivedAt !== undefined) {
+      if (records.ready(row)) {
         const id = records.identity(row);
         materialized.delete(id);
         materialized.add(id);

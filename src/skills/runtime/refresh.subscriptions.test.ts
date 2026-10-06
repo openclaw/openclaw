@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import {
   bumpSkillsSnapshotVersion,
   getSkillsSnapshotVersion,
@@ -103,157 +104,104 @@ describe("skills watcher subscription lifecycle", () => {
     },
   );
 
-  it("stops fanning a shared-directory change to a workspace after it unsubscribes", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const secondWorkspace = await createFixtureDirectory("second-workspace");
-    const sharedRoot = await createFixtureDirectory("shared");
-    const config = { skills: { load: { extraDirs: [sharedRoot] } } };
-    const seen: SkillsChangeEvent[] = [];
-    refreshModule.registerSkillsChangeListener((change) => {
-      seen.push(change);
-    });
-    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
-    refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace, config });
-    await observer.readyAll();
-    const sharedWatcher = observer.forRoot(sharedRoot);
+  it.each(["workspace", "execution"] as const)(
+    "keeps the remaining %s subscription alive after disposal",
+    async (peer) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+      const workspaceDir = fixtureWorkspaceDir;
+      const secondWorkspace =
+        peer === "workspace" ? await createFixtureDirectory("second-workspace") : workspaceDir;
+      const executionWorkspaceDir =
+        peer === "execution" ? await createFixtureDirectory("remaining-worktree") : undefined;
+      const sharedRoot =
+        peer === "workspace"
+          ? await createFixtureDirectory("shared")
+          : path.join(workspaceDir, "skills");
+      const config = { skills: { load: { extraDirs: [sharedRoot] } } };
+      refreshModule.ensureSkillsWatcher({ workspaceDir, config });
+      refreshModule.ensureSkillsWatcher({
+        workspaceDir: secondWorkspace,
+        executionWorkspaceDir,
+        config,
+      });
+      await observer.readyAll();
+      const watcher = observer.forRoot(sharedRoot);
+      const seen: SkillsChangeEvent[] = [];
+      refreshModule.registerSkillsChangeListener((change) => seen.push(change));
+      const changedPath = path.join(sharedRoot, "demo", "SKILL.md");
+      if (peer === "execution") {
+        watcher.change(changedPath);
+        await vi.advanceTimersByTimeAsync(250);
+        expect(seen).toEqual([{ workspaceDir, reason: "watch", changedPath }]);
+        seen.length = 0;
+      }
+      const version = getSkillsSnapshotVersion(workspaceDir);
+      const globalVersion = getSkillsSnapshotVersion();
+      refreshModule.ensureSkillsWatcher({
+        workspaceDir,
+        config: { skills: { load: { ...config.skills.load, watch: false } } },
+      });
+      expect(watcher.close).not.toHaveBeenCalled();
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
+      expect(getSkillsSnapshotVersion()).toBe(globalVersion);
+      expect(seen).toEqual([]);
+      watcher.change(changedPath);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(seen).toEqual([{ workspaceDir: secondWorkspace, reason: "watch", changedPath }]);
+    },
+  );
 
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: fixtureWorkspaceDir,
-      config: { skills: { load: { extraDirs: [sharedRoot], watch: false } } },
-    });
-    seen.length = 0;
-    expect(sharedWatcher.close).not.toHaveBeenCalled();
-    const changedPath = path.join(sharedRoot, "demo", "SKILL.md");
-    sharedWatcher.change(changedPath);
-    await vi.advanceTimersByTimeAsync(250);
-
-    expect(seen).toEqual([{ workspaceDir: secondWorkspace, reason: "watch", changedPath }]);
-  });
-
-  it("preserves workspace invalidation on watch disable without changing other workspaces", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-    const workspaceDir = fixtureWorkspaceDir;
-    const otherWorkspace = await createFixtureDirectory("other-workspace");
-    refreshModule.ensureSkillsWatcher({ workspaceDir: otherWorkspace });
-    const otherVersion = getSkillsSnapshotVersion(otherWorkspace);
-    const globalVersion = getSkillsSnapshotVersion();
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir,
-      config: { skills: { load: {} } },
-    });
-
-    const firstVersion = bumpSkillsSnapshotVersion({
-      workspaceDir,
-      reason: "watch",
-      changedPath: `${workspaceDir}/skills/demo/SKILL.md`,
-    });
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir,
-      config: { skills: { load: { watch: false } } },
-    });
-
-    const nextVersion = getSkillsSnapshotVersion(workspaceDir);
-    expect(nextVersion).toBe(firstVersion);
-    expect(getSkillsSnapshotVersion(otherWorkspace)).toBe(otherVersion);
-    expect(getSkillsSnapshotVersion()).toBe(globalVersion);
-    vi.setSystemTime(new Date(nextVersion));
-    refreshModule.ensureSkillsWatcher({ workspaceDir });
-    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(nextVersion);
-  });
-
-  it("evicts idle workspace subscriptions on a later ensure call", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-    const idleWorkspaceDir = fixtureWorkspaceDir;
-    const activeWorkspaceDir = await createFixtureDirectory("workspace-active");
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: idleWorkspaceDir,
-      config: { skills: { load: {} } },
-    });
-    await observer.readyAll();
-    const idleSkillsWatcher = observer.forRoot(path.join(idleWorkspaceDir, "skills"));
-    const firstVersion = bumpSkillsSnapshotVersion({
-      workspaceDir: idleWorkspaceDir,
-      reason: "watch",
-    });
-    const globalVersion = getSkillsSnapshotVersion();
-
-    vi.advanceTimersByTime(60 * 60_000 + 1_000);
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: activeWorkspaceDir,
-      config: { skills: { load: {} } },
-    });
-
-    expect(idleSkillsWatcher.close).toHaveBeenCalledTimes(1);
-    const evictedVersion = getSkillsSnapshotVersion(idleWorkspaceDir);
-    expect(evictedVersion).toBe(firstVersion);
-    expect(getSkillsSnapshotVersion()).toBe(globalVersion);
-    vi.setSystemTime(new Date(evictedVersion));
-    refreshModule.ensureSkillsWatcher({ workspaceDir: idleWorkspaceDir });
-    expect(getSkillsSnapshotVersion(idleWorkspaceDir)).toBeGreaterThan(evictedVersion);
-  });
-
-  it("keeps another execution subscription for the workspace alive after disposal", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const workspaceDir = fixtureWorkspaceDir;
-    const executionWorkspaceDir = await createFixtureDirectory("remaining-worktree");
-    refreshModule.ensureSkillsWatcher({ workspaceDir });
-    refreshModule.ensureSkillsWatcher({ workspaceDir, executionWorkspaceDir });
-    await observer.readyAll();
-    const version = getSkillsSnapshotVersion(workspaceDir);
-    const globalVersion = getSkillsSnapshotVersion();
-    await observer.readyAll();
-    const watcher = observer.forRoot(path.join(workspaceDir, "skills"));
-    const seen: SkillsChangeEvent[] = [];
-    refreshModule.registerSkillsChangeListener((change) => seen.push(change));
-
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir,
-      config: { skills: { load: { watch: false } } },
-    });
-
-    expect(watcher.close).not.toHaveBeenCalled();
-    expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
-    expect(getSkillsSnapshotVersion()).toBe(globalVersion);
-    expect(seen).toEqual([]);
-    const changedPath = path.join(workspaceDir, "skills", "demo", "SKILL.md");
-    watcher.change(changedPath);
-    await vi.advanceTimersByTimeAsync(250);
-    expect(seen).toEqual([{ workspaceDir, reason: "watch", changedPath }]);
-  });
-
-  it("keeps refreshed workspace subscriptions within the idle TTL", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-    const activeWorkspaceDir = fixtureWorkspaceDir;
-    const otherWorkspaceDir = await createFixtureDirectory("workspace-other");
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: activeWorkspaceDir,
-      config: { skills: { load: {} } },
-    });
-    await observer.readyAll();
-    const activeSkillsWatcher = observer.forRoot(path.join(activeWorkspaceDir, "skills"));
-
-    vi.advanceTimersByTime(30 * 60_000);
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: activeWorkspaceDir,
-      config: { skills: { load: {} } },
-    });
-    vi.advanceTimersByTime(31 * 60_000);
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: otherWorkspaceDir,
-      config: { skills: { load: {} } },
-    });
-
-    expect(activeSkillsWatcher.close).not.toHaveBeenCalled();
-  });
+  it.each(["disable", "idle", "refreshed"] as const)(
+    "preserves versions through %s subscription retirement or renewal",
+    async (mode) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const workspaceDir = fixtureWorkspaceDir;
+      const otherWorkspace = await createFixtureDirectory("other-workspace");
+      refreshModule.ensureSkillsWatcher({ workspaceDir: otherWorkspace });
+      refreshModule.ensureSkillsWatcher({ workspaceDir });
+      await observer.readyAll();
+      const watcher = observer.forRoot(path.join(workspaceDir, "skills"));
+      const version = bumpSkillsSnapshotVersion({
+        workspaceDir,
+        reason: "watch",
+        changedPath: `${workspaceDir}/skills/demo/SKILL.md`,
+      });
+      const otherVersion = getSkillsSnapshotVersion(otherWorkspace);
+      const globalVersion = getSkillsSnapshotVersion();
+      if (mode === "disable") {
+        refreshModule.ensureSkillsWatcher({
+          workspaceDir,
+          config: { skills: { load: { watch: false } } },
+        });
+      } else {
+        if (mode === "refreshed") {
+          vi.advanceTimersByTime(30 * 60_000);
+          refreshModule.ensureSkillsWatcher({ workspaceDir });
+          vi.advanceTimersByTime(31 * 60_000);
+        } else {
+          vi.advanceTimersByTime(60 * 60_000 + 1_000);
+        }
+        refreshModule.ensureSkillsWatcher({ workspaceDir: otherWorkspace });
+      }
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
+      expect(getSkillsSnapshotVersion(otherWorkspace)).toBe(otherVersion);
+      expect(getSkillsSnapshotVersion()).toBe(globalVersion);
+      if (mode === "refreshed") {
+        expect(watcher.close).not.toHaveBeenCalled();
+      } else {
+        expect(watcher.close).toHaveBeenCalledTimes(1);
+        vi.setSystemTime(new Date(version));
+        refreshModule.ensureSkillsWatcher({ workspaceDir });
+        expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
+      }
+    },
+  );
 
   it.each(["execution", "base"] as const)(
     "keeps an idle %s source active while another consumer remains",
     async (scope) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-      const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
       const workspaceDir = fixtureWorkspaceDir;
       const executionWorkspaceDir = await createFixtureDirectory("shared-execution");
       const idleScope = {
@@ -326,20 +274,4 @@ describe("skills watcher subscription lifecycle", () => {
       });
     },
   );
-
-  it("fans shared discovery out once per workspace across execution subscriptions", async () => {
-    const workspaceDir = fixtureWorkspaceDir;
-    const first = await createFixtureDirectory("execution-one");
-    const second = await createFixtureDirectory("execution-two");
-    refreshModule.ensureSkillsWatcher({ workspaceDir, executionWorkspaceDir: first });
-    refreshModule.ensureSkillsWatcher({ workspaceDir, executionWorkspaceDir: second });
-    await observer.readyAll();
-    const seen = vi.fn();
-    refreshModule.registerSkillsChangeListener(seen);
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const changedPath = path.join(workspaceDir, "skills", "demo", "SKILL.md");
-    observer.forRoot(path.join(workspaceDir, "skills")).change(changedPath);
-    await vi.advanceTimersByTimeAsync(250);
-    expect(seen).toHaveBeenCalledExactlyOnceWith({ workspaceDir, reason: "watch", changedPath });
-  });
 });

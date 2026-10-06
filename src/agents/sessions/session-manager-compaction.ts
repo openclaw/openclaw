@@ -3,9 +3,11 @@ import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transc
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
+import { getSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
-import { canonicalizeSessionEntry } from "./session-manager-persistence.js";
+import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
+import { canonicalizeSessionEntry } from "./session-manager-persistence-entry.js";
 import type { CompactionEntry } from "./session-manager-types.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
@@ -34,7 +36,9 @@ export class SessionManagerCompaction extends SessionManagerEntries {
     };
   }
 
+  /** @deprecated Await appendCompactionAsync. Removal: next Plugin SDK major. */
   appendCompaction(...args: Parameters<SessionManagerCompaction["createCompactionEntry"]>): string {
+    prepareSessionManagerSync("appendCompaction", this.persistenceTarget, this);
     const entry = this.createCompactionEntry(...args);
     this.appendEntry(entry, {
       invalidateSerializedPrefixCache: entry.fromHook === true || entry.details !== undefined,
@@ -55,6 +59,9 @@ export class SessionManagerCompaction extends SessionManagerEntries {
     return await withSessionManagerWrite(this, async (admission) => {
       this.assertTranscriptWriteActive();
       publication?.assertActive?.();
+      if (!admission && getSessionCompactionPersistenceAsync(this)) {
+        throw new Error("Compaction boundary validation failed");
+      }
       const entry = this.createCompactionEntry(
         summary,
         firstKeptEntryId,
@@ -64,7 +71,12 @@ export class SessionManagerCompaction extends SessionManagerEntries {
         metadata,
         tokensAfter,
       );
-      if (!admission || isIncognitoSessionKey(this.persistenceTarget?.sessionKey)) {
+      if (
+        !admission ||
+        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) &&
+          "db" in admission.database &&
+          !getSessionCompactionPersistenceAsync(this))
+      ) {
         const appended = this.appendEntry(entry, {
           invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
         });
@@ -85,6 +97,10 @@ export class SessionManagerCompaction extends SessionManagerEntries {
         canonical,
         !this.pendingDeliberateAppend && this.appendMode !== "side" ? "active-branch" : undefined,
         admission,
+        undefined,
+        undefined,
+        undefined,
+        true,
         undefined,
         publication,
       );

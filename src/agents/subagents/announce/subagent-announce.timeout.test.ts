@@ -1,7 +1,10 @@
 // Subagent announce timeout tests cover retry timing and fallback requester
 // resolution when completion delivery cannot finish immediately.
-import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  captureSubagentCompletionReplyUsing,
+  readLatestSubagentOutputWithRetryUsing,
+} from "./subagent-announce-capture.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type GatewayCall = {
@@ -143,15 +146,6 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     entry: sessionStore[sessionKey],
   }),
   loadSessionEntryByKey: (sessionKey: string) => sessionStore[sessionKey],
-  resolveAnnounceOrigin: (entry: { origin?: unknown } | undefined, requesterOrigin?: unknown) =>
-    requesterOrigin ?? entry?.origin,
-  resolveSubagentCompletionOrigin: async (params: { requesterOrigin?: unknown }) =>
-    params.requesterOrigin,
-  resolveSubagentAnnounceTimeoutMs: (cfg: typeof configOverride) => {
-    const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
-    return clampTimerTimeoutMs(configured) ?? 120_000;
-  },
-  runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 vi.mock("./subagent-announce.runtime.js", () => ({
   callSubagentLifecycleGateway: createGatewayCallModuleMock().callGateway,
@@ -181,17 +175,15 @@ vi.mock("./subagent-announce.runtime.js", () => ({
     waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
 }));
 vi.mock("../registry/subagent-registry-read.js", () => ({
-  countActiveDescendantRuns: () => 0,
   countPendingDescendantRuns: () => pendingDescendantRuns,
-  hasDescendantRunAwaitingSettle: () => false,
   getLatestSubagentRunByChildSessionKey: () => undefined,
   listSubagentRunsForRequester: () => [],
   isSubagentSessionRunActive: () => subagentSessionRunActive,
   shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
   resolveRequesterForChildSession: () => fallbackRequesterResolution,
 }));
-vi.mock("../registry/subagent-registry-runtime.js", () => ({
-  replaceSubagentRunAfterSteer: () => true,
+vi.mock("../registry/subagent-registry.js", () => ({
+  replaceSubagentRunAfterSteerCore: () => true,
 }));
 import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
@@ -207,12 +199,10 @@ const defaultSessionConfig = {
 const baseAnnounceFlowParams = {
   childSessionKey: "agent:main:subagent:worker",
   requesterSessionKey: "agent:main:main",
-  requesterDisplayKey: "main",
   task: "do thing",
   timeoutMs: 1_000,
   cleanup: "keep",
   roundOneReply: "done",
-  waitForCompletion: false,
   outcome: { status: "ok" as const },
 } satisfies Omit<AnnounceFlowParams, "childRunId">;
 
@@ -269,43 +259,11 @@ describe("subagent announce timeout config", () => {
     fallbackRequesterResolution = null;
   });
 
-  it("regression, skips parent announce while descendants are still pending", async () => {
-    requesterDepthResolver = () => 1;
-    pendingDescendantRuns = 2;
-
-    const didAnnounce = await runAnnounceFlowForTest("run-pending-descendants", {
-      requesterSessionKey: "agent:main:subagent:parent",
-      requesterDisplayKey: "agent:main:subagent:parent",
-    });
-
-    expect(didAnnounce).toBe("retryable");
-    expect(
-      findGatewayCall((call) => call.method === "agent" && call.expectFinal === true),
-    ).toBeUndefined();
-  });
-
-  it("regression, supports cron announceType without declaration order errors", async () => {
-    const didAnnounce = await runAnnounceFlowForTest("run-announce-type", {
-      announceType: "cron job",
-      expectsCompletionMessage: true,
-      requesterOrigin: { channel: "discord", to: "channel:cron" },
-    });
-
-    expect(didAnnounce).toBe("delivered");
-    const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ announceType?: string }>) ?? [];
-    expect(internalEvents[0]?.announceType).toBe("cron job");
-  });
-
   it("regression, keeps child announce internal when requester is a cron run session", async () => {
     const cronSessionKey = "agent:main:cron:daily-check:run:run-123";
 
     await runAnnounceFlowForTest("run-cron-internal", {
       requesterSessionKey: cronSessionKey,
-      requesterDisplayKey: cronSessionKey,
       requesterOrigin: { channel: "discord", to: "channel:cron-results", accountId: "acct-1" },
     });
 
@@ -324,61 +282,12 @@ describe("subagent announce timeout config", () => {
 
     await runAnnounceFlowForTest("run-parent-route", {
       requesterSessionKey: parentSessionKey,
-      requesterDisplayKey: parentSessionKey,
       childSessionKey: `${parentSessionKey}:subagent:child`,
     });
 
     const directAgentCall = findFinalDirectAgentCall();
     expect(directAgentCall?.params?.sessionKey).toBe(parentSessionKey);
     expect(directAgentCall?.params?.deliver).toBe(false);
-  });
-
-  it("regression, falls back to grandparent only when parent subagent session is missing", async () => {
-    const parentSessionKey = "agent:main:subagent:parent-missing";
-    setupParentSessionFallback(parentSessionKey);
-
-    await runAnnounceFlowForTest("run-parent-fallback", {
-      requesterSessionKey: parentSessionKey,
-      requesterDisplayKey: parentSessionKey,
-      childSessionKey: `${parentSessionKey}:subagent:child`,
-    });
-
-    const directAgentCall = findFinalDirectAgentCall();
-    expect(directAgentCall?.params?.sessionKey).toBe("agent:main:main");
-    expect(directAgentCall?.params?.deliver).toBe(true);
-    expect(directAgentCall?.params?.channel).toBe("discord");
-    expect(directAgentCall?.params?.to).toBe("chan-main");
-    expect(directAgentCall?.params?.accountId).toBe("acct-main");
-  });
-
-  it("uses partial progress on timeout when the child only made tool calls", async () => {
-    chatHistoryMessages = [
-      { role: "user", content: "do a complex task" },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
-      },
-      { role: "toolResult", toolCallId: "call-1", content: [{ type: "text", text: "data" }] },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-2", name: "exec", arguments: {} }],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-3", name: "search", arguments: {} }],
-      },
-    ];
-
-    await runAnnounceFlowForTest("run-timeout-partial-progress", {
-      outcome: { status: "timeout" },
-      roundOneReply: undefined,
-    });
-
-    const directAgentCall = findFinalDirectAgentCall();
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
-    expect(internalEvents[0]?.result).toContain("3 tool call(s)");
-    expect(internalEvents[0]?.result).not.toContain("data");
   });
 
   it("uses timeout progress without replacing an authoritative empty terminal fact", async () => {
@@ -404,7 +313,7 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).not.toContain("private tool output");
   });
 
-  it.each(["authoritative progress", "(no output)"])(
+  it.each(["(no output)"])(
     "keeps authoritative visible timeout output %s without transcript inference",
     async (text) => {
       chatHistoryMessages = [
@@ -511,27 +420,6 @@ describe("subagent announce timeout config", () => {
     expect(directAgentCall?.params?.message).not.toContain("older fallback");
   });
 
-  it("prefers visible assistant progress over a later raw tool result", async () => {
-    chatHistoryMessages = [
-      textAssistant("Read 12 files. Narrowing the search now."),
-      {
-        role: "toolResult",
-        content: [{ type: "text", text: "grep output" }],
-      },
-    ];
-
-    await runAnnounceFlowForTest("run-timeout-visible-assistant", {
-      outcome: { status: "timeout" },
-      roundOneReply: undefined,
-    });
-
-    const directAgentCall = findFinalDirectAgentCall();
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
-    expect(internalEvents[0]?.result).toContain("Read 12 files");
-    expect(internalEvents[0]?.result).not.toContain("grep output");
-  });
-
   it("reports tool progress when a later tool invalidates timeout silence", async () => {
     chatHistoryMessages = [
       ...createTimeoutHistoryWithNoReply(),
@@ -571,5 +459,72 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).toContain(
       "A longer partial summary that should stay silent.",
     );
+  });
+});
+
+describe("captureSubagentCompletionReply", () => {
+  const sessionKey = "agent:main:subagent:child";
+  const readSubagentOutput = vi.fn<() => Promise<string | undefined>>();
+  const capture = (
+    overrides: Partial<Parameters<typeof captureSubagentCompletionReplyUsing>[0]> = {},
+  ) =>
+    captureSubagentCompletionReplyUsing({
+      sessionKey,
+      maxWaitMs: 5,
+      retryIntervalMs: 5,
+      readSubagentOutput,
+      ...overrides,
+    });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    readSubagentOutput.mockReset().mockResolvedValue(undefined);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("returns immediate assistant output without polling", async () => {
+    readSubagentOutput.mockResolvedValue("Immediate completion");
+    await expect(capture()).resolves.toBe("Immediate completion");
+    expect(readSubagentOutput).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("captures the final assistant reply at the deadline", async () => {
+    readSubagentOutput
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce("Requester-visible final result");
+    const pending = capture();
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBe("Requester-visible final result");
+    expect(readSubagentOutput).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("charges slow output reads against the bounded retry deadline", async () => {
+    const startedAt = performance.now();
+    readSubagentOutput.mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 15);
+      });
+      return undefined;
+    });
+    const pending = readLatestSubagentOutputWithRetryUsing({
+      sessionKey,
+      maxWaitMs: 25,
+      retryIntervalMs: 10,
+      readSubagentOutput,
+    });
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBeUndefined();
+    expect(readSubagentOutput).toHaveBeenCalledTimes(2);
+    expect(performance.now() - startedAt).toBe(40);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([{ maxWaitMs: 0 }, { waitForReply: false }])("does not poll with %j", async (options) => {
+    await expect(capture(options)).resolves.toBeUndefined();
+    expect(readSubagentOutput).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

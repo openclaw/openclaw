@@ -1,5 +1,3 @@
-// Agent config mutation helpers wrap retrying config writes for create/update/
-// delete flows and surface typed precondition failures to gateway handlers.
 import { hasAgentRosterProperty, tryResolveSoleAgentId } from "../../agents/agent-roster.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
@@ -12,7 +10,6 @@ import {
 import { mutateConfigFileWithRetry } from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
 import type { AgentConfig } from "../../config/types.agents.js";
-import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 type AgentDeleteMutationResult = {
@@ -22,18 +19,12 @@ type AgentDeleteMutationResult = {
   removedBindings: number;
 };
 
-/** Typed precondition failure surfaced by agent mutation handlers as gateway errors. */
 export class AgentConfigPreconditionError extends Error {}
 
 export class AgentModelSelectionError extends Error {}
 
-type AgentConfigUpdate = {
-  agentId: string;
-  name?: string;
-  workspace?: string;
-  model?: string | null;
+type AgentConfigUpdate = Omit<Parameters<typeof applyAgentConfig>[1], "agentDir"> & {
   agentRuntime?: string;
-  identity?: IdentityConfig;
 };
 
 function isModelOnlyUpdate(params: AgentConfigUpdate): boolean {
@@ -65,7 +56,6 @@ export function validateAgentModelSelectionUpdate(
   return undefined;
 }
 
-/** Checks the current config snapshot for a concrete agent entry. */
 export function isConfiguredAgent(cfg: OpenClawConfig, agentId: string): boolean {
   return findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
 }
@@ -82,7 +72,6 @@ export function isImplicitAgentModelUpdate(
   );
 }
 
-/** Updates an existing agent entry while preserving omitted fields. */
 export async function updateAgentConfigEntry(
   params: AgentConfigUpdate & { assertCurrent?: () => void },
 ): Promise<void> {

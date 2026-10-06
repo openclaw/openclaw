@@ -26,19 +26,6 @@ const TELEGRAM_ACCOUNT_STATUS_FIELDS = [
 
 type TelegramAccountStatus = AccountStatusSnapshot<(typeof TELEGRAM_ACCOUNT_STATUS_FIELDS)[number]>;
 
-type TelegramGroupMembershipAuditSummary = {
-  unresolvedGroups?: number;
-  hasWildcardUnmentionedGroups?: boolean;
-  groups?: Array<{
-    chatId: string;
-    ok?: boolean;
-    status?: string | null;
-    error?: string | null;
-    matchKey?: string;
-    matchSource?: string;
-  }>;
-};
-
 function appendTelegramRuntimeError(message: string, lastError: unknown): string {
   const error = normalizeOptionalString(lastError);
   return error ? `${message}: ${error}` : message;
@@ -114,9 +101,7 @@ function collectTelegramRuntimeIssues(params: {
   }
 }
 
-function readTelegramGroupMembershipAuditSummary(
-  value: unknown,
-): TelegramGroupMembershipAuditSummary {
+function readTelegramGroupMembershipAuditSummary(value: unknown) {
   if (!isRecord(value)) {
     return {};
   }

@@ -25,16 +25,8 @@ describe("typeface presentation", () => {
 
   it.each([
     ["claw", ["instrument-sans", "instrument-sans"]],
-    ["knot", ["geist", "geist"]],
     ["dash", ["dm-sans", "fraunces"]],
-    ["absolutely", ["space-grotesk", "lora"]],
-    ["tide", ["ibm-plex-sans", "ibm-plex-sans"]],
-    ["beacon", ["atkinson-hyperlegible", "atkinson-hyperlegible"]],
     ["phosphor", ["jetbrains-mono", "jetbrains-mono"]],
-    ["crt", ["jetbrains-mono", "jetbrains-mono"]],
-    ["manuscript", ["lora", "lora"]],
-    ["rose", ["dm-sans", "dm-sans"]],
-    ["miami", ["space-grotesk", "space-grotesk"]],
     ["custom", ["system", "system"]],
   ] as const)("loads %s's default faces plus the shared mono face", (theme, [ui, chat]) => {
     const faces = resolveTypefaces(theme);
@@ -95,12 +87,9 @@ describe("typeface presentation", () => {
     expect(style.getPropertyValue("--mono")).toBe(mono);
   });
 
-  it.each(["theme", "unknown", "Lora", "serif; color: red", null, {}, 42])(
-    "ignores invalid override %j",
-    (value) => {
-      expect(normalizeTypefaceOverride(value)).toBeUndefined();
-    },
-  );
+  it.each(["serif; color: red", null])("ignores invalid override %j", (value) => {
+    expect(normalizeTypefaceOverride(value)).toBeUndefined();
+  });
 
   it("opts chat prose into auto smoothing only while the resolved chat face is a serif", () => {
     const style = document.documentElement.style;

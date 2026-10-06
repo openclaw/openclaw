@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 
 const discordInteractionPayloadSchema = Type.Object(
@@ -26,11 +26,8 @@ export function assertDiscordInteractionPayload(value: unknown): void {
   }
 }
 
-export function isDiscordRateLimitBody(value: unknown): value is {
-  message?: string;
-  retry_after?: number | string;
-  global?: boolean;
-  code?: number | string;
-} {
+export function isDiscordRateLimitBody(
+  value: unknown,
+): value is Static<typeof discordRateLimitBodySchema> {
   return Check(discordRateLimitBodySchema, value);
 }

@@ -185,7 +185,7 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
       session: { store: configuredStore },
       agents: {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "marketing" }],
+        entries: { main: {}, marketing: {} },
         defaults: { compaction: { mode: "default", keepRecentTokens: 1, postIndexSync: "off" } },
       },
     },
@@ -383,11 +383,19 @@ describe("direct compactor through the context-engine delegate", () => {
       const controller = new AbortController();
       let current = true;
       const reason = new Error("compaction preparation no longer current");
-      const read = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
-        read.mockRestore();
-        return historyLane.pool.run(input, options).then(async (snapshot) => {
-          received.resolve();
-          await release.promise;
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      const read = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
+        let hydration = false;
+        return run(async () => {
+          const request = typeof input === "function" ? await input() : input;
+          hydration = request.kind === "transcript-hydration";
+          return request;
+        }, options).then(async (snapshot) => {
+          if (hydration) {
+            read.mockRestore();
+            received.resolve();
+            await release.promise;
+          }
           return snapshot;
         });
       });
@@ -465,12 +473,9 @@ describe("direct compactor through the context-engine delegate", () => {
     "keeps queued manual %s compaction countable when cancellation follows its commit during a post-compaction hook",
     async (operation) => {
       const fixture = await createFixture(operation);
-      const { markRuntimeCompactionDelegate } =
-        await import("../../context-engine/compaction-watchdog.js");
       const { incrementCompactionCount } =
         await import("../../auto-reply/reply/session-updates.js");
       const backend = vi.fn<ContextEngine["compact"]>(delegate);
-      markRuntimeCompactionDelegate(backend);
       resolveContextEngineMock.mockResolvedValueOnce({
         info: { ownsCompaction: false },
         compact: backend,
@@ -630,9 +635,6 @@ describe("manual Codex transcript byte compaction", () => {
       ...(selection === "pinned" ? { modelSelectionLocked: true, agentHarnessId: "codex" } : {}),
     });
     const hostCompact = vi.fn<ContextEngine["compact"]>(delegate);
-    const { markRuntimeCompactionDelegate } =
-      await import("../../context-engine/compaction-watchdog.js");
-    markRuntimeCompactionDelegate(hostCompact);
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: hostCompact,

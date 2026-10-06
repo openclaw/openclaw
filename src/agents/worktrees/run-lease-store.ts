@@ -30,12 +30,15 @@ export async function releaseWorktreeRunLeaseRowAsync(
 export async function reapWorktreeRunLeases(
   env: NodeJS.ProcessEnv,
   scopes: string[],
+  assertCurrent?: () => void,
 ): Promise<void> {
   if (scopes.length > 0) {
-    await runLeaseCommand(captureOpenClawStateWorkerContext({ env }), {
-      type: "worktrees.reapRunLeases",
-      input: { scopes },
-    });
+    await runLeaseCommand(
+      captureOpenClawStateWorkerContext({ env }),
+      { type: "worktrees.reapRunLeases", input: { scopes } },
+      undefined,
+      assertCurrent,
+    );
   }
 }
 
@@ -48,6 +51,7 @@ async function runLeaseCommand(
     >
   >,
   onSettlement?: (kind: SqliteWorkerOperationSettlement["kind"]) => void,
+  assertCurrent?: () => void,
 ): Promise<void> {
   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
   try {
@@ -60,6 +64,7 @@ async function runLeaseCommand(
           nativeLocations: [context.admission.databasePath],
           admission: createSqliteWorkerOperationAdmission((_request, grant) => {
             context.admission.assertCurrent();
+            assertCurrent?.();
             grant();
           }),
         };

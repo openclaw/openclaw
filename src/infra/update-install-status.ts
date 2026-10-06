@@ -1,11 +1,20 @@
 import type { UpdateScheduleState } from "../../packages/gateway-protocol/src/index.js";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
+import { VERSION } from "../version.js";
+import { sleepWithAbort } from "./backoff.js";
+import { formatErrorMessage } from "./errors.js";
 import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { readVerifiedGitUpdateReceipt, type VerifiedGitUpdateReceipt } from "./restart-sentinel.js";
+import { resolveEffectiveUpdateChannel, type UpdateChannel } from "./update-channels.js";
 import { checkUpdateStatus, type UpdateCheckResult } from "./update-check.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
+import type { StartupInstallStatus } from "./update-install-status.types.js";
 
-export async function resolveStartupInstallStatus(fetchRemoteGit: boolean, signal: AbortSignal) {
+export async function resolveStartupInstallStatus(
+  fetchRemoteGit: boolean,
+  signal: AbortSignal,
+): Promise<StartupInstallStatus> {
   const [root, installReceipt] = await Promise.all([
     resolveOpenClawPackageRoot({
       moduleUrl: import.meta.url,
@@ -18,45 +27,117 @@ export async function resolveStartupInstallStatus(fetchRemoteGit: boolean, signa
     installReceipt?.upstreamRef && root && updateInstallRootsMatch(root, installReceipt.root)
       ? { currentSha: installReceipt.sha, upstreamRef: installReceipt.upstreamRef }
       : undefined;
-  const status = await checkUpdateStatus({
+  const timeoutMs = resolveGatewayStartupTiming().deadlineMs;
+  const options = {
     root,
     signal,
-    ...(fetchRemoteGit ? {} : { timeoutMs: 2500 }),
+    ...(fetchRemoteGit ? {} : { timeoutMs }),
     fetchGit: fetchRemoteGit,
     includeRegistry: false,
     ...(fetchRemoteGit ? { useDetachedDevUpstream: true } : {}),
     ...(gitUpstreamFallback ? { gitUpstreamFallback } : {}),
-  });
+  };
+  for (let attempt = 0; ; attempt++) {
+    let status: UpdateCheckResult | undefined;
+    let timedOut = false;
+    let failure: unknown;
+    try {
+      status = await checkUpdateStatus({
+        ...options,
+        ...(!fetchRemoteGit
+          ? {
+              onGitProbeTimeout: () => {
+                timedOut = true;
+              },
+            }
+          : {}),
+      });
+      signal.throwIfAborted();
+      if (!timedOut) {
+        return { root, status, installReceipt };
+      }
+    } catch (error) {
+      if (!timedOut) {
+        throw error;
+      }
+      failure = error;
+    }
+    signal.throwIfAborted();
+    if (attempt === 0) {
+      await sleepWithAbort(1_000, signal);
+      continue;
+    }
+    const message = failure
+      ? formatErrorMessage(failure)
+      : `Git update facts unavailable after two ${timeoutMs / 1000}s probes`;
+    status = {
+      ...(status ?? { root, installKind: "unknown", packageManager: "unknown" }),
+      ...(status?.git ? { git: { ...status.git, error: message } } : {}),
+      error: { status: "failed", message, timeoutMs },
+    };
+    return { root, status, installReceipt };
+  }
+}
+
+export async function prepareStartupUpdateInstall(
+  initialize: () => Promise<StartupInstallStatus>,
+  configChannel: UpdateChannel | null,
+  signal: AbortSignal,
+) {
+  let installStatus = await initialize();
   signal.throwIfAborted();
-  return { root, status, installReceipt };
+  if (installStatus.status.error) {
+    throw new Error(installStatus.status.error.message);
+  }
+  const resolveChannel = () =>
+    resolveEffectiveUpdateChannel({
+      configChannel,
+      currentVersion: VERSION,
+      ...installStatus.status,
+    }).channel;
+  let channel = resolveChannel();
+  if (channel === "dev" && installStatus.status.installKind === "git") {
+    installStatus = await resolveStartupInstallStatus(true, signal);
+    signal.throwIfAborted();
+    channel = resolveChannel();
+  }
+  const { status, installReceipt, root } = installStatus;
+  const readOnlySchedule =
+    status.installKind === "host" || status.installKind === "immutable"
+      ? withUpdateInstallStatus(
+          { channel, autoEnabled: false },
+          status,
+          false,
+          installReceipt,
+          root,
+        )
+      : undefined;
+  return { installStatus, channel, readOnlySchedule };
 }
 
 type GitScheduleStatus = NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>;
-
-function resolveGitInstalledAtMs(
-  git: NonNullable<UpdateCheckResult["git"]>,
-  installReceipt: VerifiedGitUpdateReceipt | null,
-  root: string | null,
-): number | undefined {
-  return installReceipt &&
-    root !== null &&
-    updateInstallRootsMatch(root, installReceipt.root) &&
-    git.sha &&
-    gitCommitPrefixesMatch(installReceipt.sha, git.sha)
-    ? installReceipt.installedAtMs
-    : undefined;
-}
 
 function resolveGitScheduleStatus(
   update: UpdateCheckResult,
   installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,
 ): GitScheduleStatus | undefined {
+  if (update.error?.timeoutMs) {
+    return { status: "unavailable", reason: "git-unavailable" };
+  }
   if (update.installKind !== "git") {
     return undefined;
   }
   const git = update.git;
-  const installedAtMs = git ? resolveGitInstalledAtMs(git, installReceipt, root) : undefined;
+  const installedAtMs =
+    git &&
+    installReceipt &&
+    root !== null &&
+    updateInstallRootsMatch(root, installReceipt.root) &&
+    git.sha &&
+    gitCommitPrefixesMatch(installReceipt.sha, git.sha)
+      ? installReceipt.installedAtMs
+      : undefined;
   const metadata = git
     ? {
         ...(git.sha ? { currentSha: git.sha } : {}),
@@ -108,6 +189,19 @@ export function withUpdateInstallStatus(
   installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,
 ): UpdateScheduleState {
+  if (update.installKind === "host") {
+    // Host ownership is not a package/Git update target in the Gateway protocol.
+    const { install: _install, target: _target, campaign: _campaign, ...rest } = schedule;
+    return { ...rest, autoEnabled: false };
+  }
+  if (update.installKind === "immutable") {
+    const { target: _target, campaign: _campaign, ...rest } = schedule;
+    return {
+      ...rest,
+      autoEnabled: false,
+      install: { kind: "immutable", ...(update.immutable ? { immutable: update.immutable } : {}) },
+    };
+  }
   const git = includeGitStatus ? resolveGitScheduleStatus(update, installReceipt, root) : undefined;
   return {
     ...schedule,

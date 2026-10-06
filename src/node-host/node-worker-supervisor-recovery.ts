@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
@@ -6,8 +7,12 @@ import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifec
 import type { NodeWorkerLaunchReceipt, NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import { inspectNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import {
+  NODE_WORKER_STOP_GRACE_MS,
+  NODE_WORKER_FORCE_STOP_WAIT_MS,
   nodeWorkerReceiptMatchesOwner,
   type NodeWorkerStopState,
+  type NodeWorkerActiveOwnership,
+  type NodeWorkerObservedTerminal,
 } from "./node-worker-supervisor-ownership.js";
 import {
   inspectOwnedNodeWorkerTree,
@@ -15,9 +20,8 @@ import {
   signalOwnedNodeWorkerTree,
   waitForOwnedNodeWorkerTreeDeath,
 } from "./node-worker-tree-control.js";
+import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
-const STOP_GRACE_MS = 1_000;
-const FORCE_STOP_WAIT_MS = 4_000;
 const log = createSubsystemLogger("node/worker");
 
 export type NodeWorkerRecovery = {
@@ -84,23 +88,14 @@ export function createNodeWorkerLaunchRecovery(
     if (awaitCleanup) {
       return await recovery.done;
     }
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      const observed = await Promise.race([
-        recovery.done,
-        new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), STOP_GRACE_MS);
-          timer.unref?.();
-        }),
-      ]);
-      if (observed !== null) {
-        return observed;
-      }
-      recovery.params.notifyCapacity = true;
-      return (await context.store.get(receipt.launchId)) ?? receipt;
-    } finally {
-      clearTimeout(timer);
+    const observed = await raceWithTimeout(recovery.done, NODE_WORKER_STOP_GRACE_MS, () => null, {
+      ref: false,
+    });
+    if (observed !== null) {
+      return observed;
     }
+    recovery.params.notifyCapacity = true;
+    return (await context.store.get(receipt.launchId)) ?? receipt;
   };
 }
 
@@ -208,7 +203,7 @@ async function recoverNodeWorkerLaunch(params: {
       // recovery needs its durable completion fact as well as group extinction.
       workerState = await waitForOwnedNodeWorkerTreeDeath(
         receipt.worker,
-        ownedAnchor ? undefined : STOP_GRACE_MS,
+        ownedAnchor ? undefined : NODE_WORKER_STOP_GRACE_MS,
         async () =>
           (await stillOwned()) &&
           (!ownedAnchor || inspectNodeWorkerProcessIdentity(worker) === "live"),
@@ -228,7 +223,7 @@ async function recoverNodeWorkerLaunch(params: {
         await signalOwnedNodeWorkerTree(receipt.worker, "SIGKILL");
         workerState = await waitForOwnedNodeWorkerTreeDeath(
           receipt.worker,
-          FORCE_STOP_WAIT_MS,
+          NODE_WORKER_FORCE_STOP_WAIT_MS,
           stillOwned,
         );
       }
@@ -293,4 +288,59 @@ async function recoverNodeWorkerLaunch(params: {
       throw error;
     }
   }
+}
+
+/** Persist an observed physical exit before releasing its active owner and turn waiters. */
+export function createNodeWorkerTerminalReconciliation(options: {
+  active: Map<string, NodeWorkerActiveOwnership>;
+  turns: NodeWorkerTurnStore;
+  capacity: NodeWorkerCapacity;
+}) {
+  return function reconcileActiveTerminal(
+    active: NodeWorkerObservedTerminal,
+  ): Promise<NodeWorkerLaunchReceipt> {
+    if (active.reconciliation) {
+      return active.reconciliation;
+    }
+    const operation = (async () => {
+      if (active.cancelledTurn) {
+        // Gateway authority may close before worker finishing. The physical failure
+        // remains separate, and neither journal can settle before process cleanup.
+        const turn = await options.turns.finish({
+          expected: active.cancelledTurn,
+          ownerLaunchId: active.launchId,
+          supervisor: active.supervisor,
+          worker: active.worker,
+          state: "cancelled",
+          errorText: active.outcome.errorText ?? "node worker turn cancelled",
+        });
+        if (!turn || turn.state === "pending" || turn.state === "running") {
+          throw new Error("node worker cancellation lost its physical owner");
+        }
+      }
+      const receipt = await options.capacity.finish({
+        launchId: active.launchId,
+        planHash: active.planHash,
+        supervisor: active.supervisor,
+        worker: active.worker,
+        ...active.outcome,
+      });
+      if (receipt.state === "pending" || receipt.state === "running") {
+        throw new Error(`node worker launch ${active.launchId} terminal state was not persisted`);
+      }
+      active.turn?.settle();
+      active.turn = undefined;
+      if (options.active.get(active.launchId) === active) {
+        options.active.delete(active.launchId);
+      }
+      return receipt;
+    })();
+    const pending = operation.finally(() => {
+      if (active.reconciliation === pending) {
+        active.reconciliation = undefined;
+      }
+    });
+    active.reconciliation = pending;
+    return pending;
+  };
 }

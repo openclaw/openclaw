@@ -3,12 +3,12 @@ import {
   readNonEmptyStringPreservingWhitespace,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { parseFrontmatterBlockResult } from "../../../packages/markdown-core/src/frontmatter.js";
 import { validateRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import {
   applyOpenClawManifestInstallCommonFields,
   getFrontmatterString,
-  normalizeStringList,
   parseOpenClawManifestInstallBase,
   parseFrontmatterBool,
   resolveOpenClawManifestBlock,
@@ -68,15 +68,10 @@ function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
   if (!value || /\s/.test(value)) {
     return undefined;
   }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return parsed.toString();
-  } catch {
-    return undefined;
-  }
+  const parsed = URL.parse(value);
+  return parsed?.protocol === "http:" || parsed?.protocol === "https:"
+    ? parsed.toString()
+    : undefined;
 }
 
 function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
@@ -91,25 +86,19 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
     },
     parsed,
   );
-  const osList = normalizeStringList(raw.os);
+  const osList = normalizeCsvOrLooseStringList(raw.os);
   if (osList.length > 0) {
     spec.os = osList;
   }
-  const formula = normalizeSafeBrewFormula(raw.formula);
+  const formula = normalizeSafeBrewFormula(raw.formula) ?? normalizeSafeBrewFormula(raw.cask);
   if (formula) {
     spec.formula = formula;
   }
-  const cask = normalizeSafeBrewFormula(raw.cask);
-  if (!spec.formula && cask) {
-    spec.formula = cask;
-  }
-  if (spec.kind === "node") {
-    const pkg = normalizeSafeNpmSpec(raw.package);
-    if (pkg) {
-      spec.package = pkg;
-    }
-  } else if (spec.kind === "uv") {
-    const pkg = normalizeSafePackageSpec(raw.package, UV_PACKAGE_PATTERN);
+  if (spec.kind === "node" || spec.kind === "uv") {
+    const pkg =
+      spec.kind === "node"
+        ? normalizeSafeNpmSpec(raw.package)
+        : normalizeSafePackageSpec(raw.package, UV_PACKAGE_PATTERN);
     if (pkg) {
       spec.package = pkg;
     }

@@ -17,17 +17,8 @@ const providerRuntimeLoader = createLazyImportLoader(
   () => import("./provider-discovery.runtime.js"),
 );
 
-function resolveProviderCatalogOrderHook(provider: ProviderPlugin) {
-  return provider.catalog ?? provider.staticCatalog;
-}
-
-function isSafeProviderConfigKey(value: string): boolean {
-  return value !== "" && !isBlockedObjectKey(value);
-}
-
 type PreparedProviderStaticCatalogEntry = Readonly<{
   provider: ProviderPlugin;
-  result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
   providerConfigs: Readonly<Record<string, ModelProviderConfig>>;
 }>;
 
@@ -69,7 +60,7 @@ export async function resolveRuntimePluginDiscoveryProviders(
     .resolvePluginDiscoveryProvidersRuntime(params)
     .filter(
       (provider) =>
-        resolveProviderCatalogOrderHook(provider) ||
+        (provider.catalog ?? provider.staticCatalog) ||
         (params.includeSyntheticAuthProviders === true &&
           (typeof provider.resolveSyntheticAuth === "function" ||
             typeof provider.prepareSyntheticAuth === "function")),
@@ -80,15 +71,15 @@ export async function resolveRuntimePluginDiscoveryProviders(
 export function groupPluginDiscoveryProvidersByOrder(
   providers: ProviderPlugin[],
 ): Record<ProviderCatalogOrder, ProviderPlugin[]> {
-  const grouped = {
+  const grouped: Record<ProviderCatalogOrder, ProviderPlugin[]> = {
     simple: [],
     profile: [],
     paired: [],
     late: [],
-  } as Record<ProviderCatalogOrder, ProviderPlugin[]>;
+  };
 
   for (const provider of providers) {
-    const order = resolveProviderCatalogOrderHook(provider)?.order ?? "late";
+    const order = (provider.catalog ?? provider.staticCatalog)?.order ?? "late";
     grouped[order].push(provider);
   }
 
@@ -127,7 +118,7 @@ export function normalizePluginDiscoveryResult(params: {
         : [];
   for (const [key, value] of entries) {
     const normalizedKey = normalizeProviderId(key);
-    if (!isSafeProviderConfigKey(normalizedKey)) {
+    if (!normalizedKey || isBlockedObjectKey(normalizedKey)) {
       continue;
     }
     normalized[normalizedKey] = value;
@@ -220,7 +211,6 @@ export async function prepareProviderStaticCatalog(params: {
       entries.push(
         Object.freeze({
           provider,
-          result,
           providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
         }),
       );

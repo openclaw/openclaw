@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as backoff from "../../infra/backoff.js";
@@ -18,7 +19,8 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
-import * as capacity from "./capacity.js";
+import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
@@ -55,6 +57,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
   let backend: WorktreeFilesystemBackend;
 
   beforeEach(async () => {
+    useInProcessWorktreeCapacityTransport();
     // Hosted runners can install system-wide LFS filters, which intentionally
     // disable acceleration. Each case owns its checkout policy instead.
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
@@ -86,6 +89,31 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     expect(await git(created.path, "status", "--porcelain")).toBe("");
     expect(listTemplates(env)).toEqual([]);
     expect(backend.cloneTemplate).not.toHaveBeenCalled();
+  });
+
+  it("preserves relative Git environment paths during registration and checkout", async () => {
+    const destination = path.join(path.dirname(repo), "relative-env");
+    const commit = await git(repo, "rev-parse", "HEAD");
+    vi.stubEnv("GIT_COMMON_DIR", "../repo/.git");
+
+    const result = await addManagedWorktree({
+      env,
+      now: () => now,
+      enabled: false,
+      repoRoot: repo,
+      commonDir: path.join(repo, ".git"),
+      worktreeRoot: path.dirname(destination),
+      destination,
+      base: commit,
+      requireSpace: async () => {},
+      commitGuard: () => {},
+    });
+
+    expect(result.code).toBe(0);
+    expect(await fs.readFile(path.join(destination, "README.md"), "utf8")).toBe("base\n");
+    expect(await git(destination, "rev-parse", "HEAD")).toBe(commit);
+    expect(await git(destination, "status", "--porcelain")).toBe("");
+    expect(await git(repo, "status", "--porcelain")).toBe("");
   });
 
   it.each(["small", "remote-restore", "invalid", "fallback"])(
@@ -233,7 +261,11 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     ).toBe("origin/racing");
   });
 
-  it("reuses clean source while including current ignored files and running setup for each checkout", async () => {
+  it("reuses deep source while including current ignored files and running setup for each checkout", async () => {
+    const root = path.dirname(repo);
+    const deepRepo = path.join(root, "repository-".padEnd(190 - root.length - 1, "r"));
+    await fs.rename(repo, deepRepo);
+    repo = await fs.realpath(deepRepo);
     await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\nprivate.txt\nsetup-ran.txt\n");
     await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
     await git(repo, "add", ".gitignore", ".worktreeinclude");
@@ -251,17 +283,28 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       );
     }
 
-    const first = await service.create({ repoRoot: repo, name: "first", baseRef: "HEAD" });
+    const sourceStatus = await git(repo, "status", "--porcelain", "--untracked-files=all");
+    const first = await service.create({
+      repoRoot: repo,
+      name: "first-deep-source-checkout",
+      baseRef: "HEAD",
+    });
+    expect((await git(first.path, "rev-parse", "--absolute-git-dir")).length).toBeGreaterThan(220);
     const template = listTemplates(env)[0];
     assert(template);
     expect(template?.status).toBe("ready");
     await fs.writeFile(path.join(repo, ".env.local"), "second\n");
     await fs.writeFile(path.join(first.path, "README.md"), "first checkout edit\n");
-    const second = await service.create({ repoRoot: repo, name: "second", baseRef: "HEAD" });
+    const second = await service.create({
+      repoRoot: repo,
+      name: "second-deep-source-checkout",
+      baseRef: "HEAD",
+    });
 
     expect(backend.createTemplate).toHaveBeenCalledTimes(1);
     expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
     expect(listTemplates(env).map((entry) => entry.id)).toEqual([template.id]);
+    expect(await git(repo, "status", "--porcelain", "--untracked-files=all")).toBe(sourceStatus);
     expect(await fs.readFile(path.join(second.path, "README.md"), "utf8")).toBe("base\n");
     expect(await fs.readFile(path.join(first.path, "README.md"), "utf8")).toBe(
       "first checkout edit\n",
@@ -379,7 +422,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       expect(await fs.readFile(path.join(destination, "sentinel.txt"), "utf8")).toBe(
         "new owner's files\n",
       );
-      expect(await git(repo, "worktree", "list", "--porcelain")).toContain(destination);
+      expect(await git(repo, "worktree", "list", "--porcelain")).toContain(
+        destination.split(path.sep).join("/"),
+      );
       expect(await git(repo, "rev-parse", `refs/heads/${branch}`)).toBe(
         change === "advanced" ? later : initial,
       );
@@ -397,16 +442,6 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     acceleration = false;
     const existing = await service.create({ repoRoot: repo, name: "existing", baseRef: "HEAD" });
     acceleration = true;
-    const inventoryStarted = createDeferredCore();
-    const finishInventory = createDeferredCore();
-    const readSize = capacity.directorySizeBytes;
-    vi.spyOn(capacity, "directorySizeBytes").mockImplementation(async (...args) => {
-      if (args[0] === existing.path) {
-        inventoryStarted.resolve();
-        await finishInventory.promise;
-      }
-      return await readSize(...args);
-    });
     const cloneStarted = createDeferredCore<string>();
     const finishClone = createDeferredCore();
     vi.mocked(backend.cloneTemplate).mockImplementationOnce(
@@ -420,41 +455,34 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         await fs.cp(source, destination, { recursive: true, verbatimSymlinks: true });
       },
     );
-    const collection = service.gc({
-      limits: { maxTotalSizeBytes: Number.MAX_SAFE_INTEGER },
-    });
-    let creation: ReturnType<typeof service.create> | undefined;
+    const creation = service.create({ repoRoot: repo, name: "allocating", baseRef: "HEAD" });
+    let collection: ReturnType<typeof service.gc> | undefined;
     try {
-      await Promise.race([
-        inventoryStarted.promise,
-        collection.then(() => {
-          throw new Error("Collection completed without inventorying the existing checkout");
-        }),
-      ]);
-      creation = service.create({ repoRoot: repo, name: "allocating", baseRef: "HEAD" });
-      const destination = await Promise.race([
+      const destination = await awaitGateBeforeSettlement(
         cloneStarted.promise,
-        creation.then(() => {
-          throw new Error("Creation completed without starting a clone");
-        }),
-      ]);
+        creation,
+        "Creation completed without starting a clone",
+      );
       const contended = createDeferredCore();
       const sleep = backoff.sleepWithAbort;
       vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async (...args) => {
         contended.resolve();
         return await sleep(...args);
       });
-      finishInventory.resolve();
-      await Promise.race([contended.promise, collection]);
+      collection = service.gc();
+      await awaitGateBeforeSettlement(
+        contended.promise,
+        collection,
+        "Collection bypassed the active allocation",
+      );
       expect(await fs.readFile(path.join(destination, "partial.txt"), "utf8")).toBe(
         "in-progress clone\n",
       );
     } finally {
-      finishInventory.resolve();
       finishClone.resolve();
       await Promise.all([creation, collection]);
     }
-    assert(creation);
+    assert(collection);
     const created = await creation;
     expect((await collection).orphansDeleted).toBe(0);
     expect((await service.listRegistryRecords()).map((record) => record.id).toSorted()).toEqual(
@@ -469,7 +497,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     const removed = await service.remove({ id: created.id, reason: "retention" });
     now += SNAPSHOT_RETENTION_MS + 1;
     const allocation = vi
-      .spyOn(stateLease, "withOpenClawStateLease")
+      .spyOn(stateLease, "withOpenClawStateLeaseAsync")
       .mockRejectedValue(new Error("allocation lease unavailable"));
 
     expect((await service.gc()).snapshotsPruned).toBe(0);
@@ -508,9 +536,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     );
     const lease = await held.promise;
     const allocationRequested = createDeferredCore();
-    const acquireLease = stateLease.withOpenClawStateLease;
+    const acquireLease = stateLease.withOpenClawStateLeaseAsync;
     const allocation = vi
-      .spyOn(stateLease, "withOpenClawStateLease")
+      .spyOn(stateLease, "withOpenClawStateLeaseAsync")
       .mockImplementation((...args) => {
         allocationRequested.resolve();
         return acquireLease(...args);

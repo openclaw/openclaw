@@ -1,4 +1,3 @@
-/** Runs ACP turns, failover, terminal delivery, and timeout cleanup. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -35,7 +34,6 @@ import {
 } from "./manager.turn-timeout.js";
 import type {
   AcpRunTurnInput,
-  AcpSessionManagerDeps,
   ActiveTurnState,
   EnsureManagerRuntimeHandle,
   ReconcileManagerRuntimeSessionIdentifiers,
@@ -52,13 +50,11 @@ import {
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 
-/** Executes one ACP prompt turn against the selected backend and records terminal state. */
 export async function runManagerTurn(params: {
   input: AcpRunTurnInput;
   acceptedTurn: AcceptedTurnState;
   sessionKey: string;
   agentId: string;
-  deps: AcpSessionManagerDeps;
   runtimeHandles: ManagerRuntimeHandleCache;
   activeTurnBySession: Map<string, ActiveTurnState>;
   resolveSession: ResolveManagerSessionAsync;
@@ -486,7 +482,7 @@ export async function runManagerTurn(params: {
                 childSessionKey: sessionKey,
                 runId: input.requestId,
                 requesterSessionKey: spawnedByWatcher,
-                outcomeStatus: turnOutcome.terminalStatus === "cancelled" ? "cancelled" : "ok",
+                outcomeStatus: cancelled ? "cancelled" : "ok",
               },
               cancelling ? assertCancellationPublicationCurrent : assertActorCurrent,
               cancelling ? params.acceptedTurn.cancelConstraint : undefined,

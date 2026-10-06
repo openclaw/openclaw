@@ -212,27 +212,6 @@ function resolveAnthropicSnapshotModel(
   return template ? { ...template, id: modelId, name: modelId } : undefined;
 }
 
-/** Newest Claude generation whose request contract this plugin encodes. */
-const ANTHROPIC_NEWEST_KNOWN_GENERATION = { major: 5, minor: 0 } as const;
-
-/**
- * Read the generation from either Claude id order: `claude-<family>-<major>[-<minor>]`
- * (4.6 onward) and `claude-<major>[-<minor>]-<family>` (through 3.7). The minor
- * capture is bounded to two digits so a trailing snapshot date such as
- * `claude-opus-4-20250514` does not parse as a minor version.
- */
-function resolveAnthropicModelGeneration(
-  modelId: string,
-): { major: number; minor: number } | undefined {
-  const match =
-    /claude-[a-z]+-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId) ??
-    /claude-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId);
-  if (!match) {
-    return undefined;
-  }
-  return { major: Number(match[1]), minor: match[2] === undefined ? 0 : Number(match[2]) };
-}
-
 /**
  * Claude ids from a generation newer than anything this plugin encodes. Request
  * shaping is selected by version predicates in `@openclaw/llm-core`, so such an
@@ -243,15 +222,16 @@ function isAnthropicUnreleasedGenerationModel(modelId: string): boolean {
   if (matchesAnthropicModernModel(modelId)) {
     return false;
   }
-  const generation = resolveAnthropicModelGeneration(modelId);
-  if (!generation) {
+  // Accept either Claude id order; two-digit minors exclude trailing snapshot dates.
+  const match =
+    /claude-[a-z]+-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId) ??
+    /claude-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId);
+  if (!match) {
     return false;
   }
-  return (
-    generation.major > ANTHROPIC_NEWEST_KNOWN_GENERATION.major ||
-    (generation.major === ANTHROPIC_NEWEST_KNOWN_GENERATION.major &&
-      generation.minor > ANTHROPIC_NEWEST_KNOWN_GENERATION.minor)
-  );
+  const major = Number(match[1]);
+  // Claude 5.0 is the newest generation whose request contract this plugin encodes.
+  return major > 5 || (major === 5 && Number(match[2] ?? 0) > 0);
 }
 
 /**
@@ -404,31 +384,19 @@ function hasConfiguredModelOverride(
   }
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
-    if (normalizeLowercaseStringOrEmpty(providerId) !== normalizedProvider) {
-      continue;
-    }
-    if (!Array.isArray(providerConfig?.models)) {
-      continue;
-    }
-    for (const model of providerConfig.models) {
-      if (
-        normalizeLowercaseStringOrEmpty(typeof model?.id === "string" ? model.id : "") !==
-        normalizedModelId
-      ) {
-        continue;
-      }
-      if (
-        override === "cost"
-          ? model?.cost !== undefined
-          : (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
-            (typeof model?.contextWindow === "number" && model.contextWindow > 0)
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return Object.entries(providers).some(
+    ([providerId, providerConfig]) =>
+      normalizeLowercaseStringOrEmpty(providerId) === normalizedProvider &&
+      Array.isArray(providerConfig?.models) &&
+      providerConfig.models.some(
+        (model) =>
+          normalizeLowercaseStringOrEmpty(model?.id) === normalizedModelId &&
+          (override === "cost"
+            ? model?.cost !== undefined
+            : (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
+              (typeof model?.contextWindow === "number" && model.contextWindow > 0)),
+      ),
+  );
 }
 
 function matchesAnthropicModernModel(modelId: string): boolean {

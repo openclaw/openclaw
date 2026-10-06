@@ -422,16 +422,6 @@ func msToAge(_ ms: Double) -> String {
     return "\(days)d"
 }
 
-/// Decode a health snapshot, tolerating stray log lines before/after the JSON blob.
 func decodeHealthSnapshot(from data: Data) -> HealthSnapshot? {
-    let decoder = JSONDecoder()
-    if let snap = try? decoder.decode(HealthSnapshot.self, from: data) {
-        return snap
-    }
-    guard let text = String(data: data, encoding: .utf8),
-          let extracted = JSONObjectExtractionSupport.extract(from: text)
-    else {
-        return nil
-    }
-    return try? decoder.decode(HealthSnapshot.self, from: Data(extracted.text.utf8))
+    try? JSONDecoder().decode(HealthSnapshot.self, from: data)
 }

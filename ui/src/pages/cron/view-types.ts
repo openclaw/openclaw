@@ -11,6 +11,7 @@ import type {
   CronJobsSortBy,
   CronSortDir,
 } from "../../api/types.ts";
+import type { updateCronJobsFilter } from "../../lib/cron/index.ts";
 import type { CronRunsViewState } from "../../lib/cron/runs.ts";
 import type {
   CronFieldErrors,
@@ -82,15 +83,7 @@ export type CronProps = {
   onRun: (job: CronJob, mode?: "force" | "due") => void;
   onRemove: (job: CronJob) => void;
   onLoadMoreJobs: () => void;
-  onJobsFiltersChange: (patch: {
-    cronJobsQuery?: string;
-    cronJobsEnabledFilter?: CronJobsEnabledFilter;
-    cronJobsScheduleKindFilter?: CronJobsScheduleKindFilter;
-    cronJobsLastStatusFilter?: CronJobsLastStatusFilter;
-    cronJobsTriggerFilter?: CronJobsTriggerFilter;
-    cronJobsSortBy?: CronJobsSortBy;
-    cronJobsSortDir?: CronSortDir;
-  }) => void | Promise<void>;
+  onJobsFiltersChange: (patch: Parameters<typeof updateCronJobsFilter>[1]) => void | Promise<void>;
   onJobsFiltersReset: () => void | Promise<void>;
   onLoadMoreRuns: () => void;
   onRunsFiltersChange: (patch: {

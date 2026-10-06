@@ -1,6 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import type { Writable } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
@@ -8,29 +7,7 @@ import type {
   RealtimeVoiceAudioChunkMetadata,
   RealtimeVoicePlaybackItem,
 } from "openclaw/plugin-sdk/realtime-voice";
-
-type PumpProcess = {
-  pid?: number;
-  killed?: boolean;
-  stdin?: (Writable & { writableLength?: number }) | null;
-  stdout?: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
-  stderr?: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
-  kill(signal?: NodeJS.Signals): boolean;
-  on(
-    event: "exit",
-    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
-  ): unknown;
-  on(event: "error", listener: (error: Error) => void): unknown;
-};
-
-type SpawnFn = (
-  command: string,
-  args: string[],
-  options: {
-    env: NodeJS.ProcessEnv;
-    stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"];
-  },
-) => PumpProcess;
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 
 const CAFFEINATE_COMMAND = "/usr/bin/caffeinate";
 const CAPTURE_CLOSE_SAFE_FRAME = Buffer.from([4, 0, 0, 0, 4, 0, 0, 0, 0]);
@@ -52,7 +29,7 @@ const MAX_PLAYBACK_BUFFERED_BYTES = 2 * 1024 * 1024;
 type FaceTimeAudioPump = {
   suppressionReady(): Promise<void>;
   routeReady(): Promise<void>;
-  processOutputSuppressed(): boolean;
+  processOutputSuppressed(this: void): boolean;
   writeOutputAudio(audio: Buffer, metadata?: RealtimeVoiceAudioChunkMetadata): void;
   getPlaybackState(): RealtimeVoicePlaybackItem[];
   finishOutputAudio(): void;
@@ -63,9 +40,9 @@ type FaceTimeAudioPump = {
   stop(): Promise<void>;
 };
 
-function sanitizedAudioChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+function sanitizedAudioChildEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(
-    Object.entries(env).filter(
+    Object.entries(process.env).filter(
       ([key]) => !/(?:API_?KEY|AUTH|CREDENTIAL|PASSWORD|SECRET|TOKEN)/iu.test(key),
     ),
   );
@@ -79,7 +56,8 @@ class PlaybackClock {
   private retiredFrames = 0;
   private items: Array<{ itemId?: string; frames: number }> = [];
 
-  append(frames: number, itemId?: string, nowMs = Date.now()): void {
+  append(frames: number, itemId?: string): void {
+    const nowMs = Date.now();
     if (nowMs >= this.playbackUntilMs) {
       this.playedFramesBeforeSegment = this.generatedFrames;
       this.playbackStartsAtMs = nowMs + OUTPUT_LATENCY_BUDGET_MS;
@@ -116,7 +94,8 @@ class PlaybackClock {
     this.retiredFrames = this.generatedFrames;
   }
 
-  playedFrames(nowMs = Date.now()): number {
+  playedFrames(): number {
+    const nowMs = Date.now();
     if (nowMs <= this.playbackStartsAtMs) {
       return this.playedFramesBeforeSegment;
     }
@@ -125,12 +104,12 @@ class PlaybackClock {
     return Math.min(this.generatedFrames, this.playedFramesBeforeSegment + elapsedFrames);
   }
 
-  queuedFrames(nowMs = Date.now()): number {
-    return Math.max(0, this.generatedFrames - this.playedFrames(nowMs));
+  queuedFrames(): number {
+    return Math.max(0, this.generatedFrames - this.playedFrames());
   }
 
-  millisecondsUntilDrained(nowMs = Date.now()): number {
-    return Math.max(0, this.playbackUntilMs - nowMs);
+  millisecondsUntilDrained(): number {
+    return Math.max(0, this.playbackUntilMs - Date.now());
   }
 
   reset(): void {
@@ -165,7 +144,7 @@ function buildSoxOutputArguments(): string[] {
   ];
 }
 
-async function terminateProcess(proc: PumpProcess, signal: NodeJS.Signals = "SIGTERM") {
+async function terminateProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM") {
   if (proc.killed && signal !== "SIGKILL") {
     return;
   }
@@ -176,31 +155,17 @@ async function terminateProcess(proc: PumpProcess, signal: NodeJS.Signals = "SIG
       resolve();
     });
   });
-  try {
-    proc.kill(signal);
-  } catch {
-    return;
-  }
-  await Promise.race([
-    exitedPromise,
-    new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 500);
-      timer.unref?.();
-    }),
-  ]);
-  if (!exited && signal !== "SIGKILL") {
+  const signals: NodeJS.Signals[] = signal === "SIGKILL" ? [signal] : [signal, "SIGKILL"];
+  for (const nextSignal of signals) {
     try {
-      proc.kill("SIGKILL");
+      proc.kill(nextSignal);
     } catch {
       return;
     }
-    await Promise.race([
-      exitedPromise,
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 500);
-        timer.unref?.();
-      }),
-    ]);
+    await Promise.race([exitedPromise, sleepWithAbort(500, undefined, { ref: false })]);
+    if (exited) {
+      return;
+    }
   }
 }
 
@@ -211,16 +176,13 @@ export function startFaceTimeAudioPump(params: {
   onError?: (error: Error) => boolean | void | Promise<boolean | void>;
   onSuppressionLost?: (error: Error) => void | Promise<void>;
   onPlaybackDrained?: (event: { generation: number; playedFrames: number }) => void;
-  spawn?: SpawnFn;
 }): FaceTimeAudioPump {
-  const spawnFn: SpawnFn =
-    params.spawn ?? ((command, args, options) => spawn(command, args, options));
   const childEnv = sanitizedAudioChildEnv();
   const playbackClock = new PlaybackClock();
   let playbackGeneration = 1;
   let drainTimer: NodeJS.Timeout | undefined;
-  let outputProcess: PumpProcess;
-  const captureProcess = spawnFn(params.captureBinary, [], {
+  let outputProcess: ChildProcess;
+  const captureProcess = spawn(params.captureBinary, [], {
     env: childEnv,
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -292,20 +254,17 @@ export function startFaceTimeAudioPump(params: {
   const spawnOutput = () => {
     // Playback stays out of the capture helper: an in-process AVAudioEngine can
     // rebind OpenClaw-Feed after FaceTime claims it and tear down the carrier.
-    const proc = spawnFn(SOX_COMMAND, buildSoxOutputArguments(), {
+    const proc = spawn(SOX_COMMAND, buildSoxOutputArguments(), {
       env: childEnv,
       stdio: ["pipe", "ignore", "pipe"],
     });
-    proc.on("error", (error) => {
+    const onError = (error: Error) => {
       if (!stopped && !mediaSuspended && proc === outputProcess) {
         reportFailure(error, false);
       }
-    });
-    proc.stdin?.on("error", (error) => {
-      if (!stopped && !mediaSuspended && proc === outputProcess) {
-        reportFailure(error, false);
-      }
-    });
+    };
+    proc.on("error", onError);
+    proc.stdin?.on("error", onError);
     proc.on("exit", (code, signal) => {
       if (!stopped && !mediaSuspended && proc === outputProcess) {
         reportFailure(new Error(`SoX playback exited (${code ?? signal ?? "done"})`), false);
@@ -367,7 +326,7 @@ export function startFaceTimeAudioPump(params: {
     ]);
   };
   const wakeProcess = existsSync(CAFFEINATE_COMMAND)
-    ? spawnFn(
+    ? spawn(
         CAFFEINATE_COMMAND,
         ["-d", "-i", ...(captureProcess.pid ? ["-w", String(captureProcess.pid)] : [])],
         { env: childEnv, stdio: ["ignore", "ignore", "pipe"] },

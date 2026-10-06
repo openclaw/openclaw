@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolveIntegerOption, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError } from "./errors.js";
 import { extractGatewayMessageText } from "./gateway-log-sentinel.js";
@@ -175,15 +175,10 @@ function resolveRetryableHistoryDelayMs(error: unknown) {
     if (code === "UNAVAILABLE" && current.retryable === true) {
       const detailMethod = isRecord(current.details) ? current.details.method : undefined;
       if (detailMethod === "chat.history") {
-        const retryAfterMs = current.retryAfterMs;
-        const rawDelayMs =
-          typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs)
-            ? retryAfterMs
-            : QA_HISTORY_RETRY_DEFAULT_MS;
-        return Math.min(
-          Math.max(Math.floor(rawDelayMs), QA_HISTORY_RETRY_MIN_MS),
-          QA_HISTORY_RETRY_MAX_MS,
-        );
+        return resolveIntegerOption(current.retryAfterMs, QA_HISTORY_RETRY_DEFAULT_MS, {
+          min: QA_HISTORY_RETRY_MIN_MS,
+          max: QA_HISTORY_RETRY_MAX_MS,
+        });
       }
     }
     current = current.cause;

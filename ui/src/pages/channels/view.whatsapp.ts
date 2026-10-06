@@ -13,7 +13,7 @@ import {
   renderChannelActionRow,
   renderChannelErrorRow,
   renderChannelFacts,
-  resolveChannelConfigured,
+  resolveChannelDisplayState,
 } from "./view.shared.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
@@ -23,7 +23,7 @@ export function renderWhatsAppCard(params: {
   accountCount?: number;
 }) {
   const { props, whatsapp, accountCount } = params;
-  const configured = resolveChannelConfigured("whatsapp", props);
+  const { configured } = resolveChannelDisplayState("whatsapp", props);
   const linked = whatsapp?.linked === true;
   const hasQr = props.channels.whatsappLoginQrDataUrl != null;
   const rawPhoneNumber = whatsapp?.self?.e164;
@@ -113,23 +113,13 @@ export function renderWhatsAppCard(params: {
           : nothing
       }
       ${renderChannelActionRow(html`
-        ${
-          linked
-            ? html`<button
-                class="btn"
-                ?disabled=${props.channels.whatsappBusy}
-                @click=${() => props.onWhatsAppStart(true)}
-              >
-                ${t("common.relink")}
-              </button>`
-            : html`<button
-                class="btn primary"
-                ?disabled=${props.channels.whatsappBusy}
-                @click=${() => props.onWhatsAppStart(false)}
-              >
-                ${props.channels.whatsappBusy ? t("common.working") : t("common.showQr")}
-              </button>`
-        }
+        <button
+          class=${linked ? "btn" : "btn primary"}
+          ?disabled=${props.channels.whatsappBusy}
+          @click=${() => props.onWhatsAppStart(linked)}
+        >
+          ${t(linked ? "common.relink" : props.channels.whatsappBusy ? "common.working" : "common.showQr")}
+        </button>
         ${
           hasQr
             ? html`<button

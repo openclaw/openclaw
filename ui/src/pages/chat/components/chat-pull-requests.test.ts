@@ -204,7 +204,9 @@ describe("renderChatPullRequests", () => {
       expect(chip?.getAttribute("data-state")).toBe("merged");
       expect(chip?.querySelector(".chat-pr__state")?.textContent?.trim()).toBe("Merged");
       expect(chip?.querySelector(".chat-pr__diff")).toBeNull();
-      expect(chip?.querySelector(".chat-pr__checks")).toBeNull();
+      expect(chip?.querySelector(".chat-pr__checks")?.getAttribute("data-checks")).toBe("none");
+      expect(chip?.querySelector("openclaw-chat-ci-automation")).not.toBeNull();
+      expect(chip?.querySelector("openclaw-chat-ci-details")).toBeNull();
       // Merged is terminal, so the stale-data warning stays off merged chips.
       expect(chip?.querySelector(".chat-pr__warning")).toBeNull();
       expect(container.querySelectorAll(".chat-pr")).toHaveLength(1);
@@ -235,6 +237,92 @@ describe("renderChatPullRequests", () => {
       expect(container.querySelector(".chat-pr__number")).toBeNull();
       expect(container.querySelector(".chat-pr__branch")?.textContent).toBe(branch);
       expect(container.querySelector(".chat-pr__create")?.textContent).toContain("Publish PR");
+    },
+  );
+
+  it("does not attach a failed session publication to any PR when live and settled rows reorder", () => {
+    const failedPublication = publication({
+      result: {
+        requestId: "failed-session-attempt",
+        status: "failed",
+        code: "unavailable",
+        message: "GitHub publication failed.",
+        nextAction: "Check repository read access before retrying publication.",
+        publisher: { source: "agent-override", accountId: 3, login: "agent-bot" },
+      },
+      onNewAction: vi.fn(),
+    });
+    const merged = pullRequest({ state: "merged" });
+    const unrelated = pullRequest({
+      number: 42,
+      owner: "synthetic",
+      repo: "another-project",
+      branch: "feature/unrelated",
+      url: "https://github.com/synthetic/another-project/pull/42",
+    });
+    for (const state of ["open", "merged"] as const) {
+      paint({ pullRequests: [merged, { ...unrelated, state }], publication: failedPublication });
+      const rows = [...container.querySelectorAll("article.chat-pr")];
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(row.textContent).not.toContain("Check repository read access");
+        expect(row.querySelector("[data-publication-account]")).toBeNull();
+        expect(row.querySelector(".chat-pr__create")).toBeNull();
+      }
+      const history = container.querySelector<HTMLDetailsElement>(
+        "details.chat-pr__publication-history",
+      );
+      expect(history?.closest("article")).toBeNull();
+      expect(history?.querySelector("summary")?.textContent?.trim()).toBe(
+        "Publication attempt failed",
+      );
+      expect(history?.open).toBe(false);
+      expect(history?.textContent).toContain("Check repository read access before retrying");
+    }
+  });
+
+  it.each(["requested", "publishing", "needs_confirmation"] as const)(
+    "keeps %s publication recovery exposed beside merged history",
+    (status) => {
+      const onRefresh = vi.fn();
+      const onConfirm = vi.fn();
+      paint({
+        pullRequests: [pullRequest({ state: "merged" })],
+        publication: publication({
+          locked: true,
+          result: {
+            requestId: "active-publication",
+            status,
+            message: "The original publication still needs attention.",
+            publisher: { source: "personal", accountId: 2, login: "alice-tools" },
+          },
+          confirmation:
+            status === "needs_confirmation"
+              ? {
+                  requestDigest: "a".repeat(64),
+                  generation: "personal-generation",
+                  account: { accountId: 2, login: "alice-tools" },
+                  repository: "synthetic/publication-demo",
+                  pushRepository: "alice-tools/publication-demo",
+                  branch: "feature/original",
+                  baseBranch: "main",
+                  sourceHeadCommit: "1".repeat(40),
+                  sourceIndexTree: "2".repeat(40),
+                  workspaceTree: "3".repeat(40),
+                }
+              : null,
+          onRefresh,
+          onConfirm: status === "needs_confirmation" ? onConfirm : undefined,
+        }),
+      });
+      const outcome = container.querySelector(".chat-pr__publication-outcome");
+      expect(outcome?.textContent).toContain("The original publication still needs attention.");
+      expect(outcome?.closest("details:not([open])")).toBeNull();
+      expect(container.querySelector(".chat-pr__publication-history")).toBeNull();
+      const action = container.querySelector<HTMLButtonElement>(".chat-pr__create");
+      expect(action?.disabled).toBe(false);
+      action?.click();
+      expect(status === "needs_confirmation" ? onConfirm : onRefresh).toHaveBeenCalledOnce();
     },
   );
 
@@ -269,7 +357,7 @@ describe("renderChatPullRequests", () => {
   });
 
   it.each([false, true])(
-    "keeps publication recovery inside the PR row after publication completed: %s",
+    "keeps publication recovery separate and expanded after publication completed: %s",
     (completed) => {
       const onPublish = vi.fn();
       const onRefresh = vi.fn();
@@ -300,9 +388,14 @@ describe("renderChatPullRequests", () => {
       expect(container.querySelectorAll(".chat-pr")).toHaveLength(1);
       expect(container.textContent).toContain("#103469");
       expect(container.textContent).toContain("Response lost.");
-      const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) =>
-          button.textContent?.trim() === (completed ? "Refresh publication" : "Retry publication"),
+      const recovery = container.querySelector(".chat-pr__publication-outcome");
+      expect(recovery?.closest("article")).toBeNull();
+      expect(recovery?.closest("details:not([open])")).toBeNull();
+      expect(container.querySelectorAll(".chat-pr__create")).toHaveLength(completed ? 0 : 1);
+      const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+        completed
+          ? button.getAttribute("aria-label") === "Refresh publication"
+          : button.textContent?.trim() === "Retry publication",
       );
       expect(action).toBeDefined();
       action?.click();
@@ -425,8 +518,15 @@ describe("renderChatPullRequests", () => {
       }),
     });
     const failure = container.querySelector('.chat-pr__publication-outcome[data-state="failed"]');
-    expect(failure?.textContent).toContain("GitHub publication failed.");
+    expect(failure?.textContent).toContain("Publication failed");
     expect(failure?.textContent).toContain("Check repository write access and retry.");
+    expect(failure?.closest("details:not([open])")).toBeNull();
+    const status = failure?.querySelector<HTMLDetailsElement>(
+      "details.chat-pr__publication-status",
+    );
+    expect(status?.open).toBe(false);
+    expect(status?.querySelector("summary")?.textContent?.trim()).toBe("Publication failed");
+    expect(failure?.closest("article")?.getAttribute("data-state")).toBe("branch");
     expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.textContent).toContain(
       "Choose a new publication",
     );

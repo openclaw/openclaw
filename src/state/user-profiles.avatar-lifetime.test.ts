@@ -11,16 +11,12 @@ import {
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
-import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import { retainUserProfileCatalog } from "./user-profile-list.js";
+import { setAvatar, setDisplayName } from "./user-profile-writes.worker.js";
 import { createProfileAvatarReader } from "./user-profiles-avatar.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
-import {
-  adoptTailscaleProfileAvatar,
-  ensureProfileForEmail,
-  setAvatar,
-  setDisplayName,
-} from "./user-profiles.js";
+import { adoptTailscaleProfileAvatar, ensureProfileForEmail } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -77,7 +73,7 @@ it.each([false, true])(
       expect(getProfileAvatar(profile.id, originalOptions)?.bytes).toEqual(
         fetched ? Uint8Array.from(bytes) : undefined,
       );
-      expect(listUserProfilesSync(options)).toEqual([
+      expect(readUserProfileSnapshotSync(options).profiles).toEqual([
         expect.objectContaining({ id: other.id, hasAvatar: false }),
       ]);
     } finally {

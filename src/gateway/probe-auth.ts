@@ -31,36 +31,6 @@ type GatewayProbeCredentialParams = {
   localPrecedence?: GatewayCredentialPrecedence;
 };
 
-// Probe auth adapts normal gateway credential precedence for reachability
-// checks. Local probes must not accidentally consume remote gateway credentials
-// from config when they are only checking the embedded/local gateway.
-function buildGatewayProbeCredentialPolicy(params: GatewayProbeCredentialParams) {
-  const cfg = resolveGatewayProbeCredentialConfig(params);
-  const plan =
-    params.mode === "local" && params.localPrecedence === "env-first"
-      ? createGatewayCredentialPlan({ config: cfg, env: params.env })
-      : undefined;
-  const activeLocalRef =
-    (plan?.localTokenCanWin && plan.localToken.hasSecretRef) ||
-    ((plan?.localPasswordCanWin || plan?.authMode === undefined) &&
-      plan?.localPassword.hasSecretRef);
-  return {
-    activeLocalRef,
-    config: cfg,
-    cfg,
-    env: params.env,
-    explicitAuth: params.explicitAuth,
-    urlOverride: params.urlOverride,
-    urlOverrideSource: params.urlOverrideSource,
-    modeOverride: params.mode,
-    mode: params.mode,
-    // Env-first is historical for plaintext, but an active SecretRef is an
-    // explicit trust choice and must never be bypassed by ambient credentials.
-    localPrecedence: activeLocalRef ? ("config-first" as const) : params.localPrecedence,
-    remoteTokenFallback: "remote-only" as const,
-  };
-}
-
 export function resolveGatewayProbeCredentialConfig(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
@@ -91,27 +61,21 @@ function hasExplicitProbeAuth(auth: { token?: string; password?: string }): bool
   return Boolean(auth.token || auth.password);
 }
 
-function buildUnresolvedProbeAuthWarning(path: string): string {
-  return `${path} SecretRef is unresolved in this command path; probing without configured auth credentials.`;
-}
-
 function resolveGatewayProbeWarning(error: unknown): string | undefined {
   if (!isGatewaySecretRefUnavailableError(error)) {
     throw error;
   }
-  return buildUnresolvedProbeAuthWarning(error.path);
+  return `${error.path} SecretRef is unresolved in this command path; probing without configured auth credentials.`;
 }
 
 /** Resolves synchronous probe auth, throwing when configured secrets cannot be read. */
-export function resolveGatewayProbeAuth(params: {
-  cfg: OpenClawConfig;
-  mode: "local" | "remote";
-  env?: NodeJS.ProcessEnv;
-  urlOverride?: string;
-  urlOverrideSource?: "cli" | "env";
-}): { token?: string; password?: string } {
-  const policy = buildGatewayProbeCredentialPolicy(params);
-  return resolveGatewayProbeCredentialsFromConfig(policy);
+export function resolveGatewayProbeAuth(
+  params: Omit<GatewayProbeCredentialParams, "explicitAuth" | "localPrecedence">,
+): { token?: string; password?: string } {
+  return resolveGatewayProbeCredentialsFromConfig({
+    ...params,
+    cfg: resolveGatewayProbeCredentialConfig(params),
+  });
 }
 
 async function resolveGatewayProbeAuthResolutionWithSecretInputs(
@@ -121,18 +85,26 @@ async function resolveGatewayProbeAuthResolutionWithSecretInputs(
   warning?: string;
   warningCode?: "SECRET_REF_REDACTED_VALUE";
 }> {
-  const policy = buildGatewayProbeCredentialPolicy(params);
+  const config = resolveGatewayProbeCredentialConfig(params);
+  const plan =
+    params.mode === "local" && params.localPrecedence === "env-first"
+      ? createGatewayCredentialPlan({ config, env: params.env })
+      : undefined;
+  const activeLocalRef =
+    (plan?.localTokenCanWin && plan.localToken.hasSecretRef) ||
+    ((plan?.localPasswordCanWin || plan?.authMode === undefined) &&
+      plan?.localPassword.hasSecretRef);
   const explicitAuth = resolveExplicitGatewayAuth(params.explicitAuth);
   if (
-    (params.mode === "remote" || policy.activeLocalRef) &&
+    (params.mode === "remote" || activeLocalRef) &&
     !hasExplicitProbeAuth(explicitAuth) &&
     !normalizeOptionalString(params.urlOverride)
   ) {
     // Remote and SecretRef-owned local probes must share their target's
     // credential owner so ambient auth cannot mask the configured secret.
     const resolved = await resolveGatewayProbeSurfaceAuth({
-      config: policy.config,
-      env: policy.env,
+      config,
+      env: params.env,
       surface: params.mode,
     });
     const warning = resolved.diagnostics?.join("\n");
@@ -152,23 +124,17 @@ async function resolveGatewayProbeAuthResolutionWithSecretInputs(
     };
   }
   const auth = await resolveGatewayCredentialsWithSecretInputs({
-    config: policy.config,
-    env: policy.env,
-    explicitAuth: policy.explicitAuth,
-    urlOverride: policy.urlOverride,
-    urlOverrideSource: policy.urlOverrideSource,
-    modeOverride: policy.modeOverride,
-    localPrecedence: policy.localPrecedence,
-    remoteTokenFallback: policy.remoteTokenFallback,
+    config,
+    env: params.env,
+    explicitAuth: params.explicitAuth,
+    urlOverride: params.urlOverride,
+    urlOverrideSource: params.urlOverrideSource,
+    modeOverride: params.mode,
+    // Active SecretRefs must not be bypassed by ambient plaintext credentials.
+    localPrecedence: activeLocalRef ? "config-first" : params.localPrecedence,
+    remoteTokenFallback: "remote-only",
   });
   return { auth };
-}
-
-/** Resolves probe auth with async SecretRef support. */
-export async function resolveGatewayProbeAuthWithSecretInputs(
-  params: GatewayProbeCredentialParams,
-): Promise<{ token?: string; password?: string }> {
-  return (await resolveGatewayProbeAuthResolutionWithSecretInputs(params)).auth;
 }
 
 /** Resolves probe auth without throwing for unavailable SecretRefs, returning a warning. */
@@ -219,14 +185,9 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(
 }
 
 /** Synchronous safe probe auth wrapper for config-only credential paths. */
-export function resolveGatewayProbeAuthSafe(params: {
-  cfg: OpenClawConfig;
-  mode: "local" | "remote";
-  env?: NodeJS.ProcessEnv;
-  explicitAuth?: ExplicitGatewayAuth;
-  urlOverride?: string;
-  urlOverrideSource?: "cli" | "env";
-}): {
+export function resolveGatewayProbeAuthSafe(
+  params: Omit<GatewayProbeCredentialParams, "localPrecedence">,
+): {
   auth: { token?: string; password?: string };
   warning?: string;
 } {

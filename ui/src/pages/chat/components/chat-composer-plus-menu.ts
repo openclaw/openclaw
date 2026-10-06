@@ -71,12 +71,18 @@ type MenuRoute = "mcp" | "plugins" | "skills";
 
 type ChatComposerPlusMenuProps = {
   attachments: ChatAttachmentControlsProps;
-  showCapabilities: boolean;
-  basePath: string;
+  capabilityMenu?: ChatComposerCapabilityMenuProps;
   disabled: boolean;
   open: boolean;
   view: ChatComposerPlusMenuView;
   toolOverrides: SessionToolOverrides | null | undefined;
+  rootToggles?: readonly ChatComposerRootToggle[];
+  onOpenChange: (open: boolean) => void;
+  onViewChange: (view: ChatComposerPlusMenuView) => void;
+};
+
+export type ChatComposerCapabilityMenuProps = {
+  basePath: string;
   skills: readonly ChatComposerMenuSkill[] | null;
   skillsLoading: boolean;
   skillsError: boolean;
@@ -91,10 +97,7 @@ type ChatComposerPlusMenuProps = {
   mutationBlockedReason: string | null;
   canAdmin: boolean;
   adminBlockedReason: string | null;
-  rootToggles?: readonly ChatComposerRootToggle[];
   addServerDialog?: TemplateResult | typeof nothing;
-  onOpenChange: (open: boolean) => void;
-  onViewChange: (view: ChatComposerPlusMenuView) => void;
   onLoadSkills: () => void;
   onPatchToolOverrides: (next: SessionToolOverrides | null) => void;
   onNavigate: (routeId: MenuRoute, options?: ApplicationNavigationOptions) => void;
@@ -102,18 +105,8 @@ type ChatComposerPlusMenuProps = {
   onOpenToolAccess?: (serverName: string) => void;
 };
 
-export type ChatComposerCapabilityMenuProps = Omit<
-  ChatComposerPlusMenuProps,
-  | "attachments"
-  | "disabled"
-  | "open"
-  | "view"
-  | "toolOverrides"
-  | "onOpenChange"
-  | "onViewChange"
-  | "showCapabilities"
-  | "rootToggles"
->;
+type ChatComposerPlusMenuContentProps = ChatComposerPlusMenuProps &
+  ChatComposerCapabilityMenuProps & { showCapabilities: boolean };
 
 function internalLink(href: string, label: string): TemplateResult {
   return html`<a
@@ -125,7 +118,7 @@ function internalLink(href: string, label: string): TemplateResult {
   >`;
 }
 
-function renderRootView(props: ChatComposerPlusMenuProps) {
+function renderRootView(props: ChatComposerPlusMenuContentProps) {
   const overrideCount = countSessionToolOverrides(props.toolOverrides);
   const connectorCount = props.mcpServers.filter((server) =>
     resolveToolOverrideState(
@@ -151,7 +144,7 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
         ? t("chat.composer.menu.webSearchGloballyDisabled")
         : "");
   const canUpload = uploadsEnabled(props.attachments.uploadConfig);
-  const attachments = canUpload ? renderChatAttachmentMenuOptions(icons.paperclip) : nothing;
+  const attachments = canUpload ? renderChatAttachmentMenuOptions() : nothing;
   const rootToggles = props.rootToggles ?? [];
   if (!props.showCapabilities && rootToggles.length === 0) {
     return attachments;
@@ -163,34 +156,32 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
     ${rootToggles.map(renderCapabilityToggleRow)}
     ${
       props.showCapabilities
-        ? html`<wa-dropdown-item class="agent-chat__capability-menu-item" value="open-skills">
-              <span slot="icon" aria-hidden="true">${icons.book}</span>
-              <span>${t("chat.composer.menu.skills")}</span>
-              <span slot="details" class="agent-chat__capability-menu-details">
-                ${
+        ? html`${(
+              [
+                [
+                  "skills",
+                  icons.book,
                   hasSkillOverrides
-                    ? html`<span class="agent-chat__capability-menu-badge"
-                        >${t("chat.composer.menu.enabledCount", {
-                          count: String(enabledSkillCount),
-                        })}</span
-                      >`
-                    : nothing
-                }
-                <span class="agent-chat__capability-menu-chevron" aria-hidden="true"
-                  >${icons.chevronRight}</span
-                >
-              </span>
-            </wa-dropdown-item>
-            <wa-dropdown-item class="agent-chat__capability-menu-item" value="open-connectors">
-              <span slot="icon" aria-hidden="true">${icons.plug}</span>
-              <span>${t("chat.composer.menu.connectors")}</span>
-              <span slot="details" class="agent-chat__capability-menu-details">
-                <span class="agent-chat__capability-menu-badge">${connectorCount}</span>
-                <span class="agent-chat__capability-menu-chevron" aria-hidden="true"
-                  >${icons.chevronRight}</span
-                >
-              </span>
-            </wa-dropdown-item>
+                    ? t("chat.composer.menu.enabledCount", { count: String(enabledSkillCount) })
+                    : null,
+                ],
+                ["connectors", icons.plug, connectorCount],
+              ] as const
+            ).map(
+              ([view, icon, badge]) => html`<wa-dropdown-item
+                class="agent-chat__capability-menu-item"
+                value=${`open-${view}`}
+              >
+                <span slot="icon" aria-hidden="true">${icon}</span>
+                <span>${t(`chat.composer.menu.${view}`)}</span>
+                <span slot="details" class="agent-chat__capability-menu-details">
+                  ${badge === null ? nothing : html`<span class="agent-chat__capability-menu-badge">${badge}</span>`}
+                  <span class="agent-chat__capability-menu-chevron" aria-hidden="true"
+                    >${icons.chevronRight}</span
+                  >
+                </span>
+              </wa-dropdown-item>`,
+            )}
             ${renderCapabilityToggleRow({
               value: "toggle-web-search",
               label: t("chat.composer.menu.webSearch"),
@@ -241,7 +232,7 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
   `;
 }
 
-function renderSkillView(props: ChatComposerPlusMenuProps) {
+function renderSkillView(props: ChatComposerPlusMenuContentProps) {
   const disabledReason = props.mutationBlockedReason;
   const rows = props.skillsLoading
     ? renderCapabilityMenuState(t("chat.composer.menu.loadingSkills"), "status")
@@ -275,7 +266,7 @@ function renderSkillView(props: ChatComposerPlusMenuProps) {
   `;
 }
 
-function renderConnectorView(props: ChatComposerPlusMenuProps) {
+function renderConnectorView(props: ChatComposerPlusMenuContentProps) {
   const disabledReason = props.mutationBlockedReason;
   const rows =
     props.mcpServers.length === 0
@@ -333,14 +324,13 @@ function renderConnectorView(props: ChatComposerPlusMenuProps) {
   `;
 }
 
-function toolsForServer(
-  result: ToolsEffectiveResult | null,
-  serverName: string,
-): (ToolsEffectiveEntry & { mcpToolName: string })[] {
+type McpToolEntry = ToolsEffectiveEntry & { mcpServer: string; mcpToolName: string };
+
+function toolsForServer(result: ToolsEffectiveResult | null, serverName: string): McpToolEntry[] {
   return (result?.groups ?? [])
     .flatMap((group) => group.tools)
     .filter(
-      (tool): tool is ToolsEffectiveEntry & { mcpToolName: string } =>
+      (tool): tool is McpToolEntry =>
         tool.source === "mcp" && tool.mcpServer === serverName && Boolean(tool.mcpToolName),
     );
 }
@@ -358,10 +348,10 @@ function mcpDiscoveryNotice(result: ToolsEffectiveResult | null, serverName: str
   );
 }
 
-function isToolDenied(props: ChatComposerPlusMenuProps, tool: ToolsEffectiveEntry): boolean {
+function isToolDenied(props: ChatComposerPlusMenuContentProps, tool: McpToolEntry): boolean {
   const serverName = tool.mcpServer;
   const rawToolName = tool.mcpToolName;
-  if (!serverName || !rawToolName) {
+  if (!serverName) {
     return false;
   }
   if (props.toolOverrides != null) {
@@ -372,7 +362,7 @@ function isToolDenied(props: ChatComposerPlusMenuProps, tool: ToolsEffectiveEntr
   return tool.deniedBySession === true;
 }
 
-function renderToolAccessView(props: ChatComposerPlusMenuProps, serverName: string) {
+function renderToolAccessView(props: ChatComposerPlusMenuContentProps, serverName: string) {
   const tools = toolsForServer(props.toolsEffectiveResult, serverName);
   const discoveryNotice =
     tools.length === 0 ? mcpDiscoveryNotice(props.toolsEffectiveResult, serverName) : null;
@@ -425,7 +415,7 @@ function renderToolAccessView(props: ChatComposerPlusMenuProps, serverName: stri
 
 function handleMenuSelection(
   event: CustomEvent<{ item: { value?: string } }>,
-  props: ChatComposerPlusMenuProps,
+  props: ChatComposerPlusMenuContentProps,
 ) {
   const value = event.detail.item.value ?? "";
   if (uploadsEnabled(props.attachments.uploadConfig) && handleChatAttachmentMenuSelection(event)) {
@@ -572,7 +562,7 @@ function handleMenuSelection(
   }
 }
 
-function renderChatComposerPlusMenuContent(props: ChatComposerPlusMenuProps) {
+function renderChatComposerPlusMenuContent(props: ChatComposerPlusMenuContentProps) {
   const hasOverrides = countSessionToolOverrides(props.toolOverrides) > 0;
   const view = props.showCapabilities ? props.view : "root";
   const content =
@@ -612,17 +602,7 @@ function renderChatComposerPlusMenuContent(props: ChatComposerPlusMenuProps) {
   `;
 }
 
-export function renderChatComposerPlusMenu(props: {
-  attachments: ChatAttachmentControlsProps;
-  capabilityMenu?: ChatComposerCapabilityMenuProps;
-  disabled: boolean;
-  open: boolean;
-  view: ChatComposerPlusMenuView;
-  toolOverrides: SessionToolOverrides | null | undefined;
-  rootToggles?: readonly ChatComposerRootToggle[];
-  onOpenChange: (open: boolean) => void;
-  onViewChange: (view: ChatComposerPlusMenuView) => void;
-}) {
+export function renderChatComposerPlusMenu(props: ChatComposerPlusMenuProps) {
   const capabilityMenu = props.capabilityMenu;
   if (
     !capabilityMenu &&

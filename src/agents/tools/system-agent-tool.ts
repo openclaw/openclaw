@@ -11,6 +11,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import {
   isSystemAgentNavigationOperation,
   type SystemAgentNavigationOperation,
+  type SystemAgentOperation,
 } from "../../system-agent/operation-types.js";
 import {
   executeSystemAgentOperation,
@@ -18,7 +19,6 @@ import {
   SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF,
   SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
   secretStoreNameForConfigPath,
-  type SystemAgentOperation,
 } from "../../system-agent/operations.js";
 import {
   hashSystemAgentOperation,
@@ -249,18 +249,6 @@ const SystemAgentToolSchema = Type.Object({
   ),
 });
 
-function createCaptureRuntime(): RuntimeEnv & { read: () => string } {
-  const lines: string[] = [];
-  return {
-    log: (...args) => lines.push(args.join(" ")),
-    error: (...args) => lines.push(args.join(" ")),
-    exit: (code) => {
-      throw new Error(`openclaw operation exited with code ${String(code)}`);
-    },
-    read: () => lines.join("\n").trim(),
-  };
-}
-
 function requireParam(params: Record<string, unknown>, name: string): string {
   const value = readToolStringParam(params, name);
   if (!value) {
@@ -287,6 +275,16 @@ function readSetupTarget(
 
 function operationForAction(params: Record<string, unknown>): SystemAgentOperation {
   const action = readToolStringParam(params, "action", { required: true });
+  const optionalStrings = <K extends string>(...keys: K[]): Partial<Record<K, string>> => {
+    const fields: Partial<Record<K, string>> = {};
+    for (const key of keys) {
+      const value = readToolStringParam(params, key);
+      if (value) {
+        fields[key] = value;
+      }
+    }
+    return fields;
+  };
   switch (action) {
     case "status":
     case "models":
@@ -302,10 +300,8 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       return { kind: "config-validate" };
     case "config_get":
       return { kind: "config-get", path: requireParam(params, "path") };
-    case "config_schema": {
-      const configPath = readToolStringParam(params, "path");
-      return { kind: "config-schema", ...(configPath ? { path: configPath } : {}) };
-    }
+    case "config_schema":
+      return { kind: "config-schema", ...optionalStrings("path") };
     case "gateway_status":
       return { kind: "gateway-status" };
     case "plugin_list":
@@ -320,21 +316,12 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       return { kind: "gateway-config-setup" };
     case "import_memory":
       return { kind: "memory-import" };
-    case "configure_model_provider": {
-      const workspace = readToolStringParam(params, "workspace");
-      return { kind: "model-setup", ...(workspace ? { workspace } : {}) };
-    }
+    case "configure_model_provider":
+      return { kind: "model-setup", ...optionalStrings("workspace") };
     case "manage_model_accounts":
       return { kind: "model-accounts" };
-    case "open_agent": {
-      const agentId = readToolStringParam(params, "agentId");
-      const workspace = readToolStringParam(params, "workspace");
-      return {
-        kind: "open-tui",
-        ...(agentId ? { agentId } : {}),
-        ...(workspace ? { workspace } : {}),
-      };
-    }
+    case "open_agent":
+      return { kind: "open-tui", ...optionalStrings("agentId", "workspace") };
     case "open_setup": {
       const target = readSetupTarget(params);
       const channel = readToolStringParam(params, "channel")?.toLowerCase();
@@ -377,21 +364,14 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       }
       return { kind: "plugin-activate-artifact", path: artifactPath, sha256 };
     }
-    case "setup": {
-      const workspace = readToolStringParam(params, "workspace");
-      const model = readToolStringParam(params, "model");
-      return {
-        kind: "setup",
-        ...(workspace ? { workspace } : {}),
-        ...(model ? { model } : {}),
-      };
-    }
+    case "setup":
+      return { kind: "setup", ...optionalStrings("workspace", "model") };
     case "set_default_model": {
-      const agentId = readToolStringParam(params, "agentId");
+      const optional = optionalStrings("agentId");
       return {
         kind: "set-default-model",
         model: requireParam(params, "model"),
-        ...(agentId ? { agentId } : {}),
+        ...optional,
       };
     }
     case "create_agent": {
@@ -399,31 +379,23 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       if (params.role !== undefined && !role) {
         throw new ToolInputError(`openclaw: unknown role; choose ${listAgentRoles().join(", ")}`);
       }
-      const workspace = readToolStringParam(params, "workspace");
-      const name = readToolStringParam(params, "name");
-      const purpose = readToolStringParam(params, "purpose");
-      const model = readToolStringParam(params, "model");
+      const workspace = optionalStrings("workspace");
+      const identity = optionalStrings("name", "purpose");
+      const model = optionalStrings("model");
       return {
         kind: "create-agent",
         agentId: requireParam(params, "agentId"),
-        ...(name ? { name } : {}),
-        ...(purpose ? { purpose } : {}),
+        ...identity,
         ...(role ? { role } : {}),
-        ...(workspace ? { workspace } : {}),
-        ...(model ? { model } : {}),
+        ...workspace,
+        ...model,
       };
     }
-    case "create_team": {
-      const coordinatorId = readToolStringParam(params, "coordinatorId");
-      const prefix = readToolStringParam(params, "prefix");
-      const workspaceRoot = readToolStringParam(params, "workspaceRoot");
+    case "create_team":
       return {
         kind: "create-team",
-        ...(coordinatorId ? { coordinatorId } : {}),
-        ...(prefix ? { prefix } : {}),
-        ...(workspaceRoot ? { workspaceRoot } : {}),
+        ...optionalStrings("coordinatorId", "prefix", "workspaceRoot"),
       };
-    }
     case "config_unset":
       return { kind: "config-unset", path: requireParam(params, "path") };
     case "config_set":
@@ -610,7 +582,14 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
           {},
         );
       }
-      const capture = createCaptureRuntime();
+      const lines: string[] = [];
+      const capture: RuntimeEnv = {
+        log: (...values) => lines.push(values.join(" ")),
+        error: (...values) => lines.push(values.join(" ")),
+        exit: (code) => {
+          throw new Error(`openclaw operation exited with code ${String(code)}`);
+        },
+      };
       try {
         await executeSystemAgentOperation(operation, capture, {
           approved: false,
@@ -624,11 +603,14 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return textResult([capture.read(), `error: ${message}`].filter(Boolean).join("\n"), {
-          error: true,
-        });
+        return textResult(
+          [lines.join("\n").trim(), `error: ${message}`].filter(Boolean).join("\n"),
+          {
+            error: true,
+          },
+        );
       }
-      return textResult(capture.read() || "done", {});
+      return textResult(lines.join("\n").trim() || "done", {});
     },
   };
 }

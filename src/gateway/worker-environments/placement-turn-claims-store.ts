@@ -1,23 +1,30 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assertSessionEntryCurrentAdmission } from "../../config/sessions/session-entry-current-admission.js";
+import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import {
-  createSqliteWorkerOperationAdmission,
-  type SqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import { isCurrentPlacementTurnClaim, type WorkerSessionTurnOwner } from "./placement-record.js";
-import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
+import { isCurrentPlacementTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
+import {
+  stagePlacementTurnClaimWorkerPublication,
+  stagePlacementWorkspaceResultWorkerPublication,
+} from "./placement-turn-authority.js";
 import { prepareWorkerTurnClaimClosed } from "./placement-turn-claim-events.js";
 import { ActiveTurnClaimError, type createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import type {
+  PlacementAckCursorInput,
+  PlacementTurnClaimCurrentCheck,
   PlacementTurnClaimReceipt,
-  PlacementTurnClaimWorkerOperations,
-} from "./placement-turn-claims.worker-contract.js";
+} from "./placement-turn-claims.types.js";
+import type { PlacementTurnClaimWorkerOperations } from "./placement-turn-claims.worker-contract.js";
+import { createPlacementWorkerMutation } from "./placement-worker-mutation.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
+import { reserveWorkerEnvironmentNativePublication } from "./store-native-publication.js";
+import { boundedWorkerError } from "./worker-error.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
 const log = createSubsystemLogger("gateway/placement");
 
@@ -32,8 +39,21 @@ function isReceipt(value: unknown): value is PlacementTurnClaimReceipt {
         typeof value.placement.agentId === "string" &&
         typeof value.placement.sessionKey === "string")) &&
     (value.claim === undefined ||
-      (isRecord(value.claim) && typeof value.claim.claimId === "string"))
+      (isRecord(value.claim) && typeof value.claim.claimId === "string")) &&
+    (value.closedClaim === undefined ||
+      (isRecord(value.closedClaim) && typeof value.closedClaim.claimId === "string")) &&
+    (value.environmentActivation === undefined ||
+      (isRecord(value.environmentActivation) &&
+        typeof value.environmentActivation.environmentId === "string" &&
+        typeof value.environmentActivation.lastActivatedAtMs === "number"))
   );
+}
+
+function requirePlacement(receipt: PlacementTurnClaimReceipt, operation: string) {
+  if (!receipt.placement) {
+    throw new Error(`${operation} receipt is missing its placement`);
+  }
+  return receipt.placement;
 }
 
 export function createPlacementTurnClaimWorkerOps(runtime: {
@@ -45,144 +65,190 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
   async function execute(
     input: SqliteWorkerCommand<PlacementTurnClaimWorkerOperations>,
     assertCurrent?: () => void,
+    current?: PlacementTurnClaimCurrentCheck,
+    beforePublish?: (claim: WorkerSessionTurnClaim) => void,
   ): Promise<PlacementTurnClaimReceipt> {
-    const requested = input.input.claim;
-    const owner: WorkerSessionTurnOwner =
-      requested.owner.kind === "local"
-        ? {
-            kind: "local",
-            environmentId: requested.owner.environmentId,
-            ownerEpoch: requested.owner.ownerEpoch,
-          }
-        : {
-            kind: "worker",
-            environmentId: requested.owner.environmentId,
-            ownerEpoch: requested.owner.ownerEpoch,
-          };
-    const claim = {
-      sessionId: requested.sessionId,
-      claimId: requested.claimId,
-      runId: requested.runId,
-      owner,
-    };
-    const command: SqliteWorkerCommand<PlacementTurnClaimWorkerOperations> =
-      input.type === "placementTurns.claim"
-        ? {
-            type: input.type,
-            input: {
-              nowMs: input.input.nowMs,
-              claim: {
-                ...claim,
-                agentId: input.input.claim.agentId,
-                sessionKey: input.input.claim.sessionKey,
-              },
-            },
-          }
-        : input.type === "placementTurns.recoverWorkspace"
-          ? {
-              type: input.type,
-              input: {
-                nowMs: input.input.nowMs,
-                gatewayInstanceId: input.input.gatewayInstanceId,
-                claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
-              },
-            }
-          : input.type === "placementTurns.handoffRuntimeRefreshResult"
-            ? {
-                type: input.type,
-                input: {
-                  nowMs: input.input.nowMs,
-                  claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
-                  expectedGeneration: input.input.expectedGeneration,
-                  gatewayInstanceId: input.input.gatewayInstanceId,
-                },
-              }
-            : {
-                type: input.type,
-                input: {
-                  nowMs: input.input.nowMs,
-                  claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
-                },
-              };
-    const close =
-      command.type === "placementTurns.release" || command.type === "placementTurns.releaseIfOwned"
+    const entryCheck = current?.sessionEntry;
+    const capturedEntryCheck = entryCheck
+      ? {
+          source: { ...entryCheck.source },
+          assertCurrent: (facts: SessionEntryCurrentFacts | undefined) =>
+            entryCheck.assertCurrent(facts),
+        }
+      : undefined;
+    const command = { ...input };
+    const sessionId =
+      "claim" in input.input
+        ? input.input.claim.sessionId
+        : "pending" in input.input
+          ? input.input.pending.sessionId
+          : input.input.sessionId;
+    if ("claim" in command.input) {
+      const { claimId, runId, owner: requestedOwner } = command.input.claim;
+      const { kind, environmentId, ownerEpoch } = requestedOwner;
+      const owner: typeof requestedOwner =
+        kind === "local"
+          ? { kind, environmentId, ownerEpoch }
+          : { kind, environmentId, ownerEpoch };
+      // Host callers may carry authority callbacks; only claim data crosses the worker boundary.
+      const claim = { sessionId, claimId, runId, owner };
+      if (
+        command.type === "placementTurns.claim" ||
+        command.type === "placementTurns.claimReclaimResult" ||
+        command.type === "placementTurns.claimMutationResult"
+      ) {
+        const { agentId, sessionKey } = command.input.claim;
+        command.input = { ...command.input, claim: { ...claim, agentId, sessionKey } };
+      } else {
+        const { placementGeneration } = command.input.claim;
+        command.input = { ...command.input, claim: { ...claim, placementGeneration } };
+      }
+    } else {
+      command.input = structuredClone(command.input);
+    }
+    if (
+      command.type === "placementTurns.recordStagedResult" ||
+      command.type === "placementTurns.updateWorkspaceBaseManifest" ||
+      command.type === "placementTurns.claimMutationResult" ||
+      command.type === "placementTurns.acceptResult" ||
+      command.type === "placementTurns.completeResult"
+    ) {
+      command.input = { ...command.input, sessionEntryCurrentSource: capturedEntryCheck?.source };
+    }
+    let close =
+      command.type === "placementTurns.release" ||
+      command.type === "placementTurns.releaseIfOwned" ||
+      command.type === "placementTurns.completeResult" ||
+      command.type === "placementTurns.cancelResult"
         ? prepareWorkerTurnClaimClosed(runtime.path, command.input.claim)
         : undefined;
     let reportedContention = false;
     for (;;) {
-      let admission: SqliteWorkerOperationAdmission | undefined;
-      let publication: ReturnType<typeof stagePlacementTurnClaimWorkerPublication> | undefined;
-      let entered = false;
-      let granted = false;
       let prepared: PlacementTurnClaimReceipt | undefined;
       let published = false;
-      const check = () => {
-        context.admission.assertCurrent();
-        assertCurrent?.();
-      };
-      const publish = (receipt: PlacementTurnClaimReceipt) => {
-        if (!published) {
+      const mutation = createPlacementWorkerMutation({
+        context,
+        label: "Placement claim",
+        nativeLocation: runtime.path,
+        assertCurrent,
+        admissionFacts(request) {
+          if (request.stage !== "transaction" && request.stage !== "commit") {
+            return request.facts;
+          }
+          const admitted = assertSessionEntryCurrentAdmission(request, capturedEntryCheck);
+          if (current) {
+            if (!isReceipt(admitted.facts)) {
+              throw new Error("Placement admission has no current placement facts");
+            }
+            current.assertPlacementCurrent(admitted.facts.placement, admitted.facts.placementMove);
+          }
+          return admitted.facts;
+        },
+        readReceipt: (facts) => (isReceipt(facts) ? facts : undefined),
+        stageCommit(facts) {
+          if (!isReceipt(facts)) {
+            throw new Error("Placement claim commit has no receipt");
+          }
+          prepared = facts;
+          if (command.type === "placementTurns.releaseIfOwned" && !facts.placement) {
+            return undefined;
+          }
+          if (facts.claim) {
+            beforePublish?.(facts.claim);
+          }
+          const workspaceOnly =
+            command.type === "placementTurns.updateAckCursors" ||
+            command.type === "placementTurns.recordStagedResult" ||
+            command.type === "placementTurns.updateWorkspaceBaseManifest" ||
+            command.type === "placementTurns.markResultPending" ||
+            command.type === "placementTurns.acceptResult" ||
+            command.type === "placementTurns.handoffResult" ||
+            command.type === "placementTurns.abandonResult";
+          if (facts.placement && facts.placement.sessionId !== sessionId) {
+            throw new Error("Workspace result receipt has a different owner");
+          }
+          if (facts.closedClaim) {
+            if (facts.closedClaim.sessionId !== sessionId) {
+              throw new Error("Placement closure receipt has a different owner");
+            }
+            close = prepareWorkerTurnClaimClosed(runtime.path, facts.closedClaim);
+          }
+          const resultFacts =
+            facts.placement && facts.workspaceResult !== undefined
+              ? { placement: facts.placement, pendingResult: facts.workspaceResult ?? undefined }
+              : undefined;
+          const activation = facts.environmentActivation;
+          if (
+            activation &&
+            (facts.placement?.state !== "active" ||
+              facts.placement.environmentId !== activation.environmentId)
+          ) {
+            throw new Error("Placement activation receipt has a different environment owner");
+          }
+          const publication =
+            facts.placement && !workspaceOnly
+              ? stagePlacementTurnClaimWorkerPublication(
+                  context.admission.identity,
+                  facts.placement,
+                  resultFacts,
+                )
+              : stagePlacementWorkspaceResultWorkerPublication(
+                  context.admission.identity,
+                  sessionId,
+                  resultFacts,
+                );
+          if (!activation) {
+            return publication;
+          }
+          const publishEnvironment = reserveWorkerEnvironmentNativePublication(
+            context.admission.identity,
+          );
+          return {
+            ...publication,
+            commit() {
+              publishEnvironment?.(activation.environmentId, {
+                lastActivatedAtMs: activation.lastActivatedAtMs,
+              });
+              publication.commit();
+            },
+          };
+        },
+        publish(receipt) {
+          if (published) {
+            return;
+          }
           published = true;
-          publication?.commit();
           if (receipt.placement) {
             close?.();
-            sessionChanges.emit({
-              agentId: receipt.placement.agentId,
-              sessionKey: receipt.placement.sessionKey,
-            });
-          }
-        }
-        return receipt;
-      };
-      try {
-        return await runOpenClawStateWorkerOperation(
-          context,
-          async (scope) => publish(await scope.execute(command)),
-          {
-            assertCurrent: check,
-            createAdmission: () => {
-              admission = createSqliteWorkerOperationAdmission((request, grant) => {
-                check();
-                if (request.stage === "commit") {
-                  if (!isReceipt(request.facts)) {
-                    throw new Error("Placement claim commit has no receipt");
-                  }
-                  prepared = request.facts;
-                  if (request.facts.placement) {
-                    publication = stagePlacementTurnClaimWorkerPublication(
-                      context.admission.identity,
-                      request.facts.placement,
-                    );
-                  }
-                }
-                if (!grant()) {
-                  publication?.rollback();
-                  throw new Error("Placement claim admission expired");
-                }
-                entered ||= request.stage === "transaction";
-                granted ||= request.stage === "commit";
+            if (receipt.environmentActivation) {
+              sessionChanges.emit({ all: true, scope: "worker-environments" });
+            }
+            const notifySession =
+              command.type !== "placementTurns.transition" &&
+              command.type !== "placementTurns.startReconcile" &&
+              command.type !== "placementTurns.fail" &&
+              (command.type !== "placementTurns.startDrain" ||
+                command.input.workspaceBaseManifestRef !== undefined);
+            if (notifySession) {
+              sessionChanges.emit({
+                agentId: receipt.placement.agentId,
+                sessionKey: receipt.placement.sessionKey,
               });
-              return { nativeLocations: [runtime.path], admission };
-            },
-          },
-        );
-      } catch (error) {
-        const committed = admission?.committed ?? admission?.settlement?.committed;
-        if (committed && isReceipt(committed.facts)) {
-          // A committed claim must reach its caller so ordinary settlement can release it.
-          return publish(committed.facts);
-        }
-        if (!granted || admission?.settlement?.kind === "completed") {
-          publication?.rollback();
-        } else if (command.type === "placementTurns.handoffRuntimeRefreshResult") {
-          // An uncertain handoff requires fresh recovery authority; never replay its write.
-          publication?.invalidate();
-        } else {
-          if (command.type === "placementTurns.recoverWorkspace") {
-            // An unchanged claim does not prove its result fence committed. Recovery
-            // rereads pending results on the next pass; never release an uncertain owner.
-            publication?.rollback();
-            throw error;
+            }
+          }
+        },
+        async recoverUnknown(error, publication) {
+          if (
+            command.type !== "placementTurns.claim" &&
+            command.type !== "placementTurns.release" &&
+            command.type !== "placementTurns.releaseIfOwned"
+          ) {
+            publication?.invalidate();
+            throw new AcceptedWorkspacePublicationIndeterminateError(
+              "commit",
+              error,
+              new Error("Workspace result settlement is unavailable"),
+            );
           }
           // Native settlement precedes readback. Never replay an uncertain claim or release.
           const reply = await (async () => {
@@ -233,16 +299,21 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
               : !placement || !isCurrentPlacementTurnClaim(placement, command.input.claim)
           ) {
             if (prepared) {
-              return publish(prepared);
+              return prepared;
             }
           }
           publication?.rollback();
-        }
+          return undefined;
+        },
+      });
+      try {
+        return await mutation.run((scope) => scope.execute(command));
+      } catch (error) {
         if (
           command.type === "placementTurns.releaseIfOwned" &&
-          !entered &&
-          !granted &&
-          admission?.settlement?.kind !== "unknown" &&
+          !mutation.transactionGranted &&
+          !mutation.commitGranted &&
+          mutation.settlement?.kind !== "unknown" &&
           isSqliteLockError(error)
         ) {
           // The worker never admitted a commit. Keep this exact cleanup owner alive;
@@ -252,21 +323,249 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
           if (!reportedContention) {
             reportedContention = true;
             log.warn("Turn claim release is waiting for the state database", {
-              sessionId: claim.sessionId,
-              runId: claim.runId,
+              sessionId: command.input.claim.sessionId,
+              runId: command.input.claim.runId,
               error,
             });
           }
           continue;
         }
         if (error instanceof Error && error.name === "ActiveTurnClaimError") {
-          throw new ActiveTurnClaimError(command.input.claim.sessionId);
+          throw new ActiveTurnClaimError(sessionId);
         }
         throw error;
       }
     }
   }
   return {
+    async transition(
+      input: Omit<
+        PlacementTurnClaimWorkerOperations["placementTurns.transition"]["input"],
+        "nowMs"
+      >,
+      assertCurrent?: () => void,
+    ) {
+      const receipt = await execute(
+        { type: "placementTurns.transition", input: { ...input, nowMs: runtime.now?.() } },
+        assertCurrent,
+      );
+      return requirePlacement(receipt, "Placement transition");
+    },
+    async startDrain(
+      input: Omit<
+        PlacementTurnClaimWorkerOperations["placementTurns.startDrain"]["input"],
+        "nowMs"
+      >,
+      assertCurrent?: () => void,
+    ) {
+      const receipt = await execute(
+        { type: "placementTurns.startDrain", input: { ...input, nowMs: runtime.now?.() } },
+        assertCurrent,
+      );
+      return requirePlacement(receipt, "Placement drain");
+    },
+    async startReconcile(
+      input: Omit<
+        PlacementTurnClaimWorkerOperations["placementTurns.startReconcile"]["input"],
+        "nowMs"
+      >,
+      assertCurrent?: () => void,
+    ) {
+      const receipt = await execute(
+        { type: "placementTurns.startReconcile", input: { ...input, nowMs: runtime.now?.() } },
+        assertCurrent,
+      );
+      return requirePlacement(receipt, "Placement reconciliation");
+    },
+    async fail(
+      input: Omit<PlacementTurnClaimWorkerOperations["placementTurns.fail"]["input"], "nowMs">,
+      assertCurrent?: () => void,
+    ) {
+      const receipt = await execute(
+        { type: "placementTurns.fail", input: { ...input, nowMs: runtime.now?.() } },
+        assertCurrent,
+      );
+      return requirePlacement(receipt, "Placement failure");
+    },
+    async failWorkspaceResultAndReleaseTurn(
+      pending: WorkerWorkspacePendingResult,
+      error: unknown,
+      assertCurrent?: () => void,
+    ) {
+      const receipt = await execute(
+        {
+          type: "placementTurns.failResult",
+          input: { pending, recoveryError: boundedWorkerError(error), nowMs: runtime.now?.() },
+        },
+        assertCurrent,
+      );
+      return requirePlacement(receipt, "Workspace result failure");
+    },
+    async claimReclaimWorkspaceResult(
+      input: Parameters<Claims["claimReclaimWorkspaceResult"]>[0],
+      beforePublish?: (claim: WorkerSessionTurnClaim) => void,
+      assertCurrent?: () => void,
+    ) {
+      const receipt = await execute(
+        {
+          type: "placementTurns.claimReclaimResult",
+          input: { claim: input, gatewayInstanceId: runtime.instanceId, nowMs: runtime.now?.() },
+        },
+        assertCurrent,
+        undefined,
+        beforePublish,
+      );
+      if (!receipt.claim) {
+        throw new Error("Workspace result claim receipt is missing its claim");
+      }
+      return receipt.claim;
+    },
+    async claimWorkspaceMutationResult(
+      input: Parameters<Claims["claimWorkspaceMutationResult"]>[0],
+      assertCurrent?: () => void,
+      current?: PlacementTurnClaimCurrentCheck,
+    ) {
+      const receipt = await execute(
+        {
+          type: "placementTurns.claimMutationResult",
+          input: {
+            claim: { ...input, runId: input.claimId },
+            gatewayInstanceId: runtime.instanceId,
+            nowMs: runtime.now?.(),
+          },
+        },
+        assertCurrent,
+        current,
+      );
+      if (!receipt.claim) {
+        throw new Error("Workspace result claim receipt is missing its claim");
+      }
+      return receipt.claim;
+    },
+    async markWorkspaceResultPending(claim: WorkerSessionTurnClaim, assertCurrent?: () => void) {
+      await execute(
+        {
+          type: "placementTurns.markResultPending",
+          input: { claim, gatewayInstanceId: runtime.instanceId, nowMs: runtime.now?.() },
+        },
+        assertCurrent,
+      );
+    },
+    async acceptWorkspaceResult(
+      claim: WorkerSessionTurnClaim,
+      assertCurrent?: () => void,
+      current?: PlacementTurnClaimCurrentCheck,
+    ) {
+      await execute(
+        { type: "placementTurns.acceptResult", input: { claim, nowMs: runtime.now?.() } },
+        assertCurrent,
+        current,
+      );
+    },
+    async handoffWorkspaceResultRecovery(
+      claim: WorkerSessionTurnClaim,
+      assertCurrent?: () => void,
+    ) {
+      await execute(
+        {
+          type: "placementTurns.handoffResult",
+          input: { claim, gatewayInstanceId: runtime.instanceId, nowMs: runtime.now?.() },
+        },
+        assertCurrent,
+      );
+    },
+    async abandonWorkspaceResult(
+      pending: WorkerWorkspacePendingResult,
+      assertCurrent?: () => void,
+    ) {
+      await execute({ type: "placementTurns.abandonResult", input: { pending } }, assertCurrent);
+    },
+    async startWorkspaceResultDrain(claim: WorkerSessionTurnClaim, assertCurrent?: () => void) {
+      const receipt = await execute(
+        { type: "placementTurns.drainResult", input: { claim, nowMs: runtime.now?.() } },
+        assertCurrent,
+      );
+      return requirePlacement(receipt, "Workspace result drain");
+    },
+    async completeWorkspaceResultAndReleaseTurn(
+      claim: WorkerSessionTurnClaim,
+      assertCurrent?: () => void,
+      current?: PlacementTurnClaimCurrentCheck,
+    ) {
+      const receipt = await execute(
+        { type: "placementTurns.completeResult", input: { claim, nowMs: runtime.now?.() } },
+        assertCurrent,
+        current,
+      );
+      return requirePlacement(receipt, "Workspace result completion");
+    },
+    async cancelWorkspaceResultAndReleaseTurn(
+      claim: WorkerSessionTurnClaim,
+      options?: { reason: "node-disconnect" },
+      assertCurrent?: () => void,
+    ) {
+      const receipt = await execute(
+        {
+          type: "placementTurns.cancelResult",
+          input: {
+            claim,
+            reason: options?.reason,
+            gatewayInstanceId: runtime.instanceId,
+            nowMs: runtime.now?.(),
+          },
+        },
+        assertCurrent,
+      );
+      return requirePlacement(receipt, "Workspace result cancellation");
+    },
+    async updateAckCursors(input: PlacementAckCursorInput, assertCurrent?: () => void) {
+      const receipt = await execute(
+        {
+          type: "placementTurns.updateAckCursors",
+          input: { ...input, gatewayInstanceId: runtime.instanceId, nowMs: runtime.now?.() },
+        },
+        assertCurrent,
+        {
+          assertPlacementCurrent(placement) {
+            if (!placement || !isCurrentPlacementTurnClaim(placement, input.claim)) {
+              throw new Error(`Cannot ACK stale worker turn for session ${input.claim.sessionId}`);
+            }
+          },
+        },
+      );
+      return requirePlacement(receipt, "Worker ACK");
+    },
+    async updateWorkspaceBaseManifest(
+      input: Parameters<Claims["updateWorkspaceBaseManifest"]>[0],
+      assertCurrent?: () => void,
+      current?: PlacementTurnClaimCurrentCheck,
+    ) {
+      const receipt = await execute(
+        {
+          type: "placementTurns.updateWorkspaceBaseManifest",
+          input: { ...input, nowMs: runtime.now?.() },
+        },
+        assertCurrent,
+        current,
+      );
+      return requirePlacement(receipt, "Workspace journal commit");
+    },
+    async recordStagedWorkspaceResult(
+      claim: WorkerSessionTurnClaim,
+      stagedResultRef: string,
+      repositoryWorkspaceId?: string,
+      assertCurrent?: () => void,
+      current?: PlacementTurnClaimCurrentCheck,
+    ): Promise<void> {
+      await execute(
+        {
+          type: "placementTurns.recordStagedResult",
+          input: { claim, stagedResultRef, repositoryWorkspaceId },
+        },
+        assertCurrent,
+        current,
+      );
+    },
     async retainInterruptedTurnWorkspace(
       claim: Parameters<Claims["releaseTurn"]>[0],
       assertCurrent: () => void,
@@ -280,7 +579,11 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
       );
     },
     async handoffRuntimeRefreshResult(
-      input: Omit<
+      {
+        claim,
+        expectedGeneration,
+        gatewayInstanceId,
+      }: Omit<
         PlacementTurnClaimWorkerOperations["placementTurns.handoffRuntimeRefreshResult"]["input"],
         "nowMs"
       >,
@@ -289,14 +592,16 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
       const receipt = await execute(
         {
           type: "placementTurns.handoffRuntimeRefreshResult",
-          input: { ...input, nowMs: runtime.now?.() ?? Date.now() },
+          input: {
+            claim,
+            expectedGeneration,
+            gatewayInstanceId,
+            nowMs: runtime.now?.() ?? Date.now(),
+          },
         },
         assertCurrent,
       );
-      if (!receipt.placement) {
-        throw new Error("Worker runtime refresh handoff receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Worker runtime refresh handoff");
     },
     async claimTurn(input: Parameters<Claims["claimTurn"]>[0], assertCurrent?: () => void) {
       const receipt = await execute(
@@ -313,10 +618,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         { type: "placementTurns.release", input: { claim, nowMs: runtime.now?.() } },
         assertCurrent,
       );
-      if (!receipt.placement) {
-        throw new Error("Placement turn release receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Placement turn release");
     },
     async releaseTurnIfOwned(claim: Parameters<Claims["releaseTurn"]>[0]) {
       await execute({

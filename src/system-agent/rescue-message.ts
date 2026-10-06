@@ -47,6 +47,7 @@ type SystemAgentRescueMessageInput = {
 const SYSTEM_AGENT_COMMAND = "/openclaw";
 const RESCUE_PENDING_NAMESPACE = "rescue-pending";
 const RESCUE_PENDING_MAX_ENTRIES = 1_024;
+const RESCUE_PENDING_TTL_MS = 15 * 60_000;
 const RESCUE_OPERATION_FIELDS = new Map<
   string,
   { required?: readonly string[]; optional?: readonly string[] }
@@ -290,7 +291,7 @@ export async function runSystemAgentRescueMessage(
     const expiresAtMs =
       nowMs === undefined
         ? undefined
-        : resolveExpiresAtMsFromDurationMs(policy.pendingTtlMinutes * 60_000, { nowMs });
+        : resolveExpiresAtMsFromDurationMs(RESCUE_PENDING_TTL_MS, { nowMs });
     if (nowMs === undefined || expiresAtMs === undefined) {
       return "OpenClaw rescue could not create a pending approval because the expiry clock is invalid.";
     }

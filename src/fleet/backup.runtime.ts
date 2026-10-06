@@ -12,7 +12,6 @@ import {
   ArchiveSecurityError,
   extractArchive,
 } from "../infra/archive.js";
-import { createBackupVolatileStatCache } from "../infra/backup-volatile-stat-cache.js";
 import {
   getPublishFileExclusiveFailureDetails,
   publishFileNoClobber,
@@ -52,8 +51,6 @@ const MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
 // Well under the 5-minute lease TTL so a stalled archive stream cannot outlive
 // the lease by more than one probe interval before the backup aborts.
 const BACKUP_LEASE_PROBE_INTERVAL_MS = 30_000;
-const RESTORE_VERIFY_TIMEOUT_MS = 60_000;
-const RESTORE_VERIFY_POLL_MS = 1_000;
 const RESTORE_EXTRACT_TIMEOUT_MS = 30 * 60_000;
 
 type FleetBackupManifest = {
@@ -273,6 +270,9 @@ export async function backupFleetCell(params: {
         return false;
       }
       if (isFile) {
+        // Tar filters its cached Stats before scheduling hardlinks. Restore
+        // requires each accepted path to carry independent file bytes.
+        stat.nlink = 1;
         totalBytes += stat.size;
         fileCount += 1;
         if (totalBytes > maxBytes) {
@@ -288,7 +288,6 @@ export async function backupFleetCell(params: {
           gzip: true,
           portable: true,
           preservePaths: true,
-          statCache: createBackupVolatileStatCache(() => false),
           filter,
           onWriteEntry: (entry) => {
             entry.path = remapArchivePath(entry.path, manifestPath, dataTarget, authTarget);
@@ -563,7 +562,6 @@ export async function restoreFleetCell(params: {
       symlinks: "reject",
       hardlinks: "reject",
       maxBytes: MANIFEST_MAX_BYTES,
-      nonBlockingRead: true,
     });
     let manifest: unknown;
     try {
@@ -720,8 +718,6 @@ export async function restoreFleetCell(params: {
         now: params.now,
         sleep: params.sleep,
         checkpoint: params.checkpoint,
-        timeoutMs: RESTORE_VERIFY_TIMEOUT_MS,
-        pollMs: RESTORE_VERIFY_POLL_MS,
         context: "restore",
       });
     }

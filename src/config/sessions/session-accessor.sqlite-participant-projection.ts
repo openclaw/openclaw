@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
+  createSqliteQueryCache,
   getNodeSqliteKysely,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
@@ -36,31 +37,21 @@ function selectParticipantRows(database: DatabaseSync) {
     .orderBy("identity_namespace");
 }
 
-function prepareSingleSessionParticipantQuery(database: DatabaseSync) {
-  return prepareSqliteQuerySync<string, SessionParticipantRow>(database, (parameter) =>
+// Compiled SQL follows the connection; native statement invalidation remains executor-owned.
+const singleSessionParticipantQuery = createSqliteQueryCache((database) =>
+  prepareSqliteQuerySync<string, SessionParticipantRow>(database, (parameter) =>
     selectParticipantRows(database).where(
       "session_key",
       "=",
       parameter((sessionKey) => sessionKey),
     ),
-  );
-}
-
-// Compiled SQL follows the connection; native statement invalidation remains executor-owned.
-const singleSessionParticipantQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareSingleSessionParticipantQuery>
->();
+  ),
+);
 
 function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly string[]) {
   const sessionKey = sessionKeys?.length === 1 ? sessionKeys[0] : undefined;
   if (sessionKey !== undefined) {
-    let query = singleSessionParticipantQueries.get(database);
-    if (!query) {
-      query = prepareSingleSessionParticipantQuery(database);
-      singleSessionParticipantQueries.set(database, query);
-    }
-    return query(sessionKey).rows;
+    return singleSessionParticipantQuery(database)(sessionKey).rows;
   }
   let query = selectParticipantRows(database);
   if (sessionKeys) {

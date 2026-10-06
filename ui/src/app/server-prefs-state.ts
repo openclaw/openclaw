@@ -8,12 +8,11 @@ import {
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
-  type ChatFollowUpMode,
   type ChatSendShortcut,
   type UiSettings,
 } from "./settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
-import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
+import { normalizeTypefaceOverride } from "./typography.ts";
 
 export function isAppearancePref(key: string): key is keyof typeof UI_APPEARANCE_PREFERENCE_KEYS {
   return Object.hasOwn(UI_APPEARANCE_PREFERENCE_KEYS, key);
@@ -25,20 +24,20 @@ type SyncedPrefSpec<T> = {
   local: (settings: UiSettings) => T | undefined;
   write?: (value: T | undefined) => Partial<UiSettings>;
   canApply?: (value: T, settings: UiSettings) => boolean;
-  clearable?: boolean;
-  reset?: (settings: UiSettings) => Partial<UiSettings>;
 };
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
 
-const fontPrefSpec = (key: "fontUi" | "fontChat") =>
-  prefSpec<TypefaceId>({
-    configSync: false,
-    extract: normalizeTypefaceOverride,
-    local: (settings) => normalizeTypefaceOverride(settings[key]),
+const optionalPrefSpec = <K extends "accent" | "fontUi" | "fontChat" | "chatFollowUpMode">(
+  key: K,
+  normalize: (value: unknown) => UiSettings[K],
+  configSync = true,
+) =>
+  prefSpec<UiSettings[K]>({
+    configSync,
+    extract: normalize,
+    local: (settings) => normalize(settings[key]),
     write: (value) => ({ [key]: value }),
-    clearable: true,
-    reset: () => ({ [key]: undefined }),
   });
 
 /**
@@ -50,8 +49,6 @@ export const SYNCED_PREFS = {
     extract: (value) => (value === "custom" || isThemeId(value) ? value : undefined),
     local: (settings) => settings.theme,
     write: (value) => ({ theme: value ?? UI_APPEARANCE_DEFAULTS.theme }),
-    clearable: true,
-    reset: () => ({ theme: UI_APPEARANCE_DEFAULTS.theme }),
     // A server "custom" theme is only honorable once this browser imported one;
     // the imported palette itself is too large to live in config.
     canApply: (value, settings) => value !== "custom" || Boolean(settings.customTheme),
@@ -60,24 +57,14 @@ export const SYNCED_PREFS = {
     extract: normalizeThemeMode,
     local: (settings) => settings.themeMode,
     write: (value) => ({ themeMode: value ?? UI_APPEARANCE_DEFAULTS.themeMode }),
-    clearable: true,
-    reset: () => ({ themeMode: UI_APPEARANCE_DEFAULTS.themeMode }),
   }),
-  accent: prefSpec<string>({
-    extract: normalizeAccentColor,
-    local: (settings) => normalizeAccentColor(settings.accent),
-    write: (value) => ({ accent: value }),
-    clearable: true,
-    reset: () => ({ accent: undefined }),
-  }),
-  fontUi: fontPrefSpec("fontUi"),
-  fontChat: fontPrefSpec("fontChat"),
+  accent: optionalPrefSpec("accent", normalizeAccentColor),
+  fontUi: optionalPrefSpec("fontUi", normalizeTypefaceOverride, false),
+  fontChat: optionalPrefSpec("fontChat", normalizeTypefaceOverride, false),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
     local: (settings) => settings.locale,
     write: (value) => ({ locale: value }),
-    clearable: true,
-    reset: () => ({ locale: undefined }),
   }),
   chatShowThinking: prefSpec<boolean>({
     extract: (value) => (typeof value === "boolean" ? value : undefined),
@@ -95,18 +82,9 @@ export const SYNCED_PREFS = {
     extract: (value) => (value === "enter" || value === "modifier-enter" ? value : undefined),
     local: (settings) => normalizeChatSendShortcut(settings.chatSendShortcut),
     write: (value) => ({ chatSendShortcut: value }),
-    clearable: true,
-    reset: () => ({ chatSendShortcut: undefined }),
   }),
-  chatFollowUpMode: prefSpec<ChatFollowUpMode>({
-    extract: normalizeChatFollowUpModeOverride,
-    local: (settings) => normalizeChatFollowUpModeOverride(settings.chatFollowUpMode),
-    write: (value) => ({ chatFollowUpMode: value }),
-    // Unset means "use the server-configured queue mode"; clearing must propagate,
-    // so the push serializes an explicit null removal.
-    clearable: true,
-    reset: () => ({ chatFollowUpMode: undefined }),
-  }),
+  // Unset uses the server-configured queue mode; clearing sends an explicit null removal.
+  chatFollowUpMode: optionalPrefSpec("chatFollowUpMode", normalizeChatFollowUpModeOverride),
   sidebarEntries: prefSpec<string[]>({
     extract: (value) => normalizeSidebarEntries(value) ?? undefined,
     local: (settings) => settings.sidebarEntries,
@@ -186,7 +164,7 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
 ): ServerUiPrefState<SyncedPrefValue<K>> {
   const specification = SYNCED_PREFS[key];
   const localValue = specification.local(settings) as SyncedPrefValue<K> | undefined;
-  const resetPatch = specification.reset?.(settings);
+  const resetPatch = specification.write?.(undefined);
   const productDefault = (
     resetPatch ? specification.local({ ...settings, ...resetPatch }) : undefined
   ) as SyncedPrefValue<K> | undefined;
@@ -313,7 +291,7 @@ export function serverUiPrefsSnapshotDelta(
       }
     } else if (
       !(prefKey in prefs) &&
-      SYNCED_PREFS[prefKey].clearable &&
+      SYNCED_PREFS[prefKey].write &&
       ((ready && Object.hasOwn(lastSeen, prefKey)) || (scopeChanged && appearance))
     ) {
       // A new identity also clears appearance values absent from its last-seen
@@ -337,7 +315,7 @@ export function serverPrefsLocalPatch(
       continue;
     }
     if (serverValue === null) {
-      const resetPatch = specification.clearable ? specification.reset?.(settings) : undefined;
+      const resetPatch = specification.write?.(undefined);
       if (resetPatch) {
         applyChangedSettingsPatch(patch, settings, resetPatch);
       }

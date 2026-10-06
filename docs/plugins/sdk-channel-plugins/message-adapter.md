@@ -39,8 +39,16 @@ A logical result's receipt takes precedence over its legacy message IDs.
 The result carries a receipt, `messageIds` (including an empty array), and
 `visibleReplySent: true`; routing fields stay in the receipt. Optional `content`
 is passed through, and `kind` and `replyToId` use the receipt builder's rules.
-Keep acceptance side effects, content joining,
-suppression, and whether an identityless outcome needs a receipt in the adapter.
+For batches that join accepted text with newlines, use
+`createChannelDeliveryAccumulator({ kind?, replyToId? })` from
+`openclaw/plugin-sdk/channel-outbound`.
+Call `add(source, acceptedText?)` only after each physical send succeeds. `size`
+counts accepted sends, and `result()` returns their combined receipt and nonempty
+text, or a `no_visible_result` suppression for an empty batch. On failure, throw
+`partialError(error)` to retain earlier sends and a nested partial-delivery
+error's accepted subset; failures before any acceptance pass through unchanged.
+Keep transport acceptance side effects, other content-joining rules, and whether
+an identityless outcome needs a receipt in the adapter.
 
 Channel actions and adapter capabilities come from the selected plugin
 registration. An omitted `actions`, `message`, or `outbound` surface is not
@@ -126,6 +134,24 @@ maintaining a plugin-local retry queue. `retire(id)` claims a detached preview;
 When transport cleanup policy must change, pass a synchronous `prepareCleanup`
 callback to `cleanupPending`; it runs in order with clears, before deletion.
 Rejected deletions remain owned for a later cleanup attempt.
+
+For synchronous turn rotation, `reset()` advances `generation`, reopens delivery,
+and resets the current message and pending updates. Published messages remain the
+adapter's responsibility. `reset("discard")` also retires
+creates from earlier generations when they settle. Call `createMessage(send, publish)`
+inside the serialized send loop; its synchronous `publish` callback installs only
+current-generation receipts. Capture `generation` before edits and recheck it before
+publishing their results. `retireCurrent(stopForClear)` similarly fences awaited
+cleanup. Adapters that already settle their sends before rotation can use
+`resetMessage()` to reset identity and pending/throttle state without reopening delivery
+or advancing the generation.
+
+Pass `"keep"` as the throttle argument to `resetMessage("keep")` or
+`reset("discard", "keep")` when rotation must preserve the existing throttle
+window and scheduled flush. The default resets both. Transports that decide
+stale-preview disposition during cleanup can pass `{ defer: true }` as the
+third argument to `createMessage`; stale discarded receipts then enter deletion
+custody without an immediate deletion attempt.
 
 ### Commentary delivery ownership
 

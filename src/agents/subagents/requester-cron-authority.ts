@@ -1,7 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import type { PreparedSessionMutationFacts } from "../../gateway/session-sharing-policy.js";
+import {
+  prepareSessionMutationFacts,
+  type SessionFactsRead,
+} from "../../gateway/session-sharing-preparation.js";
 import {
   getAgentRunContext,
   getAgentRunLifecycleGeneration,
@@ -20,7 +23,17 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
+import type { FollowupRequesterAuthority } from "./completion/session-followup-completion.types.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
+import {
+  sameRequesterSettleBatch,
+  isRequesterYieldCohortMember,
+  resolveCurrentRequesterSettleBatch,
+} from "./registry/subagent-requester-settle-identity.js";
+import {
+  getSubagentRunRuntimeKey,
+  isSameSubagentRunOwner,
+} from "./registry/subagent-run-generation.js";
 
 type RequesterCronAuthority = {
   managementEntitlement?: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
@@ -39,7 +52,7 @@ type RequesterCronAuthority = {
 } & (
   | {
       kind: "yield";
-      storePath: string;
+      sessionFacts: SessionFactsRead<PreparedSessionMutationFacts>;
       runs: ReadonlyMap<string, SubagentRunRecord>;
       batch: readonly SubagentRunRecord[];
       rearmGeneration?: number;
@@ -53,7 +66,7 @@ type RequesterCronAuthority = {
 );
 
 type RequesterCronAuthorityState = {
-  byEntry: WeakMap<SubagentRunRecord, RequesterCronAuthority>;
+  byEntry: WeakMap<object, RequesterCronAuthority>;
   bySession: Map<string, Set<RequesterCronAuthority>>;
 };
 
@@ -68,6 +81,8 @@ const state = resolveGlobalSingleton<RequesterCronAuthorityState>(
         entry.releaseOperatorAuthority = undefined;
         if (entry.kind === "followup") {
           entry.releaseFollowup();
+        } else {
+          entry.sessionFacts.release();
         }
       }
     }
@@ -81,13 +96,16 @@ function discard(authority: RequesterCronAuthority): void {
   const releaseOperatorAuthority = authority.releaseOperatorAuthority;
   authority.releaseOperatorAuthority = undefined;
   releaseOperatorAuthority?.();
+  if (authority.kind === "yield") {
+    authority.sessionFacts.release();
+  }
   // Pending rows must remember a revoked operator restriction. Forgetting it
   // would let a later retry take the no-captured-operator dispatch path. The
   // weak entry binding retires with its row or an explicitly captured successor.
   if (authority.kind === "yield" && !authority.operatorAuthority) {
     for (const entry of authority.batch) {
-      if (state.byEntry.get(entry) === authority) {
-        state.byEntry.delete(entry);
+      if (state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority) {
+        state.byEntry.delete(getSubagentRunRuntimeKey(entry));
       }
     }
   }
@@ -99,10 +117,6 @@ function discard(authority: RequesterCronAuthority): void {
   if (authority.kind === "followup") {
     authority.releaseFollowup();
   }
-}
-
-function sameBatch(left: readonly SubagentRunRecord[], right: readonly SubagentRunRecord[]) {
-  return left.length === right.length && left.every((entry) => right.includes(entry));
 }
 
 function isCurrent(authority: RequesterCronAuthority): boolean {
@@ -123,55 +137,61 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
   if (authority.kind === "followup") {
     return authority.isFollowupCurrent() && authority.requesterOwner?.isCurrent() === true;
   }
-  const session = loadSessionEntryReadOnly({
-    storePath: authority.storePath,
-    sessionKey: authority.requesterSessionKey,
-  });
+  let session: PreparedSessionMutationFacts["target"];
+  try {
+    session = authority.sessionFacts.readCurrent(getRuntimeConfig()).target;
+  } catch {
+    return false;
+  }
   if (
-    session?.sessionId !== authority.requesterSessionId ||
-    session.lifecycleRevision !== authority.sessionLifecycleRevision ||
-    session.archivedAt !== undefined
+    session?.entry.sessionId !== authority.requesterSessionId ||
+    session.entry.lifecycleRevision !== authority.sessionLifecycleRevision ||
+    session.entry.archivedAt !== undefined
   ) {
     return false;
   }
   if (authority.runScopeBound) {
     return true;
   }
+  const batch = resolveCurrentRequesterSettleBatch(authority.batch, authority.runs);
   if (
-    authority.batch.some(
+    !batch ||
+    batch.some(
       (entry) =>
         entry.killIntent?.suppressTaskDelivery === true ||
         entry.killReconciliation?.suppressTaskDelivery === true,
     ) ||
-    authority.batch.every((entry) => entry.suppressCompletionDelivery === true)
+    batch.every((entry) => entry.suppressCompletionDelivery === true)
   ) {
     return false;
   }
   const batchRunIds = authority.batch.map((entry) => entry.runId).toSorted();
-  return authority.batch.every((entry) => {
-    const wake = entry.requesterSettleWake;
-    return (
-      authority.runs.get(entry.runId) === entry &&
-      state.byEntry.get(entry) === authority &&
+  return batch.every(
+    (entry) =>
+      state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority &&
       (authority.rearmGeneration === undefined ||
-        (wake?.requesterYieldBatch === true &&
-          wake.rearmGeneration === authority.rearmGeneration &&
-          wake.batchRunIds?.length === batchRunIds.length &&
-          wake.batchRunIds.every((runId, index) => runId === batchRunIds[index])))
-    );
-  });
+        isRequesterYieldCohortMember(entry, batchRunIds, authority.rearmGeneration)),
+  );
 }
 
-/** Prepare while the exact original run is live; commit only after yield intent persists. */
-export function captureRequesterCronAuthority(params: {
+export type PreparedRequesterCronAuthority = {
+  assertCurrent(): void;
+  validate(): Promise<void>;
+  bind(params: {
+    batch: readonly SubagentRunRecord[];
+    runs: ReadonlyMap<string, SubagentRunRecord>;
+  }): Promise<{ commit(): void; revoke(): void } | undefined>;
+  release(): void | Promise<void>;
+};
+
+/** Capture the original session source before registry hydration can yield. */
+export function prepareRequesterCronAuthority(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
   requesterTurnRunId: string;
-  batch: readonly SubagentRunRecord[];
-  runs: ReadonlyMap<string, SubagentRunRecord>;
-}): { commit: () => void; revoke: () => void } | undefined {
+}): PreparedRequesterCronAuthority | undefined {
   const requesterAgentId = params.requesterAgentId;
-  if (!requesterAgentId || params.batch.length === 0) {
+  if (!requesterAgentId) {
     return undefined;
   }
   const cronCapture = captureActiveCronManagementAuthority({
@@ -214,46 +234,139 @@ export function captureRequesterCronAuthority(params: {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
     operatorAuthority.assertCurrent();
   }
-  const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-    agentId: requesterAgentId,
-  });
-  const session = loadSessionEntryReadOnly({ storePath, sessionKey: params.requesterSessionKey });
-  if (session?.sessionId !== capture.sessionId || session.archivedAt !== undefined) {
-    return undefined;
+  let releaseOperatorAuthority = operatorAuthority?.retain?.();
+  let preparedFacts: Promise<SessionFactsRead<PreparedSessionMutationFacts>>;
+  try {
+    preparedFacts = prepareSessionMutationFacts({
+      cfg: getRuntimeConfig(),
+      sessionKey: params.requesterSessionKey,
+      agentId: requesterAgentId,
+      allowMissing: true,
+    });
+  } catch (error) {
+    releaseOperatorAuthority?.();
+    throw error;
   }
-  const authority: RequesterCronAuthority = {
-    ...params,
-    kind: "yield",
-    requesterAgentId,
-    requesterSessionId: capture.sessionId,
-    managementEntitlement: cronCapture?.managementEntitlement,
-    requesterOwner: cronCapture?.requesterOwner,
-    operatorAuthority,
-    releaseOperatorAuthority: operatorAuthority?.retain?.(),
-    lifecycleGeneration: capture.lifecycleGeneration,
-    sessionLifecycleRevision: session.lifecycleRevision,
-    storePath,
-    batch: [...params.batch],
-    active: true,
-  };
-  const sessionAuthorities = state.bySession.get(authority.requesterSessionKey) ?? new Set();
-  sessionAuthorities.add(authority);
-  state.bySession.set(authority.requesterSessionKey, sessionAuthorities);
-  return {
-    commit: () => {
-      if (!authority.active || !capture.isActive()) {
-        discard(authority);
-        return;
-      }
-      for (const entry of authority.batch) {
-        const previous = state.byEntry.get(entry);
-        if (previous) {
-          discard(previous);
-        }
-        state.byEntry.set(entry, authority);
-      }
+  // Hydration can fail before this accepted preparation is consumed.
+  let readyFacts: SessionFactsRead<PreparedSessionMutationFacts> | undefined;
+  void preparedFacts.then(
+    (facts) => {
+      readyFacts = facts;
     },
-    revoke: () => discard(authority),
+    () => {},
+  );
+  let consumed = false;
+  let transferred = false;
+  let released = false;
+  let boundAuthority: RequesterCronAuthority | undefined;
+  const assertCaptureCurrent = () => {
+    if (!capture.isActive()) {
+      throw new Error("Requester authority retired during session preparation");
+    }
+    operatorAuthority?.assertCurrent();
+  };
+  const assertCurrent = () => {
+    assertCaptureCurrent();
+    if ((released && !transferred) || boundAuthority?.active === false) {
+      throw new Error("Requester authority retired before yield handoff");
+    }
+    if (readyFacts) {
+      const current = readyFacts.readCurrent(getRuntimeConfig()).target;
+      if (
+        current?.entry.sessionId !== capture.sessionId ||
+        current.entry.archivedAt !== undefined ||
+        (boundAuthority &&
+          current.entry.lifecycleRevision !== boundAuthority.sessionLifecycleRevision)
+      ) {
+        throw new Error("Requester session authority changed before yield handoff");
+      }
+    }
+  };
+  const releaseFacts = (sessionFacts?: SessionFactsRead<PreparedSessionMutationFacts>) => {
+    try {
+      if (sessionFacts && !transferred) {
+        sessionFacts.release();
+      }
+    } catch {
+      // Cleanup must still release the retained operator authority.
+    } finally {
+      releaseOperatorAuthority?.();
+      releaseOperatorAuthority = undefined;
+    }
+  };
+  return {
+    assertCurrent,
+    async validate() {
+      await preparedFacts;
+      assertCurrent();
+    },
+    async bind({ batch, runs }) {
+      if (consumed || released) {
+        throw new Error("Requester authority preparation was already consumed");
+      }
+      consumed = true;
+      const sessionFacts = await preparedFacts;
+      assertCurrent();
+      const session = sessionFacts.readCurrent(getRuntimeConfig()).target;
+      if (
+        batch.length === 0 ||
+        session?.entry.sessionId !== capture.sessionId ||
+        session.entry.archivedAt !== undefined
+      ) {
+        return undefined;
+      }
+      const authority: RequesterCronAuthority = {
+        ...params,
+        kind: "yield",
+        requesterAgentId,
+        requesterSessionId: capture.sessionId,
+        managementEntitlement: cronCapture?.managementEntitlement,
+        requesterOwner: cronCapture?.requesterOwner,
+        operatorAuthority,
+        releaseOperatorAuthority,
+        lifecycleGeneration: capture.lifecycleGeneration,
+        sessionLifecycleRevision: session.entry.lifecycleRevision,
+        sessionFacts,
+        runs,
+        batch: [...batch],
+        active: true,
+      };
+      boundAuthority = authority;
+      transferred = true;
+      releaseOperatorAuthority = undefined;
+      const sessionAuthorities = state.bySession.get(authority.requesterSessionKey) ?? new Set();
+      sessionAuthorities.add(authority);
+      state.bySession.set(authority.requesterSessionKey, sessionAuthorities);
+      return {
+        commit: () => {
+          assertCurrent();
+          const committedBatch = resolveCurrentRequesterSettleBatch(authority.batch, runs);
+          if (!committedBatch) {
+            throw new Error("Requester automation authority lost its committed child owner");
+          }
+          authority.batch = committedBatch;
+          for (const entry of authority.batch) {
+            const previous = state.byEntry.get(getSubagentRunRuntimeKey(entry));
+            if (previous && previous !== authority) {
+              discard(previous);
+            }
+            state.byEntry.set(getSubagentRunRuntimeKey(entry), authority);
+          }
+        },
+        revoke: () => discard(authority),
+      };
+    },
+    release() {
+      if (released) {
+        return undefined;
+      }
+      released = true;
+      if (readyFacts) {
+        releaseFacts(readyFacts);
+        return undefined;
+      }
+      return preparedFacts.then(releaseFacts, () => releaseFacts());
+    },
   };
 }
 
@@ -263,14 +376,14 @@ export function promoteRequesterCronAuthority(params: {
   batch: readonly SubagentRunRecord[];
   rearmGeneration?: number;
 }): void {
-  const authority = params.batch[0] && state.byEntry.get(params.batch[0]);
+  const authority = params.batch[0] && state.byEntry.get(getSubagentRunRuntimeKey(params.batch[0]));
   if (!authority || authority.kind !== "yield") {
     return;
   }
   if (
     params.rearmGeneration === undefined ||
     authority.requesterTurnRunId !== params.requesterTurnRunId ||
-    !sameBatch(authority.batch, params.batch) ||
+    !sameRequesterSettleBatch(authority.batch, params.batch) ||
     !isCurrent(authority)
   ) {
     discard(authority);
@@ -288,7 +401,7 @@ export function replaceRequesterCronAuthorityEntry(params: {
   next: SubagentRunRecord;
   preserve: boolean;
 }): void {
-  const authority = state.byEntry.get(params.previous);
+  const authority = state.byEntry.get(getSubagentRunRuntimeKey(params.previous));
   if (!authority || authority.kind !== "yield") {
     return;
   }
@@ -297,10 +410,10 @@ export function replaceRequesterCronAuthorityEntry(params: {
     return;
   }
   authority.batch = authority.batch.map((entry) =>
-    entry === params.previous ? params.next : entry,
+    isSameSubagentRunOwner(entry, params.previous) ? params.next : entry,
   );
-  state.byEntry.delete(params.previous);
-  state.byEntry.set(params.next, authority);
+  state.byEntry.delete(getSubagentRunRuntimeKey(params.previous));
+  state.byEntry.set(getSubagentRunRuntimeKey(params.next), authority);
   if (!isCurrent(authority)) {
     discard(authority);
   }
@@ -322,8 +435,16 @@ export function revokeRequesterCronAuthorityBatch(
     return;
   }
   for (const entry of batch) {
-    const authority = state.byEntry.get(entry);
+    const authority = state.byEntry.get(getSubagentRunRuntimeKey(entry));
     if (authority?.kind === "yield" && authority.rearmGeneration === rearmGeneration) {
+      if (
+        isSameSubagentRunOwner(authority.runs.get(entry.runId), entry) &&
+        entry.pauseReason === "sessions_yield" &&
+        entry.requesterSettleWake?.rearmGeneration === rearmGeneration &&
+        isCurrent(authority)
+      ) {
+        continue;
+      }
       discard(authority);
     }
   }
@@ -334,6 +455,7 @@ type RequesterCronAuthorityDispatch = {
   runId: string;
   isCurrent: () => boolean;
   consumed: boolean;
+  pause?: { entry: SubagentRunRecord; scope?: CronCreatorAuthorityCapability; released?: true };
 };
 const activeDispatch = new AsyncLocalStorage<RequesterCronAuthorityDispatch>();
 
@@ -349,7 +471,12 @@ export async function withRequesterCronAuthority<T>(
   },
   run: () => Promise<T>,
 ): Promise<T> {
-  const authority = params.batch[0] && state.byEntry.get(params.batch[0]);
+  const authority = params.batch[0] && state.byEntry.get(getSubagentRunRuntimeKey(params.batch[0]));
+  const child = params.batch.length === 1 ? params.batch[0] : undefined;
+  const pause: RequesterCronAuthorityDispatch["pause"] =
+    child?.pauseReason === "sessions_yield" && child.requesterSettleWake?.pauseNotice
+      ? { entry: child }
+      : undefined;
   if (
     !authority ||
     authority.kind !== "yield" ||
@@ -358,15 +485,30 @@ export async function withRequesterCronAuthority<T>(
     authority.requesterAgentId !== params.requesterAgentId ||
     authority.rearmGeneration === undefined ||
     authority.rearmGeneration !== params.rearmGeneration ||
-    !sameBatch(authority.batch, params.batch)
+    !(pause
+      ? authority.batch.some((entry) => isSameSubagentRunOwner(entry, pause.entry))
+      : sameRequesterSettleBatch(authority.batch, params.batch))
   ) {
     if (authority?.operatorAuthority) {
       throw new Error("Requester operator authority does not own this continuation");
     }
     return await run();
   }
-  const current = () =>
-    isCurrent(authority) && (authority.runScopeBound === true || params.isCurrent());
+  const current = () => {
+    const pausedEntry = pause && authority.runs.get(pause.entry.runId);
+    return (
+      isCurrent(authority) &&
+      (pause
+        ? !pause.released &&
+          (pause.scope
+            ? pause.scope.active && !pause.scope.signal.aborted
+            : isSameSubagentRunOwner(pausedEntry, pause.entry) &&
+              pausedEntry?.pauseReason === "sessions_yield" &&
+              Boolean(pausedEntry.requesterSettleWake?.pauseNotice) &&
+              params.isCurrent())
+        : authority.runScopeBound === true || params.isCurrent())
+    );
+  };
   if (!current()) {
     discard(authority);
     if (authority.operatorAuthority) {
@@ -379,6 +521,7 @@ export async function withRequesterCronAuthority<T>(
     runId: params.runId,
     isCurrent: current,
     consumed: false,
+    pause,
   };
   try {
     if (!authority.operatorAuthority) {
@@ -419,7 +562,7 @@ export function captureRequesterFollowupAuthority(params: {
   sourceSessionKey: string;
   isCurrent: () => boolean;
   release: () => void;
-}) {
+}): FollowupRequesterAuthority | undefined {
   const capture = captureActiveCronManagementAuthority({
     runId: params.requesterTurnRunId,
     sessionKey: params.requesterSessionKey,
@@ -463,12 +606,50 @@ export function captureRequesterFollowupAuthority(params: {
   };
 }
 
-export function consumeRequesterCronAuthorityAdmission(params: {
+type RequesterAdmissionTarget = {
   runId: string;
   sessionKey: string | undefined;
   sessionId: string | undefined;
   inputProvenance: InputProvenance | undefined;
-}):
+};
+
+function matchesAdmissionTarget(
+  dispatch: RequesterCronAuthorityDispatch,
+  params: RequesterAdmissionTarget,
+): boolean {
+  const { authority } = dispatch;
+  return (
+    dispatch.runId === params.runId &&
+    authority.requesterSessionKey === params.sessionKey &&
+    authority.requesterSessionId === params.sessionId &&
+    params.inputProvenance?.kind === "inter_session" &&
+    (authority.kind === "yield"
+      ? params.inputProvenance.sourceTool === "subagent_settle" &&
+        authority.batch.some(
+          (entry) => entry.childSessionKey === params.inputProvenance?.sourceSessionKey,
+        )
+      : params.inputProvenance.sourceTool === "subagent_announce" &&
+        params.inputProvenance.sourceSessionKey === authority.sourceSessionKey)
+  );
+}
+
+export function captureRequesterCronAuthorityAdmissionAssertion(params: RequesterAdmissionTarget) {
+  const dispatch = activeDispatch.getStore();
+  if (!dispatch || dispatch.consumed || dispatch.authority.kind !== "yield") {
+    return undefined;
+  }
+  if (!matchesAdmissionTarget(dispatch, params)) {
+    throw new Error("Requester authority does not own this continuation");
+  }
+  // Storage can invoke the pre-commit guard outside this dispatch's async context.
+  return () => {
+    if (!dispatch.consumed && !dispatch.isCurrent()) {
+      throw new Error("Requester authority is no longer current");
+    }
+  };
+}
+
+export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissionTarget):
   | {
       runId: string;
       callerOrigin: { kind: "unknown" };
@@ -482,38 +663,41 @@ export function consumeRequesterCronAuthorityAdmission(params: {
   const dispatch = activeDispatch.getStore();
   if (
     !dispatch ||
-    !dispatch.authority.managementEntitlement ||
     dispatch.consumed ||
     dispatch.authority.admittedRunId !== undefined ||
-    dispatch.runId !== params.runId ||
-    dispatch.authority.requesterSessionKey !== params.sessionKey ||
-    dispatch.authority.requesterSessionId !== params.sessionId ||
-    params.inputProvenance?.kind !== "inter_session" ||
-    (dispatch.authority.kind === "yield"
-      ? params.inputProvenance.sourceTool !== "subagent_settle" ||
-        !dispatch.authority.batch.some(
-          (entry) => entry.childSessionKey === params.inputProvenance?.sourceSessionKey,
-        )
-      : params.inputProvenance.sourceTool !== "subagent_announce" ||
-        params.inputProvenance.sourceSessionKey !== dispatch.authority.sourceSessionKey) ||
+    !matchesAdmissionTarget(dispatch, params) ||
     !dispatch.isCurrent()
   ) {
     return undefined;
   }
   dispatch.consumed = true;
-  dispatch.authority.admittedRunId = params.runId;
+  if (!dispatch.authority.managementEntitlement) {
+    return undefined;
+  }
+  if (!dispatch.pause) {
+    dispatch.authority.admittedRunId = params.runId;
+  }
   return {
     runId: params.runId,
     callerOrigin: { kind: "unknown" },
     managementEntitlement: dispatch.authority.managementEntitlement,
     requesterOwner: dispatch.authority.requesterOwner,
     isCurrent: dispatch.isCurrent,
-    ...(dispatch.authority.kind === "followup"
-      ? { release: () => discard(dispatch.authority) }
-      : {}),
+    ...(dispatch.pause
+      ? {
+          release: () => {
+            if (dispatch.pause) {
+              dispatch.pause.released = true;
+            }
+          },
+        }
+      : dispatch.authority.kind === "followup"
+        ? { release: () => discard(dispatch.authority) }
+        : {}),
     bindRunScope: (scope) => {
       if (
         dispatch.authority.runScopeBound ||
+        dispatch.pause?.scope ||
         !dispatch.isCurrent() ||
         scope.runId !== params.runId ||
         scope.isCurrent !== dispatch.isCurrent ||
@@ -525,13 +709,18 @@ export function consumeRequesterCronAuthorityAdmission(params: {
       ) {
         throw new Error("Requester automation authority no longer owns this run scope");
       }
+      if (dispatch.pause) {
+        // Admission owns this turn even after notice consumption; final custody stays with the cohort.
+        dispatch.pause.scope = scope;
+        return;
+      }
       // Queue acceptance can retire the child outbox before the parent finishes.
       // Its fresh run scope now owns the entitlement and all per-operation grants.
       dispatch.authority.runScopeBound = true;
       if (dispatch.authority.kind === "yield") {
         for (const entry of dispatch.authority.batch) {
-          if (state.byEntry.get(entry) === dispatch.authority) {
-            state.byEntry.delete(entry);
+          if (state.byEntry.get(getSubagentRunRuntimeKey(entry)) === dispatch.authority) {
+            state.byEntry.delete(getSubagentRunRuntimeKey(entry));
           }
         }
         dispatch.authority.batch = [];

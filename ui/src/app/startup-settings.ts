@@ -3,7 +3,7 @@ import {
   normalizeGatewayClientMode,
 } from "@openclaw/gateway-protocol/client-info";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import {
   CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
@@ -54,7 +54,6 @@ type ApplicationStartupSettings = {
   pendingGatewayToken: string | null;
   pendingBootstrapToken: string | null;
   pendingBootstrapProfile: ControlUiBootstrapProfileHint | null;
-  queryTokenUsed: boolean;
   nativeClient: NativeGatewayClientOptions | null;
   location: ApplicationStartupLocation;
   changed: boolean;
@@ -98,7 +97,6 @@ export function resolveApplicationStartupSettings(
   let pendingGatewayToken: string | null = null;
   let pendingBootstrapToken: string | null = null;
   let pendingBootstrapProfile: ControlUiBootstrapProfileHint | null = null;
-  let queryTokenUsed = false;
   let nativeClient: NativeGatewayClientOptions | null = null;
 
   const updateSettings = (patch: Partial<UiSettings>) => {
@@ -145,9 +143,7 @@ export function resolveApplicationStartupSettings(
     const platform = normalizeOptionalString(client?.platform);
     const deviceFamily = normalizeOptionalString(client?.deviceFamily);
     const instanceId = normalizeOptionalString(client?.instanceId);
-    const scopes = Array.isArray(client?.scopes)
-      ? uniqueStrings(client.scopes.flatMap((scope) => normalizeOptionalString(scope) ?? []))
-      : [];
+    const scopes = normalizeUniqueTrimmedStringList(client?.scopes);
     if (clientName && mode && platform && deviceFamily && scopes.length > 0) {
       nativeClient = {
         clientName,
@@ -190,7 +186,6 @@ export function resolveApplicationStartupSettings(
       pendingGatewayToken,
       pendingBootstrapToken,
       pendingBootstrapProfile,
-      queryTokenUsed,
       nativeClient,
       location,
       changed,
@@ -230,7 +225,6 @@ export function resolveApplicationStartupSettings(
 
   if (hasTokenParam) {
     if (queryToken != null) {
-      queryTokenUsed = true;
       console.warn(
         "[openclaw] Auth token passed as query parameter (?token=). Use URL fragment instead: #token=<token>. Query parameters may appear in server logs.",
       );
@@ -294,7 +288,6 @@ export function resolveApplicationStartupSettings(
     pendingGatewayToken,
     pendingBootstrapToken,
     pendingBootstrapProfile,
-    queryTokenUsed,
     nativeClient,
     location: shouldCleanUrl
       ? {

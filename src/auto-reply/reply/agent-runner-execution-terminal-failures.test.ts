@@ -66,6 +66,32 @@ describe("executeAgentTurn: terminal failures", () => {
     }
   });
 
+  it("keeps the provider reset hint when the chain summary exceeds the length guard", async () => {
+    // Three legs of ordinary provider text push the summary past the bound that keeps
+    // provider strings from dumping HTML or JSON. This is the mid-turn surfacing path in
+    // agent-runner-execution, where a run returns no usable text and the raw upstream
+    // error is rendered for the user.
+    const hint = "You've hit your session limit \u00b7 resets 6:20pm (Europe/London)";
+    const message =
+      `All models failed (3): anthropic/claude-opus-5: ${hint} (unknown) | ` +
+      `claude-cli/claude-sonnet-5: ${hint} (unknown) | ` +
+      "openai/gpt-5.6-sol: Codex error: The usage limit has been reached (rate_limit)";
+    expect(message.length).toBeGreaterThan(300);
+    state.runWithModelFallbackMock.mockResolvedValueOnce({
+      result: { payloads: [], meta: { error: new Error(message) } },
+      provider: "anthropic",
+      model: "claude-opus-5",
+      attempts: [],
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
+
+    const rendered = JSON.stringify(result);
+    expect(rendered).toContain("resets 6:20pm (Europe/London)");
+    expect(rendered).not.toContain("API rate limit reached. Please try again later.");
+  });
+
   it("surfaces Codex usage-limit reset details for pure fallback exhaustion", async () => {
     const codexMessage =
       "You've reached your Codex subscription usage limit. Next reset in 42 minutes (2026-05-04T21:34:00.000Z). Run /codex account for current usage details.";
@@ -641,28 +667,22 @@ describe("executeAgentTurn: terminal failures", () => {
       }
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
       expect(result.payload.text).not.toContain("Claude CLI");
-      expect(result.payload.text).toContain("gateway is unaffected");
-      if (mode === "overall") {
-        expect(result.payload.text).toContain("overall turn limit");
-        expect(result.payload.text).toContain("detached OpenClaw sub-agent");
-        expect(result.payload.text).toContain("agents.defaults.timeoutSeconds");
-        expect(result.payload.text).not.toContain("noOutputTimeoutMs");
-      } else {
-        expect(result.payload.text).toContain("CLI subprocess");
-        expect(result.payload.text).toContain("no-output watchdog");
-        expect(result.payload.text).toContain("separate from the overall agent timeout");
-        expect(result.payload.text).toContain("produced no output before its watchdog expired");
-        expect(result.payload.text).not.toContain("noOutputTimeoutMs");
-        expect(result.payload.text).not.toContain("agents.defaults.timeoutSeconds");
-      }
+      expect(result.payload.text).toContain(
+        mode === "overall"
+          ? "task time limit in the Control UI settings"
+          : "prompt in the terminal",
+      );
+      expect(result.payload.text).toContain(
+        mode === "overall" ? "task took too long" : "task stopped responding",
+      );
       expect(result.payload.text).not.toContain("/new");
       if (routingSubstring) {
-        expect(result.payload.text).toContain(routingSubstring);
+        expect(result.payload.text).not.toContain(routingSubstring);
       }
     },
   );
 
-  it("explains that CLI background tasks share the timed-out parent process", () => {
+  it("warns that interrupted CLI background work may have completed", () => {
     const payload = buildKnownAgentRunFailureReplyPayload({
       err: createCliTimeoutError(
         { provider: "claude-cli" },
@@ -679,21 +699,19 @@ describe("executeAgentTurn: terminal failures", () => {
       resolvedVerboseLevel: "off",
     });
 
-    expect(payload?.text).toContain("1 CLI background task");
-    expect(payload?.text).toContain("1 active CLI tool call");
-    expect(payload?.text).toContain("shares the parent CLI process");
-    expect(payload?.text).toContain("Effects may be partial");
-    expect(payload?.text).toContain("no run timeout by default");
+    expect(payload?.text).toContain("Some work may have completed");
+    expect(payload?.text).toContain("Check its results before trying again");
+    expect(payload?.text).toContain("task time limit in the Control UI settings");
   });
 
   it.each([
     {
       rejection: new Error("codex app-server client closed before turn completed"),
-      expected: "connection closed",
+      expected: "Lost the connection",
     },
     {
       rejection: new Error("codex app-server turn idle timed out waiting for turn/completed"),
-      expected: "did not replay the turn automatically",
+      expected: "hasn't confirmed whether the task finished",
     },
   ])(
     "surfaces Codex app-server bridge failures instead of generic copy",
@@ -710,7 +728,7 @@ describe("executeAgentTurn: terminal failures", () => {
         throw new Error("expected final reply");
       }
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-      expect(result.payload.text).toContain("Codex app-server");
+      expect(result.payload.text).toContain("may still be running");
       expect(result.payload.text).toContain(expected);
     },
   );

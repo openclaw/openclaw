@@ -253,64 +253,52 @@ function collectCaptureAttempts({
   const ledgerEntries = readCaptureAttemptLedger(xcresultDirectory);
   const results = [];
   for (const screenshotName of screenshotNames) {
-    const attempts = ledgerEntries
-      .filter((entry) => entry.deviceName === deviceName && entry.screenshotName === screenshotName)
-      .toSorted((left, right) => left.attempt - right.attempt);
+    const attempts = ledgerEntries.filter(
+      (entry) => entry.deviceName === deviceName && entry.screenshotName === screenshotName,
+    );
     if (attempts.length !== 1 || attempts[0].attempt !== 1) {
       fail(`${deviceName} ${screenshotName} expected exactly one OpenClaw capture attempt`);
     }
-    const summaries = attempts.map((entry) => {
-      const expectedKeys = ["attempt", "captureOutcome", "deviceName", "screenshotName"];
-      const actualKeys =
-        entry && typeof entry === "object" && !Array.isArray(entry)
-          ? Object.keys(entry).toSorted((left, right) => left.localeCompare(right))
-          : [];
-      if (actualKeys.join("\n") !== expectedKeys.join("\n")) {
-        fail(`${deviceName} ${screenshotName} has an invalid capture attempt record`);
-      }
-      const { attempt, captureOutcome } = entry;
-      if (captureOutcome !== "succeeded") {
-        fail(`${deviceName} ${screenshotName} capture attempt did not succeed`);
-      }
-      const name = `${deviceName}-${screenshotName}-attempt-${attempt}.xcresult`;
-      const source = path.join(xcresultDirectory, name);
-      if (!fs.existsSync(source)) {
-        fail(`${name} is missing for the successful capture attempt`);
-      }
-      const summary = readXcresultSummary(source);
-      if (!Number.isInteger(summary.failedTests) || summary.failedTests < 0) {
-        fail(`${name} has invalid failedTests`);
-      }
-      const artifactPath = path.posix.join("xcresults", name);
-      copyEntry(source, path.join(familyDirectory, artifactPath));
-      return {
-        screenshotName,
-        attempt,
-        artifactPath,
-        canonicalPath: path.posix.join("apps/ios/build/SnapshotTestResults", name),
-        captureOutcome,
-        testResult: summary.testResult,
-        failedTests: summary.failedTests,
-        sha256: sha256Directory(source),
-      };
-    });
-    const final = summaries.at(-1);
-    if (
-      final.captureOutcome !== "succeeded" ||
-      final.artifactPath === null ||
-      final.testResult !== "Passed" ||
-      final.failedTests !== 0
-    ) {
+    const [entry] = attempts;
+    const expectedKeys = ["attempt", "captureOutcome", "deviceName", "screenshotName"];
+    const actualKeys = Object.keys(entry).toSorted((left, right) => left.localeCompare(right));
+    if (actualKeys.join("\n") !== expectedKeys.join("\n")) {
+      fail(`${deviceName} ${screenshotName} has an invalid capture attempt record`);
+    }
+    const { attempt, captureOutcome } = entry;
+    if (captureOutcome !== "succeeded") {
+      fail(`${deviceName} ${screenshotName} capture attempt did not succeed`);
+    }
+    const name = `${deviceName}-${screenshotName}-attempt-${attempt}.xcresult`;
+    const source = path.join(xcresultDirectory, name);
+    if (!fs.existsSync(source)) {
+      fail(`${name} is missing for the successful capture attempt`);
+    }
+    const summary = readXcresultSummary(source);
+    if (!Number.isInteger(summary.failedTests) || summary.failedTests < 0) {
+      fail(`${name} has invalid failedTests`);
+    }
+    const artifactPath = path.posix.join("xcresults", name);
+    copyEntry(source, path.join(familyDirectory, artifactPath));
+    const sha256 = sha256Directory(source);
+    if (summary.testResult !== "Passed" || summary.failedTests !== 0) {
       fail(`${deviceName} ${screenshotName} does not have a passing final capture attempt`);
     }
-    results.push(...summaries);
+    results.push({
+      screenshotName,
+      attempt,
+      artifactPath,
+      canonicalPath: path.posix.join("apps/ios/build/SnapshotTestResults", name),
+      captureOutcome,
+      testResult: summary.testResult,
+      failedTests: summary.failedTests,
+      sha256,
+    });
   }
   if (ledgerEntries.length !== results.length) {
     fail(`${deviceName} capture attempt ledger contains unexpected evidence`);
   }
-  const expectedNames = results
-    .filter(({ artifactPath }) => artifactPath !== null)
-    .map(({ artifactPath }) => path.posix.basename(artifactPath));
+  const expectedNames = results.map(({ artifactPath }) => path.posix.basename(artifactPath));
   const familyEntries = xcresultNames.filter((name) => name.startsWith(`${deviceName}-`));
   if (
     familyEntries.length !== xcresultNames.length ||
@@ -533,34 +521,28 @@ function verifyManifestFamily(manifestPath, manifest) {
     fail(`${manifest.family} capture attempt union contains an unexpected screenshot`);
   }
   for (const screenshotName of spec.screenshotNames) {
-    const attempts = manifest.captureAttempts
-      ?.filter((entry) => entry.screenshotName === screenshotName)
-      .toSorted((left, right) => left.attempt - right.attempt);
+    const attempts = manifest.captureAttempts.filter(
+      (entry) => entry.screenshotName === screenshotName,
+    );
     if (attempts.length !== 1 || attempts[0].attempt !== 1) {
       fail(`${manifest.family} ${screenshotName} capture attempt union mismatch`);
     }
-    const final = attempts.at(-1);
+    const [attempt] = attempts;
     if (
-      final.captureOutcome !== "succeeded" ||
-      final.artifactPath === null ||
-      final.testResult !== "Passed" ||
-      final.failedTests !== 0
+      attempt.captureOutcome !== "succeeded" ||
+      attempt.artifactPath === null ||
+      attempt.testResult !== "Passed" ||
+      attempt.failedTests !== 0
     ) {
       fail(`${manifest.family} ${screenshotName} final xcresult is not passing`);
     }
-    for (const attempt of attempts) {
-      requireString(attempt.testResult, `${manifest.family} ${screenshotName} test result`);
-      if (!Number.isInteger(attempt.failedTests) || attempt.failedTests < 0) {
-        fail(`${manifest.family} ${screenshotName} has invalid failedTests`);
-      }
-      const expectedFilename = `${deviceName}-${screenshotName}-attempt-${attempt.attempt}.xcresult`;
-      const expectedCanonicalPath = `apps/ios/build/SnapshotTestResults/${expectedFilename}`;
-      if (attempt.canonicalPath !== expectedCanonicalPath) {
-        fail(`${manifest.family} has unexpected xcresult path: ${attempt.canonicalPath}`);
-      }
-      if (attempt.artifactPath !== `xcresults/${expectedFilename}`) {
-        fail(`${manifest.family} has unexpected xcresult artifact path: ${attempt.artifactPath}`);
-      }
+    const expectedFilename = `${deviceName}-${screenshotName}-attempt-${attempt.attempt}.xcresult`;
+    const expectedCanonicalPath = `apps/ios/build/SnapshotTestResults/${expectedFilename}`;
+    if (attempt.canonicalPath !== expectedCanonicalPath) {
+      fail(`${manifest.family} has unexpected xcresult path: ${attempt.canonicalPath}`);
+    }
+    if (attempt.artifactPath !== `xcresults/${expectedFilename}`) {
+      fail(`${manifest.family} has unexpected xcresult artifact path: ${attempt.artifactPath}`);
     }
   }
   verifyFamilyArtifactUnion(manifestPath, manifest);

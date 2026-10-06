@@ -60,7 +60,6 @@ type TelegramFinalDelivery = {
 };
 
 type TelegramExecApprovalHandlerDeps = {
-  nowMs?: () => number;
   sendTyping?: typeof sendTypingTelegram;
   sendMessage?: typeof sendMessageTelegram;
   editMessage?: typeof editMessageTelegram;
@@ -135,6 +134,7 @@ function buildPendingPayload(params: {
           : [],
     };
   }
+  const execView = params.view.approvalKind === "exec" ? params.view : undefined;
   const payload =
     params.approvalKind === "plugin"
       ? buildPluginApprovalPendingReplyPayload({
@@ -145,17 +145,12 @@ function buildPendingPayload(params: {
           approvalId: params.request.id,
           approvalSlug: params.request.id.slice(0, 8),
           approvalCommandId: params.request.id,
-          warningText:
-            params.view.approvalKind === "exec"
-              ? (params.view.warningText ?? undefined)
-              : undefined,
-          command: params.view.approvalKind === "exec" ? params.view.commandText : "",
-          cwd: params.view.approvalKind === "exec" ? (params.view.cwd ?? undefined) : undefined,
-          host:
-            params.view.approvalKind === "exec" && params.view.host === "node" ? "node" : "gateway",
-          nodeId:
-            params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
-          scope: params.view.approvalKind === "exec" ? (params.view.scope ?? undefined) : undefined,
+          warningText: execView?.warningText ?? undefined,
+          command: execView?.commandText ?? "",
+          cwd: execView?.cwd ?? undefined,
+          host: execView?.host === "node" ? "node" : "gateway",
+          nodeId: execView?.nodeId ?? undefined,
+          scope: execView?.scope ?? undefined,
           allowedDecisions: params.view.actions.map((action) => action.decision),
           expiresAtMs: params.request.expiresAtMs,
           nowMs: params.nowMs,
@@ -230,22 +225,18 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       }
       const sendTyping = resolved.context.deps?.sendTyping ?? sendTypingTelegram;
       const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
-      await sendTyping(preparedTarget.chatId, {
+      const options = {
         cfg,
         token: resolved.context.token,
         accountId: resolved.accountId,
         ...(preparedTarget.messageThreadId != null
           ? { messageThreadId: preparedTarget.messageThreadId }
           : {}),
-      }).catch(() => {});
+      };
+      await sendTyping(preparedTarget.chatId, options).catch(() => {});
       const result = await sendMessage(preparedTarget.chatId, pendingPayload.text, {
-        cfg,
-        token: resolved.context.token,
-        accountId: resolved.accountId,
+        ...options,
         buttons: pendingPayload.buttons,
-        ...(preparedTarget.messageThreadId != null
-          ? { messageThreadId: preparedTarget.messageThreadId }
-          : {}),
         ...(preparedTarget.directMessagesTopicId != null
           ? { directMessagesTopicId: preparedTarget.directMessagesTopicId }
           : {}),

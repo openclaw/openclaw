@@ -1,4 +1,3 @@
-/** Shared CLI formatting for gateway health failures, channels, and delivery queues. */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -8,6 +7,22 @@ import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/heal
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+
+export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
+  const quarantined = summary.contextEngines?.quarantined ?? [];
+  if (quarantined.length === 0) {
+    return null;
+  }
+  const engines = quarantined.map((entry) => entry.engineId).join(", ");
+  return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
+}
+
+export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
+  if (summary.configReload?.hotReloadStatus !== "disabled") {
+    return null;
+  }
+  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
+}
 
 export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
   if (!isGatewayTransportError(err) || err.kind !== "closed" || err.code === undefined) {
@@ -34,7 +49,6 @@ const formatKv = (line: string, rich: boolean) => {
   return `${colorize(rich, theme.muted, `${key}:`)} ${colorize(rich, valueColor, value)}`;
 };
 
-/** Formats thrown health errors with rich detail lines when terminal color is enabled. */
 export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } = {}): string {
   const rich = opts.rich ?? isRich();
   const raw = String(err);
@@ -143,7 +157,6 @@ function formatPluginDiagnostic(text: string, maxChars: number): string {
   return truncateUtf16Safe(redactToolPayloadText(normalized), maxChars);
 }
 
-/** Formats terse channel and actionable plugin health lines for shared CLI surfaces. */
 export const formatHealthChannelLines = (
   summary: HealthSummary,
   opts: {
@@ -301,7 +314,6 @@ export const formatHealthChannelLines = (
   return lines;
 };
 
-/** Formats dead-lettered and pressured delivery queue entries for text health output. */
 export function formatDeliveryQueueHealthLine(
   summary: HealthSummary,
   now = Date.now(),

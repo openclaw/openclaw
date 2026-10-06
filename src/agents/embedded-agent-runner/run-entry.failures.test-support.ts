@@ -29,8 +29,8 @@ export function registerRunEntryFailureTests(state: {
       const { mergeAcceptedSessionSpawnsForRun } = await import("../accepted-session-spawn.js");
       const { createSubagentRunRecord } = await import("../subagent-test-fixtures.test-helpers.js");
       const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
-      const { saveSubagentRegistryChangesToSqlite, loadSubagentRunsByRunIdsFromSqlite } =
-        await import("../subagents/registry/subagent-registry.store.sqlite.js");
+      const { saveSubagentRegistryChangesToSqlite, loadSubagentRegistryFromSqlite } =
+        await import("../subagents/registry/subagent-registry-state.fixture.test-support.js");
       const { withLocalSessionPlacementTurnSettlement } =
         await import("../session-placement-admission.js");
       const fixture = await createOpenClawTestState({ label: "entry-cli-acceptance" });
@@ -130,7 +130,9 @@ export function registerRunEntryFailureTests(state: {
               { preparedRunAdmission: admission, isFinalFallbackAttempt: false },
             );
             placementReleased = true;
-            expect(child.requesterTurnRunId).toBe(identity.runId);
+            expect(subagentRuns.get(child.runId)?.requesterTurnRunId).toBe(
+              retained ? identity.runId : undefined,
+            );
             return result;
           },
         );
@@ -181,7 +183,7 @@ export function registerRunEntryFailureTests(state: {
         });
         if (revokeAtCleanup) {
           await expect(run).rejects.toThrow("settlement is closed");
-          expect(loadSubagentRunsByRunIdsFromSqlite([child.runId])[0]).toMatchObject({
+          expect(loadSubagentRegistryFromSqlite().get(child.runId)).toMatchObject({
             requesterTurnRunId: identity.runId,
           });
           return;
@@ -191,7 +193,7 @@ export function registerRunEntryFailureTests(state: {
         expect(runCandidate).toHaveBeenCalledTimes(retained ? 2 : 3);
         if (retained) {
           expect(result.result.acceptedSessionSpawns).toHaveLength(1);
-          expect(loadSubagentRunsByRunIdsFromSqlite([child.runId])[0]).toMatchObject({
+          expect(loadSubagentRegistryFromSqlite().get(child.runId)).toMatchObject({
             runId: child.runId,
             requesterTurnRunId: undefined,
           });
@@ -215,8 +217,8 @@ export function registerRunEntryFailureTests(state: {
       const { mergeAcceptedSessionSpawnsForRun } = await import("../accepted-session-spawn.js");
       const { createSubagentRunRecord } = await import("../subagent-test-fixtures.test-helpers.js");
       const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
-      const { saveSubagentRegistryChangesToSqlite, loadSubagentRunsByRunIdsFromSqlite } =
-        await import("../subagents/registry/subagent-registry.store.sqlite.js");
+      const { saveSubagentRegistryChangesToSqlite, loadSubagentRegistryFromSqlite } =
+        await import("../subagents/registry/subagent-registry-state.fixture.test-support.js");
       const fixture = await createOpenClawTestState({ label: "entry-failure-settlement" });
       const identity = {
         runId: "failed-entry",
@@ -262,7 +264,7 @@ export function registerRunEntryFailureTests(state: {
               isFinalFallbackAttempt: false,
             }),
           ).rejects.toBe(providerError);
-          expect(loadSubagentRunsByRunIdsFromSqlite([child.runId])[0]?.requesterTurnRunId).toBe(
+          expect(loadSubagentRegistryFromSqlite().get(child.runId)?.requesterTurnRunId).toBe(
             identity.runId,
           );
           if (!skipRemaining) {
@@ -288,8 +290,12 @@ export function registerRunEntryFailureTests(state: {
           }),
         ).rejects.toBe(exhausted);
         expect(runCandidate).toHaveBeenCalledTimes(skipRemaining ? 1 : 2);
-        expect(child.requesterTurnRunId).toBeUndefined();
-        expect(loadSubagentRunsByRunIdsFromSqlite([child.runId])[0]).toMatchObject({
+        expect(child.requesterTurnRunId).toBe(identity.runId);
+        expect(subagentRuns.get(child.runId)).toMatchObject({
+          runId: child.runId,
+          requesterTurnRunId: undefined,
+        });
+        expect(loadSubagentRegistryFromSqlite().get(child.runId)).toMatchObject({
           runId: child.runId,
           requesterTurnRunId: undefined,
         });

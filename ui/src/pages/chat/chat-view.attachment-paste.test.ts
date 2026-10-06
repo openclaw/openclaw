@@ -59,6 +59,35 @@ function getComposerTextarea(container: Element) {
   );
 }
 
+function deferFileReaders() {
+  const readers: FileReader[] = [];
+  vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
+    readers.push(this);
+  });
+  return readers;
+}
+
+function attachFile(container: Element, file: File, entry: "clipboard" | "file picker" | "drop") {
+  if (entry === "clipboard") {
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", {
+      value: { items: [{ type: file.type, getAsFile: () => file }], getData: () => "" },
+    });
+    getComposerTextarea(container).dispatchEvent(paste);
+  } else if (entry === "file picker") {
+    const input = expectDefined(
+      container.querySelector<HTMLInputElement>(".agent-chat__file-input"),
+      "attachment file input",
+    );
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  } else {
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [file], types: ["Files"] } });
+    expectDefined(container.querySelector("section.chat"), "chat drop target").dispatchEvent(drop);
+  }
+}
+
 describe("chat attachment paste", () => {
   it("removes upload controls and rejects file paste/drop while preserving plain text paste", async () => {
     const uploadConfig = createApplicationConfigCapability({ resourceBasePath: "" });
@@ -158,92 +187,88 @@ describe("chat attachment paste", () => {
     expect(getChatAttachmentDataUrl(original)).toBeNull();
   });
 
-  it("converts supported-size pasted image bytes into an attachment", () => {
+  it.each(["supported", "invalid"] as const)("handles %s pasted image bytes", (kind) => {
     const onAttachmentsChange = vi.fn<(attachments: ChatAttachment[]) => void>();
     const container = renderChatView({ onAttachmentsChange });
-    const textarea = getComposerTextarea(container);
-    const base64 = Buffer.alloc(4 * 1024 * 1024, 0xab).toString("base64");
-    const allowed = textarea.dispatchEvent(createPasteEvent(`data:image/png;base64,${base64}`, []));
+    const base64 =
+      kind === "supported" ? Buffer.alloc(4 * 1024 * 1024, 0xab).toString("base64") : "AA$A";
+    const dataUrl = `data:image/png;base64,${base64}`;
+    const allowed = getComposerTextarea(container).dispatchEvent(createPasteEvent(dataUrl, []));
+    if (kind === "invalid") {
+      expect(onAttachmentsChange).not.toHaveBeenCalled();
+      return;
+    }
     expect(allowed).toBe(false);
     const attachments = expectDefined(onAttachmentsChange.mock.calls[0]?.[0], "pasted attachments");
     expect(attachments).toHaveLength(1);
     expect(attachments[0]?.sizeBytes).toBe(4 * 1024 * 1024);
-    expect(getChatAttachmentDataUrl(expectDefined(attachments[0], "pasted image"))).toBe(
-      `data:image/png;base64,${base64}`,
-    );
+    expect(getChatAttachmentDataUrl(expectDefined(attachments[0], "pasted image"))).toBe(dataUrl);
   });
-
-  it.each(["AA$A", "QQ=Q", "===="])(
-    "leaves invalid pasted image bytes %s out of attachments",
-    (data) => {
-      const onAttachmentsChange = vi.fn<(attachments: ChatAttachment[]) => void>();
-      const container = renderChatView({ onAttachmentsChange });
-      getComposerTextarea(container).dispatchEvent(
-        createPasteEvent(`data:image/png;base64,${data}`, []),
-      );
-      expect(onAttachmentsChange).not.toHaveBeenCalled();
-    },
-  );
 });
 
 describe("chat attachment reading", () => {
-  it("retains a failed attachment slot when uploads are disabled during a file read", async () => {
-    const base = createApplicationConfigCapability({ resourceBasePath: "" });
-    const uploadConfig = { ...base, current: { ...base.current, uploadsEnabled: true } };
-    const readers: FileReader[] = [];
-    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
-      readers.push(this);
-    });
-    const reads = new ChatAttachmentReadLifecycle(() => undefined);
-    const readSignal = reads.readSignal;
-    onTestFinished(() => reads.abortReads());
-    const onAttachmentsChange = vi.fn();
-    const props = {
-      uploadConfig,
-      draft: "Keep this file with the message",
-      attachmentReads: reads,
-      readSignal,
-      getPendingAttachmentReads: () => reads.pendingReads,
-      onPendingReadsChange: (delta: 1 | -1) => reads.updatePending(readSignal, delta),
-      onAttachmentsChange,
-    };
-    const container = renderChatView(props);
-    const input = expectDefined(
-      container.querySelector<HTMLInputElement>(".agent-chat__file-input"),
-      "attachment file input",
-    );
-    Object.defineProperty(input, "files", {
-      value: [new File(["attachment proof"], "proof.png", { type: "image/png" })],
-    });
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(readers).toHaveLength(1);
-    expect(reads.pendingReads).toBe(1);
-
-    uploadConfig.current.uploadsEnabled = false;
-    const reader = expectDefined(readers[0], "pending attachment reader");
-    Object.defineProperty(reader, "result", { value: "data:image/png;base64,YWJj" });
-    reader.dispatchEvent(new ProgressEvent("load"));
-    await Promise.resolve();
-
-    expect(reads.pendingReads).toBe(0);
-    expect(onAttachmentsChange).not.toHaveBeenCalled();
-    const failed = renderChatView(props);
-    expect(failed.querySelectorAll(".chat-attachment-thumb--error")).toHaveLength(1);
-    expect(getComposerTextarea(failed).value).toBe(props.draft);
-    expect(failed.querySelector(".chat-attachment-error")?.getAttribute("aria-label")).toContain(
-      "proof.png",
-    );
-  });
+  it.each(["uploads disabled", "session aborted"] as const)(
+    "rejects an in-flight read after %s",
+    async (outcome) => {
+      const base = createApplicationConfigCapability({ resourceBasePath: "" });
+      const uploadConfig = { ...base, current: { ...base.current, uploadsEnabled: true } };
+      const readers = deferFileReaders();
+      const reads = new ChatAttachmentReadLifecycle(() => undefined);
+      const readSignal = reads.readSignal;
+      onTestFinished(() => reads.abortReads());
+      const onAttachmentsChange = vi.fn();
+      const aborted = outcome === "session aborted";
+      const props = {
+        uploadConfig,
+        sessionKey: "agent:main:session-a",
+        draft: "Keep this file with the message",
+        attachmentReads: reads,
+        readSignal,
+        pendingAttachmentReads: reads.pendingReads,
+        getPendingAttachmentReads: () => reads.pendingReads,
+        onPendingReadsChange: (delta: 1 | -1) => reads.updatePending(readSignal, delta),
+        onAttachmentsChange,
+      };
+      const container = renderChatView(props);
+      attachFile(
+        container,
+        new File(
+          [aborted ? "private session A" : "attachment proof"],
+          aborted ? "private.png" : "proof.png",
+          { type: "image/png" },
+        ),
+        aborted ? "drop" : "file picker",
+      );
+      expect(readers).toHaveLength(1);
+      expect(reads.pendingReads).toBe(1);
+      if (aborted) {
+        reads.abortReads();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(readSignal.aborted).toBe(true);
+        expect(reads.readSignal).not.toBe(readSignal);
+      } else {
+        uploadConfig.current.uploadsEnabled = false;
+        const reader = expectDefined(readers[0], "pending attachment reader");
+        Object.defineProperty(reader, "result", { value: "data:image/png;base64,YWJj" });
+        reader.dispatchEvent(new ProgressEvent("load"));
+        await Promise.resolve();
+        const failed = renderChatView(props);
+        expect(failed.querySelectorAll(".chat-attachment-thumb--error")).toHaveLength(1);
+        expect(getComposerTextarea(failed).value).toBe(props.draft);
+        expect(
+          failed.querySelector(".chat-attachment-error")?.getAttribute("aria-label"),
+        ).toContain("proof.png");
+      }
+      expect(reads.pendingReads).toBe(0);
+      expect(onAttachmentsChange).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["clipboard", "file picker", "drop"] as const)(
     "waits for an in-flight %s attachment before accepting an immediate send",
     async (entry) => {
-      const readers: FileReader[] = [];
-      vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
-        this: FileReader,
-      ) {
-        readers.push(this);
-      });
+      const readers = deferFileReaders();
       const container = document.createElement("div");
       const file = new File(["attachment proof"], "proof.png", { type: "image/png" });
       const draft = "Send the attachment with this message";
@@ -282,31 +307,7 @@ describe("chat attachment reading", () => {
       });
       redraw();
 
-      if (entry === "clipboard") {
-        const paste = new Event("paste", { bubbles: true, cancelable: true });
-        Object.defineProperty(paste, "clipboardData", {
-          value: {
-            items: [{ type: file.type, getAsFile: () => file }],
-            getData: () => "",
-          },
-        });
-        getComposerTextarea(container).dispatchEvent(paste);
-      } else if (entry === "file picker") {
-        const input = expectDefined(
-          container.querySelector<HTMLInputElement>(".agent-chat__file-input"),
-          "attachment file input",
-        );
-        Object.defineProperty(input, "files", { configurable: true, value: [file] });
-        input.dispatchEvent(new Event("change", { bubbles: true }));
-      } else {
-        const drop = new Event("drop", { bubbles: true, cancelable: true });
-        Object.defineProperty(drop, "dataTransfer", {
-          value: { files: [file], types: ["Files"] },
-        });
-        expectDefined(container.querySelector("section.chat"), "chat drop target").dispatchEvent(
-          drop,
-        );
-      }
+      attachFile(container, file, entry);
 
       expect(readers).toHaveLength(1);
       expect(reads.pendingReads).toBe(1);
@@ -356,42 +357,4 @@ describe("chat attachment reading", () => {
       expect(onSend).toHaveBeenCalledOnce();
     },
   );
-
-  it("does not attach an aborted file read to a newly selected session", async () => {
-    const readers: FileReader[] = [];
-    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
-      readers.push(this);
-    });
-    const reads = new ChatAttachmentReadLifecycle(() => undefined);
-    const oldSignal = reads.readSignal;
-    const onAttachmentsChange = vi.fn();
-    const file = new File(["private session A"], "private.png", { type: "image/png" });
-    const container = renderChatView({
-      getPendingAttachmentReads: () => reads.pendingReads,
-      onAttachmentsChange,
-      onPendingReadsChange: (delta) => reads.updatePending(oldSignal, delta),
-      attachmentReads: reads,
-      pendingAttachmentReads: reads.pendingReads,
-      readSignal: oldSignal,
-      sessionKey: "agent:main:session-a",
-    });
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, "dataTransfer", {
-      value: { files: [file], types: ["Files"] },
-    });
-    expectDefined(container.querySelector("section.chat"), "session A drop target").dispatchEvent(
-      drop,
-    );
-
-    expect(readers).toHaveLength(1);
-    expect(reads.pendingReads).toBe(1);
-    reads.abortReads();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(oldSignal.aborted).toBe(true);
-    expect(reads.pendingReads).toBe(0);
-    expect(reads.readSignal).not.toBe(oldSignal);
-    expect(onAttachmentsChange).not.toHaveBeenCalled();
-  });
 });

@@ -12,6 +12,13 @@ type ArtifactDownloadHost = {
   resourceBasePath?: string;
 };
 
+type ArtifactDownloadParams = {
+  sessionKey: string;
+  agentId?: string;
+  artifactId: string;
+  variant?: "full" | "thumbnail";
+};
+
 export function isHttpArtifactDownloadUrl(url: string, resourceBasePath = ""): boolean {
   try {
     const parsed = new URL(url, globalThis.location.origin);
@@ -28,13 +35,11 @@ export function isHttpArtifactDownloadUrl(url: string, resourceBasePath = ""): b
 
 export async function downloadArtifact(
   state: ArtifactDownloadHost,
-  params: { sessionKey: string; agentId?: string; artifactId: string },
+  { variant, ...params }: ArtifactDownloadParams,
   signal?: AbortSignal,
   options?: { readBinary?: boolean },
 ): Promise<(ArtifactDownloadResult & { blob?: Blob }) | null> {
-  const client = state.client;
-  const connectionEpoch = state.connectionEpoch;
-  const resourceBasePath = state.resourceBasePath;
+  const { client, connectionEpoch, resourceBasePath } = state;
   if (!state.connected || !client) {
     return null;
   }
@@ -68,7 +73,10 @@ export async function downloadArtifact(
   if (!useHttp || !url?.startsWith(ARTIFACT_DOWNLOAD_PATH)) {
     return result;
   }
-  const download = { ...result, url: `${normalizeBasePath(resourceBasePath ?? "")}${url}` };
+  const download = {
+    ...result,
+    url: `${normalizeBasePath(resourceBasePath ?? "")}${url}${variant === "thumbnail" ? "?variant=thumbnail" : ""}`,
+  };
   const mimeType = result.artifact.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   if (!options?.readBinary && !/^(?:image\/|text\/|application\/json$)/u.test(mimeType)) {
     return download;
@@ -93,8 +101,10 @@ export async function downloadArtifact(
       throw new Error("Artifact download returned an unexpected content disposition");
     }
     const blob = await response.blob();
+    const blobType = blob.type.split(";", 1)[0]?.trim().toLowerCase();
     if (
-      blob.type.split(";", 1)[0]?.trim().toLowerCase() !== (mimeType || "application/octet-stream")
+      blobType !== (mimeType || "application/octet-stream") &&
+      !(variant === "thumbnail" && result.artifact.type === "image" && blobType === "image/png")
     ) {
       throw new Error("Artifact download returned an unexpected content type");
     }
@@ -110,7 +120,7 @@ const ARTIFACT_IMAGE_MIME = /^image\/(?:png|jpeg|gif|webp|avif)$/u;
 
 export async function resolveArtifactDownloadSource(
   state: ArtifactDownloadHost,
-  params: { sessionKey: string; agentId?: string; artifactId: string },
+  params: ArtifactDownloadParams,
   signal?: AbortSignal,
 ): Promise<{ url: string; expiresAt?: string; blob?: Blob } | null> {
   const result = await downloadArtifact(state, params, signal);
@@ -129,11 +139,11 @@ export async function resolveArtifactDownloadSource(
   ) {
     return { url: `data:${result.artifact.mimeType};base64,${result.data}` };
   }
-  const url = typeof result?.url === "string" ? result.url.trim() : "";
+  const url = result?.url?.trim();
   if (!url) {
     return null;
   }
-  const expiresAt = typeof result?.expiresAt === "string" ? result.expiresAt.trim() : undefined;
+  const expiresAt = result?.expiresAt?.trim();
   return {
     url,
     ...(expiresAt ? { expiresAt } : {}),

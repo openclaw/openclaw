@@ -1,4 +1,3 @@
-// Parses npm registry specs into package, version, and tag references.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   parse as parseSemver,
@@ -8,38 +7,10 @@ import {
 } from "semver";
 import { compareOpenClawSemver, isOpenClawCorrectionSemver } from "./semver.js";
 
+export { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
+
 const OPENCLAW_RELEASE_PREFIX_RE = /^\d{4}\./;
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-/**
- * npm ≤11 prints `npm view`/`npm pack` `--json` results as a bare entry object
- * or an entry array; npm 12 wraps view results in a singleton array and keys
- * pack results by package name. Normalize both shapes to the entry list, or
- * metadata reads mistake the wrapper for an entry and fail closed with
- * incomplete-metadata errors.
- */
-export function resolveNpmJsonEntries(value: unknown): unknown[] {
-  if (Array.isArray(value)) {
-    return value;
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    const looksLikeEntry =
-      typeof record.id === "string" ||
-      typeof record.name === "string" ||
-      typeof record.version === "string" ||
-      typeof record.filename === "string";
-    if (!looksLikeEntry) {
-      const entries = Object.values(record).filter(
-        (entry) => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
-      );
-      if (entries.length > 0) {
-        return entries;
-      }
-    }
-  }
-  return [value];
-}
 
 /**
  * Parsed registry-only npm spec accepted by plugin install flows.
@@ -54,7 +25,7 @@ export type ParsedRegistryNpmSpec = {
   selectorIsPrerelease: boolean;
 };
 
-function parseRegistryNpmSpecInternal(
+export function parseRegistryNpmSpecResult(
   rawSpec: string,
 ): { ok: true; parsed: ParsedRegistryNpmSpec } | { ok: false; error: string } {
   const spec = rawSpec.trim();
@@ -133,13 +104,13 @@ function parseRegistryNpmSpecInternal(
 
 /** Parses a registry-only npm package spec into package name and optional selector metadata. */
 export function parseRegistryNpmSpec(rawSpec: string): ParsedRegistryNpmSpec | null {
-  const parsed = parseRegistryNpmSpecInternal(rawSpec);
+  const parsed = parseRegistryNpmSpecResult(rawSpec);
   return parsed.ok ? parsed.parsed : null;
 }
 
 /** Validates a registry-only npm spec and returns a user-facing error when rejected. */
 export function validateRegistryNpmSpec(rawSpec: string): string | null {
-  const parsed = parseRegistryNpmSpecInternal(rawSpec);
+  const parsed = parseRegistryNpmSpecResult(rawSpec);
   return parsed.ok ? null : parsed.error;
 }
 

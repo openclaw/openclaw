@@ -9,6 +9,7 @@ import {
 } from "../../agents/agent-scope-config.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveEnvironmentValue } from "../../infra/process-env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isTerminalConfigEnabled } from "./enabled.js";
 
@@ -41,36 +42,12 @@ type TerminalLaunchPolicy = {
   acceptConfig: (options: { retireRejectedRestart: boolean }) => void;
 };
 
-function resolveTerminalShell(params: {
-  configuredShell?: string;
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
-}): { shell: string; args: string[] } {
-  const configured = params.configuredShell?.trim();
-  if (configured) {
-    return { shell: configured, args: [] };
-  }
-  const platform = params.platform ?? process.platform;
-  const env = params.env ?? process.env;
-  if (platform === "win32") {
-    return { shell: env.ComSpec?.trim() || "cmd.exe", args: [] };
-  }
-  const loginShell = env.SHELL?.trim();
-  if (loginShell) {
-    // Load the operator's login profile, including its PATH and prompt.
-    return { shell: loginShell, args: ["-l"] };
-  }
-  return { shell: "/bin/bash", args: ["-l"] };
-}
-
 function resolveTerminalLaunch(params: {
   config: OpenClawConfig;
   agentId?: string;
   configuredShell?: string;
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
 }): TerminalLaunchResolution {
-  const env = params.env ?? process.env;
+  const env = process.env;
   const requested = params.agentId?.trim();
   let agentId: string;
   try {
@@ -92,11 +69,13 @@ function resolveTerminalLaunch(params: {
   }
   const workspaceDir = resolveAgentWorkspaceDir(params.config, agentId, env);
   const cwd = existingDirOrHome(workspaceDir, env);
-  const { shell, args } = resolveTerminalShell({
-    configuredShell: params.configuredShell,
-    platform: params.platform,
-    env,
-  });
+  const configuredShell = params.configuredShell?.trim();
+  const windows = process.platform === "win32";
+  const shell =
+    configuredShell ||
+    (windows ? env.ComSpec?.trim() || "cmd.exe" : env.SHELL?.trim() || "/bin/bash");
+  // Load the operator's login profile, including its PATH and prompt.
+  const args = configuredShell || windows ? [] : ["-l"];
   return { ok: true, plan: { agentId, cwd, shell, args } };
 }
 
@@ -129,8 +108,7 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       // later hot commit can enable. Agent restrictions remain independent.
       restrictions.disabled ||= isTerminalConfigEnabled(committedTerminalConfig());
     }
-    const activeAgentIds = new Set(listAgentIds(activeConfig));
-    for (const agentId of activeAgentIds) {
+    for (const agentId of listAgentIds(activeConfig)) {
       const candidate = resolveForConfig(config, agentId);
       if (!candidate.ok) {
         restrictions.blockedAgents.set(agentId, candidate.block);
@@ -230,7 +208,10 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
   };
 }
 
-export function buildTerminalEnv(baseEnv: NodeJS.ProcessEnv): Record<string, string> {
+export function buildTerminalEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(baseEnv)) {
     if (typeof value === "string") {
@@ -238,6 +219,10 @@ export function buildTerminalEnv(baseEnv: NodeJS.ProcessEnv): Record<string, str
     }
   }
   env.TERM = env.TERM ?? "xterm-256color";
+  // The browser renderer supports RGB regardless of the Gateway host terminal.
+  if (resolveEnvironmentValue(env, "COLORTERM", platform) === undefined) {
+    env.COLORTERM = "truecolor";
+  }
   // Lets shells and prompts detect that they are inside an OpenClaw terminal.
   env.OPENCLAW_TERMINAL = "1";
   return env;

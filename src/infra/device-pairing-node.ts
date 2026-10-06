@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
+import type { NodePairingPendingSnapshot } from "./device-pairing-admission.types.js";
 import type { NodePairingGeneration } from "./device-pairing-identity.js";
 import {
   projectNodePairing,
@@ -14,7 +15,6 @@ import {
   type NodePairingCleanupClaim,
   type NodePairingList,
   type NodePairingListWithGeneration,
-  type NodePairingPendingSnapshot,
   type NodePairingRequestInput,
   type NodePairingSupersededRequest,
   type PairedDeviceNode,
@@ -154,6 +154,7 @@ export async function finalizeNodePairingCleanupClaim(
       },
       {
         baseDir: claim.baseDir,
+        onAuthorityRefused: () => [],
         assertCurrent: () => {
           if (!cleanupClaimIsActive(claim)) {
             throw new DevicePairingAuthorityRefusedError("node reconnect cleanup claim changed");
@@ -161,11 +162,6 @@ export async function finalizeNodePairingCleanupClaim(
         },
       },
     );
-  } catch (error) {
-    if (error instanceof DevicePairingAuthorityRefusedError) {
-      return [];
-    }
-    throw error;
   } finally {
     removeCleanupClaim(claim);
   }
@@ -215,44 +211,53 @@ export async function reusePendingNodePairingForReconnect(
 
 export async function approveNodePairing(
   requestId: string,
-  options: { callerScopes?: readonly string[] },
+  options: {
+    callerScopes?: readonly string[];
+    initialOnly?: boolean;
+    isApprovalCurrent?: () => boolean;
+  },
   baseDir?: string,
 ): Promise<ApproveNodePairingResult> {
-  try {
-    return await executeDevicePairingMutation(
-      {
-        type: "node.approve",
-        input: { requestId, callerScopes: options.callerScopes, nowMs: Date.now() },
+  return await executeDevicePairingMutation(
+    {
+      type: "node.approve",
+      input: {
+        requestId,
+        callerScopes: options.callerScopes,
+        initialOnly: options.initialOnly,
+        nowMs: Date.now(),
       },
-      {
-        baseDir,
-        admit: (facts) => {
-          if (
-            !isRecord(facts) ||
-            facts.kind !== "node-pending" ||
-            typeof facts.nodeId !== "string" ||
-            typeof facts.requestId !== "string" ||
-            (facts.revision !== undefined && typeof facts.revision !== "string")
-          ) {
-            throw new Error("invalid node pending admission facts");
-          }
-          const key = buildCleanupRevisionClaimKey(baseDir, {
-            nodeId: facts.nodeId,
-            requestId: facts.requestId,
-            revision: facts.revision,
-          });
-          if ((activeCleanupRevisionClaims.get(key)?.size ?? 0) > 0) {
-            throw new DevicePairingAuthorityRefusedError("node reconnect owns pending revision");
-          }
-        },
+    },
+    {
+      baseDir,
+      onAuthorityRefused: () => null,
+      // Automatic grants must retain their policy authority through lock and worker waits.
+      assertCurrent: () => {
+        if (options.isApprovalCurrent?.() === false) {
+          throw new DevicePairingAuthorityRefusedError("node approval policy changed");
+        }
       },
-    );
-  } catch (error) {
-    if (error instanceof DevicePairingAuthorityRefusedError) {
-      return null;
-    }
-    throw error;
-  }
+      admit: (facts) => {
+        if (
+          !isRecord(facts) ||
+          facts.kind !== "node-pending" ||
+          typeof facts.nodeId !== "string" ||
+          typeof facts.requestId !== "string" ||
+          (facts.revision !== undefined && typeof facts.revision !== "string")
+        ) {
+          throw new Error("invalid node pending admission facts");
+        }
+        const key = buildCleanupRevisionClaimKey(baseDir, {
+          nodeId: facts.nodeId,
+          requestId: facts.requestId,
+          revision: facts.revision,
+        });
+        if ((activeCleanupRevisionClaims.get(key)?.size ?? 0) > 0) {
+          throw new DevicePairingAuthorityRefusedError("node reconnect owns pending revision");
+        }
+      },
+    },
+  );
 }
 
 export function rejectNodePairing(

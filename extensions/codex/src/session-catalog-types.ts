@@ -137,10 +137,6 @@ export type CodexSessionCatalogHost = {
   error?: CodexSessionCatalogError;
 };
 
-export type CodexSessionCatalogResult = {
-  hosts: CodexSessionCatalogHost[];
-};
-
 export type CodexSessionTranscriptPage = {
   hostId: string;
   label: string;

@@ -282,16 +282,12 @@ export function renderMarkdownWithMarkers(
   const points = [...boundaries].toSorted((a, b) => a - b);
   // Links and styles share one stack so equal-end spans close in exact reverse open order.
   const stack: { open: string; close: string; end: number }[] = [];
-  type OpeningItem =
-    | { end: number; open: string; close: string; kind: "annotation" }
-    | { end: number; open: string; close: string; kind: "link" }
-    | {
-        end: number;
-        open: string;
-        close: string;
-        kind: "style";
-        style: MarkdownStyle;
-      };
+  type OpeningItem = {
+    end: number;
+    open: string;
+    close: string;
+    rank: number;
+  };
   let out = "";
 
   for (const [i, pos] of points.entries()) {
@@ -322,7 +318,7 @@ export function renderMarkdownWithMarkers(
         end: span.end,
         open: typeof marker.open === "function" ? marker.open(span) : marker.open,
         close: marker.close,
-        kind: "annotation",
+        rank: STYLE_ORDER.length,
       });
     }
 
@@ -337,7 +333,7 @@ export function renderMarkdownWithMarkers(
         end: link.end,
         open: link.open,
         close: link.close,
-        kind: "link",
+        rank: STYLE_ORDER.length + 1,
       });
     }
 
@@ -350,30 +346,16 @@ export function renderMarkdownWithMarkers(
         end: span.end,
         open: typeof marker.open === "function" ? marker.open(span) : marker.open,
         close: marker.close,
-        kind: "style",
-        style: span.style,
+        rank:
+          (STRUCTURAL_STYLES.has(span.style) ? 0 : STYLE_ORDER.length + 2) +
+          (STYLE_RANK.get(span.style) ?? 0),
       });
     }
 
     if (openingItems.length > 0) {
-      openingItems.sort((a, b) => {
-        if (a.end !== b.end) {
-          return b.end - a.end;
-        }
-        const aStructural = a.kind === "style" && STRUCTURAL_STYLES.has(a.style);
-        const bStructural = b.kind === "style" && STRUCTURAL_STYLES.has(b.style);
-        if (aStructural !== bStructural || a.kind !== b.kind) {
-          const kindRank = { annotation: 0, link: 1, style: 2 } as const;
-          const aRank = aStructural ? -1 : kindRank[a.kind];
-          const bRank = bStructural ? -1 : kindRank[b.kind];
-          return aRank - bRank;
-        }
-        if (a.kind === "style" && b.kind === "style") {
-          return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
-        }
-        // Stable sorting preserves source order for equal annotations and links.
-        return 0;
-      });
+      // Structural styles enclose annotations, links, then ordinary styles.
+      // Equal ranks retain source order for annotations and links.
+      openingItems.sort((a, b) => b.end - a.end || a.rank - b.rank);
 
       // Open outer spans first (larger end) so LIFO closes stay valid for same-start overlaps.
       for (const item of openingItems) {

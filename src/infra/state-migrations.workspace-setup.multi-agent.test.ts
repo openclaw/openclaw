@@ -31,20 +31,18 @@ describe("legacy workspace Doctor multi-agent migration", () => {
     const mtime = new Date("2026-07-15T11:02:03.456Z");
     const sources: string[] = [];
     for (const { workspace } of workspaces) {
-      await fsp.mkdir(path.join(workspace, ".openclaw"), { recursive: true });
-      for (const relative of ["openclaw-workspace-state.json", ".openclaw/workspace-state.json"]) {
-        const setupPath = path.join(workspace, relative);
-        await fsp.writeFile(
-          setupPath,
-          JSON.stringify({
-            version: 1,
-            bootstrapSeededAt: seededAt,
-            setupCompletedAt: completedAt,
-          }),
-          "utf8",
-        );
-        sources.push(setupPath);
-      }
+      await fsp.mkdir(workspace, { recursive: true });
+      const setupPath = path.join(workspace, "openclaw-workspace-state.json");
+      await fsp.writeFile(
+        setupPath,
+        JSON.stringify({
+          version: 1,
+          bootstrapSeededAt: seededAt,
+          setupCompletedAt: completedAt,
+        }),
+        "utf8",
+      );
+      sources.push(setupPath);
       const identity = resolveWorkspaceStateIdentity(workspace);
       const attestationPath = path.join(
         context.stateDir,

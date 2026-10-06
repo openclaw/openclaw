@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { maybeRepairPluginRegistryState } from "../commands/doctor-plugin-registry.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { loadOpenClawPlugins } from "./loader.js";
@@ -16,6 +17,7 @@ import {
   writePlugin,
   writePluginMetadata,
 } from "./loader.test-fixtures.js";
+import { disposePluginRegistryInstances } from "./runtime.js";
 import { buildPluginInspectReport, buildPluginSnapshotReport } from "./status.js";
 
 const defaultPluginId = "diagnostics-otel";
@@ -27,7 +29,8 @@ if (!agentMailIntegrity) {
   throw new Error("Expected a valid AgentMail catalog integrity");
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   resetPluginLoaderTestStateForTest();
 });
@@ -36,6 +39,12 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 describe("recorded plugin trust diagnostics", () => {
   it.each([
     { name: "legacy npm spec", override: {}, reason: "trusted-official", trusted: true },
+    {
+      name: "official install through a symlinked state root",
+      symlinkedStateRoot: true,
+      reason: "trusted-official",
+      trusted: true,
+    },
     {
       name: "legacy ClawHub spec",
       override: { source: "clawhub", spec: `clawhub:${defaultPackageName}@2026.8.2` },
@@ -119,6 +128,7 @@ describe("recorded plugin trust diagnostics", () => {
     version?: string;
     override?: Partial<PluginInstallRecord>;
     missing?: boolean;
+    symlinkedStateRoot?: boolean;
     reason: string;
     trusted: boolean;
     repair?: boolean;
@@ -128,6 +138,7 @@ describe("recorded plugin trust diagnostics", () => {
     async ({
       override,
       missing,
+      symlinkedStateRoot,
       reason,
       trusted,
       repair,
@@ -143,18 +154,8 @@ describe("recorded plugin trust diagnostics", () => {
         dir: path.join(stateDir, "extensions", pluginId),
         filename: "index.cjs",
         body: `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
-          const blocked = [];
-          try {
-            api.runtime.state.openKeyedStore({ namespace: "proof", maxEntries: 2 });
-          } catch (error) {
-            blocked.push("openKeyedStore: " + String(error));
-          }
-          try {
-            api.runtime.state.openChannelIngressQueue({ accountId: "default" });
-          } catch (error) {
-            blocked.push("openChannelIngressQueue: " + String(error));
-          }
-          if (blocked.length) throw new Error(blocked.join("; "));
+          api.runtime.state.openKeyedStore({ namespace: "proof", maxEntries: 2 });
+          api.runtime.state.openChannelIngressQueue({ accountId: "default" });
         } };`,
       });
       writePluginMetadata({
@@ -167,10 +168,20 @@ describe("recorded plugin trust diagnostics", () => {
         },
       });
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        let installPath = plugin.dir;
+        if (symlinkedStateRoot) {
+          const linkedStateDir = path.join(makePluginLoaderTempDir(), "linked-state");
+          fs.symlinkSync(
+            stateDir,
+            linkedStateDir,
+            process.platform === "win32" ? "junction" : "dir",
+          );
+          installPath = path.join(linkedStateDir, "extensions", pluginId);
+        }
         const install: PluginInstallRecord = {
           source: "npm",
           spec: `${packageName}@${version}`,
-          installPath: plugin.dir,
+          installPath,
           ...override,
         };
         await refreshPersistedInstalledPluginIndex({
@@ -190,7 +201,12 @@ describe("recorded plugin trust diagnostics", () => {
           config,
           report: snapshot,
         })!.plugin;
-        const registry = loadOpenClawPlugins({ config, cache: false });
+        const warn = vi.fn();
+        const registry = loadOpenClawPlugins({
+          config,
+          cache: false,
+          logger: { info() {}, warn, error() {}, debug() {} },
+        });
         const loaded = registry.plugins.find((entry) => entry.id === plugin.id)!;
         expect(inspected.trustedOfficialInstall === true).toBe(trusted);
         expect(loaded.trustedOfficialInstall === true).toBe(trusted);
@@ -200,25 +216,27 @@ describe("recorded plugin trust diagnostics", () => {
           registryPath: path.join(stateDir, "state", "openclaw.sqlite"),
           origin: "global",
         });
-        expect(loaded.status).toBe(trusted ? "loaded" : "error");
-        if (!trusted) {
-          expect(loaded.error).toContain(
-            "openKeyedStore is only available for trusted plugins in this release.",
+        expect(loaded.status).toBe("loaded");
+        const warnings = warn.mock.calls.filter(([message]) =>
+          String(message).includes("OpenClaw can't verify where this plugin came from"),
+        );
+        if (
+          reason === "record-missing" ||
+          reason === "provenance-missing" ||
+          reason === "provenance-invalid"
+        ) {
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]![0]).toContain(`reason=${reason}`);
+          expect(warnings[0]![0]).toContain(`openclaw plugins inspect ${plugin.id}`);
+          expect(registry.diagnostics).toContainEqual(
+            expect.objectContaining({
+              level: "warn",
+              pluginId: plugin.id,
+              message: expect.stringContaining(`reason=${reason}`),
+            }),
           );
-          expect(loaded.error).toContain(
-            "openChannelIngressQueue is only available for trusted plugins in this release.",
-          );
-          expect(loaded.error).toContain(`loaded from ${JSON.stringify(plugin.file)}`);
-          expect(loaded.error).toContain(`reason=${reason}`);
-          expect(loaded.error).toContain(
-            `registryPath=${JSON.stringify(path.join(stateDir, "state", "openclaw.sqlite"))}`,
-          );
-          expect(loaded.error).toContain(
-            `installSource=${JSON.stringify(missing ? null : install.source)}`,
-          );
-          expect(loaded.error).toContain(
-            `installSpec=${JSON.stringify(missing ? null : (install.spec ?? null))}`,
-          );
+        } else {
+          expect(warnings).toHaveLength(0);
         }
         if (repair) {
           await maybeRepairPluginRegistryState({
@@ -233,7 +251,7 @@ describe("recorded plugin trust diagnostics", () => {
             (entry) => entry.id === pluginId,
           )!;
           expect(repaired).toMatchObject({
-            status: repairTrusted === false ? "error" : "loaded",
+            status: "loaded",
             trust: { reason: repairTrusted === false ? reason : "trusted-official" },
           });
           expect(repaired.trustedOfficialInstall === true).toBe(repairTrusted !== false);
@@ -242,4 +260,98 @@ describe("recorded plugin trust diagnostics", () => {
       });
     },
   );
+
+  it("loads local state and ingress without granting hook agent turns", async () => {
+    useNoBundledPlugins();
+    const stateDir = fs.realpathSync(makePluginLoaderTempDir());
+    const plugins = ["local-one", "local-two"].map((id) =>
+      writePlugin({
+        id,
+        registration: `
+          const store = api.runtime.state.openKeyedStore({ namespace: "shared-name", maxEntries: 2 });
+          const queue = api.runtime.state.openChannelIngressQueue({ accountId: "default" });
+          api.registerTool({
+            name: api.id, description: "Local state fixture", parameters: { type: "object" },
+            async execute(_callId, params) {
+              if (params.hook) {
+                return await api.runtime.hooks.dispatchHookAgentTurn({
+                  name: "Local watcher", agentId: "main", sessionKey: "hook:local:1",
+                  message: "Local event", externalContentSource: "email", deliver: false,
+                });
+              }
+              const before = { value: await store.lookup("key"), pending: await queue.listPending() };
+              await store.register("key", api.id);
+              await queue.enqueue("event", { plugin: api.id });
+              const delivered = [];
+              const drain = api.runtime.state.openChannelIngressDrain({
+                accountId: "default",
+                dispatchClaimedEvent(event) { delivered.push(event.payload.plugin); },
+              });
+              try {
+                await drain.drainOnce();
+                await drain.waitForIdle();
+                return { content: [], details: { before, value: await store.lookup("key"), delivered } };
+              } finally { drain.dispose(); }
+            },
+          });`,
+      }),
+    );
+    for (const plugin of plugins) {
+      fs.writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: plugin.id,
+          configSchema: { type: "object" },
+          contracts: { tools: [plugin.id] },
+        }),
+      );
+    }
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const dispatchHookAgentTurn = vi.fn(async () => ({
+        ok: true as const,
+        runId: "unexpected-hook-run",
+      }));
+      const registry = loadOpenClawPlugins({
+        config: {
+          plugins: {
+            allow: plugins.map(({ id }) => id),
+            load: { paths: plugins.map(({ file }) => file) },
+            slots: { memory: "none" },
+          },
+        },
+        cache: false,
+        runtimeOptions: { hooks: { dispatchHookAgentTurn } },
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        expect(registry.diagnostics.filter(({ level }) => level === "error")).toEqual([]);
+        for (const { id } of plugins) {
+          const loaded = registry.plugins.find((plugin) => plugin.id === id)!;
+          expect(loaded).toMatchObject({
+            status: "loaded",
+            origin: "config",
+          });
+          expect(loaded.trustedOfficialInstall).not.toBe(true);
+          const tool = registry.tools.find((entry) => entry.pluginId === id)?.factory({});
+          if (!tool || Array.isArray(tool)) {
+            throw new Error(`Expected ${id} fixture tool`);
+          }
+          await expect(tool.execute("state", {})).resolves.toMatchObject({
+            details: { before: { value: undefined, pending: [] }, value: id, delivered: [id] },
+          });
+          await expect(tool.execute("hook", { hook: true })).rejects.toMatchObject({
+            code: "PLUGIN_TRUST_REFUSED",
+            message: expect.stringContaining(
+              "dispatchHookAgentTurn is only available for trusted plugins",
+            ),
+          });
+        }
+        expect(dispatchHookAgentTurn).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+        await disposePluginRegistryInstances(registry);
+        await closeOpenClawStateDatabaseAsync();
+      }
+    });
+  });
 });

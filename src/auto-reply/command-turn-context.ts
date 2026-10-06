@@ -70,28 +70,14 @@ export function createCommandTurnContext(
     body?: string;
   },
 ): CommandTurnContext {
-  if (source === "native") {
-    return {
-      kind: "native",
-      source: "native",
-      authorized: input.authorized,
-      commandName: input.commandName,
-      body: input.body,
-    };
-  }
-  if (source === "text") {
-    return {
-      kind: "text-slash",
-      source: "text",
-      authorized: input.authorized,
-      commandName: input.commandName,
-      body: input.body,
-    };
-  }
+  const identity: CommandTurnContext =
+    source === "native"
+      ? { kind: "native", source: "native", authorized: input.authorized }
+      : source === "text"
+        ? { kind: "text-slash", source: "text", authorized: input.authorized }
+        : { kind: "normal", source: "message", authorized: false };
   return {
-    kind: "normal",
-    source: "message",
-    authorized: false,
+    ...identity,
     commandName: input.commandName,
     body: input.body,
   };

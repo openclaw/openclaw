@@ -60,14 +60,8 @@ class CustodianSurface extends OpenClawLightDomElement {
   constructor() {
     super();
     void new SubscriptionsController(this)
-      .watch(
-        () => this.store,
-        (store, notify) => store.subscribe(notify),
-      )
-      .watch(
-        () => custodianAlertStore,
-        (alerts, notify) => alerts.subscribe(notify),
-      );
+      .watchStore(() => this.store)
+      .watchStore(() => custodianAlertStore);
   }
 
   protected override async getUpdateComplete(): Promise<boolean> {

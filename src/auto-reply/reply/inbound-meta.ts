@@ -2,13 +2,17 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  sliceUtf16Safe,
+  truncateUtf16Safe,
+  truncateWithMarker,
+} from "@openclaw/normalization-core/utf16-slice";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildDeliveryFormatPrompt } from "../../infra/outbound/delivery-format-prompt.js";
-import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatAgentEnvelopeTimestamp } from "../envelope.js";
 import { getRequesterProfile } from "../requester-profile.js";
@@ -116,17 +120,8 @@ export function refreshActiveGoalContext(
   };
 }
 
-function stripNullBytes(value: string): string {
-  return value.replaceAll("\u0000", "");
-}
-
 function normalizePromptMetadataString(value: unknown): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  const sanitized = stripNullBytes(normalized);
-  return sanitized || undefined;
+  return normalizeOptionalString(value)?.replaceAll("\u0000", "") || undefined;
 }
 
 function normalizePromptMediaPath(value: unknown): string | undefined {
@@ -172,40 +167,23 @@ function normalizePromptMetadataStringArray(value: unknown): string[] | undefine
     return undefined;
   }
   const normalized = value
-    .map((entry) => normalizePromptMetadataString(entry))
+    .map(normalizePromptMetadataString)
     .filter((entry): entry is string => Boolean(entry));
   return normalized.length > 0 ? normalized : undefined;
 }
 
 function sanitizePromptBody(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const sanitized = stripNullBytes(value);
-  return sanitized || undefined;
+  return typeof value === "string" ? value.replaceAll("\u0000", "") || undefined : undefined;
 }
 
 const HEAD_TAIL_OMISSION_MARKER = "…[omitted]…";
-const HEAD_TAIL_MARKER_LENGTH = HEAD_TAIL_OMISSION_MARKER.length;
-const MIN_HEAD_TAIL_CHARS = 20;
 
-/**
- * Applies head+tail truncation so the result is ≤ maxChars and the downstream
- * {@link truncateContextJsonString} (prefix-only 2000-char cap) is a no-op.
- * Head and tail portions are sized to keep the body within
- * {@link MAX_CONTEXT_JSON_STRING_CHARS}, preserving actionable tail content
- * that prefix-only truncation would drop.
- */
-function truncateBodyHeadTail(body: string, maxChars = MAX_CONTEXT_JSON_STRING_CHARS): string {
-  if (body.length <= maxChars) {
+// Retain actionable tail content within the downstream JSON string cap.
+function truncateBodyHeadTail(body: string): string {
+  if (body.length <= MAX_CONTEXT_JSON_STRING_CHARS) {
     return body;
   }
-  const available = maxChars - HEAD_TAIL_MARKER_LENGTH;
-  if (available < MIN_HEAD_TAIL_CHARS * 2) {
-    return `${truncateUtf16Safe(body, Math.max(0, maxChars - 14)).trimEnd()}…[truncated]`;
-  }
-  // Budget in UTF-16 code units because truncateContextJsonString enforces
-  // that same cap after JSON serialization.
+  const available = MAX_CONTEXT_JSON_STRING_CHARS - HEAD_TAIL_OMISSION_MARKER.length;
   const headChars = Math.floor(available * 0.6);
   const tailChars = available - headChars;
   const head = truncateUtf16Safe(body, headChars);
@@ -213,22 +191,18 @@ function truncateBodyHeadTail(body: string, maxChars = MAX_CONTEXT_JSON_STRING_C
   return `${head}${HEAD_TAIL_OMISSION_MARKER}${tail}`;
 }
 
-function truncateUntrustedTranscriptField(value: string): string {
-  if (value.length <= MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS) {
-    return value;
-  }
-  return `${truncateUtf16Safe(
-    value,
-    Math.max(0, MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS - 14),
-  ).trimEnd()}…[truncated]`;
-}
-
 function sanitizeTranscriptField(value: unknown): string | undefined {
   const body = sanitizePromptBody(value);
   if (!body) {
     return undefined;
   }
-  return neutralizeMarkdownFences(truncateUntrustedTranscriptField(body))
+  return neutralizeMarkdownFences(
+    truncateWithMarker(body, MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS, {
+      marker: "…[truncated]",
+      reserve: 14,
+      trimEnd: true,
+    }),
+  )
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -247,22 +221,6 @@ function sanitizeTranscriptBody(value: unknown): string | undefined {
 function formatChannelStructuredContextLabel(label: unknown): string {
   const normalized = normalizePromptMetadataString(label)?.replace(/\s+/g, " ").trim();
   return normalized ? `${normalized}:` : "Structured object:";
-}
-
-function buildConversationMentionMetadataPayload(
-  ctx: TemplateContext,
-  isDirect: boolean,
-): Record<string, unknown> {
-  return {
-    is_group_chat: !isDirect ? true : undefined,
-    was_mentioned: ctx.WasMentioned === true ? true : undefined,
-    explicitly_mentioned_bot:
-      typeof ctx.ExplicitlyMentionedBot === "boolean" ? ctx.ExplicitlyMentionedBot : undefined,
-    mentioned_user_ids: normalizePromptMetadataStringArray(ctx.MentionedUserIds),
-    mentioned_subteam_ids: normalizePromptMetadataStringArray(ctx.MentionedSubteamIds),
-    implicit_mention_kinds: normalizePromptMetadataStringArray(ctx.ImplicitMentionKinds),
-    mention_source: normalizePromptMetadataString(ctx.MentionSource),
-  };
 }
 
 function formatStructuredContextRelation(value: unknown): string | undefined {
@@ -330,8 +288,6 @@ function formatChatWindowStructuredContext(
   const label = sanitizeTranscriptField(entry.label) ?? "Chat window";
   const relation = formatStructuredContextRelation(entry.payload["relation"]);
   const order = sanitizeTranscriptField(entry.payload["order"]);
-  // Dropping the old "untrusted" qualifier means the parenthetical can now be empty for
-  // plugin entries that omit order/relation; emit a bare label instead of `Chat window ():`.
   const qualifiers = [order, relation].filter(Boolean).join(", ");
   const header = qualifiers ? `${label} (${qualifiers}):` : `${label}:`;
   return [markInboundContextLabel(header), ...lines].join("\n");
@@ -452,15 +408,12 @@ function isTelegramInboundContext(ctx: TemplateContext): boolean {
   );
 }
 
-function resolveInlineReplyQuote(ctx: TemplateContext): string | undefined {
-  return sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptBody(ctx.ReplyToBody);
-}
-
 function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | undefined {
   if (!isTelegramInboundContext(ctx)) {
     return undefined;
   }
-  const quote = resolveInlineReplyQuote(ctx);
+  const quote =
+    sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptBody(ctx.ReplyToBody);
   if (!quote) {
     return undefined;
   }
@@ -527,17 +480,9 @@ export function buildInboundMetaSystemPrompt(
   options?: { includeFormattingHints?: boolean },
 ): string {
   const chatType = normalizeChatType(ctx.ChatType);
-  const isDirect = !chatType || chatType === "direct";
 
-  // Keep human-authored strings and per-sender facts out of the stable system prefix.
-  // They belong in the user-role conversation info block below.
-  // Conversation ids, per-message identifiers, and dynamic flags are also excluded here:
-  // they change on turns/replies and would bust prefix-based prompt caches on providers that
-  // use stable system prefixes. They are included in the user-role conversation info block instead.
-
-  // Resolve channel identity: prefer explicit channel, then surface, then provider.
-  // For webchat/Hub Chat sessions (when Surface is 'webchat' or undefined with no real channel),
-  // omit the channel field entirely rather than falling back to an unrelated provider.
+  // Per-turn identifiers, flags, sender facts, and human-authored text belong in
+  // user-role context; keeping them out of this system prefix preserves prompt caches.
   const channelValue = resolveInboundChannel(ctx);
 
   const payload = {
@@ -546,7 +491,7 @@ export function buildInboundMetaSystemPrompt(
     channel: channelValue,
     provider: normalizePromptMetadataString(ctx.Provider),
     surface: normalizePromptMetadataString(ctx.Surface),
-    chat_type: chatType ?? (isDirect ? "direct" : undefined),
+    chat_type: chatType ?? "direct",
   };
   // Heartbeats and system events use the same prepared context, including their delivery channel.
   const deliveryFormat =
@@ -578,6 +523,9 @@ export function buildInboundUserContextPrefix(
   sessionEntry?: SessionEntry,
 ): string {
   const blocks: string[] = [];
+  const appendJsonContext = (label: string, payload: unknown) => {
+    blocks.push(formatContextJsonBlock(markInboundContextLabel(label), payload));
+  };
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
   const directChannelValue = resolveInboundChannel(ctx);
@@ -625,11 +573,13 @@ export function buildInboundUserContextPrefix(
     requester_profile: requester
       ? { id: requester.id, display_name: sanitizeTranscriptField(requester.displayName) }
       : undefined,
+    // Inside the marked block so display, history and memory strippers drop it with the rest.
+    requester_profile_hint: requester
+      ? 'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.'
+      : undefined,
     chat_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.OriginatingTo) : undefined,
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
-    reply_to_id: shouldIncludeConversationInfo
-      ? normalizePromptMetadataString(ctx.ReplyToId)
-      : undefined,
+    reply_to_id: shouldIncludeConversationInfo ? replyToId : undefined,
     conversation_label: isDirect ? undefined : normalizePromptMetadataString(ctx.ConversationLabel),
     sender: shouldIncludeConversationInfo
       ? Object.values(senderIdentity).some((value) => value !== undefined)
@@ -646,32 +596,28 @@ export function buildInboundUserContextPrefix(
     inbound_event_kind: ctx.InboundEventKind,
     topic_id:
       ctx.MessageThreadId != null
-        ? (normalizePromptMetadataString(String(ctx.MessageThreadId)) ?? undefined)
+        ? normalizePromptMetadataString(String(ctx.MessageThreadId))
         : undefined,
-    topic_name: normalizePromptMetadataString(ctx.TopicName) ?? undefined,
+    topic_name: normalizePromptMetadataString(ctx.TopicName),
     is_forum: ctx.IsForum === true ? true : undefined,
-    ...buildConversationMentionMetadataPayload(ctx, isDirect),
+    is_group_chat: !isDirect ? true : undefined,
+    was_mentioned: ctx.WasMentioned === true ? true : undefined,
+    explicitly_mentioned_bot:
+      typeof ctx.ExplicitlyMentionedBot === "boolean" ? ctx.ExplicitlyMentionedBot : undefined,
+    mentioned_user_ids: normalizePromptMetadataStringArray(ctx.MentionedUserIds),
+    mentioned_subteam_ids: normalizePromptMetadataStringArray(ctx.MentionedSubteamIds),
+    implicit_mention_kinds: normalizePromptMetadataStringArray(ctx.ImplicitMentionKinds),
+    mention_source: normalizePromptMetadataString(ctx.MentionSource),
     history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
     history_truncated: truncated ? true : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
-    blocks.push(
-      formatContextJsonBlock(markInboundContextLabel("Conversation info:"), conversationInfo),
-    );
-    if (requester) {
-      blocks.push(
-        'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.',
-      );
-    }
+    appendJsonContext("Conversation info:", conversationInfo);
   }
 
   const threadStarterBody = sanitizePromptBody(ctx.ThreadStarterBody);
   if (threadStarterBody) {
-    blocks.push(
-      formatContextJsonBlock(markInboundContextLabel("Thread starter:"), {
-        body: threadStarterBody,
-      }),
-    );
+    appendJsonContext("Thread starter:", { body: threadStarterBody });
   }
 
   const rawReplyToBody = sanitizePromptBody(ctx.ReplyToBody);
@@ -679,21 +625,14 @@ export function buildInboundUserContextPrefix(
   const replyToSender = normalizePromptMetadataString(ctx.ReplyToSender);
   const hasReplyTargetMetadata = Boolean(replyToId || replyToSender || replyToBody);
   if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext && !currentMessageContext) {
-    blocks.push(
-      formatContextJsonBlock(
-        markInboundContextLabel("Reply chain of current user message (nearest first):"),
-        replyChainPayload,
-      ),
-    );
+    appendJsonContext("Reply chain of current user message (nearest first):", replyChainPayload);
   } else if (hasReplyTargetMetadata && !chatWindowCoversReplyContext && !currentMessageContext) {
-    blocks.push(
-      formatContextJsonBlock(markInboundContextLabel("Reply target of current user message:"), {
-        message_id: replyToId,
-        sender_label: replyToSender,
-        is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
-        body: replyToBody || undefined,
-      }),
-    );
+    appendJsonContext("Reply target of current user message:", {
+      message_id: replyToId,
+      sender_label: replyToSender,
+      is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
+      body: replyToBody || undefined,
+    });
   }
 
   const forwardedFrom = normalizePromptMetadataString(ctx.ForwardedFrom);
@@ -707,17 +646,12 @@ export function buildInboundUserContextPrefix(
     date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
   };
   if (forwardedFrom) {
-    blocks.push(
-      formatContextJsonBlock(
-        markInboundContextLabel("Forwarded message context:"),
-        forwardedContext,
-      ),
-    );
+    appendJsonContext("Forwarded message context:", forwardedContext);
   }
 
   const locationContext = buildLocationContextPayload(ctx);
   if (locationContext) {
-    blocks.push(formatContextJsonBlock(markInboundContextLabel("Location:"), locationContext));
+    appendJsonContext("Location:", locationContext);
   }
 
   for (const entry of structuredContext) {
@@ -729,16 +663,11 @@ export function buildInboundUserContextPrefix(
       blocks.push(chatWindow);
       continue;
     }
-    blocks.push(
-      formatContextJsonBlock(
-        markInboundContextLabel(formatChannelStructuredContextLabel(entry.label)),
-        {
-          source: normalizePromptMetadataString(entry.source),
-          type: normalizePromptMetadataString(entry.type),
-          payload: entry.payload,
-        },
-      ),
-    );
+    appendJsonContext(formatChannelStructuredContextLabel(entry.label), {
+      source: normalizePromptMetadataString(entry.source),
+      type: normalizePromptMetadataString(entry.type),
+      payload: entry.payload,
+    });
   }
 
   if (boundedHistory.length > 0 && !chatWindowCoversHistory) {
@@ -770,5 +699,5 @@ export function buildInboundUserContextPrefix(
     blocks.push(currentMessageContext);
   }
 
-  return blocks.filter(Boolean).join("\n\n");
+  return blocks.join("\n\n");
 }

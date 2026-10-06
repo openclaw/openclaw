@@ -4,7 +4,6 @@ import {
   asSafeIntegerInRange,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
-import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
 import type {
@@ -20,6 +19,7 @@ import { ToolAuthorizationError, ToolInputError } from "../tool-input-error.js";
 import { textResult } from "./tool-results.js";
 
 export { ToolAuthorizationError, ToolInputError };
+export { asNonArrayRecord as asToolParamsRecord } from "@openclaw/normalization-core/record-coerce";
 export { jsonResult, textResult } from "./tool-results.js";
 
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
@@ -31,6 +31,12 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   catalogMode?: "direct-only";
   /** Gateway client capabilities required before this tool can be assembled. */
   requiredClientCaps?: string[];
+  /**
+   * Allow a result's `details.sourceReply` to be delivered to the current source as the
+   * user-visible reply, without another model turn. Only the tool author can declare this;
+   * tool results alone never grant it.
+   */
+  canDeliverSourceReply?: boolean;
   /** Tool-owned execution and transport wait budget, before any harness completion grace. */
   getExecutionTimeoutMs?: (args: unknown) => number | undefined;
   prepareBeforeToolCallParams?: (
@@ -52,10 +58,6 @@ type ErasedAgentToolExecute = {
 
 export type AnyAgentTool = Omit<AgentToolWithMeta<TSchema, unknown>, "execute"> &
   ErasedAgentToolExecute;
-
-export function asToolParamsRecord(params: unknown): Record<string, unknown> {
-  return asNonArrayRecord(params);
-}
 
 type StringParamOptions = {
   required?: boolean;
@@ -204,18 +206,10 @@ export function readPositiveIntegerParam(
     max?: number;
   } = {},
 ): number | undefined {
-  const value = readNumberParam(params, key, {
-    positiveInteger: true,
-    strict: true,
-  });
-  if (value === undefined) {
-    const raw = readSnakeCaseParamRaw(params, key);
-    if (raw != null && !isBlankParamValue(raw)) {
-      throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
-    }
-  }
-  if (value !== undefined && options.max !== undefined && value > options.max) {
-    throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
+  const message = options.message ?? `${key} must be a positive integer`;
+  const value = readNonNegativeIntegerParam(params, key, { ...options, message });
+  if (value === 0) {
+    throw new ToolInputError(message);
   }
   return value;
 }
@@ -357,19 +351,6 @@ export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<
 
 type PublicToolProgress = Pick<AgentToolProgress, "text" | "id">;
 
-function toolProgressResult(progress: PublicToolProgress): AgentToolResult<undefined> {
-  return {
-    content: [],
-    details: undefined,
-    progress: {
-      text: progress.text,
-      visibility: "channel",
-      privacy: "public",
-      ...(progress.id ? { id: progress.id } : {}),
-    },
-  };
-}
-
 // Tool progress is a UI side channel. The model-facing tool result remains in
 // `content`; progress text must already be safe to show in channel previews.
 function emitToolProgress(
@@ -381,7 +362,16 @@ function emitToolProgress(
     return;
   }
   try {
-    onUpdate(toolProgressResult({ ...progress, text }));
+    onUpdate({
+      content: [],
+      details: undefined,
+      progress: {
+        text,
+        visibility: "channel",
+        privacy: "public",
+        ...(progress.id ? { id: progress.id } : {}),
+      },
+    });
   } catch {
     // Progress is best-effort UI state; tool execution must not depend on subscribers.
   }
@@ -415,21 +405,21 @@ export function scheduleToolProgress(
   return clear;
 }
 
-async function imageResult(params: {
+export async function imageResultFromFile(params: {
   label: string;
   path: string;
-  base64: string;
-  mimeType: string;
   extraText?: string;
   details?: Record<string, unknown>;
   imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
+  const buf = (await readLocalFileSafely({ filePath: params.path })).buffer;
+  const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
   const content: AgentToolResult<unknown>["content"] = [
     ...(params.extraText ? [{ type: "text" as const, text: params.extraText }] : []),
     {
       type: "image",
-      data: params.base64,
-      mimeType: params.mimeType,
+      data: buf.toString("base64"),
+      mimeType,
     },
   ];
   const detailsMedia =
@@ -451,26 +441,6 @@ async function imageResult(params: {
   };
   const { sanitizeToolResultImages } = await import("../tool-images.runtime.js");
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
-}
-
-export async function imageResultFromFile(params: {
-  label: string;
-  path: string;
-  extraText?: string;
-  details?: Record<string, unknown>;
-  imageSanitization?: ImageSanitizationLimits;
-}): Promise<AgentToolResult<unknown>> {
-  const buf = (await readLocalFileSafely({ filePath: params.path })).buffer;
-  const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
-  return await imageResult({
-    label: params.label,
-    path: params.path,
-    base64: buf.toString("base64"),
-    mimeType,
-    extraText: params.extraText,
-    details: params.details,
-    imageSanitization: params.imageSanitization,
-  });
 }
 
 type AvailableTag = {

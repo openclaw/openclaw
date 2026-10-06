@@ -1,12 +1,12 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.ContentProviderOperation
 import android.content.ContentResolver
 import android.content.Context
 import android.provider.ContactsContract
-import androidx.core.content.ContextCompat
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -56,13 +56,9 @@ internal interface ContactsDataSource {
 }
 
 private object SystemContactsDataSource : ContactsDataSource {
-  override fun hasReadPermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
-      android.content.pm.PackageManager.PERMISSION_GRANTED
+  override fun hasReadPermission(context: Context): Boolean = context.hasPermission(Manifest.permission.READ_CONTACTS)
 
-  override fun hasWritePermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CONTACTS) ==
-      android.content.pm.PackageManager.PERMISSION_GRANTED
+  override fun hasWritePermission(context: Context): Boolean = context.hasPermission(Manifest.permission.WRITE_CONTACTS)
 
   override fun search(
     context: Context,

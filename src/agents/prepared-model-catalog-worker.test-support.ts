@@ -2,12 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { expect, vi } from "vitest";
+import { fixtureReceiptWorkerClientSource } from "../../test/helpers/fixture-receipts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-} from "../gateway/server-methods/models-list-result.js";
+import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -19,6 +17,7 @@ import {
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
+import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
@@ -118,6 +117,7 @@ export function writeCodexAuth(codexHome: string, marker: string): void {
 export function writeFixturePlugin(params: {
   root: string;
   spinMs: number;
+  receiptBroadcastName?: string;
   pluginVersion?: string;
   builtPluginVersion?: string;
   nativeCatalog?: boolean;
@@ -256,11 +256,13 @@ module.exports = {
         },
       },
       async augmentModelCatalog(context) {
+        ${params.receiptBroadcastName ? `const { sendReceipt } = await import(${JSON.stringify("data:text/javascript," + encodeURIComponent(fixtureReceiptWorkerClientSource(params.receiptBroadcastName) + "\nexport { sendReceipt };"))});` : ""}
         const marker = process.env.OPENCLAW_WORKER_CATALOG_MARKER;
         const invocation = fs.existsSync(marker)
           ? fs.readFileSync(marker, "utf8").split("start\\n").length
           : 1;
         fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, "start\\n");
+        ${params.receiptBroadcastName ? 'sendReceipt(marker, "start");' : ""}
         const barrier = marker + ".hold";
         if (fs.existsSync(barrier)) {
           await new Promise((resolve) => {
@@ -301,6 +303,7 @@ module.exports = {
     const builtFile = writeFixturePlugin({
       root: params.root,
       spinMs: params.spinMs,
+      receiptBroadcastName: params.receiptBroadcastName,
       pluginVersion: params.builtPluginVersion,
       asyncSyntheticAuth: params.asyncSyntheticAuth,
       syntheticAuthAvailable: params.syntheticAuthAvailable,
@@ -355,11 +358,12 @@ module.exports = {
   return pluginFile;
 }
 
-export function createCatalogFixture(
+export async function createCatalogFixture(
   makeTempDir: (prefix: string) => string,
   spinMs: number,
   envOverride: NodeJS.ProcessEnv = {},
   options?: {
+    receiptBroadcastName?: string;
     hydrateExternalCliProviderIds?: readonly string[];
     codexNativeOwner?: boolean;
     codexNativeHomeScope?: "agent" | "user";
@@ -454,7 +458,7 @@ export function createCatalogFixture(
         syncExternalCli: false,
       })
     : undefined;
-  seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
+  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
 }
 
@@ -498,7 +502,7 @@ async function expectNativeHarnessModelsPublished(params: {
       getRuntimeConfig: () => params.config,
       logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     } as unknown as GatewayRequestContext;
-    const projector = createGatewayAgentModelCatalogProjector({
+    const projector = createModelCatalogDecisions({
       cfg: params.config,
       agentId: "main",
       snapshot: catalog,
@@ -626,7 +630,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
       },
     },
   ]);
-  seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
+  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   const input = {
     agentId: "main",
     agentDir,

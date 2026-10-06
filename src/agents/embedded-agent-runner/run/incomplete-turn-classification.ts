@@ -2,7 +2,9 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
+import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
+import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
 import { extractEmbeddedAssistantText } from "../../embedded-agent-utils.js";
 import {
   isStrictAgenticSupportedProviderModel,
@@ -44,7 +46,9 @@ export type IncompleteTurnAttempt = Pick<
   | "terminal"
   | "toolMetas"
 > &
-  Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">>;
+  Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">> & {
+    keptAnswer?: CompletedAssistantAnswer;
+  };
 
 function readAssistantSnapshotText(message: AgentMessage): string {
   return message.role === "assistant"
@@ -93,7 +97,11 @@ export function countSettledTurnDeliveryPayloads(params: {
   const hasNoAssistantText = params.attempt.assistantTexts.every(
     (text) => !parseReplyDirectives(text).text.trim(),
   );
-  const hasComposedVisibleAnswer = hasComposedVisibleAnswerAfterSettledTools(params.attempt);
+  // A completed answer the subscriber kept for a later silent stop is this turn's answer, even
+  // though it precedes the tool results that settled after it.
+  const hasComposedVisibleAnswer =
+    params.attempt.keptAnswer !== undefined ||
+    hasComposedVisibleAnswerAfterSettledTools(params.attempt);
   const canFinalizeProviderError =
     params.attempt.settledTurnFinalizationContext && !hasComposedVisibleAnswer;
   return (params.payloads ?? []).filter((payload) => {
@@ -130,15 +138,8 @@ export function countSettledTurnDeliveryPayloads(params: {
   }).length;
 }
 
-export function hasPositiveOutputTokenUsage(message: AgentMessage | null): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const usage = (message as { usage?: unknown }).usage;
-  if (!usage || typeof usage !== "object") {
-    return false;
-  }
-  const output = asFiniteNumber((usage as { output?: unknown }).output);
+export function hasPositiveOutputTokenUsage(message: AssistantMessage | null): boolean {
+  const output = asFiniteNumber(message?.usage?.output);
   return output !== undefined && output > 0;
 }
 
@@ -191,27 +192,6 @@ export function joinAssistantTexts(assistantTexts?: readonly string[]): string {
   return (assistantTexts ?? []).join("\n\n").trim();
 }
 
-export function isReasoningOnlyAssistantTurn(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
-}
-
-// Unsigned thinking blocks have no cryptographic signature; assessLastAssistantMessage
-// returns "incomplete-thinking" for them. Empty content also returns "incomplete-thinking",
-// so the content.length > 0 guard is required to distinguish the two cases.
-export function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
-  if (message == null || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content) || content.length === 0) {
-    return false;
-  }
-  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
-}
-
 export function shouldApplyNonVisibleTurnRetryGuard(params: {
   provider?: string;
   modelId?: string;
@@ -256,7 +236,9 @@ export function classifyAssistantTurn(params: {
       : joinAssistantTexts(params.attempt.assistantTexts),
   );
   const visibleText = output.text.trim();
-  const reasoningOnly = isReasoningOnlyAssistantTurn(assistant);
+  const reasoningOnly = Boolean(
+    assistant && assessLastAssistantMessage(assistant) === "incomplete-text",
+  );
   const nonVisibleEligibleForSilentReply =
     params.payloadCount === 0 &&
     visibleText.length === 0 &&

@@ -1,4 +1,3 @@
-// Doctor warnings and repairs for redundant bundled plugin load path aliases.
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
@@ -149,25 +148,19 @@ export function maybeRepairBundledPluginLoadPaths(
   }
 
   const next = structuredClone(cfg);
-  const paths = next.plugins?.load?.paths;
-  if (!Array.isArray(paths)) {
+  const load = next.plugins?.load;
+  if (!Array.isArray(load?.paths)) {
     return { config: cfg, changes: [] };
   }
 
   const removable = new Set(
     hits.map((hit) => normalizeBundledLookupPath(resolveUserPath(hit.fromPath, env))),
   );
-  next.plugins = {
-    ...next.plugins,
-    load: {
-      ...next.plugins?.load,
-      paths: Array.from(paths).filter(
-        (entry) =>
-          typeof entry !== "string" ||
-          !removable.has(normalizeBundledLookupPath(resolveUserPath(entry, env))),
-      ),
-    },
-  };
+  load.paths = Array.from(load.paths).filter(
+    (entry) =>
+      typeof entry !== "string" ||
+      !removable.has(normalizeBundledLookupPath(resolveUserPath(entry, env))),
+  );
 
   return {
     config: next,

@@ -76,6 +76,10 @@ Packaged OpenClaw uses `NODE_COMPILE_CACHE/openclaw/<version>/<build>` when
 directory otherwise. Child processes reuse the same build namespace. Source
 checkouts keep their existing cache-disable policy.
 
+Release builds use a stable 16-character hash of the build ID. On Windows,
+OpenClaw skips cache paths longer than 200 characters with a warning and disables
+unsafe inherited caches for child processes, avoiding a Node startup hang.
+
 The compile-cache bootstrap owner starts best-effort maintenance in a background
 worker that does not keep CLI commands alive. Node permission mode skips this
 maintenance because workers do not inherit its filesystem restrictions; cache
@@ -143,17 +147,22 @@ supervisor use `@openclaw/fs-safe/watch`. The existing `CHOKIDAR_*` variable
 names remain supported for Docker, virtual machines, and other deployments
 that need an observation preference:
 
-| Variable              | Value                                   | Behavior                                                                                           |
-| --------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `CHOKIDAR_USEPOLLING` | Unset, `false`, `0`, or an empty string | `auto`: prefer native events, with polling fallback when no event backend is available.            |
-| `CHOKIDAR_USEPOLLING` | Any other nonempty value                | Select `poll`. Values are case-insensitive.                                                        |
-| `CHOKIDAR_INTERVAL`   | Positive integer in milliseconds        | Polling interval, default `100`, minimum `20`. Applies to explicit polling and automatic fallback. |
+| Variable              | Value                                   | Behavior                                                                                    |
+| --------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `CHOKIDAR_USEPOLLING` | Unset, `false`, `0`, or an empty string | `auto`: prefer native events, with polling fallback when no event backend is available.     |
+| `CHOKIDAR_USEPOLLING` | Any other nonempty value                | Select `poll`. Values are case-insensitive.                                                 |
+| `CHOKIDAR_INTERVAL`   | Positive integer in milliseconds        | Polling interval for explicit polling and automatic fallback; overrides the defaults below. |
 
 Native events are supported on Node.js on Linux, macOS, and Windows. In `auto`
 mode, Bun and runtimes without the native backend use polling with the same
 `CHOKIDAR_INTERVAL` setting as explicit polling. Native events retain fs-safe's
-30-second reconciliation interval. Invalid or nonpositive polling intervals use
-`100` ms; larger intervals are capped at `2147483647` ms.
+30-second reconciliation interval. Config hot reload and the development
+supervisor default to `100` ms polling; Memory indexing and skills refresh default
+to `30000` ms to bound idle background scanning. A valid explicit
+`CHOKIDAR_INTERVAL` overrides those defaults, with a `20` ms minimum and
+`2147483647` ms maximum. Invalid or nonpositive values use the owner's default.
+Native event hints still trigger prompt updates; Memory and Skills log one warning
+per watcher when automatic polling fallback is used.
 
 Recovery remains specific to each owner. Config hot reload retries a failed
 subscription with its existing backoff. With `CHOKIDAR_USEPOLLING` unset, native

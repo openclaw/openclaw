@@ -25,16 +25,9 @@ import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { ensureWorkspaceAndSessions } from "./onboard-helpers.js";
 
-export type OnboardingAgentTarget = {
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-};
+export type OnboardingAgentTarget = ReturnType<typeof resolveOnboardingAgentTarget>;
 
-export function resolveOnboardingAgentTarget(
-  config: OpenClawConfig,
-  explicitAgentId?: string,
-): OnboardingAgentTarget {
+export function resolveOnboardingAgentTarget(config: OpenClawConfig, explicitAgentId?: string) {
   const agentId = normalizeAgentId(
     explicitAgentId ?? tryResolveLegacyCompatibilityAgentId(config) ?? resolveSoleAgentId(config),
   );
@@ -103,11 +96,10 @@ function replaceOnboardingAgentEntry(
   } else {
     nextEntries.push(replacement);
   }
-  const { list: _list, entries: _entries, ...agents } = config.agents ?? {};
   return {
     ...updated,
     agents: {
-      ...agents,
+      ...config.agents,
       entries: toAgentEntriesRecord(nextEntries),
     },
   };

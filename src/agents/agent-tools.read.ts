@@ -8,6 +8,10 @@ import { URL } from "node:url";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
 import { detectMime } from "@openclaw/media-core/mime";
+import {
+  asPositiveFiniteNumber,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { resolveRootPath } from "../infra/boundary-path.js";
@@ -138,12 +142,8 @@ const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing (?:lines|part of line) [^\]]*|Read output capped [^\]]*|\d+ more lines? in file\. [^\]]*)\]\s*$/;
 
 export function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number {
-  const contextWindowTokens = options?.modelContextWindowTokens;
-  if (
-    typeof contextWindowTokens !== "number" ||
-    !Number.isFinite(contextWindowTokens) ||
-    contextWindowTokens <= 0
-  ) {
+  const contextWindowTokens = asPositiveFiniteNumber(options?.modelContextWindowTokens);
+  if (contextWindowTokens === undefined) {
     return DEFAULT_READ_PAGE_MAX_BYTES;
   }
   const fromContext = Math.floor(
@@ -178,17 +178,11 @@ function withToolResultText(
   text: string,
   fileContent?: string,
 ): AgentToolResult<unknown> {
-  const content = Array.isArray(result.content) ? result.content : [];
   let replaced = false;
-  const nextContent: ToolContentBlock[] = content.map((block) => {
-    if (
-      !replaced &&
-      block &&
-      typeof block === "object" &&
-      (block as { type?: unknown }).type === "text"
-    ) {
+  const nextContent: ToolContentBlock[] = result.content.map((block) => {
+    if (!replaced && block.type === "text") {
       replaced = true;
-      return Object.assign({}, block as TextContentBlock, { text });
+      return Object.assign({}, block, { text });
     }
     return block;
   });
@@ -205,11 +199,11 @@ function withToolResultText(
 function extractReadTruncationDetails(
   result: AgentToolResult<unknown>,
 ): ReadTruncationDetails | null {
-  const details = (result as { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
+  const details = result.details;
+  if (!details || typeof details !== "object" || !("truncation" in details)) {
     return null;
   }
-  const truncation = (details as { truncation?: unknown }).truncation;
+  const truncation = details.truncation;
   if (!truncation || typeof truncation !== "object") {
     return null;
   }
@@ -217,20 +211,10 @@ function extractReadTruncationDetails(
   if (record.truncated !== true) {
     return null;
   }
-  const outputLinesRaw = record.outputLines;
-  const outputLines =
-    typeof outputLinesRaw === "number" && Number.isFinite(outputLinesRaw)
-      ? Math.max(0, Math.floor(outputLinesRaw))
-      : 0;
-  const totalLinesRaw = record.totalLines;
-  const totalLines =
-    typeof totalLinesRaw === "number" && Number.isFinite(totalLinesRaw)
-      ? Math.max(0, Math.floor(totalLinesRaw))
-      : 0;
   return {
     truncated: true,
-    outputLines,
-    totalLines,
+    outputLines: resolveNonNegativeIntegerOption(record.outputLines, 0),
+    totalLines: resolveNonNegativeIntegerOption(record.totalLines, 0),
     continuation: extractReadContinuation(details),
   };
 }
@@ -276,13 +260,12 @@ function stripReadContinuationNotice(text: string): string {
 function stripReadTruncationContentDetails(
   result: AgentToolResult<unknown>,
 ): AgentToolResult<unknown> {
-  const details = (result as { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
+  const details = result.details;
+  if (!details || typeof details !== "object" || !("truncation" in details)) {
     return result;
   }
 
-  const detailsRecord = details as Record<string, unknown>;
-  const truncationRaw = detailsRecord.truncation;
+  const truncationRaw = details.truncation;
   if (!truncationRaw || typeof truncationRaw !== "object") {
     return result;
   }
@@ -296,7 +279,7 @@ function stripReadTruncationContentDetails(
   return {
     ...result,
     details: {
-      ...detailsRecord,
+      ...details,
       truncation: restTruncation,
     },
   };
@@ -314,11 +297,7 @@ async function executeReadWithAdaptivePaging(params: {
   // Presence owns the slice: the native reader clamps non-positive limits to
   // one line, which must not become permission to follow additional pages.
   const hasExplicitLimit = typeof userLimit === "number";
-  const offsetRaw = params.args.offset;
-  const initialOffset =
-    typeof offsetRaw === "number" && Number.isFinite(offsetRaw) && offsetRaw > 0
-      ? Math.floor(offsetRaw)
-      : 1;
+  const initialOffset = Math.floor(asPositiveFiniteNumber(params.args.offset) ?? 1);
   const initialLimit = hasExplicitLimit
     ? { limit: normalizePositiveLimit(userLimit, DEFAULT_MAX_LINES) }
     : {};
@@ -459,16 +438,8 @@ async function normalizeReadImageResult(
   result: AgentToolResult<unknown>,
   filePath: string,
 ): Promise<AgentToolResult<unknown>> {
-  const content = Array.isArray(result.content) ? result.content : [];
-
-  const image = content.find(
-    (b): b is ImageContentBlock =>
-      Boolean(b) &&
-      typeof b === "object" &&
-      (b as { type?: unknown }).type === "image" &&
-      typeof (b as { data?: unknown }).data === "string" &&
-      typeof (b as { mimeType?: unknown }).mimeType === "string",
-  );
+  const content = result.content;
+  const image = content.find((block): block is ImageContentBlock => block.type === "image");
   if (!image) {
     return result;
   }
@@ -493,20 +464,11 @@ async function normalizeReadImageResult(
   }
 
   const nextContent = content.map((block) => {
-    if (block && typeof block === "object" && (block as { type?: unknown }).type === "image") {
-      const b = block as ImageContentBlock & { mimeType: string };
-      return Object.assign({}, b, { mimeType: sniffed }) satisfies ImageContentBlock;
+    if (block.type === "image") {
+      return Object.assign({}, block, { mimeType: sniffed });
     }
-    if (
-      block &&
-      typeof block === "object" &&
-      (block as { type?: unknown }).type === "text" &&
-      typeof (block as { text?: unknown }).text === "string"
-    ) {
-      const b = block as TextContentBlock & { text: string };
-      return Object.assign({}, b, {
-        text: rewriteReadImageHeader(b.text, sniffed),
-      }) satisfies TextContentBlock;
+    if (block.type === "text") {
+      return Object.assign({}, block, { text: rewriteReadImageHeader(block.text, sniffed) });
     }
     return block;
   });
@@ -537,15 +499,8 @@ function normalizeReadResultDetails(
     };
   }
 
-  const content = Array.isArray(result.content) ? result.content : [];
   const displayText = getToolResultText(result) ?? "";
-  const image = content.find(
-    (block): block is ImageContentBlock =>
-      Boolean(block) &&
-      typeof block === "object" &&
-      (block as { type?: unknown }).type === "image" &&
-      typeof (block as { mimeType?: unknown }).mimeType === "string",
-  );
+  const image = result.content.find((block): block is ImageContentBlock => block.type === "image");
   if (image) {
     return {
       ...result,
@@ -573,7 +528,7 @@ function normalizeReadResultDetails(
   return { ...result, details: { kind: "text", content: text } };
 }
 
-function resolveContainerPathCandidate(filePath: string): string | null {
+function resolveContainerPathCandidate(filePath: string): string {
   let candidate = normalizeFileReferencePrefix(filePath);
   if (/^file:\/\//i.test(candidate)) {
     const localFilePath = trySafeFileURLToPath(candidate);
@@ -616,14 +571,13 @@ function mapContainerPathToWorkspaceRoot(params: {
   containerWorkdir?: string;
 }): string {
   const candidate = resolveContainerPathCandidate(params.filePath);
-  const mapped =
-    params.containerWorkdir && candidate !== null
-      ? resolveSandboxPathMapping(
-          [{ hostRoot: params.root, containerRoot: params.containerWorkdir }],
-          candidate,
-        )
-      : null;
-  return mapped?.hostPath ?? candidate ?? params.filePath;
+  const mapped = params.containerWorkdir
+    ? resolveSandboxPathMapping(
+        [{ hostRoot: params.root, containerRoot: params.containerWorkdir }],
+        candidate,
+      )
+    : null;
+  return mapped?.hostPath ?? candidate;
 }
 
 /** Resolve a model-supplied file path against the host workspace root. */
@@ -925,11 +879,11 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         const guardPath =
           options?.bridge && !legacyBridge
             ? options.bridge.resolvePath({
-                filePath: resolveContainerPathCandidate(filePath) ?? filePath,
+                filePath: resolveContainerPathCandidate(filePath),
                 cwd: options.resolutionCwd ?? root,
               }).containerPath
             : filePath;
-        const candidate = resolveContainerPathCandidate(guardPath) ?? guardPath;
+        const candidate = resolveContainerPathCandidate(guardPath);
         const workspaceMapping = resolveSandboxPathMapping(mounts, candidate);
         const guardedRoot = workspaceMapping?.mapping.hostRoot ?? root;
         const sandboxPath = workspaceMapping?.hostPath ?? candidate;
@@ -991,7 +945,7 @@ export function wrapSandboxFileToolPath(
         throw malformedXmlArgValuePathError("path");
       }
       const resolved = params.bridge.resolvePath({
-        filePath: resolveContainerPathCandidate(normalized) ?? normalized,
+        filePath: resolveContainerPathCandidate(normalized),
         cwd: params.root,
       });
       // Session write/edit/list resolve relative inputs with host path APIs.
@@ -1293,7 +1247,7 @@ function createSandboxReadOperations(params: SandboxToolParams) {
       if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
         return resolveMediaReferenceSandboxPath(normalizedMediaSource, "media/inbound").resolved;
       }
-      return resolveContainerPathCandidate(filePath) ?? filePath;
+      return resolveContainerPathCandidate(filePath);
     },
     decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
       params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath

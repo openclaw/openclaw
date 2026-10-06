@@ -538,6 +538,26 @@ describe("config form scalar integrity", () => {
     },
   );
 
+  it("keeps an env placeholder readable in a masked sensitive field", () => {
+    const container = document.createElement("div");
+
+    renderTextInputFixture(container, {
+      schema: { type: "string" },
+      value: "${SLACK_BOT_TOKEN}",
+      path: ["botToken"],
+      hints: { botToken: { sensitive: true } },
+      inputType: "text",
+      maskSensitive: true,
+      onPatch: vi.fn(),
+      onRemove: vi.fn(),
+    });
+
+    const input = expectElement(container.querySelector<HTMLInputElement>("input"), "input");
+    expect(input.type).toBe("text");
+    expect(input.value).toBe("${SLACK_BOT_TOKEN}");
+    expect(input.readOnly).toBe(false);
+  });
+
   it("preserves string and false edits through the analyzer path", () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();

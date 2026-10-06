@@ -26,8 +26,7 @@ import {
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  findMatchingApiKeyProfile,
-  findMatchingOAuthProfile,
+  findMatchingAuthProfile,
   itemProfileTarget,
   LEGACY_CODEX_PROFILE_ID,
   type CodexAuthCredential,
@@ -70,14 +69,15 @@ function authItemId(credential: CodexAuthCredential): string {
 }
 
 function sourceCredentialFingerprint(credential: CodexAuthCredential): string {
-  const profile =
-    credential.kind === "oauth" ? credential.result.profiles[0]?.credential : undefined;
   const source =
     credential.kind === "api_key"
       ? credential.key
-      : profile?.type === "oauth"
-        ? [profile.access, profile.refresh, profile.accountId, profile.idToken]
-        : undefined;
+      : [
+          credential.credential.access,
+          credential.credential.refresh,
+          credential.credential.accountId,
+          credential.credential.idToken,
+        ];
   return createHash("sha256")
     .update(JSON.stringify([credential.kind, source]))
     .digest("hex");
@@ -140,12 +140,13 @@ async function buildCodexOAuthCredential(
     configPatch,
   });
   const profile = result.profiles[0];
-  return profile
+  return profile?.credential.type === "oauth"
     ? {
         kind: "oauth",
         provider: OPENAI_PROVIDER_ID,
         profileId: profile.profileId,
-        result,
+        credential: profile.credential,
+        configPatch: result.configPatch,
       }
     : null;
 }
@@ -263,7 +264,7 @@ function resolveRequestedCredentialKind(
 function authProfileConfigForCredential(
   credential: CodexAuthCredential,
   profileId: string,
-): CodexAuthProfileConfig | null {
+): CodexAuthProfileConfig {
   if (credential.kind === "api_key") {
     return {
       profileId,
@@ -272,16 +273,13 @@ function authProfileConfigForCredential(
       displayName: CODEX_IMPORT_DISPLAY_NAME,
     };
   }
-  const profile = credential.result.profiles[0];
-  if (!profile || profile.credential.type !== "oauth") {
-    return null;
-  }
+  const profile = credential.credential;
   return {
     profileId,
-    provider: profile.credential.provider,
+    provider: profile.provider,
     mode: "oauth",
-    ...(profile.credential.email ? { email: profile.credential.email } : {}),
-    ...(profile.credential.displayName ? { displayName: profile.credential.displayName } : {}),
+    ...(profile.email ? { email: profile.email } : {}),
+    ...(profile.displayName ? { displayName: profile.displayName } : {}),
   };
 }
 
@@ -316,14 +314,12 @@ function applyCredentialConfig(
   credential: CodexAuthCredential,
   profileId: string,
 ): OpenClawConfig {
-  let next =
+  const next = applyAuthProfileConfig(
     credential.kind === "oauth"
-      ? (mergeMigrationConfigValue(config, credential.result.configPatch) as OpenClawConfig)
-      : config;
-  const profile = authProfileConfigForCredential(credential, profileId);
-  if (profile) {
-    next = applyAuthProfileConfig(next, { ...profile, preferProfileFirst: false });
-  }
+      ? (mergeMigrationConfigValue(config, credential.configPatch) as OpenClawConfig)
+      : config,
+    { ...authProfileConfigForCredential(credential, profileId), preferProfileFirst: false },
+  );
   return credential.kind === "oauth" ? applyDefaultModelIfMissing(next) : next;
 }
 
@@ -377,13 +373,11 @@ export async function buildCodexAuthItems(params: {
     );
     const existing = store.profiles[profileId];
     const configProfile = authProfileConfigForCredential(credential, profileId);
-    const configConflict = configProfile
-      ? hasAuthProfileConfigConflict(
-          params.ctx.config,
-          configProfile,
-          Boolean(params.ctx.overwrite),
-        )
-      : false;
+    const configConflict = hasAuthProfileConfigConflict(
+      params.ctx.config,
+      configProfile,
+      Boolean(params.ctx.overwrite),
+    );
     const conflict =
       ((existing && !matchedExisting && !params.ctx.overwrite) || configConflict) && !skipped;
     const unavailable =
@@ -502,16 +496,7 @@ async function applyCodexAuthItem(
     return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_NO_LONGER_PRESENT)];
   }
   ctx.signal?.throwIfAborted();
-  const oauthProfile = credential.kind === "oauth" ? credential.result.profiles[0] : undefined;
-  const oauthCredential =
-    oauthProfile?.credential.type === "oauth" ? oauthProfile.credential : undefined;
-  if (credential.kind === "oauth" && !oauthCredential) {
-    return [markMigrationItemError(item, CODEX_REASON_MISSING_AUTH_METADATA)];
-  }
   const configProfile = authProfileConfigForCredential(credential, profileId);
-  if (!configProfile) {
-    return [markMigrationItemError(item, CODEX_REASON_MISSING_AUTH_METADATA)];
-  }
   if (hasCurrentAuthProfileConfigConflict(ctx, configProfile)) {
     return [markMigrationItemConflict(item, CODEX_REASON_AUTH_PROFILE_EXISTS)];
   }
@@ -533,10 +518,7 @@ async function applyCodexAuthItem(
       }
       const existing = effectiveStore.profiles[profileId];
       if (!ctx.overwrite && existing) {
-        const matchedProfileId =
-          credential.kind === "oauth"
-            ? findMatchingOAuthProfile(effectiveStore, oauthCredential!)
-            : findMatchingApiKeyProfile(effectiveStore, credential.provider, credential.key);
+        const matchedProfileId = findMatchingAuthProfile(effectiveStore, credential);
         if (matchedProfileId === profileId) {
           // A matching account cannot turn an expired or fenced profile into a successful login.
           unusable = existing.type === "oauth" && !hasUsableOAuthCredential(existing);
@@ -545,16 +527,12 @@ async function applyCodexAuthItem(
         conflicted = true;
         return false;
       }
-      freshStore.profiles[profileId] =
-        credential.kind === "oauth"
-          ? {
-              ...oauthCredential!,
-              displayName: CODEX_IMPORT_DISPLAY_NAME,
-            }
-          : {
-              ...buildApiKeyCredential(credential.provider, credential.key),
-              displayName: CODEX_IMPORT_DISPLAY_NAME,
-            };
+      freshStore.profiles[profileId] = {
+        ...(credential.kind === "oauth"
+          ? credential.credential
+          : buildApiKeyCredential(credential.provider, credential.key)),
+        displayName: CODEX_IMPORT_DISPLAY_NAME,
+      };
       wrote = true;
       return true;
     },

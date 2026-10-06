@@ -76,51 +76,45 @@ function prepareYield(
 
 describe("yielded terminal payloads after an earlier tool failure", () => {
   it.each([
-    { assistantTexts: [], assistantErrorMessage: "Agent run aborted" },
+    {
+      assistantTexts: [],
+      assistantErrorMessage: "Agent run aborted",
+      continuation: true,
+      lastToolError: { toolName: "sessions_send", error: "Gateway delivery is unconfirmed" },
+    },
     {
       assistantTexts: ["Checking the task.", "Waiting for the child."],
       assistantErrorMessage: "Agent run aborted",
+      continuation: true,
+      lastToolError: { toolName: "sessions_send", error: "Gateway delivery is unconfirmed" },
     },
-  ])("does not treat yield cleanup as a provider failure ($assistantTexts)", async (input) => {
-    const lastToolError = { toolName: "sessions_send", error: "Gateway delivery is unconfirmed" };
-    const { attempt, terminal, prepared } = prepareYield({ ...input, lastToolError });
-    expect(attempt.lastToolError).toBe(lastToolError);
-    expect(terminal.terminalState.outcome.status).toBe("ok");
-    expect(prepared.payloadsWithToolMedia?.map((payload) => payload.text) ?? []).toEqual(
-      input.assistantTexts,
-    );
-    expect(prepared.payloadsWithToolMedia?.some((payload) => payload.isError)).not.toBe(true);
-    const result = await resolveEmbeddedRunTerminal({ ...terminal, ...prepared });
-    expect(result.action).toBe("complete");
-    if (result.action !== "complete") {
-      throw new Error("Expected a paused terminal result");
-    }
-    expect(result.result.meta).toMatchObject({ yielded: true, livenessState: "paused" });
-    expect(result.result.meta.error).toBeUndefined();
-    expect(result.result.meta.toolSummary).toMatchObject({
-      unresolvedError: { toolName: "sessions_send" },
-    });
-    expect(result.result.payloads?.map((payload) => payload.text) ?? []).toEqual(
-      input.assistantTexts,
-    );
-  });
-
-  it.each([true, false])(
-    "preserves paused-turn continuation semantics (continuation: %s)",
-    async (continuation) => {
-      const { attempt, terminal, prepared } = prepareYield({ continuation });
+    {
+      assistantTexts: [],
+      continuation: true,
+      lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+    },
+    {
+      assistantTexts: [],
+      continuation: false,
+      lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+    },
+  ])(
+    "preserves paused-turn payloads and continuation: $assistantTexts / $continuation",
+    async (input) => {
+      const { attempt, terminal, prepared } = prepareYield(input);
+      expect(attempt.lastToolError).toBe(input.lastToolError);
       expect(terminal.terminalState.outcome.status).toBe("ok");
-      expect(prepared.payloadsWithToolMedia ?? []).toEqual([]);
-      expect(attempt.lastToolError).toEqual({
-        toolName: "exec",
-        error: "Command exited with code 1",
+      expect(prepared.payloadsWithToolMedia?.map((payload) => payload.text) ?? []).toEqual(
+        input.assistantTexts,
+      );
+      expect(prepared.payloadsWithToolMedia?.some((payload) => payload.isError)).not.toBe(true);
+      expect(prepared.attemptToolSummary).toMatchObject({
+        unresolvedError: { toolName: input.lastToolError.toolName },
       });
-      expect(prepared.attemptToolSummary).toMatchObject({ unresolvedError: { toolName: "exec" } });
-
       const result = await resolveEmbeddedRunTerminal({ ...terminal, ...prepared });
       expect(result.action).toBe("complete");
       if (result.action !== "complete") {
-        throw new Error("Expected a paused terminal result, not a retry");
+        throw new Error("Expected a paused terminal result");
       }
       expect(result.result.meta).toMatchObject({
         yielded: true,
@@ -128,10 +122,15 @@ describe("yielded terminal payloads after an earlier tool failure", () => {
         livenessState: "paused",
       });
       expect(result.result.meta.error).toBeUndefined();
+      expect(result.result.meta.toolSummary).toMatchObject({
+        unresolvedError: { toolName: input.lastToolError.toolName },
+      });
       expect(result.result.payloads ?? []).toEqual(
-        continuation ? [] : [{ text: YIELD_DIAGNOSTIC_TEXT }],
+        input.continuation
+          ? input.assistantTexts.map((text) => ({ text, replyToTag: false }))
+          : [{ text: YIELD_DIAGNOSTIC_TEXT }],
       );
-      expect(terminal.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(terminal.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
     },
   );
 

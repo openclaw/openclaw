@@ -83,10 +83,6 @@ function resolveSourceReplyTarget(params: Record<string, unknown>): string | und
   return readTrimmedStringAlias(params, ["target", "to", "channelId", "chatId"]);
 }
 
-function resolveSourceReplyThreadId(params: SourceReplyTranscriptMirrorParams): string | undefined {
-  return readTrimmedStringAlias(params.actionParams, ["threadId", "messageThreadId"]);
-}
-
 function resolveDeliveryReceipt(
   params: SourceReplyTranscriptMirrorParams,
 ): Record<string, unknown> | undefined {
@@ -154,7 +150,7 @@ function resolveThreadedSourceTarget(
   params: SourceReplyTranscriptMirrorParams,
   requestedTarget: string,
 ): string {
-  const threadId = resolveSourceReplyThreadId(params);
+  const threadId = readTrimmedStringAlias(params.actionParams, ["threadId", "messageThreadId"]);
   if (!threadId) {
     return requestedTarget;
   }
@@ -166,12 +162,6 @@ function resolveThreadedSourceTarget(
       }),
     ) ?? requestedTarget
   );
-}
-
-function resolveCurrentSourceTurnId(
-  toolContext: InternalChannelThreadingToolContext | undefined,
-): string | undefined {
-  return normalizeOptionalString(toolContext?.currentSourceTurnId);
 }
 
 function resolveTerminalSourceReplyDeliveryReceipt(
@@ -187,7 +177,7 @@ function resolveTerminalSourceReplyDeliveryReceipt(
   if (!params.sessionId || !isCurrentSourceConversation(params)) {
     return undefined;
   }
-  const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
+  const sourceTurnId = normalizeOptionalString(params.toolContext?.currentSourceTurnId);
   if (!sourceTurnId) {
     return undefined;
   }
@@ -265,19 +255,6 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
   }
   await completeRestartRecoveryTerminalDelivery(params.receipt);
   return "delivered";
-}
-
-function resolveTranscriptMirrorIdempotencyKey(params: {
-  idempotencyKey?: string;
-  sourceReplyFinal?: boolean;
-  sourceTurnId?: string;
-}): string | undefined {
-  if (params.sourceReplyFinal !== true || !params.idempotencyKey || !params.sourceTurnId) {
-    return params.idempotencyKey;
-  }
-  // Progress and terminal mirrors may share provider idempotency. Transcript
-  // receipts need distinct keys so a progress row cannot mask the terminal marker.
-  return `${params.idempotencyKey}:terminal-receipt:${params.sourceTurnId}`;
 }
 
 function hasCurrentSourceContext(params: SourceReplyTranscriptMirrorParams): boolean {
@@ -625,7 +602,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   if (!mirror.text && mirror.mediaUrls.length === 0) {
     return false;
   }
-  const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
+  const sourceTurnId = normalizeOptionalString(params.toolContext?.currentSourceTurnId);
   const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: params.sessionKey });
   const result = await appendAssistantMessageToSessionTranscript({
     agentId: params.agentId,
@@ -637,11 +614,12 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
     text: mirror.text,
     mediaUrls: mirror.mediaUrls.length ? mirror.mediaUrls : undefined,
-    idempotencyKey: resolveTranscriptMirrorIdempotencyKey({
-      idempotencyKey: params.idempotencyKey,
-      sourceReplyFinal: params.sourceReplyFinal,
-      sourceTurnId,
-    }),
+    // Progress and terminal mirrors may share provider idempotency. Keep their transcript
+    // receipts distinct so a progress row cannot mask the terminal marker.
+    idempotencyKey:
+      params.sourceReplyFinal === true && params.idempotencyKey && sourceTurnId
+        ? `${params.idempotencyKey}:terminal-receipt:${sourceTurnId}`
+        : params.idempotencyKey,
     ...(params.sourceReplyFinal !== undefined
       ? {
           deliveryMirror: {

@@ -28,10 +28,12 @@ export async function prepareCronSessionWorkspace(params: {
   sessionWorkAdmission: SessionWorkAdmissionLease;
   isFastTestEnv: boolean;
 }) {
+  const { sessionWorkAdmission, sessionKey } = params;
+  const abortSignal = params.input.abortSignal ?? params.input.signal;
   const assertCurrent = () => {
-    (params.input.abortSignal ?? params.input.signal)?.throwIfAborted();
-    if (!params.sessionWorkAdmission.isActive()) {
-      throw new CronSessionLifecycleClaimError(params.sessionKey);
+    abortSignal?.throwIfAborted();
+    if (!sessionWorkAdmission.isActive()) {
+      throw new CronSessionLifecycleClaimError(sessionKey);
     }
   };
   const selected = await resolveCronSessionWorkspace({
@@ -52,20 +54,21 @@ export async function prepareCronSessionWorkspace(params: {
     ).resolveAcpAgentWorkspaceProvisioningForTurn({
       cfg: params.cfg,
       agentId: params.agentId,
-      workspaceDir: selected.workspaceDir,
+      workspaceDir: params.defaultWorkspaceDir,
       cwd: selected.cwd,
       sessionKey: params.sessionKey,
       sessionEntry: params.cronSession.sessionEntry,
     });
     assertCurrent();
-    const workspace = await ensureAgentWorkspace({
-      dir: selected.workspaceDir,
+    await ensureAgentWorkspace({
+      dir: params.defaultWorkspaceDir,
       ensureBootstrapFiles: !params.agentCfg.skipBootstrap && !params.isFastTestEnv,
       skipOptionalBootstrapFiles: params.agentCfg.skipOptionalBootstrapFiles,
       provisioning,
+      guard: { assertHost: assertCurrent },
     });
     assertCurrent();
-    return { ...selected, workspaceDir: workspace.dir };
+    return selected;
   } catch (error) {
     await selected.lease?.release();
     throw error;

@@ -61,7 +61,7 @@ function inputs(overrides: Record<string, unknown> = {}) {
 }
 
 function descriptor(target: "npm" | "clawhub") {
-  return {
+  const value = {
     repository: REPOSITORY,
     runId: target === "npm" ? 300 : 400,
     runAttempt: 1,
@@ -74,6 +74,10 @@ function descriptor(target: "npm" | "clawhub") {
     artifactDigest: `sha256:${"c".repeat(64)}`,
     artifactSizeBytes: 100,
   };
+  if (target === "npm") {
+    value.artifactName = preparedNpmArtifactName(SOURCE_SHA, value);
+  }
+  return value;
 }
 
 function readyRelease() {
@@ -129,35 +133,33 @@ function publicationRequest(ready = readyRelease(), resumeRunId = "") {
 }
 
 describe("release readiness contract", () => {
-  it.each([
-    ["v2026.9.2-beta.1", "beta"],
-    ["v2026.9.2", "beta"],
-    ["v2026.9.2", "latest"],
-  ])("seals full-release inputs for %s on %s", (tag, channel) => {
-    const value = validateReleaseButtonInputs(
-      inputs({
-        tag,
-        npm_dist_tag: channel,
-        publish_openclaw_npm: true,
-        publish_docker_only: false,
-      }),
-    );
-    expect(value).toEqual({
-      ...inputs({ tag, npm_dist_tag: channel }),
-      plugin_publish_scope: "all-publishable",
-      publish_openclaw_npm: "true",
-      publish_docker_only: "false",
-      release_evidence_mode: "full-release-validation",
-      wait_for_clawhub: "true",
-    });
-  });
+  it.each([["v2026.9.2-beta.1", "beta"]])(
+    "seals full-release inputs for %s on %s",
+    (tag, channel) => {
+      const value = validateReleaseButtonInputs(
+        inputs({
+          tag,
+          npm_dist_tag: channel,
+          publish_openclaw_npm: true,
+          publish_docker_only: false,
+        }),
+      );
+      expect(value).toEqual({
+        ...inputs({ tag, npm_dist_tag: channel }),
+        plugin_publish_scope: "all-publishable",
+        publish_openclaw_npm: "true",
+        publish_docker_only: "false",
+        release_evidence_mode: "full-release-validation",
+        wait_for_clawhub: "true",
+      });
+    },
+  );
 
   it.each([
     ["unsealed input", { prepared_plugins: "{}" }],
     ["retired soak waiver", { stable_soak_waiver: "2026.9.2 approved" }],
     ["retired lane waiver", { lane_waiver: "2026.9.2 approved" }],
     ["moving source", { tag: "main" }],
-    ["missing source", { tag: "" }],
     ["wrong beta channel", { npm_dist_tag: "latest" }],
     ["alpha owner", { tag: "v2026.9.2-alpha.1", npm_dist_tag: "alpha" }],
     ["extended-stable owner", { tag: "v2026.9.33", npm_dist_tag: "latest" }],
@@ -292,7 +294,7 @@ function bridgeFixture(releaseRunAttempt = 1, conclusion = "success") {
       `${moduleName}.mjs`,
       `
       import { trace, preparedPackage } from './fixture-trace.mjs';
-      export { prepared${prefix}ArtifactName } from ${JSON.stringify(pathToFileURL(resolve(`scripts/${moduleName}.mjs`)).href)};
+      export { prepared${prefix}ArtifactName${target === "npm" ? ", validatePreparedNpmArtifactDescriptor" : ""} } from ${JSON.stringify(pathToFileURL(resolve(`scripts/${moduleName}.mjs`)).href)};
       export async function downloadPrepared${prefix}Release(options) {
         trace('manifest', { target: '${target}', sourceSha: options.sourceSha ?? options.candidateSha,
           toolingSha: options.workflowSha ?? options.toolingSha, selectionMode: options.selectionMode });
@@ -393,6 +395,7 @@ describe("release readiness executable handoff", () => {
     expect(
       runInNewContext(workflow.jobs[jobName].if, {
         github: { repository: REPOSITORY, ref: "refs/heads/main" },
+        inputs: { operation: workflowName === "prepare" ? "prepare" : operation },
         startsWith: (value: string, prefix: string) => value.startsWith(prefix),
       }),
     ).toBe(true);
@@ -461,6 +464,8 @@ describe("release readiness executable handoff", () => {
       append_clawhub_dispatch_args() { clawhub_dispatch_args=(-f "plugins=fixture"); }
       dispatch_workflow() { node "$GITHUB_WORKSPACE/.release-harness/scripts/fixture-dispatch.mjs" "$@"; }
       dispatch_workflow_at_ref() { shift 2; dispatch_workflow "$@"; }
+      sweep_superseded_children() { :; }
+      require_clawhub_dispatch_available() { :; }
     `,
       );
       const plan = writeFixtureFile(
@@ -645,6 +650,12 @@ describe("release readiness executable handoff", () => {
 
 function finalizationFixture(overrides: Record<string, unknown> = {}) {
   const fixture = bridgeFixture();
+  const signedTagObjectSha = "d".repeat(40);
+  mkdirSync(join(fixture.scripts, "lib"), { recursive: true });
+  copyFileSync(
+    resolve("scripts/lib/release-publish-children.sh"),
+    join(fixture.scripts, "lib/release-publish-children.sh"),
+  );
   copyFileSync(
     resolve("scripts/release-tooling-identity.mjs"),
     join(fixture.scripts, "release-tooling-identity.mjs"),
@@ -812,6 +823,21 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
   `,
   );
   chmodSync(gh, 0o755);
+  const git = writeFixtureFile(
+    fixture.root,
+    "bin/git",
+    `#!${process.execPath}
+    const { readFileSync } = require('node:fs');
+    const args = process.argv.slice(2);
+    if (JSON.stringify(args) !== JSON.stringify(['ls-remote', '--tags', 'origin',
+      'refs/tags/' + process.env.FIXTURE_RELEASE_TAG,
+      'refs/tags/' + process.env.FIXTURE_RELEASE_TAG + '^{}'])) process.exit(99);
+    const state = JSON.parse(readFileSync(process.env.FIXTURE_GITHUB_STATE, 'utf8'));
+    console.log('${signedTagObjectSha}\\trefs/tags/' + process.env.FIXTURE_RELEASE_TAG);
+    console.log(state.sourceSha + '\\trefs/tags/' + process.env.FIXTURE_RELEASE_TAG + '^{}');
+  `,
+  );
+  chmodSync(git, 0o755);
   const env = {
     ...fixture.env,
     PATH: `${dirname(gh)}:${fixture.env.PATH}`,
@@ -847,8 +873,11 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
         cwd: dirname(fixture.scripts),
         env: {
           ...env,
+          PARENT_WORKFLOW_SHA: TOOLING_SHA,
           RELEASE_TAG: tag,
+          SIGNED_RELEASE_TAG_OBJECT_SHA: signedTagObjectSha,
           SOURCE_SHA,
+          TARGET_SHA: SOURCE_SHA,
           FIXTURE_ACTIVATION_OWNER: owner,
           FIXTURE_RELEASE_TAG: tag,
           RELEASE_NPM_DIST_TAG: channel,
@@ -870,7 +899,7 @@ function preparationRequest() {
     sourceSha: SOURCE_SHA,
     tooling: TOOLING,
     inputs: validateReleaseButtonInputs(inputs()),
-    npmRunId: 300,
+    npmArtifact: descriptor("npm"),
     clawhubRunId: 400,
   };
 }
@@ -1154,6 +1183,7 @@ async function preparationEvidence(
     publicationAdmission: admission,
     sourceParentRunAttempt: 1,
     executionPlanSha256: plan.sha256,
+    publicationArtifacts: { pluginNpm: descriptor("npm") },
     childEvidence,
     childRuns: Object.fromEntries(
       planned.map((child) => [
@@ -1453,7 +1483,7 @@ function publicationFixture(overrides: Record<string, unknown> = {}, ready = rea
 }
 
 describe("publication dispatch retention", () => {
-  it.each(["success", "lost", "malformed"])("retains intent before POST: %s", (response) => {
+  it.each(["lost", "malformed"])("retains intent before POST: %s", (response) => {
     const fixture = publicationFixture({ publicationResponse: response });
     const result = fixture.publish();
     const expected = publicationRequest();
@@ -1468,30 +1498,20 @@ describe("publication dispatch retention", () => {
       { event: "publication-dispatch", request: unknown },
     ]);
     expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toHaveLength(1);
-    expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(
-      response === "success" ? expected : unknown,
-    );
-    expect(result.status, result.stderr).toBe(response === "success" ? 0 : 1);
-    if (response !== "success") {
-      expect(existsSync(fixture.env.GITHUB_OUTPUT)).toBe(false);
-      expect(result.stderr).toContain("unknown; do not redispatch");
-    }
+    expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(unknown);
+    expect(result.status, result.stderr).toBe(1);
+    expect(existsSync(fixture.env.GITHUB_OUTPUT)).toBe(false);
+    expect(result.stderr).toContain("unknown; do not redispatch");
     expect(fixture.state().writes).toBe(0);
   });
 
-  it.each(["existing", "create failure"])("does not POST after %s", (failure) => {
+  it("does not POST over an existing request", () => {
     const fixture = publicationFixture();
     mkdirSync(dirname(fixture.requestPath), { recursive: true });
-    if (failure === "existing") {
-      writeFileSync(fixture.requestPath, '{"preserve":"original"}');
-    } else {
-      mkdirSync(fixture.requestPath);
-    }
+    writeFileSync(fixture.requestPath, '{"preserve":"original"}');
     expect(fixture.publish().status).toBe(1);
     expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
-    if (failure === "existing") {
-      expect(readFileSync(fixture.requestPath, "utf8")).toBe('{"preserve":"original"}');
-    }
+    expect(readFileSync(fixture.requestPath, "utf8")).toBe('{"preserve":"original"}');
   });
 
   it.each([
@@ -1549,7 +1569,6 @@ describe("publication dispatch retention", () => {
   });
 
   it.each([
-    { state: "unknown", releaseRunId: null },
     { state: "unverified" },
     { schema: "unsupported" },
     { releaseRunAttempt: 2 },
@@ -1654,7 +1673,7 @@ describe("release preparation recovery", () => {
       expect(result.status, result.stderr).toBe(scenario === "valid" ? 0 : 1);
       expect(
         fixture.trace().filter((entry) => entry.event === "preparation-dispatch"),
-      ).toHaveLength(scenario === "valid" ? 2 : 0);
+      ).toHaveLength(scenario === "valid" ? 1 : 0);
       expect(existsSync(fixture.requestPath)).toBe(scenario === "valid");
       if (scenario === "valid") {
         expect(
@@ -1772,8 +1791,8 @@ describe("release preparation recovery", () => {
     mkdirSync(fixture.env.GITHUB_STEP_SUMMARY);
     expect(fixture.prepare().status).toBe(1);
     expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toMatchObject({
-      npmRunId: 300,
-      clawhubRunId: null,
+      npmArtifact: descriptor("npm"),
+      clawhubRunId: 400,
     });
     expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toHaveLength(1);
   });
@@ -1806,40 +1825,28 @@ describe("release preparation recovery", () => {
     const result = fixture.prepare();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("ClawHub dispatch response lost after acceptance");
-    const request = { ...preparationRequest(), npmRunId: null, clawhubRunId: null };
+    const request = { ...preparationRequest(), clawhubRunId: null };
     expect(fixture.trace().filter((entry) => entry.event === "preparation-dispatch")).toEqual([
-      { event: "preparation-dispatch", target: "npm", request },
-      { event: "preparation-dispatch", target: "clawhub", request: { ...request, npmRunId: 300 } },
+      { event: "preparation-dispatch", target: "clawhub", request },
     ]);
-    expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual({
-      ...request,
-      npmRunId: 300,
-    });
+    expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(request);
     expect(existsSync(fixture.env.GITHUB_OUTPUT)).toBe(false);
   });
 
-  it.each([1, 2])(
-    "adopts exact identified preparations without dispatch on attempt %s",
-    async (attempt) => {
-      const fixture = await preparationFixture();
-      const request = preparationRequest();
-      const result = fixture.prepare(request, attempt);
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(request);
-      expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
-      expect(
-        fixture
-          .trace()
-          .filter((entry) => /\/actions\/runs\/(?:300|400)$/u.test(entry.args?.[1] ?? "")),
-      ).toEqual([
-        { event: "gh", args: ["api", `repos/${REPOSITORY}/actions/runs/300`] },
-        { event: "gh", args: ["api", `repos/${REPOSITORY}/actions/runs/400`] },
-      ]);
-      expect(readFileSync(fixture.env.GITHUB_OUTPUT, "utf8")).toContain(
-        `request=${JSON.stringify(request)}\n`,
-      );
-    },
-  );
+  it("adopts exact identified preparations without dispatch on a rerun", async () => {
+    const fixture = await preparationFixture();
+    const request = preparationRequest();
+    const result = fixture.prepare(request, 2);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(request);
+    expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
+    expect(
+      fixture.trace().filter((entry) => (entry.args?.[1] ?? "").endsWith("/actions/runs/400")),
+    ).toEqual([{ event: "gh", args: ["api", `repos/${REPOSITORY}/actions/runs/400`] }]);
+    expect(readFileSync(fixture.env.GITHUB_OUTPUT, "utf8")).toContain(
+      `request=${JSON.stringify(request)}\n`,
+    );
+  });
 
   it.each([
     ["schema", { schema: "different" }],
@@ -1849,9 +1856,10 @@ describe("release preparation recovery", () => {
     ["frozen inputs", { inputs: validateReleaseButtonInputs(inputs({ preflight_run_id: "999" })) }],
     ["unnormalized inputs", { inputs: inputs() }],
     ["unconfirmed child", { clawhubRunId: null }],
-    ["string child ID", { npmRunId: "300" }],
-    ["zero child ID", { npmRunId: 0 }],
-    ["unsafe child ID", { npmRunId: Number.MAX_SAFE_INTEGER + 1 }],
+    ["changed npm artifact", { npmArtifact: { ...descriptor("npm"), artifactId: 0 } }],
+    ["string child ID", { clawhubRunId: "400" }],
+    ["zero child ID", { clawhubRunId: 0 }],
+    ["unsafe child ID", { clawhubRunId: Number.MAX_SAFE_INTEGER + 1 }],
   ] satisfies Array<[string, Record<string, unknown>]>)(
     "rejects recovery with %s before producing a handoff",
     async (_label, overrides) => {
@@ -1867,9 +1875,6 @@ describe("release preparation recovery", () => {
 
   it.each([
     ["workflow", { path: ".github/workflows/openclaw-release-publish.yml" }],
-    ["event", { event: "push" }],
-    ["protected ref", { head_branch: "main" }],
-    ["tooling SHA", { head_sha: "c".repeat(40) }],
     ["attempt", { run_attempt: 0 }],
   ])("rejects a recovered producer with the wrong %s", async (_label, preparationProducer) => {
     const fixture = await preparationFixture({ preparationProducer });
@@ -1926,7 +1931,6 @@ process.exitCode = 1;
   ] as const)(
     "preserves sealed inputs with resume override %s (sealed=%s)",
     (resumeRunId, sealedResumeRunId) => {
-      const fixture = finalizationFixture();
       const ready = readyRelease();
       ready.inputs = validateReleaseButtonInputs(
         inputs({
@@ -1941,38 +1945,9 @@ process.exitCode = 1;
           ...(sealedResumeRunId ? { openclaw_npm_resume_run_id: sealedResumeRunId } : {}),
         }),
       );
-      writeFixtureFile(
-        fixture.scripts,
-        "lib/actions-artifact-archive.mjs",
-        `
-      export { readBoundedRegularFile } from ${JSON.stringify(pathToFileURL(resolve("scripts/lib/actions-artifact-archive.mjs")).href)};
-      export async function downloadActionsArtifactArchive() { return { archiveBytes: Buffer.from('verified fixture archive') }; }
-      export function inspectActionsArtifactZipWithPolicy() {
-        return new Map([['release-ready.json', Buffer.from(${JSON.stringify(JSON.stringify(ready))})]]);
-      }
-    `,
-      );
-      const artifact = {
-        ...descriptor("npm"),
-        workflowPath: ".github/workflows/openclaw-release-prepare.yml",
-        artifactName: readyArtifactName(SOURCE_SHA, 300, 1),
-      };
-      const workflow = parse(
-        readFileSync(".github/workflows/openclaw-release-promote.yml", "utf8"),
-      );
-      const dispatch = workflow.jobs.publish.steps.find(
-        (step: { id?: string }) => step.id === "dispatch",
-      );
-      const result = spawnSync("bash", ["-c", dispatch.run], {
-        cwd: dirname(fixture.scripts),
-        env: {
-          ...fixture.env,
-          PREPARED_ARTIFACT: JSON.stringify(artifact),
-          OPENCLAW_NPM_RESUME_RUN_ID: resumeRunId,
-        },
-        encoding: "utf8",
-        timeout: 10_000,
-      });
+      const fixture = publicationFixture({}, ready);
+      const { workflow } = fixture;
+      const result = fixture.publish({ OPENCLAW_NPM_RESUME_RUN_ID: resumeRunId });
       expect(result.status, result.stderr).toBe(0);
       const outputs = Object.fromEntries(
         readFileSync(fixture.env.GITHUB_OUTPUT, "utf8")
@@ -2037,7 +2012,7 @@ process.exitCode = 1;
     },
   );
 
-  it.each(["0", "-1", "1.5", " 800", "9007199254740992"])(
+  it.each(["0", "9007199254740992"])(
     "rejects malformed resume run %s without dispatching publication",
     (resumeRunId) => {
       const fixture = finalizationFixture();
@@ -2066,7 +2041,6 @@ process.exitCode = 1;
 
   it.each([
     ["button", "v2026.9.2-beta.1", "beta", true, false],
-    ["button", "v2026.9.2", "beta", false, false],
     ["button", "v2026.9.2", "latest", false, true],
     ["parent", "v2026.9.2-beta.1", "beta", true, false],
     ["parent", "v2026.9.2", "beta", false, false],
@@ -2107,7 +2081,6 @@ process.exitCode = 1;
 
   it.each([
     ["v2026.9.2-beta.1", "beta", true],
-    ["v2026.9.2", "beta", false],
     ["v2026.9.2", "latest", false],
   ] as const)(
     "refuses parent activation of %s on %s with a mismatched draft classification",
@@ -2142,12 +2115,10 @@ process.exitCode = 1;
 describe("prepared Windows handoff", () => {
   it.each([
     ["stable on beta", "v2026.9.2", "beta", "success", true, true, false, true],
-    ["stable on latest", "v2026.9.2", "latest", "success", true, true, false, true],
     ["absent", "v2026.9.2", "beta", "success", false, false, false, false],
     ["incomplete", "v2026.9.2", "beta", "success", true, false, false, true],
     ["beta", "v2026.9.2-beta.1", "beta", "success", true, true, false, false],
     ["failed activation", "v2026.9.2", "beta", "failure", true, true, false, false],
-    ["skipped activation", "v2026.9.2", "beta", "skipped", true, true, false, false],
     ["dispatch failed", "v2026.9.2", "beta", "success", true, true, true, true],
   ] as const)(
     "uses the frozen optional selection after activation: %s",

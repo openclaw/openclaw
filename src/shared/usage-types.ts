@@ -1,4 +1,3 @@
-// Usage types define shared usage accounting structures for sessions and runs.
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type {

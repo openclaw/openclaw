@@ -131,7 +131,8 @@ jobs:
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     timeout-minutes: 20
     outputs:
-      sha: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
+      sha: ${{ steps.manifest.outputs.sha || steps.signed_tag.outputs.sha }}
+      signed_tag_object_sha: ${{ steps.signed_tag.outputs.tag_object_sha }}
       expected_validation_branch: ${{ steps.inputs.outputs.expected_validation_branch }}
       preflight_artifact_name: ${{ steps.preflight_artifact.outputs.name }}
       preflight_artifact_run_id: ${{ steps.preflight_artifact.outputs.run_id }}
@@ -329,6 +330,45 @@ jobs:
           fi
           echo "expected_validation_branch=${expected_validation_branch}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify signed release tag
+        id: signed_tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag_ref_file="${RUNNER_TEMP}/release-tag-ref.json"
+          tag_object_file="${RUNNER_TEMP}/release-tag-object.json"
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" > "$tag_ref_file"
+          tag_ref_type="$(jq -r '.object.type // ""' "$tag_ref_file")"
+          if [[ "$tag_ref_type" != "tag" ]]; then
+            echo "Release tag ${RELEASE_TAG} must be an annotated, signed tag; lightweight tags cannot be published." >&2
+            exit 1
+          fi
+          tag_object_sha="$(jq -r '.object.sha // ""' "$tag_ref_file")"
+          if [[ ! "$tag_object_sha" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "Release tag ${RELEASE_TAG} has an invalid annotated tag object." >&2
+            exit 1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" > "$tag_object_file"
+          tag_name="$(jq -r '.tag // ""' "$tag_object_file")"
+          target_type="$(jq -r '.object.type // ""' "$tag_object_file")"
+          target_sha="$(jq -r '.object.sha // ""' "$tag_object_file")"
+          if [[ "$tag_name" != "$RELEASE_TAG" || "$target_type" != "commit" || ! "$target_sha" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "Release tag ${RELEASE_TAG} does not resolve through its annotated tag object to one exact commit." >&2
+            exit 1
+          fi
+          signature_verified="$(jq -r '.verification.verified // false' "$tag_object_file")"
+          if [[ "$signature_verified" != "true" ]]; then
+            signature_reason="$(jq -r '.verification.reason // "missing"' "$tag_object_file")"
+            echo "Release tag ${RELEASE_TAG} must have a signature verified by GitHub (reason: ${signature_reason})." >&2
+            exit 1
+          fi
+          {
+            echo "sha=${target_sha}"
+            echo "tag_object_sha=${tag_object_sha}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Checkout release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -344,6 +384,9 @@ jobs:
       - name: Resolve checked-out release ref
         id: ref
         env:
+          EXPECTED_SIGNED_TAG_SHA: ${{ steps.signed_tag.outputs.sha }}
+          EXPECTED_SIGNED_TAG_OBJECT_SHA: ${{ steps.signed_tag.outputs.tag_object_sha }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
           PUBLISH_DOCKER_ONLY: ${{ inputs.publish_docker_only && 'true' || 'false' }}
@@ -351,6 +394,19 @@ jobs:
         run: |
           set -euo pipefail
           release_version="${RELEASE_TAG#v}"
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "$checked_out_sha" != "$EXPECTED_SIGNED_TAG_SHA" ]]; then
+            echo "Release tag ${RELEASE_TAG} changed after its signature was verified: expected ${EXPECTED_SIGNED_TAG_SHA}, found ${checked_out_sha}." >&2
+            exit 1
+          fi
+          current_tag_object="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" \
+              --jq '.object | select(.type == "tag") | .sha'
+          )"
+          if [[ "$current_tag_object" != "$EXPECTED_SIGNED_TAG_OBJECT_SHA" ]]; then
+            echo "Release tag ${RELEASE_TAG} changed after its signature was verified: expected tag object ${EXPECTED_SIGNED_TAG_OBJECT_SHA}, found ${current_tag_object:-<non-annotated>}." >&2
+            exit 1
+          fi
           # The pin comes from the release checkout and is echoed into GITHUB_OUTPUT;
           # only an exact YYYY.M.PATCH string may pass so it cannot inject output records.
           android_pin_version="$(jq -r '.version // empty' apps/android/version.json)"
@@ -367,7 +423,7 @@ jobs:
             echo "${android_release_note}" >> "$GITHUB_STEP_SUMMARY"
           fi
           {
-            echo "sha=$(git rev-parse HEAD)"
+            echo "sha=${checked_out_sha}"
             echo "android_pin_version=${android_pin_version}"
             echo "android_pin_matches=${android_pin_matches}"
             echo "android_release_note=${android_release_note}"
@@ -769,9 +825,16 @@ jobs:
           if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/openclaw-npm-release.yml" && "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$PREFLIGHT_WORKFLOW_BRANCH" == "$expected_extended_stable_branch" && "$PREFLIGHT_WORKFLOW_SHA" == "$EXPECTED_SHA" ]]; then
             extended_stable_preflight=true
           fi
-          if [[ "$extended_stable_preflight" != "true" ]] && ! git merge-base --is-ancestor "$PREFLIGHT_WORKFLOW_SHA" "$WORKFLOW_SHA"; then
-            echo "OpenClaw npm preflight tooling is not on the trusted publish workflow lineage." >&2
-            exit 1
+          if [[ "$extended_stable_preflight" != "true" ]]; then
+            lineage_args=(--verify-publication-lineage)
+            if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" || "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-artifacts.yml" ]]; then
+              lineage_args+=(--full-release-manifest "${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json")
+            fi
+            node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/npm-preflight-tooling-identity.mjs" \
+              "${lineage_args[@]}" \
+              --repository "$GITHUB_REPOSITORY" --source-sha "$EXPECTED_SHA" \
+              --workflow-sha "$PREFLIGHT_WORKFLOW_SHA" --publisher-sha "$WORKFLOW_SHA" \
+              --run-id "$PREFLIGHT_RUN_ID" --run-attempt "$PREFLIGHT_RUN_ATTEMPT"
           fi
           node "$PLUGIN_SDK_API_VALIDATOR" \
             --manifest "$manifest" \
@@ -1182,6 +1245,7 @@ jobs:
           PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          SIGNED_RELEASE_TAG_OBJECT_SHA: ${{ needs.resolve_release_target.outputs.signed_tag_object_sha }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
         working-directory: .release-harness
         run: |
@@ -1201,6 +1265,7 @@ jobs:
     needs: [resolve_release_target]
     outputs:
       source_sha: ${{ needs.resolve_release_target.outputs.sha }}
+      signed_tag_object_sha: ${{ needs.resolve_release_target.outputs.signed_tag_object_sha }}
       clawhub_run_id: ${{ steps.children.outputs.plugin_clawhub_run_id }}
       clawhub_bootstrap_run_id: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
     if: ${{ !inputs.publish_docker_only }}
@@ -1209,6 +1274,7 @@ jobs:
       PREFLIGHT_ARTIFACT_RUN_ID: ${{ needs.resolve_release_target.outputs.preflight_artifact_run_id }}
       ANDROID_RELEASE_NOTE: ${{ needs.resolve_release_target.outputs.android_release_note }}
       TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+      SIGNED_RELEASE_TAG_OBJECT_SHA: ${{ needs.resolve_release_target.outputs.signed_tag_object_sha }}
       PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
       RELEASE_TAG: ${{ inputs.tag }}
       RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
@@ -1226,7 +1292,7 @@ jobs:
       contents: write
       id-token: write
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     environment: npm-release
     steps:
       - name: Checkout release SHA
@@ -1663,6 +1729,19 @@ jobs:
             bootstrap_workflow_sha="$(verify_bootstrap_workflow_sha)"
           fi
 
+          # Resolve every stale-child blocker before starting any publisher.
+          sweep_superseded_children plugin-npm-release.yml
+          for target in normal bootstrap; do
+            if [[ "$(jq -r --arg target "$target" '.[$target].shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
+              require_clawhub_dispatch_available \
+                "$(jq -r --arg target "$target" '.[$target].ref' "${clawhub_plan_path}")" \
+                "$(jq -r --arg target "$target" '.[$target].workflow' "${clawhub_plan_path}")"
+            fi
+          done
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${openclaw_npm_already_published}" != "true" ]]; then
+            sweep_superseded_children openclaw-npm-release.yml
+          fi
+
           npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}")
           npm_args+=(-f defer_registry_verification="${PUBLISH_OPENCLAW_NPM}")
           if [[ -n "${PREPARED_PLUGINS}" ]]; then
@@ -1750,6 +1829,7 @@ jobs:
         id: core_start
         env:
           GH_TOKEN: ${{ github.token }}
+          FULL_RELEASE_VALIDATION_MANIFEST_DIR: ${{ runner.temp }}/full-release-validation-manifest
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ steps.clawhub_plan.outputs.child_workflow_ref }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
@@ -2006,7 +2086,7 @@ jobs:
           if [[ "${openclaw_failed}" == "0" && ( -n "${openclaw_npm_run_id}" || "${openclaw_npm_already_published}" == "true" ) ]]; then
             wait_for_core_npm_visibility || { failed=1; openclaw_failed=1; }
             if [[ "${openclaw_failed}" == "0" ]]; then
-              sync_npm_beta_floor
+              sync_npm_beta_floor || { failed=1; openclaw_failed=1; }
             fi
           fi
 
@@ -2149,6 +2229,8 @@ jobs:
       prepared_run_attempt: ${{ needs.resolve_release_target.outputs.prepared_docker_run_attempt }}
       prepared_artifact_name: ${{ needs.resolve_release_target.outputs.prepared_docker_artifact_name }}
       prepared_manifest_sha256: ${{ needs.resolve_release_target.outputs.prepared_docker_manifest_sha256 }}
+      full_release_validation_run_id: ${{ inputs.full_release_validation_run_id }}
+      full_release_validation_run_attempt: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
       focused_release_evidence_run_id: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && inputs.focused_release_evidence_run_id || '' }}
       focused_release_evidence_run_attempt: ${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
       focused_release_evidence_workflow_full_ref: ${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_full_ref }}
@@ -2227,11 +2309,16 @@ jobs:
       - name: Publish the verified draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ inputs.tag }}
           SOURCE_SHA: ${{ needs.publish.outputs.source_sha }}
+          SIGNED_RELEASE_TAG_OBJECT_SHA: ${{ needs.publish.outputs.signed_tag_object_sha }}
+          TARGET_SHA: ${{ needs.publish.outputs.source_sha }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
+          source scripts/lib/release-publish-children.sh
+          verify_release_tag_target
           expected_prerelease=false
           if [[ "${RELEASE_TAG}" == *"-beta."* ]]; then
             expected_prerelease=true
@@ -2247,11 +2334,6 @@ jobs:
               --output "$RUNNER_TEMP/linux-updater-carry"; then
               echo "::warning::Linux updater continuity needs recovery; the independent Linux publication remains pending."
             fi
-          fi
-          actual_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
-          if [[ "$actual_sha" != "$SOURCE_SHA" ]]; then
-            echo "Release tag moved before activation; refusing publication." >&2
-            exit 1
           fi
           release_json="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)"
           latest_tag=""
@@ -2352,6 +2434,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ inputs.tag }}
+          SIGNED_RELEASE_TAG_OBJECT_SHA: ${{ needs.resolve_release_target.outputs.signed_tag_object_sha }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
         run: |
           set -euo pipefail
@@ -2401,6 +2484,7 @@ jobs:
           PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          SIGNED_RELEASE_TAG_OBJECT_SHA: ${{ needs.resolve_release_target.outputs.signed_tag_object_sha }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
         run: |
           source scripts/lib/release-publish-children.sh
@@ -2447,6 +2531,7 @@ jobs:
           PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          SIGNED_RELEASE_TAG_OBJECT_SHA: ${{ needs.resolve_release_target.outputs.signed_tag_object_sha }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
           WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}

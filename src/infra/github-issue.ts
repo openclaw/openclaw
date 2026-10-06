@@ -3,12 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
-export type PreparedGithubIssue = {
-  body: string;
-  browserFallback: GithubIssueBrowserFallback;
-  marker: string;
-  title: string;
-};
+export type PreparedGithubIssue = ReturnType<typeof prepareGithubIssue>;
 
 type GithubIssueBrowserFallback =
   | { status: "available"; url: string }
@@ -95,7 +90,7 @@ function prepareGithubIssueBrowserFallback(
 }
 
 /** Bounds sanitized content and adds the stable marker used for reconciliation. */
-export function prepareGithubIssue(input: { body: string; title: string }): PreparedGithubIssue {
+export function prepareGithubIssue(input: { body: string; title: string }) {
   const title = boundUtf8(input.title, GITHUB_ISSUE_TITLE_MAX_BYTES, GITHUB_BODY_TRUNCATED_SUFFIX);
   const boundedBody = boundUtf8(
     input.body,

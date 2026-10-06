@@ -89,8 +89,5 @@ function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
 }
 
 export function sanitizeCopilotReplayResponsePayload(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object") {
-    return false;
-  }
-  return sanitizeCopilotReplayResponseIds((payload as { input?: unknown }).input);
+  return sanitizeCopilotReplayResponseIds(asOptionalObjectRecord(payload)?.input);
 }

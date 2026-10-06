@@ -7,9 +7,7 @@ import {
   resolveChannelResetConfig,
   resolveSessionResetPolicy,
   resolveSessionResetType,
-  resolveSessionWorkStartError,
   type SessionEntry,
-  type SessionFreshness,
 } from "../../config/sessions.js";
 import { hasSessionTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
@@ -19,6 +17,7 @@ import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   respondDeletedAgentSession,
+  resolveAgentSessionWorkStartError,
   type RestoredCronContinuation,
 } from "../agent-turn/agent-handler-helpers.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -27,35 +26,7 @@ import type { AgentRunRequest } from "./agent-request-types.js";
 import { evaluateAgentSessionReuse } from "./agent-session-patch.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-type PreparedAgentSession = {
-  cfg: OpenClawConfig;
-  storePath: string;
-  entry?: SessionEntry;
-  canonicalKey: string;
-  storeKeys?: string[];
-  maintenanceConfig: ReturnType<typeof resolveMaintenanceConfigFromInput>;
-  canonicalSessionAgentId: string;
-  resetPolicy: ReturnType<typeof resolveSessionResetPolicy>;
-  now: number;
-  freshness: SessionFreshness | undefined;
-  visibleRequest: boolean;
-  mainSessionKey: string;
-  isSystemGatewayRun: boolean;
-  usableRequestedSessionId?: string;
-  sessionId: string;
-  isNewSession: boolean;
-  rotatedSessionId: boolean;
-  touchInteraction: boolean;
-  sessionPersistedBeforeGatewayAdmission: boolean;
-  effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
-  restoredCronContinuationIdentity?: Pick<
-    RestoredCronContinuation,
-    "lifecycleRevision" | "sessionId"
-  >;
-  failedSessionTranscriptMissing: (entry: SessionEntry | undefined) => boolean;
-};
-
-export function prepareAgentSession(params: {
+export async function prepareAgentSession(params: {
   cfg: OpenClawConfig;
   requestedSessionKey: string;
   requestedSessionId?: string;
@@ -68,7 +39,7 @@ export function prepareAgentSession(params: {
   effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
-}): PreparedAgentSession | undefined {
+}) {
   const requestedSessionAgent = resolveRequestedSessionAgentId(
     params.cfg,
     params.requestedSessionKey,
@@ -96,7 +67,9 @@ export function prepareAgentSession(params: {
   }
 
   let effectiveBootstrapContextRunKind = params.effectiveBootstrapContextRunKind;
-  let restoredCronContinuationIdentity: PreparedAgentSession["restoredCronContinuationIdentity"];
+  let restoredCronContinuationIdentity:
+    | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
+    | undefined;
   const isGeneratedMediaCronContinuation =
     hasGeneratedMediaCompletionEvent(params.request.internalEvents) &&
     parseCronRunScopeSuffix(canonicalKey).runId !== undefined;
@@ -157,27 +130,16 @@ export function prepareAgentSession(params: {
     params.preAttachmentSession?.canonicalKey === canonicalKey
       ? params.preAttachmentSession
       : undefined;
-  if (sessionExistedBeforeAttachmentSetup && !entry) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Session "${canonicalKey}" was deleted while starting work. Retry.`,
-      ),
-    );
-    return undefined;
-  }
   if (
     sessionExistedBeforeAttachmentSetup &&
-    entry?.sessionId !== sessionExistedBeforeAttachmentSetup.sessionId
+    (!entry || entry.sessionId !== sessionExistedBeforeAttachmentSetup.sessionId)
   ) {
     params.respond(
       false,
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        `Session "${canonicalKey}" changed while starting work. Retry.`,
+        `Session "${canonicalKey}" ${entry ? "changed" : "was deleted"} while starting work. Retry.`,
       ),
     );
     return undefined;
@@ -193,7 +155,7 @@ export function prepareAgentSession(params: {
   ) {
     return undefined;
   }
-  const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
+  const archivedSessionError = resolveAgentSessionWorkStartError(canonicalKey, entry);
   if (archivedSessionError) {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
     return undefined;
@@ -232,7 +194,7 @@ export function prepareAgentSession(params: {
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: canonicalSessionAgentId });
   const isSystemGatewayRun =
     effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
-  const reuse = evaluateAgentSessionReuse({
+  const reuse = await evaluateAgentSessionReuse({
     freshEntry: entry,
     cfg,
     sessionAgentId: canonicalSessionAgentId,

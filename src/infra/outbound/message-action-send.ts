@@ -163,10 +163,11 @@ export async function buildMessagePayload(params: {
     }
     mediaEntries.push({ url: trimmed, ...metadata });
   };
+  const primaryAttachment = attachmentByUrl.get(normalizeOptionalString(mediaHint));
   pushMedia(mediaHint, {
-    ...attachmentByUrl.get(normalizeOptionalString(mediaHint)),
-    filename: topLevelFilename ?? attachmentByUrl.get(normalizeOptionalString(mediaHint))?.filename,
-    mimeType: topLevelMimeType ?? attachmentByUrl.get(normalizeOptionalString(mediaHint))?.mimeType,
+    ...primaryAttachment,
+    filename: topLevelFilename ?? primaryAttachment?.filename,
+    mimeType: topLevelMimeType ?? primaryAttachment?.mimeType,
   });
   for (const mediaUrlHint of mediaUrlHints) {
     pushMedia(mediaUrlHint, attachmentByUrl.get(normalizeOptionalString(mediaUrlHint)));

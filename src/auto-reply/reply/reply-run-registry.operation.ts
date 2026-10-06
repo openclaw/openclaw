@@ -25,6 +25,7 @@ import {
 import {
   abortFrozenOperations,
   attachedBackendByOperation,
+  backendReadyByOperation,
   clearReplyOperationByOperation,
   clearReplyRunState,
   evictReplyOperationByOperation,
@@ -44,7 +45,6 @@ import {
   resolveReplyOperationAgentId,
   retainStateUntilCompleteOperations,
   type ReplyRunAdmissionBarrier,
-  runAfterReplyOperationClear,
   startReplyOperationSuccessorBarriers,
   updateFollowupAdmissionSessionId,
   updateSuccessorAdmissionSessionId,
@@ -101,12 +101,39 @@ export function createReplyOperation(params: {
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
+  let sourceReplyDelivered = false;
   const toolAuthority = createReplyOperationToolAuthority({
     isOpen: () => result === null,
     ownsRunSlot: () => replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
+    captureCurrent: () => {
+      const key = currentSessionKey;
+      const id = currentSessionId;
+      const backend = getAttachedBackend(operation);
+      const assertCurrent = () => {
+        if (
+          result ||
+          controller.signal.aborted ||
+          currentSessionKey !== key ||
+          currentSessionId !== id ||
+          getAttachedBackend(operation) !== backend ||
+          replyRunState.activeRunsByKey.get(key) !== operation ||
+          getAgentEventLifecycleGeneration() !== lifecycleGeneration
+        ) {
+          throw new Error("Reply operation tool authority is no longer active");
+        }
+      };
+      assertCurrent();
+      return assertCurrent;
+    },
   });
   const ownerSettlement = createDeferredCore();
   const producerCompletion = createDeferredCore();
+  let backendReady = createDeferredCore();
+  const notifyBackendReady = () => {
+    if (phase === "running" && getAttachedBackend(operation)) {
+      backendReady.resolve();
+    }
+  };
   let ownerCompletionBarrier: Promise<void> | undefined;
   const settleOwner = (): void => {
     const pending = ownerCompletionBarrier;
@@ -138,6 +165,8 @@ export function createReplyOperation(params: {
     result = next;
     toolAuthority.close();
     recordActivity();
+    phase = next.kind;
+    backendReady.resolve();
   };
   const markProgress = (reason: string) => {
     markDiagnosticRunProgress({
@@ -155,6 +184,7 @@ export function createReplyOperation(params: {
       return;
     }
     stateCleared = true;
+    backendReady.resolve();
     toolAuthority.close();
     terminalSettleTimer.clear();
     finalizationLease.clear();
@@ -189,12 +219,6 @@ export function createReplyOperation(params: {
     );
   };
 
-  const abortInternally = (reason?: unknown) => {
-    if (!controller.signal.aborted) {
-      controller.abort(reason);
-    }
-  };
-
   const scheduleTerminalSettle = () => {
     if (stateCleared) {
       return;
@@ -213,7 +237,7 @@ export function createReplyOperation(params: {
       detachUpstreamAbort();
     }
     phase = "aborted";
-    abortInternally(abortReason);
+    controller.abort(abortReason);
     // Cancellation may throw, but lifecycle cleanup still must run. Pre-backend
     // non-retained owners release now; retained/running owners await terminal settle.
     try {
@@ -223,7 +247,7 @@ export function createReplyOperation(params: {
         isReplyOperationPreBackendPhase(phaseBeforeAbort) &&
         !retainStateUntilCompleteOperations.has(operation)
       ) {
-        clearState();
+        operation.complete();
       } else {
         scheduleTerminalSettle();
       }
@@ -254,6 +278,9 @@ export function createReplyOperation(params: {
     },
     get terminalRecovery() {
       return terminalRecovery;
+    },
+    get sourceReplyDelivered() {
+      return sourceReplyDelivered;
     },
     get acceptedSteeredInboundAudio() {
       return acceptedSteeredInboundAudio;
@@ -289,10 +316,6 @@ export function createReplyOperation(params: {
     get lastActivityAtMs() {
       return lastActivityAtMs;
     },
-    hasOwnedSessionId(candidateSessionId) {
-      const normalizedSessionId = normalizeOptionalString(candidateSessionId);
-      return normalizedSessionId ? ownedSessionIds.has(normalizedSessionId) : false;
-    },
     captureOwnedSessionIds() {
       return new Set(ownedSessionIds);
     },
@@ -305,6 +328,7 @@ export function createReplyOperation(params: {
       }
       recordActivity();
       phase = next;
+      notifyBackendReady();
     },
     markWaitingForDeferredMaintenance() {
       if (result || phase !== "queued") {
@@ -336,17 +360,25 @@ export function createReplyOperation(params: {
       }
       phase = phaseBeforeGlobalLaneWait ?? "queued";
       phaseBeforeGlobalLaneWait = undefined;
+      notifyBackendReady();
       markProgress("global_lane:wait_ended");
     },
     markTerminalRecovery() {
       terminalRecovery = true;
     },
-    markAcceptedSteeredInboundAudio() {
-      acceptedSteeredInboundAudio = true;
+    markSteeredInputAccepted({ inboundAudio }) {
+      acceptedSteeredInboundAudio ||= inboundAudio;
+      sourceReplyDelivered = false;
+    },
+    markSourceReplyDelivered() {
+      sourceReplyDelivered = true;
     },
     bindToolAuthoritySnapshot: toolAuthority.bindToolAuthoritySnapshot,
+    bindToolAuthoritySnapshotAsync: toolAuthority.bindToolAuthoritySnapshotAsync,
     projectToolAuthorityFingerprint: toolAuthority.projectToolAuthorityFingerprint,
+    projectToolAuthorityFingerprintAsync: toolAuthority.projectToolAuthorityFingerprintAsync,
     bindToolAuthorityRoute: toolAuthority.bindToolAuthorityRoute,
+    bindToolAuthorityRouteAsync: toolAuthority.bindToolAuthorityRouteAsync,
     updateSessionId(nextSessionId) {
       if (result) {
         return;
@@ -389,6 +421,9 @@ export function createReplyOperation(params: {
       replyRunState.activeRunsByKey.delete(previousKey);
       replyRunState.activeSessionIdsByKey.delete(previousKey);
       currentSessionKey = update.sessionKey;
+      backendReady.resolve();
+      backendReady = createDeferredCore();
+      backendReadyByOperation.set(operation, backendReady.promise);
       replyRunState.activeRunsByKey.set(currentSessionKey, operation);
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
@@ -419,6 +454,7 @@ export function createReplyOperation(params: {
       recordActivity();
       toolAuthority.bindBackendFingerprint(handle.toolAuthorityFingerprint);
       attachedBackendByOperation.set(operation, handle);
+      notifyBackendReady();
       if (controller.signal.aborted) {
         handle.cancel("superseded");
       }
@@ -441,14 +477,9 @@ export function createReplyOperation(params: {
       producerCompletion.resolve();
       if (!result) {
         setResult({ kind: "completed" });
-        phase = "completed";
       }
       clearState();
       settleOwner();
-    },
-    completeThen(afterClear) {
-      runAfterReplyOperationClear(operation, afterClear);
-      operation.complete();
     },
     completeWithAfterClearBarrier(barrier, timeoutMs) {
       // Producer work is done; delivery may still need a successor operation.
@@ -464,7 +495,6 @@ export function createReplyOperation(params: {
         : completed;
       if (!result) {
         setResult({ kind: "completed" });
-        phase = "completed";
       }
       clearState(barrier, timeoutMs);
       // This barrier owns dispatch delivery and terminal persistence. Stale
@@ -478,7 +508,6 @@ export function createReplyOperation(params: {
       finalizationLease.clear();
       if (!result) {
         setResult({ kind: "failed", code, cause });
-        phase = "failed";
       }
       if (!retainFailureUntilComplete && !retainStateUntilCompleteOperations.has(operation)) {
         clearState();
@@ -512,7 +541,6 @@ export function createReplyOperation(params: {
       beforeSupersede?.();
       if (abortFrozen) {
         setResult({ kind: "aborted", code: "aborted_for_supersession" });
-        phase = "aborted";
         scheduleTerminalSettle();
         return true;
       }
@@ -523,6 +551,7 @@ export function createReplyOperation(params: {
 
   clearReplyOperationByOperation.set(operation, clearState);
   producerCompletionByOperation.set(operation, producerCompletion.promise);
+  backendReadyByOperation.set(operation, backendReady.promise);
   expireReplyOperationByOperation.set(operation, (reason, options) => {
     if (
       replyRunState.activeRunsByKey.get(currentSessionKey) !== operation ||
@@ -540,15 +569,7 @@ export function createReplyOperation(params: {
       // from post-output stalls (finalization/terminal cleanup; feedback is noise).
       staleExpiryReason = reason;
       setResult({ kind: "failed", code: "run_stalled" });
-      phase = "failed";
     }
-    const logStaleTakeoverRelease = () => {
-      diag.warn(
-        `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
-    };
     if (options?.afterClearBarrier) {
       // Prepare the recovery fence before cancellation, but retain exact lane
       // ownership until cancel returns or the backend re-enters completion.
@@ -568,9 +589,13 @@ export function createReplyOperation(params: {
         `reply run stale takeover cancel failed: sessionKey=${currentSessionKey} reason=${reason} owner=${stateCleared ? "completed" : "retained"} error=${String(error)}`,
       );
     }
-    abortInternally(createAbortError("Reply operation expired as stale"));
+    controller.abort(createAbortError("Reply operation expired as stale"));
     if (stateCleared) {
-      logStaleTakeoverRelease();
+      diag.warn(
+        `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
+          result,
+        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
+      );
       return true;
     }
     // cancel() only requests shutdown. A missing backend can also be a live
@@ -624,9 +649,8 @@ export function createReplyOperation(params: {
     }
     if (!result) {
       setResult({ kind: "aborted", code: "aborted_for_restart" });
-      phase = "aborted";
     }
-    abortInternally(createAgentRunRestartAbortError());
+    controller.abort(createAgentRunRestartAbortError());
     try {
       getAttachedBackend(operation)?.cancel("restart");
     } catch (error) {

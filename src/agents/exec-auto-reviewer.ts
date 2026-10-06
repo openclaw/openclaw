@@ -19,14 +19,15 @@ import {
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
+import { collectTextContentBlocks } from "./content-blocks.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import {
   DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
   DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT,
 } from "./exec-auto-reviewer.prompt.js";
 import {
-  acquireSimpleCompletionModelForAgent,
-  completeWithPreparedSimpleCompletionModel,
+  acquireSimpleCompletionModelForAgent as prepareModel,
+  completeWithPreparedSimpleCompletionModel as complete,
 } from "./simple-completion-runtime.js";
 import { coerceToolModelConfig } from "./tools/model-config.helpers.js";
 
@@ -46,11 +47,6 @@ const execAutoReviewResponseSchema = z
 
 /** Config for the optional model-backed exec reviewer. */
 export type ExecReviewerConfig = NonNullable<NonNullable<ToolsConfig["exec"]>["reviewer"]>;
-
-type ExecReviewerDeps = {
-  acquireSimpleCompletionModelForAgent?: typeof acquireSimpleCompletionModelForAgent;
-  completeWithPreparedSimpleCompletionModel?: typeof completeWithPreparedSimpleCompletionModel;
-};
 
 type ModelAutoReviewInput = ExecAutoReviewInput | BoardWidgetAutoReviewInput;
 
@@ -149,18 +145,11 @@ function hasReviewerDirective(input: ModelAutoReviewInput): boolean {
   return values.some((value) => value.length > 0 && textLooksLikeReviewerDirective(value));
 }
 
-function stripJsonFence(text: string): string {
+function extractJsonObject(text: string): string | null {
   const trimmed = text.trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed);
-  return fenced?.[1]?.trim() ?? trimmed;
-}
-
-function extractJsonObject(text: string): string | null {
-  const stripped = stripJsonFence(text);
-  if (stripped.startsWith("{") && stripped.endsWith("}")) {
-    return stripped;
-  }
-  return null;
+  const stripped = fenced?.[1]?.trim() ?? trimmed;
+  return stripped.startsWith("{") && stripped.endsWith("}") ? stripped : null;
 }
 
 function hasDuplicateJsonObjectKeys(text: string): boolean {
@@ -169,19 +158,11 @@ function hasDuplicateJsonObjectKeys(text: string): boolean {
 
   for (let index = 0; index < text.length; index += 1) {
     const token = text[index];
-    if (token === "{") {
+    if (token === "{" || token === "[") {
       depth += 1;
       continue;
     }
-    if (token === "}") {
-      depth -= 1;
-      continue;
-    }
-    if (token === "[") {
-      depth += 1;
-      continue;
-    }
-    if (token === "]") {
+    if (token === "}" || token === "]") {
       depth -= 1;
       continue;
     }
@@ -305,40 +286,18 @@ function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
   }
 }
 
-function extractTextContent(
-  result: Awaited<ReturnType<typeof completeWithPreparedSimpleCompletionModel>>,
-) {
-  return result.content
-    .filter((block): block is { type: "text"; text: string } => block.type === "text")
-    .map((block) => block.text)
-    .join("")
-    .trim();
-}
-
 function extractCompletionFailure(
-  result: Awaited<ReturnType<typeof completeWithPreparedSimpleCompletionModel>>,
+  result: Awaited<ReturnType<typeof complete>>,
 ): string | undefined {
-  const stopReason = "stopReason" in result ? result.stopReason : undefined;
+  const stopReason = result.stopReason;
   if (stopReason === "stop") {
     return undefined;
   }
   if (stopReason === "error") {
-    const message =
-      "errorMessage" in result && typeof result.errorMessage === "string"
-        ? result.errorMessage
-        : undefined;
+    const message = result.errorMessage;
     return message?.trim() ? message : "model returned an error";
   }
   return `model stopped without a complete response (${stopReason ?? "unknown"})`;
-}
-
-function resolveReviewerModelRef(config?: ExecReviewerConfig): string | undefined {
-  return coerceToolModelConfig(config?.model).primary;
-}
-
-/** Resolves the reviewer timeout with a low minimum to avoid hanging exec approval. */
-function resolveExecReviewerTimeoutMs(config?: ExecReviewerConfig): number {
-  return resolveTimerTimeoutMs(config?.timeoutMs, DEFAULT_EXEC_REVIEWER_TIMEOUT_MS, 1_000);
 }
 
 /**
@@ -391,7 +350,6 @@ export function createModelExecAutoReviewer(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
   reviewer?: ExecReviewerConfig;
-  deps?: ExecReviewerDeps;
   signal?: AbortSignal;
 }): (input: ModelAutoReviewInput) => Promise<ExecAutoReviewDecision> | ExecAutoReviewDecision {
   const cfg = params.cfg;
@@ -406,13 +364,12 @@ export function createModelExecAutoReviewer(params: {
         : defaultExecAutoReviewer(input);
   }
   const agentId = params.agentId ?? resolveAmbientOwnerAgentId(cfg);
-  const prepareModel =
-    params.deps?.acquireSimpleCompletionModelForAgent ?? acquireSimpleCompletionModelForAgent;
-  const complete =
-    params.deps?.completeWithPreparedSimpleCompletionModel ??
-    completeWithPreparedSimpleCompletionModel;
-  const modelRef = resolveReviewerModelRef(params.reviewer);
-  const timeoutMs = resolveExecReviewerTimeoutMs(params.reviewer);
+  const modelRef = coerceToolModelConfig(params.reviewer?.model).primary;
+  const timeoutMs = resolveTimerTimeoutMs(
+    params.reviewer?.timeoutMs,
+    DEFAULT_EXEC_REVIEWER_TIMEOUT_MS,
+    1_000,
+  );
   return async (input) => {
     let completionController: AbortController | undefined;
     let callerFinished: Deferred | undefined;
@@ -536,7 +493,7 @@ export function createModelExecAutoReviewer(params: {
           completionFailure,
         );
       }
-      return parseExecAutoReviewResponse(extractTextContent(result));
+      return parseExecAutoReviewResponse(collectTextContentBlocks(result.content).join("").trim());
     } catch (err) {
       params.signal?.throwIfAborted();
       if (completionController?.signal.aborted) {

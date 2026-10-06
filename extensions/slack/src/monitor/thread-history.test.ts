@@ -85,24 +85,21 @@ describe("resolveSlackThreadHistory", () => {
     expectVerboseLogContains("channel=C1");
   });
 
-  it("includes file-only messages and drops empty-only entries", async () => {
-    replies.mockResolvedValueOnce({
+  it.each([
+    {
+      name: "file-only messages and empty filtering",
       messages: [
         { text: "  ", ts: "1.000", files: [{ id: "FSCREEN", name: "screenshot.png" }] },
         { text: "   ", ts: "2.000" },
         { text: "hello", ts: "3.000", user: "U1" },
       ],
-      response_metadata: { next_cursor: "" },
-    });
-    const result = await history();
-
-    expect(result).toHaveLength(2);
-    expect(result[0]?.text).toBe("[attached: screenshot.png (fileId: FSCREEN)]");
-    expect(result[1]?.text).toBe("hello");
-  });
-
-  it("extracts thread text from Slack attachment and block surfaces", async () => {
-    replies.mockResolvedValueOnce({
+      expected: [
+        expect.objectContaining({ text: "[attached: screenshot.png (fileId: FSCREEN)]" }),
+        expect.objectContaining({ text: "hello" }),
+      ],
+    },
+    {
+      name: "attachment and block fallback surfaces",
       messages: [
         {
           text: "  ",
@@ -137,45 +134,33 @@ describe("resolveSlackThreadHistory", () => {
                     { type: "mrkdwn", text: "*device:* /dev/sda1" },
                   ],
                 },
-                {
-                  type: "section",
-                  text: { type: "mrkdwn", text: "Free space below threshold" },
-                },
+                { type: "section", text: { type: "mrkdwn", text: "Free space below threshold" } },
               ],
             },
           ],
         },
-        {
-          text: "  line one\nline two  ",
-          ts: "4.000",
-        },
+        { text: "  line one\nline two  ", ts: "4.000" },
         {
           ts: "5.000",
           attachments: [{ is_share: true, image_url: "https://files.slack.com/shared.png" }],
         },
       ],
-      response_metadata: { next_cursor: "" },
-    });
-    const result = await history();
-
-    expect(result.map((entry) => entry.text)).toEqual([
-      "Filesystem on /dev/sda1 has only 14.93% available space left.\nAlert: filesystem space is low\nHost\ndc2.ipa.mgt",
-      "Pod restart rate is high",
-      "Alert firing\n*host:* dc2.ipa.mgt\n*device:* /dev/sda1\nFree space below threshold",
-      "line one\nline two",
-      "[Slack media attachment]",
-    ]);
-    expect(result.map((entry) => entry.botId)).toEqual([
-      "BMONITOR",
-      "BMONITOR",
-      "BMONITOR",
-      undefined,
-      undefined,
-    ]);
-  });
-
-  it("keeps native chart values with top-level text in thread history", async () => {
-    replies.mockResolvedValueOnce({
+      expected: [
+        expect.objectContaining({
+          text: "Filesystem on /dev/sda1 has only 14.93% available space left.\nAlert: filesystem space is low\nHost\ndc2.ipa.mgt",
+          botId: "BMONITOR",
+        }),
+        expect.objectContaining({ text: "Pod restart rate is high", botId: "BMONITOR" }),
+        expect.objectContaining({
+          text: "Alert firing\n*host:* dc2.ipa.mgt\n*device:* /dev/sda1\nFree space below threshold",
+          botId: "BMONITOR",
+        }),
+        expect.objectContaining({ text: "line one\nline two", botId: undefined }),
+        expect.objectContaining({ text: "[Slack media attachment]", botId: undefined }),
+      ],
+    },
+    {
+      name: "native chart values alongside top-level text",
       messages: [
         {
           text: "Latency report",
@@ -194,23 +179,18 @@ describe("resolveSlackThreadHistory", () => {
           ],
         },
       ],
-      response_metadata: { next_cursor: "" },
-    });
-    const result = await history();
-
-    expect(result).toEqual([
-      {
-        text: "Latency report\nWeekly latency (line chart)\n- p95: Mon: 250",
-        userId: undefined,
-        botId: "BMONITOR",
-        ts: "1.000",
-        files: undefined,
-      },
-    ]);
-  });
-
-  it("keeps attachment table rows with top-level text in thread history", async () => {
-    replies.mockResolvedValueOnce({
+      expected: [
+        {
+          text: "Latency report\nWeekly latency (line chart)\n- p95: Mon: 250",
+          userId: undefined,
+          botId: "BMONITOR",
+          ts: "1.000",
+          files: undefined,
+        },
+      ],
+    },
+    {
+      name: "attachment table rows alongside top-level text",
       messages: [
         {
           text: "Please check these.",
@@ -238,12 +218,13 @@ describe("resolveSlackThreadHistory", () => {
           ],
         },
       ],
-      response_metadata: { next_cursor: "" },
-    });
-    const result = await history();
-
-    expect(result[0]?.text).toBe("Please check these.\nID\tStatus\n12345\tenabled");
-    expect(result[0]?.text).not.toContain("[no preview available]");
+      expected: [
+        expect.objectContaining({ text: "Please check these.\nID\tStatus\n12345\tenabled" }),
+      ],
+    },
+  ])("preserves $name in thread history", async ({ messages, expected }) => {
+    replies.mockResolvedValueOnce({ messages, response_metadata: { next_cursor: "" } });
+    expect(await history()).toEqual(expected);
   });
 
   it("returns empty when limit is zero without calling Slack API", async () => {

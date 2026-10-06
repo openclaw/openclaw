@@ -44,15 +44,9 @@ actor DiagnosticsFileLog {
 
     func clear() throws {
         let fm = FileManager()
-        let base = Self.logFileURL()
-        if fm.fileExists(atPath: base.path) {
-            try fm.removeItem(at: base)
-        }
-        for idx in 1...self.maxBackups {
-            let url = self.rotatedURL(index: idx)
-            if fm.fileExists(atPath: url.path) {
-                try fm.removeItem(at: url)
-            }
+        let files = [Self.logFileURL()] + (1...self.maxBackups).map(self.rotatedURL)
+        for url in files where fm.fileExists(atPath: url.path) {
+            try fm.removeItem(at: url)
         }
     }
 

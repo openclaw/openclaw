@@ -1,15 +1,16 @@
 import { expect, it, vi } from "vitest";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   getSessionCompactionPersistence,
+  getSessionCompactionPersistenceAsync,
   withSessionCompactionPersistence,
   withSessionCompactionPersistenceAsync,
   type CompactionAppendPersistence,
+  type CompactionAppendPersistenceAsync,
 } from "./session-compaction-persistence.js";
 
 it("closes a compaction invocation before its deferred descendants run", async () => {
   const manager = {};
-  const persist = { prepare: vi.fn(), assertActive: vi.fn(), onCommitted: vi.fn() };
+  const persist = vi.fn<CompactionAppendPersistence>();
   let descendant: Promise<CompactionAppendPersistence | undefined> | undefined;
   expect(
     withSessionCompactionPersistence(manager, persist, () => {
@@ -20,24 +21,28 @@ it("closes a compaction invocation before its deferred descendants run", async (
   ).toBe("entry");
   expect(getSessionCompactionPersistence(manager)).toBeUndefined();
   await expect(descendant).resolves.toBeUndefined();
-  expect(persist.prepare).not.toHaveBeenCalled();
+  expect(persist).not.toHaveBeenCalled();
 });
 
-it("retains an asynchronous compaction owner through settlement and closes retained descendants", async () => {
+it("retains an awaited compaction invocation and revokes deferred descendants on rejection", async () => {
   const manager = {};
-  const persist = { prepare: vi.fn(), assertActive: vi.fn(), onCommitted: vi.fn() };
-  const releaseDescendant = createDeferredCore();
-  let descendant: Promise<CompactionAppendPersistence | undefined> | undefined;
+  const persist = vi.fn<CompactionAppendPersistenceAsync>();
+  const failure = new Error("worker rejected compaction");
+  let releaseDescendant!: () => void;
+  const released = new Promise<void>((resolve) => {
+    releaseDescendant = resolve;
+  });
+  let descendant: Promise<CompactionAppendPersistenceAsync | undefined> | undefined;
   await expect(
     withSessionCompactionPersistenceAsync(manager, persist, async () => {
       await Promise.resolve();
-      expect(getSessionCompactionPersistence(manager)).toBe(persist);
-      expect(getSessionCompactionPersistence({})).toBeUndefined();
-      descendant = releaseDescendant.promise.then(() => getSessionCompactionPersistence(manager));
-      throw new Error("append refused");
+      expect(getSessionCompactionPersistenceAsync(manager)).toBe(persist);
+      expect(getSessionCompactionPersistenceAsync({})).toBeUndefined();
+      descendant = released.then(() => getSessionCompactionPersistenceAsync(manager));
+      throw failure;
     }),
-  ).rejects.toThrow("append refused");
-  expect(getSessionCompactionPersistence(manager)).toBeUndefined();
-  releaseDescendant.resolve();
+  ).rejects.toBe(failure);
+  releaseDescendant();
   await expect(descendant).resolves.toBeUndefined();
+  expect(getSessionCompactionPersistenceAsync(manager)).toBeUndefined();
 });

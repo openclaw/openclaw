@@ -1,12 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { sql } from "kysely";
 import {
   iterateSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
-import type { WorkerTaskControl } from "../../infra/worker-task-native-sections.js";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
+import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { classifyOpenClawAgentDatabaseReadError } from "../../state/openclaw-agent-db-read-error.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { prepareTranscriptEventReadQuery } from "./session-accessor.sqlite-read.js";
@@ -43,6 +44,9 @@ export async function streamSessionTranscriptHydration(
       | { value: Extract<SessionTranscriptHydrationWorkerResult, { kind: "full" }> }
       | { error: unknown };
     try {
+      if (request.expectedIdentity) {
+        assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
+      }
       // sqlite-allow-raw: This task's dedicated read-only handle keeps one snapshot across host ACKs.
       database.db.exec("BEGIN DEFERRED");
       const fence = resolveSqliteSessionTranscriptReadFence({ database, ...request.resolvedScope });
@@ -55,7 +59,7 @@ export async function streamSessionTranscriptHydration(
       const source = prepareTranscriptEventReadQuery(database, request.resolvedScope.sessionId, {
         ...request.target,
         beforeEventSeq: fence?.beforeRawSeq,
-      });
+      }).$if(request.afterSeq !== undefined, (query) => query.where("seq", ">", request.afterSeq!));
       const readPart = prepareSqliteQueryTakeFirstSync<
         { seq: number; offset: number },
         { data: Uint8Array }

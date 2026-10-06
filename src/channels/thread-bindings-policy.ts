@@ -11,9 +11,8 @@ import {
   type ThreadBindingLifecycleRecord,
 } from "../shared/thread-binding-lifecycle.js";
 import { asBoolean } from "../utils/boolean.js";
-import { resolveChannelDefaultBindingPlacement } from "./conversation-resolution.js";
 
-export { resolveThreadBindingLifecycle } from "../shared/thread-binding-lifecycle.js";
+export { supportsThreadBindingSpawn as supportsAutomaticThreadBindingSpawn } from "./conversation-resolution.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
 const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;
@@ -45,11 +44,6 @@ type ThreadBindingSpawnPolicy = {
 
 /** Starting transcript mode for a spawned thread-bound session. */
 type ThreadBindingSpawnContext = "isolated" | "fork";
-
-/** Returns true when top-level commands should spawn in a child thread by default. */
-export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
-  return resolveChannelDefaultBindingPlacement(channel) === "child";
-}
 
 function resolveThreadBindingHoursMs(raw: unknown, fallbackHours: number): number {
   const hours = asNonNegativeFiniteNumber(raw) ?? fallbackHours;

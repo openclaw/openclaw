@@ -1,14 +1,16 @@
 import {
   asPositiveFiniteNumber,
   resolveIntegerOption,
+  resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -228,9 +230,8 @@ function looksLikeHtml(value: string): boolean {
 function formatWebFetchErrorDetail(params: {
   detail: string;
   contentType?: string | null;
-  maxChars: number;
 }): string {
-  const { detail, contentType, maxChars } = params;
+  const { detail, contentType } = params;
   if (!detail) {
     return "";
   }
@@ -241,17 +242,15 @@ function formatWebFetchErrorDetail(params: {
     const withTitle = rendered.title ? `${rendered.title}\n${rendered.text}` : rendered.text;
     text = markdownToText(withTitle);
   }
-  const truncated = truncateWebFetchText(text.trim(), maxChars);
-  return truncated.text;
+  return truncateWebFetchText(text.trim(), DEFAULT_ERROR_MAX_CHARS).text;
 }
 
 function redactUrlForDebugLog(rawUrl: string): string {
-  try {
-    const parsed = new URL(rawUrl);
-    return parsed.pathname && parsed.pathname !== "/" ? `${parsed.origin}/...` : parsed.origin;
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     return "[invalid-url]";
   }
+  return parsed.pathname && parsed.pathname !== "/" ? `${parsed.origin}/...` : parsed.origin;
 }
 
 const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent("", "web_fetch").length;
@@ -264,12 +263,7 @@ function formatTerminalWebFetchOrigin(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    return url.origin;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(value)?.origin;
 }
 
 function formatWebFetchTerminalPresentation(result: unknown): { text: string } | undefined {
@@ -327,23 +321,16 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
   };
 }
 
-type WebFetchWrappedContent = {
-  text: string;
-  truncated: boolean;
-  rawLength: number;
-  length: number;
-  spill?: {
-    path: string;
-    chars: number;
-    truncated?: true;
-  };
-};
+type WebFetchWrappedContent = Pick<
+  Static<typeof WebFetchOutputSchema>,
+  "text" | "truncated" | "rawLength" | "length" | "spill"
+>;
 
 async function spillWebFetchContent(
   value: string,
   wrapped: WebFetchWrappedContent,
   maxChars: number,
-  sourceTruncated = false,
+  sourceTruncated: boolean,
 ): Promise<WebFetchWrappedContent> {
   if (!wrapped.truncated) {
     return sourceTruncated ? { ...wrapped, truncated: true } : wrapped;
@@ -389,12 +376,7 @@ async function spillWebFetchContent(
 }
 
 function normalizeContentType(value: string | null | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const [raw] = value.split(";");
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed.toLowerCase() : undefined;
+  return value?.split(";", 1)[0]?.trim().toLowerCase() || undefined;
 }
 
 type WebFetchRuntimeParams = {
@@ -422,21 +404,13 @@ function normalizeProviderFinalUrl(value: unknown): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  for (const char of trimmed) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x20 || code === 0x7f) {
-      return undefined;
-    }
-  }
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
+  if (containsAsciiControlCharacter(trimmed) || trimmed.includes(" ")) {
     return undefined;
   }
+  const url = URL.parse(trimmed);
+  return url && (url.protocol === "http:" || url.protocol === "https:")
+    ? url.toString()
+    : undefined;
 }
 
 function throwIfFetchAborted(signal: AbortSignal | undefined): void {
@@ -473,7 +447,9 @@ async function buildWebFetchPayload(params: {
   const boundProtocolField = (value: string, limit: number): string => {
     const bounded = truncateWebFetchText(value, limit);
     metadataTruncated ||= bounded.truncated;
-    return bounded.text;
+    // The cache outlives the provider payload. Even an in-budget value can be a
+    // slice of a discarded response; copy its UTF-16 units, including lone surrogates.
+    return Buffer.from(bounded.text, "utf16le").toString("utf16le");
   };
   let remainingMetadataChars = Math.min(
     WEB_FETCH_METADATA_MAX_CHARS,
@@ -511,9 +487,7 @@ async function buildWebFetchPayload(params: {
     payload.truncated === true,
   );
   const providerRawLength =
-    typeof payload.rawLength === "number" && Number.isFinite(payload.rawLength)
-      ? Math.max(0, Math.floor(payload.rawLength))
-      : wrapped.rawLength;
+    resolveOptionalIntegerOption(payload.rawLength, { min: 0 }) ?? wrapped.rawLength;
   const url = params.requestedUrl;
   const resolvedFinalUrl = normalizeProviderFinalUrl(payload.finalUrl) ?? url;
   const oversizedFinalUrl =
@@ -522,10 +496,7 @@ async function buildWebFetchPayload(params: {
   // a different destination by clipping a redirect's path or query.
   const finalUrl = oversizedFinalUrl ? url : resolvedFinalUrl;
   metadataTruncated ||= oversizedFinalUrl;
-  const status =
-    typeof payload.status === "number" && Number.isFinite(payload.status)
-      ? Math.max(0, Math.floor(payload.status))
-      : 200;
+  const status = resolveIntegerOption(payload.status, 200, { min: 0 });
   const contentType =
     typeof payload.contentType === "string" ? normalizeContentType(payload.contentType) : undefined;
   const extractor =
@@ -562,10 +533,7 @@ async function buildWebFetchPayload(params: {
     rawLength: providerRawLength,
     ...(wrapped.spill ? { spill: wrapped.spill } : {}),
     fetchedAt,
-    tookMs:
-      typeof payload.tookMs === "number" && Number.isFinite(payload.tookMs)
-        ? Math.max(0, Math.floor(payload.tookMs))
-        : params.tookMs,
+    tookMs: resolveOptionalIntegerOption(payload.tookMs, { min: 0 }) ?? params.tookMs,
     text: wrapped.text,
     ...(warning ? { warning } : {}),
   };
@@ -573,15 +541,8 @@ async function buildWebFetchPayload(params: {
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   throwIfFetchAborted(params.signal);
-  const ssrfPolicy = params.ssrfPolicy;
-  const useTrustedEnvProxy = params.useTrustedEnvProxy;
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(params.url);
-  } catch {
-    throw new Error("Invalid URL: must be http or https");
-  }
-  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+  const parsedUrl = URL.parse(params.url);
+  if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
   }
   // Routing headers partition the process-wide cache without retaining their secrets.
@@ -593,8 +554,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   const cacheDiscriminators = [
     `user-agent:${sha256Hex(params.userAgent)}`,
     params.providerCacheKey ? `provider:${params.providerCacheKey}` : "",
-    ssrfPolicy ? `ssrf-policy:${sha256Hex(JSON.stringify(ssrfPolicy))}` : "",
-    useTrustedEnvProxy ? "trusted-env-proxy" : "",
+    params.ssrfPolicy ? `ssrf-policy:${sha256Hex(JSON.stringify(params.ssrfPolicy))}` : "",
+    params.useTrustedEnvProxy ? "trusted-env-proxy" : "",
     headersCacheKey ? `headers:${headersCacheKey}` : "",
   ].filter(Boolean);
   const cacheKey = normalizeCacheKey(
@@ -708,7 +669,6 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       const detail = formatWebFetchErrorDetail({
         detail: rawDetailResult.text,
         contentType: res.headers.get("content-type"),
-        maxChars: DEFAULT_ERROR_MAX_CHARS,
       });
       const wrappedDetail = wrapWebFetchContent(detail || res.statusText, DEFAULT_ERROR_MAX_CHARS);
       throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);

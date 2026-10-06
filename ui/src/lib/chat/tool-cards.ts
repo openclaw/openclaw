@@ -1,13 +1,17 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
-import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   asNullableObjectRecord as readRecord,
   asNullableRecord,
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import {
   extractCanvasFromDetails,
   extractCanvasFromText,
@@ -23,20 +27,17 @@ import { readBrowserTabTarget } from "../../components/browser/browser-target.ts
 import { redactToolPayloadText } from "../browser-redact.ts";
 import type { ToolCard, ToolCardOutcome, ToolOutputMetadata } from "./chat-types.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
+import { readLiveDiffStat } from "./tool-call-diff.ts";
 import { readPreparedActivity } from "./tool-call-grouping.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 export type CanvasToolPreview = Extract<ToolPreview, { kind: "canvas" }>;
 
 function resolveTranscriptMessageId(message: Record<string, unknown>): string | undefined {
-  if (typeof message.messageId === "string" && message.messageId.trim()) {
-    return message.messageId;
-  }
-  const openClawMeta = message["__openclaw"];
-  const transcriptMeta = asNullableRecord(openClawMeta);
-  return typeof transcriptMeta?.id === "string" && transcriptMeta.id.trim()
-    ? transcriptMeta.id
-    : undefined;
+  return (
+    readNonBlankString(message.messageId) ??
+    readNonBlankString(asNullableRecord(message["__openclaw"])?.id)
+  );
 }
 
 function readToolOutputMetadata(value: unknown): ToolOutputMetadata | undefined {
@@ -67,21 +68,9 @@ function coerceArgs(value: unknown): unknown {
     return value;
   }
   const trimmed = value.trim();
-  if (!trimmed) {
-    return value;
-  }
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-    return value;
-  }
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return value;
-  }
-}
-
-function parseJsonRecord(value: string): Record<string, unknown> | null {
-  return safeParseJsonRecord(value.trim()) ?? null;
+  return trimmed.startsWith("{") || trimmed.startsWith("[")
+    ? (safeParseJson(trimmed) ?? value)
+    : value;
 }
 
 function extractToolText(item: Record<string, unknown>): string | undefined {
@@ -163,7 +152,12 @@ export function resolveToolCardOutcome(
       case "running":
         return runActive === true && card.live === true ? "running" : "unknown";
       default:
-        return "unknown";
+        return card.activity.phase !== "end" &&
+          runActive === true &&
+          card.live === true &&
+          card.completed !== true
+          ? "running"
+          : "unknown";
     }
   }
   if (isToolCardError(card)) {
@@ -178,11 +172,8 @@ export function resolveToolCardOutcome(
   return "unknown";
 }
 
-export function extractToolPreview(
-  outputText: string | undefined,
-  toolName: string | undefined,
-): CanvasToolPreview | undefined {
-  const preview = extractCanvasFromText(outputText, toolName);
+export function extractToolPreview(outputText: string | undefined): CanvasToolPreview | undefined {
+  const preview = extractCanvasFromText(outputText);
   return preview?.surface === "assistant_message"
     ? { ...preview, surface: "assistant_message" }
     : undefined;
@@ -198,7 +189,7 @@ function extractToolPresentation(
   const canvas =
     preview?.surface === "assistant_message"
       ? { ...preview, surface: "assistant_message" }
-      : extractToolPreview(text, name);
+      : extractToolPreview(text);
   if (canvas) {
     return { preview: { ...canvas, surface: "assistant_message" } };
   }
@@ -226,21 +217,20 @@ function resolveToolCallId(
   message: Record<string, unknown>,
 ): string | undefined {
   return (
-    resolveToolUseId(item) ||
-    (typeof item.callId === "string" && item.callId.trim()) ||
-    (typeof message.toolCallId === "string" && message.toolCallId.trim()) ||
-    (typeof message.tool_call_id === "string" && message.tool_call_id.trim()) ||
-    (typeof message.toolUseId === "string" && message.toolUseId.trim()) ||
-    (typeof message.tool_use_id === "string" && message.tool_use_id.trim()) ||
-    undefined
+    resolveToolUseId(item) ??
+    normalizeOptionalString(item.callId) ??
+    normalizeOptionalString(message.toolCallId) ??
+    normalizeOptionalString(message.tool_call_id) ??
+    normalizeOptionalString(message.toolUseId) ??
+    normalizeOptionalString(message.tool_use_id)
   );
 }
 
 function resolveToolName(item: Record<string, unknown>, message: Record<string, unknown>): string {
   return (
-    (typeof item.name === "string" && item.name.trim()) ||
-    (typeof message.toolName === "string" && message.toolName.trim()) ||
-    (typeof message.tool_name === "string" && message.tool_name.trim()) ||
+    normalizeOptionalString(item.name) ??
+    normalizeOptionalString(message.toolName) ??
+    normalizeOptionalString(message.tool_name) ??
     "tool"
   );
 }
@@ -257,6 +247,12 @@ function serializeToolInput(args: unknown): string | undefined {
   } catch {
     return typeof args === "bigint" ? String(args) : Object.prototype.toString.call(args);
   }
+}
+
+/** Rendering only: extraction and result retrieval retain the original card. */
+export function resolveToolCardDisplay(card: ToolCard): ToolCard {
+  const call = unwrapToolCallForDisplay(card);
+  return call === card ? card : { ...card, ...call, inputText: serializeToolInput(call.args) };
 }
 
 export function formatCollapsedToolSummaryText(value: string | undefined): string | undefined {
@@ -362,16 +358,7 @@ function extractToolCards(message: unknown): ToolCard[] {
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
   const isLiveToolStream = m["__openclawToolStreamLive"] === true;
-  const liveDiff = readRecord(m["__openclawToolStreamDiffStat"]);
-  const liveDiffStat =
-    typeof liveDiff?.added === "number" &&
-    Number.isInteger(liveDiff.added) &&
-    liveDiff.added >= 0 &&
-    typeof liveDiff.removed === "number" &&
-    Number.isInteger(liveDiff.removed) &&
-    liveDiff.removed >= 0
-      ? { added: liveDiff.added, removed: liveDiff.removed }
-      : undefined;
+  const liveDiffStat = readLiveDiffStat(m["__openclawToolStreamDiffStat"]);
   const cards: ToolCard[] = [];
   const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);
@@ -379,115 +366,113 @@ function extractToolCards(message: unknown): ToolCard[] {
 
   for (let index = 0; index < content.length; index++) {
     const item = content[index] ?? {};
+    const isCall = isToolCallContentBlock(item);
+    if (!isCall && !isToolResultContentType(item.type)) {
+      continue;
+    }
     const runId = readNonBlankString(item.runId) ?? messageRunId;
     const parentToolCallId = readNonBlankString(item.parentToolCallId);
-    if (isToolCallContentBlock(item)) {
+    const callId = resolveToolCallId(item, m);
+    const name = resolveToolName(item, m);
+    const identity = {
+      id: callId ?? `${name}:${index}`,
+      ...(callId ? { callId } : {}),
+      ...(runId ? { runId } : {}),
+      ...(parentToolCallId ? { parentToolCallId } : {}),
+      name,
+      messageId: transcriptMessageId,
+    };
+    const details = item.details ?? m.details;
+    if (isCall) {
       const args = coerceArgs(item.arguments ?? item.args ?? item.input);
-      const callId = resolveToolCallId(item, m);
-      const name = resolveToolName(item, m);
-      const details = item.details ?? m.details;
       cards.push({
-        id: callId ?? `${name}:${index}`,
-        ...(callId ? { callId } : {}),
-        ...(runId ? { runId } : {}),
-        ...(parentToolCallId ? { parentToolCallId } : {}),
-        name,
+        ...identity,
         args,
         inputText: serializeToolInput(args),
         ...(details !== undefined ? { details } : {}),
         ...(isLiveToolStream
-          ? { live: true, completed: m["__openclawToolStreamResultReceived"] === true }
+          ? {
+              live: true,
+              completed:
+                m["__openclawToolStreamResultReceived"] === true ||
+                m["__openclawToolStreamItemEnded"] === true,
+            }
           : {}),
         ...(liveDiffStat ? { liveDiffStat } : {}),
-        messageId: transcriptMessageId,
       });
       continue;
     }
 
-    if (isToolResultContentType(item.type)) {
-      const name = resolveToolName(item, m);
-      const callId = resolveToolCallId(item, m);
-      const cardId = callId ?? `${name}:${index}`;
-      const existing =
-        cards.find((card) => card.id === cardId) ??
-        cards.find(
-          (card) =>
-            // Same-name fallback belongs to legacy blocks missing an explicit identity.
-            (!callId || !card.callId) &&
-            card.name === name &&
-            card.outputText === undefined &&
-            !fallbackMatchedCards.has(card),
-        );
-      const text = extractToolText(item);
-      const resultMetadata = asNullableRecord(item["__openclaw"]);
-      const resultMessageId =
-        resultMetadata && Object.hasOwn(resultMetadata, "id")
-          ? readNonBlankString(resultMetadata.id)
-          : transcriptMessageId;
-      const toolOutput = readToolOutputMetadata(item) ?? readToolOutputMetadata(m);
-      const outputTruncated =
-        (resultMetadata && Object.hasOwn(resultMetadata, "truncated")
-          ? resultMetadata
-          : asNullableRecord(m["__openclaw"])
-        )?.truncated === true;
-      const details = item.details ?? m.details;
-      // Browser previews trigger I/O. Nested content cannot override its tool
-      // envelope, and a paired result cannot override the authoritative call.
-      const envelopeName = isStandaloneToolMessage ? resolveToolName({}, m) : undefined;
-      const browserToolName =
-        envelopeName && envelopeName !== "browser"
-          ? envelopeName
-          : (existing?.name ?? envelopeName ?? name);
-      const presentation = extractToolPresentation(details, text, name, browserToolName);
-      const isError = readToolErrorFlag(item) ?? messageIsError;
-      const exitCode = readToolExitCode(item, details, text ? parseJsonRecord(text) : undefined, m);
-      if (existing) {
-        fallbackMatchedCards.add(existing);
-        existing.callId ??= callId;
-        existing.runId ??= runId;
-        existing.parentToolCallId ??= parentToolCallId;
-        // Live tool-stream messages emit a toolresult block for partial
-        // `update` output too; completion there is owned by the stream's
-        // resultReceived marker (set at card creation), not block presence —
-        // otherwise a running tool flips to "succeeded" mid-execution.
-        if (!isLiveToolStream) {
-          existing.completed = true;
-        }
-        existing.outputText = text;
-        existing.resultMessageId = resultMessageId;
-        existing.outputTruncated = outputTruncated;
-        existing.toolOutput = toolOutput;
-        existing.preview = presentation.preview;
-        existing.browserTab = presentation.browserTab;
-        if (details !== undefined) {
-          existing.details = details;
-        }
-        if (isError !== undefined) {
-          existing.isError = isError;
-        }
-        if (exitCode !== undefined) {
-          existing.exitCode = exitCode;
-        }
-        continue;
+    const existing =
+      cards.find((card) => card.id === identity.id) ??
+      cards.find(
+        (card) =>
+          // Same-name fallback belongs to legacy blocks missing an explicit identity.
+          (!callId || !card.callId) &&
+          card.name === name &&
+          card.outputText === undefined &&
+          !fallbackMatchedCards.has(card),
+      );
+    const text = extractToolText(item);
+    const resultMetadata = asNullableRecord(item["__openclaw"]);
+    const resultMessageId =
+      resultMetadata && Object.hasOwn(resultMetadata, "id")
+        ? readNonBlankString(resultMetadata.id)
+        : transcriptMessageId;
+    const toolOutput = readToolOutputMetadata(item) ?? readToolOutputMetadata(m);
+    const outputTruncated =
+      (resultMetadata && Object.hasOwn(resultMetadata, "truncated")
+        ? resultMetadata
+        : asNullableRecord(m["__openclaw"])
+      )?.truncated === true;
+    // Browser previews trigger I/O. Nested content cannot override its tool
+    // envelope, and a paired result cannot override the authoritative call.
+    const envelopeName = isStandaloneToolMessage ? resolveToolName({}, m) : undefined;
+    const browserToolName =
+      envelopeName && envelopeName !== "browser"
+        ? envelopeName
+        : (existing?.name ?? envelopeName ?? name);
+    const presentation = extractToolPresentation(details, text, name, browserToolName);
+    const isError = readToolErrorFlag(item) ?? messageIsError;
+    const exitCode = readToolExitCode(
+      item,
+      details,
+      text ? safeParseJsonRecord(text.trim()) : undefined,
+      m,
+    );
+    const result = {
+      outputText: text,
+      resultMessageId,
+      outputTruncated,
+      toolOutput,
+      ...(details !== undefined ? { details } : {}),
+      ...(isError !== undefined ? { isError } : {}),
+      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...presentation,
+    };
+    if (existing) {
+      fallbackMatchedCards.add(existing);
+      existing.callId ??= callId;
+      existing.runId ??= runId;
+      existing.parentToolCallId ??= parentToolCallId;
+      // Live tool-stream messages emit a toolresult block for partial
+      // `update` output too; completion there is owned by the stream's
+      // terminal markers (set at card creation), not block presence —
+      // otherwise a running tool flips to "succeeded" mid-execution.
+      if (!isLiveToolStream) {
+        existing.completed = true;
       }
-      cards.push({
-        id: cardId,
-        ...(callId ? { callId } : {}),
-        ...(runId ? { runId } : {}),
-        ...(parentToolCallId ? { parentToolCallId } : {}),
-        name,
-        completed: true,
-        outputText: text,
-        resultMessageId,
-        outputTruncated,
-        toolOutput,
-        ...(details !== undefined ? { details } : {}),
-        messageId: transcriptMessageId,
-        ...(isError !== undefined ? { isError } : {}),
-        ...(exitCode !== undefined ? { exitCode } : {}),
-        ...presentation,
+      Object.assign(existing, result, {
+        preview: presentation.preview,
+        browserTab: presentation.browserTab,
       });
+      continue;
     }
+    cards.push({
+      ...identity,
+      completed: true,
+      ...result,
+    });
   }
 
   if (isStandaloneToolMessage && cards.length === 0) {
@@ -497,7 +482,11 @@ function extractToolCards(message: unknown): ToolCard[] {
       "tool";
     const text = extractToolText(m);
     const callId = resolveToolCallId({}, m);
-    const exitCode = readToolExitCode(m, m.details, text ? parseJsonRecord(text) : undefined);
+    const exitCode = readToolExitCode(
+      m,
+      m.details,
+      text ? safeParseJsonRecord(text.trim()) : undefined,
+    );
     cards.push({
       id: callId ?? `${resolveToolName({}, m)}:0`,
       ...(callId ? { callId } : {}),

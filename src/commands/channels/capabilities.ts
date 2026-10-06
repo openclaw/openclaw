@@ -1,4 +1,3 @@
-// Implements `openclaw channels capabilities` account capability/probe reporting.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -11,11 +10,11 @@ import {
   resolveMessageActionDiscoveryForPlugin,
 } from "../../channels/plugins/message-action-discovery.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelCapabilities,
   ChannelCapabilitiesDiagnostics,
   ChannelCapabilitiesDisplayLine,
-  ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -36,7 +35,7 @@ import {
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { formatChannelAccountLabel } from "./shared.js";
 
-export type ChannelsCapabilitiesOptions = {
+type ChannelsCapabilitiesOptions = {
   agent?: string;
   channel?: string;
   account?: string;
@@ -53,7 +52,7 @@ type ChannelCapabilitiesReport = {
   configured?: boolean;
   enabled?: boolean;
   support?: ChannelCapabilities;
-  actions?: string[];
+  actions: string[];
   probe?: unknown;
   diagnostics?: ChannelCapabilitiesDiagnostics;
 };
@@ -287,34 +286,31 @@ export async function channelsCapabilitiesCommand(
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     includeSetupFallbackPlugins: true,
   });
-  const selected =
-    !rawChannel || rawChannel === "all"
-      ? plugins
-      : await (async () => {
-          const resolved = await resolveInstallableChannelPlugin({
-            cfg: configSnapshot.sourceConfig,
-            runtime,
-            agentId: opts.agent,
-            rawChannel,
-            allowInstall: true,
-          });
-          if (resolved.configChanged) {
-            await persistChannelPluginConfig({
-              cfg: resolved.cfg,
-              pluginInstalled: resolved.pluginInstalled,
-              baseHash: configSnapshot.hash,
-              writeOptions: writeSnapshot?.writeOptions,
-              runtime,
-            });
-            // The writer refreshes the active runtime snapshot; probes must use that prepared
-            // view rather than the authored config that installation persisted.
-            cfg = await resolveCapabilitiesRuntimeConfig(getRuntimeConfig(), runtime);
-          }
-          return resolved.plugin ? [resolved.plugin] : null;
-        })();
+  let selected = plugins;
+  if (canInstall) {
+    const resolved = await resolveInstallableChannelPlugin({
+      cfg: configSnapshot.sourceConfig,
+      runtime,
+      agentId: opts.agent,
+      rawChannel,
+      allowInstall: true,
+    });
+    if (resolved.configChanged) {
+      await persistChannelPluginConfig({
+        cfg: resolved.cfg,
+        pluginInstalled: resolved.pluginInstalled,
+        baseHash: configSnapshot.hash,
+        writeOptions: writeSnapshot?.writeOptions,
+        runtime,
+      });
+      // The writer refreshes the prepared view used by probes after installation.
+      cfg = await resolveCapabilitiesRuntimeConfig(getRuntimeConfig(), runtime);
+    }
+    selected = resolved.plugin ? [resolved.plugin] : [];
+  }
 
-  if (!selected || selected.length === 0) {
-    if (!rawChannel || rawChannel === "all") {
+  if (selected.length === 0) {
+    if (!canInstall) {
       if (opts.json) {
         writeRuntimeJson(runtime, { channels: [] });
         return;
@@ -363,9 +359,7 @@ export async function channelsCapabilitiesCommand(
     });
     lines.push(theme.heading(label));
     lines.push(`Support: ${formatSupport(report.support)}`);
-    if (report.actions && report.actions.length > 0) {
-      lines.push(`Actions: ${report.actions.join(", ")}`);
-    }
+    lines.push(`Actions: ${report.actions.join(", ")}`);
     if (report.configured === false || report.enabled === false) {
       const configuredLabel = report.configured === false ? "not configured" : "configured";
       const enabledLabel = report.enabled === false ? "disabled" : "enabled";

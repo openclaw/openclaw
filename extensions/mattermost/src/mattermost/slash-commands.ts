@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
-import { isWildcardBindHost } from "./callback-host.js";
+import type { MattermostAccountConfig } from "../types.js";
+import { normalizeCallbackPath, resolveCallbackHost } from "./callback-host.js";
 import type { MattermostClient } from "./client.js";
 
 // Mattermost rejects command descriptions above 128 UTF-8 bytes. Keep portable
@@ -8,19 +9,9 @@ import type { MattermostClient } from "./client.js";
 export const MATTERMOST_SLASH_POST_METHOD = "P";
 const MATTERMOST_COMMAND_DESCRIPTION_MAX_BYTES = 128;
 
-export type MattermostSlashCommandConfig = {
-  /** Enable native slash commands. "auto" resolves to false for now (opt-in). */
-  native: boolean | "auto";
-  /** Also register skill-based commands. */
-  nativeSkills: boolean | "auto";
-  /** Path for the callback endpoint on the gateway HTTP server. */
-  callbackPath: string;
-  /**
-   * Explicit callback URL override (e.g. behind a reverse proxy).
-   * If not set, auto-derived from baseUrl + gateway port + callbackPath.
-   */
-  callbackUrl?: string;
-};
+export type MattermostSlashCommandConfig = Required<
+  Omit<NonNullable<MattermostAccountConfig["commands"]>, "callbackUrl">
+> & { callbackUrl?: string };
 
 export type MattermostCommandSpec = {
   trigger: string;
@@ -393,27 +384,13 @@ export function normalizeSlashCommandTrigger(command: string): string {
   return command.replace(/^\//, "").trim();
 }
 
-const DEFAULT_CALLBACK_PATH = "/api/channels/mattermost/command";
-
-/**
- * Ensure the callback path starts with a leading `/` to prevent
- * malformed URLs like `http://host:portapi/...`.
- */
-function normalizeCallbackPath(path: string): string {
-  const trimmed = path.trim();
-  if (!trimmed) {
-    return DEFAULT_CALLBACK_PATH;
-  }
-  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-}
-
 export function resolveSlashCommandConfig(
   raw?: Partial<MattermostSlashCommandConfig>,
 ): MattermostSlashCommandConfig {
   return {
     native: raw?.native ?? "auto",
     nativeSkills: raw?.nativeSkills ?? "auto",
-    callbackPath: normalizeCallbackPath(raw?.callbackPath ?? DEFAULT_CALLBACK_PATH),
+    callbackPath: normalizeCallbackPath(raw?.callbackPath),
     callbackUrl: normalizeOptionalString(raw?.callbackUrl),
   };
 }
@@ -432,16 +409,8 @@ export function resolveCallbackUrl(params: {
     return params.config.callbackUrl;
   }
 
-  let host =
-    params.gatewayHost && !isWildcardBindHost(params.gatewayHost)
-      ? params.gatewayHost
-      : "localhost";
+  const host = resolveCallbackHost(params.gatewayHost);
   const path = normalizeCallbackPath(params.config.callbackPath);
-
-  // Bracket IPv6 literals so the URL is valid: http://[::1]:3015/...
-  if (host.includes(":") && !(host.startsWith("[") && host.endsWith("]"))) {
-    host = `[${host}]`;
-  }
 
   return `http://${host}:${params.gatewayPort}${path}`;
 }

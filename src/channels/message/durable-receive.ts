@@ -1,8 +1,3 @@
-/**
- * Durable inbound receive journal.
- *
- * Tracks accepted, pending, completed, and retryable inbound platform events.
- */
 import type { ChannelIngressQueue, ChannelIngressQueuePruneOptions } from "./ingress-queue.js";
 import type {
   ChannelIngressQueueCompletedRecord,

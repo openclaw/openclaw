@@ -1,5 +1,7 @@
 /** Durable external-conversation delivery independent from local model sessions. */
 import crypto from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
   beginConversationDeliveryOperation,
@@ -8,10 +10,9 @@ import {
   markConversationDeliverySuppressed,
   type ConversationDeliveryRecord,
 } from "../../config/sessions/conversation-delivery-store.js";
-import {
-  runConversationDatabaseWrite,
-  type ConversationRecord,
-  type PreparedConversationRegistryScope,
+import type {
+  ConversationRecord,
+  PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureConversationDeliveryTarget } from "./delivery-completion.js";
@@ -49,10 +50,9 @@ function buildConversationDeliveryIntentId(agentId: string, operationId: string)
   return `convq_${digest}`;
 }
 
-function readMessageIdFromActionResult(result: MessageActionResult): string | undefined {
-  if (result.kind !== "send") {
-    return undefined;
-  }
+function readMessageIdFromActionResult(
+  result: Extract<MessageActionResult, { kind: "send" }>,
+): string | undefined {
   const sendResult = result.sendResult?.result;
   if (sendResult && "receipt" in sendResult && sendResult.receipt) {
     const receiptId = resolveMessageReceiptPrimaryId(sendResult.receipt);
@@ -63,12 +63,7 @@ function readMessageIdFromActionResult(result: MessageActionResult): string | un
   if (sendResult && "messageId" in sendResult && typeof sendResult.messageId === "string") {
     return sendResult.messageId.trim() || undefined;
   }
-  const payload = result.payload;
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const messageId = (payload as { messageId?: unknown }).messageId;
-    return typeof messageId === "string" && messageId.trim() ? messageId.trim() : undefined;
-  }
-  return undefined;
+  return normalizeOptionalString(asOptionalRecord(result.payload)?.messageId);
 }
 
 export function resultFromExistingOperation(
@@ -125,9 +120,9 @@ export async function sendGatewayConversationMessage(params: {
   const conversationDeliveryTarget = captureConversationDeliveryTarget(scope);
   const begun = params.operation
     ? { created: false, record: params.operation }
-    : await runConversationDatabaseWrite(scope, (writeScope) => {
-        params.assertCurrent();
-        return beginConversationDeliveryOperation(writeScope, {
+    : await beginConversationDeliveryOperation(
+        scope,
+        {
           operationId: params.operationId,
           operationKind: params.operationKind,
           conversationRef: params.conversation.conversationRef,
@@ -136,15 +131,17 @@ export async function sendGatewayConversationMessage(params: {
             : {}),
           message: params.message,
           ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
-        });
-      });
+        },
+        params.assertCurrent,
+      );
+  params.assertCurrent();
   const existing = resultFromExistingOperation(begun.record);
   if (existing) {
     return existing;
   }
 
-  const readAuthoritativeOperation = (writeScope: PreparedConversationRegistryScope) =>
-    getConversationDeliveryOperation(writeScope, begun.record.operationId) ?? begun.record;
+  const readAuthoritativeOperation = async () =>
+    (await getConversationDeliveryOperation(scope, begun.record.operationId)) ?? begun.record;
   try {
     const action = await runMessageAction({
       cfg: params.context.config,
@@ -195,9 +192,7 @@ export async function sendGatewayConversationMessage(params: {
     }
     const messageId = readMessageIdFromActionResult(action);
     if (action.sendResult.deliveryStatus === "suppressed") {
-      const operation = await runConversationDatabaseWrite(scope, (writeScope) =>
-        markConversationDeliverySuppressed(writeScope, begun.record.operationId),
-      );
+      const operation = await markConversationDeliverySuppressed(scope, begun.record.operationId);
       return { deliveryStatus: "suppressed", operation };
     }
     if (action.sendResult.deliveryStatus !== "sent") {
@@ -205,12 +200,11 @@ export async function sendGatewayConversationMessage(params: {
         `Conversation delivery was not confirmed (${action.sendResult.deliveryStatus ?? "unknown"})`,
       );
     }
-    const operation = await runConversationDatabaseWrite(scope, (writeScope) => {
-      const authoritativeOperation = readAuthoritativeOperation(writeScope);
-      return authoritativeOperation.status === "sent" || authoritativeOperation.status === "replied"
-        ? authoritativeOperation
-        : markConversationDeliverySent(writeScope, begun.record.operationId, messageId);
-    });
+    const operation = await markConversationDeliverySent(
+      scope,
+      begun.record.operationId,
+      messageId,
+    );
     const confirmedMessageId =
       messageId ?? operation.platformMessageId ?? operation.preparedMessageId;
     return {
@@ -220,9 +214,7 @@ export async function sendGatewayConversationMessage(params: {
     };
   } catch (error) {
     // Queue settlement may have committed before the sender observed an error.
-    const persisted = await runConversationDatabaseWrite(scope, (writeScope) =>
-      resultFromExistingOperation(readAuthoritativeOperation(writeScope)),
-    );
+    const persisted = resultFromExistingOperation(await readAuthoritativeOperation());
     if (persisted) {
       return persisted;
     }

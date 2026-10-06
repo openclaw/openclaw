@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-  normalizeOptionalLowercaseString,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -30,10 +30,10 @@ import {
   type InternalRealtimeVoiceBrowserSessionCreateRequest,
 } from "../../../talk/provider-internal.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../../talk/provider-resolver.js";
-import { resolveSandboxedSessionCreation } from "../../operator-role-policy.js";
-import { resolveOperatorSessionCreation } from "../../server-methods/session-creation-provenance.js";
+import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
+import { resolveOperatorSessionCreation } from "../../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../../session-sharing.js";
 import { formatForLog } from "../../ws-log.js";
 import { createTalkClientAgentConsultRunner } from "../client-agent-consult.js";
@@ -45,7 +45,6 @@ import {
   buildRealtimeInstructions,
   buildRealtimeVoiceLaunchOptions,
   buildTalkRealtimeConfig,
-  isUnsupportedBrowserWebRtcSession,
   resolveTalkRealtimeProviderInstructions,
 } from "../session-config.js";
 import { readTalkRealtimeInitialItems } from "../session-history.js";
@@ -102,23 +101,21 @@ export const createTalkClient: GatewayRequestHandler = async ({
       requested.provider,
       requested.model,
     );
-    const mode = normalizeOptionalLowercaseString(params.mode) ?? realtimeConfig.mode ?? "realtime";
+    const mode = params.mode ?? realtimeConfig.mode ?? "realtime";
     if (mode !== "realtime") {
       return rejectRequest(
         ErrorCodes.INVALID_REQUEST,
         `talk.client.create only supports mode="realtime"; use talk.catalog for ${mode} provider discovery`,
       );
     }
-    const brain =
-      normalizeOptionalLowercaseString(params.brain) ?? realtimeConfig.brain ?? "agent-consult";
+    const brain = params.brain ?? realtimeConfig.brain ?? "agent-consult";
     if (brain !== "agent-consult") {
       return rejectRequest(
         ErrorCodes.INVALID_REQUEST,
         `talk.client.create only supports brain="agent-consult"`,
       );
     }
-    const transport =
-      normalizeOptionalLowercaseString(params.transport) ?? realtimeConfig.transport;
+    const transport = params.transport ?? realtimeConfig.transport;
     const wantsCameraFrames = params.capabilities?.includes("camera-frame") === true;
     const wantsGatewayControl = params.capabilities?.includes("gateway-control-v1") === true;
     const clientControl = wantsGatewayControl ? { owner: "gateway" as const } : undefined;
@@ -351,9 +348,13 @@ export const createTalkClient: GatewayRequestHandler = async ({
         // Client-owned voice records are minted only for client-owned transports;
         // relay sessions are created via talk.session.create and keyed by relaySessionId.
         // Widening this guard would hand relay calls a mismatched voiceSessionId.
+        // Google WebRTC is not supported by this client-owned flow.
         if (
           (session.transport === "webrtc" || session.transport === "provider-websocket") &&
-          !isUnsupportedBrowserWebRtcSession(session) &&
+          !(
+            session.transport === "webrtc" &&
+            normalizeLowercaseStringOrEmpty(session.provider) === "google"
+          ) &&
           (!transport || session.transport === transport)
         ) {
           const sessionEntryDeadlineAt =
@@ -384,7 +385,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
           void closeStaleClientVoiceSessions({
             agentId,
             config: runtimeConfig,
-            excludeVoiceSessionId: normalizeOptionalString(params.voiceSessionId),
+            excludeVoiceSessionId: requestedVoiceSessionId,
             warn: (message) => context.logGateway.warn(`talk voice session recovery: ${message}`),
           }).catch((error: unknown) =>
             context.logGateway.warn(`talk voice session recovery failed: ${formatForLog(error)}`),

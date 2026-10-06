@@ -86,7 +86,7 @@ async function openTlsTunnel(env = grant.env): Promise<tls.TLSSocket> {
   return socket;
 }
 
-function onClose(socket: Socket | IncomingMessage): Promise<void> {
+function onClose(socket: Socket | IncomingMessage | ServerResponse): Promise<void> {
   return new Promise((resolve) => {
     socket.once("close", () => resolve());
   });
@@ -641,7 +641,7 @@ describe("secret egress registration lifecycle", () => {
     // OpenSSL uses the native clock. Advance the cache's clock into the leaf's
     // renewal window while real TLS verifies both certificates and the same CA.
     vi.spyOn(Date, "now").mockReturnValue(previous.validToDate.getTime() - 30 * 60_000);
-    const renewed = await Promise.all([openTlsTunnel(), openTlsTunnel()]);
+    const renewed = await Promise.all([openTlsTunnel(), openTlsTunnel(register().env)]);
     for (const socket of renewed) {
       await sendCredential(socket);
     }
@@ -726,12 +726,18 @@ describe("secret egress registration lifecycle", () => {
     },
   );
 
-  it("does not reuse a revoked registration's cached TLS bindings on a fresh connection", async () => {
-    await sendCredential(await openTlsTunnel());
+  it("reuses certificates across registrations without reusing revoked TLS bindings", async () => {
+    const generateLeaf = vi.spyOn(proxyCa, "generateLocalProxyLeaf");
+    const grants = [grant, ...Array.from({ length: 4 }, register)];
+    await Promise.all(grants.map(async ({ env }) => sendCredential(await openTlsTunnel(env))));
+    expect(observed).toHaveLength(5);
     grant.revoke();
     grant = proxy.registerProcess();
     await sendCredential(await openTlsTunnel());
-    expect(observed).toEqual([{ authorization: `Bearer ${value}`, body: "" }]);
+    expect(observed).toHaveLength(5);
+    await sendCredential(await openTlsTunnel(register().env));
+    expect(observed).toHaveLength(6);
+    expect(generateLeaf).toHaveBeenCalledTimes(1);
   });
 
   it.each([undefined, 100 * 1024 * 1024 + 1, Number.MAX_SAFE_INTEGER])(
@@ -787,6 +793,8 @@ describe("secret egress registration lifecycle", () => {
       );
       await vi.waitFor(() => expect(bodyReceived.has("cleanup")).toBe(true));
       expect(responses.get("cleanup")?.headersSent).toBe(false);
+      // Client close can precede the proxy response closing and releasing its reservation.
+      const serverClosed = onClose(responses.get("cleanup")!);
       let stopped: Promise<void> | undefined;
       if (action === "disconnect") {
         socket.destroy();
@@ -800,7 +808,7 @@ describe("secret egress registration lifecycle", () => {
           grant = register();
         }
       }
-      await Promise.all([clientClosed, stopped]);
+      await Promise.all([clientClosed, serverClosed, stopped]);
       expect(observed).toEqual([]);
       if (action !== "stop") {
         const next = await openTlsTunnel(register().env);

@@ -12,7 +12,6 @@ import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
-import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   buildManagedMediaFailureBlock,
@@ -96,15 +95,9 @@ export function sanitizeAssistantDisplayText(
   if (!value) {
     return undefined;
   }
-  const withoutEnvelope = stripEnvelopeFromMessage(value);
-  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
-  const stripped = stripInlineDirectiveTagsForDelivery(normalized);
+  const stripped = stripInlineDirectiveTagsForDelivery(value);
   const visible = trimTextPreservingCode(stripped.text);
-  return visible
-    ? options?.preserveBoundaries && !stripped.changed
-      ? normalized
-      : visible
-    : undefined;
+  return visible ? (options?.preserveBoundaries && !stripped.changed ? value : visible) : undefined;
 }
 
 export function prepareAssistantDisplayText(
@@ -114,12 +107,10 @@ export function prepareAssistantDisplayText(
   if (!value) {
     return undefined;
   }
-  const withoutEnvelope = stripEnvelopeFromMessage(value);
-  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
-  return normalized.trim()
+  return value.trim()
     ? options?.preserveBoundaries
-      ? normalized
-      : trimTextPreservingCode(normalized)
+      ? value
+      : trimTextPreservingCode(value)
     : undefined;
 }
 
@@ -213,7 +204,7 @@ export async function buildAssistantReplyContentFromInputs(
   for (const entry of plan) {
     const payload = entry.payload;
     const metadataSource = payloads[entry.sourceIndex] ?? payload;
-    const mediaFailures = getReplyPayloadMetadata(metadataSource)?.assistantMediaFailures ?? [];
+    const mediaFailures = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
     const isPrepared = params.inputs[entry.sourceIndex]?.kind === "prepared";
     const statusNotice = isReplyPayloadStatusNotice(payload);
     const displayText = isPrepared ? prepareAssistantDisplayText : sanitizeAssistantDisplayText;

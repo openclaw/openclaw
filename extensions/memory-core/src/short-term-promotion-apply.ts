@@ -8,6 +8,7 @@ import {
   formatMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   appendConsolidationSkippedSummary,
@@ -187,9 +188,7 @@ export async function applyShortTermPromotions(
   const workspaceDir = options.workspaceDir.trim();
   const nowMs = resolveMemoryCoreNowMs(options.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
-  const limit = Number.isFinite(options.limit)
-    ? Math.max(0, Math.floor(options.limit as number))
-    : options.candidates.length;
+  const limit = resolveNonNegativeIntegerOption(options.limit, options.candidates.length);
   const minScore = toFiniteScore(options.minScore, DEFAULT_PROMOTION_MIN_SCORE);
   const minRecallCount = toFiniteNonNegativeInt(
     options.minRecallCount,
@@ -364,10 +363,10 @@ export async function applyShortTermPromotions(
   );
 
   let compactedDates: string[] = [];
-  const budgetChars =
-    typeof options.memoryFileMaxChars === "number" && Number.isFinite(options.memoryFileMaxChars)
-      ? Math.max(0, Math.floor(options.memoryFileMaxChars))
-      : DEFAULT_MEMORY_FILE_MAX_CHARS;
+  const budgetChars = resolveNonNegativeIntegerOption(
+    options.memoryFileMaxChars,
+    DEFAULT_MEMORY_FILE_MAX_CHARS,
+  );
   const maxPriorEntryLossFraction = Math.max(
     0,
     Math.min(1, options.maxPriorEntryLossFraction ?? 0.25),
@@ -496,7 +495,7 @@ export async function applyShortTermPromotions(
       if (consolidationResult && consolidationPlan) {
         // Reserve lineage before publication; release new rows only when the
         // file owner rules out a replacement or reconciles an unchanged target.
-        const rollbackOrigins = reserveMemoryEntryOrigins({
+        const rollbackOrigins = await reserveMemoryEntryOrigins({
           agentIds: originAgentIds,
           previousMemory: existingMemory,
           operations: consolidationPlan.operations,
@@ -518,7 +517,7 @@ export async function applyShortTermPromotions(
           if (error instanceof MemoryAtomicPublicationError) {
             throw error;
           }
-          rollbackOrigins();
+          await rollbackOrigins();
           if (
             !(error instanceof MemoryWriteConflictError) &&
             !isAtomicReplacePermissionError(error)

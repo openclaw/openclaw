@@ -1,7 +1,10 @@
-// Session message RPC adapters over canonical chat.send dispatch.
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -48,7 +51,7 @@ async function createAgentMainSessionForSend(
   }
 
   let createResult:
-    | { ok: boolean; payload?: { key?: string }; error?: ReturnType<typeof errorShape> }
+    | { ok: boolean; payload?: Record<string, unknown>; error?: ReturnType<typeof errorShape> }
     | undefined;
   const createOptions = bindGatewayRequestHandlerMutationAuthority(
     options,
@@ -61,8 +64,7 @@ async function createAgentMainSessionForSend(
       respond: (ok, payload, error) => {
         createResult = {
           ok,
-          payload:
-            payload && typeof payload === "object" ? (payload as { key?: string }) : undefined,
+          payload: asOptionalObjectRecord(payload),
           error,
         };
       },
@@ -215,18 +217,9 @@ async function handleSessionSend(
     sendAcked = ok;
     sendPayload = payload;
     sendCached = meta?.cached === true;
-    startedRunId =
-      payload &&
-      typeof payload === "object" &&
-      typeof (payload as { runId?: unknown }).runId === "string"
-        ? (payload as { runId: string }).runId
-        : undefined;
-    interruptedActiveRun =
-      ok &&
-      payload !== null &&
-      typeof payload === "object" &&
-      "interruptedActiveRun" in payload &&
-      payload.interruptedActiveRun === true;
+    const result = asOptionalObjectRecord(payload);
+    startedRunId = readStringValue(result?.runId);
+    interruptedActiveRun = ok && result?.interruptedActiveRun === true;
     respond(ok, payload, error, meta);
   });
   if (sendAcked) {

@@ -1,3 +1,4 @@
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";

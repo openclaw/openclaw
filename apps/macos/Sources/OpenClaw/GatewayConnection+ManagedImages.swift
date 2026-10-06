@@ -21,7 +21,7 @@ extension GatewayConnection {
             request,
             ifCurrentServerLease: lease)
         let response = try JSONDecoder().decode(ArtifactsDownloadResult.self, from: responseData)
-        let maximumBytes = Self.maximumManagedMediaBytes(for: kind)
+        let maximumBytes = kind.maximumDownloadBytes
         let declaredMIME = response.artifact.mimetype?.lowercased()
         if playback != .transcode,
            let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -84,19 +84,8 @@ extension GatewayConnection {
         guard await self.isCurrentServerLease(lease) else {
             throw OpenClawChatTransportSendError.notDispatched
         }
-        let transferID = UUID()
-        let transfer = Task { [urlRequest] in
-            try await session.data(for: urlRequest, maximumBytes: maximumBytes) { [weak self] in
-                self?.serverLeaseMatchesCurrentState(lease) == true
-            }
-        }
-        self.managedMediaTransfers[transferID] = transfer
-        defer { self.managedMediaTransfers[transferID] = nil }
-        let (data, urlResponse) = try await withTaskCancellationHandler {
-            try await transfer.value
-        } onCancel: {
-            transfer.cancel()
-        }
+        let (data, urlResponse) = try await self.transferMedia(
+            request: urlRequest, session: session, maximumBytes: maximumBytes, lease: lease)
         guard await self.isCurrentServerLease(lease) else {
             throw OpenClawChatTransportSendError.notDispatched
         }
@@ -117,11 +106,24 @@ extension GatewayConnection {
         return .data(OpenClawChatMediaData(data: data, mimeType: mimeType))
     }
 
-    private static func maximumManagedMediaBytes(for kind: OpenClawChatMediaKind) -> Int {
-        switch kind {
-        case .image: 12 * 1024 * 1024
-        case .audio, .video: 16 * 1024 * 1024
-        case .file: 100 * 1024 * 1024 // Gateway document limit (media-core/constants).
+    func transferMedia(
+        request: URLRequest,
+        session: GatewayTLSPinningSession,
+        maximumBytes: Int,
+        lease: ServerLease) async throws -> (Data, URLResponse)
+    {
+        let transferID = UUID()
+        let transfer = Task {
+            try await session.data(for: request, maximumBytes: maximumBytes) { [weak self] in
+                self?.serverLeaseMatchesCurrentState(lease) == true
+            }
+        }
+        self.managedMediaTransfers[transferID] = transfer
+        defer { self.managedMediaTransfers[transferID] = nil }
+        return try await withTaskCancellationHandler {
+            try await transfer.value
+        } onCancel: {
+            transfer.cancel()
         }
     }
 }

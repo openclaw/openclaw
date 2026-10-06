@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { toQaError } from "../errors.js";
-import { trimToValue } from "../mantis-options.runtime.js";
 import {
   type CommandRunner,
   type CrabboxInspect,
@@ -13,7 +14,6 @@ import {
   resolveCrabboxBin,
   resolveMantisCrabboxLeaseOptions,
   type MantisCrabboxLeaseOptions,
-  runCommand,
 } from "./crabbox-runtime.js";
 import {
   renderMantisCrabboxReport,
@@ -92,7 +92,6 @@ const DEFAULT_PROVIDER = "hetzner";
 const DEFAULT_DURATION = "180s";
 const DEFAULT_SETTLE_MS = 8000;
 const DEFAULT_VISION_TIMEOUT_MS = 120000;
-const CRABBOX_BIN_ENV = "OPENCLAW_MANTIS_CRABBOX_BIN";
 const CRABBOX_PROVIDER_ENV = "OPENCLAW_MANTIS_CRABBOX_PROVIDER";
 const CRABBOX_LEASE_ID_ENV = "OPENCLAW_MANTIS_CRABBOX_LEASE_ID";
 
@@ -155,9 +154,8 @@ async function runCommandWithExternalOutput(params: {
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
-  preserveOutputOnError?: (params: { error: unknown; tempPath: string }) => Promise<boolean>;
+  preserveOutputOnError?: (tempPath: string) => Promise<boolean>;
   runner: CommandRunner;
-  stdio?: "inherit" | "pipe";
 }): Promise<void> {
   let deferredError: unknown;
   await writeExternalFileWithinRoot({
@@ -165,16 +163,13 @@ async function runCommandWithExternalOutput(params: {
     path: path.basename(params.outputPath),
     write: async (tempPath) => {
       try {
-        await runCommand({
-          command: params.command,
-          args: params.buildArgs(tempPath),
+        await params.runner(params.command, params.buildArgs(tempPath), {
           cwd: params.cwd,
           env: params.env,
-          runner: params.runner,
-          stdio: params.stdio,
+          stdio: "inherit",
         });
       } catch (error) {
-        if (await params.preserveOutputOnError?.({ error, tempPath })) {
+        if (await params.preserveOutputOnError?.(tempPath)) {
           deferredError = error;
           return;
         }
@@ -185,57 +180,6 @@ async function runCommandWithExternalOutput(params: {
   if (deferredError) {
     throw toQaError(deferredError);
   }
-}
-
-function buildVisualDriverArgs(params: {
-  browserUrl: string;
-  crabboxBin: string;
-  expectText?: string;
-  leaseId: string;
-  outputDir: string;
-  provider: string;
-  repoRoot: string;
-  settleMs: number;
-  visionMode: MantisVisualTaskVisionMode;
-  visionModel?: string;
-  visionPrompt: string;
-  visionTimeoutMs: number;
-}) {
-  const args = [
-    "--dir",
-    params.repoRoot,
-    "openclaw",
-    "qa",
-    "mantis",
-    "visual-driver",
-    "--repo-root",
-    params.repoRoot,
-    "--output-dir",
-    params.outputDir,
-    "--crabbox-bin",
-    params.crabboxBin,
-    "--provider",
-    params.provider,
-    "--lease-id",
-    params.leaseId,
-    "--browser-url",
-    params.browserUrl,
-    "--settle-ms",
-    String(params.settleMs),
-    "--vision-mode",
-    params.visionMode,
-    "--vision-prompt",
-    params.visionPrompt,
-    "--vision-timeout-ms",
-    String(params.visionTimeoutMs),
-  ];
-  if (params.expectText) {
-    args.push("--expect-text", params.expectText);
-  }
-  if (params.visionModel) {
-    args.push("--vision-model", params.visionModel);
-  }
-  return args;
 }
 
 function parseImageDescribeText(stdout: string) {
@@ -259,12 +203,8 @@ function parseImageDescribeText(stdout: string) {
 }
 
 function parseJsonObjectFromText<T>(text: string, accepts: (value: unknown) => value is T) {
-  const starts = [...text.matchAll(/\{/gu)]
-    .map((match) => match.index)
-    .filter((index) => index !== undefined);
-  const ends = [...text.matchAll(/\}/gu)]
-    .map((match) => match.index)
-    .filter((index) => index !== undefined);
+  const starts = [...text.matchAll(/\{/gu)].map((match) => match.index);
+  const ends = [...text.matchAll(/\}/gu)].map((match) => match.index);
   for (const start of starts) {
     for (const end of ends.toReversed()) {
       if (end < start) {
@@ -283,7 +223,14 @@ function parseJsonObjectFromText<T>(text: string, accepts: (value: unknown) => v
   return undefined;
 }
 
-function parseVisionAssertion(text: string, expectText: string): VisionAssertion {
+function parseVisionAssertion(text: string | undefined, expectText: string): VisionAssertion {
+  if (!text) {
+    return {
+      expectedText: expectText,
+      matched: false,
+      reason: "Image describe did not return text.",
+    };
+  }
   const parsed = parseJsonObjectFromText(text, (value): value is Record<string, unknown> =>
     Boolean(value && typeof value === "object" && "visible" in value),
   );
@@ -318,24 +265,6 @@ function parseVisionAssertion(text: string, expectText: string): VisionAssertion
       : (reason ?? `Visual assertion did not cite the expected text "${expectText}".`),
     visible,
   };
-}
-
-function evaluateVisualExpectation(text: string | undefined, expectText: string | undefined) {
-  if (!expectText) {
-    return { matched: true };
-  }
-  if (!text) {
-    return {
-      assertion: {
-        expectedText: expectText,
-        matched: false,
-        reason: "Image describe did not return text.",
-      },
-      matched: false,
-    };
-  }
-  const assertion = parseVisionAssertion(text, expectText);
-  return { assertion, matched: assertion.matched };
 }
 
 function browserLaunchScript() {
@@ -391,7 +320,6 @@ export async function runMantisVisualDriver(
   const screenshotPath = path.join(outputDir, "visual-task.png");
   const crabboxBin = await resolveCrabboxBin({
     env,
-    envName: CRABBOX_BIN_ENV,
     explicit: opts.crabboxBin,
     repoRoot,
   });
@@ -431,9 +359,9 @@ export async function runMantisVisualDriver(
   };
 
   try {
-    await runCommand({
-      command: crabboxBin,
-      args: [
+    await runner(
+      crabboxBin,
+      [
         "desktop",
         "launch",
         "--provider",
@@ -449,16 +377,15 @@ export async function runMantisVisualDriver(
         "-lc",
         browserLaunchScript(),
       ],
-      cwd: repoRoot,
-      env,
-      runner,
-      stdio: "inherit",
-    });
+      {
+        cwd: repoRoot,
+        env,
+        stdio: "inherit",
+      },
+    );
     const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
     if (settleMs > 0) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, settleMs);
-      });
+      await sleep(settleMs);
     }
     await runCommandWithExternalOutput({
       command: crabboxBin,
@@ -476,7 +403,6 @@ export async function runMantisVisualDriver(
       cwd: repoRoot,
       env,
       runner,
-      stdio: "inherit",
     });
     let visionText: string | undefined;
     if (visionMode === "image-describe") {
@@ -497,16 +423,15 @@ export async function runMantisVisualDriver(
       if (visionModel) {
         imageArgs.push("--model", visionModel);
       }
-      const described = await runCommand({
-        command: "pnpm",
-        args: ["--dir", repoRoot, ...imageArgs],
+      const described = await runner("pnpm", ["--dir", repoRoot, ...imageArgs], {
         cwd: repoRoot,
         env,
-        runner,
+        stdio: "pipe",
       });
       visionText = parseImageDescribeText(described.stdout);
     }
-    const { assertion, matched } = evaluateVisualExpectation(visionText, expectText);
+    const assertion = expectText ? parseVisionAssertion(visionText, expectText) : undefined;
+    const matched = assertion?.matched ?? true;
     result.matched = matched;
     result.status = matched ? "pass" : "fail";
     result.vision.assertion = assertion;
@@ -538,7 +463,6 @@ export async function runMantisVisualTask(
   const videoPath = path.join(outputDir, "visual-task.mp4");
   const crabboxBin = await resolveCrabboxBin({
     env,
-    envName: CRABBOX_BIN_ENV,
     explicit: opts.crabboxBin,
     repoRoot,
   });
@@ -564,12 +488,31 @@ export async function runMantisVisualTask(
     runner,
   });
   let inspected: CrabboxInspect = {};
-  let summary: MantisVisualTaskSummary | undefined;
+  const summary: MantisVisualTaskSummary = {
+    artifacts: {
+      driverResultPath,
+      reportPath,
+      screenshotPath: undefined,
+      summaryPath,
+      videoPath: undefined,
+    },
+    browserUrl,
+    crabbox: session.describe(inspected),
+    driver: undefined,
+    error: undefined,
+    finishedAt: startedAt.toISOString(),
+    outputDir,
+    recording: { error: undefined, required: true },
+    startedAt: startedAt.toISOString(),
+    status: "fail",
+    visionMode,
+  };
 
   try {
     const leaseId = await session.acquire({ idleTimeout, machineClass, ttl });
     inspected = await session.inspect();
     let recordingError: string | undefined;
+    const visionModel = trimToValue(opts.visionModel);
     try {
       await runCommandWithExternalOutput({
         command: crabboxBin,
@@ -587,27 +530,40 @@ export async function runMantisVisualTask(
           "--while",
           "--",
           "pnpm",
-          ...buildVisualDriverArgs({
-            browserUrl,
-            crabboxBin,
-            expectText,
-            leaseId,
-            outputDir,
-            provider,
-            repoRoot,
-            settleMs: opts.settleMs ?? DEFAULT_SETTLE_MS,
-            visionMode,
-            visionModel: trimToValue(opts.visionModel),
-            visionPrompt,
-            visionTimeoutMs: opts.visionTimeoutMs ?? DEFAULT_VISION_TIMEOUT_MS,
-          }),
+          "--dir",
+          repoRoot,
+          "openclaw",
+          "qa",
+          "mantis",
+          "visual-driver",
+          "--repo-root",
+          repoRoot,
+          "--output-dir",
+          outputDir,
+          "--crabbox-bin",
+          crabboxBin,
+          "--provider",
+          provider,
+          "--lease-id",
+          leaseId,
+          "--browser-url",
+          browserUrl,
+          "--settle-ms",
+          String(opts.settleMs ?? DEFAULT_SETTLE_MS),
+          "--vision-mode",
+          visionMode,
+          "--vision-prompt",
+          visionPrompt,
+          "--vision-timeout-ms",
+          String(opts.visionTimeoutMs ?? DEFAULT_VISION_TIMEOUT_MS),
+          ...(expectText ? ["--expect-text", expectText] : []),
+          ...(visionModel ? ["--vision-model", visionModel] : []),
         ],
         cwd: repoRoot,
         env,
-        preserveOutputOnError: async ({ tempPath }) =>
+        preserveOutputOnError: async (tempPath) =>
           (await pathExists(driverResultPath)) && (await nonEmptyFileExists(tempPath)),
         runner,
-        stdio: "inherit",
       });
     } catch (error) {
       if (!(await pathExists(driverResultPath))) {
@@ -624,73 +580,35 @@ export async function runMantisVisualTask(
       recordingError ??
       (copiedVideo ? undefined : "Mantis visual task recording did not produce visual-task.mp4.");
     const status = driver.status === "pass" && !recordingFailure ? "pass" : "fail";
-    summary = {
-      artifacts: {
-        driverResultPath,
-        reportPath,
-        screenshotPath: copiedScreenshot,
-        summaryPath,
-        videoPath: copiedVideo,
-      },
-      browserUrl,
-      crabbox: session.describe(inspected),
-      driver,
-      error: recordingFailure,
-      finishedAt: new Date().toISOString(),
-      outputDir,
-      recording: {
-        error: recordingFailure,
-        required: true,
-      },
-      startedAt: startedAt.toISOString(),
-      status,
-      visionMode,
-    };
-    return {
-      outputDir,
-      reportPath,
-      screenshotPath: copiedScreenshot,
-      status,
-      summaryPath,
-      videoPath: copiedVideo,
-    };
+    summary.artifacts.screenshotPath = copiedScreenshot;
+    summary.artifacts.videoPath = copiedVideo;
+    summary.crabbox = session.describe(inspected);
+    summary.driver = driver;
+    summary.error = recordingFailure;
+    summary.recording.error = recordingFailure;
+    summary.status = status;
   } catch (error) {
-    summary = {
-      artifacts: {
-        driverResultPath,
-        reportPath,
-        summaryPath,
-        videoPath: (await pathExists(videoPath)) ? videoPath : undefined,
-      },
-      browserUrl,
-      crabbox: session.describe(inspected),
-      error: formatErrorMessage(error),
-      finishedAt: new Date().toISOString(),
-      outputDir,
-      recording: {
-        error: (await nonEmptyFileExists(videoPath)) ? undefined : "visual-task.mp4 missing",
-        required: true,
-      },
-      startedAt: startedAt.toISOString(),
-      status: "fail",
-      visionMode,
-    };
+    summary.artifacts.videoPath = (await pathExists(videoPath)) ? videoPath : undefined;
+    summary.crabbox = session.describe(inspected);
+    summary.error = formatErrorMessage(error);
+    summary.recording.error = (await nonEmptyFileExists(videoPath))
+      ? undefined
+      : "visual-task.mp4 missing";
     await fs.writeFile(path.join(outputDir, "error.txt"), `${summary.error}\n`, "utf8");
-    return {
-      outputDir,
-      reportPath,
-      status: "fail",
-      summaryPath,
-      videoPath: summary.artifacts.videoPath,
-    };
   } finally {
-    if (summary) {
-      summary.finishedAt = new Date().toISOString();
-      await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
-      await fs.writeFile(reportPath, renderReport(summary), "utf8");
-    }
-    if (summary?.status === "pass" && session.createdLease && session.leaseId && !keepLease) {
+    summary.finishedAt = new Date().toISOString();
+    await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+    await fs.writeFile(reportPath, renderReport(summary), "utf8");
+    if (summary.status === "pass" && session.createdLease && session.leaseId && !keepLease) {
       await session.stop();
     }
   }
+  return {
+    outputDir,
+    reportPath,
+    ...(summary.driver !== undefined ? { screenshotPath: summary.artifacts.screenshotPath } : {}),
+    status: summary.status,
+    summaryPath,
+    videoPath: summary.artifacts.videoPath,
+  };
 }

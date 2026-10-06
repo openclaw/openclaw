@@ -561,7 +561,6 @@ describe("createAcpxRuntimeService", () => {
   it("reaps stale ACPX process leases from the generated wrapper root at startup", async () => {
     const ctx = createServiceContext(testWorkspace.dir);
     const runtime = createMockRuntime();
-    const processCleanupDeps = { sleep: vi.fn(async () => {}) };
     const wrapperRoot = path.join(ctx.stateDir, "acpx");
     await seedActiveLease(ctx, {
       leaseId: "lease-1",
@@ -574,7 +573,6 @@ describe("createAcpxRuntimeService", () => {
     });
     const service = createAcpxRuntimeService(ctx, {
       runtimeFactory: () => runtime as never,
-      processCleanupDeps,
     });
 
     await service.start(ctx);
@@ -584,7 +582,7 @@ describe("createAcpxRuntimeService", () => {
       expectedLeaseId: "lease-1",
       expectedGatewayInstanceId: "gw-test",
       wrapperRoot,
-      deps: { ...processCleanupDeps, assertCurrent: expect.any(Function) },
+      assertCurrent: expect.any(Function),
     });
     expect(ctx.logger.info).toHaveBeenCalledWith("reaped 2 stale OpenClaw-owned ACPX processes");
 
@@ -621,7 +619,6 @@ describe("createAcpxRuntimeService", () => {
   it("recovers a pending ACPX lease from exact wrapper identity before retiring it", async () => {
     const ctx = createServiceContext(testWorkspace.dir);
     const runtime = createMockRuntime();
-    const processCleanupDeps = { sleep: vi.fn(async () => {}) };
     const wrapperRoot = path.join(ctx.stateDir, "acpx");
     await fs.mkdir(wrapperRoot, { recursive: true });
     await seedActiveLease(ctx, {
@@ -635,7 +632,6 @@ describe("createAcpxRuntimeService", () => {
     });
     const service = createAcpxRuntimeService(ctx, {
       runtimeFactory: () => runtime as never,
-      processCleanupDeps,
     });
 
     await service.start(ctx);
@@ -645,11 +641,11 @@ describe("createAcpxRuntimeService", () => {
       gatewayInstanceId: "gw-test",
       wrapperRoot,
       wrapperPath: path.join(wrapperRoot, "codex-acp-wrapper.mjs"),
-      deps: { ...processCleanupDeps, assertCurrent: expect.any(Function) },
+      assertCurrent: expect.any(Function),
     });
     expect(reapStaleOpenClawOwnedAcpxOrphansMock).toHaveBeenCalledWith({
       wrapperRoot,
-      deps: { ...processCleanupDeps, assertCurrent: expect.any(Function) },
+      assertCurrent: expect.any(Function),
     });
     expect(ctx.logger.info).toHaveBeenCalledWith("reaped 2 stale OpenClaw-owned ACPX processes");
     await expect(openProcessLeaseStore(ctx).lookup("lease-pending")).resolves.toBeUndefined();

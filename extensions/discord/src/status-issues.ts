@@ -8,25 +8,16 @@ import {
   readAccountStatusSnapshot,
   resolveEnabledConfiguredAccountId,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-type DiscordPermissionsAuditSummary = {
-  unresolvedChannels?: number;
-  channels?: Array<{
-    channelId: string;
-    ok?: boolean;
-    missing?: string[];
-    error?: string | null;
-    matchKey?: string;
-    matchSource?: string;
-  }>;
-};
+import {
+  normalizeOptionalString,
+  normalizeOptionalTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function isDiscordMessageContentIntentDisabled(value: unknown): boolean {
   return isRecord(value) && isRecord(value.intents) && value.intents.messageContent === "disabled";
 }
 
-function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsAuditSummary {
+function readDiscordPermissionsAuditSummary(value: unknown) {
   if (!isRecord(value)) {
     return {};
   }
@@ -36,7 +27,7 @@ function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsA
       : undefined;
   const channelsRaw = value.channels;
   const channels = Array.isArray(channelsRaw)
-    ? (channelsRaw
+    ? channelsRaw
         .map((entry) => {
           if (!isRecord(entry)) {
             return null;
@@ -45,23 +36,16 @@ function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsA
           if (!channelId) {
             return null;
           }
-          const ok = typeof entry.ok === "boolean" ? entry.ok : undefined;
-          const missing = Array.isArray(entry.missing)
-            ? entry.missing.map((v) => normalizeOptionalString(v)).filter(Boolean)
-            : undefined;
-          const error = normalizeOptionalString(entry.error) ?? null;
-          const matchKey = normalizeOptionalString(entry.matchKey);
-          const matchSource = normalizeOptionalString(entry.matchSource);
           return {
             channelId,
-            ok,
-            missing: missing?.length ? missing : undefined,
-            error,
-            matchKey,
-            matchSource,
+            ok: typeof entry.ok === "boolean" ? entry.ok : undefined,
+            missing: normalizeOptionalTrimmedStringList(entry.missing),
+            error: normalizeOptionalString(entry.error) ?? null,
+            matchKey: normalizeOptionalString(entry.matchKey),
+            matchSource: normalizeOptionalString(entry.matchSource),
           };
         })
-        .filter(Boolean) as DiscordPermissionsAuditSummary["channels"])
+        .filter((entry) => entry !== null)
     : undefined;
   return { unresolvedChannels, channels };
 }

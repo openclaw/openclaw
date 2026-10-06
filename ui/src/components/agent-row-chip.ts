@@ -25,18 +25,9 @@ class AgentRowChip extends OpenClawLightDomElement {
   constructor() {
     super();
     void new SubscriptionsController(this)
-      .watch(
-        () => this.context?.agents,
-        (agents, notify) => agents.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentIdentity,
-        (identity, notify) => identity.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
-      );
+      .watchStore(() => this.context?.agents)
+      .watchStore(() => this.context?.agentIdentity)
+      .watchStore(() => this.context?.gateway);
   }
 
   override render() {

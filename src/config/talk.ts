@@ -15,7 +15,7 @@ import type {
   TalkRealtimeConfig,
 } from "./types.gateway.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-import { coerceSecretRef } from "./types.secrets.js";
+import { parseSecretRef } from "./types.secrets.js";
 
 function normalizeInteger(value: unknown, min: number): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value >= min ? value : undefined;
@@ -29,7 +29,7 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
   const provider: TalkProviderConfig = {};
   for (const [key, raw] of Object.entries(value)) {
     const normalized =
-      key === "apiKey" ? (normalizeOptionalString(raw) ?? coerceSecretRef(raw) ?? undefined) : raw;
+      key === "apiKey" ? (normalizeOptionalString(raw) ?? parseSecretRef(raw) ?? undefined) : raw;
     if (normalized !== undefined) {
       provider[key] = normalized;
     }
@@ -60,7 +60,7 @@ function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConf
   return Object.keys(providers).length > 0 ? providers : undefined;
 }
 
-function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undefined {
+export function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undefined {
   if (!isRecord(value)) {
     return undefined;
   }

@@ -5,6 +5,11 @@ import {
   resolveEnvNormalizationKeys,
 } from "../infra/env.js";
 import {
+  clearFsSafeEnvFallback,
+  fsSafeEnvInput,
+  normalizeFsSafeNativeEnv,
+} from "../infra/fs-safe-env.js";
+import {
   collectConfigRuntimeEnvVars,
   envSnapshotEntriesEqual,
   envSnapshotKey,
@@ -70,6 +75,7 @@ export function restoreEnvChangesIfUnchanged(params: {
     replaceEnvSnapshotEntry(owned, currentOwned.get(key), beforeOwned.get(key));
   }
   appliedConfigEnvOwnership.set(params.env, owned);
+  normalizeFsSafeNativeEnv(params.env);
 }
 
 type ConfigReadEnvChanges = {
@@ -186,7 +192,7 @@ export function captureConfigReadEnvMutation<T>(
         const key = change.after?.key ?? change.before?.key ?? change.key;
         const unchanged = change.after
           ? envSnapshotEntriesEqual(current.get(key), change.after)
-          : !Object.hasOwn(env, key);
+          : !current.has(key);
         if (!unchanged || !envSnapshotEntriesEqual(currentOwned.get(key), change.afterOwned)) {
           continue;
         }
@@ -197,6 +203,7 @@ export function captureConfigReadEnvMutation<T>(
         replaceEnvSnapshotEntry(owned, currentOwned.get(key), change.beforeOwned);
       }
       appliedConfigEnvOwnership.set(env, owned);
+      normalizeFsSafeNativeEnv(env);
     };
     // Snapshot rejection and include compensation consume the same receipt once.
     retainRestore?.(restore);
@@ -207,7 +214,7 @@ export function captureConfigReadEnvMutation<T>(
 }
 
 export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  let cloned: NodeJS.ProcessEnv = { ...env };
+  let cloned: NodeJS.ProcessEnv = { ...fsSafeEnvInput(env) };
   // A plain spread loses Windows process.env's case-insensitive lookup and assignment semantics.
   if (process.platform === "win32") {
     cloned = new Proxy(cloned, {
@@ -257,6 +264,7 @@ export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.Pr
     });
   }
   appliedConfigEnvOwnership.set(cloned, resolveAppliedConfigEnvOwnership(env));
+  normalizeFsSafeNativeEnv(cloned);
   return cloned;
 }
 
@@ -309,6 +317,8 @@ export function collectConfigRuntimeEnvOwnership(
   after: Readonly<Record<string, string | undefined>>,
   options: { replacedLowerPrecedenceKeys?: readonly string[] } = {},
 ): Record<string, string> {
+  const beforeInput = fsSafeEnvInput(before);
+  const afterInput = fsSafeEnvInput(after);
   const ownedEnv: Record<string, string> = {};
   // Equal bytes cannot reveal that config replaced a lower-precedence layer.
   // Carry the apply-time replacement signal so later reloads can remove that owned value.
@@ -317,14 +327,14 @@ export function collectConfigRuntimeEnvOwnership(
   );
   for (const [key, value] of Object.entries(collectConfigRuntimeEnvVars(sourceConfig))) {
     for (const normalizedKey of resolveEnvNormalizationKeys(key)) {
-      const afterKey = findCaseInsensitiveEnvKey(after, normalizedKey);
-      if (!afterKey || after[afterKey] !== value) {
+      const afterKey = findCaseInsensitiveEnvKey(afterInput, normalizedKey);
+      if (!afterKey || afterInput[afterKey] !== value) {
         continue;
       }
-      const beforeKey = findCaseInsensitiveEnvKey(before, normalizedKey);
+      const beforeKey = findCaseInsensitiveEnvKey(beforeInput, normalizedKey);
       if (
         beforeKey &&
-        before[beforeKey] === value &&
+        beforeInput[beforeKey] === value &&
         !replacedLowerPrecedenceKeys.has(envSnapshotKey(afterKey))
       ) {
         continue;
@@ -340,12 +350,13 @@ function filterConfigRuntimeEnvOwnership(
   env: NodeJS.ProcessEnv,
   ownedEnv: Readonly<Record<string, string>>,
 ): Record<string, string> {
+  const input = fsSafeEnvInput(env);
   const allowedValues = indexConfigRuntimeEnvValues(collectConfigRuntimeEnvVars(sourceConfig));
   const filtered: Record<string, string> = {};
   for (const [key, value] of Object.entries(ownedEnv)) {
     const normalizedKey = resolveEnvNormalizationKeys(key)[0] ?? key;
-    const actualKey = findCaseInsensitiveEnvKey(env, key);
-    if (actualKey && env[actualKey] === value && allowedValues.get(normalizedKey)?.has(value)) {
+    const actualKey = findCaseInsensitiveEnvKey(input, key);
+    if (actualKey && input[actualKey] === value && allowedValues.get(normalizedKey)?.has(value)) {
       filtered[actualKey] = value;
     }
   }
@@ -398,6 +409,7 @@ export function createConfigRuntimeEnvBase(
   } = {},
 ): NodeJS.ProcessEnv {
   const isolated = cloneEnvWithPlatformSemantics(env);
+  clearFsSafeEnvFallback(isolated);
   const ownedEnv = filterConfigRuntimeEnvOwnership(
     activeConfig,
     env,
@@ -411,6 +423,7 @@ export function createConfigRuntimeEnvBase(
       delete isolated[key];
     }
   }
+  normalizeFsSafeNativeEnv(isolated);
   return isolated;
 }
 
@@ -427,7 +440,7 @@ export function prepareConfigRuntimeEnv(params: {
     targetEnv,
     params.previousOwnedEnv ? { ownedEnv: params.previousOwnedEnv } : {},
   );
-  const base = { ...preparedEnv } as Record<string, string | undefined>;
+  const base = { ...fsSafeEnvInput(preparedEnv) };
   applyConfigEnvVars(params.nextConfig, preparedEnv);
   const preparedOwnedEnv = collectConfigRuntimeEnvOwnership(params.nextConfig, base, preparedEnv);
 
@@ -521,6 +534,7 @@ function prepareConfigRuntimeEnvPublication(params: {
   };
 }): PreparedConfigRuntimeEnv {
   const { targetEnv, before, preparedEnv } = params;
+  normalizeFsSafeNativeEnv(preparedEnv);
   const afterByPlatformKey = snapshotEnvByPlatformKey(preparedEnv);
 
   return {
@@ -563,6 +577,7 @@ function prepareConfigRuntimeEnvPublication(params: {
           replaceEnvSnapshotEntry(targetEnv, currentEntry, afterEntry);
         }
       }
+      normalizeFsSafeNativeEnv(targetEnv);
       const generation = processPublication ? publishedConfigRuntimeEnvState.generation + 1 : null;
       let processPublicationState: PendingConfigRuntimeEnvPublication | null = null;
       if (generation !== null) {
@@ -642,6 +657,7 @@ export function applyConfigEnvVars(
     onLowerPrecedenceKeysReplaced?: (keys: readonly string[]) => void;
   } = {},
 ): void {
+  clearFsSafeEnvFallback(env);
   const before = { ...env };
   const previousOwnedEnv = resolveAppliedConfigEnvOwnership(env);
   const entries = collectConfigRuntimeEnvVars(cfg);
@@ -695,4 +711,5 @@ export function applyConfigEnvVars(
     ...filterConfigRuntimeEnvOwnership(cfg, env, previousOwnedEnv),
     ...collectConfigRuntimeEnvOwnership(cfg, before, env, { replacedLowerPrecedenceKeys }),
   });
+  normalizeFsSafeNativeEnv(env);
 }

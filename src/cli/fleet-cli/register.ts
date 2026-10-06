@@ -1,11 +1,16 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { InvalidArgumentError, type Command } from "commander";
 import { validateDiskSize } from "../../fleet/cell-profile.js";
-import type { FleetCreateOptions } from "../../fleet/service.runtime.js";
-import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { collectOption, parseStrictPositiveIntOption } from "../program/helpers.js";
 
-const loadFleetRuntime = createLazyPromise(() => import("./commands.runtime.js"));
+function tenantAction<TOptions extends object>(
+  select: (
+    runtime: typeof import("./commands.runtime.js"),
+  ) => (options: TOptions & { tenant: string }) => Promise<void>,
+) {
+  return async (tenant: string, options: TOptions) =>
+    select(await import("./commands.runtime.js"))({ tenant, ...options });
+}
 
 function parseContainerRuntime(value: string): "docker" | "podman" {
   if (value === "docker" || value === "podman") {
@@ -87,12 +92,7 @@ export function registerFleetCli(program: Command): void {
     .option("--gateway-token <token>", "Use an existing Gateway token")
     .option("--no-start", "Create the container without starting it")
     .option("--json", "Output JSON", false)
-    .action(
-      async (tenant: string, options: Omit<FleetCreateOptions, "tenant"> & { json: boolean }) => {
-        const runtime = await loadFleetRuntime();
-        await runtime.runFleetCreateCommand({ tenant, ...options });
-      },
-    );
+    .action(tenantAction((runtime) => runtime.runFleetCreateCommand));
 
   fleet
     .command("backup")
@@ -103,10 +103,7 @@ export function registerFleetCli(program: Command): void {
       parseStrictPositiveIntOption(value, "--max-bytes"),
     )
     .option("--json", "Output JSON", false)
-    .action(async (tenant: string, options: { out?: string; maxBytes?: number; json: boolean }) => {
-      const runtime = await loadFleetRuntime();
-      await runtime.runFleetBackupCommand({ tenant, ...options });
-    });
+    .action(tenantAction((runtime) => runtime.runFleetBackupCommand));
 
   fleet
     .command("restore")
@@ -118,15 +115,7 @@ export function registerFleetCli(program: Command): void {
       parseStrictPositiveIntOption(value, "--max-bytes"),
     )
     .option("--json", "Output JSON", false)
-    .action(
-      async (
-        tenant: string,
-        options: { from: string; force: boolean; maxBytes?: number; json: boolean },
-      ) => {
-        const runtime = await loadFleetRuntime();
-        await runtime.runFleetRestoreCommand({ tenant, ...options });
-      },
-    );
+    .action(tenantAction((runtime) => runtime.runFleetRestoreCommand));
 
   fleet
     .command("doctor")
@@ -134,7 +123,7 @@ export function registerFleetCli(program: Command): void {
     .argument("[tenant]", "Tenant slug")
     .option("--json", "Output JSON", false)
     .action(async (tenant: string | undefined, options: { json: boolean }) => {
-      const runtime = await loadFleetRuntime();
+      const runtime = await import("./commands.runtime.js");
       await runtime.runFleetDoctorCommand({ tenant, ...options });
     });
 
@@ -144,7 +133,7 @@ export function registerFleetCli(program: Command): void {
     .description("List tenant cells")
     .option("--json", "Output JSON", false)
     .action(async (options: { json: boolean }) => {
-      const runtime = await loadFleetRuntime();
+      const runtime = await import("./commands.runtime.js");
       await runtime.runFleetListCommand(options);
     });
 
@@ -153,10 +142,7 @@ export function registerFleetCli(program: Command): void {
     .description("Show tenant cell status")
     .argument("<tenant>", "Tenant slug")
     .option("--json", "Output JSON", false)
-    .action(async (tenant: string, options: { json: boolean }) => {
-      const runtime = await loadFleetRuntime();
-      await runtime.runFleetStatusCommand({ tenant, ...options });
-    });
+    .action(tenantAction((runtime) => runtime.runFleetStatusCommand));
 
   fleet
     .command("logs")
@@ -168,15 +154,7 @@ export function registerFleetCli(program: Command): void {
       parseStrictPositiveIntOption(value, "--tail"),
     )
     .option("--since <value>", "Show logs since a duration or timestamp")
-    .action(
-      async (
-        tenant: string,
-        options: { follow: boolean; timestamps: boolean; tail?: number; since?: string },
-      ) => {
-        const runtime = await loadFleetRuntime();
-        await runtime.runFleetLogsCommand({ tenant, ...options });
-      },
-    );
+    .action(tenantAction((runtime) => runtime.runFleetLogsCommand));
 
   for (const action of ["start", "stop", "restart"] as const) {
     fleet
@@ -184,7 +162,7 @@ export function registerFleetCli(program: Command): void {
       .description(`${action[0]?.toUpperCase()}${action.slice(1)} a tenant cell`)
       .argument("<tenant>", "Tenant slug")
       .action(async (tenant: string) => {
-        const runtime = await loadFleetRuntime();
+        const runtime = await import("./commands.runtime.js");
         await runtime.runFleetLifecycleCommand({ action, tenant });
       });
   }
@@ -194,10 +172,7 @@ export function registerFleetCli(program: Command): void {
     .description("Replace a tenant cell with a freshly pulled image")
     .argument("<tenant>", "Tenant slug")
     .option("--image <ref>", "Replacement image (default: recorded image)")
-    .action(async (tenant: string, options: { image?: string }) => {
-      const runtime = await loadFleetRuntime();
-      await runtime.runFleetUpgradeCommand({ tenant, ...options });
-    });
+    .action(tenantAction((runtime) => runtime.runFleetUpgradeCommand));
 
   fleet
     .command("rm")
@@ -205,8 +180,5 @@ export function registerFleetCli(program: Command): void {
     .argument("<tenant>", "Tenant slug")
     .option("--purge-data", "Delete the tenant data directory", false)
     .option("--force", "Remove a running cell", false)
-    .action(async (tenant: string, options: { purgeData: boolean; force: boolean }) => {
-      const runtime = await loadFleetRuntime();
-      await runtime.runFleetRemoveCommand({ tenant, ...options });
-    });
+    .action(tenantAction((runtime) => runtime.runFleetRemoveCommand));
 }

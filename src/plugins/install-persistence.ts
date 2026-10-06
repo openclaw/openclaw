@@ -358,7 +358,6 @@ async function persistPluginInstallOwned(
           enabledPluginIds.push(pluginId);
         }
       }
-      const slotWarnings: string[] = [];
       // Select from this install's candidate before its record reaches the durable index.
       const slotMetadata = enabledPluginIds.length
         ? loadPluginMetadataSnapshot({
@@ -373,7 +372,7 @@ async function persistPluginInstallOwned(
           })
         : undefined;
       for (const pluginId of enabledPluginIds) {
-        const slotResult = await tracePluginLifecyclePhaseAsync(
+        next = await tracePluginLifecyclePhaseAsync(
           "slot selection",
           async () => {
             // Legacy kind inspection executes plugin code; every entry follows an awaited boundary.
@@ -387,8 +386,6 @@ async function persistPluginInstallOwned(
           },
           { command: "install", pluginId },
         );
-        next = slotResult.config;
-        slotWarnings.push(...slotResult.warnings);
       }
       next = withoutPluginInstallRecords(next);
       const enabled = new Set(enabledPluginIds);
@@ -505,9 +502,6 @@ async function persistPluginInstallOwned(
             ),
         },
       });
-      for (const warning of slotWarnings) {
-        warn(warning, warning);
-      }
       const configurationRequiredPluginIds = [...enablementByPluginId]
         .filter(([, state]) => state.mode === "missing")
         .map(([pluginId]) => pluginId);

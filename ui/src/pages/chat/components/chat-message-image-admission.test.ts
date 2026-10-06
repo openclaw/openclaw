@@ -61,9 +61,24 @@ afterEach(() => {
 });
 
 const imageResponse = () => new Response("png", { headers: { "Content-Type": "image/png" } });
+const ticketResponse = () =>
+  Response.json({
+    available: true,
+    mediaTicket: "image-ticket",
+    mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+  });
 
 function draw(images: ImageBlock[], options: ImageRenderOptions = {}) {
-  render(renderMessageImages(images, { onRequestUpdate, ...options }), container);
+  return render(renderMessageImages(images, { onRequestUpdate, ...options }), container);
+}
+
+async function loadAdmittedImage() {
+  intersections[0]!();
+  await vi.advanceTimersByTimeAsync(0);
+  const loaded = container.querySelector("img")!;
+  Object.defineProperties(loaded, { naturalWidth: { value: 20 }, complete: { value: true } });
+  loaded.dispatchEvent(new Event("load"));
+  return loaded;
 }
 
 it("replaces failed remote images with an unavailable card while preserving local recovery", async () => {
@@ -137,68 +152,69 @@ it.each(["assistant", "managed", "omitted"] as const)(
   },
 );
 
-it.each(["assistant", "managed"] as const)(
-  "remounts a loaded %s image immediately without repeating viewport admission",
-  async (kind) => {
-    const source =
-      kind === "assistant"
-        ? `/tmp/${crypto.randomUUID()}.png`
-        : `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
-    const fetch = vi.fn(async () =>
-      kind === "assistant"
-        ? Response.json({
-            available: true,
-            mediaTicket: "scroll-ticket",
-            mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-          })
-        : imageResponse(),
-    );
+it("loads an artifact thumbnail for the tile and distinct full bytes for the lightbox", async () => {
+  const artifactId = `artifact_transcript_image_${crypto.randomUUID()}`;
+  const thumbnail = new Blob(["thumbnail"], { type: "image/png" });
+  const full = new Blob(["original"], { type: "image/jpeg" });
+  const resolveArtifactDownload = vi
+    .fn()
+    .mockResolvedValueOnce({ url: "/thumbnail", blob: thumbnail })
+    .mockResolvedValueOnce({ url: "/original", blob: full });
+  const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+  draw([{ artifactId }], { sessionKey: "main", resolveArtifactDownload, onOpenImage });
+  intersections[0]!();
+  await vi.advanceTimersByTimeAsync(0);
+  const preview = container.querySelector("img")?.getAttribute("src");
+  expect(preview).toBeTruthy();
+  expect(resolveArtifactDownload).toHaveBeenCalledExactlyOnceWith(
+    { sessionKey: "main", artifactId, variant: "thumbnail" },
+    expect.any(AbortSignal),
+  );
+
+  container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+  const opened = onOpenImage.mock.calls[0]![0];
+  expect(opened.src).toBe(preview);
+  const original = await opened.loadFullResolution!();
+  expect(original?.src).toBeTruthy();
+  expect(original?.src).not.toBe(preview);
+  expect(resolveArtifactDownload).toHaveBeenLastCalledWith(
+    { sessionKey: "main", artifactId, variant: "full" },
+    expect.any(AbortSignal),
+  );
+  expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+  original?.release?.();
+  opened.release?.();
+});
+
+it.each(["assistant remount", "managed remount", "assistant reconnect"] as const)(
+  "restores a loaded image without another viewport admission: %s",
+  async (mode) => {
+    const managed = mode === "managed remount";
+    const source = managed
+      ? `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`
+      : `/tmp/${crypto.randomUUID()}.png`;
+    const fetch = vi.fn(async () => (managed ? imageResponse() : ticketResponse()));
     vi.stubGlobal("fetch", fetch);
-    const images = [{ url: source, alt: "Loaded screenshot" }];
-    draw(images);
-    intersections[0]!();
-    await vi.advanceTimersByTimeAsync(0);
-    const loaded = container.querySelector("img")!;
-    Object.defineProperties(loaded, { naturalWidth: { value: 20 }, complete: { value: true } });
-    loaded.dispatchEvent(new Event("load"));
+    const images = [{ url: source, fileName: "Screenshot.png" }];
+    const root = draw(images);
+    const loaded = await loadAdmittedImage();
     const src = loaded.getAttribute("src");
-    render(nothing, container);
-    draw(images);
+    if (mode === "assistant reconnect") {
+      root.setConnected(false);
+      expect(loaded.parentNode).toBeNull();
+      root.setConnected(true);
+    } else {
+      render(nothing, container);
+      draw(images);
+    }
     expect(container.querySelector(".chat-image-skeleton")).toBeNull();
     expect(container.querySelector("img")?.getAttribute("src")).toBe(src);
-    if (kind === "assistant") {
+    if (!managed) {
       expect(container.querySelector("img")).toBe(loaded);
     }
     expect(fetch).toHaveBeenCalledOnce();
   },
 );
-
-it("restores a native image when its retained Lit root reconnects without another render", async () => {
-  const source = `/tmp/${crypto.randomUUID()}.png`;
-  const fetch = vi.fn(async () =>
-    Response.json({
-      available: true,
-      mediaTicket: "reconnect-ticket",
-      mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-    }),
-  );
-  vi.stubGlobal("fetch", fetch);
-  const root = render(
-    renderMessageImages([{ url: source, fileName: "Screenshot.png" }], { onRequestUpdate }),
-    container,
-  );
-  intersections[0]!();
-  await vi.advanceTimersByTimeAsync(0);
-  const loaded = container.querySelector("img")!;
-  Object.defineProperties(loaded, { naturalWidth: { value: 20 }, complete: { value: true } });
-  loaded.dispatchEvent(new Event("load"));
-  root.setConnected(false);
-  expect(loaded.parentNode).toBeNull();
-  root.setConnected(true);
-  expect(container.querySelector("img")).toBe(loaded);
-  expect(container.querySelector(".chat-image-skeleton")).toBeNull();
-  expect(fetch).toHaveBeenCalledOnce();
-});
 
 it.each([
   "authToken",
@@ -210,13 +226,7 @@ it.each([
   "expiry",
 ] as const)("does not reuse a detached native image after %s changes", async (change) => {
   const source = `/tmp/${crypto.randomUUID()}.png`;
-  const fetch = vi.fn(async () =>
-    Response.json({
-      available: true,
-      mediaTicket: "scoped-ticket",
-      mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-    }),
-  );
+  const fetch = vi.fn(async () => ticketResponse());
   vi.stubGlobal("fetch", fetch);
   const images = [{ url: source, fileName: "Screenshot.png" }];
   const options: ImageRenderOptions = {
@@ -228,11 +238,7 @@ it.each([
     policyKey: "before",
   };
   draw(images, options);
-  intersections[0]!();
-  await vi.advanceTimersByTimeAsync(0);
-  const loaded = container.querySelector("img")!;
-  Object.defineProperties(loaded, { naturalWidth: { value: 20 }, complete: { value: true } });
-  loaded.dispatchEvent(new Event("load"));
+  const loaded = await loadAdmittedImage();
   const removeListener = vi.spyOn(loaded, "removeEventListener");
   render(nothing, container);
   expect(loaded.parentNode).toBeNull();

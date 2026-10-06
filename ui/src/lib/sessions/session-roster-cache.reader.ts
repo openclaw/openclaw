@@ -1,15 +1,21 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { SessionGateway, SessionListOptions, SessionState } from "./session-capability.ts";
 import { isPrimarySessionListQuery } from "./session-list-query.ts";
 import { normalizeManagedSessionListQuery } from "./session-requests.ts";
 import {
-  SESSION_ROSTER_DB_NAME,
+  openSessionRosterDatabase,
+  resetSessionRosterDatabase,
+  rosterRequestResult,
+  rosterTransactionDone,
+} from "./session-roster-cache-database.ts";
+import {
   SESSION_ROSTER_STORE_NAME,
   SESSION_ROSTER_MAX_AGE_MS,
   SESSION_ROSTER_MAX_BYTES,
-  sessionRosterCacheGeneration,
+  sessionRosterGeneration,
   type RosterExpectation,
   type SessionRosterCache,
   type SessionRosterRecord,
@@ -37,6 +43,7 @@ function isRosterQuery(value: unknown): value is SessionListOptions {
           "includeDerivedTitles",
           "includeLastMessage",
           "ownerFirst",
+          "excludeDock",
         ].includes(key) && typeof entry === "boolean"
       );
     })
@@ -73,11 +80,11 @@ function isSessionRosterRecord(value: unknown): value is SessionRosterRecord {
 
 // Incognito conversations are memory-only by contract; their titles and previews
 // must never reach IndexedDB, and a stored row from an older writer is dropped too.
-export function isPersistableSessionRow(row: GatewaySessionRow): boolean {
+function isPersistableSessionRow(row: GatewaySessionRow): boolean {
   return row.incognito !== true;
 }
 
-export function stripVolatileSessionRowFields(row: GatewaySessionRow): GatewaySessionRow {
+function stripVolatileSessionRowFields(row: GatewaySessionRow): GatewaySessionRow {
   const result = { ...row };
   delete result.hasActiveRun;
   delete result.activeRunIds;
@@ -104,18 +111,21 @@ export function parseSessionRosterRecord(value: unknown): SessionRosterRecord | 
   return isSessionRosterRecord(value) ? value : null;
 }
 
-export function sessionRosterQuery(options: SessionListOptions): SessionListOptions {
-  return normalizeManagedSessionListQuery({
+function sessionRosterQuery(options: SessionListOptions): SessionListOptions {
+  const {
+    source: _source,
+    rowMode: _rowMode,
+    ...query
+  } = normalizeManagedSessionListQuery({
     ...options,
     includeDerivedTitles: options.includeDerivedTitles ?? true,
     includeLastMessage: options.includeLastMessage ?? true,
   });
+  // Wire diagnostics and detail projection do not change persisted roster membership.
+  return query;
 }
 
-export function rosterRecordMatches(
-  record: SessionRosterRecord,
-  expected: RosterExpectation,
-): boolean {
+function rosterRecordMatches(record: SessionRosterRecord, expected: RosterExpectation): boolean {
   return (
     record.agentId === expected.agentId &&
     (record.query.agentId === undefined || record.query.agentId.trim() === record.agentId) &&
@@ -126,78 +136,30 @@ export function rosterRecordMatches(
   );
 }
 
-export function rosterRequestResult<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () =>
-      reject(request.error ?? new Error("IndexedDB request failed")),
-    );
-    request.addEventListener("blocked", () => reject(new Error("IndexedDB open was blocked")));
-  });
-}
-
-export function rosterTransactionDone(transaction: IDBTransaction): Promise<void> {
-  const completed = new Promise<void>((resolve, reject) => {
-    transaction.addEventListener("complete", () => resolve());
-    transaction.addEventListener("error", () =>
-      reject(transaction.error ?? new Error("IndexedDB transaction failed")),
-    );
-    transaction.addEventListener("abort", () =>
-      reject(transaction.error ?? new Error("IndexedDB transaction failed")),
-    );
-  });
-  // A failed request can leave its caller before the transaction is awaited.
-  void completed.catch(() => undefined);
-  return completed;
-}
-
-export async function resetSessionRosterDatabase(): Promise<void> {
+export function boundSessionRosterRecord(record: SessionRosterRecord): SessionRosterRecord | null {
   try {
-    if (globalThis.indexedDB) {
-      await new Promise<void>((resolve) => {
-        const request = indexedDB.deleteDatabase(SESSION_ROSTER_DB_NAME);
-        request.addEventListener("success", () => resolve());
-        request.addEventListener("error", () => resolve());
-        request.addEventListener("blocked", () => resolve());
-      });
+    if (!isPrimarySessionListQuery(record.query)) {
+      return null;
     }
+    const stripped = {
+      ...record,
+      query: sessionRosterQuery(record.query),
+      result: {
+        ...record.result,
+        sessions: record.result.sessions
+          .filter(isPersistableSessionRow)
+          .map(stripVolatileSessionRowFields),
+      },
+    };
+    const json = JSON.stringify(stripped, (key, value: unknown) =>
+      key === "avatarUrl" || key === "channelAvatarUrl" ? undefined : value,
+    );
+    return new TextEncoder().encode(json).byteLength <= SESSION_ROSTER_MAX_BYTES
+      ? parseSessionRosterRecord(JSON.parse(json))
+      : null;
   } catch {
-    // Storage access can be denied independently of the Gateway connection.
+    return null;
   }
-}
-
-export async function openSessionRosterDatabase(): Promise<IDBDatabase | null> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      if (!globalThis.indexedDB) {
-        return null;
-      }
-      const request = indexedDB.open(SESSION_ROSTER_DB_NAME, 1);
-      request.addEventListener("upgradeneeded", () => {
-        for (const name of Array.from(request.result.objectStoreNames)) {
-          request.result.deleteObjectStore(name);
-        }
-        request.result.createObjectStore(SESSION_ROSTER_STORE_NAME, { keyPath: "scope" });
-      });
-      const database = await rosterRequestResult(request);
-      database.addEventListener("versionchange", () => database.close());
-      if (
-        database.objectStoreNames.length === 1 &&
-        database.objectStoreNames.contains(SESSION_ROSTER_STORE_NAME) &&
-        database.transaction(SESSION_ROSTER_STORE_NAME).objectStore(SESSION_ROSTER_STORE_NAME)
-          .keyPath === "scope"
-      ) {
-        return database;
-      }
-      database.close();
-    } catch {
-      // Browser caches are optional, including when storage is disabled or unavailable.
-    }
-    if (attempt === 0) {
-      await resetSessionRosterDatabase();
-    }
-  }
-  return null;
 }
 
 export async function readSessionRoster(
@@ -205,7 +167,7 @@ export async function readSessionRoster(
   expected: RosterExpectation,
   generation: number,
 ): Promise<SessionRosterRecord | null> {
-  if (generation !== sessionRosterCacheGeneration) {
+  if (generation !== sessionRosterGeneration(scope)) {
     return null;
   }
   const database = await openSessionRosterDatabase();
@@ -219,7 +181,7 @@ export async function readSessionRoster(
       transaction.objectStore(SESSION_ROSTER_STORE_NAME).get(scope),
     );
     await completed;
-    if (value === undefined || generation !== sessionRosterCacheGeneration) {
+    if (value === undefined || generation !== sessionRosterGeneration(scope)) {
       return null;
     }
     const record = parseSessionRosterRecord(value);
@@ -269,9 +231,12 @@ export async function hydrateSessionRoster(
     return;
   }
   const record = await cache.read(initial.scope, initial);
-  const scope = gateway.connection
+  const account = readOfflineStorageScope({ client: gateway.snapshot.client });
+  const gatewayScope = gateway.connection
     ? gatewayCredentialScope(gateway.connection.gatewayUrl)
-    : initial.scope;
+    : undefined;
+  const scope =
+    gatewayScope && account ? `account:${JSON.stringify([gatewayScope, account])}` : initial.scope;
   if (
     !record ||
     signal.aborted ||

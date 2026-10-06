@@ -3,7 +3,11 @@
  * Converts provider-specific usage shapes into OpenClaw's normalized input,
  * output, cache, reasoning, and total token accounting fields.
  */
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Usage } from "../llm/types.js";
 
@@ -81,25 +85,7 @@ export type NormalizedUsage = {
 };
 
 /** OpenAI chat-completions compatible usage shape. */
-export type OpenAiChatCompletionsUsage = {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  prompt_tokens_details?: { cached_tokens: number };
-  completion_tokens_details?: { reasoning_tokens: number };
-};
-
-/** OpenAI Responses compatible usage shape. */
-type OpenAiResponsesUsage = {
-  input_tokens: number;
-  input_tokens_details: {
-    cached_tokens: number;
-    cache_write_tokens: number;
-  };
-  output_tokens: number;
-  output_tokens_details: { reasoning_tokens: number };
-  total_tokens: number;
-};
+export type OpenAiChatCompletionsUsage = ReturnType<typeof toOpenAiChatCompletionsUsage>;
 
 /** Assistant usage snapshot with token counts and computed cost buckets. */
 export type AssistantUsageSnapshot = Usage;
@@ -356,22 +342,14 @@ export function toDiagnosticUsage(usage: NormalizedUsage) {
  * cost. Field name and shape match OpenAI's documented usage breakdown:
  * https://platform.openai.com/docs/guides/prompt-caching
  */
-export function toOpenAiChatCompletionsUsage(
-  usage: NormalizedUsage | undefined,
-): OpenAiChatCompletionsUsage {
+export function toOpenAiChatCompletionsUsage(usage: NormalizedUsage | undefined) {
   const input = usage?.input ?? 0;
   const output = usage?.output ?? 0;
   const cacheRead = usage?.cacheRead ?? 0;
   const promptTokens = Math.max(0, input + cacheRead);
   const completionTokens = Math.max(0, output);
   const componentTotal = promptTokens + completionTokens;
-  const aggregateRaw = usage?.total;
-  const aggregateTotal =
-    typeof aggregateRaw === "number" && Number.isFinite(aggregateRaw)
-      ? Math.max(0, aggregateRaw)
-      : undefined;
-  const totalTokens =
-    aggregateTotal !== undefined ? Math.max(componentTotal, aggregateTotal) : componentTotal;
+  const totalTokens = Math.max(componentTotal, asNonNegativeFiniteNumber(usage?.total) ?? 0);
 
   const reasoningTokens = normalizeTokenCount(usage?.reasoningTokens);
   return {
@@ -392,7 +370,7 @@ export function toOpenAiChatCompletionsUsage(
  * recombine OpenClaw's separately priced buckets and retain their details.
  * Reasoning tokens remain a detail of `output_tokens`, not an extra bucket.
  */
-export function toOpenAiResponsesUsage(usage: NormalizedUsage | undefined): OpenAiResponsesUsage {
+export function toOpenAiResponsesUsage(usage: NormalizedUsage | undefined) {
   const input = Math.max(0, usage?.input ?? 0);
   const output = Math.max(0, usage?.output ?? 0);
   const cacheRead = Math.max(0, usage?.cacheRead ?? 0);
@@ -431,16 +409,9 @@ export function derivePromptTokens(usage?: {
 }
 
 function derivePromptTokensFromTotal(usage?: NormalizedUsage): number | undefined {
-  const total = usage?.total;
-  const output = usage?.output;
-  if (
-    typeof total !== "number" ||
-    !Number.isFinite(total) ||
-    total <= 0 ||
-    typeof output !== "number" ||
-    !Number.isFinite(output) ||
-    output < 0
-  ) {
+  const total = asPositiveFiniteNumber(usage?.total);
+  const output = asNonNegativeFiniteNumber(usage?.output);
+  if (total === undefined || output === undefined) {
     return undefined;
   }
   const promptTokens = total - output;
@@ -453,8 +424,8 @@ export function deriveContextPromptTokens(params: {
   promptTokens?: number;
   usage?: NormalizedUsage;
 }): number | undefined {
-  const promptOverride = params.promptTokens;
-  if (typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0) {
+  const promptOverride = asPositiveFiniteNumber(params.promptTokens);
+  if (promptOverride !== undefined) {
     return promptOverride;
   }
 
@@ -485,15 +456,7 @@ export function deriveSessionTotalTokens(params: {
   contextTokens?: number;
   promptTokens?: number;
 }): number | undefined {
-  // SessionEntry.totalTokens is used as a prompt/context snapshot.
-  // It intentionally excludes completion/output tokens.
-  const promptTokens = deriveContextPromptTokens(params);
-
-  if (!(typeof promptTokens === "number") || !Number.isFinite(promptTokens) || promptTokens <= 0) {
-    return undefined;
-  }
-
-  // Keep this value unclamped; display layers are responsible for capping
-  // percentages for terminal output.
-  return promptTokens;
+  // SessionEntry.totalTokens is an unclamped prompt/context snapshot, excluding
+  // completion tokens. Display layers own percentage caps.
+  return asPositiveFiniteNumber(deriveContextPromptTokens(params));
 }

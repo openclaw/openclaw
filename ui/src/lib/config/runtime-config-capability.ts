@@ -1,3 +1,4 @@
+import { registerListener } from "../../../../src/shared/listeners.js";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
@@ -217,8 +218,7 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
     runExternalMutation: writes.runExternalMutation,
     lookupSchemaPath: (path: string) => run(() => lookupConfigSchemaPath(state, path)),
     subscribe(listener: (state: RuntimeConfigState) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      return registerListener(listeners, listener);
     },
     dispose() {
       stopReloadGuard();

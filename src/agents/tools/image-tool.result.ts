@@ -2,31 +2,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
+import { buildMediaReferenceDetails } from "./media-tool-shared.js";
 
 export type LoadedImageForTool = {
   buffer: Buffer;
   mimeType: string;
-  resolvedImage: string;
+  resolvedInput: string;
   rewrittenFrom?: string;
 };
-
-export function buildImageToolReferenceDetails(
-  images: readonly LoadedImageForTool[],
-): Record<string, unknown> {
-  const single = images.length === 1 ? images[0] : undefined;
-  if (single) {
-    return {
-      image: single.resolvedImage,
-      ...(single.rewrittenFrom ? { rewrittenFrom: single.rewrittenFrom } : {}),
-    };
-  }
-  return {
-    images: images.map((image) => ({
-      image: image.resolvedImage,
-      ...(image.rewrittenFrom ? { rewrittenFrom: image.rewrittenFrom } : {}),
-    })),
-  };
-}
 
 export async function buildNativeImageToolResult(
   images: readonly LoadedImageForTool[],
@@ -53,7 +36,7 @@ export async function buildNativeImageToolResult(
     ],
     details: {
       transport: "native",
-      ...buildImageToolReferenceDetails(retainedImages),
+      ...buildMediaReferenceDetails(retainedImages, "image", { includeEmpty: true }),
       media: { outbound: false },
     },
   };

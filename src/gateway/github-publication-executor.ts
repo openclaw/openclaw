@@ -1,21 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
-import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
-import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
+import { githubRepositoryUrl } from "../agents/github-host.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import {
-  currentGitHubPublicationConfig,
+  readLocalGitHubPublicationWorktreeOwner,
   resolveLocalGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
-import {
-  githubPublicationBaseFetchArgs,
-  githubPublicationBaseLineageArgs,
-  githubPublicationBaseLookupArgs,
-  parseGitHubPublicationBaseRef,
-} from "./github-publication-base.js";
+import { prepareGitHubPublicationContent } from "./github-publication-content.js";
 import {
   createGitHubPublicationExecutionIdentity,
   GitHubPublicationAuthorityLostError,
@@ -35,7 +28,6 @@ import {
   updateGitHubPublicationBranchAndIndex,
 } from "./github-publication-git-index.js";
 import {
-  appendGitHubPublicationMessage,
   assertSafeGitPublicationWorkspace,
   assertGitHubPublicationBranchRef,
   captureGitHubPublicationWorkspaceSnapshot,
@@ -47,6 +39,8 @@ import {
   hasGitHubPublicationWorkflowChanges,
   hasGitHubPublicationMessageFooter,
   readGitHubPublicationCoauthorTrailers,
+  readGitHubPublicationBaseSha,
+  requireGitHubPublicationCommit,
   requirePublicationCommand as requireCommand,
   runPublicationCommand as runCommand,
 } from "./github-publication-git-transport.js";
@@ -58,6 +52,7 @@ import {
   readKnownGitHubPublicationPullRequestUrls,
   recoverGitHubPublicationWorkspace,
 } from "./github-publication-recovery.js";
+import { projectGitHubPublicationResult } from "./github-publication-store.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
 import { prepareGitHubPublicationWorkflowGuard } from "./github-publication-workflows.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
@@ -67,31 +62,17 @@ const PUBLICATION_MARKER = "OpenClaw-Publication";
 
 type PublicationRow = GitHubPublicationExecutionRow;
 
-function parseJsonObject(value: string, label: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch (error) {
-    throw new Error(`${label} returned invalid JSON`, { cause: error });
-  }
-  if (!isRecord(parsed)) {
-    throw new Error(`${label} returned an invalid response`);
-  }
-  return parsed;
-}
-
 /** Lost requester authority permits receipt reconciliation, never a publication retry. */
 export async function reconcileGitHubPublication<Row extends PublicationRow>(params: {
   initial: Row;
   identity?: GitHubPublicationIdentityOwner;
   validateCustody: () => boolean;
   pushOnly?: "observed" | "dispatched";
-  projectResult: (row: Row) => SessionGitHubPublicationResult;
   complete: (row: Row, result: SessionGitHubPublicationResult) => Row;
 }): Promise<SessionGitHubPublicationResult | undefined> {
   const row = params.initial;
   if (row.status === "published" || row.status === "failed") {
-    return params.projectResult(row);
+    return projectGitHubPublicationResult(row);
   }
   // Shared execution records these facts before dispatching any branch or PR write.
   if (
@@ -114,7 +95,8 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
   let url: string | undefined;
   try {
     assertCurrent();
-    const { worktree } = resolveLocalGitHubPublicationWorktreeOwner(row);
+    const { worktree } = await readLocalGitHubPublicationWorktreeOwner(row);
+    assertCurrent();
     const target = await prepareGitHubPublicationTarget({
       worktree,
       identity: await refreshIdentity(),
@@ -154,7 +136,7 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
   if (!url) {
     return undefined;
   }
-  return params.projectResult(
+  return projectGitHubPublicationResult(
     params.complete(row, {
       requestId: row.request_id,
       status: "published",
@@ -168,10 +150,7 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
 
 export async function executeGitHubPublication<Row extends PublicationRow>(params: {
   initial: Row;
-  identity?: {
-    prepare: () => Promise<PreparedGitHubPublicationIdentity>;
-    isCurrent: (identity: PreparedGitHubPublicationIdentity) => boolean;
-  };
+  identity?: GitHubPublicationIdentityOwner;
   target?: { pushRepository: string; repository: string; baseBranch: string };
   recordEffect?: (
     effect: "push" | "pull_request",
@@ -181,7 +160,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
   prepareAuthority?: () => Promise<void>;
   validateCustody: () => boolean;
   assertWorkflowChangesAllowed: () => void;
-  projectResult: (row: Row) => SessionGitHubPublicationResult;
   bindWorkspaceSnapshot: (input: {
     row: Row;
     sourceHeadCommit: string;
@@ -203,7 +181,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
 }): Promise<SessionGitHubPublicationResult> {
   const { initial } = params;
   if (initial.status === "published" || initial.status === "failed") {
-    return params.projectResult(initial);
+    return projectGitHubPublicationResult(initial);
   }
   let pullRequestPending = false;
   // A confirmed push can still leave its pull-request outcome unknown.
@@ -230,7 +208,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     });
   const { step, run, require: command } = createGitHubPublicationCommandRunner(assertAuthority);
   try {
-    const { loaded, worktree } = currentWorktree();
+    const { loaded, worktree } = await readLocalGitHubPublicationWorktreeOwner(initial);
     await custodyCommands.step(() => assertSafeGitPublicationWorkspace(worktree.path, runCommand));
     await recoverGitHubPublicationWorkspace(initial, custodyCommands.require, assertCustody);
     // Accepted workspace recovery retains custody even when the requester can no longer publish.
@@ -279,7 +257,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       cwd: worktree.path,
     });
     let identity = await refreshIdentity();
-    const { pushRepository, repository, branch, baseBranch, pushOwner } =
+    const { pushRepository, repository, branch, baseBranch, pushOwner, githubHost } =
       await prepareGitHubPublicationTarget({ worktree, identity, assertCurrent: assertAuthority });
     if (
       params.target &&
@@ -291,15 +269,12 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         "GitHub publication accepted repository target changed.",
       );
     }
-    const remoteBaseResult = await run(githubPublicationBaseLookupArgs(repository, baseBranch), {
-      env: identity.env,
-    });
-    if (remoteBaseResult.code !== 0) {
-      throw new Error("GitHub publication workspace base branch could not be verified.");
-    }
-    const remoteBaseSha = parseGitHubPublicationBaseRef(
-      remoteBaseResult.stdout.toString("utf8"),
+    const remoteBaseSha = await readGitHubPublicationBaseSha(
+      run,
+      repository,
       baseBranch,
+      githubHost,
+      identity.env,
     );
     await step(() => assertSafeGitPublicationWorkspace(worktree.path, runCommand));
     identity = await refreshIdentity();
@@ -308,13 +283,15 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       GIT_CONFIG_GLOBAL: gitNullConfigPath(),
       GIT_CONFIG_SYSTEM: gitNullConfigPath(),
     };
-    const baseFetched = await run(githubPublicationBaseFetchArgs(repository, remoteBaseSha), {
-      cwd: worktree.path,
-      env: baseTransportEnv,
-    });
-    if (baseFetched.code !== 0) {
-      throw new Error("GitHub publication workspace base could not be materialized.");
-    }
+    await requireGitHubPublicationCommit(
+      run,
+      repository,
+      remoteBaseSha,
+      githubHost,
+      worktree.path,
+      baseTransportEnv,
+      "GitHub publication workspace base could not be materialized.",
+    );
     // Reflogs can expire or restart when a branch is recreated; commits own its history.
     const lineage = await run(["git", "merge-base", sourceHeadCommit, remoteBaseSha], {
       cwd: worktree.path,
@@ -346,6 +323,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         pushOwner,
         branch,
         baseBranch,
+        host: githubHost,
         headCommit,
         marker: pullRequestMarker,
         refreshIdentity,
@@ -372,7 +350,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         "GitHub publication workspace changed after its accepted snapshot.",
       );
     }
-    const httpsRemote = `https://github.com/${pushRepository}.git`;
+    const httpsRemote = githubRepositoryUrl(pushRepository, githubHost);
     identity = await refreshIdentity();
     let transportEnv = {
       ...identity.env,
@@ -406,14 +384,16 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     const expectedRemoteHead = await step(observeRemoteHead);
     let remoteHead = expectedRemoteHead;
     if (remoteHead && remoteHead !== headCommit) {
-      const fetched = await run(githubPublicationBaseFetchArgs(pushRepository, remoteHead), {
-        cwd: worktree.path,
-        env: transportEnv,
-      });
-      if (fetched.code !== 0) {
-        throw new Error("GitHub publication remote branch could not be verified.");
-      }
-      const ancestry = await run(githubPublicationBaseLineageArgs(remoteHead, headCommit), {
+      await requireGitHubPublicationCommit(
+        run,
+        pushRepository,
+        remoteHead,
+        githubHost,
+        worktree.path,
+        transportEnv,
+        "GitHub publication remote branch could not be verified.",
+      );
+      const ancestry = await run(["git", "merge-base", "--is-ancestor", remoteHead, headCommit], {
         cwd: worktree.path,
       });
       if (ancestry.code === 1) {
@@ -430,6 +410,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         hasGitHubPublicationWorkflowChanges({
           cwd: worktree.path,
           comparisonCommit: expectedRemoteHead || lineage.stdout.toString("utf8").trim(),
+          ancestryCommit: expectedRemoteHead || sourceHeadCommit,
+          targetCommit: remoteBaseSha,
           workspaceTree,
           run,
         }),
@@ -449,24 +431,24 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       headCommit,
     });
 
-    const config = currentGitHubPublicationConfig();
-    const preparedAttribution = await prepareGitCoauthorAttribution({
-      agentId: row.agent_id,
-      config,
-      excludeAccountId: identity.account.accountId,
-      sessionKey: row.session_key,
-      sessionId: row.session_id,
+    const content = await prepareGitHubPublicationContent({
+      row,
       storePath: loaded.storePath,
+      accountId: identity.account.accountId,
+      assertCurrent: assertPublicationAction,
+      description: (
+        row.body?.trim() || "Published by the Gateway after authoritative workspace reconciliation."
+      )
+        .replace(/(?:\s*---\s*\n\[View the OpenClaw team session\]\([^\r\n)]*\)\s*)+$/u, "")
+        .replace(
+          /(?:^|\n\n)## Worked on by\n\n(?:- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\n)*- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?=\n\n|$)/gu,
+          "",
+        )
+        .trimEnd(),
     });
-    const attribution = preparedAttribution.attribution;
-    const assertAction = () => {
-      assertPublicationAction();
-      if (!preparedAttribution.isCurrent()) {
-        throw new GitHubPublicationCreditChangedError();
-      }
-    };
+    const { assertAction } = content;
     const completePublished = (url: string, publishedHead: string) =>
-      params.projectResult(
+      projectGitHubPublicationResult(
         params.complete(row, {
           requestId: row.request_id,
           status: "published",
@@ -480,11 +462,10 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     if (
       markerPresent &&
       remoteHead !== headCommit &&
-      !hasGitHubPublicationMessageFooter(currentMessage, attribution?.trailers ?? [], marker)
+      !hasGitHubPublicationMessageFooter(currentMessage, content.trailers, marker)
     ) {
       throw new GitHubPublicationCreditChangedError();
     }
-    const contributorCredit = attribution?.logins.map((login) => `- @${login}`).join("\n");
     const messageLines = currentMessage.split(/\r?\n/u);
     if (
       existingPullRequest &&
@@ -501,7 +482,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         command,
       });
       assertAction();
-      if ((attribution?.trailers ?? []).every((trailer) => trailers.includes(trailer))) {
+      if (content.trailers.every((trailer) => trailers.includes(trailer))) {
         // The owned open PR already exposes this exact attributed tree. A new request
         // needs a receipt, not a new commit marker or index transaction. First publication
         // and missing contributor credit still use the request-owned recovery marker below.
@@ -514,14 +495,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       await command(["git", "cat-file", "-e", `${workspaceTree}^{tree}`], {
         cwd: worktree.path,
       });
-      const title = row.title?.trim() || `Publish ${branch}`;
-      const commitBody = contributorCredit
-        ? `${title}\n\nWorked on by:\n${contributorCredit}`
-        : title;
-      const message = appendGitHubPublicationMessage(commitBody, [
-        ...(attribution?.trailers ?? []),
-        marker,
-      ]);
       const timestamp = new Date(row.created_at_ms).toISOString();
       identity = await refreshIdentity();
       const authorEnv = {
@@ -535,7 +508,12 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       };
       const commit = await requireCommand(
         ["git", "commit-tree", "--no-gpg-sign", workspaceTree, "-p", headCommit],
-        { cwd: worktree.path, env: authorEnv, input: `${message}\n`, beforeRun: assertAction },
+        {
+          cwd: worktree.path,
+          env: authorEnv,
+          input: content.commitMessage,
+          beforeRun: assertAction,
+        },
       );
       assertAuthority();
       await assertGitHubPublicationBranchRef(
@@ -616,39 +594,19 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
 
     let pullRequestUrl = await findPullRequest();
     if (!pullRequestUrl) {
-      const sessionUrl = resolveControlUiSessionUrl(config, {
-        sessionKey: row.session_key,
-        fallbackAgentId: row.agent_id,
-        exactKey: true,
-      });
-      const description = (
-        row.body?.trim() || "Published by the Gateway after authoritative workspace reconciliation."
-      )
-        .replace(/(?:\s*---\s*\n\[View the OpenClaw team session\]\([^\r\n)]*\)\s*)+$/u, "")
-        .replace(
-          /(?:^|\n\n)## Worked on by\n\n(?:- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\n)*- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?=\n\n|$)/gu,
-          "",
-        )
-        .trimEnd();
-      const participantCredit = contributorCredit
-        ? `\n\n## Worked on by\n\n${contributorCredit}`
-        : "";
-      const footer = sessionUrl?.startsWith("https://")
-        ? `\n\n---\n[View the OpenClaw team session](${sessionUrl})`
-        : "";
-      const body = `${description}${participantCredit}\n\n${pullRequestMarker}${footer}`;
+      const body = content.pullRequestBody();
       identity = await refreshIdentity();
       assertAction();
       params.recordEffect?.("pull_request");
       pullRequestPending = true;
       effectDispatched = true;
       const created = await runCommand(
-        githubPublicationApiArgs(`repos/${repository}/pulls`, "POST"),
+        githubPublicationApiArgs(`repos/${repository}/pulls`, "POST", githubHost),
         {
           env: identity.env,
           beforeRun: assertAction,
           input: JSON.stringify({
-            title: row.title?.trim() || `Publish ${branch}`,
+            title: content.title,
             body,
             head: `${pushOwner}:${branch}`,
             base: baseBranch,
@@ -657,9 +615,16 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         },
       );
       if (created.code === 0) {
-        pullRequestUrl = readNonBlankString(
-          parseJsonObject(created.stdout.toString("utf8"), "GitHub pull request creation").html_url,
-        );
+        let value: unknown;
+        try {
+          value = JSON.parse(created.stdout.toString("utf8"));
+        } catch (error) {
+          throw new Error("GitHub pull request creation returned invalid JSON", { cause: error });
+        }
+        if (!isRecord(value)) {
+          throw new Error("GitHub pull request creation returned an invalid response");
+        }
+        pullRequestUrl = readNonBlankString(value.html_url);
       }
       params.recordEffect?.("pull_request", pullRequestUrl ? { url: pullRequestUrl } : {});
       if (!pullRequestUrl) {
@@ -685,7 +650,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       throw error;
     }
     if (error instanceof GitHubPublicationAuthorityLostError && params.defer) {
-      return params.projectResult(params.defer(initial));
+      return projectGitHubPublicationResult(params.defer(initial));
     }
     if (
       params.interrupt &&
@@ -695,7 +660,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       // Unavailable observations cannot settle dispatched effects; only an owner's
       // definitive outcome ends recovery, retaining any already-recorded effects.
       assertAuthority();
-      return params.projectResult(params.interrupt());
+      return projectGitHubPublicationResult(params.interrupt());
     }
     // A head on entry belongs to an earlier attempt; current preparation updates row.
     // It can carry unconfirmed GitHub effects, not proof that a write was dispatched.
@@ -711,7 +676,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       );
     }
     const failure = resolveGitHubPublicationFailure(error);
-    const result = params.projectResult(
+    const result = projectGitHubPublicationResult(
       params.complete(initial, {
         requestId: initial.request_id,
         status: "failed",

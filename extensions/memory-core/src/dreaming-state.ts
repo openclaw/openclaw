@@ -1,4 +1,3 @@
-// Memory Core dreaming state lives in SQLite-backed plugin state.
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
@@ -108,15 +107,12 @@ async function readWorkspaceStoreEntries<T>(store: PluginStateKeyedStore<T>, wor
 }
 
 // Caller owns typed decoding for values read from plugin state.
-export function readMemoryCoreWorkspaceEntries<T>(
+export async function readMemoryCoreWorkspaceEntries<T>(
   params: MemoryCoreWorkspaceParams,
-): Promise<Array<MemoryCoreWorkspaceEntry<T>>>;
-export async function readMemoryCoreWorkspaceEntries(
-  params: MemoryCoreWorkspaceParams,
-): Promise<Array<MemoryCoreWorkspaceEntry<unknown>>> {
+): Promise<Array<MemoryCoreWorkspaceEntry<T>>> {
   const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
   const entries = await readWorkspaceStoreEntries(
-    openWorkspaceStore<unknown>(params.namespace),
+    openWorkspaceStore<T>(params.namespace),
     workspaceKey,
   );
   return entries
@@ -125,13 +121,10 @@ export async function readMemoryCoreWorkspaceEntries(
 }
 
 // Caller owns typed encoding for values written to plugin state.
-export function writeMemoryCoreWorkspaceEntries<T>(
+export async function writeMemoryCoreWorkspaceEntries<T>(
   params: WriteMemoryCoreWorkspaceEntriesParams<T>,
-): Promise<void>;
-export async function writeMemoryCoreWorkspaceEntries(
-  params: WriteMemoryCoreWorkspaceEntriesParams<unknown>,
 ): Promise<void> {
-  const store = openWorkspaceStore<unknown>(params.namespace);
+  const store = openWorkspaceStore<T>(params.namespace);
   const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
   const replacementKeys = new Set<string>();
   // Scalar store calls can finish synchronously; await alone does not service I/O.
@@ -161,14 +154,11 @@ export async function writeMemoryCoreWorkspaceEntries(
 }
 
 // Caller owns typed encoding for values written to plugin state.
-export function writeMemoryCoreWorkspaceEntry<T>(
+export async function writeMemoryCoreWorkspaceEntry<T>(
   params: WriteMemoryCoreWorkspaceEntryParams<T>,
-): Promise<void>;
-export async function writeMemoryCoreWorkspaceEntry(
-  params: WriteMemoryCoreWorkspaceEntryParams<unknown>,
 ): Promise<void> {
   const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
-  await openWorkspaceStore<unknown>(params.namespace).register(
+  await openWorkspaceStore<T>(params.namespace).register(
     memoryCoreWorkspaceEntryKey(params.workspaceDir, params.key),
     {
       version: 1,

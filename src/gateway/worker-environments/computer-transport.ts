@@ -200,6 +200,20 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
       (privateNode !== undefined ||
         context.nodeRegistry.get(node.nodeId)?.computerUse?.provider.generation ===
           providerGeneration);
+    const commandIsAllowed = (command: (typeof COMPUTER_COMMANDS)[number]) => {
+      const currentNode = context.nodeRegistry.get(node.nodeId);
+      const declaredCommands = privateNode ? [...COMPUTER_COMMANDS] : (currentNode?.commands ?? []);
+      return isNodeCommandAllowed({
+        command,
+        declaredCommands,
+        allowlist: resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
+          ...currentNode,
+          approvedCommands: declaredCommands,
+        }),
+      }).ok;
+    };
+    const hasController = () =>
+      options.desktopRegistry?.hasController(environment.environmentId, environment.ownerEpoch);
 
     const parseRequest = (request: Parameters<ComputerToolTransport["invoke"]>[0]) => {
       if (request.nodeId !== node.nodeId) {
@@ -363,13 +377,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
           const assertInvocationCurrent = () => {
             assertCurrent();
             assertAuthorized?.();
-            if (
-              isInput &&
-              options.desktopRegistry?.hasController(
-                environment.environmentId,
-                environment.ownerEpoch,
-              )
-            ) {
+            if (isInput && hasController()) {
               throw new Error(
                 "Computer input paused while the operator has control; use take_control when asked to resume, or release control in the Desktop panel",
               );
@@ -419,20 +427,6 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
                 onDispatchReady: params.onDispatchReady,
               });
             };
-            const commandIsAllowed = () => {
-              const currentNode = context.nodeRegistry.get(node.nodeId);
-              const declaredCommands = privateNode
-                ? [...COMPUTER_COMMANDS]
-                : (currentNode?.commands ?? []);
-              return isNodeCommandAllowed({
-                command,
-                declaredCommands,
-                allowlist: resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
-                  ...currentNode,
-                  approvedCommands: declaredCommands,
-                }),
-              }).ok;
-            };
             const result = await applyPluginNodeInvokePolicy({
               context,
               client: null,
@@ -459,7 +453,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               }
               return result.payloadJSON ? JSON.parse(result.payloadJSON) : result.payload;
             }
-            if ((privateNode && command === "computer.act") || !commandIsAllowed()) {
+            if ((privateNode && command === "computer.act") || !commandIsAllowed(command)) {
               throw new Error("Session computer command has no active policy or permission");
             }
             const raw = await dispatch({
@@ -467,7 +461,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               timeoutMs: request.timeoutMs,
               signal,
               idempotencyKey: request.idempotencyKey,
-              isDispatchAuthorized: () => isCurrent() && commandIsAllowed(),
+              isDispatchAuthorized: () => isCurrent() && commandIsAllowed(command),
             });
             assertInvocationCurrent();
             return payload(raw);
@@ -539,20 +533,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               if (!environment.desktop || !options.desktopRegistry) {
                 throw new Error("Agent takeover is unavailable for this session desktop");
               }
-              const currentNode = context.nodeRegistry.get(node.nodeId);
-              const declaredCommands = privateNode
-                ? [...COMPUTER_COMMANDS]
-                : (currentNode?.commands ?? []);
-              if (
-                !isNodeCommandAllowed({
-                  command: "computer.act",
-                  declaredCommands,
-                  allowlist: resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
-                    ...currentNode,
-                    approvedCommands: declaredCommands,
-                  }),
-                }).ok
-              ) {
+              if (!commandIsAllowed("computer.act")) {
                 throw new Error("Session computer command has no active policy or permission");
               }
               // Every takeover needs a replay identity before it can evict a human controller.
@@ -577,12 +558,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               assertCurrent();
               assertAuthorized?.();
               request.signal?.throwIfAborted();
-              if (
-                options.desktopRegistry.hasController(
-                  environment.environmentId,
-                  environment.ownerEpoch,
-                )
-              ) {
+              if (hasController()) {
                 throw new Error(
                   "The operator took control again; observe before requesting another takeover",
                 );
@@ -614,10 +590,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               if (
                 input.operation === "snapshot" &&
                 controlGeneration === observedControlGeneration &&
-                !options.desktopRegistry?.hasController(
-                  environment.environmentId,
-                  environment.ownerEpoch,
-                )
+                !hasController()
               ) {
                 inputNeedsObservation = false;
               }

@@ -1,8 +1,7 @@
-// Normalizes tool availability metadata from plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
 import { isBuiltInDefaultSecretProviderRef } from "../secrets/ref-contract.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -36,7 +35,7 @@ function hasConfiguredValue(params: {
   env: NodeJS.ProcessEnv;
   value: unknown;
 }): boolean {
-  const secretRef = coerceSecretRef(params.value, params.config?.secrets?.defaults);
+  const secretRef = parseSecretRef(params.value, params.config?.secrets?.defaults);
   if (secretRef?.source === "env") {
     return (
       canResolveEnvSecretRefInReadOnlyPath({

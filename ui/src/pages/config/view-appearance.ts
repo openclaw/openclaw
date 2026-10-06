@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
@@ -84,20 +84,12 @@ function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customTh
 }
 
 function focusCustomThemeImportInput() {
-  const schedule =
-    typeof requestAnimationFrame === "function"
-      ? requestAnimationFrame
-      : (cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0);
-  schedule(() => {
-    const input = globalThis.document?.querySelector<HTMLInputElement>(
-      "[data-custom-theme-import-input]",
-    );
+  requestAnimationFrame(() => {
+    const input = document.querySelector<HTMLInputElement>("[data-custom-theme-import-input]");
     if (!input) {
       return;
     }
-    if (typeof input.scrollIntoView === "function") {
-      input.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
-    }
+    input.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
     input.focus();
     input.select();
   });
@@ -169,10 +161,7 @@ function renderTypography(props: ConfigProps, theme: { id: ThemeName; label: str
   `;
 }
 
-export function renderAppearanceSection(
-  props: ConfigProps,
-  inputs: { customThemeImport: TemplateResult; chatMessageWidth: TemplateResult },
-) {
+export function renderAppearanceSection(props: ConfigProps) {
   const viewState = props.viewState;
   const showCustomThemeImport = props.hasCustomTheme || props.customThemeImportExpanded === true;
   if (
@@ -372,7 +361,19 @@ export function renderAppearanceSection(
                         <span class="settings-theme-import__label"
                           >${t("configView.appearance.themeLink")}</span
                         >
-                        ${inputs.customThemeImport}
+                        <input
+                          class="settings-theme-import__input"
+                          data-custom-theme-import-input
+                          type="text"
+                          spellcheck="false"
+                          placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
+                          .value=${props.customThemeImportUrl}
+                          @input=${(event: Event) =>
+                            props.onCustomThemeImportUrlChange(
+                              // SAFETY: The listener is bound directly to this input.
+                              (event.currentTarget as HTMLInputElement).value,
+                            )}
+                        />
                       </label>
                       <div class="settings-theme-import__actions">
                         <button
@@ -564,7 +565,7 @@ export function renderAppearanceSection(
       </section>
 
       ${renderSidebarPreferencesSection(props)} ${renderLobsterPetSection(props)}
-      ${renderChatPreferencesSection(props, inputs.chatMessageWidth)} ${renderSessionSources(props)}
+      ${renderChatPreferencesSection(props)} ${renderSessionSources(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
         <div class="settings-section__header">

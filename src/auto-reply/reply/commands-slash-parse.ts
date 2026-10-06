@@ -38,41 +38,29 @@ export function parseSendPolicyCommandBody(normalized: string): {
   return { hasCommand: true, mode };
 }
 
-/** Public slash-command parse result returned to command handlers. */
-type ParsedSlashCommand =
-  | { ok: true; action: string; args: string }
-  | { ok: false; message: string };
-
 /** Parses a slash command or returns null when the prefix does not match. */
 export function parseSlashCommandOrNull(
   raw: string,
   slash: string,
-  opts: { invalidMessage: string; defaultAction?: string },
-): ParsedSlashCommand | null {
+  defaultAction = "show",
+): { action: string; args: string } | null {
   const trimmed = raw.trim();
   const slashLower = normalizeLowercaseStringOrEmpty(slash);
   if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith(slashLower)) {
     return null;
   }
-  // Fix #84572: enforce a boundary after the prefix so `/config-check` does
-  // not match the `/config` handler. The character immediately after the
-  // matched prefix must be whitespace, a colon, or end-of-string. Otherwise
-  // the prefix collided with a longer command name (e.g. a skill named
-  // `config-check`) and should be treated as a non-match so the longer
-  // handler — or the skill router — gets a chance to claim it.
+  // Longer command names such as `/config-check` belong to their own handler.
   const charAfter = trimmed.charAt(slash.length);
   if (charAfter && !/[\s:]/.test(charAfter)) {
     return null;
   }
   const rest = trimmed.slice(slash.length).trim();
   if (!rest) {
-    return { ok: true, action: opts.defaultAction ?? "show", args: "" };
+    return { action: defaultAction, args: "" };
   }
-  const match = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
-  if (!match) {
-    return { ok: false, message: opts.invalidMessage };
-  }
-  const action = normalizeLowercaseStringOrEmpty(match[1]);
-  const args = (match[2] ?? "").trim();
-  return { ok: true, action, args };
+  const actionEnd = rest.search(/\s/);
+  return {
+    action: (actionEnd === -1 ? rest : rest.slice(0, actionEnd)).toLowerCase(),
+    args: actionEnd === -1 ? "" : rest.slice(actionEnd).trim(),
+  };
 }

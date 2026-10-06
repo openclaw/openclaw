@@ -102,7 +102,9 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
 
       const selected = { epoch: 1, fingerprint: "desktop-original" };
       let fingerprint = selected.fingerprint;
+      const lifetime = new AbortController();
       const owner = createCodexDesktopGenerationOwner({
+        signal: lifetime.signal,
         initialGeneration: selected,
         readFingerprint: async () => {
           await expect(
@@ -186,7 +188,8 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
         expect(await fs.readdir(path.dirname(targetService))).toEqual(["Codex Computer Use.app"]);
         expect(await fs.readdir(path.dirname(cachePath))).toEqual(["1.0.857"]);
       } finally {
-        owner.stop();
+        lifetime.abort();
+        await owner.waitForIdle();
         await harness.client.closeAndWait();
       }
     },

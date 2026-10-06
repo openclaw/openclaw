@@ -2,6 +2,7 @@ import { html, nothing, render } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../lit/presentation-binding.ts";
 import { markdownBlocks } from "./markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
@@ -47,6 +48,9 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     },
   );
   const container = document.body.appendChild(document.createElement("div"));
+  const owner = new EventTarget();
+  let presented = true;
+  const presentation = { owner, isPresented: () => presented };
   const content = toSanitizedMarkdownHtml(
     "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
     {
@@ -55,7 +59,9 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     },
   );
   const view = (active = true) =>
-    html`<section class="chat-text" ${markdownBlocks(active)}>${unsafeHTML(content)}</section>`;
+    html`<section class="chat-text" ${markdownBlocks(active ? presentation : false)}>
+      ${unsafeHTML(content)}
+    </section>`;
   const part = render(view(), container);
   const code = container.querySelector("code");
   const tableViewport = container.querySelector(".markdown-table__viewport");
@@ -81,6 +87,19 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     expect(observed.has(tableViewport!)).toBe(true);
     expect(observed.size).toBe(4);
 
+    presented = false;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    await Promise.resolve();
+    expect(observed.size).toBe(0);
+    expect(container.querySelector("code")).toBe(code);
+    presented = true;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    await Promise.resolve();
+    expect(observed.size).toBe(0);
+    render(view(), container);
+    await Promise.resolve();
+    expect(observed.size).toBe(4);
+
     render(view(false), container);
     await Promise.resolve();
     expect(observed.size).toBe(0);
@@ -94,6 +113,12 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     expect(observed.size).toBe(4);
     expect(observed.has(code!)).toBe(true);
     expect(observed.has(tableViewport!)).toBe(true);
+    part.setConnected(false);
+    presented = false;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    part.setConnected(true);
+    await Promise.resolve();
+    expect(observed.size).toBe(0);
   } finally {
     render(nothing, container);
   }

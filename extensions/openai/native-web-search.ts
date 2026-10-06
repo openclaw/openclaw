@@ -14,14 +14,6 @@ function isManagedWebSearchTool(tool: unknown): boolean {
   return isRecord(tool) && tool.type === "function" && tool.name === OPENAI_WEB_SEARCH_TOOL.type;
 }
 
-function raiseMinimalReasoningForOpenAINativeWebSearch(payload: Record<string, unknown>): void {
-  const reasoning = payload.reasoning;
-  if (!isRecord(reasoning) || reasoning.effort !== "minimal") {
-    return;
-  }
-  reasoning.effort = "low";
-}
-
 function patchOpenAINativeWebSearchPayload(payload: unknown): void {
   if (!isRecord(payload)) {
     return;
@@ -33,19 +25,19 @@ function patchOpenAINativeWebSearchPayload(payload: unknown): void {
     if (filteredTools.length !== existingTools.length) {
       payload.tools = filteredTools;
     }
-    raiseMinimalReasoningForOpenAINativeWebSearch(payload);
-    return;
+  } else {
+    payload.tools = [...filteredTools, OPENAI_WEB_SEARCH_TOOL];
   }
-
-  payload.tools = [...filteredTools, OPENAI_WEB_SEARCH_TOOL];
-  raiseMinimalReasoningForOpenAINativeWebSearch(payload);
+  const reasoning = payload.reasoning;
+  if (isRecord(reasoning) && reasoning.effort === "minimal") {
+    reasoning.effort = "low";
+  }
 }
 
 export function createOpenAINativeWebSearchWrapper(
   baseStreamFn: StreamFn | undefined,
   params: {
     config?: OpenClawConfig;
-    agentId?: string;
     nativeWebSearchAllowedByToolPolicy?: boolean;
   },
 ): StreamFn {

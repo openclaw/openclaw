@@ -1,5 +1,7 @@
+import { raceWithTimeout } from "@openclaw/retry";
+import type { WizardStartResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { WizardStep } from "../../api/types.ts";
+import type { WizardNextResult, WizardStep } from "../../api/types.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 
@@ -13,7 +15,6 @@ async function requestWithTimeout<T>(
   params: unknown,
   onLateResult?: (result: T) => void,
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   const request = client.request<T>(method, params).then((result) => {
     if (timedOut) {
@@ -21,35 +22,13 @@ async function requestWithTimeout<T>(
     }
     return result;
   });
-  try {
-    return await Promise.race([
-      request,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          reject(new Error(`wizard request timed out: ${method}`));
-        }, WIZARD_STEP_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return await raceWithTimeout(request, WIZARD_STEP_TIMEOUT_MS, () => {
+    timedOut = true;
+    throw new Error(`wizard request timed out: ${method}`);
+  });
 }
 
-export type ChannelWizardStep = WizardStep;
-
-type WizardNextResult = {
-  sessionId?: string;
-  done: boolean;
-  step?: ChannelWizardStep;
-  status?: "running" | "done" | "cancelled" | "error";
-  error?: string;
-  // What the gateway flow actually configured (terminal result only).
-  channels?: string[];
-  accounts?: Array<{ channel: string; accountId: string }>;
-};
-
-function cancelRunningWizardResult(client: WizardGatewayClient, result: WizardNextResult): void {
+function cancelRunningWizardResult(client: WizardGatewayClient, result: WizardStartResult): void {
   if (!result.sessionId || result.done) {
     return;
   }
@@ -64,8 +43,7 @@ export type ChannelWizardState =
   | {
       phase: "step";
       channel: string | null;
-      step: ChannelWizardStep;
-      stepIndex: number;
+      step: WizardStep;
       busy: boolean;
       validationError: string | null;
     }
@@ -85,7 +63,6 @@ export class ChannelWizardController {
   private currentState: ChannelWizardState = { phase: "idle" };
   private sessionId: string | null = null;
   private channel: string | null = null;
-  private stepIndex = 0;
   private generation = 0;
   private abortController: AbortController | null = null;
   private pendingCancellation: {
@@ -117,7 +94,6 @@ export class ChannelWizardController {
     this.abortController = new AbortController();
     this.sessionId = null;
     this.channel = channel;
-    this.stepIndex = 0;
     this.setState({ phase: "starting", channel });
     try {
       const cancellation = this.pendingCancellation;
@@ -127,7 +103,7 @@ export class ChannelWizardController {
           return;
         }
       }
-      const result = await requestWithTimeout<WizardNextResult>(
+      const result = await requestWithTimeout<WizardStartResult>(
         client,
         "wizard.start",
         {
@@ -238,13 +214,11 @@ export class ChannelWizardController {
 
   private applyResult(result: WizardNextResult): void {
     if (!result.done && result.step) {
-      this.stepIndex += 1;
       const gatewayOwned = result.step.executor === "gateway";
       this.setState({
         phase: "step",
         channel: this.channel,
         step: result.step,
-        stepIndex: this.stepIndex,
         busy: gatewayOwned,
         validationError: result.error ? formatUiExternalText(result.error) : null,
       });

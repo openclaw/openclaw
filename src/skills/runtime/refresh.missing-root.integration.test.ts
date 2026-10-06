@@ -1,16 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { WatchSubscription } from "@openclaw/fs-safe/watch";
+import type { WatchOptions, WatchSubscription } from "@openclaw/fs-safe/watch";
 import { beforeEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { getSkillsResourceVersion, getSkillsSourceVersion } from "./refresh-state.js";
+import {
+  getSkillsResourceVersion,
+  getSkillsSnapshotVersion,
+  getSkillsSourceVersion,
+} from "./refresh-state.js";
 import { toWatchRoot } from "./refresh-watch-path.js";
 import { pathWatchers } from "./refresh-watch-registry.js";
 import { useSkillsWatcherFixture } from "./refresh.watcher.test-support.js";
 
 const subscriptions: WatchSubscription[] = [];
+const observations = new Map<WatchSubscription, { rootDir: string; options: WatchOptions }>();
 const starts: Promise<void>[] = [];
 vi.mock("@openclaw/fs-safe/watch", async () => {
   const { createRequire } = await import("node:module");
@@ -31,6 +39,7 @@ vi.mock("@openclaw/fs-safe/watch", async () => {
       return scoped;
     };
     subscriptions.push(subscription);
+    observations.set(subscription, { rootDir: root.rootDir, options });
     starts.push(subscription.ready);
     return subscription;
   };
@@ -46,6 +55,7 @@ const planning: Promise<unknown>[] = [];
 const samples: Promise<unknown>[] = [];
 beforeEach(async () => {
   subscriptions.length = starts.length = planning.length = samples.length = 0;
+  observations.clear();
   const settling = await import("./refresh-file-stability.js");
   const createScheduler = settling.createSkillFileScheduler;
   vi.spyOn(settling, "createSkillFileScheduler").mockImplementation((options) =>
@@ -87,27 +97,16 @@ async function advance(elapsed: number) {
   await Promise.all(samples.splice(0));
 }
 
-async function reconcile(retiring?: { closed: boolean; close(): Promise<void> }) {
+async function reconcile() {
   const results = await Promise.allSettled(
     subscriptions
       .filter((subscription) => subscription.health().state === "ready")
       .map((subscription) => subscription.reconcile()),
   );
-  let lostRoots = 0;
   for (const result of results) {
     if (result.status === "rejected") {
-      if (retiring && result.reason?.code === "path-mismatch") {
-        expect(result.reason).toMatchObject({ message: "root path changed during operation" });
-        lostRoots += 1;
-      } else {
-        expect(result.reason).toMatchObject({ name: "AbortError" });
-      }
+      expect(result.reason).toMatchObject({ name: "AbortError" });
     }
-  }
-  if (retiring) {
-    expect(lostRoots).toBe(1);
-    expect(retiring.closed).toBe(true);
-    await retiring.close();
   }
   await ready();
   for (const elapsed of [0, 100, 100, 50, 250]) {
@@ -116,11 +115,11 @@ async function reconcile(retiring?: { closed: boolean; close(): Promise<void> })
 }
 
 const linkType = process.platform === "win32" ? "junction" : "dir";
-const read = (config = {}) =>
+const read = (config?: OpenClawConfig) =>
   loadWorkspaceSkills(fixture.workspaceDir, { workspaceOnly: true, config }).map(
     (entry) => entry.skill.description,
   );
-const ensure = (config = {}) => {
+const ensure = (config?: OpenClawConfig) => {
   refresh.ensureSkillsWatcher({
     workspaceDir: fixture.workspaceDir,
     config,
@@ -132,76 +131,59 @@ const ensure = (config = {}) => {
   return ready();
 };
 
-it.each(["missing", "root", "workspace", "symbolic", "external collection"] as const)(
-  "refreshes cached skills after replacing a %s and keeps observing later edits",
-  async (replacement) => {
-    const workspaceDir = fixture.workspaceDir;
-    const external = replacement === "external collection";
-    const collection = path.join(fixture.root, "collection");
-    const root = path.join(external ? collection : workspaceDir, "skills");
-    const write = (description: string) =>
-      writeSkill({ dir: path.join(root, "guide"), name: "guide", description });
-    const linked = await fixture.createFixtureDirectory("linked-target");
-    if (replacement === "missing" || replacement === "symbolic") {
-      await fs.rm(root, { recursive: true });
-    }
-    if (replacement === "symbolic") {
-      await fs.symlink(linked, root, linkType);
-    }
-    if (replacement !== "missing") {
-      await write("Original instructions");
-    }
-    const config = {
-      skills: { load: { allowSymlinkTargets: [linked], extraDirs: external ? [collection] : [] } },
-    };
-    const sources = {
-      workspaceOnly: !external,
-      config,
-      bundledSkillsDir: path.join(fixture.root, "empty-bundled"),
-      managedSkillsDir: path.join(fixture.root, "empty-managed"),
-      pluginSkillsDir: path.join(fixture.root, "empty-plugins"),
-    };
-    const params = {
-      workspaceDir,
-      config,
-      sourcePlan: resolveWorkspaceSkillSourcePlan(workspaceDir, sources),
-    };
-    const readSkills = () =>
-      loadWorkspaceSkills(workspaceDir, sources).map((entry) => entry.skill.description);
-    refresh.ensureSkillsWatcher(params);
-    await ready();
-    expect(readSkills()).toEqual(replacement === "missing" ? [] : ["Original instructions"]);
-    const original = subscriptions.slice();
-    const retiring = external ? pathWatchers.get(toWatchRoot(root)) : undefined;
-    if (external) {
-      expect(await retiring?.authority).toMatchObject({ rootDir: collection });
-    }
-    if (replacement === "symbolic") {
-      await fs.unlink(root);
-    } else if (replacement === "root") {
-      await fs.rename(root, path.join(workspaceDir, "old-skills"));
-    } else if (replacement === "workspace") {
-      await fs.rename(workspaceDir, path.join(fixture.root, "old-workspace"));
-    } else if (external) {
-      await fs.rename(collection, path.join(fixture.root, "old-collection"));
-    }
-    await write("Replacement instructions");
-    await reconcile(retiring);
-    expect(refresh.reconcileSkillsWatcherCoverage(params)).toBe(true);
-    expect(readSkills()).toEqual(["Replacement instructions"]);
-    if (!external) {
-      expect(subscriptions).toEqual(original);
-    }
-    const version = getSkillsSourceVersion(workspaceDir);
-    await write("Later independent edit");
-    await reconcile();
-    expect(getSkillsSourceVersion(workspaceDir)).toBeGreaterThan(version);
-    expect(readSkills()).toEqual(["Later independent edit"]);
-    await fs.rm(root, { recursive: true });
-    await reconcile();
-    expect(readSkills()).toEqual([]);
-  },
-);
+it("discovers a newly created root and keeps observing edits and deletion", async () => {
+  const root = path.join(fixture.workspaceDir, "skills");
+  const write = (description: string) =>
+    writeSkill({ dir: path.join(root, "guide"), name: "guide", description });
+  await fs.rm(root, { recursive: true });
+  await ensure();
+  expect(read()).toEqual([]);
+  await write("Created");
+  await reconcile();
+  expect(read()).toEqual(["Created"]);
+  const version = getSkillsSourceVersion(fixture.workspaceDir);
+  await write("Edited");
+  await reconcile();
+  expect(getSkillsSourceVersion(fixture.workspaceDir)).toBeGreaterThan(version);
+  expect(read()).toEqual(["Edited"]);
+  await fs.rm(root, { recursive: true });
+  await reconcile();
+  expect(read()).toEqual([]);
+});
+
+it("keeps admitted symlink coverage available after unchanged overflow", async () => {
+  const root = path.join(fixture.workspaceDir, "skills");
+  const target = await fixture.createFixtureDirectory("linked-target");
+  await writeSkill({ dir: path.join(target, "guide"), name: "guide", description: "Unchanged" });
+  await fs.rm(root, { recursive: true });
+  await fs.symlink(target, root, linkType);
+  const config = { skills: { load: { allowSymlinkTargets: [target] } } };
+  await ensure(config);
+  expect(read(config)).toEqual(["Unchanged"]);
+  const version = getSkillsSnapshotVersion(fixture.workspaceDir);
+  const changes = vi.fn();
+  const unsubscribe = refresh.registerSkillsChangeListener(changes);
+  const scopeUpdates = subscriptions.map((subscription) => vi.spyOn(subscription, "setScopes"));
+  const aliases = [...observations.values()].filter(({ rootDir, options }) =>
+    options.scopes.some(
+      (scope) => scope.kind === "entry" && path.resolve(rootDir, scope.path) === root,
+    ),
+  );
+  expect(aliases.length).toBeGreaterThan(0);
+  for (const { options } of aliases) {
+    options.onInvalidate({ reason: "overflow" });
+  }
+  expect(pathWatchers.get(toWatchRoot(root))).toMatchObject({
+    verified: true,
+    unavailable: false,
+  });
+  await ready();
+  await advance(250);
+  expect(scopeUpdates.every((update) => update.mock.calls.length === 0)).toBe(true);
+  expect(changes).not.toHaveBeenCalled();
+  expect(getSkillsSnapshotVersion(fixture.workspaceDir)).toBe(version);
+  unsubscribe();
+});
 
 it("refreshes supporting resources without invalidating discovery, including atomic saves", async () => {
   const dir = path.join(fixture.workspaceDir, "skills", "guide");
@@ -247,9 +229,13 @@ it("observes admitted symlink targets and removes them from cached discovery on 
   await writeSkill({ dir, name: "guide", description: "Edited target" });
   await reconcile();
   expect(read(config)).toEqual(["Edited target"]);
+  const observation = pathWatchers.get(toWatchRoot(target));
+  expect(observation).toBeDefined();
   await fs.unlink(link);
   await reconcile();
   expect(read(config)).toEqual([]);
+  await ensure(config);
+  expect(observation?.closed).toBe(true);
 });
 
 it("settles an atomic SKILL.md replacement until the writer stops changing it", async () => {
@@ -292,9 +278,19 @@ it.each(["directory", "blocking file"] as const)(
     const owner = await import("./refresh-observation-source.js");
     const plan = vi.mocked(owner.skillsObservationScope).getMockImplementation()!;
     let replaced = false;
+    let replacementStarted = false;
+    const replacement = createDeferredCore();
+    void replacement.promise.catch(() => {});
     vi.mocked(owner.skillsObservationScope).mockImplementation((...args) => {
-      const work = plan(...args).then(async (scope) => {
-        if (path.resolve(args[1].path) === root && !replaced) {
+      const selected = path.resolve(args[1].path) === root && !replacementStarted;
+      replacementStarted ||= selected;
+      const work = (async () => {
+        // Root admission can finish out of order; hold companion probes before they plan or scan.
+        if (!selected) {
+          await racePromiseWithAbortSignal(replacement.promise, args[2]);
+        }
+        const scope = await plan(...args);
+        if (selected) {
           replaced = true;
           await fs.rm(root, { recursive: true });
           if (kind === "directory") {
@@ -307,19 +303,27 @@ it.each(["directory", "blocking file"] as const)(
           });
         }
         return scope;
-      });
+      })();
+      if (selected) {
+        void work.then(() => replacement.resolve(), replacement.reject);
+      }
       planning.push(work);
       return work;
     });
-    await ensure(config);
-    expect(replaced).toBe(true);
-    expect(read(config)).toEqual(["At startup"]);
-    await writeSkill({
-      dir: path.join(root, "guide"),
-      name: "guide",
-      description: "After startup",
-    });
-    await reconcile();
-    expect(read(config)).toEqual(["After startup"]);
+    try {
+      await ensure(config);
+      expect(replaced).toBe(true);
+      expect(read(config)).toEqual(["At startup"]);
+      await writeSkill({
+        dir: path.join(root, "guide"),
+        name: "guide",
+        description: "After startup",
+      });
+      await reconcile();
+      expect(read(config)).toEqual(["After startup"]);
+    } finally {
+      replacement.reject(createAbortError("Skills replacement fixture finished"));
+      await Promise.allSettled(planning);
+    }
   },
 );

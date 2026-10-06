@@ -63,6 +63,9 @@ final class AppState {
 
     let isPreview: Bool
     @ObservationIgnored private let gatewayConfigSaver: ([String: Any], Bool) -> Bool
+    @ObservationIgnored private let voiceEnvironment: AppVoiceRuntime.Environment
+    @ObservationIgnored private(set) lazy var voiceRuntime = AppVoiceRuntime(
+        state: self, environment: self.voiceEnvironment)
     @ObservationIgnored let bundleLocationAllowsPersistentIntegration: Bool
     @ObservationIgnored private var isHydratingLaunchAtLogin = false
     private var isInitializing = true
@@ -81,12 +84,14 @@ final class AppState {
     #endif
     private var configWatcher: ConfigFileWatcher?
     private var lastConfigFingerprint: Data?
-    private var lastObservedGatewayConfig: GatewayConfigSnapshot = .empty
+    private var lastObservedGatewayConfig: [GatewayConfigField: Data] = [:]
     private var lastObservedGatewayFingerprint: Data?
     private var dirtyGatewayConfigFields: Set<GatewayConfigField> = []
     private var conflictedGatewayConfigFields: Set<GatewayConfigField> = []
     private var suppressVoiceWakeGlobalSync = false
     @ObservationIgnored private var voiceWakeEnableGeneration: UInt64 = 0
+    @ObservationIgnored private var talkEnableGeneration: UInt64 = 0
+    @ObservationIgnored private var talkTransitionTask: Task<Void, Never>?
     @ObservationIgnored private var locationModeGeneration: UInt64 = 0
     @ObservationIgnored private let voiceWakeGlobalSyncScheduler = VoiceWakeGlobalSyncScheduler()
     @ObservationIgnored private var activeComputerPresenceTask: Task<Void, Never>?
@@ -128,8 +133,8 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 AppDefaults.standard.set(self.swabbleEnabled, forKey: swabbleEnabledKey)
-                Task { await VoiceWakeRuntime.shared.refresh(state: self) }
             }
+            self.refreshVoiceWake()
         }
     }
 
@@ -138,11 +143,9 @@ final class AppState {
             // Preserve the raw editing state; sanitization happens when we actually use the triggers.
             self.ifNotPreview {
                 AppDefaults.standard.set(self.swabbleTriggerWords, forKey: swabbleTriggersKey)
-                if self.swabbleEnabled {
-                    Task { await VoiceWakeRuntime.shared.refresh(state: self) }
-                }
                 self.scheduleVoiceWakeGlobalSyncIfNeeded()
             }
+            if self.swabbleEnabled { self.refreshVoiceWake() }
         }
     }
 
@@ -181,12 +184,10 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 AppDefaults.standard.set(self.voiceWakeMicID, forKey: voiceWakeMicKey)
-                if self.swabbleEnabled, !self.talkEnabled {
-                    Task { await VoiceWakeRuntime.shared.refresh(state: self) }
-                }
-                if self.talkEnabled {
-                    Task { await TalkModeRuntime.shared.inputDeviceSelectionDidChange() }
-                }
+            }
+            if self.swabbleEnabled, !self.talkEnabled { self.refreshVoiceWake() }
+            if self.voiceRuntime.isActive, self.talkEnabled {
+                Task { [runtime = self.voiceRuntime.talkRuntime] in await runtime.inputDeviceSelectionDidChange() }
             }
         }
     }
@@ -199,10 +200,8 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 AppDefaults.standard.set(self.voiceWakeLocaleID, forKey: voiceWakeLocaleKey)
-                if self.swabbleEnabled {
-                    Task { await VoiceWakeRuntime.shared.refresh(state: self) }
-                }
             }
+            if self.swabbleEnabled { self.refreshVoiceWake() }
         }
     }
 
@@ -222,10 +221,8 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 AppDefaults.standard.set(self.voiceWakeTriggersTalkMode, forKey: voiceWakeTriggersTalkModeKey)
-                if self.swabbleEnabled {
-                    Task { await VoiceWakeRuntime.shared.refresh(state: self) }
-                }
             }
+            if self.swabbleEnabled { self.refreshVoiceWake() }
         }
     }
 
@@ -235,8 +232,8 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 AppDefaults.standard.set(self.talkEnabled, forKey: talkEnabledKey)
-                Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
             }
+            self.applyTalkEnabled()
         }
     }
 
@@ -256,7 +253,9 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 AppDefaults.standard.set(self.talkShiftToStopEnabled, forKey: talkShiftToStopEnabledKey)
-                Task { TalkSpeechInterruptMonitor.shared.setEnabled(self.talkShiftToStopEnabled && self.talkEnabled) }
+            }
+            if self.voiceRuntime.isActive {
+                self.voiceRuntime.interruptMonitor.setEnabled(self.talkShiftToStopEnabled && self.talkEnabled)
             }
         }
     }
@@ -474,7 +473,8 @@ final class AppState {
         preview: Bool = false,
         gatewayConfigSaver: @escaping ([String: Any], Bool) -> Bool = {
             OpenClawConfigFile.saveDict($0, allowGatewayModeRemoval: $1)
-        })
+        },
+        voiceEnvironment: AppVoiceRuntime.Environment = .live)
     {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
         self.isPreview = isPreview
@@ -482,6 +482,7 @@ final class AppState {
             !AppProfile.current.isActive &&
             (isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration())
         self.gatewayConfigSaver = gatewayConfigSaver
+        self.voiceEnvironment = voiceEnvironment
         let onboardingSeen = AppDefaults.standard.bool(forKey: onboardingSeenKey)
         self.isPaused = AppLaunchRuntimePlan.current.resolvePaused(AppDefaults.standard.bool(forKey: pauseDefaultsKey))
         self.launchAtLogin = false
@@ -489,7 +490,7 @@ final class AppState {
         self.debugPaneEnabled = AppDefaults.standard.bool(forKey: debugPaneEnabledKey)
         self.nativeExperienceEnabled = AppDefaults.standard.bool(forKey: nativeExperienceEnabledKey)
         let savedVoiceWake = AppDefaults.standard.bool(forKey: swabbleEnabledKey)
-        self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
+        self.swabbleEnabled = voiceEnvironment.appStatePermissions.supported() ? savedVoiceWake : false
         self.swabbleTriggerWords = AppDefaults.standard
             .stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
         self.voiceWakeTriggerChime = Self.loadChime(
@@ -583,19 +584,15 @@ final class AppState {
             Self.logger.info("login-agent status skipped (unavailable under app profile)")
         }
 
-        if self.swabbleEnabled, !PermissionManager.voiceWakePermissionsGranted() {
+        if self.swabbleEnabled, !voiceEnvironment.appStatePermissions.granted() {
             self.swabbleEnabled = false
         }
-        if self.talkEnabled, !PermissionManager.voiceWakePermissionsGranted() {
+        if self.talkEnabled, !voiceEnvironment.appStatePermissions.granted() {
             self.talkEnabled = false
         }
 
         if !self.isPreview {
-            Task { await VoiceWakeRuntime.shared.refresh(state: self) }
-            Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
-        }
-
-        if !self.isPreview {
+            self.activateVoice()
             self.reconcilePreferredGatewayRouteBinding()
         }
         self.isInitializing = false
@@ -624,15 +621,8 @@ final class AppState {
     }
 
     private static func remoteHost(from urlString: String?) -> String? {
-        guard let raw = urlString?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty,
-              let url = URL(string: raw),
-              let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !host.isEmpty
-        else {
-            return nil
-        }
-        return host
+        guard let raw = urlString?.trimmedNonEmpty else { return nil }
+        return URL(string: raw)?.host?.trimmedNonEmpty
     }
 
     private static func sshTunnelGatewayUrl(existingUrl: String?, expectedRemoteHost: String?) -> String {
@@ -693,7 +683,7 @@ extension AppState {
         self.remoteTokenUnsupported = unsupported
     }
 
-    private static func updatedRemoteGatewayConfig(
+    static func updatedRemoteGatewayConfig(
         current: [String: Any],
         draft: RemoteGatewayConfigDraft) -> (remote: [String: Any], changed: Bool)
     {
@@ -749,8 +739,7 @@ extension AppState {
     }
 
     private func startConfigWatcher() {
-        let configUrl = OpenClawConfigFile.url()
-        self.configWatcher = ConfigFileWatcher(url: configUrl) { [weak self] in
+        self.configWatcher = ConfigFileWatcher(url: OpenClawPaths.configURL) { [weak self] in
             Task { @MainActor in
                 self?.applyConfigFromDisk()
             }
@@ -784,26 +773,22 @@ extension AppState {
         return try? JSONSerialization.data(withJSONObject: comparableRoot, options: [.sortedKeys])
     }
 
-    private static func gatewayConfigSnapshot(_ root: [String: Any]) -> GatewayConfigSnapshot {
+    private static func gatewayConfigSnapshot(_ root: [String: Any]) -> [GatewayConfigField: Data] {
         let gateway = root["gateway"] as? [String: Any]
         let remote = gateway?["remote"] as? [String: Any]
-        var values: [GatewayConfigField: GatewayConfigValue] = [:]
+        var values: [GatewayConfigField: Data] = [:]
         for field in GatewayConfigField.allCases {
             let value = if let remoteKey = field.remoteKey {
                 remote?[remoteKey]
             } else {
                 gateway?["mode"]
             }
-            guard let value else {
-                values[field] = .missing
-                continue
-            }
-            let data = try? JSONSerialization.data(
+            guard let value else { continue }
+            values[field] = try? JSONSerialization.data(
                 withJSONObject: ["value": value],
                 options: [.sortedKeys])
-            values[field] = data.map(GatewayConfigValue.json) ?? .missing
         }
-        return GatewayConfigSnapshot(values: values)
+        return values
     }
 
     private func gatewayConfigDraft() -> GatewayConfigSyncDraft {
@@ -945,7 +930,7 @@ extension AppState {
     func applyConfigOverrides(_ root: [String: Any]) {
         let gatewayFingerprint = Self.gatewayRoutingFingerprint(root)
         if gatewayFingerprint != self.lastObservedGatewayFingerprint {
-            self.advanceGatewayRoutingGeneration()
+            self.gatewayRoutingGeneration &+= 1
             self.lastObservedGatewayFingerprint = gatewayFingerprint
         }
         let previousSelection = self.gatewaySelectionSnapshot()
@@ -1008,14 +993,6 @@ extension AppState {
         }
     }
 
-    func startVoiceEars() {
-        self.earBoostActive = true
-    }
-
-    func stopVoiceEars() {
-        self.earBoostActive = false
-    }
-
     func blinkOnce() {
         self.blinkTick &+= 1
     }
@@ -1028,10 +1005,11 @@ extension AppState {
         guard !Task.isCancelled, requestIsCurrent() else { return }
         self.voiceWakeEnableGeneration &+= 1
         let generation = self.voiceWakeEnableGeneration
-        var authorized = enabled && voiceWakeSupported && SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(
-            localeID: self.voiceWakeLocaleID)
-        if authorized, !self.isPreview, !PermissionManager.voiceWakePermissionsGranted() {
-            authorized = await PermissionManager.ensureVoiceWakePermissions(interactive: true)
+        var authorized = enabled && self.voiceEnvironment.appStatePermissions.supported() &&
+            SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(
+                localeID: self.voiceWakeLocaleID)
+        if authorized, self.voiceRuntime.isActive, !self.voiceEnvironment.appStatePermissions.granted() {
+            authorized = await self.voiceEnvironment.appStatePermissions.ensure(true)
         }
         // OS authorization outlives task cancellation. Only the current intent and
         // requesting document may commit; didSet owns persistence and runtime refresh.
@@ -1058,23 +1036,48 @@ extension AppState {
         AppDefaults.standard.set(mode.rawValue, forKey: locationModeKey)
     }
 
+    func activateVoice() {
+        guard !self.voiceRuntime.isActive else { return }
+        // Normal startup calls this at the original voice activation point; preview
+        // construction remains inert and does not enable persistence or other services.
+        self.voiceRuntime.activate()
+        self.refreshVoiceWake()
+        self.applyTalkEnabled()
+    }
+
+    private func refreshVoiceWake() {
+        guard self.voiceRuntime.isActive else { return }
+        Task { [wake = self.voiceRuntime.wake] in await wake.refresh(state: self) }
+    }
+
+    private func applyTalkEnabled() {
+        guard self.voiceRuntime.isActive else { return }
+        let enabled = self.talkEnabled
+        self.talkTransitionTask = Task { [controller = self.voiceRuntime.talkController] in
+            await controller.setEnabled(enabled)
+        }
+    }
+
     func setTalkEnabled(_ enabled: Bool) async {
-        self.talkEnabled = enabled && voiceWakeSupported
-        guard !self.isPreview else { return }
-
-        if !self.talkEnabled {
-            await GatewayConnection.shared.talkMode(enabled: false, phase: "disabled")
-            return
+        self.talkEnableGeneration &+= 1
+        let generation = self.talkEnableGeneration
+        self.talkEnabled = enabled && self.voiceEnvironment.appStatePermissions.supported()
+        guard self.voiceRuntime.isActive else { return }
+        var transition = self.talkTransitionTask
+        var phase = self.talkEnabled ? "enabled" : "disabled"
+        if self.talkEnabled, !self.voiceEnvironment.appStatePermissions.granted() {
+            let granted = await self.voiceEnvironment.appStatePermissions.ensure(true)
+            if generation == self.talkEnableGeneration {
+                self.talkEnabled = granted
+                transition = self.talkTransitionTask
+                phase = granted ? "enabled" : "denied"
+            }
         }
-
-        if PermissionManager.voiceWakePermissionsGranted() {
-            await GatewayConnection.shared.talkMode(enabled: true, phase: "enabled")
-            return
-        }
-
-        let granted = await PermissionManager.ensureVoiceWakePermissions(interactive: true)
-        self.talkEnabled = granted
-        await GatewayConnection.shared.talkMode(enabled: granted, phase: granted ? "enabled" : "denied")
+        // Even a replaced wake handoff waits for its Talk pause acknowledgement.
+        // Only the latest request may project completion or restore permission-gated intent.
+        await transition?.value
+        guard generation == self.talkEnableGeneration else { return }
+        await self.voiceEnvironment.publishTalk(self.talkEnabled, phase)
     }
 
     // MARK: - Global wake words sync (Gateway-owned)
@@ -1095,10 +1098,7 @@ extension AppState {
 
     private static func loadChime(key: String, fallback: VoiceWakeChime) -> VoiceWakeChime {
         guard let data = AppDefaults.standard.data(forKey: key) else { return fallback }
-        if let decoded = try? JSONDecoder().decode(VoiceWakeChime.self, from: data) {
-            return decoded
-        }
-        return fallback
+        return (try? JSONDecoder().decode(VoiceWakeChime.self, from: data)) ?? fallback
     }
 
     private func storeChime(_ chime: VoiceWakeChime, key: String) {
@@ -1194,7 +1194,7 @@ extension AppState {
 
     private func syncGatewayConfigIfNeeded() {
         guard !self.isApplyingGatewayConfig else { return }
-        self.advanceGatewayRoutingGeneration()
+        self.gatewayRoutingGeneration &+= 1
         guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return }
         self.setGatewayConfigSyncState(.pending)
 
@@ -1221,15 +1221,11 @@ extension AppState {
     private func setGatewayConfigSyncState(_ state: GatewayConfigSyncState) {
         guard self.gatewayConfigSyncState != state else { return }
         self.gatewayConfigSyncState = state
-        self.advanceGatewayRoutingGeneration()
+        self.gatewayRoutingGeneration &+= 1
         guard !self.isPreview, state != .pending else { return }
         // Failed persistence must retire the old endpoint; recovery must publish
         // the newly canonical route. Requests also re-check this state directly.
         Task { await GatewayEndpointStore.shared.refresh() }
-    }
-
-    private func advanceGatewayRoutingGeneration() {
-        self.gatewayRoutingGeneration &+= 1
     }
 
     static func gatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
@@ -1575,15 +1571,6 @@ extension AppState {
 #if DEBUG
 @MainActor
 extension AppState {
-    static func _testUpdatedRemoteGatewayConfig(
-        current: [String: Any],
-        draft: RemoteGatewayConfigDraft) -> [String: Any]
-    {
-        self.updatedRemoteGatewayConfig(
-            current: current,
-            draft: draft).remote
-    }
-
     func _testEnableGatewayConfigSync() {
         self.gatewayConfigSyncEnabledForTesting = true
     }

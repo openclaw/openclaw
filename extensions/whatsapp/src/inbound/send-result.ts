@@ -441,9 +441,5 @@ export function listWhatsAppSendResultMessageIds(result: WhatsAppSendResult): st
   if (receiptIds.length > 0) {
     return receiptIds;
   }
-  const keyIds = normalizeStringEntries(result.keys.map((key) => key.id));
-  if (keyIds.length > 0) {
-    return uniqueStrings(keyIds);
-  }
-  return [];
+  return uniqueStrings(normalizeStringEntries(result.keys.map((key) => key.id)));
 }

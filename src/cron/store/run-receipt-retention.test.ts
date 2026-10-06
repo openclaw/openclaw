@@ -11,11 +11,16 @@ import { setupCronServiceSuite } from "../service.test-harness.js";
 import type { CronServiceDeps } from "../service/state.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "./key.js";
-import { finishCronRunReceipt, prepareCronRunReceiptClaim } from "./run-receipt-store.js";
+import {
+  finishCronRunReceiptAsync,
+  finishCronRunReceiptInDatabase,
+  prepareCronRunReceiptClaim,
+} from "./run-receipt-store.js";
 import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
 } from "./run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-pending-retention-" });
 
@@ -75,7 +80,7 @@ describe("pending cron receipt retention", () => {
         }),
       );
       history.push(receipt.receiptId);
-      finishCronRunReceipt({
+      await finishCronRunReceiptAsync({
         handle: receipt,
         status: "ok",
         finishedAtMs: now + 101 + index * 2,
@@ -104,7 +109,7 @@ describe("pending cron receipt retention", () => {
       expect(retirement()).toEqual({ receipt_id: pending!.receiptId });
 
       database.exec(`
-        CREATE TEMP TRIGGER reject_pending_receipt_completion
+        CREATE TRIGGER reject_pending_receipt_completion
         BEFORE UPDATE ON cron_jobs
         WHEN NEW.job_id = '${job.id}'
           AND json_extract(NEW.state_json, '$.runningAtMs') IS NULL
@@ -123,7 +128,15 @@ describe("pending cron receipt retention", () => {
       const queries = vi.spyOn(sqliteQuery, "executeSqliteQuerySync");
       let fetchedRows: number;
       try {
-        finishCronRunReceipt({ handle: pending!, status: "ok", finishedAtMs: now });
+        runOpenClawStateWriteTransaction(({ db }) =>
+          finishCronRunReceiptInDatabase({
+            database: db,
+            receiptSchema: prepareCronRunReceiptWriteSchema(db),
+            handle: pending!,
+            status: "ok",
+            finishedAtMs: now,
+          }),
+        );
         fetchedRows = queries.mock.results.flatMap((result) =>
           result.type === "return" ? result.value.rows : [],
         ).length;

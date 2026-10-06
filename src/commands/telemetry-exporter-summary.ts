@@ -13,19 +13,9 @@ const REASON_LABELS = {
   shutdown_failed: "shutdown failed",
 } as const;
 
-type ExporterSignal = (typeof SIGNALS)[number];
-type ExporterStatus = (typeof STATUSES)[number];
 type ExporterReason = keyof typeof REASON_LABELS | "configured" | "default_endpoint";
 
-type ExporterHealthRecord = {
-  seq: number;
-  source: string;
-  signal: ExporterSignal;
-  status: ExporterStatus;
-  transport?: string;
-  reason?: ExporterReason;
-  ownership?: "configured" | "default_endpoint";
-};
+type ExporterHealthRecord = NonNullable<ReturnType<typeof parseExporterHealthRecord>>;
 
 type TelemetryExporterSummary = {
   title: string;
@@ -37,7 +27,7 @@ function oneOf<const T extends readonly string[]>(value: unknown, choices: T): v
   return typeof value === "string" && (choices as readonly string[]).includes(value);
 }
 
-function parseExporterHealthRecord(value: unknown): ExporterHealthRecord | undefined {
+function parseExporterHealthRecord(value: unknown) {
   if (
     !isRecord(value) ||
     value.type !== "telemetry.exporter" ||
@@ -122,17 +112,12 @@ export function formatTelemetryExporterSummary(snapshot: unknown): TelemetryExpo
       latest.set(key, record);
     }
   }
-  const records = [...latest.values()].toSorted((left, right) => {
-    const sourceOrder = left.source.localeCompare(right.source);
-    if (sourceOrder !== 0) {
-      return sourceOrder;
-    }
-    const signalOrder = SIGNALS.indexOf(left.signal) - SIGNALS.indexOf(right.signal);
-    if (signalOrder !== 0) {
-      return signalOrder;
-    }
-    return (left.transport ?? "").localeCompare(right.transport ?? "");
-  });
+  const records = [...latest.values()].toSorted(
+    (left, right) =>
+      left.source.localeCompare(right.source) ||
+      SIGNALS.indexOf(left.signal) - SIGNALS.indexOf(right.signal) ||
+      (left.transport ?? "").localeCompare(right.transport ?? ""),
+  );
   if (records.length === 0) {
     return null;
   }

@@ -1,16 +1,20 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,
-  runSqliteImmediateTransactionSync,
+  runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
-import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import type {
+  SqliteWorkerBackend,
+  SqliteWorkerCommand,
+} from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import {
-  deleteOrphanedTranscriptIndexRowsInTransaction,
-  listSessionsNeedingTranscriptIndexReconcile,
-} from "./session-transcript-index.js";
+  isSessionTranscriptIndexStatusClean,
+  maintainSessionTranscriptIndexStatus,
+} from "./session-transcript-index-status.worker.js";
 import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
   claimPreparedSessionTranscriptProjectionInTransaction,
@@ -19,8 +23,7 @@ import {
   type PreparedSessionTranscriptProjectionMetadata,
 } from "./session-transcript-projection-rebuild.js";
 
-export type TranscriptProjectionPublicationOperations = {
-  preflight: { input: undefined; output: boolean };
+export type TranscriptProjectionRebuildOperations = {
   claim: {
     input: { plan: PreparedSessionTranscriptProjectionMetadata; claimId: number };
     output: boolean;
@@ -37,29 +40,38 @@ export type TranscriptProjectionPublicationOperations = {
     input: { plan: PreparedSessionTranscriptProjectionMetadata; claimId: number };
     output: { finalized: boolean; sessionKey?: string };
   };
-  sweep: { input: undefined; output: null };
+};
+
+export type TranscriptProjectionPublicationOperations = TranscriptProjectionRebuildOperations & {
+  preflight: { input: undefined; output: ReturnType<typeof maintainSessionTranscriptIndexStatus> };
+  sweep: { input: undefined; output: ReturnType<typeof maintainSessionTranscriptIndexStatus> };
 };
 
 /** The canonical agent executor lends its connection for each bounded publication. */
-export function bindSqliteWorkerBackend(
-  _input: undefined,
-  context: {
-    databasePath: string;
-    database: DatabaseSync;
-    admit(stage: "transaction" | "commit"): void;
-  },
-): SqliteWorkerBackend<TranscriptProjectionPublicationOperations> {
+export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorkerDatabaseContext) {
   const db = context.database;
-  return {
-    execute(command) {
-      return runSqliteImmediateTransactionSync(
-        db,
+  // Incognito rebuild callers expose no global maintenance commands or results.
+  function execute(
+    command: SqliteWorkerCommand<TranscriptProjectionRebuildOperations>,
+  ): TranscriptProjectionRebuildOperations[keyof TranscriptProjectionRebuildOperations]["output"];
+  function execute(
+    command: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>,
+  ): TranscriptProjectionPublicationOperations[keyof TranscriptProjectionPublicationOperations]["output"];
+  function execute(command: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>) {
+    if (
+      (command.type === "preflight" || command.type === "sweep") &&
+      isSessionTranscriptIndexStatusClean(db)
+    ) {
+      return { sessionIds: [], hasMore: false, traversalComplete: true };
+    }
+    return withSqlitePostCommitPublications(db, () =>
+      runSqliteWorkerTransactionSync(
+        context,
         () => {
-          context.admit("transaction");
           switch (command.type) {
             case "preflight":
-              deleteOrphanedTranscriptIndexRowsInTransaction(db);
-              return listSessionsNeedingTranscriptIndexReconcile(db).length > 0;
+            case "sweep":
+              return maintainSessionTranscriptIndexStatus(db);
             case "claim":
               return claimPreparedSessionTranscriptProjectionInTransaction(
                 db,
@@ -87,9 +99,6 @@ export function bindSqliteWorkerBackend(
                 : undefined;
               return { finalized, ...(session ? { sessionKey: session.session_key } : {}) };
             }
-            case "sweep":
-              deleteOrphanedTranscriptIndexRowsInTransaction(db);
-              return null;
           }
           throw new Error("Unknown transcript projection publication operation");
         },
@@ -97,13 +106,12 @@ export function bindSqliteWorkerBackend(
           operationLabel: `sessions.transcript-index.${command.type}`,
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
           databaseLabel: context.databasePath,
-          withCommit(commit) {
-            context.admit("commit");
-            commit();
-          },
         },
-      );
-    },
+      ),
+    );
+  }
+  return {
+    execute,
     assertSettled() {
       assertTransactionUsable(db);
       if (db.isTransaction) {
@@ -111,5 +119,5 @@ export function bindSqliteWorkerBackend(
       }
     },
     close() {},
-  };
+  } satisfies SqliteWorkerBackend<TranscriptProjectionPublicationOperations>;
 }

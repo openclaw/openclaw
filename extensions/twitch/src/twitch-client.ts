@@ -1,8 +1,13 @@
 import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -46,14 +51,11 @@ export class TwitchClientManager {
   private async createAuthProvider(
     account: TwitchAccountConfig,
     normalizedToken: string,
+    clientId: string,
   ): Promise<StaticAuthProvider | RefreshingAuthProvider> {
-    if (!account.clientId) {
-      throw new Error("Missing Twitch client ID");
-    }
-
     if (account.clientSecret) {
       const authProvider = new RefreshingAuthProvider({
-        clientId: account.clientId,
+        clientId,
         clientSecret: account.clientSecret,
       });
 
@@ -96,7 +98,7 @@ export class TwitchClientManager {
     }
 
     this.logger.info(`Using StaticAuthProvider for ${account.username} (no clientSecret provided)`);
-    return new StaticAuthProvider(account.clientId, normalizedToken);
+    return new StaticAuthProvider(clientId, normalizedToken);
   }
 
   async getClient(
@@ -162,7 +164,7 @@ export class TwitchClientManager {
 
     const normalizedToken = normalizeToken(tokenResolution.token);
 
-    const authProvider = await this.createAuthProvider(account, normalizedToken);
+    const authProvider = await this.createAuthProvider(account, normalizedToken, account.clientId);
     if (!ownsConnection()) {
       throw new Error(`Twitch connection cancelled for ${account.username}`);
     }
@@ -228,9 +230,7 @@ export class TwitchClientManager {
           return;
         }
         settled = true;
-        if (timeout) {
-          clearTimeout(timeout);
-        }
+        clearTimeout(timeout);
         for (const listener of listeners) {
           listener.unbind();
         }
@@ -277,7 +277,7 @@ export class TwitchClientManager {
           );
         }),
       );
-      const timeout: NodeJS.Timeout | undefined = setTimeout(
+      const timeout = setTimeout(
         () => finish(new Error(`Timed out connecting to Twitch as ${account.username}`)),
         connectTimeoutMs,
       );
@@ -387,19 +387,39 @@ export class TwitchClientManager {
     cfg?: OpenClawConfig,
     accountId?: string,
   ): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> {
+    const effect = captureEffectAuthority();
+    let preparingUse = false;
     try {
       const client = await this.getClient(account, cfg, accountId);
 
       // Twurple say() does not return a provider message ID.
       const messageId = crypto.randomUUID();
 
-      // Pre-chunk so Twurple's raw UTF-16 fallback cannot split surrogate pairs.
-      for (const chunk of chunkTextForOutbound(message, TWITCH_CHAT_MESSAGE_LIMIT)) {
-        await client.say(channel, chunk);
+      // Prechunk before Twurple's raw UTF-16 fallback can split surrogate pairs.
+      const chunks = chunkTextForOutbound(message, TWITCH_CHAT_MESSAGE_LIMIT);
+      preparingUse = true;
+      const results = await effect.initiate(() => {
+        preparingUse = false;
+        // Admit the whole prechunked message before any SDK call. Twurple owns
+        // rate limiting after these synchronous handoffs; responses do not hold authority.
+        return Promise.allSettled(chunks.map(async (chunk) => client.say(channel, chunk)));
+      });
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure) {
+        if (results.some((result) => result.status === "fulfilled")) {
+          throw createChannelPartialDeliveryError(failure.reason, {
+            messageIds: [messageId],
+            visibleReplySent: true,
+          });
+        }
+        throw failure.reason;
       }
 
       return { ok: true, messageId };
     } catch (error) {
+      if (preparingUse || isChannelPartialDeliveryError(error)) {
+        throw error;
+      }
       const errorMessage = formatErrorMessage(error);
       this.logger.error(`Failed to send message: ${errorMessage}`);
       return { ok: false, error: errorMessage };

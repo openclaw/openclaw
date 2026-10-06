@@ -126,9 +126,9 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       captured.blocked = false;
       return true;
     },
-    beginMutation() {
+    beginMutation(invalidatesAuthority: boolean) {
       captured.epoch++;
-      captured.blocked = true;
+      captured.blocked ||= invalidatesAuthority;
       const mutation = {};
       captured.mutation = mutation;
       return {

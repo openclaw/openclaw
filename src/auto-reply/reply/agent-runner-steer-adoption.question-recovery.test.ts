@@ -13,13 +13,20 @@ import {
   withQuestionGateway,
 } from "../../agents/harness/gateway-question.test-support.js";
 import type { GatewayQuestionCall } from "../../agents/tools/gateway-question-lifecycle.js";
+import {
+  updateSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
-import { clearSessionQueues, enqueueFollowupRun, type FollowupRun } from "./queue.js";
+import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
+import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -115,7 +122,6 @@ describe("question response custody through reply adoption", () => {
             touchActiveSessionEntry: async () => {},
             typing,
             typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-            toolAuthorityFingerprint: fingerprint,
           });
           expect(state.admission).toEqual({ status: "accepted", mode: "followup" });
         }
@@ -134,7 +140,8 @@ describe("question response custody through reply adoption", () => {
         releaseFirst.resolve();
         await Promise.allSettled(followup.mock.results.map((result) => result.value));
         clearAgentRunContext("accepted-backing-work");
-        clearSessionQueues([key]);
+        clearFollowupQueue(key);
+        clearFollowupDrainCallback(key);
       }
     });
   });
@@ -196,7 +203,6 @@ describe("question response custody through reply adoption", () => {
           touchActiveSessionEntry: async () => {},
           typing,
           typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-          toolAuthorityFingerprint: fingerprint,
         });
       };
       const firstSteer = startSteer(first);
@@ -233,13 +239,14 @@ describe("question response custody through reply adoption", () => {
       } finally {
         firstOutcome.resolve();
         await Promise.allSettled([firstSteer, waitingSteer]);
-        clearSessionQueues([key]);
+        clearFollowupQueue(key);
+        clearFollowupDrainCallback(key);
       }
     });
   });
 
-  it.each(["confirmed", "unconfirmed"] as const)(
-    "retains accepted input during source cancellation until its %s outcome settles",
+  it.each(["confirmed", "unconfirmed", "backend-error"] as const)(
+    "retains accepted input until its %s outcome settles",
     async (confirmation) => {
       const key = `agent:main:accepted-steer-abort-${confirmation}`;
       const run = createQueueTestRun({ prompt: text, messageId: `accepted-${confirmation}` });
@@ -292,7 +299,6 @@ describe("question response custody through reply adoption", () => {
           touchActiveSessionEntry: async () => {},
           typing,
           typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-          toolAuthorityFingerprint: fingerprint,
         });
         void adoption.catch(() => undefined);
         const tryDuplicate = () =>
@@ -311,7 +317,9 @@ describe("question response custody through reply adoption", () => {
               throw new Error("steering finished before backend acceptance");
             }),
           ]);
-          source.abort(new Error("source released while accepted input awaits confirmation"));
+          if (confirmation !== "backend-error") {
+            source.abort(new Error("source released while accepted input awaits confirmation"));
+          }
           // The injection owner still holds this input; cancellation must not make it replayable.
           expect(abandoned).not.toHaveBeenCalled();
           expect(settled).not.toHaveBeenCalled();
@@ -341,13 +349,29 @@ describe("question response custody through reply adoption", () => {
           expect(abandoned).not.toHaveBeenCalled();
           expect(settled).not.toHaveBeenCalled();
           expect(tryDuplicate()).toBe(false);
-          delivery.resolve(
-            confirmation === "confirmed"
-              ? undefined
-              : { transcriptCommit: "unconfirmed", errorMessage: "transcript confirmation lost" },
-          );
-          await expect(adoption).resolves.toBe("handled");
-          expect(state.admission).toEqual({ status: "accepted", mode: "steer" });
+          if (confirmation === "backend-error") {
+            delivery.reject(new Error("backend failed after accepting input"));
+            const result = await adoption;
+            expect(state.admission).toEqual({
+              status: "skipped",
+              reason: "question-response-indeterminate",
+            });
+            expect(result).toMatchObject({
+              isError: true,
+              text: "backend failed after accepting input",
+            });
+          } else {
+            delivery.resolve(
+              confirmation === "confirmed"
+                ? undefined
+                : {
+                    transcriptCommit: "unconfirmed",
+                    errorMessage: "transcript confirmation lost",
+                  },
+            );
+            await expect(adoption).resolves.toBe("handled");
+            expect(state.admission).toEqual({ status: "accepted", mode: "steer" });
+          }
           expect(adopted).toHaveBeenCalledOnce();
           expect(settled).toHaveBeenCalledOnce();
           expect(abandoned).not.toHaveBeenCalled();
@@ -357,7 +381,8 @@ describe("question response custody through reply adoption", () => {
         } finally {
           delivery.resolve();
           await adoption.catch(() => undefined);
-          clearSessionQueues([key]);
+          clearFollowupQueue(key);
+          clearFollowupDrainCallback(key);
         }
       });
     },
@@ -490,9 +515,12 @@ describe("question response custody through reply adoption", () => {
       "v1-negative",
       "closed-adoption",
       "confirmed-closed-adoption",
+      "late-receipt",
     ].flatMap((mode) =>
       (["steer", "reply"] as const)
-        .filter((entrypoint) => mode !== "v1-negative" || entrypoint === "steer")
+        .filter(
+          (entrypoint) => !["v1-negative", "late-receipt"].includes(mode) || entrypoint === "steer",
+        )
         .flatMap((entrypoint) =>
           (entrypoint === "steer" &&
           ["failed-waiter", "legacy-receipt", "confirmed-closed-adoption"].includes(mode)
@@ -512,6 +540,21 @@ describe("question response custody through reply adoption", () => {
       });
       await withQuestionGateway(async (fixture) =>
         withQuestionCreator(key, run, async (operation, fingerprint) => {
+          const receiptScope =
+            mode === "late-receipt"
+              ? {
+                  agentId: "main",
+                  sessionKey: key,
+                  storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+                }
+              : undefined;
+          if (receiptScope) {
+            run.abortSignal = operation.abortSignal;
+            await upsertSessionEntryCore(receiptScope, {
+              sessionId: run.run.sessionId,
+              updatedAt: 1,
+            });
+          }
           const hold = fixture.holdWaitAnswerResponse();
           const call = mode === "legacy-receipt" ? legacyGateway : callGatewayTool;
           const questions = [
@@ -566,6 +609,7 @@ describe("question response custody through reply adoption", () => {
             throw new Error("unexpected ordinary steering of an answered question");
           });
           const subscribe = vi.fn(() => () => {});
+          let finalAssertion: (() => void) | undefined;
           const queue = async (
             message: string,
             options: QueueOptions,
@@ -573,6 +617,13 @@ describe("question response custody through reply adoption", () => {
             kind: "run" | "source-bound",
           ) => {
             try {
+              if (receiptScope) {
+                assertCurrent();
+                finalAssertion = assertCurrent;
+                await updateSessionEntry(receiptScope, () => ({
+                  restartRecoveryDeliveryReceiptState: "terminal-pending",
+                }));
+              }
               return await steerActiveSessionWithOptionalDeliveryWait(
                 { steer: nativeSteer, subscribe },
                 message,
@@ -582,7 +633,7 @@ describe("question response custody through reply adoption", () => {
                   assertCurrent();
                   return true;
                 },
-                { kind, assertCurrent },
+                { kind, assertCurrent: () => assertCurrent() },
               );
             } catch (error) {
               if (mode === "v1-negative") {
@@ -636,8 +687,12 @@ describe("question response custody through reply adoption", () => {
               projectSessionMessages: false,
             });
           }
-          const confirmed = mode === "delayed-receipt" || mode === "confirmed-closed-adoption";
-          if (mode !== "confirmed-closed-adoption") {
+          const confirmed = [
+            "delayed-receipt",
+            "confirmed-closed-adoption",
+            "late-receipt",
+          ].includes(mode);
+          if (mode !== "confirmed-closed-adoption" && mode !== "late-receipt") {
             fixture.dropNextResolveResponse();
           }
           const state: ReplyOperationRunState = {};
@@ -682,6 +737,7 @@ describe("question response custody through reply adoption", () => {
                   runFollowup: followup,
                   sessionCtx: {},
                   sessionKey: key,
+                  storePath: receiptScope?.storePath,
                   touchActiveSessionEntry: async () => {},
                   typing,
                   typingSignals: createTypingSignaler({
@@ -689,11 +745,6 @@ describe("question response custody through reply adoption", () => {
                     mode: "never",
                     isHeartbeat: false,
                   }),
-                  toolAuthorityFingerprint:
-                    mode === "legacy-receipt" ? "incoming-authority" : fingerprint,
-                  ...(mode === "legacy-receipt"
-                    ? { pendingInputAuthorityFingerprint: fingerprint }
-                    : {}),
                 })
           ).finally(() => {
             done = true;
@@ -758,6 +809,20 @@ describe("question response custody through reply adoption", () => {
             expect.soft(adopted).toHaveBeenCalledOnce();
             expect.soft(settled).toHaveBeenCalledOnce();
             expect(nativeSteer).not.toHaveBeenCalled();
+            if (mode === "late-receipt") {
+              expect(finalAssertion).toBeDefined();
+              await expect(
+                queue(
+                  "ordinary input after the answer",
+                  undefined,
+                  finalAssertion!,
+                  "source-bound",
+                ),
+              ).rejects.toMatchObject({
+                cause: expect.any(MessageInjectionTargetUnavailableError),
+              });
+              expect(nativeSteer).not.toHaveBeenCalled();
+            }
             if (confirmed) {
               expect(result).toBe(entrypoint === "reply" ? undefined : "handled");
               expect(state.admission).toEqual({ status: "accepted", mode: "steer" });
@@ -790,7 +855,8 @@ describe("question response custody through reply adoption", () => {
             await answerOutcome;
             await adoption.catch(() => undefined);
             claim.dispose();
-            clearSessionQueues([key]);
+            clearFollowupQueue(key);
+            clearFollowupDrainCallback(key);
             if (hidden) {
               clearAgentRunContext("accepted-backing-work");
             }

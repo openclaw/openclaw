@@ -49,8 +49,7 @@ const DEFAULT_LOG_MAX_BYTES = 1_000_000;
 const SUPPORT_EXPORT_CONFIG_MAX_BYTES = 8 * 1024 * 1024;
 const SUPPORT_EXPORT_PREFIX = "openclaw-diagnostics-";
 const SUPPORT_EXPORT_SUFFIX = ".zip";
-type Awaitable<T> = T | Promise<T>;
-type SupportSnapshotReader = () => Awaitable<unknown>;
+type SupportSnapshotReader = () => unknown;
 
 type DiagnosticSupportExportOptions = {
   outputPath?: string;
@@ -80,11 +79,6 @@ type DiagnosticSupportExportManifest = {
     rawLogsIncluded: false;
     notes: string[];
   };
-};
-
-type DiagnosticSupportExportArtifact = {
-  manifest: DiagnosticSupportExportManifest;
-  files: DiagnosticSupportBundleFile[];
 };
 
 export type WriteDiagnosticSupportExportResult = {
@@ -283,13 +277,6 @@ function sanitizeConfigShape(
   return shape;
 }
 
-function sanitizeConfigDetails(parsed: unknown, redaction: SupportRedactionContext): unknown {
-  return sanitizeSupportConfigValue(
-    redactConfigObject(parsed, buildConfigSchemaCore().uiHints),
-    redaction,
-  );
-}
-
 function configShapeReadFailure(params: {
   configPath: string;
   redaction: SupportRedactionContext;
@@ -346,7 +333,10 @@ function readConfigExport(options: {
     }
     return {
       shape: sanitizeConfigShape(parsed.parsed, redactedConfigPath, stat, options.env),
-      sanitized: sanitizeConfigDetails(parsed.parsed, options),
+      sanitized: sanitizeSupportConfigValue(
+        redactConfigObject(parsed.parsed, buildConfigSchemaCore().uiHints),
+        options,
+      ),
     };
   } catch (error) {
     return {
@@ -665,12 +655,20 @@ function resolveOutputPath(options: {
   return resolved;
 }
 
-async function buildDiagnosticSupportExport(
-  options: DiagnosticSupportExportOptions = {},
-): Promise<DiagnosticSupportExportArtifact> {
-  const env = options.env ?? process.env;
-  const stateDir = options.stateDir ?? resolveStateDir(env);
-  const now = options.now ?? new Date();
+export async function writeDiagnosticSupportExport(
+  input: DiagnosticSupportExportOptions = {},
+): Promise<WriteDiagnosticSupportExportResult> {
+  const env = input.env ?? process.env;
+  const stateDir = input.stateDir ?? resolveStateDir(env);
+  const now = input.now ?? new Date();
+  const outputPath = resolveOutputPath({
+    outputPath: input.outputPath,
+    cwd: input.cwd ?? process.cwd(),
+    env,
+    stateDir,
+    now,
+  });
+  const options = { ...input, env, stateDir, now };
   const generatedAt = now.toISOString();
   const configPath = resolveConfigPath(env, stateDir);
   const stability = readStabilityBundle(options.stabilityBundle, stateDir);
@@ -774,35 +772,14 @@ async function buildDiagnosticSupportExport(
     },
   };
 
-  return {
-    manifest,
-    files: [jsonSupportBundleFile("manifest.json", manifest), ...files],
-  };
-}
-
-export async function writeDiagnosticSupportExport(
-  options: DiagnosticSupportExportOptions = {},
-): Promise<WriteDiagnosticSupportExportResult> {
-  const env = options.env ?? process.env;
-  const stateDir = options.stateDir ?? resolveStateDir(env);
-  const now = options.now ?? new Date();
-  const outputPath = resolveOutputPath({
-    outputPath: options.outputPath,
-    cwd: options.cwd ?? process.cwd(),
-    env,
-    stateDir,
-    now,
-  });
-  const artifact = await buildDiagnosticSupportExport({ ...options, env, stateDir, now });
   const published = await writeSupportBundleZip({
     outputPath,
-    files: artifact.files,
-    compressionLevel: 6,
+    files: [jsonSupportBundleFile("manifest.json", manifest), ...files],
   });
   return {
     path: published.path,
     bytes: published.bytes,
-    manifest: artifact.manifest,
+    manifest,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

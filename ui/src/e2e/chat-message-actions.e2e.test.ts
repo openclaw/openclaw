@@ -94,13 +94,21 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
           >("wa-tooltip");
         const body = tooltip?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
         const bounds = body?.getBoundingClientRect();
+        // Apple modifier glyphs pair hidden text with an aria-hidden SVG whose
+        // markup whitespace is in textContent but never rendered or announced.
+        const readableText = (node: Node): string =>
+          node instanceof Element && node.getAttribute("aria-hidden") === "true"
+            ? ""
+            : node instanceof Text
+              ? node.data
+              : Array.from(node.childNodes, readableText).join("");
         return {
           anchorMatches: tooltip?.anchor === element,
           height: bounds?.height ?? 0,
           hidden: body?.hidden ?? true,
           open: tooltip?.hasAttribute("open") ?? false,
           popupActive: tooltip?.popup?.active ?? false,
-          text: tooltip?.textContent?.trim() ?? "",
+          text: tooltip ? readableText(tooltip).trim() : "",
           width: bounds?.width ?? 0,
         };
       }),
@@ -400,11 +408,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const sent = await gateway.waitForRequest("chat.send");
         expect(sent.params).toMatchObject({ message: text, replyToId: sourceId });
-        const sentPreview = page.locator(".chat-reply-preview--message");
-        await expect
-          .poll(() => sentPreview.locator(".chat-reply-preview__text").textContent())
-          .toBe(fileName);
-        await sentPreview.click();
+        const sentPreview = page.locator(".chat-reply-attribution--inline");
+        await expect.poll(() => sentPreview.getByRole("button").count()).toBe(1);
+        await sentPreview.getByRole("button").click();
         await expect
           .poll(() =>
             bubble.evaluate((element) => element.classList.contains("chat-bubble--reply-target")),
@@ -462,8 +468,10 @@ describeControlUiE2e("Control UI chat message actions", () => {
 
     const presentation = (group: Locator) =>
       group.evaluate((element) => {
-        const footer = element.querySelector<HTMLElement>(".chat-group-footer");
-        const action = element.querySelector<HTMLElement>(".chat-group-footer-actions button");
+        const footer = element.querySelector<HTMLElement>(":scope > .chat-group-footer");
+        const action = element.querySelector<HTMLElement>(
+          ":scope > .chat-group-footer .chat-group-footer-actions button",
+        );
         return {
           actionOpacity: action ? getComputedStyle(action).opacity : null,
           actionPointerEvents: action ? getComputedStyle(action).pointerEvents : null,
@@ -480,7 +488,14 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const earlierAssistant = assistantGroups.first();
       const latestAssistant = assistantGroups.last();
       await latestAssistant.getByText("Latest assistant reply.", { exact: true }).waitFor();
-      const inlineAction = latestAssistant.locator(".chat-message-actions-row button").first();
+      const intermediateId = await latestAssistant
+        .locator(".chat-bubble")
+        .first()
+        .getAttribute("data-message-id");
+      const intermediateOwner = latestAssistant.locator(
+        `[data-message-actions-for="${intermediateId}"]`,
+      );
+      const inlineAction = intermediateOwner.locator("button").first();
       await expect.poll(() => inlineAction.count()).toBe(1);
 
       await screenshot(page, "user-last-assistant-actions-hidden-desktop.png");
@@ -510,6 +525,11 @@ describeControlUiE2e("Control UI chat message actions", () => {
         .toEqual({ opacity: "0", pointerEvents: "none" });
 
       await page.setViewportSize({ width: 390, height: 844 });
+      await expect.poll(() => intermediateOwner.count()).toBe(1);
+      await expect.poll(() => latestAssistant.locator(".chat-message-actions-row").count()).toBe(0);
+      expect(await intermediateOwner.locator("..").getAttribute("class")).toContain(
+        "chat-message-footer",
+      );
       await screenshot(page, "latest-assistant-actions-resting-mobile.png");
       await expect
         .poll(() => presentation(latestAssistant))
@@ -610,7 +630,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const file = group.locator("a").filter({ hasText: "tooltip-proof.txt" });
       await file.hover();
       await expect.poll(() => openTooltip.count()).toBe(1);
-      expect(await openTooltip.textContent()).toContain("/workspace/tooltip-proof.txt");
+      const filePath = group.locator("openclaw-tooltip[open] .markdown-file-tooltip__path");
+      await filePath.waitFor({ state: "visible" });
+      expect(await filePath.textContent()).toBe("/workspace/tooltip-proof.txt");
       expect(await popupStyle()).toEqual(metadataStyle);
       expect(await file.getAttribute("title")).toBe("");
       await screenshot(page, "tooltip-file-hint.png");

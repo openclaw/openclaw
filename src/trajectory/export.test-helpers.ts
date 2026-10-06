@@ -51,16 +51,16 @@ function toolResultMessage(content: Extract<Message, { role: "toolResult" }>["co
   };
 }
 
-export function writeSimpleSessionFile(
-  sessionFile: string,
+export function simpleSessionEntries(
+  workspaceDir: string,
   params: { userEntryTimestamp?: string | number; userMessage?: Message } = {},
-): void {
+) {
   const header = {
     type: "session",
     version: 3,
     id: "session-1",
     timestamp: "2026-04-01T05:46:39.000Z",
-    cwd: path.dirname(sessionFile),
+    cwd: workspaceDir,
   };
   const userEntry = {
     type: "message",
@@ -76,9 +76,18 @@ export function writeSimpleSessionFile(
     timestamp: "2026-04-01T05:46:41.000Z",
     message: assistantMessage([{ type: "text", text: "done" }]),
   };
+  return [header, userEntry, assistantEntry];
+}
+
+export function writeSimpleSessionFile(
+  sessionFile: string,
+  params: Parameters<typeof simpleSessionEntries>[1] = {},
+): void {
   fs.writeFileSync(
     sessionFile,
-    `${[header, userEntry, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    `${simpleSessionEntries(path.dirname(sessionFile), params)
+      .map((entry) => JSON.stringify(entry))
+      .join("\n")}\n`,
     "utf8",
   );
 }
@@ -112,19 +121,16 @@ export function writeToolCallOnlySessionFile(sessionFile: string): void {
   );
 }
 
-export function writeToolCallSessionFile(
-  sessionFile: string,
-  toolResultText = "README contents",
-): void {
+export function toolCallSessionEntries(workspaceDir: string, toolResultText = "README contents") {
   const header = {
     type: "session",
     version: 3,
     id: "session-1",
     timestamp: "2026-04-01T05:46:39.000Z",
-    cwd: path.dirname(sessionFile),
+    cwd: workspaceDir,
     title: "Trajectory Test",
   };
-  const entries = [
+  return [
     header,
     {
       type: "message",
@@ -144,7 +150,7 @@ export function writeToolCallSessionFile(
           id: "call_1",
           name: "read",
           arguments: {
-            filePath: path.join(path.dirname(sessionFile), "skills", "weather", "SKILL.md"),
+            filePath: path.join(workspaceDir, "skills", "weather", "SKILL.md"),
           },
         },
       ]),
@@ -164,9 +170,17 @@ export function writeToolCallSessionFile(
       message: assistantMessage([{ type: "text", text: "done" }]),
     },
   ];
+}
+
+export function writeToolCallSessionFile(
+  sessionFile: string,
+  toolResultText = "README contents",
+): void {
   fs.writeFileSync(
     sessionFile,
-    `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    `${toolCallSessionEntries(path.dirname(sessionFile), toolResultText)
+      .map((entry) => JSON.stringify(entry))
+      .join("\n")}\n`,
     "utf8",
   );
 }

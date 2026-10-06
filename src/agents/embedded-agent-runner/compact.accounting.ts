@@ -1,8 +1,10 @@
 import { resolveMaxActiveTranscriptBytes } from "../../auto-reply/reply/memory-flush.js";
 import { incrementCompactionCount } from "../../auto-reply/reply/session-updates.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
-import { readSessionTranscriptActiveStatsAsync } from "../../config/sessions/session-transcript-hydration.js";
+import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import { readSessionTranscriptAccountingAsync } from "../../gateway/session-transcript-readers.js";
+import { SessionEntryCommittedError } from "../sessions/session-manager-persistence-error.js";
 import type { QueuedCompactionHostOptions } from "./compact.queued-execution.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
@@ -38,13 +40,15 @@ export async function prepareManualTranscriptByteCompaction(
   ) {
     return { params, host };
   }
-  const { sizeBytes: activeBytes } = await readSessionTranscriptActiveStatsAsync(
+  const { byteSize: activeBytes } = await readSessionTranscriptAccountingAsync(
     target,
+    { includeByteSize: true, includeUsage: false },
     params.abortSignal,
   );
   params.abortSignal?.throwIfAborted();
   host.assertActive?.();
   if (
+    activeBytes === undefined ||
     activeBytes < maxBytes ||
     hasMatchingTranscriptByteCompactionLatch(entry, activeBytes, maxBytes)
   ) {
@@ -85,11 +89,11 @@ export function createCompactionAccounting(params: {
     if (byteBudget) {
       try {
         postCompactionBytes = (
-          await readSessionTranscriptActiveStatsAsync({
-            ...params.target,
-            sessionId: acceptedEntry.sessionId,
-          })
-        ).sizeBytes;
+          await readSessionTranscriptAccountingAsync(
+            { ...params.target, sessionId: acceptedEntry.sessionId },
+            { includeByteSize: true, includeUsage: false },
+          )
+        ).byteSize;
       } catch {
         // Preserve the atomic boundary's latch when the post-commit read is unavailable.
         postCompactionBytes = byteBudget.activeBytes;
@@ -120,23 +124,31 @@ export function createCompactionAccounting(params: {
     ...params.host,
     ...(params.host.transcriptBytePreflightHarness && byteBudget
       ? {
-          withCompactionPersistence: {
-            assertActive: () => params.host.assertActive?.(),
-            prepare: () => ({
-              scope: {
+          withCompactionPersistenceAsync: async (prepared) => {
+            const result = await persistCompactionBoundaryWithSessionEntryAsync(
+              {
                 ...params.target,
                 sessionId: entry.sessionId,
                 expectedLifecycleRevision: entry.lifecycleRevision,
                 expectedWriterRunId: entry.activeWriterRunId,
+                expectedOwner: {
+                  lifecycleRevision: entry.lifecycleRevision,
+                  activeWriterRunId: entry.activeWriterRunId,
+                },
               },
-              transcriptByteCompactionLatch: {
-                sessionId: entry.sessionId,
-                ...byteBudget,
+              {
+                prepared,
+                transcriptByteCompactionLatch: { sessionId: entry.sessionId, ...byteBudget },
               },
-            }),
-            onCommitted: () => {
-              committed = true;
-            },
+              () => params.host.assertActive?.(),
+            ).catch((error: unknown) => {
+              if (error instanceof SessionEntryCommittedError) {
+                committed = true;
+              }
+              throw error;
+            });
+            committed = true;
+            return result;
           },
         }
       : {}),

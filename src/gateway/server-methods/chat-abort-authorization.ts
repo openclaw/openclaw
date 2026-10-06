@@ -1,13 +1,24 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Authorization and pending-run state transitions for chat cancellation.
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import {
+  isChatAbortTerminalPersistenceSettled,
+  isCurrentChatAbortExecution,
+} from "../chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { listQueuedChatTurnsForSession } from "../chat-queued-turns.js";
 import { chatRunBelongsToAgent, resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
-import { pendingChatSendDedupeKey, PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
+import {
+  pendingChatSendDedupeKey,
+  PENDING_CHAT_SEND_DEDUPE_PREFIX,
+  type DedupeEntry,
+} from "../server-shared.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -72,10 +83,7 @@ export function resolveChatAbortRequester(
   const sessionTarget = authorization?.admittedTarget;
   const assertCurrent =
     assertCallerCurrent && authorization && sessionTarget
-      ? () => {
-          assertCallerCurrent();
-          authorization.assertCurrent();
-        }
+      ? composeSessionSourceAssertion([assertCallerCurrent, authorization.assertCurrent])
       : undefined;
   assertCurrent?.();
   return {
@@ -116,12 +124,11 @@ export function canRequesterAbortChatRun(
 }
 
 export function readPreRegisteredAgentDedupePayloadForSession(params: {
-  entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
+  entry: DedupeEntry | undefined;
   runId: string;
   sessionKey: string;
   agentId?: string;
   defaultAgentId?: string;
-  includeHidden?: boolean;
   requiredSessionId?: string;
 }): PreRegisteredAgentDedupePayload | undefined {
   if (!params.entry?.ok) {
@@ -129,9 +136,6 @@ export function readPreRegisteredAgentDedupePayloadForSession(params: {
   }
   const payload = params.entry.payload as PreRegisteredAgentDedupePayload | undefined;
   if (payload?.status !== "accepted") {
-    return undefined;
-  }
-  if (!params.includeHidden && payload.controlUiVisible === false) {
     return undefined;
   }
   const payloadRunId = normalizeOptionalString(payload.runId);
@@ -174,7 +178,7 @@ export function readPreRegisteredAgentDedupePayloadForSession(params: {
 
 export function readPreRegisteredRun(params: {
   key: string;
-  entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
+  entry: DedupeEntry | undefined;
   keyPrefix: string;
   includeHidden?: boolean;
 }): PreRegisteredAgentRun | undefined {
@@ -236,21 +240,15 @@ export function writePreRegisteredAgentAbort(params: {
   payload: PreRegisteredAgentDedupePayload;
   stopReason: string;
   endedAt?: number;
-  expectedPayload?: PreRegisteredAgentDedupePayload;
+  expectedPayload: PreRegisteredAgentDedupePayload;
 }) {
-  if (
-    params.expectedPayload &&
-    params.context.dedupe.get(`agent:${params.runId}`)?.payload !== params.expectedPayload
-  ) {
+  if (params.context.dedupe.get(`agent:${params.runId}`)?.payload !== params.expectedPayload) {
     return false;
   }
   const endedAt = params.endedAt ?? Date.now();
   const payloadAgentId = normalizeOptionalString(params.payload.agentId);
   for (const key of resolvePreRegisteredAgentDedupeKeys(params.payload, params.runId)) {
-    if (
-      params.expectedPayload &&
-      params.context.dedupe.get(key)?.payload !== params.expectedPayload
-    ) {
+    if (params.context.dedupe.get(key)?.payload !== params.expectedPayload) {
       continue;
     }
     setGatewayDedupeEntry({
@@ -281,6 +279,7 @@ export function writePreRegisteredChatAbort(params: {
   stopReason: string;
   endedAt?: number;
   attemptId?: string;
+  requestIdentity?: string;
   expectedPayload?: PreRegisteredAgentDedupePayload;
 }) {
   if (
@@ -304,6 +303,12 @@ export function writePreRegisteredChatAbort(params: {
     (pendingEntry?.payload as PreRegisteredAgentDedupePayload | undefined)?.attemptId,
   );
   const ownsPendingAttempt = !params.attemptId || pendingAttemptId === params.attemptId;
+  // Eviction removes the reservation, not the admission's immutable input identity.
+  const requestIdentity = pendingEntry
+    ? ownsPendingAttempt
+      ? pendingEntry.requestIdentity
+      : undefined
+    : params.requestIdentity;
   if (ownsPendingAttempt) {
     params.context.dedupe.delete(pendingKey);
   }
@@ -314,9 +319,7 @@ export function writePreRegisteredChatAbort(params: {
       ts: endedAt,
       ok: true,
       payload,
-      ...(ownsPendingAttempt && pendingEntry?.requestIdentity
-        ? { requestIdentity: pendingEntry.requestIdentity }
-        : {}),
+      ...(requestIdentity ? { requestIdentity } : {}),
     },
   });
   return true;
@@ -362,11 +365,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   preserveSideRuns?: boolean;
   includeProtectedRuns?: boolean;
 }) {
-  const sessionKeys = new Set(
-    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalString(sessionKey)).filter(
-      (sessionKey): sessionKey is string => Boolean(sessionKey),
-    ),
-  );
+  const sessionKeys = new Set(normalizeTrimmedStringList([...params.sessionKeys]));
   const selection = createChatAbortRunSelection<PreRegisteredAgentRun>();
   for (const [key, entry] of params.context.dedupe) {
     const run = readPreRegisteredRun({
@@ -431,16 +430,8 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   preserveSideRuns?: boolean;
   includeProtectedRuns?: boolean;
 }) {
-  const sessionKeys = new Set(
-    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalString(sessionKey)).filter(
-      (sessionKey): sessionKey is string => Boolean(sessionKey),
-    ),
-  );
-  const sessionIds = new Set(
-    Array.from(params.sessionIds ?? [], (sessionId) => normalizeOptionalString(sessionId)).filter(
-      (sessionId): sessionId is string => Boolean(sessionId),
-    ),
-  );
+  const sessionKeys = new Set(normalizeTrimmedStringList([...params.sessionKeys]));
+  const sessionIds = new Set(normalizeTrimmedStringList([...(params.sessionIds ?? [])]));
   const agentId = normalizeOptionalString(params.agentId)?.toLowerCase();
   const selection = createChatAbortRunSelection<{
     runId: string;
@@ -548,7 +539,10 @@ export function hasGatewaySessionAbortOwner(params: SessionAbortOwnerParams): bo
       sessionIds: [params.sessionId],
       ...ownerScope,
       includeProtectedRuns: true,
-    }).authorizedRuns.length > 0 ||
+    }).authorizedRuns.some(
+      ({ entry }) =>
+        !isCurrentChatAbortExecution(entry) || !isChatAbortTerminalPersistenceSettled(entry),
+    ) ||
     resolveAuthorizedQueuedTurnsForSession({
       context: params.context,
       sessionId: params.sessionId,

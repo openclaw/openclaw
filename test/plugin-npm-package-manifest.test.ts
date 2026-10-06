@@ -1,7 +1,7 @@
 // Plugin npm manifest tests validate generated plugin package manifests.
 import { execFile, spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
+import fs, {
   chmodSync,
   existsSync,
   lstatSync,
@@ -14,18 +14,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { dirname, join, win32 } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   generatePluginNpmPackageLockWithRetry,
   resolveAugmentedPluginNpmPackageJson,
   resolveAugmentedPluginNpmManifest,
-  resolvePluginNpmCommand,
   runPluginNpmCiWithRetry,
   withAugmentedPluginNpmManifestForPackage,
 } from "../scripts/lib/plugin-npm-package-manifest.mts";
+import { resolveNpmRunner } from "../scripts/npm-runner.mts";
 import { hasChannelPackageState } from "../src/channels/plugins/package-state-probes.js";
 import type { PluginManifest } from "../src/plugins/manifest-types.js";
 import {
@@ -113,7 +113,9 @@ function parseNpmPackResult(stdout: string): NpmPackResult {
 }
 
 function listNpmPackDryRunFiles(packageDir: string): string[] {
-  const invocation = resolvePluginNpmCommand(["pack", "--dry-run", "--json", "--ignore-scripts"]);
+  const invocation = resolveNpmRunner({
+    npmArgs: ["pack", "--dry-run", "--json", "--ignore-scripts"],
+  });
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: packageDir,
     encoding: "utf8",
@@ -280,14 +282,14 @@ function writePatchedRuntimeFixture(bundling = "default") {
     );
     let artifact = registryDependencyArtifacts.get(inputKey);
     if (!artifact) {
-      const pack = spawnSync(
-        "npm",
-        ["pack", "--json", "--ignore-scripts", "--pack-destination", repoDir],
-        {
-          cwd: dependencyDir,
-          encoding: "utf8",
-        },
-      );
+      const npm = resolveNpmRunner({
+        npmArgs: ["pack", "--json", "--ignore-scripts", "--pack-destination", repoDir],
+      });
+      const pack = spawnSync(npm.command, npm.args, {
+        ...npm,
+        cwd: dependencyDir,
+        encoding: "utf8",
+      });
       expect(pack.status, pack.stderr).toBe(0);
       const tarball = readFileSync(join(repoDir, parseNpmPackResult(pack.stdout).filename));
       artifact = {
@@ -507,180 +509,117 @@ describe("plugin npm package manifest staging", () => {
     expect(packageJson.openclaw?.release?.bundleRuntimeDependencies).toBe(false);
   });
 
-  it("wraps Windows npm.cmd staging through cmd.exe without shell mode", () => {
-    const nodeDir = "C:\\Program Files\\nodejs";
-    const npmCmdPath = win32.resolve(nodeDir, "npm.cmd");
-
-    expect(
-      resolvePluginNpmCommand(["install", "--package-lock-only"], {
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: { PATH: "C:\\bin" },
-        execPath: win32.join(nodeDir, "node.exe"),
-        existsSync: (candidate: string) => candidate === npmCmdPath,
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        '""C:\\Program Files\\nodejs\\npm.cmd" install --package-lock-only"',
-      ],
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
-  });
-
-  it("rejects bare npm fallback on Windows plugin package staging", () => {
-    expect(() =>
-      resolvePluginNpmCommand(["install"], {
-        execPath: "C:\\nodejs\\node.exe",
-        existsSync: () => false,
-        platform: "win32",
-      }),
-    ).toThrow("OpenClaw refuses to shell out to bare npm on Windows");
-  });
-
-  it("retries timed-out bundled dependency installs after cleaning partial output", () => {
-    const timeoutError = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
-    const spawnResults = [
-      { error: timeoutError, status: null },
-      { error: undefined, status: 0 },
-    ];
-    const spawnOptions: SpawnSyncOptions[] = [];
-    let cleanupCalls = 0;
-
-    const result = runPluginNpmCiWithRetry(
-      ["ci"],
-      { cwd: "/tmp/plugin" },
-      {
+  it.each(["recovered timeout", "ordinary failure", "exhausted timeout"])(
+    "settles bundled dependency installs after %s",
+    (scenario) => {
+      const exhausted = scenario === "exhausted timeout";
+      const ordinary = scenario === "ordinary failure";
+      const packageDir = exhausted
+        ? join(makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-timeout-"), "extensions", "whatsapp")
+        : "/tmp/plugin";
+      const nodeModulesPath = join(packageDir, "node_modules");
+      const timeoutError = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
+      const spawnResults = [
+        { error: timeoutError, status: null },
+        { error: undefined, status: 0 },
+      ];
+      if (exhausted) {
+        mkdirSync(packageDir, { recursive: true });
+      }
+      const spawnOptions: SpawnSyncOptions[] = [];
+      let cleanupCalls = 0;
+      const result = runPluginNpmCiWithRetry(["ci"], ordinary ? {} : { cwd: packageDir }, {
+        attempts: exhausted ? 3 : undefined,
+        timeoutMs: ordinary || exhausted ? undefined : 1234,
+        pluginDir: ordinary ? undefined : "whatsapp",
         cleanupAttempt: () => {
-          cleanupCalls += 1;
-        },
-        pluginDir: "whatsapp",
-        spawn: (_args: string[], options: SpawnSyncOptions) => {
-          spawnOptions.push(options);
-          return spawnResults.shift();
-        },
-        timeoutMs: 1234,
-      },
-    ) as { status: number | null };
-
-    expect(result.status).toBe(0);
-    expect(cleanupCalls).toBe(1);
-    expect(spawnOptions).toEqual([
-      { cwd: "/tmp/plugin", timeout: 1234 },
-      { cwd: "/tmp/plugin", timeout: 1234 },
-    ]);
-  });
-
-  it("does not retry ordinary bundled dependency install failures", () => {
-    let spawnCalls = 0;
-    const result = runPluginNpmCiWithRetry(
-      ["ci"],
-      {},
-      {
-        cleanupAttempt: () => {
-          throw new Error("cleanup should not run");
-        },
-        spawn: () => {
-          spawnCalls += 1;
-          return { error: undefined, status: 1 };
-        },
-      },
-    ) as { status: number | null };
-
-    expect(result.status).toBe(1);
-    expect(spawnCalls).toBe(1);
-  });
-
-  it("cleans an exhausted timeout before reusing the same package directory", () => {
-    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-timeout-");
-    const packageDir = join(repoDir, "extensions", "whatsapp");
-    const nodeModulesPath = join(packageDir, "node_modules");
-    const timeoutError = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
-    mkdirSync(packageDir, { recursive: true });
-
-    const firstResult = runPluginNpmCiWithRetry(
-      ["ci"],
-      { cwd: packageDir },
-      {
-        attempts: 3,
-        cleanupAttempt: () => rmSync(nodeModulesPath, { recursive: true, force: true }),
-        pluginDir: "whatsapp",
-        spawn: () => {
-          mkdirSync(nodeModulesPath, { recursive: true });
-          return { error: timeoutError, status: null };
-        },
-      },
-    ) as { error?: NodeJS.ErrnoException };
-
-    expect(firstResult.error?.code).toBe("ETIMEDOUT");
-    expect(existsSync(nodeModulesPath)).toBe(false);
-
-    const secondResult = runPluginNpmCiWithRetry(
-      ["ci"],
-      { cwd: packageDir },
-      {
-        cleanupAttempt: () => rmSync(nodeModulesPath, { recursive: true, force: true }),
-        pluginDir: "whatsapp",
-        spawn: () => {
-          expect(existsSync(nodeModulesPath)).toBe(false);
-          return { error: undefined, status: 0 };
-        },
-      },
-    ) as { status: number | null };
-
-    expect(secondResult.status).toBe(0);
-  });
-
-  it("retries timed-out package-lock generation with a bounded command timeout", () => {
-    const timeoutError = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
-    const generateOptions: Array<Record<string, unknown>> = [];
-    let generateCalls = 0;
-
-    const lock = generatePluginNpmPackageLockWithRetry(
-      "/tmp/plugin",
-      { installStrategy: "shallow" },
-      {
-        generate: (_packageDir: string, options: Record<string, unknown>) => {
-          generateCalls += 1;
-          generateOptions.push(options);
-          if (generateCalls === 1) {
-            throw timeoutError;
+          if (ordinary) {
+            throw new Error("cleanup should not run");
           }
-          return '{"lockfileVersion":3}\n';
+          cleanupCalls += 1;
+          if (exhausted) {
+            rmSync(nodeModulesPath, { recursive: true, force: true });
+          }
         },
-        pluginDir: "whatsapp",
-      },
-    );
-
-    expect(lock).toBe('{"lockfileVersion":3}\n');
-    expect(generateOptions).toHaveLength(2);
-    expect(generateOptions[0]).toMatchObject({
-      env: { OPENCLAW_NPM_LOCK_COMMAND_TIMEOUT_MS: "180000" },
-      installStrategy: "shallow",
-    });
-    expect(generateOptions[1]).toEqual(generateOptions[0]);
-  });
-
-  it("does not retry ordinary package-lock generation failures", () => {
-    let generateCalls = 0;
-    expect(() =>
-      generatePluginNpmPackageLockWithRetry(
-        "/tmp/plugin",
-        { installStrategy: "shallow" },
-        {
-          generate: () => {
-            generateCalls += 1;
-            throw new Error("invalid dependency");
+        spawn: (_args, options) => {
+          spawnOptions.push(options);
+          if (exhausted) {
+            mkdirSync(nodeModulesPath, { recursive: true });
+          }
+          return ordinary
+            ? { error: undefined, status: 1 }
+            : exhausted
+              ? { error: timeoutError, status: null }
+              : spawnResults.shift();
+        },
+      });
+      expect(result.status).toBe(ordinary ? 1 : exhausted ? null : 0);
+      if (ordinary) {
+        expect(spawnOptions).toHaveLength(1);
+      } else if (!exhausted) {
+        expect(cleanupCalls).toBe(1);
+        expect(spawnOptions).toEqual([
+          { cwd: "/tmp/plugin", timeout: 1234 },
+          { cwd: "/tmp/plugin", timeout: 1234 },
+        ]);
+      } else {
+        expect(result.error).toMatchObject({ code: "ETIMEDOUT" });
+        expect(existsSync(nodeModulesPath)).toBe(false);
+        const secondResult = runPluginNpmCiWithRetry(
+          ["ci"],
+          { cwd: packageDir },
+          {
+            cleanupAttempt: () => rmSync(nodeModulesPath, { recursive: true, force: true }),
+            pluginDir: "whatsapp",
+            spawn: () => {
+              expect(existsSync(nodeModulesPath)).toBe(false);
+              return { error: undefined, status: 0 };
+            },
           },
-        },
-      ),
-    ).toThrow("invalid dependency");
-    expect(generateCalls).toBe(1);
-  });
+        );
+        expect(secondResult.status).toBe(0);
+      }
+    },
+  );
+
+  it.each(["recovered timeout", "ordinary failure"])(
+    "settles package-lock generation after %s",
+    (scenario) => {
+      const ordinary = scenario === "ordinary failure";
+      const timeoutError = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
+      const generateOptions: Array<Record<string, unknown>> = [];
+      const generate = () =>
+        generatePluginNpmPackageLockWithRetry(
+          "/tmp/plugin",
+          { installStrategy: "shallow" },
+          {
+            generate: (_packageDir, options) => {
+              generateOptions.push(options);
+              if (ordinary) {
+                throw new Error("invalid dependency");
+              }
+              if (generateOptions.length === 1) {
+                throw timeoutError;
+              }
+              return '{"lockfileVersion":3}\n';
+            },
+            pluginDir: ordinary ? undefined : "whatsapp",
+          },
+        );
+      if (ordinary) {
+        expect(generate).toThrow("invalid dependency");
+        expect(generateOptions).toHaveLength(1);
+      } else {
+        expect(generate()).toBe('{"lockfileVersion":3}\n');
+        expect(generateOptions).toHaveLength(2);
+        expect(generateOptions[0]).toMatchObject({
+          env: { OPENCLAW_NPM_LOCK_COMMAND_TIMEOUT_MS: "180000" },
+          installStrategy: "shallow",
+        });
+        expect(generateOptions[1]).toEqual(generateOptions[0]);
+      }
+    },
+  );
 
   it.each([undefined, "providerCatalogEntry", "capabilityCatalogEntry"] as const)(
     "overlays manifest-only channel configs and restores catalog metadata (%s)",
@@ -832,6 +771,50 @@ describe("plugin npm package manifest staging", () => {
       },
     );
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+  });
+
+  it("restores both source manifests when the package overlay write fails", () => {
+    const repoDir = fixtureDirs.make("openclaw-plugin-npm-overlay-write-failure-");
+    const packageDir = writePublishablePluginPackage(repoDir);
+    writeGeneratedChannelMetadata(repoDir, "diffs");
+    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    const manifestPath = join(packageDir, "openclaw.plugin.json");
+    const packageJsonPath = join(packageDir, "package.json");
+    writeFileSync(manifestPath, '{"id":"diffs"}\r\n');
+    const originalManifest = readFileSync(manifestPath);
+    const originalPackageJson = readFileSync(packageJsonPath);
+    const failure = Object.assign(new Error("package overlay write failed"), { code: "EIO" });
+    const write = fs.writeFileSync.bind(fs);
+    let injected = false;
+    let manifestAtFailure: Buffer | undefined;
+    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+      if (!injected && file === packageJsonPath) {
+        injected = true;
+        manifestAtFailure = readFileSync(manifestPath);
+        throw failure;
+      }
+      write(file, data, options);
+    });
+    const callback = vi.fn();
+    let caught: unknown;
+    try {
+      withAugmentedPluginNpmManifestForPackage(
+        { repoRoot: repoDir, packageDir, bundleDependencies: true },
+        callback,
+      );
+    } catch (error) {
+      caught = error;
+    } finally {
+      writeSpy.mockRestore();
+    }
+
+    expect(injected).toBe(true);
+    expect(manifestAtFailure).not.toEqual(originalManifest);
+    expect(caught).toBe(failure);
+    expect(callback).not.toHaveBeenCalled();
+    expect(readFileSync(manifestPath)).toEqual(originalManifest);
+    expect(readFileSync(packageJsonPath)).toEqual(originalPackageJson);
   });
 
   it.each(["qa-lab", "qa-channel"] as const)(
@@ -1039,13 +1022,9 @@ describe("plugin npm package manifest staging", () => {
         mkdirSync(consumerDir, { recursive: true });
         writeJsonFile(join(consumerDir, "package.json"), { private: true, type: "module" });
 
-        const packInvocation = resolvePluginNpmCommand([
-          "pack",
-          "--json",
-          "--ignore-scripts",
-          "--pack-destination",
-          consumerDir,
-        ]);
+        const packInvocation = resolveNpmRunner({
+          npmArgs: ["pack", "--json", "--ignore-scripts", "--pack-destination", consumerDir],
+        });
         const pack = spawnSync(packInvocation.command, packInvocation.args, {
           cwd: packageDir,
           encoding: "utf8",
@@ -1171,7 +1150,6 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     "split destination",
     "failed command",
     "ancestor optional",
-    "legacy shrinkwrap",
   ])("preserves source dependencies while staging npm bundles with %s", (scenario) => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-portable-optional-");
     const packageDir = writePublishablePluginPackage(repoDir);
@@ -1211,16 +1189,6 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     const sourceOnlyPath = join(packageDir, "node_modules", "source-only", "marker");
     writeFileText(sourceOnlyPath, "keep\n");
     const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
-    const shrinkwrapPath = join(packageDir, "npm-shrinkwrap.json");
-    const legacyShrinkwrap = `${JSON.stringify({
-      name: "@openclaw/diffs",
-      version: "2026.5.3",
-      lockfileVersion: 3,
-      packages: {},
-    })}\n`;
-    if (scenario === "legacy shrinkwrap") {
-      writeFileText(shrinkwrapPath, legacyShrinkwrap);
-    }
     const outputDir =
       scenario.includes("destination") && scenario !== "default destination"
         ? join(packageDir, "artifacts")
@@ -1268,9 +1236,6 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     expect(readFileSync(sourceOnlyPath, "utf8")).toBe("keep\n");
     expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
-    if (scenario === "legacy shrinkwrap") {
-      expect(readFileSync(shrinkwrapPath, "utf8")).toBe(legacyShrinkwrap);
-    }
     if (scenario === "failed command") {
       const stagingDir = result.stdout.trim();
       expect(stagingDir).not.toBe("");
@@ -1382,18 +1347,24 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     try {
       let packResult: NpmPackResult;
       if (bundling === "clawhub") {
-        const cli = join(repoDir, "clawhub.cjs");
+        const cli = join(repoDir, "clawhub");
+        const cliEntry = join(repoDir, "clawhub.mjs");
         const metadata = join(consumerDir, "pack-metadata.json");
         writeFileText(
           cli,
-          `#!${process.execPath}
-const { execFileSync } = require("node:child_process");
-const fs = require("node:fs");
-const path = require("node:path");
+          '#!/bin/sh\nexec "$CLAWHUB_FIXTURE_RUNTIME" "$CLAWHUB_FIXTURE_ENTRY" "$@"\n',
+        );
+        writeFileText(
+          cliEntry,
+          `import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { resolveNpmRunner } from ${JSON.stringify(new URL("../scripts/npm-runner.mts", import.meta.url).href)};
 const args = process.argv.slice(2);
 const source = args[args.indexOf("pack") + 1];
 const destination = args[args.indexOf("--pack-destination") + 1];
-const stdout = execFileSync("npm", ["pack", source, "--json", "--ignore-scripts", "--pack-destination", destination], { encoding: "utf8" });
+const npm = resolveNpmRunner({ npmArgs: ["pack", source, "--json", "--ignore-scripts", "--pack-destination", destination] });
+const stdout = execFileSync(npm.command, npm.args, { ...npm, encoding: "utf8" });
 fs.writeFileSync(${JSON.stringify(metadata)}, stdout);
 const output = JSON.parse(stdout);
 const [packed] = Array.isArray(output) ? output : Object.values(output);
@@ -1408,6 +1379,8 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
           OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
           OPENCLAW_CLAWHUB_CLI: cli,
           OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: consumerDir,
+          CLAWHUB_FIXTURE_RUNTIME: process.execPath,
+          CLAWHUB_FIXTURE_ENTRY: cliEntry,
         };
         delete env.OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT;
         await execFileAsync(
@@ -1485,16 +1458,18 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
         expect(bundled.status, bundled.stderr).toBe(0);
         expect(JSON.parse(bundled.stdout)).toEqual([2, expectedSibling]);
       }
-      const npm = resolvePluginNpmCommand([
-        "install",
-        "--ignore-scripts",
-        "--omit=dev",
-        "--omit=peer",
-        "--legacy-peer-deps",
-        "--workspaces=false",
-        "--no-audit",
-        "--no-fund",
-      ]);
+      const npm = resolveNpmRunner({
+        npmArgs: [
+          "install",
+          "--ignore-scripts",
+          "--omit=dev",
+          "--omit=peer",
+          "--legacy-peer-deps",
+          "--workspaces=false",
+          "--no-audit",
+          "--no-fund",
+        ],
+      });
       await execFileAsync(npm.command, npm.args, {
         cwd: consumerPackage,
         encoding: "utf8",
@@ -1678,53 +1653,25 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
     );
   });
 
-  it("refuses to pack publishable plugins before package-local runtime files exist", () => {
-    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-runtime-missing-");
+  it.each(["missing outputs", "excluded output"])("refuses packages with %s", (scenario) => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-runtime-invalid-");
     const packageDir = writePublishablePluginPackage(repoDir);
-
-    expect(() =>
-      resolveAugmentedPluginNpmPackageJson({
-        repoRoot: repoDir,
-        packageDir,
-      }),
-    ).toThrow(
-      "package-local plugin runtime is missing for diffs: ./dist/index.js, ./dist/setup-entry.js",
-    );
-  });
-
-  it("refuses package file rules that omit advertised package-local runtime files", () => {
-    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-runtime-excluded-");
-    const packageDir = writePublishablePluginPackage(repoDir);
-    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
-    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
-    writeJsonFile(join(packageDir, "package.json"), {
-      name: "@openclaw/diffs",
-      version: "2026.5.3",
-      type: "module",
-      files: ["dist/**", "!dist/setup-entry.js"],
-      openclaw: {
-        extensions: ["./index.ts"],
-        setupEntry: "./setup-entry.ts",
-        compat: {
-          pluginApi: ">=2026.4.30",
-        },
-        release: {
-          publishToNpm: true,
-        },
-      },
-    });
-
-    const packedFiles = listNpmPackDryRunFiles(packageDir);
-    expect(packedFiles).toContain("dist/index.js");
-    expect(packedFiles).not.toContain("dist/setup-entry.js");
-
-    expect(() =>
-      resolveAugmentedPluginNpmPackageJson({
-        repoRoot: repoDir,
-        packageDir,
-      }),
-    ).toThrow(
-      "package file rule '!dist/setup-entry.js' excludes required package-local runtime file './dist/setup-entry.js' for diffs",
+    if (scenario === "excluded output") {
+      writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+      writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+      const packageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+      writeJsonFile(join(packageDir, "package.json"), {
+        ...packageJson,
+        files: ["dist/**", "!dist/setup-entry.js"],
+      });
+      const packedFiles = listNpmPackDryRunFiles(packageDir);
+      expect(packedFiles).toContain("dist/index.js");
+      expect(packedFiles).not.toContain("dist/setup-entry.js");
+    }
+    expect(() => resolveAugmentedPluginNpmPackageJson({ repoRoot: repoDir, packageDir })).toThrow(
+      scenario === "missing outputs"
+        ? "package-local plugin runtime is missing for diffs: ./dist/index.js, ./dist/setup-entry.js"
+        : "package file rule '!dist/setup-entry.js' excludes required package-local runtime file './dist/setup-entry.js' for diffs",
     );
   });
 });

@@ -27,7 +27,9 @@ const edge = vi.hoisted(() => ({
       "Pure compaction lifetime proof crossed a native or unrelated runtime boundary",
     );
   }),
-  load: vi.fn<typeof import("../../config/sessions/session-accessor.js").loadSessionEntry>(),
+  load: vi.fn<
+    typeof import("../../config/sessions/session-entry-read-runtime.js").readSessionEntryInWorker
+  >(),
   patch: vi.fn<typeof import("../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
   retire: vi.fn<typeof import("../agent-bundle-mcp-manager-api.js").retireSessionMcpRuntime>(),
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
@@ -59,11 +61,15 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn() }),
 }));
 vi.mock("../../globals.js", () => ({ logVerbose: vi.fn() }));
+// mock-isolation: This lifetime proof forbids native storage and keeps only the commit callback.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: edge.load,
   patchSessionEntryCore: edge.patch,
-  loadSessionEntryReadOnly: edge.forbidden,
-  listSessionEntriesReadOnly: edge.forbidden,
+}));
+// mock-isolation: The lifetime proof supplies committed rows without opening a database or worker.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryInWorker: edge.load,
+  readSessionEntryReadOnlyInWorker: edge.forbidden,
+  readSessionEntrySummariesInWorker: edge.forbidden,
 }));
 vi.mock("../../config/sessions/session-store-path.js", () => ({
   resolveSessionStorePathForScope: (scope: { storePath: string }) => scope.storePath,
@@ -125,7 +131,7 @@ it("preserves the accepted successor and both hook lifetimes when an identity ob
     activeWriterRunId: "synthetic-writer",
     updatedAt: 1,
   };
-  edge.load.mockImplementation(() => structuredClone(row));
+  edge.load.mockImplementation(async () => structuredClone(row));
   edge.patch.mockImplementation(async (scope, update, options = {}) => {
     expect(scope).toEqual(target);
     const previous = structuredClone(row);

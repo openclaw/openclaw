@@ -216,6 +216,8 @@ still show declared capabilities.
 `openclaw plugins install --link <path>` creates a managed install record and
 requires capability consent even though it loads the plugin from its source
 directory. It is not the same as adding a bare `plugins.load.paths` entry.
+Both can use their own plugin-scoped keyed and blob state and ingress queues.
+Linking does not grant trust for hook agent turns or Gateway scope elevation.
 
 ## Install plugins
 

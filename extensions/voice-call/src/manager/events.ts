@@ -22,29 +22,6 @@ import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
 
 const log = createSubsystemLogger("voice-call/events");
 
-type EventContext = Pick<
-  CallManagerContext,
-  | "activeCalls"
-  | "providerCallIdMap"
-  | "processedEventIds"
-  | "rejectedProviderCallIds"
-  | "provider"
-  | "config"
-  | "coreSession"
-  | "storePath"
-  | "stateRuntime"
-  | "transcriptWaiters"
-  | "maxDurationTimers"
-  | "notifyHangupTimers"
-  | "endCallOperations"
-  | "onCallAnswered"
-  | "onCallerSpeech"
-  | "streamSessionIssuer"
-  | "mutationQueue"
-  | "trackCallWork"
-  | "isStopping"
->;
-
 export type ProcessEventResult =
   | { kind: "ignored"; replayable?: true }
   | { kind: "processed"; replayable?: true }
@@ -55,7 +32,10 @@ export type ProcessEventResult =
       waiterResolved: boolean;
     };
 
-function shouldAcceptInbound(config: EventContext["config"], from: string | undefined): boolean {
+function shouldAcceptInbound(
+  config: CallManagerContext["config"],
+  from: string | undefined,
+): boolean {
   const { inboundPolicy: policy, allowFrom } = config;
 
   switch (policy) {
@@ -85,92 +65,15 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
   }
 }
 
-async function createWebhookCall(params: {
-  ctx: EventContext;
-  providerCallId: string;
-  direction: "inbound" | "outbound";
-  from: string;
-  to: string;
-}): Promise<CallRecord> {
-  const callId = crypto.randomUUID();
-  const effective = resolveVoiceCallEffectiveConfig(
-    params.ctx.config,
-    params.direction === "inbound" ? params.to : undefined,
-  );
-  const effectiveConfig = effective.config;
-
-  const callRecord: CallRecord = {
-    callId,
-    providerCallId: params.providerCallId,
-    provider: params.ctx.provider?.name || "twilio",
-    direction: params.direction,
-    state: "ringing",
-    from: params.from,
-    to: params.to,
-    sessionKey: resolveVoiceCallSessionKey({
-      config: effectiveConfig,
-      callId,
-      phone: params.direction === "outbound" ? params.to : params.from,
-      coreSession: params.ctx.coreSession,
-    }),
-    agentId: normalizeAgentId(effectiveConfig.agentId),
-    startedAt: Date.now(),
-    transcript: [],
-    processedEventIds: [],
-    metadata: {
-      initialMessage:
-        params.direction === "inbound"
-          ? effectiveConfig.inboundGreeting || "Hello! How can I help you today?"
-          : undefined,
-      ...(effective.numberRouteKey ? { numberRouteKey: effective.numberRouteKey } : {}),
-    },
-  };
-
-  await persistCallRecord(params.ctx.storePath, callRecord, params.ctx.stateRuntime);
-  params.ctx.activeCalls.set(callId, callRecord);
-  params.ctx.providerCallIdMap.set(params.providerCallId, callId);
-
-  log.info(
-    `Created ${params.direction} call record: ${callId} caller=${redactIdentifier(params.from)}`,
-  );
-  return callRecord;
-}
-
-async function persistRejectedInboundCall(params: {
-  ctx: EventContext;
-  event: NormalizedEvent;
-  dedupeKey: string;
-  providerCallId: string;
-}): Promise<void> {
-  const callId = params.event.callId || params.providerCallId;
-  const now = Date.now();
-  const rejectedCall: CallRecord = {
-    callId,
-    providerCallId: params.providerCallId,
-    provider: params.ctx.provider?.name || "twilio",
-    direction: "inbound",
-    state: "hangup-bot",
-    from: params.event.from || "unknown",
-    to: params.event.to || params.ctx.config.fromNumber || "unknown",
-    startedAt: params.event.timestamp || now,
-    endedAt: now,
-    endReason: "hangup-bot",
-    transcript: [],
-    processedEventIds: [params.dedupeKey],
-    metadata: { rejectionReason: "inbound-policy" },
-  };
-  await persistCallRecord(params.ctx.storePath, rejectedCall, params.ctx.stateRuntime);
-}
-
 export function processEvent(
-  ctx: EventContext,
+  ctx: CallManagerContext,
   event: NormalizedEvent,
 ): Promise<ProcessEventResult> {
   return ctx.mutationQueue.enqueue("state", () => processEventInQueue(ctx, event));
 }
 
 async function processEventInQueue(
-  ctx: EventContext,
+  ctx: CallManagerContext,
   event: NormalizedEvent,
 ): Promise<ProcessEventResult> {
   const dedupeKey = event.dedupeKey || event.id;
@@ -211,16 +114,13 @@ async function processEventInQueue(
       providerCallId = call.providerCallId;
     }
   }
-  const eventDirection =
-    event.direction === "inbound" || event.direction === "outbound" ? event.direction : undefined;
-
   // Auto-register untracked calls arriving via webhook. This covers both
   // true inbound calls and externally-initiated outbound-api calls (e.g. calls
   // placed directly via the Twilio REST API pointing at our webhook URL).
-  if (!call && providerCallId && eventDirection) {
+  if (!call && providerCallId && event.direction) {
     // Apply inbound policy for true inbound calls; external outbound-api calls
     // are implicitly trusted because the caller controls the webhook URL.
-    if (eventDirection === "inbound" && !shouldAcceptInbound(ctx.config, event.from)) {
+    if (event.direction === "inbound" && !shouldAcceptInbound(ctx.config, event.from)) {
       const pid = providerCallId;
       if (!ctx.provider) {
         log.warn(
@@ -232,7 +132,26 @@ async function processEventInQueue(
         return { kind: "ignored" };
       }
       const callId = event.callId ?? pid;
-      await persistRejectedInboundCall({ ctx, event, dedupeKey, providerCallId: pid });
+      const now = Date.now();
+      await persistCallRecord(
+        ctx.storePath,
+        {
+          callId: event.callId || pid,
+          providerCallId: pid,
+          provider: ctx.provider.name,
+          direction: "inbound",
+          state: "hangup-bot",
+          from: event.from || "unknown",
+          to: event.to || ctx.config.fromNumber || "unknown",
+          startedAt: event.timestamp || now,
+          endedAt: now,
+          endReason: "hangup-bot",
+          transcript: [],
+          processedEventIds: [dedupeKey],
+          metadata: { rejectionReason: "inbound-policy" },
+        },
+        ctx.stateRuntime,
+      );
       if (ctx.isStopping()) {
         return { kind: "processed" };
       }
@@ -258,14 +177,43 @@ async function processEventInQueue(
       return { kind: "processed" };
     }
 
-    call = await createWebhookCall({
-      ctx,
+    const callId = crypto.randomUUID();
+    const from = event.from || "unknown";
+    const to = event.to || ctx.config.fromNumber || "unknown";
+    const { config: effectiveConfig, numberRouteKey } = resolveVoiceCallEffectiveConfig(
+      ctx.config,
+      event.direction === "inbound" ? to : undefined,
+    );
+    call = {
+      callId,
       providerCallId,
-      direction: eventDirection === "outbound" ? "outbound" : "inbound",
-      from: event.from || "unknown",
-      to: event.to || ctx.config.fromNumber || "unknown",
-    });
-
+      provider: ctx.provider?.name || "twilio",
+      direction: event.direction,
+      state: "ringing",
+      from,
+      to,
+      sessionKey: resolveVoiceCallSessionKey({
+        config: effectiveConfig,
+        callId,
+        phone: event.direction === "outbound" ? to : from,
+        coreSession: ctx.coreSession,
+      }),
+      agentId: normalizeAgentId(effectiveConfig.agentId),
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {
+        initialMessage:
+          event.direction === "inbound"
+            ? effectiveConfig.inboundGreeting || "Hello! How can I help you today?"
+            : undefined,
+        ...(numberRouteKey ? { numberRouteKey } : {}),
+      },
+    };
+    await persistCallRecord(ctx.storePath, call, ctx.stateRuntime);
+    ctx.activeCalls.set(callId, call);
+    ctx.providerCallIdMap.set(providerCallId, callId);
+    log.info(`Created ${event.direction} call record: ${callId} caller=${redactIdentifier(from)}`);
     // Normalize event to internal ID for downstream consumers.
     event.callId = call.callId;
   }
@@ -275,7 +223,7 @@ async function processEventInQueue(
   }
 
   const activeCall = copyCallRecord(call);
-  const previousCall = { providerCallId: call.providerCallId };
+  const previousProviderCallId = call.providerCallId;
   const shouldCommitReplayKey = !(event.type === "call.error" && event.retryable);
   const effects: Array<() => void> = [];
   let result: ProcessEventResult = { kind: "processed" };
@@ -293,16 +241,16 @@ async function processEventInQueue(
     }
   };
   const publishProviderCallId = (terminal = false) => {
-    if (!providerCallId || providerCallId === previousCall.providerCallId) {
+    if (!providerCallId || providerCallId === previousProviderCallId) {
       return;
     }
     if (!terminal) {
       ctx.providerCallIdMap.set(providerCallId, activeCall.callId);
     }
-    if (previousCall.providerCallId) {
-      const mapped = ctx.providerCallIdMap.get(previousCall.providerCallId);
+    if (previousProviderCallId) {
+      const mapped = ctx.providerCallIdMap.get(previousProviderCallId);
       if (mapped === activeCall.callId) {
-        ctx.providerCallIdMap.delete(previousCall.providerCallId);
+        ctx.providerCallIdMap.delete(previousProviderCallId);
       }
     }
   };
@@ -417,35 +365,25 @@ async function processEventInQueue(
     case "call.dtmf":
       break;
 
+    case "call.error":
     case "call.ended":
+      if (event.type === "call.error" && event.retryable) {
+        // Retryable provider errors remain uncommitted for a later redelivery.
+        result = { kind: "processed", replayable: true };
+        break;
+      }
       await finalizeCall({
         ctx,
         call,
         preparedCall: activeCall,
-        endReason: event.reason,
+        endReason: event.type === "call.ended" ? event.reason : "error",
         endedAt: event.timestamp,
+        transcriptRejectReason:
+          event.type === "call.error" ? `Call error: ${event.error}` : undefined,
       });
       publishProviderCallId(true);
       rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
       return { kind: "processed" };
-
-    case "call.error":
-      if (!event.retryable) {
-        await finalizeCall({
-          ctx,
-          call,
-          preparedCall: activeCall,
-          endReason: "error",
-          endedAt: event.timestamp,
-          transcriptRejectReason: `Call error: ${event.error}`,
-        });
-        publishProviderCallId(true);
-        rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
-        return { kind: "processed" };
-      }
-      // Retryable provider errors remain uncommitted for a later redelivery.
-      result = { kind: "processed", replayable: true };
-      break;
   }
 
   // Persist reversible call mutations before publishing dedupe, timers, or waiters.

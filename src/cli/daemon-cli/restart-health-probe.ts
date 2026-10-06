@@ -64,7 +64,7 @@ export async function readGatewayStartupPhase(params: {
   }
 }
 
-export type GatewayRestartProbeAuth = {
+type GatewayRestartProbeAuth = {
   token?: string;
   password?: string;
 };
@@ -81,7 +81,7 @@ export type GatewayReachability = {
   staleConnection?: GatewayStaleConnectionReason;
 };
 
-export type GatewayHttpReadiness = {
+type GatewayHttpReadiness = {
   healthz: number | null;
   readyz: number | null;
 };
@@ -195,14 +195,10 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
       activated: true,
       error: entry.error,
     };
-    if (typeof entry.activationSource === "string") {
-      error.activationSource = entry.activationSource;
-    }
-    if (typeof entry.activationReason === "string") {
-      error.activationReason = entry.activationReason;
-    }
-    if (typeof entry.failurePhase === "string") {
-      error.failurePhase = entry.failurePhase;
+    for (const key of ["activationSource", "activationReason", "failurePhase"] as const) {
+      if (typeof entry[key] === "string") {
+        error[key] = entry[key];
+      }
     }
     return [error];
   });
@@ -210,22 +206,14 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
 
 function readChannelProbeErrors(health: unknown): Array<{ id: string; error: string }> {
   const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  if (!channels) {
-    return [];
-  }
-  const errors: Array<{ id: string; error: string }> = [];
-  for (const [id, summary] of Object.entries(channels)) {
+  return Object.entries(channels ?? {}).flatMap(([id, summary]) => {
     const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
     if (probe?.ok !== false) {
-      continue;
+      return [];
     }
     const error = probe.error;
-    errors.push({
-      id,
-      error: typeof error === "string" && error.trim() ? error : "probe failed",
-    });
-  }
-  return errors;
+    return [{ id, error: typeof error === "string" && error.trim() ? error : "probe failed" }];
+  });
 }
 
 function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {

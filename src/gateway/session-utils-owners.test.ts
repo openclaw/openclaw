@@ -91,7 +91,7 @@ it.each([true, false, undefined])(
       },
     };
     const result = await listSessionFixture({
-      cfg: { agents: { list: [{ id: "main" }] } },
+      cfg: { agents: { entries: { main: {} } } },
       storePath: "/tmp/openclaw-session-activity-subagents",
       store,
       opts: { excludeSubagents, includePeople: true, limit: 2 },
@@ -144,7 +144,7 @@ it("lets configured agents win id-only owner facet collisions", async () => {
     );
     const result = await listSessionFixture({
       cfg: {
-        agents: { list: [{ id: "shared-id", identity: { name: "Shared agent" } }] },
+        agents: { entries: { "shared-id": { identity: { name: "Shared agent" } } } },
       } as OpenClawConfig,
       storePath: "/tmp/openclaw-session-owner-order",
       store,
@@ -306,10 +306,10 @@ it("projects only durable profiles and configured agents as effective owners", a
   const result = await listSessionFixture({
     cfg: {
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "research", identity: { name: "Research" } },
-        ],
+        entries: {
+          main: {},
+          research: { identity: { name: "Research" } },
+        },
       },
     } as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owner-candidates",
@@ -559,7 +559,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
     },
   };
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "research", identity: { name: "Research" } }] },
+    agents: { entries: { research: { identity: { name: "Research" } } } },
   };
   const result = await listSessionFixture({
     cfg,
@@ -676,7 +676,7 @@ it.each(["spawn", "talk", "cron"] as const)(
       };
     }
     const query = {
-      cfg: { agents: { list: [{ id: "main" }, { id: "research" }] } },
+      cfg: { agents: { entries: { main: {}, research: {} } } },
       storePath: "/tmp/openclaw-session-profile-alias",
       store,
       opts: { archived: "all" as const, includePeople: true },
@@ -821,7 +821,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
   }));
   const cfg = {
     agents: {
-      list: [{ id: "main", default: true }, { id: "work" }],
+      entries: { main: {}, work: {} },
     },
   } as OpenClawConfig;
   const store: Record<string, SessionEntry> = {

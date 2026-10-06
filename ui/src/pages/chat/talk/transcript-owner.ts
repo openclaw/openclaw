@@ -1,4 +1,5 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
+import { createAbortError, sleepWithAbort } from "@openclaw/retry";
 import type { BoundedSerialQueue } from "../../../../../src/shared/bounded-serial-queue.js";
 import { createDeferredCore } from "../../../../../src/shared/deferred.js";
 import {
@@ -6,11 +7,7 @@ import {
   VOICE_TRANSCRIPT_QUEUE_POLICY,
 } from "../../../../../src/talk/voice-transcript.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type {
-  RealtimeTalkTranscript,
-  RealtimeTalkTranscriptItem,
-  RealtimeTalkTransport,
-} from "./shared.ts";
+import type { RealtimeTalkTranscript, RealtimeTalkTranscriptItem } from "./shared.ts";
 
 type ReservedTranscript = {
   previousItemId: string | null | undefined;
@@ -306,47 +303,6 @@ export function reserveClientVoiceSessionOwner(
   };
 }
 
-export function retireUncommittedRealtimeTalkTransport(params: {
-  nextTransport: RealtimeTalkTransport | null;
-  transport: string;
-  owner: ClientVoiceSessionOwner;
-  closeVoiceSession: () => void;
-}): void {
-  void params.nextTransport?.stop({ emitClosed: false });
-  if (params.transport === "gateway-relay" && params.nextTransport) {
-    // The relay transport owns server close once constructed; release browser ownership.
-    params.owner.release();
-    return;
-  }
-  params.closeVoiceSession();
-}
-
-function transcriptPersistenceAbortError(): Error {
-  const error = new Error("voice transcript persistence aborted");
-  error.name = "AbortError";
-  return error;
-}
-
-async function waitForTranscriptRetry(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) {
-    throw transcriptPersistenceAbortError();
-  }
-  if (delayMs <= 0) {
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(transcriptPersistenceAbortError());
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 export async function retryVoiceTranscriptPersistence(
   signal: AbortSignal,
   operation: () => Promise<unknown>,
@@ -356,17 +312,18 @@ export async function retryVoiceTranscriptPersistence(
   // Transcript writes and logical close share retry timing, but retain their
   // separate owner deadlines so accepted writes drain before close is attempted.
   for (const delayMs of [0, 500, 2_000]) {
-    if (delayMs > 0) {
-      await waitForTranscriptRetry(delayMs, signal);
-    } else if (signal.aborted) {
-      throw transcriptPersistenceAbortError();
+    if (signal.aborted) {
+      throw createAbortError("voice transcript persistence aborted");
     }
     try {
+      if (delayMs > 0) {
+        await sleepWithAbort(delayMs, signal);
+      }
       await operation();
       return;
     } catch (error) {
       if (signal.aborted) {
-        throw transcriptPersistenceAbortError();
+        throw createAbortError("voice transcript persistence aborted");
       }
       lastError = error;
     }

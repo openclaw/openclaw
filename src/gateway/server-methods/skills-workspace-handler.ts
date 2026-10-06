@@ -21,12 +21,12 @@ import type {
 } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
-export function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestContext) {
+export function resolveSkillsAgentWorkspace(
+  params: { agentId?: string },
+  context: GatewayRequestContext,
+) {
   const cfg = context.getRuntimeConfig();
-  const agentIdRaw =
-    params && typeof params === "object" && "agentId" in params
-      ? normalizeOptionalString((params as { agentId?: unknown }).agentId)
-      : undefined;
+  const agentIdRaw = normalizeOptionalString(params.agentId);
   let agentId: string;
   try {
     agentId = agentIdRaw
@@ -65,7 +65,7 @@ export type ResolvedSkillsWorkspace = Extract<
 
 export const SKILL_PROPOSAL_RESPONSE_HANDLED = Symbol("skill proposal response handled");
 
-export function defineSkillsProposalWorkspaceHandler<TParams>(
+export function defineSkillsProposalWorkspaceHandler<TParams extends { agentId?: string }>(
   method: string,
   validate: Validator<TParams>,
   run: (
