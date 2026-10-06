@@ -240,16 +240,11 @@ export function resolveTranscriptPolicy(params: {
   // Once a provider adopts the replay-policy hook, replay policy should come
   // from the plugin, not from transport-family defaults in core.
   const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
-  const policy = buildReplayPolicy
-    ? mergeTranscriptPolicy(buildReplayPolicy(context) ?? undefined)
-    : mergeTranscriptPolicy(
-        buildUnownedProviderTransportReplayFallback({
-          modelApi: params.modelApi,
-          modelId: params.modelId,
-          model: params.model,
-          inHistorySystemUpdates: context.inHistorySystemUpdates,
-        }),
-      );
+  const policy = mergeTranscriptPolicy(
+    buildReplayPolicy
+      ? (buildReplayPolicy(context) ?? undefined)
+      : buildUnownedProviderTransportReplayFallback(context),
+  );
   if (policy.inHistorySystemUpdates) {
     policy.inHistorySystemUpdates = context.inHistorySystemUpdates;
     policy.appendOnlyRuntimeContext ||= context.inHistorySystemUpdates;

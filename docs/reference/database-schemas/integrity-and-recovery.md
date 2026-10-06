@@ -14,9 +14,10 @@ remain unavailable while the startup admission owner completes their inspection
 and session/model preparation after the listener is ready. Other agents and the
 Control UI can start in the meantime. Inspection starts during foreground
 readiness and continues without an idle retry delay. Deferred writable admission
-starts as soon as the listener binds, with at most two databases opening
-concurrently. Agent-local session preparation waits for restored recovery owners,
-then runs with up to four agents concurrently. Only credential/model publication
+starts after Gateway sidecars are ready, with at most two databases opening
+concurrently. Slow opens and index repairs therefore cannot occupy shared SQLite
+workers ahead of plugin-service startup. Agent-local session preparation then
+runs with up to four agents concurrently. Only credential/model publication
 and final admission are serialized, in the order agents finish session preparation;
 a slow open or migration does not hold that publication turn. Readiness reports
 pending required stores in
@@ -28,6 +29,17 @@ Chat metadata and model listings refresh when an agent finishes admission, so
 they include newly recovered stores.
 Update canaries retain foreground inspection and strict database readiness because
 they do not activate background agent preparation.
+
+Missing or changed canonical index definitions also defer an agent to that same
+startup owner, even with a reusable clean-close receipt. Foreground inspection
+compares schema metadata without rebuilding indexes. After sidecars are ready,
+the SQLite worker repairs the indexes atomically before admitting the agent.
+That agent's session reads and writes remain unavailable; health, Control UI,
+and admitted agents can proceed. The repair log names the rebuilt indexes and
+elapsed time. Deferred preparation timing includes the repair; foreground
+`sessions.admission` does not. Matching definitions are not rebuilt. A crash
+before the repair commits rolls back its DDL, and the next startup detects the
+remaining drift again. Physical corruption still requires explicit Doctor repair.
 
 For current-schema stores without a reusable clean-close receipt, ordinary
 Gateway inspection checks compatibility, ownership, and schema shape, then
@@ -54,33 +66,46 @@ Native Gateway admission distinguishes two missing-receipt classes:
 - **Process death:** every swept lease belongs to the same Linux host, OS boot,
   PID namespace, OpenClaw version, and physical database file; the recorded
   owner has a known start identity, completed admission, and its PID is definitely dead; no foreign or
-  unknown live owner remains. SQLite opens normally with a nonempty WAL and no
-  rollback journal. Page size, schema version, WAL journal mode, and non-mutating
-  WAL frame state are readable/consistent, and the existing owner, current-schema,
+  unknown live owner remains. SQLite opens normally in WAL mode with no
+  rollback journal. Page size and schema version are readable, a passive
+  checkpoint succeeds, and the existing owner, current-schema,
   and canonical-index preflight passes. Admission runs **no synchronous page
   scan**. SQLite's WAL crash-recovery guarantee supplies consistency after a
   process crash; it does not establish freedom from unrelated storage damage.
   The listening Gateway queues a full integrity and foreign-key check in its
   existing low-priority verifier child.
 - **Corruption risk:** foreign host/boot, changed PID start identity, legacy or
-  unknown provenance, dirty receipt without a matching dead lease, missing WAL,
+  unknown provenance, dirty receipt without a matching dead lease,
   failed journal/header checks, and pending migrations retain the full admission
-  gate. Other platforms, SQLite before 3.53 without `wal_checkpoint(NOOP)`, and
-  non-native openers remain conservative.
+  gate. Other platforms and non-native openers remain conservative.
+
+An empty or absent WAL after checkpointing, committed WAL frames awaiting
+backfill, and uncommitted writes interrupted by process death all retain the
+process-death class. SQLite recovers committed frames and discards uncommitted
+transactions on open. `wal_checkpoint(PASSIVE)` works on all supported SQLite
+versions; busy readers or an incomplete checkpoint do not imply corruption.
+Its work can grow with outstanding WAL pages, but admission does not scan the
+whole database or run `quick_check`.
+
+Concurrent readers of persisted canonical session proof preserve an in-flight
+native integrity handoff. Recording that read result does not replace the
+validation owner or force later startup work to repeat its scan. Explicit
+invalidation and native database replacement still revoke delayed handoffs.
 
 Lease IDs retain their UUID format. The nullable `agent_database_leases.provenance`
 column binds the provenance above separately from ownership identifiers. The
 lease owner adds this column on first use without changing the schema version;
-existing rows receive `NULL` and cannot defer integrity verification. Maintenance
+existing rows receive `NULL` and retain one full admission with
+`because=legacy-provenance-missing`. The successor cannot reconstruct the old
+owner's host or boot identity from a PID alone. Its own admitted lease records
+provenance for later restarts. Maintenance
 accepts an absent provenance column so it can claim stopped-writer ownership
 before migration without modifying the old schema. Older readers ignore this
 additive column. Newly created files without a prior physical identity also use the
 full gate. A new claim has `opened_at=0`; only successful admission publishes its
 opening timestamp. A process killed during a required full gate therefore cannot
 lend restart provenance, even when its host, boot, and WAL match. Updates, rollback, canaries, Doctor, and copied-file verification retain
-their existing strict checks. Admission observes WAL state without a passive
-checkpoint, which would synchronously copy WAL pages and grow with the journal.
-SQLite still performs its own required recovery; OpenClaw adds no full-file scan.
+their existing strict checks.
 
 The deferred open lends only revocable runtime admission and does not publish
 durable verification or a clean-close receipt. Background success is logged;
@@ -112,7 +137,14 @@ leases, `revoked` for other
 invalidated proof, `dirty-receipt` when verification remains without a certified
 final checkpoint and close, `no-proof` for unavailable or nonmatching proof, and
 `lease-class` when a foreign or unknown lease owner prevents runtime reuse.
-Slow-open summaries include the same facts. A dirty receipt alone does not
+For `stale-lease-full`, `because` names the failed predicate before the scan
+starts and in the final gate and slow-open summaries. Lease diagnostics distinguish
+unfinished admission, missing start identity, a path mismatch, missing legacy
+provenance, a host/boot/namespace/version/file provenance mismatch, and a remaining
+live or unknown owner. The stored provenance is a combined hash, so a mismatch
+cannot identify which hashed component changed. Native admission, prepared
+provenance, pending migration, journal, header, and WAL recovery refusals have
+separate reasons. A dirty receipt alone does not
 distinguish an incomplete checkpoint from a live lease; neither permits restart
 reuse. A process exiting with status zero after its shutdown deadline can still
 leave a stale lease and require the admission gate. Stale-lease diagnostics name
@@ -170,6 +202,11 @@ reclamation connections close immediately. Active executions close when their
 final borrower releases them; active reclamation requests settle before closing.
 External cleanup can still be pending. Cancellation alone never certifies a
 receipt: the last lease must still complete its checkpoint and native close.
+Restart recovery markers and reply cancellation precede background-service
+joins, including scheduled continuation delivery. An interrupted external restart
+can exit after accepted terminal writes, memory preparation, and database close
+settle, without waiting for unrelated service teardown. Scheduled deliveries retain
+their Gateway owner so restart cancellation reaches their reply admissions.
 Database retirement completes independently for each path. A database whose
 resources have settled can publish its clean-close receipt while another database
 still owns pending work. Each path still joins its accepted writers, pending opens,

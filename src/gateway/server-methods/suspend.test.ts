@@ -25,6 +25,7 @@ function invoke(method: keyof typeof suspendHandlers, params: unknown) {
   const pauseScheduling = vi.fn();
   const resumeScheduling = vi.fn();
   const warn = vi.fn();
+  const info = vi.fn();
   const handler = expectDefined(suspendHandlers[method], "suspendHandlers[method] test invariant");
   return Promise.resolve(
     handler({
@@ -32,12 +33,12 @@ function invoke(method: keyof typeof suspendHandlers, params: unknown) {
       respond,
       context: {
         cron: { pauseScheduling, resumeScheduling },
-        logGateway: { warn },
+        logGateway: { warn, info },
         chatAbortControllers: new Map(),
         chatQueuedTurns: new Map(),
       },
     } as unknown as Parameters<typeof handler>[0]),
-  ).then(() => ({ respond, pauseScheduling, resumeScheduling }));
+  ).then(() => ({ respond, pauseScheduling, resumeScheduling, info }));
 }
 
 beforeEach(() => {
@@ -114,7 +115,7 @@ describe("gateway suspend handlers", () => {
     };
     coordinator.prepare.mockReturnValueOnce(result);
 
-    const { respond } = await invoke("gateway.suspend.prepare", {
+    const { respond, info } = await invoke("gateway.suspend.prepare", {
       requestId: "request-draining",
       drain: true,
     });
@@ -127,6 +128,9 @@ describe("gateway suspend handlers", () => {
       }),
     );
     expect(respond).toHaveBeenCalledWith(true, result);
+    expect(info).toHaveBeenCalledWith(
+      'DRAINING activeCount=1 blockers=terminal-session:1 holders=["one preserved terminal"] custody=clear',
+    );
   });
 
   it("returns a draining status without exposing its owner's suspension id", async () => {
@@ -134,17 +138,28 @@ describe("gateway suspend handlers", () => {
       status: "draining",
       expiresAtMs: 123_000,
       retryAfterMs: 20_000,
-      activeCount: 1,
-      blockers: [{ kind: "reply", count: 1, message: "one pending reply" }],
+      activeCount: 2,
+      blockers: [
+        { kind: "root-request", count: 1, message: "1 active gateway request(s): http:openai" },
+        {
+          kind: "terminal-persistence",
+          count: 1,
+          message: "1 pending terminal session write(s): run=run-1 session=agent:main:chat-1",
+        },
+      ],
+      writeCustody: [{ phase: "terminal-persistence", count: 1 }],
     };
     coordinator.status.mockReturnValueOnce(result);
 
-    const { respond } = await invoke("gateway.suspend.status", {
+    const { respond, info } = await invoke("gateway.suspend.status", {
       suspensionId: "suspension-draining",
     });
 
     expect(coordinator.status).toHaveBeenCalledWith("suspension-draining", false);
     expect(respond).toHaveBeenCalledWith(true, result);
+    expect(info).toHaveBeenCalledWith(
+      'DRAINING activeCount=2 blockers=root-request:1,terminal-persistence:1 holders=["1 active gateway request(s): http:openai","1 pending terminal session write(s): run=run-1 session=agent:main:chat-1"] custody=held',
+    );
   });
 
   it("maps prepare and status recovery to the same retryable unavailable error", async () => {

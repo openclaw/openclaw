@@ -1,6 +1,7 @@
 import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
 import {
   createMessageInjectionAuthority,
+  createLegacyMessageInjectionAuthority,
   enqueueMessageInjection,
 } from "../../auto-reply/reply/message-injection-authority.js";
 import {
@@ -29,6 +30,10 @@ import {
   logMessageQueuedWithBacklogPolicy,
 } from "../../logging/diagnostic-runtime.js";
 import { bindWorkerToolPreparation } from "../harness/host-private-capabilities.js";
+import {
+  bindPreparedToolAuthority,
+  createLegacyToolAuthorityQueuePreflight,
+} from "../harness/tool-authority-preparation.js";
 import {
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
@@ -214,7 +219,10 @@ export function captureDirectEmbeddedMessageInjectionTarget(
 export type EmbeddedInjectionPreparation = Pick<
   ReplyToolAuthorityPreparation,
   "assertCurrent" | "prepareCurrent"
-> & { prepareMessage?: () => Promise<string> };
+> &
+  Partial<Pick<ReplyToolAuthorityPreparation, "compatAssertCurrent">> & {
+    prepareMessage?: () => Promise<string>;
+  };
 
 type EmbeddedInjectionTask = (
   sessionId: string,
@@ -259,7 +267,7 @@ export async function prepareEmbeddedInjectionAuthority(
   sourcePreparation?: EmbeddedInjectionPreparation,
 ): Promise<{ fingerprint?: string; preparation: EmbeddedInjectionPreparation } | undefined> {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  if (!handle?.messageInjectionV2?.queueMessageAsync) {
+  if (!handle) {
     return undefined;
   }
   const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
@@ -270,7 +278,7 @@ export async function prepareEmbeddedInjectionAuthority(
     sourcePreparation?.assertCurrent();
     registration?.toolAuthority?.assertActive();
     return (
-      (!sourcePreparation && canInject ? canInject() : true) &&
+      (!canInject || canInject()) &&
       ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle &&
       ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) === registration &&
       (!ownedOperation ||
@@ -298,6 +306,20 @@ export async function prepareEmbeddedInjectionAuthority(
     preparation: bindWorkerToolPreparation(
       {
         assertCurrent,
+        compatAssertCurrent: () => {
+          assertCurrent();
+          sourcePreparation?.compatAssertCurrent?.();
+          const overlay = options?.toolAuthorityOverlay;
+          const projected = overlay
+            ? registration?.toolAuthority
+              ? registration.toolAuthority.project(overlay)
+              : ownedOperation?.projectToolAuthorityFingerprint(overlay)
+            : options?.toolAuthorityFingerprint;
+          if (projected !== fingerprint) {
+            throw new Error("Queued caller tool authority changed during preparation");
+          }
+          assertCurrent();
+        },
         prepareCurrent: async () => {
           if ((await project()) !== fingerprint) {
             throw new Error("Queued caller tool authority changed during preparation");
@@ -309,7 +331,7 @@ export async function prepareEmbeddedInjectionAuthority(
   };
 }
 
-export function bindEmbeddedMessageInjection(
+function bindEmbeddedMessageInjection(
   sessionId: string,
   handle: EmbeddedAgentQueueHandle,
   guarded: NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>,
@@ -317,16 +339,18 @@ export function bindEmbeddedMessageInjection(
   preparation?: EmbeddedInjectionPreparation,
   options?: ReplyMessageInjectionOptions,
 ):
-  | Pick<
+  | (Pick<
       EmbeddedAgentQueueHandle,
       "queueMessage" | "claimPendingUserInputAnswer" | "cancelPendingUserInput"
-    >
+    > & { prepareQueueMessage?: () => Promise<void> })
   | undefined {
   const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   const ownedOperation =
     operation && getAttachedBackend(operation) === handle ? operation : undefined;
   const assertCurrent = createMessageInjectionAuthority(() => {
+    preparation?.assertCurrent();
+    preparation?.compatAssertCurrent?.();
     if (sourceCanInject && !sourceCanInject()) {
       return false;
     }
@@ -352,24 +376,36 @@ export function bindEmbeddedMessageInjection(
     );
   });
   const authorityKind = sourceCanInject ? "source-bound" : "run";
+  const prepared =
+    preparation &&
+    bindPreparedToolAuthority({
+      ...preparation,
+      compatAssertCurrent: assertCurrent,
+    });
+  const legacy =
+    prepared && !guarded.queueMessageAsync
+      ? createLegacyToolAuthorityQueuePreflight(prepared)
+      : undefined;
+  const assertFinalCurrent = legacy
+    ? createLegacyMessageInjectionAuthority(assertCurrent, legacy.assertQueueCurrent)
+    : assertCurrent;
   return guarded.isAvailable()
     ? {
-        queueMessage: (text, injectionOptions) =>
-          preparation && guarded.queueMessageAsync
-            ? guarded.queueMessageAsync(
-                text,
-                injectionOptions,
-                { ...preparation, compatAssertCurrent: assertCurrent },
-                authorityKind,
-              )
-            : guarded.queueMessage(text, injectionOptions, assertCurrent, authorityKind),
+        prepareQueueMessage: legacy?.prepareQueueMessage,
+        queueMessage: (text, injectionOptions) => {
+          if (prepared && guarded.queueMessageAsync) {
+            return guarded.queueMessageAsync(text, injectionOptions, prepared, authorityKind);
+          }
+          legacy?.assertQueueCurrent();
+          return guarded.queueMessage(text, injectionOptions, assertFinalCurrent, authorityKind);
+        },
         claimPendingUserInputAnswer:
-          preparation && guarded.claimPendingUserInputAnswerAsync
+          prepared && guarded.claimPendingUserInputAnswerAsync
             ? (text, injectionOptions) =>
                 guarded.claimPendingUserInputAnswerAsync!(
                   text,
                   injectionOptions,
-                  { ...preparation, compatAssertCurrent: assertCurrent },
+                  prepared,
                   authorityKind,
                 )
             : guarded.claimPendingUserInputAnswer
@@ -382,17 +418,83 @@ export function bindEmbeddedMessageInjection(
                   )
               : undefined,
         cancelPendingUserInput:
-          preparation && guarded.cancelPendingUserInputAsync
+          prepared && guarded.cancelPendingUserInputAsync
             ? (resolvedBy) =>
-                guarded.cancelPendingUserInputAsync!(
-                  resolvedBy,
-                  { ...preparation, compatAssertCurrent: assertCurrent },
-                  authorityKind,
-                )
+                guarded.cancelPendingUserInputAsync!(resolvedBy, prepared, authorityKind)
             : guarded.cancelPendingUserInput
               ? (resolvedBy) =>
                   guarded.cancelPendingUserInput!(resolvedBy, assertCurrent, authorityKind)
               : undefined,
       }
     : undefined;
+}
+
+export function resolveEmbeddedInjection(
+  sessionId: string,
+  handle: EmbeddedAgentQueueHandle,
+  sourceCanInject?: () => boolean,
+  preparation?: EmbeddedInjectionPreparation,
+  injectionOptions?: ReplyMessageInjectionOptions,
+):
+  | (Pick<
+      EmbeddedAgentQueueHandle,
+      "queueMessage" | "claimPendingUserInputAnswer" | "cancelPendingUserInput"
+    > & { prepareQueueMessage?: () => Promise<void> })
+  | undefined {
+  try {
+    const guarded = handle.messageInjectionV2;
+    if (guarded?.version === 2) {
+      return bindEmbeddedMessageInjection(
+        sessionId,
+        handle,
+        guarded,
+        sourceCanInject,
+        preparation,
+        injectionOptions,
+      );
+    }
+    // Shipped v2026.8.1 sinks have no source-lifetime enforcement contract.
+    if (sourceCanInject) {
+      return undefined;
+    }
+    const legacy =
+      preparation &&
+      createLegacyToolAuthorityQueuePreflight({
+        ...preparation,
+        compatAssertCurrent: preparation.compatAssertCurrent ?? preparation.assertCurrent,
+      });
+    const injection = handle.messageInjection;
+    if (injection) {
+      return injection.isAvailable()
+        ? {
+            prepareQueueMessage: legacy?.prepareQueueMessage,
+            queueMessage: (text, options) => {
+              legacy?.assertQueueCurrent();
+              return injection.queueMessage(text, options);
+            },
+            claimPendingUserInputAnswer: handle.claimPendingUserInputAnswer?.bind(handle),
+            cancelPendingUserInput: handle.cancelPendingUserInput?.bind(handle),
+          }
+        : undefined;
+    }
+    // Legacy handles predate explicit injection capability. Preserve their
+    // shipped eligibility probe while modern backends use messageInjection.
+    const isAvailable = handle.isStopped ? !handle.isStopped() : handle.isStreaming();
+    return isAvailable
+      ? {
+          prepareQueueMessage: legacy?.prepareQueueMessage,
+          queueMessage: (text, options) => {
+            legacy?.assertQueueCurrent();
+            return handle.queueMessage(text, options);
+          },
+          claimPendingUserInputAnswer: handle.claimPendingUserInputAnswer?.bind(handle),
+          cancelPendingUserInput: handle.cancelPendingUserInput?.bind(handle),
+        }
+      : undefined;
+  } catch (err) {
+    diag.warn(
+      `queue message failed: sessionId=${sessionId} reason=injectable_check_failed err=${String(err)}`,
+    );
+    return undefined;
+  }
 }

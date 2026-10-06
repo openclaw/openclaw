@@ -75,6 +75,18 @@ same-version readers can ignore the extra index, so binary rollback leaves it
 intact. The accepted design is recorded in the
 [session label index decision](https://github.com/openclaw/openclaw/pull/147837#issuecomment-5658783288).
 
+ACP resume lookups use two nonunique expression indexes on the existing
+`acp_sessions.identity_json` agent and ACPX session IDs. The shared-state worker
+selects only matching identities, and canonical session reads retain requester,
+backend, and lifecycle checks. Duplicate IDs retain session-key ordering; stale
+lifecycles do not authorize resume. Unresolved aliases and internal sessions stay
+ineligible, as in the canonical session listing. The writable schema owner installs the indexes
+on existing databases without changing the schema version or canonical rows.
+Construction scans ACP metadata once and uses temporary disk; subsequent metadata
+writes maintain both indexes. Older same-version readers ignore the extra indexes,
+so downgrade and binary rollback preserve rows and indexes. No new cache,
+retention policy, or operator configuration is introduced.
+
 Task and maintenance lookups added nonunique indexes without changing state
 schema 17 or agent schema 21: task requester sessions, worker placements by
 environment, and session entries whose validity is not yet confirmed. The task
@@ -141,8 +153,11 @@ construction reads trajectory history and uses temporary disk for its probe and
 replacement. Writes maintain the expression index. Older same-version writable
 owners can restore their prior definition on downgrade or rollback without
 changing event rows; strict read-only admission can require that repair first.
-During the v17 upgrade, Doctor completes the legacy data migrations before
-repairing canonical indexes and validating the target schema in the same transaction.
+During the v17 upgrade, Doctor normalizes legacy memory metadata and validates the
+legacy schema before creating target-schema objects. Missing required tables or
+triggers remain refusals. Canonical indexes are repaired after the remaining data
+migrations, with target-schema validation in the same transaction. A refusal rolls
+back the migration and leaves the database unavailable to runtime until repaired.
 See the [storage design](/reference/database-schemas/storage-changes#trajectory-retention-covering-index).
 
 Removing the Tasks and TaskFlow runtime does not change the shared-state or agent

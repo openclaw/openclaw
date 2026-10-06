@@ -96,7 +96,7 @@ final class DeepLinkHandler {
             return
         }
 
-        let allowUnattended = link.key == Self.canvasUnattendedKey || link.key == Self.expectedKey()
+        let allowUnattended = link.key == Self.canvasUnattendedKey || link.key == Self.currentKey()
         if !allowUnattended {
             if Date().timeIntervalSince(self.lastPromptAt) < 1.0 {
                 deepLinkLogger.debug("throttling deep link prompt")
@@ -155,13 +155,7 @@ final class DeepLinkHandler {
         }
     }
 
-    // MARK: - Auth
-
     static func currentKey() -> String {
-        self.expectedKey()
-    }
-
-    private static func expectedKey() -> String {
         let defaults = AppDefaults.standard
         if let key = defaults.string(forKey: deepLinkKeyKey), !key.isEmpty {
             return key
@@ -181,8 +175,6 @@ final class DeepLinkHandler {
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
     }
-
-    // MARK: - UI
 
     private func confirm(title: String, message: String) async -> Bool {
         let alert = NSAlert()

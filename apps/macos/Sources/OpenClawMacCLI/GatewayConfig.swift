@@ -80,7 +80,7 @@ func parseInt(_ value: Any?) -> Int? {
     case let number as Int:
         number
     case let number as Double:
-        Int(number)
+        Int(exactly: number.rounded(.towardZero))
     case let raw as String:
         Int(raw.trimmingCharacters(in: .whitespacesAndNewlines))
     default:

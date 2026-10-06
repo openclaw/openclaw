@@ -196,7 +196,19 @@ internal class WearRealtimeTalkController(
 
       val payload =
         try {
-          requestRealtimeSession(sessionKey, language)
+          requestPhoneRealtimeSessionWithLanguageFallback(language) { requestedLanguage ->
+            requestGateway(
+              "talk.session.create",
+              buildJsonObject {
+                put("sessionKey", JsonPrimitive(sessionKey))
+                put("mode", JsonPrimitive("realtime"))
+                put("transport", JsonPrimitive("gateway-relay"))
+                put("brain", JsonPrimitive("agent-consult"))
+                if (requestedLanguage != null) put("language", JsonPrimitive(requestedLanguage))
+              }.toString(),
+              SESSION_CREATE_TIMEOUT_MILLIS,
+            )
+          }
         } catch (err: Throwable) {
           synchronized(lifecycleStateLock) {
             if (!startIsStale()) fail(err.message ?: "Unable to start Real-Time Talk", expectedOwner = owner)
@@ -251,31 +263,6 @@ internal class WearRealtimeTalkController(
       onSessionActivated()
       true
     }
-
-  private suspend fun requestRealtimeSession(
-    sessionKey: String,
-    language: String?,
-  ): String =
-    requestPhoneRealtimeSessionWithLanguageFallback(language) { requestedLanguage ->
-      requestGateway(
-        "talk.session.create",
-        buildSessionCreateParams(sessionKey, requestedLanguage).toString(),
-        SESSION_CREATE_TIMEOUT_MILLIS,
-      )
-    }
-
-  private fun buildSessionCreateParams(
-    sessionKey: String,
-    language: String?,
-  ) = buildJsonObject {
-    put("sessionKey", JsonPrimitive(sessionKey))
-    put("mode", JsonPrimitive("realtime"))
-    put("transport", JsonPrimitive("gateway-relay"))
-    put("brain", JsonPrimitive("agent-consult"))
-    if (language != null) {
-      put("language", JsonPrimitive(language))
-    }
-  }
 
   suspend fun stop(
     nodeId: String? = null,

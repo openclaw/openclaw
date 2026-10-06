@@ -105,6 +105,10 @@ it("completes absent legacy-state checks without loading client runtimes", async
       warnings: [],
     });
   }
+  const inboundDedupe = stateMigrations.find(
+    (entry) => entry.id === "matrix-inbound-dedupe-to-claimable-dedupe",
+  )!;
+  await expect(inboundDedupe.detectLegacyState(params)).resolves.toBeNull();
   const credentials = stateMigrations.find(
     (entry) => entry.id === "matrix-credentials-json-to-plugin-state",
   );

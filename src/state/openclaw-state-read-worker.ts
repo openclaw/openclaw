@@ -373,6 +373,7 @@ function createReadTransport(
         context: {
           environment: { ...context.environment },
           existingSchemaPath: context.existingSchemaPath,
+          stateIntegrity: context.stateIntegrity,
         },
         databasePath: context.admission.databasePath,
         location,
@@ -386,7 +387,11 @@ function createReadTransport(
           authority.assertCurrent();
           return request;
         },
-        { signal: authority.signal, inputBytes: requestBytes(request) },
+        {
+          signal: authority.signal,
+          inputBytes: requestBytes(request),
+          diagnosticOperation: readCommand.type,
+        },
       );
       tasks.set(task, cleanup);
       void task.result.then(

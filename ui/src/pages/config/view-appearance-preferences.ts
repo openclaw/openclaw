@@ -73,29 +73,35 @@ export function renderLanguageSection(props: ConfigProps) {
   `;
 }
 
-function renderSettingsMediaDeviceField(options: {
-  state: ConfigProps["microphone"];
-  title: string;
-  systemDefaultLabel: string;
-  emptyLabel: string;
-  fallbackLabel: (number: number) => string;
-  dataAttribute: "microphone" | "camera";
-  onRefresh: (() => void) | undefined;
-  onSelect: ((deviceId: string) => void) | undefined;
-}) {
-  const state = options.state;
-  if (!state || !options.onSelect) {
+function renderSettingsMediaDeviceField(props: ConfigProps, kind: "microphone" | "camera") {
+  const state = props[kind];
+  const title = t(`chat.composer.${kind}Input`);
+  const onSelect = kind === "microphone" ? props.onMicrophoneSelect : props.onCameraSelect;
+  const onRefresh = kind === "microphone" ? props.onMicrophoneRefresh : props.onCameraRefresh;
+  if (!state || !onSelect) {
     return nothing;
   }
   const selectedDeviceId = state.selectedDeviceId.trim();
   const selectedDeviceKnown = state.devices.some((device) => device.deviceId === selectedDeviceId);
   const selectOptions = [
-    { label: options.systemDefaultLabel, value: "" },
+    {
+      label: t(
+        kind === "microphone"
+          ? "chat.composer.systemDefaultMicrophone"
+          : "chat.composer.systemDefaultCamera",
+      ),
+      value: "",
+    },
     ...state.devices.map((device) => ({ label: device.label, value: device.deviceId })),
     // A remembered device that is unplugged right now stays selectable so the
     // choice survives until the user picks something else.
     ...(selectedDeviceId && !selectedDeviceKnown
-      ? [{ label: options.fallbackLabel(state.devices.length + 1), value: selectedDeviceId }]
+      ? [
+          {
+            label: t(`chat.composer.${kind}Fallback`, { number: String(state.devices.length + 1) }),
+            value: selectedDeviceId,
+          },
+        ]
       : []),
   ];
   let accessRequested = false;
@@ -104,7 +110,7 @@ function renderSettingsMediaDeviceField(options: {
       return;
     }
     accessRequested = true;
-    options.onRefresh?.();
+    onRefresh?.();
   };
   const requestAccessFromPointer = (event: PointerEvent) => {
     if (event.button === 0) {
@@ -119,24 +125,23 @@ function renderSettingsMediaDeviceField(options: {
   const note = state.error
     ? html`<span role="alert">${state.error}</span>`
     : !state.loading && state.devices.length === 0
-      ? options.emptyLabel
+      ? t(kind === "microphone" ? "chat.composer.noMicrophones" : "chat.composer.noCameras")
       : undefined;
   return renderSettingsRow({
-    title: options.title,
+    title,
     description: html`${note ? html`${note}<br />` : nothing}${t(
       "quickSettings.personal.browserOnly",
     )}`,
     control: html`
       <select
         class="settings-select settings-select--media-device"
-        data-settings-microphone=${options.dataAttribute === "microphone" ? "" : nothing}
-        data-settings-camera=${options.dataAttribute === "camera" ? "" : nothing}
-        aria-label=${options.title}
+        data-settings-microphone=${kind === "microphone" ? "" : nothing}
+        data-settings-camera=${kind === "camera" ? "" : nothing}
+        aria-label=${title}
         .value=${selectedDeviceId}
         @pointerdown=${requestAccessFromPointer}
         @keydown=${requestAccessFromKeyboard}
-        @change=${(event: Event) =>
-          options.onSelect?.((event.currentTarget as HTMLSelectElement).value)}
+        @change=${(event: Event) => onSelect((event.currentTarget as HTMLSelectElement).value)}
       >
         ${selectOptions.map(
           (option) => html`
@@ -147,32 +152,6 @@ function renderSettingsMediaDeviceField(options: {
         )}
       </select>
     `,
-  });
-}
-
-function renderSettingsMicrophoneField(props: ConfigProps) {
-  return renderSettingsMediaDeviceField({
-    state: props.microphone,
-    title: t("chat.composer.microphoneInput"),
-    systemDefaultLabel: t("chat.composer.systemDefaultMicrophone"),
-    emptyLabel: t("chat.composer.noMicrophones"),
-    fallbackLabel: (number) => t("chat.composer.microphoneFallback", { number: String(number) }),
-    dataAttribute: "microphone",
-    onRefresh: props.onMicrophoneRefresh,
-    onSelect: props.onMicrophoneSelect,
-  });
-}
-
-function renderSettingsCameraField(props: ConfigProps) {
-  return renderSettingsMediaDeviceField({
-    state: props.camera,
-    title: t("chat.composer.cameraInput"),
-    systemDefaultLabel: t("chat.composer.systemDefaultCamera"),
-    emptyLabel: t("chat.composer.noCameras"),
-    fallbackLabel: (number) => t("chat.composer.cameraFallback", { number: String(number) }),
-    dataAttribute: "camera",
-    onRefresh: props.onCameraRefresh,
-    onSelect: props.onCameraSelect,
   });
 }
 
@@ -329,7 +308,8 @@ export function renderChatPreferencesSection(props: ConfigProps) {
           checked: props.openLinksExternally,
           onChange: props.setOpenLinksExternally,
         })}
-        ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
+        ${renderSettingsMediaDeviceField(props, "microphone")}
+        ${renderSettingsMediaDeviceField(props, "camera")}
         ${renderSettingsToggleRow({
           title: t("chat.composer.holdToRecordSetting"),
           description: html`${t("chat.composer.holdToRecordSettingDescription")}<br />

@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
+  appendTranscriptMessageSync,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -11,6 +12,7 @@ import {
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { prepareModelVisibleToolTextBlock } from "../../logging/redact.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -47,6 +49,112 @@ const user = (key: string) => ({
   content: `Synthetic input ${key}`,
   timestamp: 1,
   idempotencyKey: `${key}:user`,
+});
+
+it.each([1, 2])(
+  "rereads and retries one local append after a transcript conflict (conflicting writes: %s)",
+  async (conflicts) => {
+    const { target, manager } = await fixture(state, `mutation-conflicts-${conflicts}`);
+    await manager.appendMessageAsync(user("seed"));
+    const withWorker = metadataRuntime.withSessionMetadataWorker;
+    let appends = 0;
+    let mutationReads = 0;
+    const failures: unknown[] = [];
+    const spy = vi
+      .spyOn(metadataRuntime, "withSessionMetadataWorker")
+      .mockImplementation((options, database, assertCurrent, operation, controls) =>
+        withWorker(
+          options,
+          database,
+          assertCurrent,
+          (worker) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                if (command.type === "session.metadata.mutation") {
+                  mutationReads++;
+                }
+                if (command.type === "session.metadata.append" && ++appends <= conflicts) {
+                  // The synchronous SDK can commit after host preparation but before the worker.
+                  expect(
+                    appendTranscriptMessageSync(target, {
+                      eventId: `concurrent-${appends}`,
+                      message: user(`concurrent-${appends}`),
+                    }).ok,
+                  ).toBe(true);
+                }
+                try {
+                  return await worker.execute(command, commandOptions);
+                } catch (error) {
+                  failures.push(error);
+                  throw error;
+                }
+              },
+            }),
+          controls,
+        ),
+      );
+    let failure: unknown;
+    let entryId: string | undefined;
+    try {
+      entryId = await manager.appendMessageAsync(user("accepted")).catch((error: unknown) => {
+        failure = error;
+        return undefined;
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(appends).toBe(2);
+    expect(mutationReads).toBe(1);
+    expect(failures).toHaveLength(conflicts);
+    for (const error of failures) {
+      expect(error).toBeInstanceOf(SqliteTranscriptMutationConflictError);
+    }
+    const events = await loadTranscriptEvents(target);
+    expect(events.slice(2, 2 + conflicts)).toMatchObject(
+      Array.from({ length: conflicts }, (_, index) => ({
+        id: `concurrent-${index + 1}`,
+        message: user(`concurrent-${index + 1}`),
+      })),
+    );
+    if (conflicts === 1) {
+      expect(failure).toBeUndefined();
+      expect(events).toHaveLength(4);
+      expect(events.at(-1)).toMatchObject({
+        id: entryId,
+        parentId: "concurrent-1",
+        message: user("accepted"),
+      });
+      expect(manager.getPersistedEntries()).toEqual(events);
+    } else {
+      expect(failure).toBeInstanceOf(SqliteTranscriptMutationConflictError);
+      expect(events).toHaveLength(4);
+      expect(entryId).toBeUndefined();
+    }
+  },
+);
+
+it("keeps a newer user intact when a prepared tool result cannot rebase", async () => {
+  const { target, manager } = await fixture(state, "superseded-tool-result");
+  await manager.appendMessageAsync(user("seed"));
+  expect(
+    appendTranscriptMessageSync(target, {
+      eventId: "newer-user",
+      message: user("newer"),
+    }).ok,
+  ).toBe(true);
+  const before = await loadTranscriptEvents(target);
+  await expect(
+    manager.appendMessageAsync({
+      role: "toolResult",
+      toolCallId: "superseded-result",
+      toolName: "lookup",
+      content: [{ type: "text", text: "Prepared for the older user" }],
+      isError: false,
+      timestamp: 2,
+    }),
+  ).rejects.toBeInstanceOf(SqliteTranscriptMutationConflictError);
+  expect(await loadTranscriptEvents(target)).toEqual(before);
+  expect(manager.getEntries()).toHaveLength(1);
 });
 
 it("shares one frozen tool-result graph across append receipts, transcript views, and prompt history", async () => {

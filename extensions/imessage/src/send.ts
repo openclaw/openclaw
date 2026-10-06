@@ -40,7 +40,6 @@ import {
 } from "./approval-reactions.js";
 import { chatContextFromIMessageTarget, resolveIMessageDirectChatService } from "./chat-context.js";
 import { withIMessageReceiptGuidReader } from "./chat-db.js";
-import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
@@ -57,7 +56,11 @@ import {
 } from "./monitor/sanitize-outbound.js";
 import { withIMessageRemoteFile } from "./remote-file.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
-import { requestIMessageRpcSend, type IMessageSendHandoff } from "./send-transport.js";
+import {
+  bindIMessageCliSend,
+  requestIMessageRpcSend,
+  type IMessageSendHandoff,
+} from "./send-transport.js";
 import {
   formatIMessageChatTarget,
   type IMessageService,
@@ -158,22 +161,6 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
   return raw ? raw.trim() : null;
 }
 
-// Tapbacks identify their target by GUID, never the numeric ROWID some sends return.
-function resolveOutboundMessageGuid(
-  result: Record<string, unknown> | null | undefined,
-): string | null {
-  if (!result) {
-    return null;
-  }
-  for (const key of ["messageGuid", "guid", "messageId", "message_id", "id"]) {
-    const guid = normalizeResolvedMessageGuid(result[key]);
-    if (guid) {
-      return guid;
-    }
-  }
-  return null;
-}
-
 function isNumericMessageRowId(value: string | null | undefined): value is string {
   return typeof value === "string" && /^\d+$/.test(value.trim());
 }
@@ -185,22 +172,6 @@ function normalizeResolvedMessageGuid(value: unknown): string | null {
   const trimmed = value.trim();
   // Status placeholders and numeric ROWIDs cannot match inbound tapback GUIDs.
   return normalizeIMessageMessageId(trimmed) && !isNumericMessageRowId(trimmed) ? trimmed : null;
-}
-
-async function resolveMessageGuidFromChatDb(params: {
-  dbPath?: string;
-  messageId: string;
-}): Promise<string | null> {
-  const dbPath = params.dbPath?.trim();
-  const messageId = params.messageId.trim();
-  if (!dbPath || !isNumericMessageRowId(messageId)) {
-    return null;
-  }
-  return normalizeResolvedMessageGuid(
-    await withIMessageReceiptGuidReader(dbPath, (read) =>
-      read({ type: "messageGuid", input: { messageId } }),
-    ),
-  );
 }
 
 function canResolveLatestSentMessageGuidFromChatDb(dbPath?: string): boolean {
@@ -222,21 +193,30 @@ async function resolveApprovalBindingMessageGuid(params: {
   result: Record<string, unknown> | null | undefined;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<string | null> {
-  const immediateGuid = resolveOutboundMessageGuid(params.result);
-  if (immediateGuid) {
-    return immediateGuid;
+  // Tapbacks identify their target by GUID, never the numeric ROWID some sends return.
+  for (const key of ["messageGuid", "guid", "messageId", "message_id", "id"]) {
+    const guid = normalizeResolvedMessageGuid(params.result?.[key]);
+    if (guid) {
+      return guid;
+    }
   }
   const messageId = params.messageId?.trim();
   if (!messageId || !isNumericMessageRowId(messageId)) {
     return null;
   }
-  const resolver = params.resolveMessageGuidImpl ?? resolveMessageGuidFromChatDb;
-  return normalizeResolvedMessageGuid(
-    await resolver({
-      dbPath: params.dbPath,
-      messageId,
-    }),
-  );
+  if (params.resolveMessageGuidImpl) {
+    return normalizeResolvedMessageGuid(
+      await params.resolveMessageGuidImpl({ dbPath: params.dbPath, messageId }),
+    );
+  }
+  const dbPath = params.dbPath?.trim();
+  return dbPath
+    ? normalizeResolvedMessageGuid(
+        await withIMessageReceiptGuidReader(dbPath, (read) =>
+          read({ type: "messageGuid", input: { messageId } }),
+        ),
+      )
+    : null;
 }
 
 async function resolveFallbackSentMessageGuid(params: {
@@ -510,14 +490,7 @@ export async function sendMessageIMessage(
       : undefined;
   // Unthreaded fallback must also clear reply metadata from receipts and bindings.
   let effectiveReplyToId = resolvedReplyToId;
-  const runCli =
-    opts.runCliJson ??
-    ((args: readonly string[]) => runIMessageCliJsonCommand({ args, cliPath, dbPath, timeoutMs }));
-  const runCliJson = async (args: readonly string[]) => {
-    // Lookup commands need current authority without recording visible dispatch.
-    opts.assertDirectAdapterHandoff?.();
-    return await runCli(args);
-  };
+  const runCliJson = bindIMessageCliSend(opts, { cliPath, dbPath, timeoutMs });
   const requestOwnedRpc = async (method: string, rpcParams: Record<string, unknown>) => {
     opts.assertDirectAdapterHandoff?.();
     const rpcClient = await (opts.createClient ?? createIMessageRpcClient)({

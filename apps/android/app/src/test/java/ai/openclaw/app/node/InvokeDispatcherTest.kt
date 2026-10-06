@@ -383,7 +383,6 @@ private fun newCameraHandler(appContext: Context): CameraHandler =
     appContext = appContext,
     camera = CameraCaptureManager(appContext),
     setCameraAudioCaptureActive = { true },
-    invokeErrorFromThrowable = { err -> "UNAVAILABLE" to (err.message ?: "camera failed") },
   )
 
 private class InvokeDispatcherFakeLocationDataSource : LocationDataSource {

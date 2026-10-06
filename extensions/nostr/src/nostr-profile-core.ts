@@ -1,16 +1,9 @@
 import { type NostrProfile, NostrProfileSchema } from "./config-schema.js";
 
 /** NIP-01 profile content (JSON inside kind:0 event). */
-export interface ProfileContent {
-  name?: string;
-  display_name?: string;
-  about?: string;
-  picture?: string;
-  banner?: string;
-  website?: string;
-  nip05?: string;
-  lud16?: string;
-}
+export type ProfileContent = Omit<NostrProfile, "displayName"> & {
+  display_name?: NostrProfile["displayName"];
+};
 
 const PROFILE_FIELDS = [
   ["name", "name"],

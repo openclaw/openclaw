@@ -1,5 +1,3 @@
-import childProcess from "node:child_process";
-import { syncBuiltinESMExports } from "node:module";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -10,9 +8,7 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { withPreparedChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { withEffectPreparation, type PreparedEffectUse } from "../../shared/effect-authority.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
@@ -62,7 +58,6 @@ import {
   finishCronRunReceiptAsync,
   listActiveCronRunReceiptJobIdsInDatabase,
   prepareCronRunReceiptClaim,
-  readCronRunReceiptCurrentJob,
   releaseLocalCronRunReceiptOwnership,
 } from "./run-receipt-store.js";
 import {
@@ -80,39 +75,7 @@ const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-rece
 
 afterEach(() => {
   vi.restoreAllMocks();
-  syncBuiltinESMExports();
 });
-
-it.each(["implicit", "supplied"] as const)(
-  "checks receipt availability with the %s transaction without spawning or opening another database",
-  async (source) => {
-    const { storePath, job } = await storeJob(makeCronReceiptJob("transaction-availability"));
-    const handle = claimCronRunReceiptForTest(storePath, job, 1);
-    const state = makeState(storePath, (agentId, database) => {
-      if (source === "supplied") {
-        expect(database?.isTransaction).toBe(true);
-      }
-      return !isAgentDeletionBlocked(agentId, {}, source === "supplied" ? database : undefined);
-    });
-    const spawn = vi.spyOn(childProcess, "spawnSync");
-    syncBuiltinESMExports();
-    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-    let connections = 0;
-    for (let index = 0; index < 3; index += 1) {
-      runOpenClawStateWriteTransaction(() => {
-        const before = open.mock.calls.length;
-        readCronRunReceiptCurrentJob({
-          handle,
-          resolveAgentId: () => handle.agentId,
-          isAgentAvailable: state.deps.isAgentAvailable,
-        });
-        connections += open.mock.calls.length - before;
-      });
-    }
-    expect(spawn.mock.calls.length).toBe(0);
-    expect(connections).toBe(0);
-  },
-);
 
 async function storeJob(job: CronJob) {
   const { storePath } = await makeStorePath();
@@ -153,7 +116,7 @@ function receipts(storePath: string, jobId: string) {
 }
 
 describe("cron run receipt store", () => {
-  it("prepares an exact force-disabled message use and releases at initiation", async ({
+  it("prepares an exact force-disabled message use without host SQL and releases at initiation", async ({
     signal,
   }) => {
     const { storePath, job } = await storeJob({
@@ -205,15 +168,17 @@ describe("cron run receipt store", () => {
       sql.calibrate();
       use = await source!.prepareUse!();
       use.assertCurrent();
+      expect(source).not.toThrow();
       use.release();
       use = await message!.prepareUse!();
-      const initiate = vi.fn(() => response.promise);
+      const initiate = vi.fn(() => {
+        message!();
+        return response.promise;
+      });
       const delivered = use.initiate(initiate);
       sql.expectIdle();
       sql.restore();
       sql = undefined;
-      expect(source).not.toThrow();
-      expect(message).not.toThrow();
       expect(initiate).toHaveBeenCalledOnce();
       expect(() => use!.initiate(initiate)).toThrow();
       const providerError = new Error("provider read failed");
@@ -557,13 +522,14 @@ describe("cron run receipt store", () => {
       },
     ]);
     try {
-      expect(() =>
-        readCronRunReceiptCurrentJob({
-          handle: receipt,
-          resolveAgentId: (current) => current.agentId!,
-          isAgentAvailable: () => false,
-        }),
-      ).toThrow(reason);
+      await expect(
+        assertServiceCronRunReceiptCurrent(
+          makeState(storePath, () => false),
+          receipt,
+          undefined,
+          captureOpenClawStateReadWorkerContext(),
+        ),
+      ).rejects.toThrow(reason);
     } finally {
       recordAgentDatabaseAdmissions([]);
       await finishCronRunReceiptAsync({
@@ -699,9 +665,6 @@ describe("cron run receipt store", () => {
         } else {
           const database = openOpenClawStateDatabase().db;
           database.exec("DROP TABLE cron_run_receipts");
-          expect(() =>
-            readCronRunReceiptCurrentJob({ handle, resolveAgentId: () => job.agentId! }),
-          ).toThrow(CronRunReceiptRevisionError);
           await expect(
             assertServiceCronRunReceiptCurrent(state, handle, undefined, context),
           ).rejects.toBeInstanceOf(CronRunReceiptRevisionError);
@@ -908,12 +871,14 @@ describe("cron run receipt store", () => {
       expect(receipts(storePath, job.id)).toMatchObject([
         { receiptId: foreign.handle.receiptId, status: "interrupted" },
       ]);
-      expect(() =>
-        readCronRunReceiptCurrentJob({
-          handle: foreign.handle,
-          resolveAgentId: () => job.agentId!,
-        }),
-      ).toThrow(CronRunReceiptRevisionError);
+      await expect(
+        assertServiceCronRunReceiptCurrent(
+          state,
+          foreign.handle,
+          undefined,
+          captureOpenClawStateReadWorkerContext(),
+        ),
+      ).rejects.toBeInstanceOf(CronRunReceiptRevisionError);
       expect(definition()).toBe(originalDefinition);
       if (delivery === "unrepaired") {
         expect(() => claimCronRunReceiptForTest(storePath, recovered, Date.now())).toThrow(
@@ -1012,12 +977,14 @@ describe("cron run receipt store", () => {
     const reassigned = { ...admitted, agentId: "beta", updatedAtMs: 2 };
     await saveCronStore(storePath, { version: 1, jobs: [reassigned] });
 
-    expect(() =>
-      readCronRunReceiptCurrentJob({
-        handle: receipt,
-        resolveAgentId: (job) => job.agentId!,
-      }),
-    ).toThrow(CronRunReceiptRevisionError);
+    await expect(
+      assertServiceCronRunReceiptCurrent(
+        makeState(storePath),
+        receipt,
+        undefined,
+        captureOpenClawStateReadWorkerContext(),
+      ),
+    ).rejects.toBeInstanceOf(CronRunReceiptRevisionError);
 
     await finishCronRunReceiptAsync({
       handle: receipt,

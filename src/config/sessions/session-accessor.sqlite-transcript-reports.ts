@@ -46,7 +46,7 @@ import {
 import { prepareTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.js";
 import {
   appendAbortedSessionTranscriptPartialInTransaction,
-  appendSelectedTranscriptReportInTransaction,
+  appendSessionTranscriptReportInTransaction,
   prepareCustomTranscriptReport,
   prepareTranscriptReportSelection,
 } from "./session-accessor.sqlite-transcript-reports.kernel.js";
@@ -56,6 +56,8 @@ import type {
   AbortedSessionTranscriptPartialResult,
   TranscriptReport,
   TranscriptReportWorkerOperations,
+  StartupSessionSettlement,
+  StartupSessionSettlementOutcome,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-transcript-reports.worker.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
@@ -79,6 +81,7 @@ import {
   captureOwnedTranscriptWriteAssertion,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
+  withSessionTranscriptWriteAssertion,
 } from "./transcript-write-context.js";
 
 const log = createSubsystemLogger("sessions/transcript-reports");
@@ -162,6 +165,9 @@ function withIncognitoReportWorker<T>(
           type: "session.report.assistant",
           input: { ...target, report },
         }),
+      startupSettlement: async () => {
+        throw new Error("Startup settlement requires a durable session");
+      },
       abortedPartial: (report) =>
         actor.sessions.transcript(authority, {
           type: "session.report.abortedPartial",
@@ -593,36 +599,31 @@ export async function readLatestSessionTranscriptReport(
   );
 }
 
-/** Boot repair and process-held incognito databases retain their native transaction owner. */
-export async function appendSessionTranscriptReportNative(
+/** Startup recovery supplies data; the existing worker owns the atomic entry/report settlement. */
+export async function settleStartupSession(
   scope: SessionTranscriptWriteScope,
-  report: TranscriptReport,
-): Promise<Result<void, TranscriptAppendRefusal>> {
-  return withNativeCurrentTranscript(scope, (database, resolved) => {
-    const facts = prepareTranscriptReportSelection(
-      database,
-      resolved,
-      report.kind === "assistant"
-        ? { kind: "assistant", responseId: report.message.responseId }
-        : report,
-    );
-    if (facts.suppressed) {
-      return;
-    }
-    if (report.kind === "assistant") {
-      appendSelectedTranscriptReportInTransaction(database, resolved, facts.appendParentId, report);
-      return;
-    }
-    const selected = report.selectReport(facts.latest);
-    if (selected) {
-      appendSelectedTranscriptReportInTransaction(
-        database,
-        resolved,
-        facts.appendParentId,
-        prepareCustomTranscriptReport(selected, facts.appendParentId),
-      );
-    }
-  });
+  input: StartupSessionSettlement,
+  assertCommitAllowed: () => void,
+): Promise<Result<StartupSessionSettlementOutcome, TranscriptAppendRefusal>> {
+  if (isProcessHeldTranscript(scope)) {
+    throw new Error("Startup settlement requires a durable session");
+  }
+  return withSessionTranscriptWriteAssertion(scope, assertCommitAllowed, () =>
+    withReportWorker<StartupSessionSettlementOutcome>(
+      scope,
+      "append",
+      async (operation, _assertCurrent, publish) => {
+        const result = await operation.execute({ type: "startupSettlement", input });
+        if (!result.ok) {
+          return result;
+        }
+        if (result.value.committed) {
+          publish(result.value);
+        }
+        return ok(result.value.outcome);
+      },
+    ),
+  );
 }
 
 /** Selects and appends one report against the same authoritative branch revision. */
@@ -638,7 +639,9 @@ export async function appendSessionTranscriptReport(
     if (options?.sessionEntryCurrent) {
       throw new Error("A file session source cannot authorize a process-held transcript report");
     }
-    return appendSessionTranscriptReportNative(scope, report);
+    return withNativeCurrentTranscript(scope, (database, resolved) =>
+      appendSessionTranscriptReportInTransaction(database, resolved, report),
+    );
   }
   if (report.kind === "assistant") {
     const preparedMessage = prepareTranscriptMessageAppend({

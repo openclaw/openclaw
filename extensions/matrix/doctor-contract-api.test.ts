@@ -459,10 +459,11 @@ describe("matrix doctor contract state migrations", () => {
     await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toBeNull();
   });
 
-  it("records an empty legacy scan silently and then skips historical databases", async () => {
+  it("records an empty configured Matrix scan silently and then skips historical databases", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const migration = migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
     const params = createMigrationParams(stateDir);
+    params.config = { channels: { matrix: {} } };
 
     await expect(migration.detectLegacyState(params)).resolves.toEqual({
       preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
@@ -540,6 +541,7 @@ describe("matrix doctor contract state migrations", () => {
   it("ignores an invalid legacy-scan completion receipt", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const params = createMigrationParams(stateDir);
+    params.config = { channels: { matrix: {} } };
     const receiptStore = params.context.openPluginStateKeyedStore<{
       version: number;
       completedAt: number;

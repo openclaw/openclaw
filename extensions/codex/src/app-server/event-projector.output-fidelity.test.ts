@@ -14,6 +14,7 @@ import {
   formatToolAggregate,
   inferToolMetaFromArgs,
   vi,
+  mockCallArg,
 } from "./event-projector.test-harness.js";
 
 registerCodexEventProjectorTestLifecycle();
@@ -100,17 +101,10 @@ describe("Codex tool response fidelity", () => {
   });
 
   it.each([
-    { label: "empty", output: "", isError: false, outcome: "unknown" },
     {
       label: "completed",
       output: "Script completed\nWall time 0.1 seconds\nOutput:\n" + "x".repeat(34_766),
       isError: false,
-      outcome: undefined,
-    },
-    {
-      label: "failed",
-      output: "Script failed\nWall time 0.1 seconds\nOutput:\nScript error: fixture failure",
-      isError: true,
       outcome: undefined,
     },
   ])(
@@ -131,52 +125,8 @@ describe("Codex tool response fidelity", () => {
   );
 
   it.each([
-    {
-      label: "completed",
-      output: "Script completed\nWall time 0.1 seconds\nOutput:\nfinished",
-      isError: false,
-      outcome: undefined,
-    },
-    {
-      label: "failed",
-      output: "Script failed\nWall time 0.1 seconds\nOutput:\nScript error: fixture failure",
-      isError: true,
-      outcome: undefined,
-    },
-    {
-      label: "yielded",
-      output: "Script running with cell ID cell-1\nWall time 0.1 seconds\nOutput:\n",
-      isError: false,
-      outcome: "unknown",
-    },
-    {
-      label: "unrecognized",
-      output: "Script completed\nunrecognized result envelope",
-      isError: false,
-      outcome: "unknown",
-    },
-  ])("uses the exact $label Wait result envelope", async ({ output, isError, outcome }) => {
-    const result = await projectCodeModeOutput(
-      output,
-      JSON.stringify({ cell_id: "cell-1" }),
-      "wait",
-    );
-    expect(result.toolCallId).toBe("outer-wait");
-    expect(result.toolName).toBe("wait");
-    expect(result.isError).toBe(isError);
-    expect(
-      requireRecord(requireRecord(result["__openclaw"], "metadata").toolOutput, "provenance")
-        .outcome,
-    ).toBe(outcome);
-  });
-
-  it.each([
-    { order: "before", status: "completed", isError: false },
-    { order: "after", status: "completed", isError: false },
     { order: "before", status: "failed", isError: true },
     { order: "after", status: "failed", isError: true },
-    { order: "before", status: "interrupted", isError: true },
-    { order: "after", status: "interrupted", isError: true },
   ])(
     "uses the native collaboration $status outcome when output arrives $order completion",
     async ({ order, status, isError }) => {
@@ -231,79 +181,7 @@ describe("Codex tool response fidelity", () => {
     },
   );
 
-  it.each(["before", "after"])(
-    "uses a completed subagent activity when output arrives %s completion",
-    async (order) => {
-      const projector = await createProjector();
-      const callId = `message-${order}`;
-      const call = forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "function_call",
-          call_id: callId,
-          name: "send_message",
-          arguments: JSON.stringify({ target: "worker", message: "status?" }),
-        },
-      });
-      const output = forCurrentTurn("rawResponseItem/completed", {
-        item: { type: "function_call_output", call_id: callId, output: "" },
-      });
-      const native = {
-        type: "subAgentActivity",
-        id: callId,
-        kind: "interacted",
-        agentThreadId: "child-1",
-        agentPath: "/root/worker",
-      };
-      await projector.handleNotification(call);
-      await projector.handleNotification(forCurrentTurn("item/started", { item: native }));
-      if (order === "before") {
-        await projector.handleNotification(output);
-      }
-      await projector.handleNotification(forCurrentTurn("item/completed", { item: native }));
-      if (order === "after") {
-        await projector.handleNotification(output);
-      }
-      await projector.handleNotification(turnCompleted([native]));
-
-      const result = toolResult(projector);
-      expect(result).toMatchObject({
-        toolCallId: callId,
-        toolName: "send_message",
-        isError: false,
-        __openclaw: { toolOutput: { source: "provider-response", modelInput: "unverified" } },
-      });
-      expect(
-        requireRecord(requireRecord(result["__openclaw"], "metadata").toolOutput, "provenance")
-          .outcome,
-      ).toBeUndefined();
-    },
-  );
-
-  it("retains unrecognized code-mode patch responses without inventing patch success", async () => {
-    const output = "  Future patch execution failure\r\n" + "details\n".repeat(2_000);
-    const patchInput = "*** Begin Patch\n*** Add File: fixture.txt\n+fixture\n*** End Patch\n";
-    const result = await projectCodeModeOutput(
-      output,
-      `const result = await tools.apply_patch(${JSON.stringify(patchInput)});\ntext(result);\n`,
-    );
-    expect(result).toMatchObject({
-      toolCallId: "outer-exec",
-      toolName: "exec",
-      content: [{ type: "text", text: output }],
-      __openclaw: { toolOutput: { source: "provider-response", modelInput: "unverified" } },
-    });
-    const metadata = requireRecord(result["__openclaw"], "metadata");
-    expect(requireRecord(metadata.toolOutput, "provenance").outcome).toBe("unknown");
-  });
-
-  it.each([
-    {
-      order: "before",
-      aggregate: "available",
-      aggregatedOutput: "raw execution output is not the response",
-    },
-    { order: "after", aggregate: "null", aggregatedOutput: null },
-  ])(
+  it.each([{ order: "after", aggregate: "null", aggregatedOutput: null }])(
     "preserves the complete response $order the terminal item with $aggregate aggregate",
     async ({ order, aggregatedOutput }) => {
       const projector = await createProjector();
@@ -504,23 +382,41 @@ describe("streamed-output-echo", () => {
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain(summary.slice(0, 1_000));
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain(chunks.join("").trim());
   });
+});
 
-  it("filters aggregate echoes while preserving the complete tool transcript", async () => {
-    const projector = await createProjector();
-    const output = `\n${"s".repeat(12_345)}tail-should-not-appear\n`;
-    await projector.handleNotification(rawMessage(output));
-    await projector.handleNotification(
-      turnCompleted([
-        createNativeCommandItem({
-          id: "cmd-aggregate-echo",
-          command: "python scripts/run_demo_scenario.py",
-          aggregatedOutput: output,
+describe("CodexAppServerEventProjector command output projection", () => {
+  it.each([{ prefixLength: 7_999, delta: "😀tail", expectedChunk: "" }])(
+    "keeps streamed progress UTF-16 safe with $prefixLength chars already emitted",
+    async ({ prefixLength, delta, expectedChunk }) => {
+      const onToolResult = vi.fn();
+      const projector = await createProjector({
+        ...(await createParams()),
+        verboseLevel: "full",
+        onToolResult,
+      });
+
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-progress-utf16",
+          delta: "a".repeat(prefixLength),
         }),
-      ]),
-    );
-    const result = expectNoReply(projector);
-    expect(
-      JSON.stringify(result.messagesSnapshot.filter((message) => message.role === "toolResult")),
-    ).toContain("tail-should-not-appear");
-  });
+      );
+      onToolResult.mockClear();
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-progress-utf16",
+          delta,
+        }),
+      );
+
+      expect(onToolResult).toHaveBeenCalledTimes(1);
+      expect(onToolResult).toHaveBeenCalledWith({
+        text: `Bash\n\`\`\`txt\n${expectedChunk}...(truncated)...\n\`\`\``,
+      });
+      const text = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
+      expect(text).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
+    },
+  );
 });

@@ -194,23 +194,6 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-type MattermostButton = {
-  id: string;
-  type: "button" | "select";
-  name: string;
-  style?: "default" | "primary" | "danger";
-  integration: {
-    url: string;
-    context: Record<string, unknown>;
-  };
-};
-
-type MattermostAttachment = {
-  text?: string;
-  actions?: MattermostButton[];
-  [key: string]: unknown;
-};
-
 /**
  * Sanitize a button ID so Mattermost's action router can match it.
  * Mattermost uses the action ID in the URL path `/api/v4/posts/{id}/actions/{actionId}`
@@ -231,8 +214,8 @@ export function buildButtonAttachments(params: {
     context?: Record<string, unknown>;
   }>;
   text?: string;
-}): MattermostAttachment[] {
-  const actions: MattermostButton[] = params.buttons.map((btn) => {
+}) {
+  const actions = params.buttons.map((btn) => {
     const safeId = sanitizeActionId(btn.id);
     const context: Record<string, unknown> = {
       action_id: safeId,

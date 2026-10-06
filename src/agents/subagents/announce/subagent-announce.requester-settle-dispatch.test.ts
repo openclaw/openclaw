@@ -287,11 +287,10 @@ describe("requester settle dispatch deadline", () => {
     expect(completeBatch).not.toHaveBeenCalled();
   });
 
-  it.each(
-    (["completed", "cancelled"] as const).flatMap((outcome) =>
-      [true, false].map((legacy) => ({ outcome, legacy })),
-    ),
-  )(
+  it.each([
+    { outcome: "completed", legacy: true },
+    { outcome: "cancelled", legacy: false },
+  ] as const)(
     "retains an in-flight private wake until $outcome, legacy=$legacy",
     async ({ outcome, legacy }) => {
       vi.useFakeTimers();

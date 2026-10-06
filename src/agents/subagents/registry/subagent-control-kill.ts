@@ -31,10 +31,8 @@ import {
   getSubagentExecutionCleanup,
 } from "./subagent-registry-execution-cleanup.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
-import {
-  listSubagentRunsForController,
-  listSubagentRunsForRequester,
-} from "./subagent-registry-read.js";
+import { listRunsForControllerFromRuns } from "./subagent-registry-queries.js";
+import { listSubagentRunsForRequester } from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 async function killSubagentRun(
@@ -405,7 +403,7 @@ export async function killSessionSubagentRuns(params: {
     assertCurrent: params.assertCurrent,
     runs: [
       ...listSubagentRunsForRequester(params.sessionKey, { requesterAgentId: params.agentId }),
-      ...listSubagentRunsForController(params.sessionKey, params.agentId),
+      ...listRunsForControllerFromRuns(subagentRuns, params.sessionKey, params.agentId),
     ],
     // Ordinary controller mutations retain their narrower authority. Only an admitted
     // lifecycle boundary can retire work whose completion belongs to this session.

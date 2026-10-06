@@ -58,7 +58,7 @@ export function createEmbeddedAttemptSessionSettleTracker(
 }
 
 type AttemptTranscriptLifecycle = ReturnType<typeof createEmbeddedAttemptTranscriptLifecycle>;
-type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
+type TrajectoryRecorder = Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 type DisposableRuntime = { dispose(): Promise<void> | void };
 
 export type EmbeddedAttemptSessionResources = {
@@ -109,8 +109,6 @@ type CleanupEmbeddedAttemptSessionInput = EmbeddedAttemptSessionResources & {
   bundleMcpRuntime?: DisposableRuntime;
   bundleLspRuntime?: DisposableRuntime;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
-  sandboxSessionKey?: string;
-  sessionAgentId: string;
   trajectoryEndRecorded: boolean;
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   emitDiagnosticRunCompleted?: EmitDiagnosticRunCompleted;

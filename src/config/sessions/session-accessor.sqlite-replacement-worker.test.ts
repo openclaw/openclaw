@@ -69,7 +69,6 @@ it.each([false, true])(
       });
       let prepared = false;
       let current = true;
-      const native = vi.fn(() => []);
       const dispose = vi.fn();
       const prepare = vi.fn(async () => {
         prepared = true;
@@ -84,7 +83,7 @@ it.each([false, true])(
           dispose,
         };
       });
-      const unregister = registerSessionMaintenancePreserveKeysProvider(native, prepare);
+      const unregister = registerSessionMaintenancePreserveKeysProvider(prepare);
       try {
         const replacement = applySessionEntryExactReplacements({
           storePath: database.path,
@@ -109,7 +108,6 @@ it.each([false, true])(
           revoke ? "before" : "after",
         );
         expect(prepare).toHaveBeenCalledOnce();
-        expect(native).not.toHaveBeenCalled();
         expect(dispose).toHaveBeenCalledOnce();
       } finally {
         unregister();
@@ -129,19 +127,16 @@ it("rechecks prepared durable maintenance facts after the final replacement gran
       updatedAt: Date.now(),
       label: "before",
     });
-    const unregister = registerSessionMaintenancePreserveKeysProvider(
-      () => [],
-      async () => ({
-        capture: () => [],
-        dispose: () => {},
-        subagentRunBasis: {
-          databasePath: shared.path,
-          databaseIdentity: identity.key,
-          databaseBirthtime: identity.birthtime,
-          digest: loadSubagentMaintenanceRunsInDatabase(shared).digest,
-        },
-      }),
-    );
+    const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+      capture: () => [],
+      dispose: () => {},
+      subagentRunBasis: {
+        databasePath: shared.path,
+        databaseIdentity: identity.key,
+        databaseBirthtime: identity.birthtime,
+        digest: loadSubagentMaintenanceRunsInDatabase(shared).digest,
+      },
+    }));
     const child: SubagentRunRecord = {
       runId: "late-preserved-child",
       requesterSessionKey: sessionKey,

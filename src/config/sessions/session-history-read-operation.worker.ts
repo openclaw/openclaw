@@ -13,15 +13,18 @@ type DurableHistoryReadOperationRequest = Extract<
     kind:
       | "transcript-match"
       | "transcript-search"
+      | "transcript-search-current"
       | "branch-summaries"
       | "session-title-fields"
       | "session-preview"
       | "model-context"
+      | "context-messages"
       | "transcript-watermark"
       | "transcript-message-presence"
       | "transcript-anchors"
       | "session-pending-input-receipts"
-      | "session-pending-input-source";
+      | "session-pending-input-source"
+      | "session-harness-completion-source";
   }
 >;
 
@@ -41,15 +44,18 @@ export function isSessionHistoryReadOperation(
   switch (request.kind) {
     case "transcript-match":
     case "transcript-search":
+    case "transcript-search-current":
     case "branch-summaries":
     case "session-title-fields":
     case "session-preview":
     case "model-context":
+    case "context-messages":
     case "transcript-watermark":
     case "transcript-message-presence":
     case "transcript-anchors":
     case "session-pending-input-receipts":
     case "session-pending-input-source":
+    case "session-harness-completion-source":
       return true;
     default:
       return false;
@@ -72,7 +78,8 @@ export async function prepareSessionHistoryReadOperation(
     if (
       "expectedIdentity" in request &&
       request.expectedIdentity &&
-      request.kind !== "transcript-anchors"
+      request.kind !== "transcript-anchors" &&
+      request.kind !== "context-messages"
     ) {
       assertExistingDatabaseIdentity(
         request.kind === "model-context" ? request.target.storePath : request.database.path,
@@ -113,6 +120,32 @@ async function prepareHistoryRead(
           { ...request.database, env: request.resolved.env },
         );
         return { kind: request.kind, facts: read.found ? read.value : { anchors: [] } };
+      };
+    }
+    case "session-harness-completion-source": {
+      const [
+        { withOpenClawAgentDatabaseReadOnly },
+        { assertCapturedSessionEntryReadSource },
+        { readHarnessCompletionSourceInDatabase },
+      ] = await Promise.all([
+        import("../../state/openclaw-agent-db-readonly.js"),
+        import("./session-accessor.sqlite-exact-read.js"),
+        import("./session-harness-completion-source.kernel.js"),
+      ]);
+      return () => {
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) => {
+            assertCapturedSessionEntryReadSource(request.source, database);
+            return runWithSessionTranscriptReadFence(request.admission, () =>
+              readHarnessCompletionSourceInDatabase(database, request.claim),
+            );
+          },
+          { ...request.database, env: request.env },
+        );
+        return {
+          kind: request.kind,
+          snapshot: read.found ? read.value : { validInput: false },
+        };
       };
     }
     case "session-pending-input-source": {
@@ -162,6 +195,17 @@ async function prepareHistoryRead(
         return { kind: request.kind, result: opened.found ? opened.value : undefined };
       };
     }
+    case "transcript-search-current": {
+      const { isSessionTranscriptSearchCurrentSync } =
+        await import("./session-transcript-search.js");
+      return () => ({
+        kind: request.kind,
+        current: isSessionTranscriptSearchCurrentSync(request.revision, {
+          ...request.database,
+          env: request.env,
+        }),
+      });
+    }
     case "transcript-search": {
       const { searchSessionTranscriptsReadOnlySync } =
         await import("./session-transcript-search.js");
@@ -210,6 +254,42 @@ async function prepareHistoryRead(
           kind: request.kind,
           items: readSessionPreviewItemsReadOnly(request, retainedDatabase),
         }));
+    }
+    case "context-messages": {
+      const [
+        { readSessionTranscriptContextMessages },
+        { resolveSqliteTranscriptReadScope, toDatabaseOptions },
+        { resolveOpenClawAgentSqlitePath },
+        { readDatabasePathIdentitySync },
+      ] = await Promise.all([
+        import("./session-accessor.sqlite-model-context.js"),
+        import("./session-accessor.sqlite-scope.js"),
+        import("../../state/openclaw-agent-db.paths.js"),
+        import("../../infra/sqlite-worker-identity.js"),
+      ]);
+      return () =>
+        runWithSessionTranscriptReadFence(request.admission, () => {
+          const databasePath = resolveOpenClawAgentSqlitePath(
+            toDatabaseOptions(resolveSqliteTranscriptReadScope(request.target)),
+          );
+          if (request.expectedIdentity) {
+            assertExistingDatabaseIdentity(
+              databasePath,
+              request.expectedIdentity.key,
+              request.expectedIdentity.birthtime,
+            );
+          } else if (readDatabasePathIdentitySync(databasePath).key.startsWith("file:")) {
+            throw new Error("Session context changed its captured database owner");
+          }
+          return readSessionTranscriptContextMessages(
+            request.target,
+            (messages, header, version) => ({
+              messages: [...messages],
+              header,
+              version,
+            }),
+          );
+        });
     }
     case "model-context": {
       const { readSessionTranscriptModelContext } =

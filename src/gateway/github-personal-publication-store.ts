@@ -1,5 +1,4 @@
 import { randomUUID, createHash } from "node:crypto";
-import type { SessionGitHubStatusResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -96,32 +95,6 @@ export function readPersonalGitHubPublication(
     throw new Error("My GitHub publication receipt is corrupt; create a new publication request.");
   }
   return row;
-}
-
-export function personalGitHubPublicationStatus(
-  row: PersonalGitHubPublicationRow,
-  executing: boolean,
-): SessionGitHubStatusResult {
-  const unfinished = row.status === "requested" || row.status === "publishing";
-  const projected = unfinished && !executing ? { ...row, status: "needs_confirmation" } : row;
-  return {
-    result: projectGitHubPublicationResult(projected),
-    confirmation:
-      projected.status !== "needs_confirmation"
-        ? null
-        : {
-            requestDigest: row.request_digest,
-            generation: row.connection_generation,
-            account: { accountId: row.identity_account_id, login: row.identity_login },
-            pushRepository: row.push_repository,
-            repository: row.repository,
-            branch: row.branch,
-            baseBranch: row.base_branch,
-            sourceHeadCommit: row.source_head_commit,
-            sourceIndexTree: row.source_index_tree,
-            workspaceTree: row.workspace_tree,
-          },
-  };
 }
 
 export function insertPersonalGitHubPublication(
@@ -301,25 +274,4 @@ export function listUnreportedPersonalGitHubPublications() {
       result: projectGitHubPublicationResult(row),
     };
   });
-}
-
-export function markPersonalGitHubPublicationReported(requestId: string): void {
-  const database = openOpenClawStateDatabase();
-  if (!tableExists(database.db, table)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        query(db)
-          .updateTable(table)
-          .set({ reported_at_ms: Date.now() })
-          .where("request_id", "=", requestId)
-          .where("status", "in", ["published", "failed"]),
-      );
-    },
-    undefined,
-    { operationLabel: "github-personal-publication.report" },
-  );
 }

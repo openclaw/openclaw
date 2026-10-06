@@ -32,7 +32,6 @@ import {
   type ExtensionErrorListener,
   ExtensionRunner,
   type ExtensionUIContext,
-  type SessionStartEvent,
   type ShutdownHandler,
   type ToolDefinition,
   type ToolInfo,
@@ -90,7 +89,6 @@ export abstract class AgentSessionBase {
   protected cwd: string;
   protected extensionRunnerRef?: { current?: ExtensionRunner };
   protected allowedToolNames: Set<string>;
-  protected sessionStartEvent: SessionStartEvent;
   protected withExternalSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
   protected extensionUIContext?: ExtensionUIContext;
   protected extensionCommandContextActions?: ExtensionCommandContextActions;
@@ -121,10 +119,6 @@ export abstract class AgentSessionBase {
     this.sessionModelRegistry = config.modelRegistry;
     this.extensionRunnerRef = config.extensionRunnerRef;
     this.allowedToolNames = new Set(config.allowedToolNames);
-    this.sessionStartEvent = config.sessionStartEvent ?? {
-      type: "session_start",
-      reason: "startup",
-    };
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
     this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
@@ -301,7 +295,6 @@ export abstract class AgentSessionBase {
       this.emitQueueUpdate();
       return true;
     });
-    this.emitQueueUpdate();
   }
 
   // Track last assistant message for auto-compaction check

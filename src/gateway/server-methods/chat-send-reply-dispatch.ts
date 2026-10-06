@@ -23,11 +23,7 @@ import {
   readActiveTranscriptEntryAnchorAsync,
   readSessionTranscriptAnchorsAsync,
 } from "../../config/sessions/session-transcript-anchor-read.js";
-import {
-  recordAssistantManagedMediaUrls,
-  type PrepareAssistantTranscriptMessage,
-} from "../../config/sessions/transcript-assistant-delivery.js";
-import { splitMediaFromOutput } from "../../media/parse.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -68,7 +64,7 @@ import {
   replaceChatSendReplyPayload,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
-import { observeChatSendCommentaryMedia } from "./chat-send-commentary-media.js";
+import { createAssistantCommentaryMediaCustody } from "./chat-send-commentary-media.js";
 import { resolveChatReplyDeliveryFromAnchors } from "./chat-send-reply-delivery.js";
 import { createChatReplySessionReader, type ChatReplySession } from "./chat-send-reply-session.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
@@ -124,22 +120,16 @@ export function createChatSendReplyDispatch(params: {
   });
   const deliveredReplies: DeliveredChatSendReply[] = [];
   const finalizedAgentMediaTranscriptKeys = new Set<string>();
-  let preparingTranscript = false;
-  const prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage = (
-    message,
-    sourceText,
-  ) => {
-    if (!preparingTranscript || !isAgentRunStarted() || !params.isRunCurrent?.() || !sourceText) {
-      return message;
-    }
-    // Record delivery ownership before publication, while preserving raw refs for
-    // the exact-row materializer. This is display provenance, never local-file trust.
-    const prepared = recordAssistantManagedMediaUrls(
-      message,
-      splitMediaFromOutput(sourceText).mediaUrls,
-    );
-    return params.prepareAssistantTranscriptMessage?.(prepared, sourceText) ?? prepared;
-  };
+  const commentaryMedia = createAssistantCommentaryMediaCustody({
+    requesterContext: params.requesterContext,
+    session,
+    accountId,
+    getRunId: () => agentRunId,
+    isCurrent: () => isAgentRunStarted() && params.isRunCurrent?.() === true,
+    abortSignal: params.abortSignal,
+    logGateway,
+    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+  });
   const resolveReplyDelivery = async (
     minimumAssistantMessageIndex = 0,
   ): Promise<ReplyDeliveryState> => {
@@ -632,21 +622,10 @@ export function createChatSendReplyDispatch(params: {
     operation: () => Promise<T>,
   ): Promise<T> => {
     return await admission.run(async () => {
-      preparingTranscript = true;
-      const commentaryMedia = observeChatSendCommentaryMedia({
-        requesterContext: params.requesterContext,
-        session,
-        accountId,
-        getRunId: () => agentRunId,
-        isCurrent: () => isAgentRunStarted() && params.isRunCurrent?.() === true,
-        abortSignal: params.abortSignal,
-        logGateway,
-      });
       try {
-        return await operation();
+        return await commentaryMedia.run(operation);
       } finally {
-        preparingTranscript = false;
-        const commentaryRewrite = await commentaryMedia.close();
+        const commentaryRewrite = commentaryMedia.lastRewrite;
         if (
           commentaryRewrite &&
           assistantTranscriptRewriteState &&
@@ -667,7 +646,7 @@ export function createChatSendReplyDispatch(params: {
     dispatcherOptions,
     hasAppendedWebchatAgentMedia: () => finalizedAgentMediaTranscriptKeys.size > 0,
     onModelSelected,
-    prepareAssistantTranscriptMessage,
+    prepareAssistantTranscriptMessage: commentaryMedia.prepareAssistantTranscriptMessage,
     resolveReplyDelivery,
     runAgentMediaTranscript,
   };

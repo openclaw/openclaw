@@ -12,6 +12,7 @@ import type { RetainedNativeWorker } from "./worker-native-lifecycle.types.js";
 export async function runNativeColdRecovery(
   directory: string,
   serviceUntil: (label: string, service: () => void, done: () => boolean) => void,
+  ending: "resource-cold-supervisor-loss" | "resource-cold-skewed-clock",
 ) {
   const { SpawnBrokerHost } = await import("../process/spawn-broker/host.js");
   const { drainGlobalSingletonLifecycleState } = await import("../shared/global-singleton.js");
@@ -48,6 +49,10 @@ export async function runNativeColdRecovery(
   let nativeJoined = false;
   let supervisorExited = false;
   let targetReady = false;
+  let targetTurn = false;
+  let targetFailure: Error | undefined;
+  let targetWallClock: number | undefined;
+  let targetMonotonic: bigint | undefined;
   let readinessObserved = false;
   let sealCalls = 0;
   const releaseBootstrap = () => {
@@ -99,19 +104,33 @@ export async function runNativeColdRecovery(
   let observing = initialObservation;
   const registrations = mock.method(Worker.prototype, "on");
   const captures = mock.method(SpawnBrokerHost.prototype, "captureNativeResource");
+  const realWallClock = Date.now.bind(Date);
+  const clock =
+    ending === "resource-cold-skewed-clock" ? mock.method(Date, "now", () => 100_000) : undefined;
   try {
+    const startedAt = process.hrtime.bigint();
     const worker = createRetainedNativeWorker(
       `const { parentPort, workerData } = require("node:worker_threads");
        workerData.nativeResource.on("message", () => {});
-       parentPort.postMessage("target-ready");`,
-      { eval: true, execArgv: [], workerData: {} },
+       parentPort.postMessage({type: "target-ready", wallClock: Date.now(), monotonic: process.hrtime.bigint()});
+       if (workerData.clockProbe) setImmediate(() => parentPort.postMessage("target-turn"));`,
+      { eval: true, execArgv: [], workerData: { clockProbe: Boolean(clock) } },
       source,
       resource,
     );
     target = worker;
-    worker.on("error", () => {});
+    worker.on("error", (error: Error) => {
+      targetFailure = error;
+    });
     worker.on("message", (value) => {
-      targetReady ||= value === "target-ready";
+      targetTurn ||= value === "target-turn";
+      if (isRecord(value) && value.type === "target-ready" && typeof value.wallClock === "number") {
+        targetReady = true;
+        targetWallClock = value.wallClock;
+        if (typeof value.monotonic === "bigint") {
+          targetMonotonic = value.monotonic;
+        }
+      }
     });
     worker.once("exit", () => {
       nativeJoined = true;
@@ -149,6 +168,16 @@ export async function runNativeColdRecovery(
     });
     assert.ok(observed.child);
     assert.ok(heldBootstrap);
+    if (clock) {
+      process.stderr.write(
+        JSON.stringify({
+          driverWallClock: Date.now(),
+          realWallClock: realWallClock(),
+          startupDeadline: captures.mock.calls[0]?.result?.attachment.startupDeadline,
+          bootstrapHeld: true,
+        }) + "\n",
+      );
+    }
     const originalBrokerPid = observed.child.pid;
     void broker.ready().then(
       () => {
@@ -159,8 +188,25 @@ export async function runNativeColdRecovery(
     serviceUntil(
       "cold target before broker bootstrap",
       () => worker.service(),
-      () => targetReady,
+      () => (clock ? targetTurn || targetFailure !== undefined : targetReady),
     );
+    if (clock) {
+      if (targetFailure) {
+        process.stderr.write(`cold resource clock probe: ${targetFailure.message}\n`);
+      }
+      assert.equal(targetFailure, undefined, "a cold attachment keeps its real startup budget");
+      assert.equal(Date.now(), 100_000, "only the driver wall clock is pinned");
+      assert.ok(
+        targetWallClock !== undefined && targetWallClock > 100_000 + 15_000,
+        "the target retains its real clock",
+      );
+      assert.ok(
+        targetMonotonic !== undefined &&
+          targetMonotonic >= startedAt &&
+          targetMonotonic <= process.hrtime.bigint(),
+        "driver and target share the same-host monotonic clock",
+      );
+    }
     const termination = supervisor.terminate();
     const stopped = worker.stop();
     serviceUntil(
@@ -209,7 +255,7 @@ export async function runNativeColdRecovery(
     );
     console.log(
       JSON.stringify({
-        ending: "resource-cold-supervisor-loss",
+        ending,
         unavailableBeforeReady: true,
         sameSourceRetained: true,
         sameBrokerRetried: true,
@@ -239,6 +285,7 @@ export async function runNativeColdRecovery(
         await brokerClosed.promise;
       }
     } finally {
+      clock?.mock.restore();
       restoreSealing?.();
       captures.mock.restore();
       registrations.mock.restore();

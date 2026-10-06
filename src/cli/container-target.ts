@@ -77,38 +77,35 @@ function resolveRunningContainer(containerName: string): ContainerRuntime | null
   return expectDefined(matches[0], "matches capture group 0");
 }
 
-function buildContainerExecArgs(params: {
-  runtime: ContainerRuntime;
-  containerName: string;
-  argv: string[];
-  env: NodeJS.ProcessEnv;
-  stdinIsTTY: boolean;
-  stdoutIsTTY: boolean;
-}): string[] {
+function buildContainerExecArgs(
+  runtime: ContainerRuntime,
+  containerName: string,
+  argv: string[],
+): string[] {
   // Preserve proxy env only after loopback validation; localhost would point inside the container.
-  const envFlag = params.runtime === "docker" ? "-e" : "--env";
-  const proxyUrl = normalizeOptionalString(params.env.OPENCLAW_PROXY_URL);
+  const envFlag = runtime === "docker" ? "-e" : "--env";
+  const proxyUrl = normalizeOptionalString(process.env.OPENCLAW_PROXY_URL);
   if (proxyUrl) {
-    assertContainerProxyUrlIsReachable(proxyUrl, params.env);
+    assertContainerProxyUrlIsReachable(proxyUrl);
   }
   const proxyEnvArgs = proxyUrl ? [envFlag, `OPENCLAW_PROXY_URL=${proxyUrl}`] : [];
-  const interactiveFlags = ["-i", ...(params.stdinIsTTY && params.stdoutIsTTY ? ["-t"] : [])];
   return [
     "exec",
-    ...interactiveFlags,
+    "-i",
+    ...(process.stdin.isTTY && process.stdout.isTTY ? ["-t"] : []),
     envFlag,
-    `OPENCLAW_CONTAINER_HINT=${params.containerName}`,
+    `OPENCLAW_CONTAINER_HINT=${containerName}`,
     envFlag,
     "OPENCLAW_CLI_CONTAINER_BYPASS=1",
     ...proxyEnvArgs,
-    params.containerName,
+    containerName,
     "openclaw",
-    ...params.argv,
+    ...argv,
   ];
 }
 
-function assertContainerProxyUrlIsReachable(proxyUrl: string, env: NodeJS.ProcessEnv): void {
-  if (env[CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV] === "1") {
+function assertContainerProxyUrlIsReachable(proxyUrl: string): void {
+  if (process.env[CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV] === "1") {
     return;
   }
   const parsed = URL.parse(proxyUrl);
@@ -224,14 +221,7 @@ export function maybeRunCliInContainer(argv: string[]): CliContainerTargetResult
 
   const result = spawnSync(
     runningContainer,
-    buildContainerExecArgs({
-      runtime: runningContainer,
-      containerName,
-      argv: parsed.argv.slice(2),
-      env: process.env,
-      stdinIsTTY: process.stdin.isTTY,
-      stdoutIsTTY: process.stdout.isTTY,
-    }),
+    buildContainerExecArgs(runningContainer, containerName, parsed.argv.slice(2)),
     {
       stdio: "inherit",
       env: buildContainerExecEnv(process.env),

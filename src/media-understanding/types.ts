@@ -61,7 +61,7 @@ export type MediaUnderstandingDecision = {
   attachments: MediaUnderstandingAttachmentDecision[];
   // Optional on the shipped SDK contract: plugins pass FinalizedMsgContext into
   // inbound-reply dispatch and may hold legacy decision literals. Core producers
-  // (runner, apply-capability, runtime) always populate it; absence renders no
+  // (runner, apply, runtime) always populate it; absence renders no
   // markers rather than breaking plugin compilation.
   attachmentDispositions?: Record<number, MediaAttachmentDisposition>;
   // CLI/provider completion is independent of usable output or a rendered marker.

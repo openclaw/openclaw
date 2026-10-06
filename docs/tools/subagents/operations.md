@@ -77,6 +77,10 @@ saved continuation across restart. Registry recovery waits for that owner instea
 of reporting interruption while the same continuation is being replayed. This
 does not authorize automatic relaunch of unrelated interrupted child work.
 
+Recovery retires superseded requester-transfer generations before restoring the
+remaining claim. The current generation keeps its completion custody; obsolete
+transfers do not retry indefinitely. Transient persistence failures still retry.
+
 Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
 prevented the shutdown marker from being written. For a hard kill, the child
 session must still identify the exact run from the retired Gateway, with no newer

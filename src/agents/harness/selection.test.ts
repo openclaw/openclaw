@@ -1005,7 +1005,7 @@ describe("runAgentHarnessAttempt", () => {
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     const sessionKey = "agent:main:main";
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
-    const trajectoryRecorder = createTrajectoryRuntimeRecorder({
+    const trajectoryRecorder = await createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
       sessionKey,
       sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },

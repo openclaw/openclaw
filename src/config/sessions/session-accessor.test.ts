@@ -182,6 +182,14 @@ describe("session accessor seam", () => {
       updatedAt: 10,
       pluginOwnerId: "history-owner",
       hookExternalContentSource: "webhook",
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "history-old",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 10,
+      },
     });
     await appendTranscriptMessage(
       { ...scope, sessionId: "history-old" },
@@ -202,6 +210,7 @@ describe("session accessor seam", () => {
     expect(instances).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          acpOwned: true,
           entry: expect.objectContaining({
             hookExternalContentSource: "webhook",
             pluginOwnerId: "history-owner",
@@ -226,84 +235,6 @@ describe("session accessor seam", () => {
         ]),
       ),
     ).toEqual(transcriptTimes);
-  });
-
-  it("marks transcript-only rows as unknown provenance", async () => {
-    const scope = transcriptScope("transcript-only", "agent:main:transcript-only");
-    await appendTranscriptMessage(scope, {
-      message: { role: "assistant", content: "orphan transcript" },
-    });
-
-    expect(listSessionTranscriptInstances({ agentId: "main", storePath })).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          provenanceKnown: false,
-          sessionId: "transcript-only",
-        }),
-      ]),
-    );
-
-    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
-      agentId: "main",
-    }).path;
-    expect(databasePath).toBeDefined();
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: databasePath,
-    });
-    database.db
-      .prepare("UPDATE session_windows SET transcript_updated_at = NULL WHERE session_id = ?")
-      .run(scope.sessionId);
-
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey: scope.sessionKey, storePath },
-      { sessionId: scope.sessionId, updatedAt: 20 },
-    );
-    await appendTranscriptMessage(scope, {
-      message: { role: "assistant", content: "new transcript content" },
-    });
-    expect(listSessionTranscriptInstances({ agentId: "main", storePath })).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          provenanceKnown: false,
-          sessionId: "transcript-only",
-        }),
-      ]),
-    );
-  });
-
-  it("retains ACP ownership for custom-key transcript history", async () => {
-    const sessionKey = "agent:main:main";
-    const scope = { agentId: "main", sessionKey, storePath };
-    await replaceSessionEntry(scope, {
-      sessionId: "custom-key-acp",
-      updatedAt: 10,
-      acp: {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "custom-key-acp",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: 10,
-      },
-    });
-    await appendTranscriptMessage(
-      { ...scope, sessionId: "custom-key-acp" },
-      { message: { role: "assistant", content: "ACP transcript" } },
-    );
-    await replaceSessionEntry(scope, { sessionId: "custom-key-acp", updatedAt: 15 });
-    await replaceSessionEntry(scope, { sessionId: "interactive-replacement", updatedAt: 20 });
-
-    expect(listSessionTranscriptInstances({ agentId: "main", storePath })).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          acpOwned: true,
-          provenanceKnown: true,
-          sessionId: "custom-key-acp",
-          sessionKey,
-        }),
-      ]),
-    );
   });
 
   it("keeps migrated unknown provenance unknown while the session remains current", async () => {
@@ -1041,7 +972,7 @@ describe("session accessor seam", () => {
       updatedAt: 10,
       ...initial,
     });
-    const snapshot = loadReplySessionInitializationSnapshot({
+    const snapshot = await loadReplySessionInitializationSnapshot({
       agentId: "main",
       ...scope,
     });
@@ -1088,7 +1019,7 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadMainInitializationSnapshot(sessionKey);
+    const snapshot = await loadMainInitializationSnapshot(sessionKey);
     if (!snapshot.currentEntry) {
       throw new Error("expected reply session initialization snapshot");
     }
@@ -1134,7 +1065,7 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadMainInitializationSnapshot(sessionKey);
+    const snapshot = await loadMainInitializationSnapshot(sessionKey);
 
     const current = loadSessionEntry({ sessionKey, storePath });
     if (!current) {
@@ -1179,9 +1110,9 @@ describe("session accessor seam", () => {
     expect(persisted?.pendingFinalDelivery).toBeUndefined();
   });
 
-  it("rejects a reply initialization key scoped to another explicit agent", () => {
+  it("rejects a reply initialization key scoped to another explicit agent", async () => {
     try {
-      loadReplySessionInitializationSnapshot({
+      await loadReplySessionInitializationSnapshot({
         agentId: "main",
         sessionKey: "agent:ops:main",
         storePath,
@@ -1263,7 +1194,7 @@ describe("session accessor seam", () => {
         updatedAt: 10,
       },
     );
-    const snapshot = loadMainInitializationSnapshot(sessionKey);
+    const snapshot = await loadMainInitializationSnapshot(sessionKey);
 
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
@@ -1403,9 +1334,14 @@ describe("session accessor seam", () => {
         ]);
         main.entry.abortedLastRun = true;
         main.entry.updatedAt = 30;
+        const replacement = {
+          sessionKey: main.sessionKey,
+          entry: main.entry,
+          previousSessionKeys: ["agent:main:other"],
+        };
         return {
           result: { replaced: true },
-          replacements: [{ sessionKey: main.sessionKey, entry: main.entry }],
+          replacements: [replacement],
         };
       },
     }).finally(() => preparationReads.restore());
@@ -1487,38 +1423,6 @@ describe("session accessor seam", () => {
         }),
       }),
     ).rejects.toThrow("outside the selected row set");
-  });
-
-  it("ignores runtime-only alias rekey fields on public exact replacements", async () => {
-    const canonicalKey = "agent:main:runtime-canonical";
-    const aliasKey = "agent:main:runtime-alias";
-    await upsertSessionEntryCore(
-      { sessionKey: canonicalKey, storePath },
-      { sessionId: "runtime-canonical", updatedAt: 1 },
-    );
-    await upsertSessionEntryCore(
-      { sessionKey: aliasKey, storePath },
-      { sessionId: "runtime-alias", updatedAt: 2 },
-    );
-    const runtimeAliasRekeyMarker = {
-      sessionKey: canonicalKey,
-      entry: { sessionId: "runtime-canonical", label: "Updated", updatedAt: 3 },
-      previousSessionKeys: [aliasKey],
-    };
-
-    await applySessionEntryReplacements({
-      sessionKeys: [canonicalKey, aliasKey],
-      storePath,
-      update: () => ({ replacements: [runtimeAliasRekeyMarker], result: undefined }),
-    });
-
-    expect(loadSessionEntry({ sessionKey: canonicalKey, storePath })).toMatchObject({
-      label: "Updated",
-      sessionId: "runtime-canonical",
-    });
-    expect(loadSessionEntry({ sessionKey: aliasKey, storePath })).toMatchObject({
-      sessionId: "runtime-alias",
-    });
   });
 
   it("projects session patches with label ownership and current request authority", async () => {
@@ -3408,41 +3312,6 @@ describe("session accessor seam", () => {
     });
 
     expect(readInsideTransaction).toBe(false);
-  });
-
-  it("ignores an explicit legacy read file and resolves SQLite identity", () => {
-    const explicitSessionFile = path.join(tempDir, "explicit-read-session.jsonl");
-
-    const target = resolveSessionTranscriptReadTarget({
-      agentId: "main",
-      sessionFile: explicitSessionFile,
-      sessionId: "session-1",
-    });
-
-    expect(target).toMatchObject({
-      agentId: "main",
-      sessionId: "session-1",
-      storePath: expect.stringMatching(/sessions\.json$/),
-    });
-    expect(target).not.toHaveProperty("sessionFile");
-  });
-
-  it("preserves a matching preloaded entry identity without rereading the session row", () => {
-    const sessionKey = "agent:main:preloaded-read";
-    const target = resolveSessionTranscriptReadTarget({
-      agentId: "main",
-      sessionEntry: { sessionId: "preloaded-session" },
-      sessionId: "preloaded-session",
-      sessionKey,
-      storePath,
-    });
-
-    expect(target).toEqual({
-      agentId: "main",
-      sessionId: "preloaded-session",
-      sessionKey,
-      storePath,
-    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

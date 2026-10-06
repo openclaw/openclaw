@@ -530,7 +530,9 @@ export function createTalkClientAgentConsultRunner(params: {
       runTarget: {
         runId: identity.runId,
         signal: ownerSignal,
-        isCurrent: (sessionId) => isOwnerCurrent(owner, sessionId),
+        isCurrent: (sessionId) =>
+          isOwnerCurrent(owner, sessionId) &&
+          completionClaim.resolveCurrentRegistration() !== undefined,
       },
       getToolAuthorityOverlay: () => {
         if (!isOwnerCurrent(owner, identity.sessionId)) {

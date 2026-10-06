@@ -14,6 +14,7 @@ import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,
@@ -35,8 +36,13 @@ function freezeValue(value: unknown): void {
 
 export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
   prepareGatewayContextBindingOwner(entry);
-  freezeValue(entry);
-  return entry;
+  return freezeSubagentRunReadRecord(entry);
+}
+
+/** Registry projections contain only canonical JSON fields and owner-created containers. */
+export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(record: T): T {
+  freezeValue(record);
+  return record;
 }
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
@@ -413,8 +419,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 
   /** Publish accepted runtime ownership after the row's commit acknowledgement. */
   commitOwnership(entry: SubagentRunRecord): void {
+    if (this.settleCommittedOwnership(entry)) {
+      publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+    }
+  }
+
+  /** Bulk restore settles custody before its one atomic row publication notifies readers. */
+  settleCommittedOwnership(entry: SubagentRunRecord): boolean {
     if (!isSameSubagentRunOwner(this.get(entry.runId), entry)) {
-      return;
+      return false;
     }
     for (const scope of this.registrationScopes) {
       if (
@@ -438,7 +451,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         scope.observation = { state: "superseded" };
       }
     }
-    publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+    return true;
   }
 
   /** Normal cleanup calls this only after its deletion commits; raw map deletion is not evidence. */

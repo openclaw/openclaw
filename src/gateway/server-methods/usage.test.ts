@@ -15,9 +15,11 @@ vi.mock("../../infra/session-cost-usage.js", async () => ({
   loadCostUsageSummaryFromCache: vi.fn(async () => costSummary(1, 0)),
   discoverAllSessions: vi.fn(async () => []),
 }));
-vi.mock("../session-utils.js", async () => ({
-  ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-  loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
+vi.mock("../../config/sessions/combined-store-gateway-read.js", async () => ({
+  ...(await vi.importActual<typeof import("../../config/sessions/combined-store-gateway-read.js")>(
+    "../../config/sessions/combined-store-gateway-read.js",
+  )),
+  loadCombinedSessionStoreForGatewayCoreAsync: vi.fn(() => ({
     targetsBySessionKey: new Map(),
     durableTargets: [],
     storePath: "(multiple)",
@@ -133,6 +135,25 @@ describe("gateway usage", () => {
         error: "calendar day does not exist in requested time zone",
       },
     );
+  });
+
+  it("rejects a host civil date the gateway timezone skipped", () => {
+    withEnv({ TZ: "Pacific/Apia" }, () => {
+      expect(
+        resolveDateRange({
+          mode: "gateway",
+          startDate: "2011-12-30",
+          endDate: "2011-12-30",
+        }),
+      ).toEqual({
+        ok: false,
+        error: "calendar day does not exist in requested time zone",
+      });
+      expect(range({ mode: "gateway", startDate: "2011-12-29", endDate: "2011-12-29" })).toEqual({
+        startMs: Date.parse("2011-12-29T10:00:00.000Z"),
+        endMs: Date.parse("2011-12-30T10:00:00.000Z") - 1,
+      });
+    });
   });
 
   it.each([null, ""])("retains UTC for omitted or blank offset %j", (utcOffset) => {

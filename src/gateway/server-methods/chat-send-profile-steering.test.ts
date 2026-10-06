@@ -1,6 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -9,14 +13,17 @@ import {
   resolveAgentQuestionGatewayCall,
   type AgentQuestionDispatcher,
 } from "../../agents/harness/gateway-question-dispatch.js";
+import { createNativeSessionBindingAuthority } from "../../agents/harness/native-session/binding-authority.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import {
   beginReplyMessageInjectionTarget,
   replyRunRegistry,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { beginRestartRecoveryTerminalDelivery } from "../../config/sessions/restart-recovery-receipt.js";
 import {
   listSessionPendingInputs,
   loadTranscriptEventsSync,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -33,6 +40,127 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("native profile-bound steering", () => {
+  it.for(["terminal-pending", "matching-tombstone", "unrelated-tombstone"] as const)(
+    "rechecks Gateway terminal delivery inside native final preparation: %s",
+    async (change, { signal }) => {
+      const fixture = await createBrowserFollowupFixture();
+      fixture.params.queueMode = "steer";
+      fixture.params.idempotencyKey = `gateway-native-receipt-${change}`;
+      const operation = fixture.activeRun;
+      if (!operation) {
+        throw new Error("Expected the steering fixture to own an active run");
+      }
+      const sourceTurnId = "native-active-source";
+      await upsertSessionEntryCore(fixture.scope, {
+        status: "running",
+        restartRecoveryDeliveryRunId: "native-receipt-owner",
+        restartRecoveryDeliverySourceRunId: sourceTurnId,
+      });
+      const entered = createDeferred();
+      const release = createDeferred();
+      const fingerprint = "native-receipt-tools";
+      let preparingNative = false;
+      let held = false;
+      operation.bindToolAuthoritySnapshot({
+        fingerprint: () => fingerprint,
+        project: () => fingerprint,
+        projectAsync: async () => {
+          if (preparingNative && !held) {
+            held = true;
+            entered.resolve();
+            await withinTest(release.promise, signal);
+          }
+          return fingerprint;
+        },
+      });
+      operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
+      replyRunRegistry.bindSourceTurnId(operation, sourceTurnId);
+      operation.setPhase("running");
+      const native = createNativeSessionBindingAuthority(
+        [
+          {
+            read: fixture.scope,
+            sessionId: fixture.scope.sessionId,
+            createSupersededError: () => new Error("Native steering session was replaced"),
+          },
+        ],
+        () => operation.abortSignal.throwIfAborted(),
+      );
+      const enqueued = vi.fn();
+      operation.attachBackend({
+        kind: "embedded",
+        runId: "native-receipt-owner",
+        toolAuthorityFingerprint: fingerprint,
+        cancel() {},
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          async queueMessage() {
+            throw new Error("Expected prepared native steering");
+          },
+          async queueMessageAsync(text, options, preparation) {
+            preparingNative = true;
+            await native.withPreparedCurrent!(() => {
+              enqueued(text);
+              options?.onQueueAccepted?.(true);
+            }, [preparation]);
+          },
+        },
+      });
+      const request = fixture.send();
+      const settlement = request.then(
+        () => {},
+        () => {},
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            request,
+            "Native final preparation was not reached",
+          ),
+          signal,
+        );
+        expect(enqueued).not.toHaveBeenCalled();
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        if (change === "terminal-pending") {
+          await expect(
+            beginRestartRecoveryTerminalDelivery({
+              ...fixture.scope,
+              sourceTurnId,
+              toolCallId: "native-terminal-delivery",
+            }),
+          ).resolves.toBe("started");
+        } else {
+          await upsertSessionEntryCore(fixture.scope, {
+            restartRecoveryTerminalRunIds: [
+              change === "matching-tombstone" ? sourceTurnId : "prior-source",
+            ],
+          });
+        }
+        expect(operation.phase).toBe("running");
+        release.resolve();
+        const respond = await request;
+        expect(operation.result).toBeNull();
+        if (change === "unrelated-tombstone") {
+          expect(enqueued).toHaveBeenCalledExactlyOnceWith(fixture.approvedContent);
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        } else {
+          expect(enqueued).not.toHaveBeenCalled();
+          const recorder = await withinTest(fixture.dispatchedRecorder, signal);
+          expect((await recorder.resolveMessage())?.content).toBe(fixture.approvedContent);
+          expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        }
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        await fixture.finishDispatch();
+      } finally {
+        release.resolve();
+        await settlement;
+        await fixture.cleanup();
+      }
+    },
+  );
+
   it.each(["same profile", "profile merge", "target closed"] as const)(
     "keeps bound native V2 steering on its captured owner after preparation (%s)",
     async (change) => {

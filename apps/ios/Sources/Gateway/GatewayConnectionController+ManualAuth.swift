@@ -201,10 +201,6 @@ extension GatewayConnectionController {
             }
         }
 
-        private final class Handoff: Sendable {
-            let accepted = OSAllocatedUnfairLock(initialState: false)
-        }
-
         struct SetupAuth {
             let token: String
             let bootstrapToken: String
@@ -240,7 +236,7 @@ extension GatewayConnectionController {
         let expiresAtMs: Int64?
         let isSetupCodeOrigin: Bool
         let suppressStoredDeviceAuth: Bool
-        private var handoff = Handoff()
+        private var handoff = OSAllocatedUnfairLock(initialState: false)
 
         static func == (lhs: Self, rhs: Self) -> Bool {
             lhs.token == rhs.token &&
@@ -254,7 +250,7 @@ extension GatewayConnectionController {
         }
 
         var wasHandedOff: Bool {
-            self.handoff.accepted.withLock { $0 }
+            self.handoff.withLock { $0 }
         }
 
         var unconsumed: Self? {
@@ -264,7 +260,7 @@ extension GatewayConnectionController {
         func markHandedOff() {
             // Root Retry and the form can retain copies of one setup attempt. Record handoff
             // on their shared receipt so neither can replay credentials after consumption.
-            self.handoff.accepted.withLock { $0 = true }
+            self.handoff.withLock { $0 = true }
         }
 
         func refreshedFieldsAfterHandoff(

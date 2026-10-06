@@ -59,7 +59,12 @@ export async function startGatewayTailscaleExposure(params: {
     );
     const host = await (
       params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
-    ).catch(() => null);
+    ).catch((error: unknown) => {
+      params.logTailscale.warn(
+        `Could not read the Tailscale hostname; managed portal ingress is unavailable: ${formatErrorMessage(error)}`,
+      );
+      return null;
+    });
     if (!claim.isActive()) {
       throw new Error(`Managed Tailscale ${params.tailscaleMode} claim exited during startup`);
     }

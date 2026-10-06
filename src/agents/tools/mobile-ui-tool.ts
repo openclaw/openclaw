@@ -4,6 +4,7 @@ import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coerci
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type, type Static } from "typebox";
+import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   type EligibleNodeMessages,
@@ -90,16 +91,14 @@ type MobileUiSnapshot = ReturnType<typeof parseMobileUiSnapshot>;
 function readInteger(
   record: Record<string, unknown>,
   key: string,
-  options: { minimum?: number; maximum?: number } = {},
+  options: { minimum: number; maximum?: number },
 ): number {
   const value = asSafeIntegerInRange(record[key], { min: options.minimum, max: options.maximum });
   if (value === undefined) {
     const range =
-      options.minimum !== undefined && options.maximum !== undefined
+      options.maximum !== undefined
         ? ` between ${options.minimum} and ${options.maximum}`
-        : options.minimum !== undefined
-          ? ` >= ${options.minimum}`
-          : "";
+        : ` >= ${options.minimum}`;
     throw new ToolInputError(`${key} must be an integer${range}`);
   }
   return value;
@@ -201,8 +200,15 @@ function mobileUiActIdempotencyKey(params: { scope?: string; toolCallId: string 
   if (!stableScope || !stableCallId) {
     return crypto.randomUUID();
   }
-  const digest = sha256Hex(JSON.stringify([stableScope, stableCallId, MOBILE_UI_ACT_COMMAND]));
-  return `mobile.ui.act:v1:${digest}`;
+  const digest = sha256Hex(
+    JSON.stringify([
+      stableScope,
+      getAgentToolAssistantTurnId() ?? "",
+      stableCallId,
+      MOBILE_UI_ACT_COMMAND,
+    ]),
+  );
+  return `mobile.ui.act:v2:${digest}`;
 }
 
 function payloadRecord(payload: unknown, label: string): Record<string, unknown> {

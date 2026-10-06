@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
+import { withQuestionInputAssertion } from "../../auto-reply/reply/message-injection-authority.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -99,7 +100,7 @@ function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionI
   };
   const assertCurrent = () => {
     try {
-      authority?.assertCurrent();
+      withQuestionInputAssertion(() => authority?.assertCurrent());
       state.answerAuthority?.assertActive();
       if (pendingAgentQuestions.get(state.sessionKey) !== state) {
         throw new Error("pending question is no longer current");
@@ -314,7 +315,7 @@ async function claimQuestionAnswer(
   ) {
     return false;
   }
-  authority?.assertCurrent();
+  withQuestionInputAssertion(() => authority?.assertCurrent());
   const sourceRecorder = params.sourceRecorder;
   const stagedSource = sourceRecorder?.getPendingInputMessage?.() !== undefined;
   const reservation = reserveQuestionInput(state, authority);

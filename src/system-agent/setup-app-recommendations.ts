@@ -288,11 +288,7 @@ export async function getSetupAppRecommendations(params: {
   if (!Array.isArray(inventory) && inventory.status === "unsupported") {
     return { status: "skipped", reason: "unsupported" };
   }
-  const apps = normalizeInventory(
-    Array.isArray(inventory)
-      ? inventory
-      : inventory.apps.map((app) => ({ label: app.label, bundleId: app.bundleId })),
-  );
+  const apps = normalizeInventory(Array.isArray(inventory) ? inventory : inventory.apps);
   if (apps.length === 0) {
     return { status: "skipped", reason: "no-apps" };
   }

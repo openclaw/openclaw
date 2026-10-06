@@ -50,10 +50,7 @@ internal data class MotionActivityRecord(
 internal data class PedometerRecord(
   val startISO: String,
   val endISO: String,
-  val steps: Int?,
-  val distanceMeters: Double?,
-  val floorsAscended: Int?,
-  val floorsDescended: Int?,
+  val steps: Int,
 )
 
 /** Motion data seam for Android sensors and tests. */
@@ -146,9 +143,6 @@ private object SystemMotionDataSource : MotionDataSource {
       startISO = Instant.ofEpochMilli(max(0L, bootMs)).toString(),
       endISO = Instant.now().toString(),
       steps = steps,
-      distanceMeters = null,
-      floorsAscended = null,
-      floorsDescended = null,
     )
   }
 
@@ -256,10 +250,7 @@ class MotionHandler internal constructor(
       buildJsonObject {
         put("startISO", JsonPrimitive(payload.startISO))
         put("endISO", JsonPrimitive(payload.endISO))
-        payload.steps?.let { put("steps", JsonPrimitive(it)) }
-        payload.distanceMeters?.let { put("distanceMeters", JsonPrimitive(it)) }
-        payload.floorsAscended?.let { put("floorsAscended", JsonPrimitive(it)) }
-        payload.floorsDescended?.let { put("floorsDescended", JsonPrimitive(it)) }
+        put("steps", JsonPrimitive(payload.steps))
       }.toString()
     }
 

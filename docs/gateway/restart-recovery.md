@@ -139,6 +139,11 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+CLI shutdown drains process-wide work. Closing an individual Gateway drains its
+own active chat runs and queued turns, and waits on the process-wide pending-reply
+count. Both report remaining work as named counts; categories can overlap and
+should not be added as distinct turns.
+
 Read-only RPC waits (`agent.wait`, approval decision waits, `question.waitAnswer`,
 and `device.scopes.waitUpgrade`) stop observing when their client disconnects.
 When shutdown drain begins, connected waiters receive retryable `UNAVAILABLE`
@@ -163,10 +168,9 @@ When launchd drives the stop, macOS uses the running job's own `ExitTimeOut`, ca
 by the launcher's own stop timer when a launcher is in the path, and Linux units use
 their own stop timeout; both are described in the deadline sections below.
 This requires a Gateway started with the updated launcher: replacing files cannot
-change a launcher that is already running. The stop deadlines below are the
-exception: the serving Gateway derives the launcher's reap timer rather than being
-told it, precisely so a Gateway started by an already-running older launcher still
-bounds itself correctly.
+change a launcher that is already running. On macOS, a marked launcher parent
+keeps a conservative 19-second child deadline because its existing markers do not
+identify whether it loaded the old or new stop policy.
 
 For these managed restarts, if the CLI cannot verify the service command, serving
 owner, or restart-intent recording, it refuses the restart before signaling with
@@ -246,9 +250,19 @@ new work is fenced and admitted work gets the computed grace period, still cappe
 by the native shutdown deadline. Deferral time does not spend that shutdown budget.
 For a supervisor's SIGTERM restart, a shorter requested drain limits when active
 runs are interrupted, not when database cleanup must finish: cleanup can use the
-remaining native stop budget. The Gateway still exits before the supervisor's
-deadline. Clean database restart proof is published only after writer leases,
-checkpointing, and native connection closure settle.
+remaining native stop budget. After an interrupted external restart, the Gateway
+joins final chat persistence, drains Memory's database borrows, and closes agent
+databases before exiting. It skips plugin and channel teardown that could retain
+the process until the deadline. Database admission stays fenced through lock
+release and log flushing, which have a final five-second exit window. Shutdown
+logs report each cleanup step that takes at least one second, including its name
+and elapsed milliseconds. Deadline exits list the currently pending cleanup steps
+and how long each has been waiting (up to eight, with a count of any others).
+These diagnostics are always enabled; `OPENCLAW_GATEWAY_RESTART_TRACE=1` adds
+begin/end timing for fast steps too. The supervisor deadline remains
+the hard upper bound. Clean database restart proof is published only after writer
+leases, checkpointing, and native connection closure settle; one database's idle
+receipt alone does not authorize process exit.
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must
@@ -346,9 +360,22 @@ new work and wait for active turns and background tasks to settle. The rest is
 reserved for final writes and service cleanup (up to 10 seconds). The Gateway
 logs the chosen source, drain, shutdown deadline, reserve, and exit margin.
 
-For the installed 20-second LaunchAgent job, the nominal split is 5 seconds of
-drain, 10 seconds for cleanup, and 5 seconds before launchd's deadline. Time
-spent inspecting the job is debited. For a shorter custom deadline the exit
+New LaunchAgent plists request `ExitTimeOut=330`, derived from the same service
+stop budget as Linux's `TimeoutStopSec=330`. With that effective deadline, the
+nominal split is 315 seconds of drain, 10 seconds for cleanup, and 5 seconds before
+the supervisor deadline. `openclaw doctor --fix` backs up and migrates the retired
+installer value of 20 seconds to 330 only when the definition otherwise matches
+the retired generated template. A 20-second timeout in a customized definition
+is ambiguous: Doctor reports that it is below the drain budget and preserves it.
+An installer comment alone does not authorize replacing an operator's policy.
+Other explicit values, including 600 and
+unlimited (`0`), are reported and preserved; short custom values receive a warning.
+Update finalization uses the same backed-up service reconciliation. The first
+stop still obeys the previously loaded job's deadline until the replacement is
+bootstrapped.
+
+Time spent inspecting the job is debited. A legacy 20-second job nominally leaves
+5 seconds of drain, 10 seconds for cleanup, and a 5-second exit margin. For a shorter custom deadline the exit
 margin is at most a quarter, and the cleanup reserve gives way to leave active
 work up to 5 seconds of drain (at most half of the remaining shutdown budget
 when it is very short). For example, a 5-second job nominally leaves 1.875
@@ -361,7 +388,10 @@ consume up to three 2-second calls; a very slow inspection can leave no drain.
 If a Node-recovery or compile-cache launcher is the job's PID, its own child
 reap timer may be shorter than launchd's deadline. The Gateway caps its budget
 at that timer only when its respawn markers establish that this launcher started
-it; an unrelated parent does not shorten the budget.
+it; an unrelated parent does not shorten the budget. New launchers use the shared
+330-second service budget, but the child conservatively retains the older
+19-second launcher cap until a parent runtime-generation contract can distinguish
+already-running launchers. Raising the plist value alone does not remove that cap.
 
 A direct signal to a marked launcher can start its own timer while launchd
 still reports `running`. The Gateway cannot distinguish that forwarded signal
@@ -551,12 +581,23 @@ Copying one does not grant permission to restart a service.
 
 ## How interrupted work is detected
 
-Startup reconciles older subagent session rows that still say `running` but have
-no live run, task, admission, or recovery owner. It records a diagnostic transcript
+Startup reconciles older spawned session rows, including dashboard-shaped children,
+that still say `running` but have no live run, task, admission, or recovery owner.
+An abort flag or safe-tools hint alone does not establish a recovery owner.
+Completed child history stops retaining its requester only after delivery and
+cleanup finish with no outstanding requester, wake, collector, or recovery claim.
+Incomplete or unreadable child records still retain ownership.
+It records a diagnostic transcript
 receipt and marks the row `interrupted` in one transaction. The end timestamp records when
 startup observed the interruption, rather than an inferred execution finish time;
 the original activity timestamps remain intact. A failed receipt write becomes a
 warning and leaves the row eligible for a later repair.
+
+Archiving cancels the session's work and settles a remaining `running` status as
+`killed`. Startup applies the same settlement to older archived rows after excluding
+live work. Existing terminal outcomes, recovery receipts, and pending delivery
+metadata remain intact; restoring an archived session does not resume its cancelled
+execution. Unarchived main sessions retain their separate resume path below.
 
 Three complementary mechanisms mark sessions whose turn did not finish:
 
@@ -583,10 +624,25 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   hard crashes and kills where no shutdown code ran. Stale transcript lock
   files are cleaned up at the same time.
 
+Agents still undergoing database startup inspection retain their recovery work.
+When admission finishes, the same startup recovery owner scans their stores with
+the original cutoff, so newly admitted turns are not mistaken for crash orphans.
+Inbound channel turns, including unacknowledged messages replayed after a crash,
+wait for their agent's writable admission before recording session metadata or
+dispatching. Other agents remain available, and stopping the channel or Gateway
+cancels the wait.
+
 A failed store scan leaves that store eligible for the scheduled retry while
 other stores continue recovery. `openclaw status` and `openclaw doctor` show
 outstanding startup recovery failures from the running Gateway; the warning clears
 when the store scan succeeds.
+
+A restart abort preserves the interrupted turn's recovery claim even when command
+cleanup finishes before shutdown marking. On upgrade, startup also repairs an
+internal chat turn left running and aborted with a dead writer, a missing claim,
+and an incorrect terminal marker for that writer. It restores that turn's claim
+only when no live owner or recorded terminal delivery remains, then uses the normal
+transcript replay checks to resume. Earlier completed turns keep their receipts.
 
 If an older Gateway left a dead writer and an unfinished recovery cycle in a
 running, failed, or statusless session, `sessions.recover` reconciles that writer
@@ -609,6 +665,12 @@ interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work.
 
+Startup recovery prepares and admits one continuation at a time to bound database
+and worker pressure. Once execution starts, the normal main lane owns concurrency;
+a long recovered turn does not hold a separate startup slot. Deferred database
+admissions join the same startup scheduler. Shutdown stops new preparation and
+joins the current pass, leaving unstarted interruptions available for the next boot.
+
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking
 the user to repeat the request. Preparing a new message cannot consume the
@@ -623,9 +685,11 @@ automatically without surviving authority. Missing or invalid provenance does no
 establish a human sender for an internal claim. Legacy channel and Control UI
 turns retain their existing recovery checks. Child-completion follow-ups still use
 their existing recovery and delivery ownership checks. If their agent database is
-still undergoing startup inspection or preparation, the pending completion wake
-retries after 30 seconds without consuming delivery attempts or changing its
-replay identity. The retained wake survives another restart. A confirmed
+still undergoing startup inspection or preparation, a child result changes while
+being read, or a preparation worker refuses work at capacity, the pending completion
+wake retries after 30 seconds without consuming delivery attempts or changing its
+batch, replay identity, or retry counters. Each retry reads fresh results under
+the same ownership checks. The retained wake survives another restart. A confirmed
 inspection failure or ownership mismatch remains a failure, not permission to
 bypass database admission; cancellation still retires the wake.
 
@@ -680,6 +744,13 @@ Every retry reuses one durable dispatch identifier, so an ambiguous connection
 failure cannot start the same recovery twice. Completed Control UI turns also
 retain bounded durable idempotency tombstones, allowing a reconnecting outbox
 to retire them without re-executing the request.
+
+When a pending final has no remaining queue owner and its delivery outcome is
+uncertain, recovery records a notice for the next turn on the same route when
+the saved final has a delivery context and intent ID. Settling that turn clears
+its recovery ownership together with its delivery claim, so the next agent turn
+can proceed. The notice and terminal deduplication evidence survive another
+restart; completed work is not replayed.
 
 Message-tool-only replies use a second durable correlation. Before a terminal
 same-conversation send reaches the channel, the gateway records an unresolved
@@ -760,6 +831,14 @@ An interruption alone is not a blocker; the parent continues until the request
 is finished or a specific blocker requires user input or unavailable authority.
 Existing cleanup and retention settings still apply.
 
+Startup retires superseded requester completion claims through the registry's
+cleanup owner before restoring the surviving claim.
+Those historical rows do not block current children in the same requester turn
+or recovery of other subagents. Saved yield intent is evaluated from the same
+current children used for the transfer. Interrupted current children still report
+their restart outcome to the parent.
+Turns with only superseded children need no requester settlement.
+
 If a parent yielded while waiting for children, its saved batch collects both
 completed and interrupted results and wakes the parent once the batch settles.
 A parent already working on those results resumes through ordinary main-session
@@ -787,6 +866,8 @@ follow-up is waiting to retry or is interrupted by restart, the saved
 obligation survives and resumes after startup. Restart admission rejection
 does not consume an attempt, and cancellation of an admitted attempt does
 not exhaust the obligation. Existing delivery retry limits still apply.
+Transient cleanup preparation failures keep required final delivery scheduled
+within its existing delivery window. Incidental cleanup retains its bounded retry limit.
 Settling a yielded turn's wake leaves its unfinished native run and final delivery
 intact. Completed cancellation keeps its wake and cleanup bookkeeping in the
 native subagent record; it does not require a separate Tasks row.
@@ -825,19 +906,13 @@ update with no continuation does not wake the model to deliver the report.
 
 The sentinel's typed SQLite columns are authoritative for restart handling.
 Its `payload_json` value is a replay/debug shadow only. Runtime reads, writes,
-and clears SQLite state without a file fallback. Doctor and restart recovery
-share the bounded importer for `restart-sentinel.json`. Restart recovery imports
-only update notices, after readiness; unrelated legacy repair still requires Doctor.
-
-The `2026.6.1` RPC updater writes its notice after candidate Doctor finishes.
-Its managed updater can publish the final outcome after restart health succeeds.
-Recovery checks that same pending handoff through its existing retry window and
-preserves its delivery route and continuation. A final legacy outcome can replace
-only its own imported pending notification; newer canonical state wins.
-Recorded source generations are not replayed when their files reappear.
-Incomplete notices stay on disk for recovery or explicit Doctor repair.
-The `2026.6.34` and `2026.9.2` updaters write native SQLite state instead.
-For pre-June installations, use the [bridge upgrade procedure](/install/updating#upgrading-very-old-versions).
+and clears SQLite state without a file fallback. The pre-July
+`restart-sentinel.json` format and its `.doctor-importing` claim are retired.
+Doctor, update admission, and restart recovery leave these files and any current
+SQLite notification unchanged, and require an intermediate upgrade through
+`2026.9.7` with `openclaw doctor --fix` before retrying. Supported updaters,
+including `2026.6.34` and `2026.9.2`, write native SQLite state and retain their
+existing restart delivery and continuation behavior.
 
 ## Safety valves and observability
 
@@ -894,7 +969,11 @@ channels.start --params '{"channel":"<id>"}'`
   `openclaw_session_recovery_age_seconds`.
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `agents/subagent-registry`
-  subsystems.
+  subsystems. Every startup pass includes bounded skip counts by reason such as
+  `live_owner`, `work_start_blocked`, or `dispatch_target_unavailable`, even when
+  other sessions started. Each interrupted main candidate has a structured
+  decision line with boot/pass, session and source-run identity, outcome
+  (`started`, `settled`, `deferred`, or `blocked`), and the next responsible owner.
 - **Reply hooks:** resumed turns run currently loaded `before_agent_reply`
   hooks under the normal user-trigger rules. Automatically delivered replies
   also run the normal `reply_payload_sending` hook before channel delivery,

@@ -4,6 +4,10 @@ import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { rewritePreparedTranscriptMessageAtAnchor } from "../../config/sessions/session-message-rewrite.js";
 import { readActiveTranscriptEntryAnchorAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import {
+  recordAssistantManagedMediaUrls,
+  type PrepareAssistantTranscriptMessage,
+} from "../../config/sessions/transcript-assistant-delivery.js";
+import {
   captureOwnedTranscriptWriteAssertion,
   runWithOwnedSessionTranscriptWrite,
   SessionTranscriptWriterClaimReboundError,
@@ -38,8 +42,7 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { publishAssistantTranscriptRewrite } from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext } from "./types.js";
 
-/** Materialize committed progress attachments within the same admitted webchat run. */
-export function observeChatSendCommentaryMedia(params: {
+type AssistantCommentaryMediaCustodyParams = {
   requesterContext?: WebchatReplyMediaRequesterContext;
   session: Pick<PreparedChatSendSession, "agentId" | "cfg" | "sessionKey" | "sessionLoadOptions">;
   accountId: string | undefined;
@@ -47,12 +50,57 @@ export function observeChatSendCommentaryMedia(params: {
   isCurrent: () => boolean;
   abortSignal?: AbortSignal;
   logGateway: GatewayRequestContext["logGateway"];
-}) {
+};
+type CommentaryMediaRewrite = { sessionId: string; generation: string };
+
+/** Own authored progress attachments while the caller retains its admitted run. */
+export function createAssistantCommentaryMediaCustody(
+  params: AssistantCommentaryMediaCustodyParams & {
+    prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+  },
+) {
+  let preparingTranscript = false;
+  let lastRewrite: CommentaryMediaRewrite | undefined;
+  const prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage = (
+    message,
+    sourceText,
+  ) => {
+    if (!preparingTranscript || !params.isCurrent() || params.abortSignal?.aborted || !sourceText) {
+      return message;
+    }
+    // Delivery provenance comes from pre-hook text, never from local-file trust.
+    const prepared = recordAssistantManagedMediaUrls(
+      message,
+      splitMediaFromOutput(sourceText).mediaUrls,
+    );
+    return params.prepareAssistantTranscriptMessage?.(prepared, sourceText) ?? prepared;
+  };
+  return {
+    prepareAssistantTranscriptMessage,
+    get lastRewrite() {
+      return lastRewrite;
+    },
+    async run<T>(operation: () => Promise<T>): Promise<T> {
+      lastRewrite = undefined;
+      preparingTranscript = true;
+      const observer = observeChatSendCommentaryMedia(params);
+      try {
+        return await operation();
+      } finally {
+        preparingTranscript = false;
+        lastRewrite = await observer.close();
+      }
+    },
+  };
+}
+
+/** Materialize committed progress attachments within the same admitted Gateway run. */
+function observeChatSendCommentaryMedia(params: AssistantCommentaryMediaCustodyParams) {
   const { session } = params;
   const seen = new Set<string>();
   let pending = Promise.resolve();
   let uncertainRewrite = false;
-  let lastRewrite: { sessionId: string; generation: string } | undefined;
+  let lastRewrite: CommentaryMediaRewrite | undefined;
   const reportPreparationFailure = (error: unknown) => {
     if (!(error instanceof SessionTranscriptWriterClaimReboundError)) {
       params.logGateway.warn(`webchat commentary media preparation failed: ${formatForLog(error)}`);

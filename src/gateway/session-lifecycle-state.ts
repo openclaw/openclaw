@@ -12,6 +12,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { buildUpdatedSessionGoalStatus } from "../config/sessions/goals-transitions.js";
 import { patchSessionEntryTarget } from "../config/sessions/session-accessor.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -372,7 +373,6 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
     key: params.sessionKey,
     excludeInternalEffects: true,
     ...(params.agentId ? { agentId: params.agentId } : {}),
-    assertActive: params.assertCommitAllowed,
   });
   // Queue waits must not leave an early read rejection unobserved.
   void prepared.catch(() => undefined);
@@ -384,7 +384,6 @@ async function persistPreparedGatewaySessionLifecycleEvent(
   phase: LifecyclePhase,
   sessionEntry: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
 ): Promise<void> {
-  params.assertCommitAllowed?.();
   if (!sessionEntry.entry) {
     return;
   }
@@ -539,6 +538,12 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       skipMaintenance: true,
       takeCacheOwnership: true,
       requireWriteSuccess: true,
+      workerGuard: {
+        source: composeSessionSourceAssertion([
+          params.assertCommitAllowed,
+          providerReview?.assertCurrent,
+        ]),
+      },
       ...(providerReview ? { providerReviewMutation: true } : {}),
       onCommitted: () =>
         sessionChanges.emit({
@@ -548,14 +553,6 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           // The SQLite writer already published sharing facts; this adapter only projects run state.
           facts: { kind: "unchanged" },
         }),
-      ...(params.assertCommitAllowed || providerReview
-        ? {
-            assertCommitAllowed: () => {
-              params.assertCommitAllowed?.();
-              providerReview?.assertCurrent();
-            },
-          }
-        : {}),
     },
   );
   if (persisted && terminalRecovery) {

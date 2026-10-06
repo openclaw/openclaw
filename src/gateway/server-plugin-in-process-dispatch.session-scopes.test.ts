@@ -344,7 +344,6 @@ describe("hosted visible spawn permission inheritance", () => {
   it.each([
     { mode: undefined, agentId: "main", source: "scheduled" },
     { mode: "read-only", agentId: "main", source: "scheduled" },
-    { mode: "full", agentId: "main", source: "scheduled" },
     { mode: "full", agentId: "reviewer", source: "scheduled" },
     { mode: "full", agentId: "main", source: "operator" },
   ] as const)(

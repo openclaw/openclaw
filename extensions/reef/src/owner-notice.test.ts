@@ -90,7 +90,6 @@ describe("createReefOwnerNoticeHandler", () => {
     const notify = createReefOwnerNoticeHandler({
       runtime,
       cfg: {},
-      accountId: "default",
       handle: "bob",
     });
 
@@ -120,7 +119,6 @@ describe("createReefOwnerNoticeHandler", () => {
     const notify = createReefOwnerNoticeHandler({
       runtime,
       cfg: {},
-      accountId: "default",
       handle: "bob",
     });
 

@@ -660,19 +660,19 @@ describe("anthropic cli migration", () => {
     expect(defaults?.models?.["openai/gpt-5.2"]).toEqual({});
   });
 
-  it("registered non-interactive cli auth reports missing local auth and exits cleanly", async () => {
+  it("registered non-interactive cli auth propagates missing local auth", async () => {
     probeClaudeCliAuthStatus.mockReturnValue({ status: "missing" });
     const method = await resolveAnthropicCliAuthMethod();
     const ctx = createProviderAuthMethodNonInteractiveContext();
 
-    await expect(method.runNonInteractive?.(ctx)).resolves.toBeNull();
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
+    await expect(method.runNonInteractive?.(ctx)).rejects.toThrow(
       [
         'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
         "Run claude auth login first.",
       ].join("\n"),
     );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    expect(ctx.runtime.error).not.toHaveBeenCalled();
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("registered non-interactive cli auth reports stored credentials that need interaction", async () => {
@@ -680,13 +680,13 @@ describe("anthropic cli migration", () => {
     const method = await resolveAnthropicCliAuthMethod();
     const ctx = createProviderAuthMethodNonInteractiveContext();
 
-    await expect(method.runNonInteractive?.(ctx)).resolves.toBeNull();
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
+    await expect(method.runNonInteractive?.(ctx)).rejects.toThrow(
       [
         'Auth choice "anthropic-cli" could not verify the installed Claude CLI login.',
         "Run claude auth status, then retry.",
       ].join("\n"),
     );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    expect(ctx.runtime.error).not.toHaveBeenCalled();
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 });

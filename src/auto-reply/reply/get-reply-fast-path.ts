@@ -72,13 +72,13 @@ export function shouldUseReplyFastTestRuntime(params: {
   );
 }
 
-export function initFastReplySessionState(params: {
+export async function initFastReplySessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentId: string;
   commandAuthorized: boolean;
   workspaceDir: string;
-}): SessionInitResult {
+}): Promise<SessionInitResult> {
   const { ctx, cfg, agentId, commandAuthorized } = params;
   const sessionScope = cfg.session?.scope ?? "per-sender";
   const sessionKey =
@@ -91,7 +91,7 @@ export function initFastReplySessionState(params: {
     ctx.CommandTargetSessionKey,
     resolveSessionParentSessionKey(sessionKey),
   ].filter((key): key is string => typeof key === "string");
-  const snapshot = loadReplySessionInitializationSnapshot({
+  const snapshot = await loadReplySessionInitializationSnapshot({
     agentId,
     storePath,
     sessionKey,
@@ -105,7 +105,7 @@ export function initFastReplySessionState(params: {
       sessionStore[key] = entry;
     }
   }
-  const commandSource = ctx.commandText ?? "";
+  const commandSource = ctx.commandText;
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup = normalizedChatType != null && normalizedChatType !== "direct";
   const resetCommand = resolveSessionResetCommand({
@@ -130,7 +130,7 @@ export function initFastReplySessionState(params: {
   const previousSessionEntry = resetTriggered && existingEntry ? { ...existingEntry } : undefined;
   const sessionId =
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
-  const bodyStripped = resetTriggered ? (resetCommand.payload ?? "") : (ctx.agentText ?? "");
+  const bodyStripped = resetTriggered ? (resetCommand.payload ?? "") : ctx.agentText;
   const now = Date.now();
   const resetPreservedSelection = resetTriggered
     ? resolveResetPreservedSelection({ entry: existingEntry })
@@ -193,9 +193,9 @@ export function initFastReplySessionState(params: {
   });
   const sessionCtx: TemplateContext = {
     ...ctx,
-    commandText: ctx.commandText ?? "",
+    commandText: ctx.commandText,
     agentText: bodyStripped,
-    rawText: ctx.rawText ?? "",
+    rawText: ctx.rawText,
     SessionKey: sessionKey,
     CommandAuthorized: commandAuthorized,
     BodyStripped: bodyStripped,

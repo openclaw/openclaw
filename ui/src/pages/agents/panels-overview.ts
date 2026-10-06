@@ -38,6 +38,7 @@ import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
+import { renderAgentConfigActions, type AgentConfigActions } from "./config-actions.ts";
 
 export type AgentIdentityDraft = {
   name: string | null;
@@ -48,38 +49,34 @@ export type AgentIdentityDraft = {
 /** Authenticated image lease the settings preview shares with the roster. */
 export type IdentityAvatarLoader = Pick<IdentityAvatarController, "resolve" | "imageErrorHandler">;
 
-export function renderAgentOverview(params: {
-  applicationConfig?: ApplicationConfigCapability;
-  agent: AgentsListResult["agents"][number];
-  defaultId: string | null;
-  configForm: Record<string, unknown> | null;
-  agentFilesList: AgentsFilesListResult | null;
-  agentIdentity: AgentIdentityResult | null;
-  identityDraft: AgentIdentityDraft;
-  identityAvatarLoader: IdentityAvatarLoader;
-  identitySaving: boolean;
-  identityError: string | null;
-  canUpdateConfig: boolean;
-  canUpdateIdentity: boolean;
-  configLoading: boolean;
-  configSaving: boolean;
-  configDirty: boolean;
-  modelCatalog: ModelCatalogEntry[];
-  modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
-  modelCatalogRetired?: boolean;
-  decisionModels: DecisionModelEntry[];
-  modelCatalogStatus: PanelRefreshStatus;
-  onConfigReload: () => void;
-  onConfigSave: () => void;
-  onIdentityFieldChange: (field: "name" | "emoji", value: string) => void;
-  onIdentityAvatarSelect: (file: File) => void;
-  onIdentitySave: () => void;
-  onModelChange: (agentId: string, modelId: string | null) => void;
-  onDecisionModelChange: (agentId: string, modelId: string | null) => void;
-  onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
-  onModelCatalogOpen: () => void;
-  onSelectPanel: (panel: AgentsPanel) => void;
-}) {
+export function renderAgentOverview(
+  params: AgentConfigActions & {
+    applicationConfig?: ApplicationConfigCapability;
+    agent: AgentsListResult["agents"][number];
+    defaultId: string | null;
+    configForm: Record<string, unknown> | null;
+    agentFilesList: AgentsFilesListResult | null;
+    agentIdentity: AgentIdentityResult | null;
+    identityDraft: AgentIdentityDraft;
+    identityAvatarLoader: IdentityAvatarLoader;
+    identitySaving: boolean;
+    identityError: string | null;
+    canUpdateIdentity: boolean;
+    modelCatalog: ModelCatalogEntry[];
+    modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
+    modelCatalogRetired?: boolean;
+    decisionModels: DecisionModelEntry[];
+    modelCatalogStatus: PanelRefreshStatus;
+    onIdentityFieldChange: (field: "name" | "emoji", value: string) => void;
+    onIdentityAvatarSelect: (file: File) => void;
+    onIdentitySave: () => void;
+    onModelChange: (agentId: string, modelId: string | null) => void;
+    onDecisionModelChange: (agentId: string, modelId: string | null) => void;
+    onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
+    onModelCatalogOpen: () => void;
+    onSelectPanel: (panel: AgentsPanel) => void;
+  },
+) {
   const {
     agent,
     configForm: rawConfigForm,
@@ -87,8 +84,6 @@ export function renderAgentOverview(params: {
     configLoading,
     configSaving,
     configDirty,
-    onConfigReload,
-    onConfigSave,
     onModelChange,
     onModelFallbacksChange,
     onSelectPanel,
@@ -322,24 +317,7 @@ export function renderAgentOverview(params: {
       {
         title: t("agents.overview.modelSelection"),
         notice: renderPanelRefreshStatus({ status: params.modelCatalogStatus }),
-        actions: html`
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${configLoading}
-            @click=${onConfigReload}
-          >
-            ${t("common.reloadConfig")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm primary"
-            ?disabled=${!params.canUpdateConfig || configSaving || !configDirty}
-            @click=${onConfigSave}
-          >
-            ${configSaving ? t("common.saving") : t("common.save")}
-          </button>
-        `,
+        actions: html` ${renderAgentConfigActions(params, nothing, "button")} `,
       },
       html`
         ${renderSettingsRow({

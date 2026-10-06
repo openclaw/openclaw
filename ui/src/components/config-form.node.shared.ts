@@ -303,20 +303,6 @@ export function renderFieldRow(params: {
   `;
 }
 
-export function renderCollectionDefaultDescription(
-  params: ConfigNodeRenderParams,
-  effectiveValue: unknown,
-): TemplateResult | typeof nothing {
-  const redacted = getSensitiveRenderState({
-    path: params.path,
-    value: effectiveValue,
-    hints: params.hints,
-    revealSensitive: params.revealSensitive ?? false,
-    isSensitivePathRevealed: params.isSensitivePathRevealed,
-  }).isRedacted;
-  return redacted ? nothing : renderSchemaDefaultDescription(params.schema, params.value);
-}
-
 export function renderSchemaDefaultDescription(
   schema: JsonSchema,
   value: unknown,

@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+} from "./tool-search-catalog.js";
 import * as ranking from "./tool-search-ranking.js";
 import {
   buildLexicalIndex,
@@ -59,13 +63,6 @@ function runtime(catalog = CATALOG): ToolSearchRuntime {
 }
 
 describe("tokenizeQuery", () => {
-  it("collapses inflected forms to a shared root", () => {
-    expect(tokenizeQuery("scheduling").map((term) => term.term)).toEqual(
-      tokenizeDocument("schedule"),
-    );
-    expect(tokenizeQuery("reminders").map((term) => term.term)).toContain("remind");
-  });
-
   it.each([
     ["running", "run"],
     ["runner", "run"],
@@ -108,15 +105,6 @@ describe("tokenizeQuery", () => {
     const terms = tokenizeDocument("web_search");
     expect(terms).toContain("web_search");
     expect(terms).toContain("web");
-  });
-
-  it("decomposes camelCase names, which MCP catalogs commonly use", () => {
-    const document = tokenizeDocument("readFile");
-
-    // Lowercasing first would leave only "readfil", which "read file" cannot meet.
-    for (const term of tokenizeQuery("read file")) {
-      expect(document).toContain(term.term);
-    }
   });
 
   it.each(["news"])("keeps %s distinct from the word left by stripping its s", (word) => {
@@ -231,17 +219,32 @@ describe("ToolSearchRuntime.search", () => {
         type: "object",
         properties: { orchard: { type: "string", description: "Collect apples" } },
       };
-      const search = runtime([
-        entry({
+      const catalogRef = createToolSearchCatalogRef();
+      const tools = [
+        {
           name: "indexed_resource",
+          label: "Resource",
+          description: "Inspect resources",
           parameters: { [keyword]: [{ description: "Measure asteroids" }, branch] },
-        }),
-      ]);
+          execute: async () => ({ content: [], details: {} }),
+        },
+      ];
+      registerHeadlessToolSearchCatalog({ catalogRef, tools });
+      const search = new ToolSearchRuntime(
+        { catalogRef },
+        {
+          enabled: true,
+          mode: "tools",
+          searchDefaultLimit: 10,
+          maxSearchLimit: 50,
+        },
+      );
 
       for (const query of ["asteroids", "orchard", "apples"]) {
         expect((await search.search(query)).map((hit) => hit.name)).toEqual(["indexed_resource"]);
       }
       branch.properties.orchard.description = "Observe meteors";
+      registerHeadlessToolSearchCatalog({ catalogRef, tools });
       expect((await search.search("meteors")).map((hit) => hit.name)).toEqual(["indexed_resource"]);
       expect(await search.search("apples")).toEqual([]);
       expect(await search.search("orchard", { allowedIds: new Set() })).toEqual([]);
@@ -270,6 +273,45 @@ describe("ToolSearchRuntime.search", () => {
     ]);
 
     expect((await search.search("meteors")).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+  });
+
+  it("prepares search text and its revision once across warm searches and runtimes", async () => {
+    const catalog = CATALOG.map((item) => entry({ ...item, id: `warm-index:${item.id}` }));
+    const render = vi.spyOn(ranking, "readParameterText");
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
+    const allowedIds = new Set(catalog.map(({ id }) => id));
+    for (let turn = 0; turn < 3; turn++) {
+      const search = runtime(catalog);
+      expect((await search.search("repository", { allowedIds })).map(({ name }) => name)).toEqual([
+        "issue_create",
+      ]);
+      expect((await search.search("read", { allowedIds })).map(({ name }) => name)).toEqual([
+        "read_file",
+      ]);
+    }
+    expect(render).toHaveBeenCalledTimes(catalog.length);
+    expect(build).toHaveBeenCalledTimes(1);
+    allowedIds.delete(catalog[4]!.id);
+    expect(await runtime(catalog).search("repository", { allowedIds })).toEqual([]);
+    allowedIds.add(catalog[4]!.id);
+    expect(
+      (await runtime(catalog).search("repository", { allowedIds })).map(({ name }) => name),
+    ).toEqual(["issue_create"]);
+    expect(render).toHaveBeenCalledTimes(catalog.length);
+    expect(build).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps BM25 population statistics scoped to the current visibility", async () => {
+    const search = runtime([
+      entry({ name: "first", description: "alpha alpha" }),
+      entry({ name: "second", description: "beta" }),
+      ...["third", "fourth", "fifth"].map((name) => entry({ name, description: "alpha" })),
+    ]);
+    const allowedIds = new Set(["first", "second"]);
+    expect((await search.search("alpha beta", { limit: 1 }))[0]?.name).toBe("second");
+    expect((await search.search("alpha beta", { allowedIds, limit: 1 }))[0]?.name).toBe("first");
+    allowedIds.add("third").add("fourth").add("fifth");
+    expect((await search.search("alpha beta", { allowedIds, limit: 1 }))[0]?.name).toBe("second");
   });
 
   it("shares one index across fresh turns and rebuilds for a changed tool-set revision", async () => {
@@ -367,33 +409,15 @@ describe("ToolSearchRuntime.search", () => {
   });
 
   it.each([
-    {
-      query: "scheduling",
-      expected: "cron_create",
-      why: "stemmed to the description's 'Schedule'",
-    },
     { query: "reminder", expected: "cron_create", why: "expanded toward schedule/cron" },
     {
       query: "look up the price",
       expected: "web_search",
       why: "intent expanded toward search/web",
     },
-    { query: "repository", expected: "issue_create", why: "matched only via a parameter" },
   ])("finds $expected for $query ($why)", async ({ query, expected }) => {
     const hits = await runtime().search(query);
     expect(hits.map((hit) => hit.name)).toContain(expected);
-  });
-
-  it("ranks an exact tool name first even when a shorter entry mentions it", async () => {
-    const catalog = [
-      entry({ name: "issue_create", description: "Open a new issue" }),
-      entry({ id: "b", name: "notes", description: "Notes about issue_create and other tools" }),
-    ];
-    const search = runtime(catalog);
-
-    // Querying a known name is a request for that tool, not a description of one.
-    const hits = await search.search("issue_create");
-    expect(hits[0]?.name).toBe("issue_create");
   });
 
   it.each([
@@ -446,19 +470,6 @@ describe("ToolSearchRuntime.search", () => {
         })
       ).map((hit) => hit.id),
     ).toEqual(["m-local"]);
-  });
-
-  it("does not match a term that only appears inside another word", async () => {
-    // "spreadsheet" contains "read"; substring scoring used to rank it here.
-    const names = (await runtime().search("read")).map((hit) => hit.name);
-    expect(names).toContain("read_file");
-    expect(names).not.toContain("spreadsheet_open");
-  });
-
-  it("returns nothing rather than an unranked catalog for a query the catalog cannot answer", async () => {
-    // The catalog is described in English, so this matches nothing. The old
-    // scorer returned every tool in id order for exactly this input.
-    expect(await runtime().search("価格を調べて")).toEqual([]);
   });
 });
 

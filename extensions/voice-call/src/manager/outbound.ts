@@ -26,28 +26,6 @@ import { resolveVoiceCallSecondsTimerDelayMs } from "./timer-delays.js";
 import { clearTranscriptWaiter, startMaxDurationTimer, waitForFinalTranscript } from "./timers.js";
 import { generateDtmfRedirectTwiml, generateNotifyTwiml } from "./twiml.js";
 
-type InitiateContext = Pick<
-  CallManagerContext,
-  | "activeCalls"
-  | "providerCallIdMap"
-  | "provider"
-  | "config"
-  | "coreSession"
-  | "storePath"
-  | "stateRuntime"
-  | "webhookUrl"
-  | "streamSessionIssuer"
-  | "mutationQueue"
-  | "pendingCallAdmissions"
-  | "isStopping"
->;
-
-type SpeakContext = EndCallContext &
-  Pick<CallManagerContext, "config" | "trackCallWork" | "isStopping">;
-
-type ConversationContext = SpeakContext &
-  Pick<CallManagerContext, "activeTurnCalls" | "initialMessageInFlight" | "notifyHangupTimers">;
-
 type EndCallContext = Pick<
   CallManagerContext,
   | "activeCalls"
@@ -57,42 +35,30 @@ type EndCallContext = Pick<
   | "stateRuntime"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "notifyHangupTimers"
   | "endCallOperations"
   | "mutationQueue"
 >;
 
 type ConnectedCallContext = Pick<CallManagerContext, "activeCalls" | "provider">;
 
-type ConnectedCallLookup =
-  | { kind: "error"; error: string }
-  | { kind: "ended"; call: CallRecord }
-  | {
-      kind: "ok";
-      call: CallRecord;
-      providerCallId: string;
-      provider: NonNullable<ConnectedCallContext["provider"]>;
-    };
-
-function lookupConnectedCall(ctx: ConnectedCallContext, callId: CallId): ConnectedCallLookup {
+function lookupConnectedCall(ctx: ConnectedCallContext, callId: CallId) {
   const call = ctx.activeCalls.get(callId);
   if (!call) {
-    return { kind: "error", error: "Call not found" };
+    return { kind: "error" as const, error: "Call not found" };
   }
   if (!ctx.provider || !call.providerCallId) {
-    return { kind: "error", error: "Call not connected" };
+    return { kind: "error" as const, error: "Call not connected" };
   }
   if (TerminalStates.has(call.state)) {
-    return { kind: "ended", call };
+    return { kind: "ended" as const, call };
   }
-  return { kind: "ok", call, providerCallId: call.providerCallId, provider: ctx.provider };
+  return { kind: "ok" as const, call, providerCallId: call.providerCallId, provider: ctx.provider };
 }
 
-function requireConnectedCall(
-  ctx: ConnectedCallContext,
-  callId: CallId,
-): Exclude<ConnectedCallLookup, { kind: "ended" }> {
+function requireConnectedCall(ctx: CallManagerContext, callId: CallId) {
   const lookup = lookupConnectedCall(ctx, callId);
-  return lookup.kind === "ended" ? { kind: "error", error: "Call has ended" } : lookup;
+  return lookup.kind === "ended" ? { kind: "error" as const, error: "Call has ended" } : lookup;
 }
 
 function isCurrentCall(ctx: Pick<CallManagerContext, "activeCalls">, call: CallRecord): boolean {
@@ -106,7 +72,7 @@ function validateDtmfDigits(digits: string): string | null {
 }
 
 export async function initiateCall(
-  ctx: InitiateContext,
+  ctx: CallManagerContext,
   to: string,
   sessionKey?: string,
   opts: OutboundCallOptions = {},
@@ -266,7 +232,7 @@ export type SpeakOptions = {
 };
 
 export async function speak(
-  ctx: SpeakContext,
+  ctx: CallManagerContext,
   callId: CallId,
   text: string,
   options?: SpeakOptions,
@@ -354,7 +320,7 @@ export function hasConversationStreamConnect(
 }
 
 export async function sendDtmf(
-  ctx: SpeakContext,
+  ctx: CallManagerContext,
   callId: CallId,
   digits: string,
 ): Promise<{ success: boolean; error?: string }> {
@@ -383,7 +349,7 @@ export async function sendDtmf(
 }
 
 export async function speakInitialMessage(
-  ctx: ConversationContext,
+  ctx: CallManagerContext,
   providerCallId: string,
 ): Promise<void> {
   const call = getCallByProviderCallId({
@@ -493,7 +459,7 @@ export async function speakInitialMessage(
 }
 
 export async function continueCall(
-  ctx: ConversationContext,
+  ctx: CallManagerContext,
   callId: CallId,
   prompt: string,
 ): Promise<{ success: boolean; transcript?: string; error?: string }> {

@@ -1,7 +1,11 @@
 /** Covers the injection-start admission fence and steer finalize audit honesty. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
@@ -19,10 +23,16 @@ import {
   recordSessionParticipant,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry as loadActualSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { logMessageProcessed } from "../../logging/diagnostic.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import {
@@ -121,6 +131,7 @@ function makeStarterParams(params?: { entry?: unknown; loadLatest?: unknown }) {
       supportsTaskSuggestions: false,
     },
     session: {
+      agentId: "main",
       cfg: {},
       clientRunId: "run-1",
       entry: params?.entry as never,
@@ -232,124 +243,138 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
 });
 
 describe("createChatSendMessageInjectionStarter admission fence", () => {
-  it.each([
+  it.for([
     "normal",
     "terminal receipt",
     "active source tombstone",
     "unrelated tombstone",
     "read failure",
     "caller revoked",
-  ] as const)("rechecks terminal admission after awaited projection: %s", async (change) => {
-    const initial = { sessionId: "session-1", status: "running" as const, updatedAt: 1 };
-    let latest: ReturnType<typeof loadSessionEntry> = initial;
-    let unreadable = false;
-    let callerCurrent = true;
-    const refusal = new Error("caller authority revoked during projection");
-    const readEntry = vi.mocked(loadSessionEntry);
-    const originalRead = expectDefined(readEntry.getMockImplementation(), "mock session reader");
-    readEntry.mockImplementation(() => {
-      if (unreadable) {
-        throw new Error("session receipt unavailable");
-      }
-      return latest;
-    });
-    const entered = createDeferred();
-    const resume = createDeferred();
-    const params = makeStarterParams({ entry: initial });
-    params.assertCurrent = () => {
-      if (!callerCurrent) {
-        throw refusal;
-      }
-    };
-    const operation = createReplyOperation({
-      sessionKey: expectDefined(params.session.sessionKey, "steering session key"),
-      sessionId: initial.sessionId,
-      resetTriggered: false,
-    });
-    onTestFinished(() => operation.complete());
-    operation.bindToolAuthoritySnapshot({
-      fingerprint: () => "authority",
-      project: () => "authority",
-      projectAsync: async () => {
-        entered.resolve();
-        await resume.promise;
-        return "authority";
-      },
-    });
-    operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
-    const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
-      async (_text, _options, assertCurrent) => {
-        assertCurrent();
-      },
-    );
-    operation.attachBackend({
-      kind: "embedded",
-      runId: "active-run",
-      toolAuthorityFingerprint: "authority",
-      cancel() {},
-      messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
-    });
-    operation.setPhase("running");
-    replyRunRegistry.bindSourceTurnId(operation, "source-1");
-    params.target = expectDefined(
-      replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key),
-      "active injection target",
-    );
-    vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
-      beginActualReplyMessageInjectionTarget,
-    );
-    const starting = createChatSendMessageInjectionStarter(params)();
-    const outcome = starting.then(
-      (attempt) => ({ attempt }),
-      (error: unknown) => ({ error }),
-    );
-    try {
-      await awaitGateBeforeSettlement(entered.promise, outcome, "Projection did not await");
-      expect(queueMessage).not.toHaveBeenCalled();
-      if (change === "terminal receipt" || change === "caller revoked") {
-        latest = {
-          ...initial,
-          restartRecoveryDeliveryRunId: "recovery-1",
-          restartRecoveryDeliverySourceRunId: "source-1",
-          restartRecoveryDeliveryReceiptState: "delivered-terminal",
+  ] as const)(
+    "rechecks terminal admission after awaited projection: %s",
+    async (change, { signal }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const initial = { sessionId: "session-1", status: "running" as const, updatedAt: 1 };
+        const sessionKey = `agent:main:dashboard:projection-${change.replaceAll(" ", "-")}`;
+        const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+        const scope = { agentId: "main", sessionKey, storePath };
+        await upsertSessionEntryCore(scope, initial);
+        let unreadable = false;
+        let callerCurrent = true;
+        const refusal = new Error("caller authority revoked during projection");
+        const readEntry = vi.mocked(loadSessionEntry);
+        const originalRead = expectDefined(
+          readEntry.getMockImplementation(),
+          "mock session reader",
+        );
+        readEntry.mockImplementation((readScope) => {
+          if (unreadable) {
+            throw new Error("session receipt unavailable");
+          }
+          return loadActualSessionEntry(readScope);
+        });
+        const entered = createDeferred();
+        const resume = createDeferred();
+        const params = makeStarterParams({ entry: initial });
+        params.session.sessionKey = sessionKey;
+        params.session.storePath = storePath;
+        params.assertCurrent = () => {
+          if (!callerCurrent) {
+            throw refusal;
+          }
         };
-      } else if (change === "active source tombstone" || change === "unrelated tombstone") {
-        latest = {
-          ...initial,
-          restartRecoveryTerminalRunIds: [
-            change === "active source tombstone" ? "source-1" : "source-old",
-          ],
-        };
-      } else if (change === "read failure") {
-        unreadable = true;
-      }
-      callerCurrent = change !== "caller revoked";
-      resume.resolve();
-      const result = await outcome;
-      if (change === "caller revoked") {
-        expect(result).toEqual({ error: refusal });
-        expect(queueMessage).not.toHaveBeenCalled();
-      } else if (change === "normal" || change === "unrelated tombstone") {
-        if (!("attempt" in result) || !result.attempt) {
-          throw new Error("Expected current terminal authority to admit steering", {
-            cause: result,
-          });
+        const operation = createReplyOperation({
+          sessionKey: expectDefined(params.session.sessionKey, "steering session key"),
+          sessionId: initial.sessionId,
+          resetTriggered: false,
+        });
+        operation.bindToolAuthoritySnapshot({
+          fingerprint: () => "authority",
+          project: () => "authority",
+          projectAsync: async () => {
+            entered.resolve();
+            await withinTest(resume.promise, signal);
+            return "authority";
+          },
+        });
+        operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
+        const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+          async (_text, _options, assertCurrent) => {
+            assertCurrent();
+          },
+        );
+        operation.attachBackend({
+          kind: "embedded",
+          runId: "active-run",
+          toolAuthorityFingerprint: "authority",
+          cancel() {},
+          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+        });
+        operation.setPhase("running");
+        replyRunRegistry.bindSourceTurnId(operation, "source-1");
+        params.target = expectDefined(
+          replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key),
+          "active injection target",
+        );
+        vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
+          beginActualReplyMessageInjectionTarget,
+        );
+        const starting = createChatSendMessageInjectionStarter(params)();
+        const outcome = starting.then(
+          (attempt) => ({ attempt }),
+          (error: unknown) => ({ error }),
+        );
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(entered.promise, starting, "Projection did not await"),
+            signal,
+          );
+          expect(queueMessage).not.toHaveBeenCalled();
+          if (change === "terminal receipt" || change === "caller revoked") {
+            await upsertSessionEntryCore(scope, {
+              restartRecoveryDeliveryRunId: "recovery-1",
+              restartRecoveryDeliverySourceRunId: "source-1",
+              restartRecoveryDeliveryReceiptState: "delivered-terminal",
+            });
+          } else if (change === "active source tombstone" || change === "unrelated tombstone") {
+            await upsertSessionEntryCore(scope, {
+              restartRecoveryTerminalRunIds: [
+                change === "active source tombstone" ? "source-1" : "source-old",
+              ],
+            });
+          } else if (change === "read failure") {
+            unreadable = true;
+          }
+          callerCurrent = change !== "caller revoked";
+          resume.resolve();
+          const result = await outcome;
+          if (change === "caller revoked") {
+            expect(result).toEqual({ error: refusal });
+            expect(queueMessage).not.toHaveBeenCalled();
+          } else if (change === "normal" || change === "unrelated tombstone") {
+            if (!("attempt" in result) || !result.attempt) {
+              throw new Error("Expected current terminal authority to admit steering", {
+                cause: result,
+              });
+            }
+            await expect(result.attempt.outcome).resolves.toMatchObject({ status: "accepted" });
+            expect(queueMessage).toHaveBeenCalledOnce();
+          } else {
+            expect(result).toEqual({ attempt: undefined });
+            expect(queueMessage).not.toHaveBeenCalled();
+          }
+        } finally {
+          resume.resolve();
+          const result = await outcome;
+          if ("attempt" in result) {
+            await result.attempt?.outcome;
+          }
+          readEntry.mockImplementation(originalRead);
+          operation.complete();
         }
-        await expect(result.attempt.outcome).resolves.toMatchObject({ status: "accepted" });
-        expect(queueMessage).toHaveBeenCalledOnce();
-      } else {
-        expect(result).toEqual({ attempt: undefined });
-        expect(queueMessage).not.toHaveBeenCalled();
-      }
-    } finally {
-      resume.resolve();
-      const result = await outcome;
-      if ("attempt" in result) {
-        await result.attempt?.outcome;
-      }
-      readEntry.mockImplementation(originalRead);
-    }
-  });
+      });
+    },
+  );
 
   it("rejects the injection before queueing when the latest persisted entry fail-closes terminal delivery", async () => {
     // A terminal receipt committed after prepareChatSendSession captured its
@@ -620,6 +645,7 @@ describe("createChatSendMessageInjectionStarter", () => {
         supportsTaskSuggestions: false,
       },
       session: {
+        agentId: "main",
         cfg: {},
         entry: undefined,
         sessionKey,

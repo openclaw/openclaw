@@ -59,6 +59,7 @@ export type ThreadBindingManager = {
     metadata?: Record<string, unknown>;
   }) => Promise<ThreadBindingRecord | null>;
   unbindThread: (params: {
+    assertCurrent?: () => void;
     threadId: string;
     expected?: ThreadBindingRecord;
     persist?: boolean;

@@ -74,6 +74,35 @@ vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
   unlockWorktree: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: Only the synthetic repository lacks physical recovery refs; real Git stays real.
+vi.mock("../agents/worktrees/git.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/worktrees/git.js")>();
+  const runGit: typeof actual.runGit = async (cwd, args, options) => {
+    if (
+      cwd !== "/repo" ||
+      args.length !== 4 ||
+      args[0] !== "show-ref" ||
+      args[1] !== "--verify" ||
+      args[2] !== "--quiet" ||
+      !args[3]?.startsWith("refs/openclaw/removals/")
+    ) {
+      return await actual.runGit(cwd, args, options);
+    }
+    options?.signal?.throwIfAborted();
+    options?.beforeRun?.();
+    return {
+      code: 1,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+      timeoutMs: options?.timeoutMs ?? 120_000,
+    };
+  };
+  return { ...actual, runGit };
+});
+
 vi.mock("../agents/git-coauthor-attribution.js", () => ({
   resolveGitCoauthorAttribution: mocks.attribution,
   prepareGitCoauthorAttribution: mocks.prepareAttribution,
@@ -408,7 +437,7 @@ export function installGitHubPublicationTestHarness(
     const syntheticIndex = path.join(root, "synthetic-index");
     await fs.writeFile(syntheticIndex, "synthetic Git transport index");
     if (!realWorktree) {
-      insertRegistryWorktree(process.env, {
+      await insertRegistryWorktree(process.env, {
         id: "worktree-1",
         name: "publication",
         repoRoot: "/repo",

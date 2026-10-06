@@ -10,13 +10,16 @@ import {
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
 import {
   createAgentDatabaseInspectionRefusal,
   failPendingAgentDatabase,
   listAgentDatabaseAdmissionRefusals,
   preparePendingAgentDatabase,
+  readAgentDatabaseAdmissionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
@@ -29,6 +32,7 @@ import {
   createOpenClawAgentDatabasePathMatcher,
   isSameOpenClawAgentDatabasePath,
 } from "./openclaw-agent-db.paths.js";
+import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -54,9 +58,9 @@ type Activation = {
 type PreparationPhase =
   | "inspection"
   | "activation"
+  | "readiness"
   | "open-wait"
   | "open"
-  | "readiness"
   | "migration-wait"
   | "migration"
   | "publication-wait"
@@ -65,6 +69,7 @@ type PreparationPhase =
   | "publication";
 type PendingRecovery = {
   refusal: AgentDatabaseAdmissionRefusal;
+  completion: Promise<void>;
   startedAt: number;
   phase: PreparationPhase;
   phaseStartedAt: number;
@@ -85,12 +90,13 @@ function recoveryTiming(recovery: PendingRecovery, now = performance.now()) {
   };
 }
 type SchemaSourceWitness = Array<FileMutationFingerprint | undefined>;
+type PreparedSchemaHeader = Pick<
+  AgentSchemaInspection,
+  "version" | "writerAppVersion" | "agentSchemaMeta"
+>;
 type PreparedSchemaHeaders = {
   statePath: string;
-  headers: Map<
-    string,
-    { version: typeof OPENCLAW_AGENT_SCHEMA_VERSION; witness: SchemaSourceWitness }
-  >;
+  headers: Map<string, { inspection: PreparedSchemaHeader; witness: SchemaSourceWitness }>;
 };
 
 function readSchemaSourceWitness(pathname: string): SchemaSourceWitness | undefined {
@@ -194,7 +200,7 @@ class AgentDatabaseStartupAdmission {
     this.preparedSchemaHeaders = prepared;
     return (pathname: string) => {
       const before = readSchemaSourceWitness(pathname);
-      return (version: number) => {
+      return ({ version, writerAppVersion, agentSchemaMeta }: PreparedSchemaHeader) => {
         if (
           !this.stopped &&
           this.preparedSchemaHeaders === prepared &&
@@ -202,7 +208,10 @@ class AgentDatabaseStartupAdmission {
           version === OPENCLAW_AGENT_SCHEMA_VERSION &&
           matchesSchemaSourceWitness(before, readSchemaSourceWitness(pathname))
         ) {
-          prepared.headers.set(pathname, { version, witness: before });
+          prepared.headers.set(pathname, {
+            inspection: { version, writerAppVersion, agentSchemaMeta },
+            witness: before,
+          });
         }
       };
     };
@@ -215,11 +224,31 @@ class AgentDatabaseStartupAdmission {
       const header = prepared?.headers.get(pathname);
       return !this.stopped &&
         prepared?.statePath === resolveOpenClawStateSqlitePath(env) &&
-        header?.version === supportedVersion &&
+        header?.inspection.version === supportedVersion &&
         matchesSchemaSourceWitness(header.witness, readSchemaSourceWitness(pathname))
-        ? { version: header.version }
+        ? header.inspection
         : undefined;
     };
+  }
+
+  /** Joins startup work already scheduled before a background consumer begins. */
+  get pendingPreparation(): Promise<unknown> | undefined {
+    return this.work.size > 0 ? Promise.allSettled(this.work) : undefined;
+  }
+
+  /** Join only the current agent preparation, without holding channel startup or healthy agents. */
+  waitForAgentPreparation(
+    agentId: string,
+    options: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+  ): Promise<void> | undefined {
+    const pending = this.pending.get(normalizeAgentId(agentId));
+    if (!pending || readAgentDatabaseAdmissionRefusal(agentId, options) !== pending.refusal) {
+      return undefined;
+    }
+    return racePromiseWithAbortSignal(
+      pending.completion,
+      options.signal ? AbortSignal.any([this.signal, options.signal]) : this.signal,
+    );
   }
 
   track(work: Promise<unknown>): void {
@@ -317,8 +346,10 @@ class AgentDatabaseStartupAdmission {
         reason: `Agent ${agentId} has not completed startup inspection and preparation. ${params.reason}`,
       });
       const startedAt = performance.now();
+      const completion = createDeferredCore();
       const recovery: PendingRecovery = {
         refusal,
+        completion: completion.promise,
         startedAt,
         phase: "inspection",
         phaseStartedAt: startedAt,
@@ -344,7 +375,8 @@ class AgentDatabaseStartupAdmission {
       // Observe failures immediately, but publish their outcome only after startup
       // records the pending decisions and the Gateway accepts their lifetime.
       const checked = Promise.allSettled(inspections.map(({ result }) => result));
-      const work = (async () => {
+      // Gateway-owned recovery outlives the caller's temporary discovery snapshot.
+      const work = runInDetachedAsyncContext(async () => {
         const publicationComplete = createDeferredCore();
         try {
           const results = await checked;
@@ -396,6 +428,9 @@ class AgentDatabaseStartupAdmission {
               );
             }
           }
+          phase("readiness");
+          await racePromiseWithAbortSignal(activation.preparationReady, this.signal);
+          assertCurrent();
           await withSqliteReadOnlyWorkerScope(
             async () => {
               await assertNotDeleted();
@@ -417,9 +452,6 @@ class AgentDatabaseStartupAdmission {
                 } finally {
                   release?.();
                 }
-                phase("readiness");
-                await racePromiseWithAbortSignal(activation.preparationReady, this.signal);
-                assertCurrent();
                 phase("migration-wait");
                 const releaseMigration = await this.migrating.acquire({ signal: this.signal });
                 try {
@@ -470,8 +502,9 @@ class AgentDatabaseStartupAdmission {
             this.publishingAgentId = undefined;
           }
           publicationComplete.resolve();
+          completion.resolve();
         }
-      })();
+      });
       this.track(work);
     }
     return refusals;

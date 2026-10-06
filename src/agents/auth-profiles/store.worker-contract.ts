@@ -1,8 +1,8 @@
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import type {
   AuthProfileCredential,
-  AuthProfileRowRead,
   AuthProfileStore,
+  AuthProfileStoreOwner,
   UserModelAuthProfile,
 } from "./types.js";
 import type {
@@ -50,7 +50,29 @@ export type AuthProfileUsageResult =
   | { ok: true; receipt: AuthProfileUsageReceipt }
   | { ok: false; error: OpenClawStateWorkerErrorPayload };
 
-export type AuthProfileWorkerOperations = {
+export type AuthStoreUpdateInput = {
+  owner: AuthProfileStoreOwner;
+  agentDir?: string;
+  envOnly: boolean;
+};
+
+export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"] & {
+  oauthRefreshClaimIds: ReadonlyMap<string, string | undefined>;
+};
+
+export type AuthStoreUpdateOperations = {
+  "authProfiles.update": { input: AuthStoreUpdateInput; output: void };
+};
+
+export type AuthProfileWorkerOperations = AuthStoreUpdateOperations & {
+  "authProfiles.personalAccept": {
+    input: { profileId: string; credential: AuthProfileCredential };
+    output: boolean;
+  };
+  "authProfiles.personalReplace": {
+    input: { profileId: string; expected: UserModelAuthProfile; next: UserModelAuthProfile };
+    output: UserModelAuthProfile | undefined;
+  };
   "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
   "authProfiles.personalUsage": {
     input: { profileId: string; reduction: PersonalAuthProfileUsageReduction };
@@ -58,7 +80,7 @@ export type AuthProfileWorkerOperations = {
   };
   "authProfiles.read": {
     input: { artifactPreserving: boolean };
-    output: AuthProfileRowRead;
+    output: void;
   };
   "authProfiles.sharedOwnership": {
     input: { artifactPreserving: boolean };

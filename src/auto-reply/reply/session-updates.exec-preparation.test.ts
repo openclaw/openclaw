@@ -1,11 +1,21 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { writeExecApprovalsConfigRow } from "../../infra/exec-approvals-sqlite.js";
 import * as approvalStore from "../../infra/exec-approvals-store.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -15,6 +25,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { ensureSkillSnapshot } from "./session-updates.js";
 
 // mock-isolation: Remote node discovery is outside the approval-read boundary.
@@ -59,6 +70,74 @@ function prepare(root: string, config: OpenClawConfig, assertCurrent?: () => voi
 const config: OpenClawConfig = {
   tools: { exec: { host: "node", node: "build-node", mode: "full" } },
 };
+
+it.each([false, true])(
+  "persists first-turn skills only while the caller is current without caller-thread session SQL (revoked: %s)",
+  async (revokeAtCommit) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:skill-persistence",
+        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+      };
+      const sessionEntry = { sessionId: "skill-session", updatedAt: 1 };
+      await replaceSessionEntry(scope, sessionEntry);
+      const originalEntry = loadSessionEntry(scope);
+      const sessionStore = { [scope.sessionKey]: sessionEntry };
+      const controller = new AbortController();
+      const refusal = new Error("skill caller retired before commit");
+      let commitReached = false;
+      if (revokeAtCommit) {
+        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+        vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+          (callback, attachment) =>
+            createAdmission((request, grant) => {
+              if (
+                request.stage === "commit" &&
+                isRecord(request.facts) &&
+                isRecord(request.facts.publication) &&
+                request.facts.publication.kind === "session-entry-patch-committed"
+              ) {
+                commitReached = true;
+                controller.abort(refusal);
+              }
+              callback(request, grant);
+            }, attachment),
+        );
+      }
+      const sql = observeHostDataSql();
+      const pending = ensureSkillSnapshot({
+        ...scope,
+        cfg: {},
+        sessionEntry,
+        sessionStore,
+        sessionId: sessionEntry.sessionId,
+        workspaceDir: state.statePath("workspace"),
+        isFirstTurnInSession: true,
+        assertCurrent: () => controller.signal.throwIfAborted(),
+      }).finally(sql.restore);
+
+      if (revokeAtCommit) {
+        await expect(pending).rejects.toBe(refusal);
+        expect(commitReached).toBe(true);
+        expect(loadSessionEntry(scope)).toEqual(originalEntry);
+        expect(sessionStore[scope.sessionKey]).toEqual(sessionEntry);
+      } else {
+        const result = await pending;
+        expect(result).toMatchObject({
+          systemSent: true,
+          sessionEntry: {
+            sessionId: sessionEntry.sessionId,
+            systemSent: true,
+            skillsSnapshot: { prompt: "", skills: [] },
+          },
+        });
+        expect(loadSessionEntry(scope)).toEqual(result.sessionEntry);
+      }
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    });
+  },
+);
 
 it("prepares current sandbox and approval skill eligibility without caller-thread SQL", async () => {
   const root = tempDirs.make("openclaw-skill-exec-");

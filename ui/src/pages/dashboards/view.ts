@@ -49,21 +49,6 @@ function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
   return { id, label: actor?.label?.trim() || id };
 }
 
-function renderDashboardPreview(
-  row: DashboardRow,
-  gatewaySnapshot: ApplicationGatewaySnapshot | undefined,
-  error: string | null,
-) {
-  return html`<div class="dashboard-preview" aria-hidden="true" inert>
-    <openclaw-dashboard-preview
-      .gatewaySnapshot=${gatewaySnapshot}
-      .sessionKey=${row.key}
-      .agentId=${row.agentId}
-      .error=${error}
-    ></openclaw-dashboard-preview>
-  </div>`;
-}
-
 function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalleryFilters) {
   const query = filters.query.trim().toLocaleLowerCase();
   return (data.result?.sessions ?? [])
@@ -122,7 +107,14 @@ function renderDashboardCard(
         }
       }}
     >
-      ${renderDashboardPreview(row, gatewaySnapshot, previewError)}
+      ${html`<div class="dashboard-preview" aria-hidden="true" inert>
+        <openclaw-dashboard-preview
+          .gatewaySnapshot=${gatewaySnapshot}
+          .sessionKey=${row.key}
+          .agentId=${row.agentId}
+          .error=${previewError}
+        ></openclaw-dashboard-preview>
+      </div>`}
       <div class="dashboard-card__body">
         <div class="dashboard-card__heading">
           <h2>${title}</h2>

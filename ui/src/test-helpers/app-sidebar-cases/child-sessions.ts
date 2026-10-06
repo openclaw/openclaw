@@ -91,6 +91,7 @@ describe("AppSidebar agent chip", () => {
       includeGlobal: false,
       includeUnknown: false,
       configuredAgentsOnly: true,
+      excludeDock: true,
     });
     const childRows = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-recent-session--child")];
     const parentTree = sidebar.querySelector('[data-session-tree="agent:main:parent"]');

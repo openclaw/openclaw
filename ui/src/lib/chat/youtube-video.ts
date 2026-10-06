@@ -32,13 +32,8 @@ export function parseYouTubeVideoUrl(raw: string | undefined): YouTubeVideo | un
   if (!raw) {
     return undefined;
   }
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return undefined;
-  }
-  if (url.protocol !== "https:" || url.username || url.password || url.port) {
+  const url = URL.parse(raw);
+  if (!url || url.protocol !== "https:" || url.username || url.password || url.port) {
     return undefined;
   }
   const query = url.searchParams;

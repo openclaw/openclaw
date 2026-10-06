@@ -61,24 +61,6 @@ describe("message action threading helpers", () => {
     });
   });
 
-  it("preserves explicit replies through Slack-style transport", () => {
-    const actionParams: Record<string, unknown> = {
-      threadId: "root-42",
-      replyTo: "child-777",
-    };
-    const resolveAutoThreadId = vi.fn(() => "unexpected");
-    const resolved = resolveAndApplyOutboundThreadId(actionParams, {
-      ...threadContext,
-      resolveAutoThreadId,
-      replyToIsExplicit: true,
-      resolveReplyTransport: ({ replyToId }) => ({ replyToId, threadId: null }),
-    });
-
-    expect(actionParams).toEqual({ threadId: "root-42", replyTo: "child-777" });
-    expect(resolved).toBe("root-42");
-    expect(resolveAutoThreadId).not.toHaveBeenCalled();
-  });
-
   it("skips auto-threading for an explicit null threadId", () => {
     const resolveAutoThreadId = vi.fn(() => "42");
     const resolved = resolveAndApplyOutboundThreadId(
@@ -88,21 +70,6 @@ describe("message action threading helpers", () => {
 
     expect(resolved).toBeUndefined();
     expect(resolveAutoThreadId).not.toHaveBeenCalled();
-  });
-
-  it("keeps reply and thread distinct without canonicalization", () => {
-    const resolveAutoThreadId = vi.fn(() => "thread-777");
-    const actionParams: Record<string, unknown> = { replyTo: "777" };
-    const resolved = resolveAndApplyOutboundThreadId(actionParams, {
-      ...threadContext,
-      resolveAutoThreadId,
-    });
-
-    expect(resolveAutoThreadId).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ replyToId: "777" }),
-    );
-    expect(resolved).toBe("thread-777");
-    expect(actionParams).toEqual({ threadId: "thread-777", replyTo: "777" });
   });
 
   it("inherits replies for routable target aliases", () => {

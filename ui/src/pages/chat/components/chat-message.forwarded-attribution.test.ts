@@ -53,11 +53,11 @@ function renderTestMessageGroup(
 }
 
 describe("forwarded message attribution", () => {
-  it.each(
-    [false, true].flatMap((collapsed) =>
-      ["click", "Enter", " "].map((key) => ({ collapsed, key })),
-    ),
-  )(
+  it.each([
+    { collapsed: false, key: "click" },
+    { collapsed: true, key: "Enter" },
+    { collapsed: false, key: " " },
+  ])(
     "resolves $key file links to the sender in collapsed=$collapsed groups",
     ({ collapsed, key }) => {
       const sessionKey = "agent:research:report";

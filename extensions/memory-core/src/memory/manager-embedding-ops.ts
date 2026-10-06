@@ -17,7 +17,6 @@ import {
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
-import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import {
   withMemoryWorkspaceLock,
   withMemoryWorkspacePreparation,
@@ -73,8 +72,8 @@ type PreparedMemoryIndexEntry = {
 
 // Retry attempts are host control state. Provider-thrown values stay opaque so
 // they cannot override the counter or break accounting when they are immutable.
-type MemoryBatchRetryResult<T> =
-  | { kind: "success"; value: T }
+type MemoryBatchRetryResult =
+  | { kind: "success"; value: number[][] | null }
   | { kind: "failure"; error: unknown; attempts: 1 | 2 };
 
 function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
@@ -304,28 +303,56 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     }
 
     const missingChunks = missingCandidates.map((candidate) => candidate.chunk);
-    const batchResult = await this.runBatchWithFallback({
-      provider: provider.id,
-      run: () =>
-        batchEmbed({
-          agentId: this.agentId,
-          chunks: missingChunks,
-          wait: this.batch.wait,
-          concurrency: this.batch.concurrency,
-          pollIntervalMs: this.batch.pollIntervalMs,
-          timeoutMs: this.batch.timeoutMs,
-          debug: (message, data) =>
-            log.debug(message, { ...data, source, chunks: candidates.length, ...debugContext }),
-        }),
-      fallback: () =>
-        this.embedChunksInBatches(missingCandidates, generation, EMBEDDING_BATCH_MAX_TOKENS),
-    });
-    const batchEmbeddings = batchResult.value;
-    if (!batchEmbeddings) {
-      return this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS);
-    }
-    if (batchResult.kind === "batch") {
+    const batchResult = this.batch.enabled
+      ? await this.runBatchWithTimeoutRetry({
+          provider: provider.id,
+          run: () =>
+            batchEmbed({
+              agentId: this.agentId,
+              chunks: missingChunks,
+              wait: this.batch.wait,
+              concurrency: this.batch.concurrency,
+              pollIntervalMs: this.batch.pollIntervalMs,
+              timeoutMs: this.batch.timeoutMs,
+              debug: (message, data) =>
+                log.debug(message, { ...data, source, chunks: candidates.length, ...debugContext }),
+            }),
+        })
+      : null;
+    let batchEmbeddings: number[][];
+    // Completion accounting is synchronous: concurrent batches cannot interleave updates.
+    if (batchResult?.kind === "success") {
+      if (this.batchFailure.count > 0) {
+        log.debug("memory embeddings: batch recovered; resetting failure count");
+      }
+      // An in-flight success clears failures without re-enabling disabled batching.
+      this.batchFailure = { count: 0 };
+      if (!batchResult.value) {
+        return this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS);
+      }
+      batchEmbeddings = batchResult.value;
       await this.persistGeneratedEmbeddings(missingCandidates, batchEmbeddings, generation);
+    } else {
+      if (batchResult) {
+        const message = formatErrorMessage(batchResult.error);
+        const forceDisable = isEmbeddingBatchUnavailableError(batchResult.error);
+        if (this.batch.enabled) {
+          const count =
+            this.batchFailure.count +
+            (forceDisable ? this.batchFailureLimit : batchResult.attempts);
+          this.batchFailure = { count, lastError: message, lastProvider: provider.id };
+          this.batch.enabled = !(forceDisable || count >= this.batchFailureLimit);
+        }
+        const suffix = this.batch.enabled ? "keeping batch enabled" : "disabling batch";
+        log.warn(
+          `memory embeddings: ${provider.id} batch failed (${this.batchFailure.count}/${this.batchFailureLimit}); ${suffix}; falling back to non-batch embeddings: ${message}`,
+        );
+      }
+      batchEmbeddings = await this.embedChunksInBatches(
+        missingCandidates,
+        generation,
+        EMBEDDING_BATCH_MAX_TOKENS,
+      );
     }
     for (const [index, item] of missing.entries()) {
       embeddings[item.index] = batchEmbeddings[index] ?? [];
@@ -518,10 +545,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     return await runEmbeddingOperationWithTimeout({ timeoutMs, message, run: () => promise });
   }
 
-  private async runBatchWithTimeoutRetry<T>(params: {
+  private async runBatchWithTimeoutRetry(params: {
     provider: string;
-    run: () => Promise<T>;
-  }): Promise<MemoryBatchRetryResult<T>> {
+    run: () => Promise<number[][] | null>;
+  }): Promise<MemoryBatchRetryResult> {
     try {
       return { kind: "success", value: await params.run() };
     } catch (error) {
@@ -536,43 +563,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     } catch (error) {
       return { kind: "failure", error, attempts: 2 };
     }
-  }
-
-  private async runBatchWithFallback<T>(params: {
-    provider: string;
-    run: () => Promise<T>;
-    fallback: () => Promise<number[][]>;
-  }): Promise<{ kind: "batch"; value: T } | { kind: "fallback"; value: number[][] }> {
-    if (!this.batch.enabled) {
-      return { kind: "fallback", value: await params.fallback() };
-    }
-    const result = await this.runBatchWithTimeoutRetry({
-      provider: params.provider,
-      run: params.run,
-    });
-    // Completion accounting is synchronous: concurrent batches cannot interleave updates.
-    if (result.kind === "success") {
-      if (this.batchFailure.count > 0) {
-        log.debug("memory embeddings: batch recovered; resetting failure count");
-      }
-      // An in-flight success clears failures without re-enabling disabled batching.
-      this.batchFailure = { count: 0 };
-      return { kind: "batch", value: result.value };
-    }
-
-    const message = formatErrorMessage(result.error);
-    const forceDisable = isEmbeddingBatchUnavailableError(result.error);
-    if (this.batch.enabled) {
-      const count =
-        this.batchFailure.count + (forceDisable ? this.batchFailureLimit : result.attempts);
-      this.batchFailure = { count, lastError: message, lastProvider: params.provider };
-      this.batch.enabled = !(forceDisable || count >= this.batchFailureLimit);
-    }
-    const suffix = this.batch.enabled ? "keeping batch enabled" : "disabling batch";
-    log.warn(
-      `memory embeddings: ${params.provider} batch failed (${this.batchFailure.count}/${this.batchFailureLimit}); ${suffix}; falling back to non-batch embeddings: ${message}`,
-    );
-    return { kind: "fallback", value: await params.fallback() };
   }
 
   protected getIndexConcurrency(): number {
@@ -595,8 +585,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     embeddings: number[][],
     vectorReady: boolean,
   ): Promise<void> {
+    const database = this.database;
+    const sourceDatabase = generation?.database ?? this.publishedDatabase;
+    const session =
+      source === "sessions"
+        ? {
+            agentId: this.agentId,
+            sessionId: expectDefined(entry.sessionId, "memory index session identity"),
+          }
+        : undefined;
     await withMemoryWorkspaceLock(this.workspaceDir, async () => {
-      const database = this.database;
       const assertCurrent = () => {
         this.memoryFiles?.assertCurrent();
         if (
@@ -604,30 +602,30 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           database.closed ||
           !database.db.isOpen ||
           this.database !== database ||
-          (generation &&
-            (generation.database !== this.publishedDatabase ||
-              generation.database.closed ||
-              !generation.database.db.isOpen ||
-              this.syncProviderGeneration !== generation))
+          sourceDatabase !== this.publishedDatabase ||
+          sourceDatabase.closed ||
+          !sourceDatabase.db.isOpen ||
+          (generation && this.syncProviderGeneration !== generation)
         ) {
           throw new Error("Memory source owner changed before replacement");
         }
-        // The workspace lock remains held through the Worker reply. Forget's
-        // tombstone writer uses this same lock and bumps the publication revision.
-        if (
-          source === "sessions" &&
-          hasMemorySessionTombstone(
-            (generation?.database ?? database).db,
-            this.agentId,
-            expectDefined(entry.sessionId, "memory index session identity"),
-          )
-        ) {
+      };
+      if (session) {
+        // Forget shares this cross-process lock. The prepared predicate remains
+        // current through native commit only while this lock and original owner
+        // stay retained; a shadow's empty tombstone table cannot authorize it.
+        const predicate = await sourceDatabase.read(
+          { type: "session.current", input: session },
+          assertCurrent,
+        );
+        assertCurrent();
+        if (predicate === "forgotten") {
           this.markFailedFullReindexRetry({ memory: false, sessions: true });
           throw new Error(
             "A session was forgotten while memory indexing was running; retry the memory index.",
           );
         }
-      };
+      }
       const createReplacement = (): MemorySourceIndexReplacement => ({
         entry: { path: entry.path, hash: entry.hash, mtimeMs: entry.mtimeMs, size: entry.size },
         chunks,
@@ -635,13 +633,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         model: generation?.provider?.model ?? "fts-only",
         now: Date.now(),
         vectorReady,
-        ...(source === "sessions"
-          ? {
-              source,
-              agentId: this.agentId,
-              sessionId: expectDefined(entry.sessionId, "memory index session identity"),
-            }
-          : { source }),
+        ...(session ? { source: "sessions", ...session } : { source: "memory" }),
       });
       const prepare = async (): Promise<boolean> => {
         if (source === "memory") {
@@ -686,12 +678,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
 
   private async prepareIndexEntry(
     entry: MemoryIndexEntry,
-    options: { source: MemorySource; content?: string },
+    source: MemorySource,
     generation: MemorySyncProviderGeneration | null,
   ): Promise<PreparedMemoryIndexEntry | null> {
-    const source = options.source;
     const kind = entry.kind;
-    const suppliedContent = options.content ?? entry.content;
+    const suppliedContent = entry.content;
     const prepare = async (): Promise<PreparedMemoryIndexEntry | null> => {
       if (kind === "multimodal") {
         const multimodalChunk: Awaited<
@@ -798,7 +789,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       await runWithConcurrency(
         items.map(
           (item) => async () =>
-            await this.indexFileWithGeneration(item.entry, { source: item.source }, generation),
+            await this.indexFileWithGeneration(item.entry, item.source, generation),
         ),
         this.getIndexConcurrency(),
       );
@@ -882,14 +873,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
 
     for (const item of items) {
       if (item.entry.kind === "multimodal") {
-        await this.indexFileWithGeneration(item.entry, { source: item.source }, generation);
+        await this.indexFileWithGeneration(item.entry, item.source, generation);
         continue;
       }
-      const preparedEntry = await this.prepareIndexEntry(
-        item.entry,
-        { source: item.source },
-        generation,
-      );
+      const preparedEntry = await this.prepareIndexEntry(item.entry, item.source, generation);
       if (!preparedEntry) {
         continue;
       }
@@ -913,13 +900,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     await flushPrepared("end");
   }
 
-  protected async indexFile(
-    entry: MemoryIndexEntry,
-    options: { source: MemorySource; content?: string },
-  ): Promise<void> {
+  protected async indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void> {
     this.beginSyncProviderGeneration();
     try {
-      await this.indexFileWithGeneration(entry, options, this.syncProviderGeneration);
+      await this.indexFileWithGeneration(entry, source, this.syncProviderGeneration);
     } finally {
       this.endSyncProviderGeneration();
     }
@@ -927,14 +911,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
 
   private async indexFileWithGeneration(
     entry: MemoryIndexEntry,
-    options: { source: MemorySource; content?: string },
+    source: MemorySource,
     generation: MemorySyncProviderGeneration | null,
   ): Promise<void> {
     // Multimodal files require an embedding provider; skip in FTS-only mode.
     if (generation?.kind !== "semantic" && entry.kind === "multimodal") {
       return;
     }
-    const prepared = await this.prepareIndexEntry(entry, options, generation);
+    const prepared = await this.prepareIndexEntry(entry, source, generation);
     if (!prepared) {
       return;
     }
@@ -951,7 +935,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         source: prepared.source,
       }));
       embeddings = this.batch.enabled
-        ? await this.embedChunksWithBatch(candidates, options.source, generation)
+        ? await this.embedChunksWithBatch(candidates, source, generation)
         : await this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS);
     } catch (err) {
       const message = formatErrorMessage(err);

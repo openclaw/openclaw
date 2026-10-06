@@ -1,10 +1,14 @@
 import type { AgentMessage } from "@openclaw/agent-core";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type {
   SessionTranscriptBoundedActiveContext,
   SessionTranscriptContextVersion,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import type { SessionBranchSummary } from "./session-accessor.types.js";
+import type {
+  SessionTranscriptRuntimeTarget,
+  SessionBranchSummary,
+} from "./session-accessor.types.js";
 
 export type SessionTitleFields = {
   firstUserMessage: string | null;
@@ -39,6 +43,7 @@ export type SessionTranscriptModelContext = {
 
 export type SessionTranscriptReadSnapshot = {
   events: TranscriptEvent[];
+  eventJson?: string[];
   version: SessionTranscriptContextVersion;
 };
 
@@ -67,3 +72,10 @@ export type SessionTranscriptEventMatch =
       deliveryMirror?: boolean;
     }
   | { kind: "active-assistant"; runId: string };
+
+export type SessionContextMessagesWorkerInput = {
+  kind: "context-messages";
+  target: SessionTranscriptRuntimeTarget;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+  expectedIdentity?: import("../../infra/sqlite-worker-identity.js").DatabaseFileIdentity;
+};

@@ -6,7 +6,11 @@ import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
-import type { RuntimeSessionFactsResult } from "./types-session-facts.js";
+import type {
+  RuntimeSessionFactsResult,
+  RuntimeSessionFactsSelection,
+  RuntimeSessionFactsSelectionResult,
+} from "./types-session-facts.js";
 
 export type { RuntimeLogger };
 
@@ -154,6 +158,11 @@ export type PluginRuntime = PluginRuntimeCore & {
     readSessionFacts: (params: {
       sessionKeys: readonly string[];
     }) => Promise<RuntimeSessionFactsResult>;
+    /** Select immutable current session facts, retaining caller authority through the consumer. */
+    withSessionFacts: <T>(
+      select: RuntimeSessionFactsSelection,
+      run: (snapshot: RuntimeSessionFactsSelectionResult) => Promise<T>,
+    ) => Promise<T>;
     /** Keyed fact invalidations; callers own unsubscribe. Broad store changes are excluded. */
     subscribeSessionChanges: (
       listener: (event: { agentId: string; sessionKey: string; factsInvalidated?: string }) => void,
@@ -166,6 +175,18 @@ export type PluginRuntime = PluginRuntimeCore & {
       },
       run: (assertCurrent: () => void) => Promise<T>,
     ) => Promise<T>;
+    /** Resolve public GitHub identity with the Gateway credential; never retry anonymously. */
+    resolveGitHubAccount?: (params: { login: string; signal?: AbortSignal }) => Promise<
+      | { accountId: number; login: string; error?: never }
+      | {
+          error: {
+            statusCode: number;
+            message: string;
+            retryAtMs?: number;
+            credentialConfigured: boolean;
+          };
+        }
+    >;
   };
   subagent: {
     /** Fresh, tool-free background inference under the existing subagent model policy. */
@@ -244,5 +265,5 @@ export type CreatePluginRuntimeOptions = {
 /** Checked contract for both the path-loaded factory and its implementation. */
 export type PluginRuntimeFactory = (
   options?: CreatePluginRuntimeOptions,
-  base?: Pick<PluginRuntime, "config" | "state" | "system">,
+  base?: Pick<PluginRuntime, "capabilities" | "config" | "state" | "system">,
 ) => PluginRuntime;

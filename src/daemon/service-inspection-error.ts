@@ -150,6 +150,19 @@ export function assertServiceInspectionFallbackAllowed(error: unknown): void {
   }
 }
 
+export type SystemdServiceStartRefusal = {
+  reason: "masked" | "refuse-manual-start" | "disabled-no-start";
+  message: string;
+};
+
+/** A known native start restriction must not collapse into unavailable inspection. */
+export class ServiceStartRefusalError extends Error {
+  constructor(readonly refusal: SystemdServiceStartRefusal) {
+    super(refusal.message);
+    this.name = "ServiceStartRefusalError";
+  }
+}
+
 export class ServiceDefinitionInspectionError extends Error {
   constructor(pathname: string) {
     super(
@@ -173,6 +186,7 @@ export function hasGatewayServiceStopUnsafeError(error: unknown): boolean {
 export function sanitizeServiceInspectionError(error: unknown): Error {
   return error instanceof ServiceInspectionError ||
     error instanceof ServiceDefinitionInspectionError ||
+    error instanceof ServiceStartRefusalError ||
     error instanceof ServiceOwnershipRefusalError
     ? error
     : new Error("SERVICE_DEFINITION_UNKNOWN: Service definition cannot be safely inspected.");

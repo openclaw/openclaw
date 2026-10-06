@@ -755,8 +755,14 @@ module.exports = { stateMigrations: [{
     "closes receipts before rethrowing automatic $blockerId failure",
     async ({ blockerId, property }) => {
       const fixture = await makeCallerModeFixture();
-      const sourcePath = path.join(fixture.stateDir, "settings", "voicewake.json");
-      const sourceBytes = '{"triggers":["hey fixture"]}\n';
+      const sourcePath = path.join(fixture.stateDir, "logs", "config-health.json");
+      const sourceBytes = `${JSON.stringify({
+        entries: {
+          [path.join(fixture.stateDir, "openclaw.json")]: {
+            lastObservedSuspiciousSignature: "leave-me",
+          },
+        },
+      })}\n`;
       fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
       fs.writeFileSync(sourcePath, sourceBytes);
       if (!property) {

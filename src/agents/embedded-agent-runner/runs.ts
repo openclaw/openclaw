@@ -1,8 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  collectErrorGraphCandidates,
+  readErrorCauses,
+} from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { MessageInjectionAuthorityError } from "../../auto-reply/reply/message-injection-authority.js";
+import {
+  MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionAuthorityError,
+  MessageInjectionWithdrawnError,
+} from "../../auto-reply/reply/message-injection-authority.js";
 import type { ReplyMessageInjectionOptions } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   abortActiveReplyRuns,
@@ -54,9 +62,9 @@ import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-disp
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
-  bindEmbeddedMessageInjection,
   createEmbeddedMessageInjectionQueue,
   prepareEmbeddedInjectionAuthority,
+  resolveEmbeddedInjection,
   type EmbeddedInjectionPreparation,
 } from "./message-injection-target.js";
 import {
@@ -375,56 +383,6 @@ function logActiveRunMessageAccepted(sessionId: string): void {
   );
 }
 
-function resolveEmbeddedInjection(
-  sessionId: string,
-  handle: EmbeddedAgentQueueHandle,
-  sourceCanInject?: () => boolean,
-  preparation?: EmbeddedInjectionPreparation,
-  injectionOptions?: ReplyMessageInjectionOptions,
-):
-  | Pick<
-      EmbeddedAgentQueueHandle,
-      "queueMessage" | "claimPendingUserInputAnswer" | "cancelPendingUserInput"
-    >
-  | undefined {
-  try {
-    const guarded = handle.messageInjectionV2;
-    if (guarded?.version === 2) {
-      return bindEmbeddedMessageInjection(
-        sessionId,
-        handle,
-        guarded,
-        sourceCanInject,
-        preparation,
-        injectionOptions,
-      );
-    }
-    // Shipped v2026.8.1 sinks have no source-lifetime enforcement contract.
-    if (sourceCanInject) {
-      return undefined;
-    }
-    const injection = handle.messageInjection;
-    if (injection) {
-      return injection.isAvailable()
-        ? {
-            queueMessage: (text, options) => injection.queueMessage(text, options),
-            claimPendingUserInputAnswer: handle.claimPendingUserInputAnswer?.bind(handle),
-            cancelPendingUserInput: handle.cancelPendingUserInput?.bind(handle),
-          }
-        : undefined;
-    }
-    // Legacy handles predate explicit injection capability. Preserve their
-    // shipped eligibility probe while modern backends use messageInjection.
-    const isAvailable = handle.isStopped ? !handle.isStopped() : handle.isStreaming();
-    return isAvailable ? handle : undefined;
-  } catch (err) {
-    diag.warn(
-      `queue message failed: sessionId=${sessionId} reason=injectable_check_failed err=${String(err)}`,
-    );
-    return undefined;
-  }
-}
-
 export function isEmbeddedAgentRunAbortableForRunId(runId: string): boolean {
   const normalizedRunId = runId.trim();
   if (!normalizedRunId) {
@@ -611,7 +569,13 @@ const queueEmbeddedAgentMessageAsync = createEmbeddedMessageInjectionQueue(async
         ? await prepareEmbeddedInjectionAuthority(sessionId, options, canInject, sourcePreparation)
         : undefined;
     assertCurrent();
-    prepared = prepareEmbeddedAgentQueueMessage(sessionId, options, canInject, authority);
+    prepared = prepareEmbeddedAgentQueueMessage(
+      sessionId,
+      options,
+      canInject,
+      authority,
+      sourcePreparation,
+    );
   } catch (error) {
     if (error instanceof MessageInjectionAuthorityError) {
       return createQueueFailureOutcome(sessionId, "tool_authority_mismatch");
@@ -619,6 +583,7 @@ const queueEmbeddedAgentMessageAsync = createEmbeddedMessageInjectionQueue(async
     return createQueueFailureOutcome(sessionId, "runtime_rejected", formatErrorMessage(error));
   }
   const enqueuedAtMs = Date.now();
+  let queueAccepted = false;
   const unconfirmed = (errorMessage: string): EmbeddedAgentQueueMessageOutcome => {
     diag.warn(
       `queue message accepted without confirmation: sessionId=${sessionId} err=${errorMessage}`,
@@ -636,8 +601,21 @@ const queueEmbeddedAgentMessageAsync = createEmbeddedMessageInjectionQueue(async
     };
   };
   const failed = (error: unknown): EmbeddedAgentQueueMessageOutcome => {
-    if (error instanceof QuestionAnswerUnconfirmedError) {
-      throw error;
+    const candidates = collectErrorGraphCandidates(error, readErrorCauses);
+    const accepted = candidates.findLast(
+      (candidate) => candidate instanceof MessageInjectionAcceptedUnconfirmedError,
+    );
+    const questionUnconfirmed = candidates.findLast(
+      (candidate) => candidate instanceof QuestionAnswerUnconfirmedError,
+    );
+    const withdrawn = candidates.some(
+      (candidate) => candidate instanceof MessageInjectionWithdrawnError,
+    );
+    if (accepted || (queueAccepted && (!withdrawn || questionUnconfirmed))) {
+      return unconfirmed(accepted?.message ?? formatErrorMessage(error));
+    }
+    if (questionUnconfirmed) {
+      throw questionUnconfirmed;
     }
     const errorMessage = formatErrorMessage(error);
     diag.debug(`queue message rejected: sessionId=${sessionId} err=${errorMessage}`);
@@ -667,6 +645,7 @@ const queueEmbeddedAgentMessageAsync = createEmbeddedMessageInjectionQueue(async
           const claim = claimPendingUserInputAnswer(text, options);
           release();
           if (await claim) {
+            queueAccepted = true;
             options.onQueueAccepted?.(true);
             options.onQueueSettled?.();
             logActiveRunMessageAccepted(sessionId);
@@ -686,9 +665,20 @@ const queueEmbeddedAgentMessageAsync = createEmbeddedMessageInjectionQueue(async
     return outcome;
   }
   try {
-    const delivery = prepared.queueMessage(text, prepared.options);
+    if (prepared.prepareQueueMessage) {
+      await prepared.prepareQueueMessage();
+    }
+    const delivery = prepared.queueMessage(text, {
+      ...prepared.options,
+      onQueueAccepted: (accepted) => {
+        // Once the backend owns input, observer failures cannot release it for replay.
+        queueAccepted ||= accepted;
+        prepared.options.onQueueAccepted?.(accepted);
+      },
+    });
     release();
     const queueResult = await delivery;
+    queueAccepted = true;
     if (queueResult?.transcriptCommit === "unconfirmed") {
       return unconfirmed(queueResult.errorMessage);
     }
@@ -713,8 +703,10 @@ function prepareEmbeddedAgentQueueMessage(
   options?: ReplyMessageInjectionOptions,
   sourceCanInject?: () => boolean,
   prepared?: { fingerprint?: string; preparation: EmbeddedInjectionPreparation },
+  sourcePreparation?: EmbeddedInjectionPreparation,
 ): PreparedEmbeddedAgentQueueMessage {
-  prepared?.preparation.assertCurrent();
+  const preparation = prepared?.preparation ?? sourcePreparation;
+  preparation?.assertCurrent();
   const reject = (reason: EmbeddedAgentQueueFailureReason): PreparedEmbeddedAgentQueueMessage => ({
     kind: "complete",
     outcome: createQueueFailureOutcome(sessionId, reason),
@@ -744,7 +736,7 @@ function prepareEmbeddedAgentQueueMessage(
     sessionId,
     handle,
     sourceCanInject,
-    prepared?.preparation,
+    preparation,
     options,
   );
   if (!injection) {
@@ -835,6 +827,7 @@ function prepareEmbeddedAgentQueueMessage(
     kind: "embedded_run",
     runId: handle.runId,
     queueMessage: injection.queueMessage,
+    prepareQueueMessage: injection.prepareQueueMessage,
     options: backendOptions,
   };
 }

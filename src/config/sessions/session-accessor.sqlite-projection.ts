@@ -1,5 +1,4 @@
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
@@ -78,12 +77,55 @@ import {
   commitSessionLifecycleProjectionInWorker,
   projectSessionEntryLifecycleMutationInWorker,
 } from "./session-lifecycle-projection.js";
-import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
+import { SessionMaintenancePreservationConflictError } from "./session-mutation-conflict-error.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
+import {
+  prepareSessionMaintenancePreservation,
+  type PreparedSessionMaintenancePreservation,
+} from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import { normalizeResolvedMaintenanceConfigInput } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 export { applySessionEntryExactReplacements as applySessionEntryReplacements } from "./session-accessor.sqlite-replacement-projection.js";
+
+function assertMaintenancePreservationCompatible(
+  sent: SessionMaintenancePreservationSnapshot,
+  current: SessionMaintenancePreservationSnapshot,
+  plans?: readonly SessionEntryMaintenancePlan[],
+): void {
+  const added = new Set(
+    (["providerKeys", "workIdentities", "lifecycleIdentities"] as const).flatMap((kind) => {
+      const previous = new Set(sent[kind].map((id) => id.trim()));
+      return current[kind]
+        .flatMap((id) => (previous.has(id.trim()) ? [] : [id.trim(), normalizeStoreSessionKey(id)]))
+        .filter(Boolean);
+    }),
+  );
+  // Lost protection only over-preserves the sent plan, so it cannot invalidate a commit.
+  if (added.size === 0) {
+    return;
+  }
+  // Matching provider keys against session IDs only makes rare conflicts more conservative.
+  const protectsRow = (sessionKey: string, sessionId?: string) =>
+    added.has(sessionKey.trim()) ||
+    added.has(normalizeStoreSessionKey(sessionKey)) ||
+    (sessionId && added.has(sessionId.trim()));
+  if (
+    !plans ||
+    plans.some(
+      (plan) =>
+        plan.entryRemovals.some((row) =>
+          protectsRow(row.sessionKey, row.expectedEntry?.sessionId),
+        ) ||
+        plan.archivedEntries.some((row) => protectsRow(row.sessionKey, row.sessionId)) ||
+        plan.stateDeletePlans.some((row) => protectsRow("", row.sessionId)),
+    )
+  ) {
+    throw new SessionMaintenancePreservationConflictError();
+  }
+}
 
 /** Applies exact lifecycle removals/upserts using SQLite session rows. */
 export async function applySessionEntryLifecycleMutation(
@@ -193,15 +235,17 @@ export async function applySessionEntryLifecycleMutation(
               }
             : {}),
           commit: async (assertSourceCurrent?: () => void) => {
-            if (
-              reclamationOptions &&
-              (!hasPreparedNativeSessionDeletion() ||
-                captureNativeSessionWorkerDeletion(deletedOwners))
-            ) {
-              const preparedPreservation = params.skipMaintenance
-                ? undefined
-                : await prepareSessionMaintenancePreservation(params.storePath);
-              try {
+            const nativeMaintenance =
+              !reclamationOptions ||
+              (hasPreparedNativeSessionDeletion() &&
+                !captureNativeSessionWorkerDeletion(deletedOwners));
+            const preparedPreservation = params.skipMaintenance
+              ? undefined
+              : await prepareSessionMaintenancePreservation(params.storePath, {
+                  native: nativeMaintenance,
+                });
+            try {
+              if (reclamationOptions && !nativeMaintenance) {
                 const maintenance: SessionEntryMaintenanceInput | null = preparedPreservation
                   ? {
                       activeSessionKey: params.activeSessionKey ?? "",
@@ -220,14 +264,14 @@ export async function applySessionEntryLifecycleMutation(
                   params.commitGuard?.();
                   assertSourceCurrent?.();
                 };
-                const assertPreservationCurrent = () => {
-                  if (
-                    maintenance &&
-                    preparedPreservation &&
-                    !isDeepStrictEqual(maintenance.preservation, preparedPreservation.capture())
-                  ) {
-                    throw new Error(
-                      "Session maintenance protection changed before lifecycle removal",
+                const assertPreservationCurrent = (
+                  plans?: readonly SessionEntryMaintenancePlan[],
+                ) => {
+                  if (maintenance?.preservation && preparedPreservation) {
+                    assertMaintenancePreservationCompatible(
+                      maintenance.preservation,
+                      preparedPreservation.capture(),
+                      plans,
                     );
                   }
                 };
@@ -237,7 +281,11 @@ export async function applySessionEntryLifecycleMutation(
                       database: reclamationOptions,
                       execution,
                       assertCurrent,
-                      assertPreservationCurrent,
+                      assertPrepared: () => {
+                        preparedPreservation?.capture();
+                      },
+                      assertCandidate: (candidate) =>
+                        assertPreservationCurrent(candidate.result.maintenancePlans),
                       onLifecycleCommitted: params.onLifecycleCommitted,
                       input: {
                         agentId: resolved.agentId,
@@ -284,26 +332,27 @@ export async function applySessionEntryLifecycleMutation(
                   );
                 }
                 return withArchivePublication(result.value);
-              } finally {
-                preparedPreservation?.dispose();
               }
+              return await withSqliteSessionDatabase(toDatabaseOptions(resolved), (database) =>
+                withNativeSessionCommitContext(
+                  database,
+                  resolved.env,
+                  (source) =>
+                    commitProjectedLifecycleMutation(
+                      materializedRemovalPlans,
+                      removalArchiveMaterializationFailed,
+                      preparedPreservation,
+                      () => {
+                        assertSourceCurrent?.();
+                        source?.assertCurrent();
+                      },
+                    ),
+                  params.afterCommitted,
+                ),
+              );
+            } finally {
+              preparedPreservation?.dispose();
             }
-            return withSqliteSessionDatabase(toDatabaseOptions(resolved), (database) =>
-              withNativeSessionCommitContext(
-                database,
-                resolved.env,
-                (source) =>
-                  commitProjectedLifecycleMutation(
-                    materializedRemovalPlans,
-                    removalArchiveMaterializationFailed,
-                    () => {
-                      assertSourceCurrent?.();
-                      source?.assertCurrent();
-                    },
-                  ),
-                params.afterCommitted,
-              ),
-            );
           },
         };
       },
@@ -317,6 +366,7 @@ export async function applySessionEntryLifecycleMutation(
     function commitProjectedLifecycleMutation(
       removalPlans: MaterializedSessionStateDeletePlan[],
       materializationFailed: boolean,
+      preservation: PreparedSessionMaintenancePreservation | undefined,
       assertSourceCurrent?: () => void,
     ) {
       const commitResult = runOpenClawAgentWriteTransaction(
@@ -345,7 +395,8 @@ export async function applySessionEntryLifecycleMutation(
                 maintenanceConfig: params.maintenanceOverride
                   ? { ...resolveMaintenanceConfig(), ...params.maintenanceOverride }
                   : undefined,
-                skipMaintenance: params.skipMaintenance,
+                preservation: preservation?.capture,
+                refreshCandidates: preservation?.refreshCandidates,
                 storePath: params.storePath,
               }),
           });
@@ -515,6 +566,9 @@ export async function purgeDeletedAgentSessionEntries(
     "session.agent-purge.prepare",
   );
   const materializedPlans = await materializeSessionStateDeletePlans(prepared.deletePlans);
+  const preservation = await prepareSessionMaintenancePreservation(params.storePath, {
+    native: true,
+  });
   const committed = await withSqliteSessionDeletions(
     resolved,
     prepared.entryRemovals.flatMap(({ expectedEntry: entry, sessionKey }) =>
@@ -562,6 +616,8 @@ export async function purgeDeletedAgentSessionEntries(
                   activeSessionKey: "",
                   archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
                   storePath: params.storePath,
+                  preservation: preservation.capture,
+                  refreshCandidates: preservation.refreshCandidates,
                 }),
               );
               return publish;
@@ -574,7 +630,7 @@ export async function purgeDeletedAgentSessionEntries(
         },
         "session.agent-purge.commit",
       ),
-  );
+  ).finally(() => preservation.dispose());
   const { archivedTranscripts: maintenanceArchivedTranscripts } =
     await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
       resolved,

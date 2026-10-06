@@ -202,9 +202,7 @@ export function createOpenClawStateLeaseWorkerStorage(
       const timer = startOpenClawStateLeaseTimer({
         observation: params.observation,
         heartbeatMs: params.heartbeatMs,
-        async renew() {
-          await renew();
-        },
+        renew,
         onRenewError(error) {
           try {
             owner.rethrowIfUncertain(error, undefined);
@@ -244,6 +242,7 @@ export function createOpenClawStateLeaseWorkerStorage(
         const cleanupContext = {
           environment: context.environment,
           existingSchemaPath: context.existingSchemaPath,
+          stateIntegrity: context.stateIntegrity,
         };
         // Canonical close seals reads first; this owner retains only release authority.
         const store = await openOpenClawStateWorkerCleanupStore(

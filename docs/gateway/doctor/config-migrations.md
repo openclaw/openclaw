@@ -184,6 +184,27 @@ original files before stopping the running Gateway. The same early check reports
 the existing recovery guidance for a retired `plugins/installs.json` index. See
 [state migration recovery](/gateway/doctor/state-and-sessions).
 
+Voice Wake trigger/routing JSON, plugin-binding approvals,
+current-conversation bindings, ACP replay `acp/event-ledger.json`, and
+`restart-sentinel.json` are retired. Their last writers shipped before July 1.
+A leftover `update-check.json` is only a notification cache, so Doctor and
+updates ignore it.
+Doctor and update admission preserve the files and refuse with the intermediate
+upgrade path: install `2026.9.7`, run `openclaw doctor --fix` on the original
+host, then retry. Interrupted ACP and restart-sentinel import claims are also
+preserved. Current SQLite state and the supported config-health importer remain
+unchanged. Plugin-binding approvals retain their original default-home scope;
+a custom state directory does not inspect another profile's approval file.
+
+Startup leaves these retired files for Doctor. When `openclaw gateway run` or
+a local `openclaw message send` prepares that state, it continues without
+importing the files, logs a warning, and retains that deferred outcome in the
+startup diagnostics. Their presence alone does not prevent bootstrap or a
+recovery restart. Gateway-routed message clients leave state preparation to the
+running Gateway.
+If this advisory inspection fails, startup records the error with guidance to
+run `openclaw doctor` and continues without changing the files.
+
 Doctor also refuses these retired config inputs:
 
 - `agents.defaults.llm`, agent `embeddedPi`, `embeddedHarness`, whole-agent
@@ -194,6 +215,10 @@ Doctor also refuses these retired config inputs:
 - `memorySearch.store.path`, including its agent and `memory.search` forms.
 - `plugins.installs`, `gateway.webchat`, `session.parentForkMaxTokens`,
   `browser.relayBindHost`, and `browser.ssrfPolicy.allowPrivateNetwork`.
+- Extension browser profiles with a legacy `cdpUrl`. Current extension profiles
+  discover their relay endpoint automatically; the extension driver remains supported.
+- The `openai-codex-responses` provider or model API identifier. The intermediate
+  release migrates it to `openai-chatgpt-responses` before the current provider repair.
 - Queue modes `queue`, `steer-backlog`, and `steer+backlog` in `messages.queue.mode`
   or `messages.queue.byChannel`.
 - Top-level `heartbeat`, `routing.allowFrom`, and `routing.groupChat`.
@@ -228,10 +253,13 @@ can use the intermediate release above to remove it.
 OAuth credential sidecars under `credentials/auth-profiles/` are retired. Their
 last writer shipped in `2026.5.16-beta.3` on May 16, 2026; `2026.5.16-beta.4`
 removed that writer. Doctor detects these files without reading credentials or
-accessing encryption keys. Upgrade through `2026.9.7` and run
-`openclaw doctor --fix` on the original host before retrying. The supported
-`auth.json`, `auth-profiles.json`, SQLite credential, and migration-recovery
-contracts remain unchanged.
+accessing encryption keys. When a legacy `auth-profiles.json` still references
+one, upgrade through `2026.9.7` and run `openclaw doctor --fix` on the original
+host before retrying. Sidecars that no legacy profile references stay in place
+and do not block the upgrade; `2026.9.7` also keeps them, because agent
+directories outside its scan might still use them. The supported `auth.json`,
+`auth-profiles.json`, SQLite credential, and migration-recovery contracts
+remain unchanged.
 
 ## Cron ownership before roster migration
 
@@ -855,7 +883,6 @@ against the current SQLite owners before the import can rename profiles.
     | `plugins.entries.voice-call.config.streaming.sttProvider`                                        | `plugins.entries.voice-call.config.streaming.provider`                      |
     | `plugins.entries.voice-call.config.streaming.openaiApiKey`/`sttModel`/`silenceDurationMs`/`vadThreshold` | `plugins.entries.voice-call.config.streaming.providers.openai.*`             |
     | `models.providers.*.api: "openai"`                                                               | `"openai-completions"` (gateway startup also skips providers whose `api` is a future/unknown enum value rather than failing closed) |
-    | `browser.profiles.*.driver: "extension"` with a stale `cdpUrl`                                  | driver preserved; stale relay URL removed                                     |
     | `mcp.servers.*.type`, `nodeHost.mcp.servers.*.type` (CLI-native aliases)                           | corresponding `transport` field                                            |
     | `mcp.servers.*.disabled`                                                                         | inverse `mcp.servers.*.enabled`                                              |
     | MCP timeout aliases `connectTimeout`/`connect_timeout`/`timeout`                                 | `connectionTimeoutMs`/`requestTimeoutMs`                                    |

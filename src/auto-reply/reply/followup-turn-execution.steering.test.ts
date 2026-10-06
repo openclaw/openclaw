@@ -131,6 +131,7 @@ describe("queued turn steering", () => {
               supportsTaskSuggestions: false,
             },
             session: {
+              agentId: "main",
               cfg: {},
               entry,
               sessionKey,

@@ -52,6 +52,7 @@ import {
 import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 import {
   assertSupportedTurn,
+  captureWorkerTurnInputAuthority,
   finalizeWorkerTurnResult,
   emitProviderReplayRejected,
   fitLaunchDescriptorWithRuntimeIdentity,
@@ -77,6 +78,7 @@ export async function executeWorkerTurn(
   },
 ) {
   const { placement, turn: input } = params;
+  const backend = "cloud-worker";
   await using preparedRuntime = await acquireAgentRunPreparedModelRuntime(
     {
       config: input.config ?? {},
@@ -115,34 +117,26 @@ export async function executeWorkerTurn(
   turn.abortSignal?.throwIfAborted();
 
   const startedAt = Date.now();
-  await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
+  await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration, backend });
   params.assertRunCurrent?.();
   turn.abortSignal?.throwIfAborted();
   if (!params.placements.validateTurnClaim(params.turnClaim)) {
     throw new Error("Worker turn claim is no longer current");
   }
-  turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
+  turn.onExecutionPhase?.({ phase: "runner_entered", backend });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
   const recorder = turn.userTurnTranscriptRecorder;
   let blocked = false;
-  const assertTurnInputCurrent = () => {
-    params.assertRunCurrent?.();
-    turn.abortSignal?.throwIfAborted();
-    if (recorder?.isBlocked() && !blocked) {
-      throw new Error("Cloud worker turn input is blocked");
-    }
-  };
-  const assertSourceCurrent = () => {
-    assertTurnInputCurrent();
-    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
-  };
-  const assertContextCurrent = () => {
-    assertTurnInputCurrent();
-    if (!params.placements.validateTurnClaim(params.turnClaim)) {
-      throw new Error("Worker turn claim changed during context preparation");
-    }
-    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
-  };
+  const { assertTurnInputCurrent, assertSourceCurrent, assertContextCurrent } =
+    captureWorkerTurnInputAuthority({
+      transcriptTarget,
+      recorder,
+      signal: turn.abortSignal,
+      assertRunCurrent: params.assertRunCurrent,
+      isBlocked: () => blocked,
+      placements: params.placements,
+      turnClaim: params.turnClaim,
+    });
   assertContextCurrent();
   if (recorder?.hasRuntimePersistencePending()) {
     await recorder.waitForRuntimePersistence();
@@ -376,6 +370,7 @@ export async function executeWorkerTurn(
         const tools = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
           params.environments.createGatewayTools?.({
             identity,
+            inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
             skillWorkshop,
             portalAvailable,
             prepareTools: async (adapters) => {
@@ -626,7 +621,7 @@ export async function executeWorkerTurn(
       throw new Error("Queued child results lost authority before worker prompt injection");
     }
     recorder?.markSentToProvider?.();
-    turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend: "cloud-worker" });
+    turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend });
     const handoffAbort = new AbortController();
     let handoffError: Error | undefined;
     let handoffPending: Promise<void> | undefined;
@@ -641,7 +636,7 @@ export async function executeWorkerTurn(
           ? { requiresTerminalReceipt: true }
           : undefined,
       );
-      turn.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
+      turn.onExecutionPhase?.({ phase: "process_spawned", backend });
       handoffPending = (async () => {
         try {
           if (!(await params.environments.acknowledgeCredentialDelivery(credential))) {

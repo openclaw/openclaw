@@ -192,11 +192,9 @@ export {
   updateSessionProfileInvolvement,
   updateSessionProfileInvolvementAsync,
 } from "./session-involvement-store.js";
-export {
-  MAX_SESSION_PARTICIPANTS,
-  recordSessionParticipant,
-  type RecordSessionParticipantResult,
-} from "./session-accessor.sqlite-participants.js";
+export { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
+export type { RecordSessionParticipantResult } from "./session-accessor.sqlite-participants.native.js";
+export { recordSessionParticipantInWorker as recordSessionParticipant } from "./session-sharing-store.async.js";
 export { type SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 export {
   listCanonicalSessionRepairFacts,
@@ -302,7 +300,6 @@ export {
   resolveSessionTranscriptDatabasePath,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeTarget,
-  resolveSessionTranscriptRuntimeTarget as resolveSessionTranscriptRuntimeReadTarget,
 } from "./session-accessor.transcript-target.js";
 
 export {

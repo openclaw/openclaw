@@ -3,7 +3,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
-  listLegacyOAuthSidecarPaths,
+  listReferencedLegacyOAuthSidecarPaths,
 } from "../../commands/doctor-auth-legacy-paths.js";
 import { planLegacyConfigForUpdateChannel } from "../../commands/doctor/legacy-config-repair.js";
 import { findRetiredConfigUpgradeRequirement } from "../../commands/doctor/shared/retired-config-formats.js";
@@ -24,6 +24,7 @@ import {
   assertNoRetiredStateFiles,
   RetiredStateFormatError,
 } from "../../infra/state-migrations.retired-files.js";
+import { assertNoRetiredRuntimeStateFiles } from "../../infra/state-migrations.retired-runtime-files.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   parseUpdateAdmissionContext,
@@ -240,6 +241,7 @@ async function inspectUpdateAdmission(
             // The saved partition reads SQLite; admit its schema before inspecting live files
             // that published updaters omit from their later rehearsal snapshots.
             const stateDir = resolveStateDir(databaseContext.env);
+            assertNoRetiredRuntimeStateFiles(stateDir, databaseContext.env);
             assertNoRetiredStateFiles(
               "JSON delivery queues",
               listRetiredDeliveryQueueFiles(stateDir),
@@ -248,11 +250,11 @@ async function inspectUpdateAdmission(
               resolveLegacyInstalledPluginIndexStorePath({ stateDir }),
             ]);
             assertNoRetiredStateFiles("OAuth credential sidecars", [
-              ...listLegacyOAuthSidecarPaths(
+              ...listReferencedLegacyOAuthSidecarPaths(
                 env,
                 snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
               ),
-              ...listLegacyOAuthSidecarPaths(databaseContext.env, databaseContext.config),
+              ...listReferencedLegacyOAuthSidecarPaths(databaseContext.env, databaseContext.config),
             ]);
             assertNoRetiredStateFiles(
               "Cron state",

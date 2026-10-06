@@ -218,7 +218,6 @@ function replayPendingSessionMessageReload(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
   presentation: ChatPanePresentation,
-  supersedeInFlight = false,
 ): boolean {
   const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
   const payloadSessionKey = payload?.sessionKey?.trim();
@@ -234,7 +233,6 @@ function replayPendingSessionMessageReload(
   state.pendingSessionMessageReloadSessionKey = null;
   void loadChatHistory(state, {
     deferBranches: !presentation(),
-    supersedeInFlight,
   }).finally(() => state.requestUpdate?.());
   return true;
 }
@@ -568,7 +566,10 @@ export function handlePageGatewayEvent(
         refreshPullRequestsForStreamedLinks(state, payload.runId, payload.deltaText);
       }
       const shouldRefreshPullRequests = finalAssistantReplyHasPullRequestLink(state, payload);
-      handleChatGatewayEvent(state, payload);
+      if (handleChatGatewayEvent(state, payload) === "injected") {
+        requestChatPageUpdate(state);
+        return;
+      }
       if (terminalPayload && sessionMatches) {
         clearPendingQueueItemsForRun(state, terminalPayload.runId);
       }

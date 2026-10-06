@@ -3,12 +3,7 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import "../../styles/channels.css";
-import type {
-  ChannelsStatusSnapshot,
-  ChannelStatus,
-  NostrStatus,
-  WhatsAppStatus,
-} from "../../api/types.ts";
+import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/openclaw-mascot.ts";
@@ -19,17 +14,13 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
-import {
-  channelEnabled,
-  renderChannelRefreshAction,
-  resolveChannelDisplayState,
-} from "./view.shared.ts";
-import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
+import { renderChannelRefreshAction, resolveChannelDisplayState } from "./view.shared.ts";
+import type { ChannelKey, ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
 type ChannelCardState = "running" | "configured" | "attention";
@@ -46,10 +37,11 @@ const RECOMMENDED_CHANNEL_ORDER: ChannelKey[] = [
 ];
 
 export function renderChannels(props: ChannelsProps) {
-  const channelOrder = resolveChannelOrder(props.channels.channelsSnapshot);
+  const snapshot = props.channels.channelsSnapshot;
+  const channelOrder = resolveChannelOrder(snapshot);
   // Key both lists so status updates cannot retarget an in-flight channel click.
-  const connected = channelOrder.filter((key) => channelEnabled(key, props));
-  const available = channelOrder.filter((key) => !channelEnabled(key, props));
+  const connected = channelOrder.filter((key) => channelSnapshotEntryIsActive(snapshot, key));
+  const available = channelOrder.filter((key) => !channelSnapshotEntryIsActive(snapshot, key));
   const showingStaleSnapshot = Boolean(
     props.channels.channelsLoading &&
     props.channels.channelsSnapshot &&
@@ -59,7 +51,6 @@ export function renderChannels(props: ChannelsProps) {
     props.channels.channelsSnapshot?.warnings
       ?.filter((warning) => warning.trim())
       .map((warning) => formatUiExternalText(warning)) ?? [];
-  const data = buildChannelData(props);
   const selected = props.selectedChannel;
 
   return html`
@@ -136,7 +127,6 @@ export function renderChannels(props: ChannelsProps) {
             label: resolveChannelLabel(props, selected),
             pluginIconUrl: props.presentation.pluginIconUrls[selected],
             props,
-            data,
             onClose: () => props.onCloseDetail(),
             onSetup: () => props.onStartSetup(selected),
           })
@@ -167,21 +157,6 @@ export function renderChannels(props: ChannelsProps) {
     }
     ${renderChannelPairingPrompt(props)}
   `;
-}
-
-function buildChannelData(props: ChannelsProps): ChannelsChannelData {
-  const channels = props.channels.channelsSnapshot?.channels as Record<string, unknown> | null;
-  return {
-    whatsapp: (channels?.whatsapp ?? undefined) as WhatsAppStatus | undefined,
-    telegram: (channels?.telegram ?? undefined) as ChannelStatus | undefined,
-    discord: (channels?.discord ?? null) as ChannelStatus | null,
-    googlechat: (channels?.googlechat ?? null) as ChannelStatus | null,
-    slack: (channels?.slack ?? null) as ChannelStatus | null,
-    signal: (channels?.signal ?? null) as ChannelStatus | null,
-    imessage: (channels?.imessage ?? null) as ChannelStatus | null,
-    nostr: (channels?.nostr ?? null) as NostrStatus | null,
-    channelAccounts: props.channels.channelsSnapshot?.channelAccounts ?? null,
-  };
 }
 
 export function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {

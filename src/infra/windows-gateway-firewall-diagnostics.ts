@@ -146,7 +146,6 @@ export type WindowsGatewayFirewallDiagnostic = {
 type WindowsGatewayFirewallCommandResult = {
   code: number | null;
   stdout: string;
-  stderr?: string;
   stdoutTruncatedBytes?: number;
   stderrTruncatedBytes?: number;
 };
@@ -258,7 +257,7 @@ function stringField(row: Record<string, unknown>, ...keys: string[]): string {
 }
 
 function normalizeProfileName(value: string): string {
-  const normalized = value.trim().toLowerCase();
+  const normalized = value.toLowerCase();
   if (normalized === "domainauthenticated") {
     return "domain";
   }
@@ -392,10 +391,7 @@ function formatProfiles(activeProfileNames: string[]): string {
 }
 
 function formatRuleNames(rules: FirewallRule[]): string {
-  return rules
-    .map((rule) => rule.displayName)
-    .filter(Boolean)
-    .join(", ");
+  return rules.map((rule) => rule.displayName).join(", ");
 }
 
 function classifyWindowsGatewayFirewallState(

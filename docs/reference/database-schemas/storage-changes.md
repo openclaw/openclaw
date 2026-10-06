@@ -27,16 +27,55 @@ A committed finalization returns its session change to the host for notification
 refused or rolled-back finalization publishes no readiness notification. Unknown
 write outcomes are never replayed.
 
-Preflight and readiness polling use the existing read-only transcript worker.
+Global projection preflight and search readiness use the projection maintenance
+owner's connection-local facts. Transactional TEMP triggers queue affected sessions
+for appends, rewrites, projection publication, deletion, cold-storage moves, and raw
+local SQL. A fresh foreign-commit probe or schema change restarts bounded admission;
+indexed seeks skip whole session ranges instead of scanning transcript rows. Each
+maintenance transaction examines at most 128 sessions and deletes at most 512
+orphan rows per projection table. A status request stops after 32 batches;
+incomplete admission remains pending and the existing reconcile cadence resumes it.
+Reconciliation yields between bounded batches until an ordered traversal completes,
+then gives the observed pending backlog to the scheduler and awaits its rebuild.
+It can rebuild that work even when foreign writes prevent clean certification;
+the owner retains traversal completion so another status caller cannot hide that
+progress. Changes discovered afterward continue on the existing cadence, including
+newer revisions of sessions that were already rebuilt.
+Foreign commits invalidate readiness without resetting
+an in-progress cursor. Maintenance reaches later keys before starting another pass,
+and only a full pass at a stable foreign revision can certify a clean store.
+The planner consumes this owner's pending list.
+Search also verifies that its original reader connection and revision remain current
+after readiness returns; a changed hit snapshot keeps the indexing hint. Read-only
+searches also retain their results with that conservative hint when writable
+maintenance is unavailable.
+Clean status reads reuse these facts without entering a write transaction or
+requesting write grants until a mutation invalidates them; connection close
+discards them. No durable tables or migration are added. Shipped synchronous
+SDK callbacks into process-held incognito storage and operator maintenance retain
+their native reconciliation adapter; moving those callbacks to another thread
+requires a separate SDK cutover. Their one-shot orphan cleanup retains ordered,
+indexed owner-set differences
+rather than per-row membership probes.
+
+Per-session readiness polling uses the existing read-only transcript worker.
 Readiness waits retain their original execution owner across lazy reader loading
 and forward cancellation to queued reads. Re-admission after retirement waits for
 the canonical database close, including native cleanup, to finish. A committed
-finalization stays successful if retirement prevents a subsequent orphan sweep
+finalization stays successful if retirement prevents any later orphan-sweep batch
 from starting; the next preflight detects and removes any remaining derived rows.
 Incognito, maintenance, and deletion scopes keep their current native owner.
 Canonical shutdown joins accepted publication and planner lease cleanup; a newer
 scheduled owner cannot be consumed by an older retired pass. Schemas, retention,
 permissions, and update behavior are unchanged.
+
+The transcript reconcile pool admits the smallest pending session backlog first,
+with original operation order breaking ties. At a completed session boundary, a
+planner yields only to a strictly smaller waiting backlog and reserves its place
+before releasing the worker. Each resumed pass refreshes its backlog in preflight.
+Direct reconciliation awaits its observed backlog; Gateway startup runs that
+maintenance after readiness, with cancellation tied to startup lifetime. The pool
+retains one worker, and lease release tasks bypass backlog admission.
 
 Deferred agent recovery reads deletion status through the shared-state worker.
 Native preparation checks the current journal before transaction and commit
@@ -2260,24 +2299,49 @@ contracts, and update behavior are unchanged; no migration is required.
 The accepted trajectory retention design keeps canonical runtime events in the
 per-agent store and replaces its derived `idx_agent_trajectory_runtime_run`
 index with `(session_id, run_id, created_at, octet_length(event_json))`. The
-existing worker-owned append transaction aggregates directly from that covering
-index. The materialized staging query is removed; no summary table, trigger,
+retention read worker aggregates directly from that covering index, outside the
+append transaction. No materialized event-size staging, summary table, trigger,
 counter, second index, or new persistence owner is introduced.
 
 Writable database admission atomically repairs the same-name index through the
 canonical index owner, with its existing integrity checks. This is an index-only
 change at agent schema 24; no schema-version bump or event conversion is required.
-The one-time rebuild reads retained trajectory rows and temporarily holds a probe
-index and replacement. Later event writes maintain the byte-length expression,
+The one-time rebuild reads retained trajectory rows and builds the replacement
+once inside a savepoint; rollback restores the old index on failure. Gateway
+startup defers that repair to its agent preparation worker after the listener
+binds. Later event writes maintain the byte-length expression,
 including null run IDs. Older same-version writable owners can rebuild their
 prior partial index on downgrade or binary rollback without changing event rows.
 Strict read-only validation may require that writable repair before reopening.
 
 Retention keeps the 14-day age rule, whole-run eviction, current-session exemption,
 512 MiB default global budget, JSONL separator accounting, and existing database
-encoding semantics. Per-session trimming still measures UTF-8 bytes. First-use
-and hourly handle-local sweeps, postcommit cadence publication, atomic append
-outcomes, permissions, and durability are unchanged.
+encoding semantics. Per-session trimming still measures UTF-8 bytes. Appends
+serialize events before writer admission and commit independently of global
+cleanup. First-use and hourly cleanup uses one lifecycle-owned reader and deletion
+transactions bounded to 16 runs and 10 MiB, allowing one oversized complete run.
+Deletion revalidates only the selected batch under writer admission: run identity,
+newest timestamp, bytes, event count, and the protected session. The read worker
+aggregates run summaries once per sweep. A native-owner cursor drains that snapshot
+in bounded batches; selection and sorting run before the deletion transaction.
+
+The retention owner holds mutation receipts only for the active sweep. Committed
+appends publish their retained session's run summaries, including per-session trims.
+The owner replaces affected snapshot sessions with these receipts, so writes that
+overlap snapshot creation are neither lost nor counted twice. Its byte and expiry
+facts settle each batch without waiting for a write-free read. No receipts are
+published after a rollback. A connection-local mutation count and fresh
+`PRAGMA data_version` probes fence changes outside those receipts, including foreign
+commits. Such a change requires a new read-worker snapshot, never a writer-held
+scan. One refresh is allowed per sweep; another leaves cleanup due on the next
+append. Committed deletions survive refreshes. A shared lease fence invalidates
+receipts on cancellation or owner release; native connection replacement cannot
+reuse them. Nested synchronous appends defer cleanup until an independent append.
+
+This in-memory receipt and conservative-refresh design was accepted by the
+maintainer on 2026-10-05. Permissions, durability, schemas, retained-row policy,
+and update behavior are unchanged. WAL checkpoint scheduling remains with the
+existing maintenance owner.
 
 A synthetic 241,697-event fixture measured the aggregate at 31–40 ms versus
 407–453 ms with the staged query, with all 3,836 groups equal. The replacement
@@ -2285,10 +2349,35 @@ index occupied 7,712,768 bytes versus 6,598,656 bytes for the old partial index,
 about 1.06 MiB more. A warm 320-row insert/rollback probe was roughly 0.7 ms for
 both shapes, excluding commit, cache eviction, and checkpoint amplification.
 These are component measurements, not production throughput or end-to-end hold
-guarantees. Regression proof captures the append's aggregate plan, requires
-covering access without temporary grouping or table-body reads, compares grouped
-results for null and named runs, and opens a populated old-index fixture through
+guarantees. Regression proof captures the retention read's aggregate plan, requires
+covering access without temporary grouping or table-body reads, asserts retained
+events for null and named runs, and opens a populated old-index fixture through
 canonical admission without changing its version or rows.
+
+## Talk voice-session lookup indexes
+
+The voice-session lookup change keeps the existing `cache_entries` JSON bodies
+and table shape. Two partial expression indexes contain only valid JSON records
+whose status is `open`: one indexes agent, session key, and origin for legacy
+client inference; the other indexes update time for stale recovery. Malformed
+JSON and closed records do not enter either index. JSON expressions are guarded
+individually, so unrelated cache values need not contain JSON.
+
+This is an index-only change under the storage review checkpoint. Writable
+admission installs or repairs the indexes through the canonical index owner;
+existing records need no Doctor conversion or schema-version bump. Initial
+installation scans the cache table once. Subsequent writes maintain index entries
+only while a voice record is open. Older same-version readers ignore the additive
+indexes; upgrade, downgrade, and rollback preserve record bytes and retention.
+
+Legacy inference and stale candidate decoding run in the existing agent history
+reader. Recovery rechecks the cutoff inside the close transaction, so a concurrent
+resume is not closed from an earlier snapshot. Synchronous tool policy retains at
+most 128 compact voice facts per native connection, invalidated by the admitted
+schema, foreign-commit data version, or local mutation revision. Transactions and
+pinned or authorizer-controlled reads do not reuse those facts. Closing the native
+connection retires its cache. Confirmation capability remains available to bound
+consults after call closure, independently of the open-state check.
 
 ## Review checkpoint for material changes
 

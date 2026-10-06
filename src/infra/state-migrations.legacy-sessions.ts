@@ -224,8 +224,6 @@ export async function migrateLegacySessions(
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
     scope: detected.targetScope,
-    skipCrossAgentRemap: detected.sessions.preserveAmbiguousKeys,
-    preserveCanonicalAgentOwner: true,
     preserveAmbiguousKeys: detected.sessions.preserveAmbiguousKeys,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
     legacySessionSurfaces: options.legacySessionSurfaces.surfaces,
@@ -347,7 +345,6 @@ export async function migrateLegacyAgentDir(
     const duplicates: string[] = [];
     const directories: string[] = [];
     const movedFiles: { sourcePath: string; destinationPath: string }[] = [];
-    let plan: ReturnType<typeof planLegacyAgentDir> | undefined;
     let sourceRoot = legacyDir;
     let targetRoot = targetDir;
     let retainedRoot = legacyDir;
@@ -441,7 +438,7 @@ export async function migrateLegacyAgentDir(
         );
       }
       // Ownership inspection can materialize a SQLite shared-memory sidecar; inventory afterward.
-      plan = planLegacyAgentDir(sourceRoot, targetDir);
+      const plan = planLegacyAgentDir(sourceRoot, targetDir);
       preserveSource = plan.families.length > 0;
       for (const family of plan.families) {
         const database = path.join(sourceRoot, family.relative);

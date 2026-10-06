@@ -95,7 +95,7 @@ describe("agent session resolution", () => {
       const store = path.join(home, "sessions.json");
       const cfg = mockConfig(home, store);
 
-      const resolution = resolveSession({ cfg, sessionId: "explicit-session-123" });
+      const resolution = await resolveSession({ cfg, sessionId: "explicit-session-123" });
 
       expect(resolution.sessionKey).toBe("agent:main:explicit:explicit-session-123");
       expect(resolution.sessionId).toBe("explicit-session-123");
@@ -122,7 +122,7 @@ describe("agent session resolution", () => {
           { sessionId: "research-session", updatedAt: Date.now() },
         );
 
-        const resolution = resolveSession({ cfg, sessionId: "research-session" });
+        const resolution = await resolveSession({ cfg, sessionId: "research-session" });
 
         expect(resolution.sessionId).toBe("research-session");
         expect(resolution.sessionAgentId).toBe("research");
@@ -153,7 +153,7 @@ describe("agent session resolution", () => {
       });
       const cfg = mockConfig(home, storePattern, { other: {}, retired: {} }, "retired");
 
-      const resolution = resolveSession({ cfg, sessionId: "run-dup" });
+      const resolution = await resolveSession({ cfg, sessionId: "run-dup" });
 
       expect(resolution.sessionKey).toBe("agent:retired:acp:run-dup");
       expect(resolution.storePath).toBe(retiredStore);
@@ -182,7 +182,7 @@ describe("agent session resolution", () => {
         },
       };
 
-      const resolution = resolveSession({ cfg, sessionKey: "main" });
+      const resolution = await resolveSession({ cfg, sessionKey: "main" });
 
       expect(resolution.sessionId).toBe("origin-provider-reset");
       expect(resolution.isNewSession).toBe(false);
@@ -271,7 +271,7 @@ describe("agent session resolution", () => {
         const cfg = mockConfig(home, store);
         cfg.session = { ...cfg.session, mainKey: scenario.mainKey };
 
-        const resolution = resolveSession({ cfg, sessionKey: scenario.requestedSessionKey });
+        const resolution = await resolveSession({ cfg, sessionKey: scenario.requestedSessionKey });
 
         expect(resolution.sessionKey).toBe(scenario.storedSessionKey);
         expect(resolution.isNewSession).toBe(scenario.expectNewSession);
@@ -322,7 +322,7 @@ describe("agent session resolution", () => {
       );
       const cfg = mockConfig(home, store);
 
-      const resolution = resolveSession({ cfg, sessionId });
+      const resolution = await resolveSession({ cfg, sessionId });
 
       expect(resolution.sessionKey).toBe("agent:main:main");
       expect(resolution.sessionId).toBe(sessionId);
@@ -368,7 +368,7 @@ describe("agent session resolution", () => {
 
   it("forwards resolved outbound session context when resuming by sessionId", async () => {
     await withCrossAgentResumeFixture(async ({ sessionId, sessionKey, cfg }) => {
-      const resolution = resolveSession({ cfg, sessionId });
+      const resolution = await resolveSession({ cfg, sessionId });
       expect(resolution.sessionKey).toBe(sessionKey);
       const agentId = resolveSessionAgentId({ sessionKey: resolution.sessionKey, config: cfg });
       const outboundContext = buildOutboundSessionContext({

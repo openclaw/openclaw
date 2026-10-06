@@ -4,13 +4,26 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveXAccount } from "./accounts.js";
+import { XAllowlistChangedError } from "./allowlist.js";
 import type { XApiClient, XPost } from "./api.js";
 import { getXApi } from "./client.js";
+import type { XSenderTier } from "./guest-policy.js";
 import { resolveXIngress } from "./ingress.js";
 import { resolveXRecipient } from "./recipient.js";
 import { sendXReply, XPartialReplyError, type XVisibleWorkSession } from "./reply.js";
 import { getXRuntime } from "./runtime.js";
+import { XBudgetExceededError } from "./spend.js";
 import { normalizeXReplyTarget } from "./target.js";
+
+function rethrowReplyAuthorizationError(cause: unknown): never {
+  if (cause instanceof XAllowlistChangedError) {
+    throw new PlatformMessageNotDispatchedError("X reply allowlist changed during authorization.", {
+      cause,
+      retryable: false,
+    });
+  }
+  throw cause;
+}
 
 export function xReceipt(postIds: string[], replyToId: string) {
   return createMessageReceiptFromOutboundResults({
@@ -29,6 +42,7 @@ export async function sendXDelivery(params: {
   mediaUrls?: readonly string[];
   signal?: AbortSignal;
   mention?: XPost;
+  senderTier?: XSenderTier;
   visibleWorkSessions?: XVisibleWorkSession[];
   assertDirectAdapterHandoff?: () => void;
 }) {
@@ -49,10 +63,14 @@ export async function sendXDelivery(params: {
     );
   }
   const readConfig = createRuntimeConfigReader(params.cfg);
+  const runtime = getXRuntime();
   const assertHandoff = () => {
     try {
       params.signal?.throwIfAborted();
       params.assertDirectAdapterHandoff?.();
+      if (getXRuntime() !== runtime) {
+        throw new Error("X reply runtime was replaced");
+      }
     } catch (cause) {
       if (cause instanceof PlatformMessageNotDispatchedError) {
         throw cause;
@@ -95,7 +113,7 @@ export async function sendXDelivery(params: {
     }
     throw new PlatformMessageNotDispatchedError(
       cause instanceof Error ? cause.message : "X reply preparation failed",
-      { cause, retryable: !params.signal?.aborted },
+      { cause, retryable: !(cause instanceof XBudgetExceededError) && !params.signal?.aborted },
     );
   }
   const { account, api, mention } = prepared;
@@ -106,8 +124,7 @@ export async function sendXDelivery(params: {
     if (
       !current.enabled ||
       current.userId !== account.userId ||
-      mention.author_id === current.userId ||
-      !(await resolveXIngress(account.accountId, mention, cfg)).senderAccess.allowed
+      mention.author_id === current.userId
     ) {
       throw new PlatformMessageNotDispatchedError(
         "X reply author is no longer allowed or the account changed.",
@@ -117,15 +134,34 @@ export async function sendXDelivery(params: {
         },
       );
     }
-    assertHandoff();
-    if (cfg !== readConfig()) {
-      throw new PlatformMessageNotDispatchedError(
-        "X reply policy changed during authorization; retry the reply",
-        {
-          cause: undefined,
-        },
-      );
+    const authorization = await resolveXIngress(account.accountId, mention, cfg).catch(
+      rethrowReplyAuthorizationError,
+    );
+    if (
+      !authorization.ingress.senderAccess.allowed ||
+      (params.senderTier && authorization.tier !== params.senderTier)
+    ) {
+      throw new PlatformMessageNotDispatchedError("X reply author is no longer allowed.", {
+        cause: undefined,
+        retryable: false,
+      });
     }
+    const assertCurrent = () => {
+      assertHandoff();
+      try {
+        authorization.assertCurrent();
+      } catch (cause) {
+        rethrowReplyAuthorizationError(cause);
+      }
+      if (cfg !== readConfig()) {
+        throw new PlatformMessageNotDispatchedError(
+          "X reply policy changed during authorization; retry the reply",
+          { cause: undefined },
+        );
+      }
+    };
+    assertCurrent();
+    return assertCurrent;
   };
   try {
     const result = await sendXReply({
@@ -133,7 +169,7 @@ export async function sendXDelivery(params: {
       text: params.text,
       replyToId,
       signature: account.config.replySignature,
-      visibleWorkSessions: params.visibleWorkSessions,
+      visibleWorkSessions: params.senderTier === "guest" ? undefined : params.visibleWorkSessions,
       signal: params.signal,
       assertActive,
     });

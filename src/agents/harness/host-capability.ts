@@ -67,6 +67,7 @@ import {
 import { bindHostSkillCatalog } from "./host-skills.js";
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 import {
+  bindHarnessHostSourceAuthority,
   bindHarnessModelExecution,
   bindHarnessNativeSpawnAuthority,
   retainHarnessSource,
@@ -131,17 +132,6 @@ export function createAgentHarnessHostCapabilities(params: {
       ? inheritedCaller
       : undefined;
   let personalToolParticipants = sourceCaller?.personalToolParticipants;
-  const callerIdentity = createAdmittedGatewayToolCallerIdentity({
-    admittedRunContext: attempt.admittedRunContext,
-    receiptAuthority: assertActive,
-    approvalSignals: [capabilityAbortController.signal, ...(attemptSignal ? [attemptSignal] : [])],
-    agentId: attempt.agentId,
-    sessionKey: attempt.sessionKey,
-    turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,
-    turnSourceTo: attempt.currentMessagingTarget ?? attempt.currentChannelId,
-    turnSourceAccountId: attempt.agentAccountId,
-    turnSourceThreadId: attempt.currentThreadTs,
-  });
   const inactiveError = (message: string) => {
     // Gateway closure can precede the run's abort marker. Keep its captured
     // reason without replacing an earlier user cancellation or deadline.
@@ -154,30 +144,26 @@ export function createAgentHarnessHostCapabilities(params: {
   // A supplied resolver that currently returns no context is a retired binding;
   // only a genuinely absent resolver is exempt from the Gateway liveness fence.
   const boundGatewayContext = getGatewayContextResolver(attempt.admittedRunContext);
-  function assertActive() {
-    if (
-      !active ||
-      attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
-      getAdmittedRunDelegatedAuthority(attempt.admittedRunContext) !== delegatedAuthority ||
-      (boundGatewayContext && callerIdentity?.gatewayContextResolver?.() === undefined)
-    ) {
-      throw inactiveError("agent harness host capability is no longer active");
-    }
-    // The captured worker/source claim owns every host capability use, including
-    // native configuration writes that do not pass through prompt annotation.
-    if (
-      (sourceCaller &&
-        (sourceCaller.agentId !== attempt.agentId ||
-          sourceCaller.sessionKey !== attempt.sessionKey)) ||
-      (sourceCaller?.workerTurnClaim &&
-        (sourceCaller.workerTurnClaim.sessionId !== attempt.sessionId ||
-          sourceCaller.workerTurnClaim.runId !== attempt.runId)) ||
-      (sourceCaller?.workerTurnClaim && !sourceCaller.receiptAuthority) ||
-      sourceCaller?.receiptAuthority?.() === false
-    ) {
-      throw new Error("agent harness host capability lost its source execution claim");
-    }
-  }
+  const assertActive = bindHarnessHostSourceAuthority({
+    attempt,
+    delegatedAuthority,
+    sourceCaller,
+    isActive: () => active,
+    isGatewayCurrent: () =>
+      !boundGatewayContext || callerIdentity?.gatewayContextResolver?.() !== undefined,
+    inactiveError,
+  });
+  const callerIdentity = createAdmittedGatewayToolCallerIdentity({
+    admittedRunContext: attempt.admittedRunContext,
+    receiptAuthority: assertActive,
+    approvalSignals: [capabilityAbortController.signal, ...(attemptSignal ? [attemptSignal] : [])],
+    agentId: attempt.agentId,
+    sessionKey: attempt.sessionKey,
+    turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,
+    turnSourceTo: attempt.currentMessagingTarget ?? attempt.currentChannelId,
+    turnSourceAccountId: attempt.agentAccountId,
+    turnSourceThreadId: attempt.currentThreadTs,
+  });
   const observeCoreTtsToolResult = (result: unknown) => {
     if (typeof result === "object" && result !== null && getCoreTtsToolResultMediaUrls(result)) {
       coreTtsToolResults.add(result);

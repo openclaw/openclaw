@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
-import { withSessionManagerIncognitoActor } from "../agents/sessions/session-manager-incognito-scope.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { IncognitoSessionEndedError } from "../state/incognito-session-error.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
@@ -47,9 +47,7 @@ it("settles accepted actor appends across the real close prelude before closing 
         updatedAt: Date.now(),
       },
     });
-    const manager = await withSessionManagerIncognitoActor(actor, () =>
-      SessionManager.openAsync(target),
-    );
+    const manager = await withIncognitoSessionActor(actor, () => SessionManager.openAsync(target));
     const actorEntered = createDeferredCore();
     held = actor.run(authority, async () => {
       actorEntered.resolve();
@@ -65,21 +63,19 @@ it("settles accepted actor appends across the real close prelude before closing 
       id: "incognito-manager-settlement",
       delayMs: 0,
       run: () =>
-        withSessionManagerIncognitoActor(
+        withIncognitoSessionActor(
           actor,
           async () => {
             const writing = manager.appendMessageAsync(makeUserMessage("accepted before close", 1));
             accepted.resolve();
             await prelude.promise;
-            try {
-              await expect(manager.appendCustomEntryAsync("too-late")).rejects.toThrow();
-            } finally {
-              release.resolve();
-            }
+            const tooLate = manager.appendCustomEntryAsync("too-late");
+            release.resolve();
+            await expect(tooLate).rejects.toThrow();
             const id = await writing;
-            const reopened = await SessionManager.openAsync(target);
-            expect(reopened.getEntries()).toMatchObject([{ id, type: "message" }]);
-            expect(reopened.getEntries()).toHaveLength(1);
+            await expect(SessionManager.openAsync(target)).rejects.toThrow();
+            expect(manager.getEntries()).toMatchObject([{ id, type: "message" }]);
+            expect(manager.getEntries()).toHaveLength(1);
             verified.resolve();
           },
           kernel.scheduler.signal,

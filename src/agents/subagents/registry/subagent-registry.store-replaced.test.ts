@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -6,6 +7,9 @@ import { createGatewayRequestContext } from "../../../gateway/server-request-con
 import { makeContextParams } from "../../../gateway/server-request-context.test-support.js";
 import { resetHeartbeatEventsForTest } from "../../../infra/heartbeat-events.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
+import { resetLogger, setLoggerOverride } from "../../../logging/logger.js";
+import { testApi as loggerTestApi } from "../../../logging/logger.test-support.js";
+import { createDiagnosticLogRecordCapture } from "../../../logging/test-helpers/diagnostic-log-capture.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -29,9 +33,10 @@ import { loadPendingFinalDeliveryPayload } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import * as lifecycleCleanup from "./subagent-registry-lifecycle-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   activateSubagentRegistry,
   initSubagentRegistry,
@@ -70,6 +75,68 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.useRealTimers();
+});
+
+it("reports an ownerless store retirement once per execution across repeated publications", async () => {
+  const { subagent } = records();
+  subagent.requesterStorePath = "original-store";
+  subagent.generation = 1;
+  markSubagentRunPausedAfterYield({ entry: subagent });
+  seedSubagentCompletionDelivery({ subagent });
+  publishCommittedRecords(subagent);
+  const capture = createDiagnosticLogRecordCapture();
+  setLoggerOverride({
+    level: "info",
+    consoleLevel: "silent",
+    file: path.join(tempDirs.make("openclaw-store-retirement-log-"), "retirement.log"),
+  });
+  const retirementRecords = () =>
+    capture.records.filter(
+      (record) =>
+        record.message === "subagent notification store retirement has no current native owner",
+    );
+  try {
+    publishSystemEventStoreResolver(() => "replacement-store");
+    await settleRootWork(true);
+    await vi.advanceTimersByTimeAsync(0);
+    await capture.flush();
+    expect(retirementRecords()).toMatchObject([
+      { level: "INFO", attributes: { runId: subagent.runId } },
+    ]);
+
+    publishSystemEventStoreResolver(() => "replacement-store");
+    await settleRootWork(true);
+    const sameExecution = structuredClone(
+      expectDefined(subagentRuns.get(subagent.runId), "paused notification owner"),
+    );
+    publishCommittedRecords(sameExecution);
+    publishSystemEventStoreResolver(() => "replacement-store");
+    await settleRootWork(true);
+    await vi.advanceTimersByTimeAsync(0);
+    await capture.flush();
+    expect(retirementRecords()).toHaveLength(1);
+    expect(loadSubagentRegistryFromSqlite().get(subagent.runId)).toMatchObject({
+      pauseReason: "sessions_yield",
+      delivery: { status: "pending" },
+    });
+
+    const nextExecution = { ...structuredClone(sameExecution), generation: 2 };
+    seedSubagentCompletionDelivery({ subagent: nextExecution });
+    publishCommittedRecords(nextExecution);
+    publishSystemEventStoreResolver(() => "replacement-store");
+    await settleRootWork(true);
+    await vi.advanceTimersByTimeAsync(0);
+    await capture.flush();
+    expect(retirementRecords()).toMatchObject([
+      { level: "INFO", attributes: { runId: subagent.runId } },
+      { level: "INFO", attributes: { runId: subagent.runId } },
+    ]);
+  } finally {
+    await loggerTestApi.flushFileLogQueueForTests();
+    capture.cleanup();
+    setLoggerOverride(null);
+    resetLogger();
+  }
 });
 
 it.each([false, true])(
@@ -211,7 +278,7 @@ it("keeps an observed late-result store retirement after the original selector r
     },
   );
   try {
-    expect(driver.controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+    expect(driver.controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
     const announce = await entered.promise;
     expect(announce.isCompletionDeliveryAllowed?.()).toBe(false);
     publishSystemEventStoreResolver(() => "original-store");
@@ -239,14 +306,7 @@ it("keeps an observed late-result store retirement after the original selector r
   ).toEqual([]);
 });
 
-it.each([
-  "same",
-  "restore",
-  "unknown retry",
-  "failed",
-  "delivered",
-  "pending acknowledgment",
-] as const)(
+it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"] as const)(
   "keeps automatic child notification disposition through store publication: %s",
   async (change) => {
     const input = change === "failed" ? failedRecords("failed", { status: "error" }) : records();
@@ -255,8 +315,7 @@ it.each([
     input.subagent.controllerStorePath = unknownStore ? undefined : "original-store";
     input.subagent.cleanupCompletedAt = undefined;
     input.subagent.delivery = {
-      status: change === "delivered" ? "delivered" : "pending",
-      ...(change === "delivered" ? { deliveredAt: Date.now(), announcedAt: Date.now() } : {}),
+      status: "pending",
       payload: loadPendingFinalDeliveryPayload(input.subagent),
     };
     const executionBefore = structuredClone(input.subagent.execution);
@@ -390,9 +449,7 @@ it.each([
         .prepare("SELECT id FROM delivery_queue_entries WHERE entry_kind = 'systemEvent'")
         .all(),
     ).toEqual([]);
-    if (change === "delivered") {
-      expect(persisted?.delivery).toEqual(receipt);
-    } else if (change !== "same") {
+    if (change !== "same") {
       expect(persisted?.delivery).toMatchObject({
         status: "suspended",
         disposition: "intentional_non_delivery",

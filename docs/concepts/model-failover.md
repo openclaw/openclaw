@@ -24,6 +24,11 @@ Anthropic streaming errors retain their structured error type, so rate limits,
 overload, and authentication failures follow the same recovery policy even when
 the provider's message is generic.
 
+Local transcript write conflicts do not retry the model, rotate accounts, or
+trigger model fallback. The transcript owner rereads the current revision and
+retries an eligible append once. A repeated conflict is reported as a local
+error; an older reply cannot overwrite or bypass a newer user turn.
+
 Thinking-level recovery applies only when the provider identifies a reasoning or
 thinking parameter. Model/account restrictions and unrelated unsupported options
 keep their original failure classification and follow the configured fallback

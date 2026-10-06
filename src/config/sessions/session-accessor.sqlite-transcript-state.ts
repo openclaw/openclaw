@@ -27,10 +27,10 @@ import {
   resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
 
-function createTranscriptContextVersionQuery(database: Pick<OpenClawAgentDatabase, "db">) {
-  const db = getSessionKysely(database.db);
+const transcriptContextVersionQuery = createSqliteQueryCache((database) => {
+  const db = getSessionKysely(database);
   return prepareSqliteQueryTakeFirstSync<string, SessionTranscriptContextVersion>(
-    database.db,
+    database,
     (parameter) =>
       db
         .selectFrom("transcript_events")
@@ -61,11 +61,7 @@ function createTranscriptContextVersionQuery(database: Pick<OpenClawAgentDatabas
           parameter((sessionId) => sessionId),
         ),
   );
-}
-
-const transcriptContextVersionQuery = createSqliteQueryCache((db) =>
-  createTranscriptContextVersionQuery({ db }),
-);
+});
 
 export function readTranscriptContextVersionInTransaction(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -280,12 +276,13 @@ function normalizeTranscriptMutationAtMs(value: number): number | undefined {
   return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : undefined;
 }
 
-function createTranscriptMutationStateQuery(database: Pick<OpenClawAgentDatabase, "db">) {
-  const db = getSessionKysely(database.db);
+// Only compilation is retained; writer transactions must see their latest mutation fences.
+const transcriptMutationStateQuery = createSqliteQueryCache((database) => {
+  const db = getSessionKysely(database);
   return prepareSqliteQueryTakeFirstSync<
     string,
     { transcript_observed_at: number | null; transcript_updated_at: number | null }
-  >(database.db, (parameter) =>
+  >(database, (parameter) =>
     db
       .selectFrom("session_windows")
       .select(["transcript_observed_at", "transcript_updated_at"])
@@ -295,12 +292,7 @@ function createTranscriptMutationStateQuery(database: Pick<OpenClawAgentDatabase
         parameter((sessionId) => sessionId),
       ),
   );
-}
-
-// Only compilation is retained; writer transactions must see their latest mutation fences.
-const transcriptMutationStateQuery = createSqliteQueryCache((db) =>
-  createTranscriptMutationStateQuery({ db }),
-);
+});
 
 export function readTranscriptMutationStateInTransaction(
   database: OpenClawAgentDatabase,

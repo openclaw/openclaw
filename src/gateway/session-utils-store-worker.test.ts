@@ -2,10 +2,15 @@ import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  prepareGatewaySessionEntryReadOnlyInWorker,
+} from "./session-utils-store-worker.js";
 
 it("prepares complete Gateway entries while preserving main aliases and exact-row isolation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -100,5 +105,62 @@ it("rechecks caller authority before returning prepared Gateway metadata", async
     });
     current = false;
     await expect(read).rejects.toBe(revoked);
+  });
+});
+
+it("retains current alias policy through refused read admission and rejects released or replaced owners", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {} } },
+      session: { mainKey: "primary" },
+    };
+    const sessionKey = "agent:main:primary";
+    const target = { agentId: "main", sessionKey, env };
+    const entry = { sessionId: "retained-alias", updatedAt: 1, sandboxMode: "all" as const };
+    replaceSessionEntrySync(target, entry);
+    const { readPlan } = await prepareGatewaySessionEntryReadOnlyInWorker({
+      cfg,
+      key: "main",
+      agentId: "main",
+      env,
+    });
+    if (!readPlan) {
+      throw new Error("Expected a durable alias read plan");
+    }
+    const retained = readPlan.retainNative();
+    const released = readPlan.retainNative();
+    released.release();
+    expect(() => released.readCurrent()).toThrow("no longer active");
+    const admissionRefused = new Error("Synthetic effect grant forbids reader admission");
+    let inGrant = false;
+    const grant = createOpenClawDatabaseMaintenanceScope({
+      assertOwnerCurrent() {
+        if (inGrant) {
+          throw admissionRefused;
+        }
+      },
+    });
+    try {
+      replaceSessionEntrySync(target, { ...entry, sandboxMode: "off" });
+      grant.run(() => {
+        inGrant = true;
+        try {
+          expect(retained.readCurrent()).toMatchObject({
+            sessionId: "retained-alias",
+            sandboxMode: "off",
+          });
+          expect(() => readPlan.readLegacy()).toThrow(admissionRefused);
+        } finally {
+          inGrant = false;
+        }
+      });
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      await closeOpenClawAgentDatabaseByPathAsync(database.path, "main");
+      replaceSessionEntrySync(target, { ...entry, sessionId: "replacement-owner" });
+      expect(() => retained.readCurrent()).toThrow(/changed|no longer current/);
+    } finally {
+      retained.release();
+      await grant.close();
+    }
   });
 });

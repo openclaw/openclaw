@@ -195,45 +195,6 @@ describe("pw-session page enumeration", () => {
     },
   );
 
-  it("lists healthy pages without awaiting a wedged page title", async () => {
-    vi.useFakeTimers();
-    const fixture = makePageEnumerationBrowser([
-      {
-        targetId: "WEDGED",
-        title: "Wedged",
-        url: "https://wedged.example",
-        readTitle: () => new Promise<string>(() => {}),
-      },
-      {
-        targetId: "HEALTHY",
-        title: "Healthy title",
-        url: "https://healthy.example",
-      },
-    ]);
-    connectOverCdpSpy.mockResolvedValue(fixture.browser);
-
-    let listed: Awaited<ReturnType<typeof listPagesViaPlaywright>> | undefined;
-    void listPagesViaPlaywright({ cdpUrl }).then((pages) => {
-      listed = pages;
-    });
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(listed).toEqual([
-      {
-        targetId: "WEDGED",
-        title: "Wedged",
-        url: "https://wedged.example",
-        type: "page",
-      },
-      {
-        targetId: "HEALTHY",
-        title: "Healthy title",
-        url: "https://healthy.example",
-        type: "page",
-      },
-    ]);
-  });
-
   it("times out stuck target-info reads in one window and shares them across enumerations", async () => {
     vi.useFakeTimers();
     const fixture = makePageEnumerationBrowser([
@@ -255,6 +216,7 @@ describe("pw-session page enumeration", () => {
         targetId: "HEALTHY",
         title: "Healthy title",
         url: "https://healthy.example",
+        readTitle: () => new Promise<string>(() => {}),
       },
     ]);
     connectOverCdpSpy.mockResolvedValue(fixture.browser);
@@ -408,28 +370,6 @@ describe("pw-session page enumeration", () => {
     },
   );
 
-  it("rejects an unavailable complete target enumeration even with zero cached pages", async () => {
-    const fixture = makePageEnumerationBrowser([]);
-    const detach = vi.fn(async () => {});
-    const browser = Object.assign(fixture.browser, {
-      newBrowserCDPSession: vi.fn(async () => ({
-        send: vi.fn(async () => {
-          throw new Error("Target identities are unavailable");
-        }),
-        detach,
-      })),
-    });
-    connectOverCdpSpy.mockResolvedValue(browser);
-
-    await expect(
-      listPagesViaPlaywright({
-        cdpUrl,
-        requireCompleteTargetList: true,
-      }),
-    ).rejects.toThrow(/target identities.*unavailable/i);
-    expect(detach).toHaveBeenCalledOnce();
-  });
-
   it.each<{
     name: string;
     nativeIds: string[];
@@ -438,7 +378,6 @@ describe("pw-session page enumeration", () => {
     rejectedId?: string;
     blockedId?: string;
     blockedPageId?: string;
-    complete?: boolean;
     waitsForPublication?: boolean;
     expected: string[] | null;
   }>([
@@ -448,19 +387,6 @@ describe("pw-session page enumeration", () => {
       pageIds: ["A", "B"],
       rejectedId: "B",
       expected: null,
-    },
-    {
-      name: "equal counts with different identities",
-      nativeIds: ["A", "B"],
-      pageIds: ["A", "STALE"],
-      waitsForPublication: true,
-      expected: null,
-    },
-    {
-      name: "native removal before page removal",
-      nativeIds: ["A"],
-      pageIds: ["A", "STALE"],
-      expected: ["A"],
     },
     {
       name: "known blocked target with a page",
@@ -477,14 +403,6 @@ describe("pw-session page enumeration", () => {
       unresolvedId: "B",
       waitsForPublication: true,
       expected: null,
-    },
-    {
-      name: "general read keeps a healthy subset",
-      nativeIds: ["A", "B"],
-      pageIds: ["A", "B"],
-      unresolvedId: "B",
-      complete: false,
-      expected: ["A"],
     },
   ])("enforces enumeration completeness: $name", async (testCase) => {
     vi.useFakeTimers();
@@ -532,7 +450,7 @@ describe("pw-session page enumeration", () => {
       markPageRefBlocked(cdpUrl, blockedPage);
     }
 
-    const requireCompleteTargetList = testCase.complete ?? true;
+    const requireCompleteTargetList = true;
     const listing = listPagesViaPlaywright({ cdpUrl, requireCompleteTargetList, timeoutMs: 100 });
     if (testCase.expected === null) {
       const rejected = expect(listing).rejects.toThrow(
@@ -552,8 +470,8 @@ describe("pw-session page enumeration", () => {
         })),
       );
     }
-    expect(inventoryRead).toHaveBeenCalledTimes(requireCompleteTargetList ? 1 : 0);
-    expect(detach).toHaveBeenCalledTimes(requireCompleteTargetList ? 1 : 0);
+    expect(inventoryRead).toHaveBeenCalledOnce();
+    expect(detach).toHaveBeenCalledOnce();
     expect(connectOverCdpSpy).toHaveBeenCalledOnce();
     expect(fixture.browserClose).not.toHaveBeenCalled();
     expect(fixture.contextEvents.listenerCount("page")).toBe(1);

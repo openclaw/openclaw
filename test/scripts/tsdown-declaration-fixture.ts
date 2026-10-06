@@ -184,6 +184,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "tsdown-build.mts",
     "pnpm-runner.mts",
     "run-node-watch-paths.mts",
+    "runtime-postbuild-shared.mjs",
     "windows-cmd-helpers.mjs",
     "write-plugin-sdk-entry-dts.ts",
     "write-unified-entry-dts.ts",

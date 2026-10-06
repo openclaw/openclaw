@@ -3,14 +3,11 @@ import {
   type SessionEntryReadWorkerOwner,
 } from "../../config/sessions/session-entry-read-runtime.js";
 import type { IncognitoSessionAuthority } from "../../config/sessions/session-incognito-contract.js";
-import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
-import {
-  captureAcpSessionReadContext,
-  type AcpSessionReadContextInput,
-} from "./session-meta-read-context.js";
+import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
+import type { AcpSessionEntryReadInput } from "./session-meta-read.types.js";
 import {
   readAcpSessionMetaForEntries,
   readAcpSessionMetaForEntry,
@@ -21,11 +18,11 @@ import {
   type AcpSessionStoreEntry,
 } from "./session-meta-store.js";
 
-export type AcpSessionEntryReadInput = AcpSessionReadContextInput & {
-  sessionKey: string;
-  agentId?: string;
-  clone?: boolean;
-};
+export type {
+  AcpSessionEntryPreparer,
+  AcpSessionEntryReadInput,
+  PreparedAcpSessionEntryRead,
+} from "./session-meta-read.types.js";
 
 /** Retain the canonical session source through its lifecycle-bound ACP metadata join. */
 export async function readAcpSessionEntryAsync(
@@ -48,7 +45,7 @@ export async function readAcpSessionEntryAsync(
     if (target.agentId !== actor.agentId) {
       throw new Error("ACP read differs from its captured incognito actor");
     }
-    const entry = await actor.acp.readEntry({
+    const prepared = await actor.acp.prepareEntryRead({
       ...captured,
       sessionKey: target.storeSessionKey,
       authority: {
@@ -59,8 +56,12 @@ export async function readAcpSessionEntryAsync(
         authorize: (stage, facts) => authority.authorize?.(stage, facts),
       },
     });
-    captured.assertCurrent();
-    return { ...target, cfg: captured.cfg, sessionKey: input.sessionKey, entry, acp: entry?.acp };
+    try {
+      prepared.assertCurrent();
+      return prepared.session ? { ...prepared.session, sessionKey: input.sessionKey } : null;
+    } finally {
+      prepared.release();
+    }
   });
 }
 
@@ -82,7 +83,7 @@ export async function withAcpSessionEntryRead<T>(
   const { cfg, env, databasePath, assertCurrent } = await captureAcpSessionReadContext(input);
   assertCurrent();
   const target = resolveSessionStorePathForAcp({ ...input, sessionKey, cfg, env });
-  const storeSessionKey = normalizeStoreSessionKey(target.storeSessionKey);
+  const storeSessionKey = target.storeSessionKey;
   if (isIncognitoSessionKey(storeSessionKey)) {
     // Incognito retains its process-held native owner and nonyielding join until its cutover.
     const stored = readSessionEntryFromStore({ ...input, sessionKey, cfg, env });

@@ -828,7 +828,6 @@ export function scheduleGatewayRestart(opts?: {
   preservePendingEmitHooksOnDeferralBypass?: boolean;
   sessionKey?: string;
   skipDeferral?: boolean;
-  skipCooldown?: boolean;
   successorOwner?: GatewayRestartIntent["successorOwner"];
 }): ScheduledRestart {
   const delayMs = normalizeGatewayRestartDelayMs(opts?.delayMs);
@@ -841,7 +840,7 @@ export function scheduleGatewayRestart(opts?: {
         : "signal";
   const nowMs = monotonicNow();
   const cooldownMsApplied =
-    opts?.skipCooldown === true || lastRestartEmittedAt === null
+    lastRestartEmittedAt === null
       ? 0
       : Math.max(0, lastRestartEmittedAt + RESTART_COOLDOWN_MS - nowMs);
   const restartResultBase = {

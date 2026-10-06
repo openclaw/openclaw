@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseToml, type TomlTable } from "smol-toml";
 import type { CodexAppServerManagedApprovalPolicy, OpenClawExecMode } from "./config-contracts.js";
 import { resolveApprovalPolicy, resolveApprovalsReviewer } from "./config-exec-policy.js";
@@ -132,18 +133,8 @@ function requirementsHostNameMatchesAnyPattern(hostName: string, patterns: strin
 }
 
 function globPatternMatches(value: string, pattern: string): boolean {
-  let regex = "^";
-  for (const char of pattern) {
-    if (char === "*") {
-      regex += ".*";
-    } else if (char === "?") {
-      regex += ".";
-    } else {
-      regex += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }
-  }
-  regex += "$";
-  return new RegExp(regex).test(value);
+  const regex = escapeRegExp(pattern).replaceAll("\\*", ".*").replaceAll("\\?", ".");
+  return new RegExp(`^${regex}$`).test(value);
 }
 
 function normalizeRequirementsApprovalPolicy(

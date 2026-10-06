@@ -96,7 +96,14 @@ it.each(
             rawMessage: text,
             supportsTaskSuggestions: false,
           },
-          session: { cfg: {}, entry: undefined, sessionKey, storePath, clientRunId: "answer-run" },
+          session: {
+            agentId: "main",
+            cfg: {},
+            entry: undefined,
+            sessionKey,
+            storePath,
+            clientRunId: "answer-run",
+          },
           admittedSessionSettings: { permissionMode: restricted ? "guarded" : "full" },
           turn: {
             ctx: {

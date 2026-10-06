@@ -193,7 +193,6 @@ export async function runDoctorSessionSqlite(
   if (options.mode === "recover") {
     return recoverDoctorSessionSqliteTargets({
       env,
-      options,
       targets,
       prepareTarget: (target) => repairEntryStates([target]),
       recoveryInventory: historicalSources?.inventory,
@@ -1309,7 +1308,6 @@ async function archiveLegacyArtifacts(
       try {
         const move = planSessionJsonlArchiveMove({
           archiveKey: "archive-tier",
-          baseNameRaw: path.basename(source),
           kind,
           reservedArchivePaths,
           sourcePathRaw: source,

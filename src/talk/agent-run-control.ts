@@ -9,6 +9,7 @@ import type {
   EmbeddedAgentQueueMessageOutcome,
 } from "../agents/embedded-agent-runner/runs.js";
 import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
+import { bindPreparedToolAuthority } from "../agents/harness/tool-authority-preparation.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -193,8 +194,10 @@ export async function controlRealtimeVoiceAgentRun(
   if (!sessionId || (target === undefined && !isLegacyCurrent())) {
     return noActiveRun();
   }
+  // Released dependency adapters may ignore optional preparation callbacks.
+  const deferMessagePreparation = !providedDeps && Boolean(target || legacyOwner);
   const toolAuthorityOverlay = params.getToolAuthorityOverlay?.();
-  if (toolAuthorityOverlay && (mode === "cancel" || (!target && !legacyOwner))) {
+  if (toolAuthorityOverlay && (mode === "cancel" || !deferMessagePreparation)) {
     await params.prepareToolAuthorityOverlay?.(toolAuthorityOverlay);
   }
   const preparedOwner = resolveCurrentRun();
@@ -247,13 +250,19 @@ export async function controlRealtimeVoiceAgentRun(
     // a capable TUI run's model-facing task tools.
     taskSuggestionDeliveryMode: undefined,
   };
-  const steerText = target || legacyOwner ? text : prepareMessage();
+  const steerText = deferMessagePreparation ? text : prepareMessage();
   const prepareCurrent = async () => {
     const overlay = params.getToolAuthorityOverlay?.();
     if (overlay) {
       await params.prepareToolAuthorityOverlay?.(overlay);
     }
     options.toolAuthorityOverlay = overlay;
+  };
+  const canInject = () => {
+    options.toolAuthorityOverlay?.operatorAuthority?.assertCurrent();
+    return target
+      ? !target.signal.aborted && target.isCurrent(sessionId)
+      : legacyOwner?.isCurrent() === true;
   };
   const outcome: EmbeddedAgentQueueMessageOutcome =
     target || legacyOwner
@@ -262,33 +271,30 @@ export async function controlRealtimeVoiceAgentRun(
             sessionId,
             steerText,
             options,
-            () => {
-              const currentOverlay = params.getToolAuthorityOverlay?.();
-              options.toolAuthorityOverlay = currentOverlay;
-              if (target) {
-                return !target.signal.aborted && target.isCurrent(sessionId);
-              }
-              return Boolean(
-                legacyOwner?.isCurrent() &&
-                (!currentOverlay || legacyOwner.matchesCaller(currentOverlay)),
-              );
-            },
-            bindWorkerToolPreparation({
-              assertCurrent: () => {
-                if (
-                  target
-                    ? target.signal.aborted || !target.isCurrent(sessionId)
-                    : !legacyOwner?.isCurrent()
-                ) {
-                  throw new Error("The original Talk run is no longer current");
-                }
-              },
-              prepareCurrent,
-              prepareMessage: async () => {
-                await prepareCurrent();
-                return prepareMessage();
-              },
-            }),
+            canInject,
+            bindPreparedToolAuthority(
+              bindWorkerToolPreparation({
+                assertCurrent: () => {
+                  if (!canInject()) {
+                    throw new Error("The original Talk run is no longer current");
+                  }
+                },
+                compatAssertCurrent: () => {
+                  const overlay = params.getToolAuthorityOverlay?.();
+                  options.toolAuthorityOverlay = overlay;
+                  if (overlay && legacyOwner && !legacyOwner.matchesCaller(overlay)) {
+                    throw new Error("The original Talk caller authority no longer matches");
+                  }
+                },
+                prepareCurrent,
+                prepareMessage: deferMessagePreparation
+                  ? async () => {
+                      await prepareCurrent();
+                      return prepareMessage();
+                    }
+                  : undefined,
+              }),
+            ),
           )
         : {
             queued: false,

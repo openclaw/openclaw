@@ -5,6 +5,7 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "./agent-events.js";
 import {
+  captureAgentRunDelegatedSourceAssertion,
   claimAgentRunApprovalAuthority,
   claimAgentRunContext,
   claimAgentRunDelegatedAuthority,
@@ -114,6 +115,11 @@ test.each(["release", "abort"])(
     const child = claimAgentRunApprovalAuthority(request, [new AbortController().signal]);
     const sibling = claimAgentRunApprovalAuthority(root, [new AbortController().signal]);
     const copiedChild = structuredClone(child);
+    const source = captureAgentRunDelegatedSourceAssertion(copiedChild, () => {
+      throw new Error("child authority closed");
+    });
+    expect(source).toBeDefined();
+    expect(() => source?.assertCurrent()).not.toThrow();
     expect(validateAgentRunDelegatedAuthority(copiedChild, worker)).toBe(true);
     expect(validateAgentRunDelegatedAuthority(worker, request)).toBe(false);
     expect(validateAgentRunDelegatedAuthority(sibling, worker)).toBe(false);
@@ -152,6 +158,12 @@ test.each(["release", "abort"])(
         })),
       );
       expect(validateAgentRunDelegatedAuthority(copiedChild)).toBe(false);
+      expect(() => source?.assertCurrent()).toThrow("child authority closed");
+      expect(
+        captureAgentRunDelegatedSourceAssertion(copiedChild, () => {
+          throw new Error("child authority closed");
+        }),
+      ).toBeUndefined();
       expect(() => claimAgentRunApprovalAuthority(worker, [])).toThrow("no longer active");
     } finally {
       stop();

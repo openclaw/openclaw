@@ -131,6 +131,7 @@ export type PreparedEmbeddedAgentQueueMessage =
       kind: "embedded_run";
       runId?: string;
       queueMessage: EmbeddedAgentQueueHandle["queueMessage"];
+      prepareQueueMessage?: () => Promise<void>;
       options: EmbeddedAgentQueueMessageOptions;
     };
 

@@ -4,7 +4,6 @@ import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -69,7 +68,7 @@ function normalizePersistedPairingRequest(value: unknown): PairingRequest | unde
 }
 
 export function resolvePairingRequestAccountId(entry: PairingRequest): string {
-  return resolveAllowFromAccountId(entry.meta?.accountId) || DEFAULT_ACCOUNT_ID;
+  return resolveAllowFromAccountId(entry.meta?.accountId);
 }
 
 function readChannelAllowEntries(database: DatabaseSync, channel: PairingChannel) {

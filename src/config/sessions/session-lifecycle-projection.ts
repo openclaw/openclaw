@@ -79,7 +79,8 @@ export function commitSessionLifecycleProjectionInWorker(params: {
   input: SessionLifecycleProjectionCommit;
   execution: OpenClawAgentDatabaseExecution;
   assertCurrent: () => void;
-  assertPreservationCurrent: () => void;
+  assertPrepared: () => void;
+  assertCandidate: (candidate: SessionLifecycleProjectionCommitted) => void;
   onLifecycleCommitted?: () => void;
 }) {
   return runSessionEntryWorkerOperation<
@@ -89,8 +90,8 @@ export function commitSessionLifecycleProjectionInWorker(params: {
     database: params.database,
     agentId: params.input.agentId,
     assertCurrent: params.assertCurrent,
-    assertPrepared: params.assertPreservationCurrent,
-    assertCandidate: params.assertPreservationCurrent,
+    assertPrepared: params.assertPrepared,
+    assertCandidate: params.assertCandidate,
     retainedExecution: params.execution,
     candidateKind: "session-lifecycle-projection",
     run: (worker, commit) =>

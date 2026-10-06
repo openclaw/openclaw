@@ -6,6 +6,36 @@ read_when:
   - You are triaging a nightly, scheduled, or maintenance workflow
 ---
 
+## PR vs hourly vs release
+
+Ordinary pull requests, including fork contributions, no longer select these
+expensive jobs in `ci.yml`:
+
+- Real-Gateway Control UI E2E (mocked/bundled `checks-ui-e2e` remains owner-selected).
+- Windows Node tests, macOS Node tests, macOS Swift jobs, and iOS build/simulator smoke.
+- The published-npm-driver × candidate update cell, including on update-owner PRs.
+- Dependency/dead-export scanning (Knip) and the full runtime topology/architecture job.
+  Runtime import-cycle checks remain in the existing PR guard; TypeScript changes
+  also select Madge there. TypeScript changes under `src/`, `extensions/`, or
+  `packages/` also select Kysely guardrails in that same job; generated Kysely
+  types remain deferred. See [scope selection](/ci/scope-and-routing/selection).
+- Android screenshot capture.
+
+The first four groups retain their existing hourly main-tier and full release
+inventories. Android screenshots were already excluded from hourly main and
+continue in full manual/release validation. Ordinary manual dispatch and
+exact-head `release_gate` fallback behavior are unchanged. SwiftLint and
+SwiftFormat are part of the moved Apple jobs; they are not split into new PR
+jobs. Other source tests, static correctness gates, Android unit/lint work,
+and independent native localization checks keep their existing PR selection.
+
+This moves frequent PR critical paths to their existing later tiers without
+changing what the jobs execute. Failures unique to those jobs can therefore
+appear after merge. `openclaw/ci-gate` requires only the jobs the manifest
+selected; its required-check identity and repository protection are unchanged.
+See [scope selection](/ci/scope-and-routing/selection#pr-vs-hourly-vs-release)
+for the tier table and owner boundaries.
+
 ## Hourly main CI
 
 The complete `main` validation tier runs directly from `ci.yml` at minute 23 of each hour.

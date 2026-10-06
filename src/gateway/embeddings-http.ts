@@ -34,7 +34,6 @@ import {
   isOpenClawAgentModelId,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
-  resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 
@@ -173,7 +172,6 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     ...opts,
     pathname: "/v1/embeddings",
     requiredOperatorMethod: "chat.send",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes: opts.maxBodyBytes ?? DEFAULT_EMBEDDINGS_BODY_BYTES,
   });
   if (handled === false) {

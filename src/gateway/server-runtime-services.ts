@@ -2,6 +2,7 @@
 // Starts delayed maintenance, cron, heartbeat, recovery, and pricing refresh work.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   captureDeliveryQueueStateContext,
   resolveDeliveryQueueStateEnv,
@@ -43,6 +44,7 @@ import {
   createNoopHeartbeatRunner,
   type GatewayRuntimeServiceLogger,
 } from "./server-runtime-service-shared.js";
+import { measureStartup } from "./server-startup-trace.js";
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 export {
   startGatewayChannelHealthMonitor,
@@ -53,9 +55,15 @@ const loadHeartbeatExecution = createLazyRuntimeModule(
   () => import("../infra/heartbeat-runner-run.js"),
 );
 
-type GatewayPostReadyLogger = {
-  warn: (message: string) => void;
+type StartupMaintenanceParams = Parameters<
+  typeof import("./server-startup-plugins.js").runGatewayPostReadyStartupMaintenance
+>[0];
+type GatewayStartupMaintenance = {
+  startupSessionDatabases: StartupMaintenanceParams["databases"];
+  pluginRuntime: { registry: ReturnType<StartupMaintenanceParams["getPluginRegistry"]> };
+  startupTrace?: StartupMaintenanceParams["startupTrace"];
 };
+type GatewayPostReadyLogger = StartupMaintenanceParams["log"];
 
 /** Starts cron without making the surrounding startup or reload transaction wait. */
 export function startGatewayCronWithLogging(params: {
@@ -96,6 +104,8 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   signal: AbortSignal;
   delayMs: number;
   isClosing: () => boolean;
+  waitForPostReadyWork: () => Promise<void>;
+  startupMaintenance: GatewayStartupMaintenance;
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => Promise<void> | void;
   shouldStartCron: () => boolean;
@@ -107,6 +117,37 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
 }): void {
+  if (process.platform === "linux") {
+    params.scheduler.schedule({
+      id: "database:page-cache",
+      delayMs: params.delayMs,
+      everyMs: 15 * 60 * 1000,
+      run: () =>
+        runWithGatewayIndependentRootWorkAdmission(
+          async () => {
+            await racePromiseWithAbortSignal(params.waitForPostReadyWork(), params.signal);
+            if (params.isClosing()) {
+              return;
+            }
+            const { warmGatewayDatabasePageCache } =
+              await import("./server-database-page-cache.js");
+            params.signal.throwIfAborted();
+            await warmGatewayDatabasePageCache({
+              databases: params.startupMaintenance.startupSessionDatabases,
+              signal: params.signal,
+              startupTrace: params.startupMaintenance.startupTrace,
+              log: params.log,
+            });
+          },
+          "runtime:database-page-cache",
+          params.signal,
+        ).catch((error: unknown) => {
+          if (!params.isClosing()) {
+            params.log.warn(`database page-cache probe failed: ${String(error)}`);
+          }
+        }),
+    });
+  }
   params.scheduler.schedule({
     id: "startup:maintenance",
     delayMs: params.delayMs,
@@ -116,6 +157,32 @@ export function scheduleGatewayPostReadyMaintenance(params: {
       }
       return runWithGatewayIndependentRootWorkAdmission(
         async () => {
+          await params.waitForPostReadyWork();
+          if (params.isClosing()) {
+            return;
+          }
+          try {
+            await measureStartup(
+              params.startupMaintenance.startupTrace,
+              "post-ready.startup-maintenance",
+              async () => {
+                const { runGatewayPostReadyStartupMaintenance } =
+                  await import("./server-startup-plugins.js");
+                await runGatewayPostReadyStartupMaintenance({
+                  getConfig: getRuntimeConfig,
+                  getPluginRegistry: () => params.startupMaintenance.pluginRuntime.registry,
+                  databases: params.startupMaintenance.startupSessionDatabases,
+                  startupTrace: params.startupMaintenance.startupTrace,
+                  signal: params.signal,
+                  log: params.log,
+                });
+              },
+            );
+          } catch (error) {
+            if (!params.isClosing()) {
+              params.log.warn(`Gateway post-ready startup maintenance failed: ${String(error)}`);
+            }
+          }
           try {
             if (!params.isClosing()) {
               const maintenance = await params.startMaintenance();
@@ -337,6 +404,9 @@ function startPendingSessionDeliveryRuntime(params: {
   const queueContext = captureOpenClawStateWorkerContext();
   const scheduler = params.scheduler.scope();
   const { signal } = scheduler;
+  const runDelivery = createScheduledGatewayRunner(
+    fenceScheduledGatewayContextResolver(params.resolveGatewayContext),
+  );
   let stopPromise: Promise<void> | undefined;
   let stopRuntime: (() => Promise<void>) | undefined;
   // Delay session continuation recovery so the gateway has time to publish ready state and
@@ -360,27 +430,27 @@ function startPendingSessionDeliveryRuntime(params: {
             scheduler: params.scheduler,
             queueContext,
             deliver: (entry, { queueContext: deliveryContext }) =>
-              deliverQueuedSessionDelivery({
-                deps: params.deps,
-                entry,
-                queueContext: deliveryContext,
-                ...(params.resolveGatewayContext
-                  ? { resolveGatewayContext: params.resolveGatewayContext }
-                  : {}),
-              }),
+              runDelivery(() =>
+                deliverQueuedSessionDelivery({
+                  deps: params.deps,
+                  entry,
+                  queueContext: deliveryContext,
+                  resolveGatewayContext: params.resolveGatewayContext,
+                }),
+              ),
             log: logRecovery,
             onSettled: settleQueuedSessionDelivery,
           });
           try {
-            await recoverPendingRestartContinuationDeliveries({
-              deps: params.deps,
-              queueContext,
-              log: logRecovery,
-              maxEnqueuedAt: params.maxEnqueuedAt,
-              ...(params.resolveGatewayContext
-                ? { resolveGatewayContext: params.resolveGatewayContext }
-                : {}),
-            });
+            await runDelivery(() =>
+              recoverPendingRestartContinuationDeliveries({
+                deps: params.deps,
+                queueContext,
+                log: logRecovery,
+                maxEnqueuedAt: params.maxEnqueuedAt,
+                resolveGatewayContext: params.resolveGatewayContext,
+              }),
+            );
           } finally {
             // Recovery and scheduling are independent safeguards. A transient
             // recovery failure must not leave persisted rows without timers.

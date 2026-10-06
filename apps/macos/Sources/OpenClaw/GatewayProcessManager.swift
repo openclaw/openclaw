@@ -1315,14 +1315,9 @@ extension GatewayProcessManager {
             // retain the connected channel; only replacement evidence forces refresh.
             self.refreshControlChannelIfNeeded(reason: refreshReason, force: replaced)
             self.lastObservedGatewayPID = instance?.pid ?? self.lastObservedGatewayPID
-            if self.launchAgentInstallGeneration == context.generation {
-                self.launchAgentInstallGeneration = nil
-            }
-            if self.launchAgentFreshInstallGeneration == context.generation {
-                self.launchAgentFreshInstallGeneration = nil
-            }
+            self.clearCompletedLaunchAgentInstall(generation: context.generation)
             self.refreshLog()
-            self.markChildHealthy(instance: instance)
+            if let pid = instance?.pid { self.childSupervisor.markHealthy(pid: pid) }
             return true
 
         case let .failed(terminalFailure):
@@ -1374,6 +1369,15 @@ extension GatewayProcessManager {
         }
     }
 
+    private func clearCompletedLaunchAgentInstall(generation: UInt64) {
+        if self.launchAgentInstallGeneration == generation {
+            self.launchAgentInstallGeneration = nil
+        }
+        if self.launchAgentFreshInstallGeneration == generation {
+            self.launchAgentFreshInstallGeneration = nil
+        }
+    }
+
     private func canPublishGatewayReadiness(
         instance: PortGuardian.Descriptor?,
         context: GatewayReadinessContext) async -> Bool
@@ -1386,10 +1390,6 @@ extension GatewayProcessManager {
             startGeneration: context.generation)
         else { return false }
         return self.isCurrentGatewayReadiness(context)
-    }
-
-    private func markChildHealthy(instance: PortGuardian.Descriptor?) {
-        if let pid = instance?.pid { self.childSupervisor.markHealthy(pid: pid) }
     }
 
     private func probeGatewayHealth<C: Clock>(timeoutMs: Double, clock: C) async throws -> Data

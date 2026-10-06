@@ -93,11 +93,12 @@ async function restoreSnapshotProjection(
   worktree: ManagedWorktreeRecord,
   env: NodeJS.ProcessEnv,
   assertCurrent: WorktreeAllocationGuard["commitGuard"],
+  workerAuthority: WorktreeAllocationGuard["workerAuthority"],
 ) {
   const { withSettledLocalWorkspace } =
     await import("../../gateway/worker-environments/local-workspace-projection.js");
   await withSettledLocalWorkspace(
-    { worktree, env, assertCurrent, restoreSnapshot: true },
+    { worktree, env, assertCurrent, workerAuthority, restoreSnapshot: true },
     async () => {},
   );
 }
@@ -172,6 +173,13 @@ export async function restoreManagedWorktreeSnapshot(
         return await restoreSnapshot(
           {
             ...input,
+            workerAuthority: {
+              ...input.workerAuthority,
+              predicates: [
+                ...(input.workerAuthority.predicates ?? []),
+                { kind: "removal-claim", id: record.id, token },
+              ],
+            },
             commitGuard: () => {
               input.commitGuard?.();
               assertClaim();
@@ -370,14 +378,27 @@ async function restoreSnapshot(
     const restoreRecord = record;
     const finalize = async (identity: ExactStateSnapshot) => {
       const callerGuard = params.commitGuard;
+      const workerAuthority = params.workerAuthority;
       params = {
         ...params,
+        workerAuthority: {
+          ...workerAuthority,
+          assertCurrent: () => {
+            workerAuthority.assertCurrent?.();
+            assertExactStateSourceIdentity(restoreRecord.path, identity);
+          },
+        },
         commitGuard: () => {
           callerGuard?.();
           assertExactStateSourceIdentity(restoreRecord.path, identity);
         },
       };
-      await restoreSnapshotProjection(restoreRecord, env, params.commitGuard);
+      await restoreSnapshotProjection(
+        restoreRecord,
+        env,
+        params.commitGuard,
+        params.workerAuthority,
+      );
       return await finishRestoredSnapshot(
         params,
         context,
@@ -579,7 +600,7 @@ async function restoreSnapshot(
       params.commitGuard,
     );
     params.commitGuard?.();
-    await restoreSnapshotProjection(record, env, params.commitGuard);
+    await restoreSnapshotProjection(record, env, params.commitGuard, params.workerAuthority);
     await requireSpace(record.path, repository);
     restoredProvisionedPaths = provisionedState.map((state) => state.path);
   } catch (error) {
@@ -637,7 +658,13 @@ async function finishRestoredSnapshot(
     const { withSettledLocalWorkspace } =
       await import("../../gateway/worker-environments/local-workspace-projection.js");
     await withSettledLocalWorkspace(
-      { worktree: restored, env, assertCurrent: params.commitGuard, finishRestore: true },
+      {
+        worktree: restored,
+        env,
+        assertCurrent: params.commitGuard,
+        workerAuthority: params.workerAuthority,
+        finishRestore: true,
+      },
       async () => {},
     );
   };
@@ -654,7 +681,7 @@ async function finishRestoredSnapshot(
   if (exact) {
     await finishRecovery();
   }
-  updateRegistryWorktree(
+  await updateRegistryWorktree(
     env,
     params.id,
     {
@@ -666,7 +693,7 @@ async function finishRestoredSnapshot(
       // a live row until the next run-end cleanup records fresh truth.
       runEndCleanup: undefined,
     },
-    { assertCurrent: params.commitGuard },
+    { assertCurrent: params.commitGuard, workerAuthority: params.workerAuthority },
   );
   onFinalized();
   if (!exact) {

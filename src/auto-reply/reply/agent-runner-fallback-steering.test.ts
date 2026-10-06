@@ -22,23 +22,30 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { createReplyOperation } from "./reply-run-registry.js";
+import * as registryState from "./reply-run-registry.state.js";
 import * as toolAuthority from "./reply-tool-authority.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("ordinary steering into automatic model fallback", () => {
   it.each([
-    { read: 1, revoked: false, aborted: false },
-    { read: 2, revoked: false, aborted: false },
-    { read: 1, revoked: true, aborted: false },
-    { read: 2, revoked: true, aborted: false },
-    { read: 1, revoked: false, aborted: true },
+    { preparation: "fingerprint-1", revoked: false, aborted: false, replaceBackend: false },
+    { preparation: "fingerprint-2", revoked: false, aborted: false, replaceBackend: false },
+    { preparation: "fingerprint-1", revoked: true, aborted: false, replaceBackend: false },
+    { preparation: "fingerprint-2", revoked: true, aborted: false, replaceBackend: false },
+    { preparation: "fingerprint-1", revoked: false, aborted: true, replaceBackend: false },
+    { preparation: "fingerprint-1", revoked: false, aborted: false, replaceBackend: true },
+    { preparation: "backend-ready", revoked: false, aborted: false, replaceBackend: false },
+    { preparation: "backend-ready", revoked: true, aborted: false, replaceBackend: false },
   ])(
-    "preserves input after target termination during read $read (caller revoked: $revoked, target aborted: $aborted)",
-    async ({ read, revoked, aborted }) => {
-      const key = `agent:main:completed-steering-${read}-${revoked}-${aborted}`;
+    "preserves input at $preparation (caller revoked: $revoked, target aborted: $aborted, backend replaced: $replaceBackend)",
+    async ({ preparation, revoked, aborted, replaceBackend }) => {
+      const key = `agent:main:completed-steering-${preparation}-${revoked}-${aborted}-${replaceBackend}`;
+      const holdBackend = preparation === "backend-ready";
+      const read = holdBackend ? undefined : preparation === "fingerprint-1" ? 1 : 2;
       const run = createQueueTestRun({ prompt: "preserve this incoming turn", messageId: key });
       run.run.agentId = "main";
       run.run.sessionKey = key;
@@ -62,19 +69,47 @@ describe("ordinary steering into automatic model fallback", () => {
       operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
       operation.bindToolAuthorityRoute(run.run);
       const injected = vi.fn(async () => {});
-      operation.attachBackend({
-        kind: "embedded",
-        cancel() {},
-        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
-      });
+      const replacementInjected = vi.fn(async () => {});
+      if (!holdBackend) {
+        operation.attachBackend({
+          kind: "embedded",
+          cancel() {},
+          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
+        });
+      }
       operation.setPhase("running");
       const entered = createDeferred();
       const resume = createDeferred();
+      if (holdBackend) {
+        const waitForBackend = registryState.waitForReplyOperationBackend;
+        vi.spyOn(registryState, "waitForReplyOperationBackend").mockImplementation((...args) => {
+          const ready = waitForBackend(...args);
+          entered.resolve();
+          return ready;
+        });
+      }
       const delivered = createDeferred<FollowupRun>();
       const consumeFollowup = vi.fn(async (queued: FollowupRun) => {
         delivered.resolve(queued);
       });
-      vi.spyOn(followupRunner, "createFollowupRunner").mockReturnValue(consumeFollowup);
+      vi.spyOn(followupRunner, "createFollowupRunner").mockReturnValue(async (queued) => {
+        // Follow-up admission owns execution ordering after a parked input settles.
+        const admission = await admitReplyTurn({
+          agentId: queued.run.agentId,
+          sessionId: queued.run.sessionId,
+          sessionKey: key,
+          kind: "queued_followup",
+          resetTriggered: false,
+        });
+        expect(admission.status).toBe("owned");
+        if (admission.status === "owned") {
+          try {
+            await consumeFollowup(queued);
+          } finally {
+            admission.operation.complete();
+          }
+        }
+      });
       const fingerprint = toolAuthority.resolveFollowupRunToolAuthorityFingerprintAsync;
       let reads = 0;
       vi.spyOn(toolAuthority, "resolveFollowupRunToolAuthorityFingerprintAsync").mockImplementation(
@@ -110,8 +145,18 @@ describe("ordinary steering into automatic model fallback", () => {
         typingMode: "never",
       });
       try {
-        await awaitGateBeforeSettlement(entered.promise, incoming, "Fingerprint read was not held");
-        if (aborted) {
+        await awaitGateBeforeSettlement(entered.promise, incoming, "Preparation was not held");
+        if (replaceBackend) {
+          operation.attachBackend({
+            kind: "embedded",
+            cancel() {},
+            messageInjectionV2: {
+              version: 2,
+              isAvailable: () => true,
+              queueMessage: replacementInjected,
+            },
+          });
+        } else if (aborted) {
           expect(operation.abortByUser()).toBe(true);
         } else {
           operation.complete();
@@ -124,12 +169,13 @@ describe("ordinary steering into automatic model fallback", () => {
           expect(resultState.admission).toBeUndefined();
         } else {
           await expect(incoming).resolves.toBeUndefined();
-          if (aborted) {
+          expect(replacementInjected).not.toHaveBeenCalled();
+          expect(resultState.admission).toEqual({ status: "accepted", mode: "followup" });
+          if (aborted || replaceBackend) {
             expect(consumeFollowup).not.toHaveBeenCalled();
             operation.complete();
           }
           expect(await delivered.promise).toBe(run);
-          expect(resultState.admission).toEqual({ status: "accepted", mode: "followup" });
           expect(consumeFollowup).toHaveBeenCalledExactlyOnceWith(run);
         }
         expect(injected).not.toHaveBeenCalled();

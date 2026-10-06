@@ -126,11 +126,9 @@ export function applyChatAgentOwnerTransition(
   host.assistantAgentId = selectedAgentId;
   host.assistantName = "";
   host.assistantAvatar = null;
-  host.assistantAvatarSource = null;
   host.assistantAvatarStatus = null;
   host.assistantAvatarReason = null;
   host.chatAvatarUrl = null;
-  host.chatAvatarSource = null;
   host.chatAvatarStatus = null;
   host.chatAvatarReason = null;
   host.modelAuthStatusResult = null;
@@ -201,10 +199,6 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
         if (update.type !== "loading") {
           if (update.type === "result") {
             applyRemoteSlashCommandsResult(update.result);
-            if (update.catalogChanged) {
-              binding.sessionFactsInvalidated = true;
-              void refreshChatMetadata(host, { automatic: true });
-            }
           }
           if (binding.sessionFactsRetryPending) {
             binding.sessionFactsRetryPending = false;

@@ -71,12 +71,12 @@ vi.mock("./update-immutable-generation.js", () => ({
   verifyImmutableGeneration: mocks.generation,
 }));
 vi.mock("./update-candidate-canary.js", () => ({ validateUpdateCandidateCanary: mocks.canary }));
-vi.mock("./update-immutable-service.js", () => ({
+vi.mock("./update-immutable-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-service.js")>()),
   inspectImmutableActivationService: mocks.inspect,
   assertImmutableServiceProcessCurrent: mocks.current,
   assertImmutableServiceStoppedCurrent: mocks.stopped,
-  stopImmutableService: mocks.stop,
-  startImmutableService: mocks.start,
+  controlImmutableService: (action: "start" | "stop", params: unknown) => mocks[action](params),
 }));
 vi.mock("../cli/update-cli/update-command-service-drain.js", () => ({
   withGatewayMaintenanceDrain: mocks.drain,
@@ -257,7 +257,6 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
     mocks.unchanged.mockImplementation((_snapshot, { assertCurrent: check }) => check());
     mocks.verifyProtection.mockImplementation((_snapshot, { assertCurrent: check }) => {
       check();
-      return { configMigrated: false };
     });
     mocks.wait.mockImplementation(async ({ generation, assertCurrent: check }) => {
       check();
@@ -623,7 +622,6 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       mocks.unchanged.mockImplementation(checkProtection);
       mocks.verifyProtection.mockImplementation((snapshot, options) => {
         checkProtection(snapshot, options);
-        return { configMigrated: false };
       });
       await expect(activateImmutableUpdate({ root, expectedPrepared: candidate })).rejects.toThrow(
         "foreign config write",

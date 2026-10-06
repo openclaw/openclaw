@@ -722,6 +722,8 @@ jobs:
           sparse-checkout: |
             package.json
             .github/actions/setup-test-bun
+            scripts/stage-openclaw-bun.sh
+            scripts/lib/openclaw-bun.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
 

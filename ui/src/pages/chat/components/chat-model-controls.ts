@@ -66,14 +66,13 @@ type ChatModelControlsProps = {
   gatewayAvailable: boolean;
   loading: boolean;
   modelCatalog: ModelCatalogEntry[];
-  modelCatalogState?: ChatModelCatalogState;
+  modelCatalogState: ChatModelCatalogState;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
   modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
   modelPickerTargetGroups?: readonly ChatModelPickerTargetGroup[];
   modelPickerOpen?: boolean;
   modelSwitching: boolean;
-  modelsLoading?: boolean;
   modelMutationDisabledReason?: string;
   effortMutationDisabledReason?: string;
   contextWindowMutationDisabledReason?: string;
@@ -239,9 +238,10 @@ function resolveCatalogTriggerStatus(
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
   const catalog = prepareChatModelCatalog(props.modelCatalog);
-  const policy = props.modelCatalogState?.modelSelectionPolicy;
-  const retired = props.modelCatalogState?.retired === true;
-  const uninitialized = props.modelCatalogState?.initialized === false;
+  const catalogState = props.modelCatalogState;
+  const policy = catalogState.modelSelectionPolicy;
+  const retired = catalogState.retired === true;
+  const uninitialized = catalogState.initialized === false;
   const catalogOwnsChoices = retired || uninitialized || policy?.restricted === true;
   const providerAuth = new Map<string, ModelProviderAuthLabel>();
   const headingKey = (id: string) =>
@@ -279,7 +279,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     sessionsResult: props.sessionsResult,
     modelSelectionPolicy: policy,
     catalogRetired: retired,
-    catalogInitialized: props.modelCatalogState?.initialized,
+    catalogInitialized: catalogState.initialized,
   });
   const currentOverride =
     !catalogOwnsChoices || (!retired && catalog.entry(rawCurrentOverride))
@@ -551,26 +551,22 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           ),
           triggerModelValue || defaultModel ? triggerRuntime : null,
         );
-  const managedCatalog = props.modelCatalogState ?? {
-    hasSnapshot: !props.modelsLoading,
-    status: props.modelsLoading ? ("loading" as const) : ("ready" as const),
-  };
   const catalogLoadingWithoutSnapshot =
-    !managedCatalog.hasSnapshot && ["idle", "loading"].includes(managedCatalog.status);
+    !catalogState.hasSnapshot && ["idle", "loading"].includes(catalogState.status);
   // The session owns the selected model; its account-scoped catalog only owns
   // picker availability. Refreshing that catalog must not hide a known selection.
   const selectionKnown = Boolean(currentOverride || (modelOverrideSource === null && defaultModel));
   const catalogTriggerStatus = retired
-    ? resolveCatalogTriggerStatus(managedCatalog, 0, false)
+    ? resolveCatalogTriggerStatus(catalogState, 0, false)
     : policy?.restricted && !currentOverride && !defaultModel
       ? t(
           modelOptions.length
             ? "chat.modelControls.selectionRequired"
             : "chat.modelControls.noPermittedModels",
         )
-      : resolveCatalogTriggerStatus(managedCatalog, modelOptions.length, selectionKnown);
+      : resolveCatalogTriggerStatus(catalogState, modelOptions.length, selectionKnown);
   const hasResolvableModel =
-    managedCatalog.status === "ready" &&
+    catalogState.status === "ready" &&
     activeModelOption?.disabled !== true &&
     modelOptions.some((option) => !option.disabled);
   const busy = props.sending || Boolean(props.activeRunId) || props.stream !== null;
@@ -584,7 +580,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const thinkingDisabled =
     commonDisabled ||
     effortMutationDisabled ||
-    !managedCatalog.hasSnapshot ||
+    !catalogState.hasSnapshot ||
     (thinking.options.length === 0 && thinking.selection.source === "default");
   // One owner supplies the whole tuple: mixing an override session's fields with
   // the defaults row can render the default model's options for a session whose
@@ -624,7 +620,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
             : undefined,
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
-        modelCatalogState: managedCatalog,
+        modelCatalogState: catalogState,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
         selectionScopeDescription: policy?.restricted

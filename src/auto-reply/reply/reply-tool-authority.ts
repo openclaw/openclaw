@@ -38,17 +38,14 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { readExactSessionEntryRow } from "../../config/sessions/session-accessor.sqlite-entry-read.js";
-import { assertCapturedSessionEntryReadSource } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
-import { captureSessionStoreReadCandidate } from "../../config/sessions/session-store-read-candidates.js";
-import { loadGatewaySessionEntryReadOnlyInWorker } from "../../gateway/session-utils-store-worker.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import {
+  prepareGatewaySessionEntryReadOnlyInWorker,
+  type GatewaySessionEntryReadPlan,
+} from "../../gateway/session-utils-store-worker.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { RuntimeMsgContext } from "../templating.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue/types.js";
@@ -57,6 +54,7 @@ import type {
   ReplyToolAuthorityRoute,
   ReplyToolAuthoritySnapshot,
 } from "./reply-run-registry.contracts.js";
+import { prepareNativeReplyToolAuthorityRead } from "./reply-tool-authority.native-read.js";
 
 export type ReplyToolAuthorityInput = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -489,25 +487,28 @@ export function prepareReplyToolAuthority(
     | {
         storePath: string;
         canonicalKey: string;
+        storeKeys: readonly string[];
         agentId: string;
         source: Awaited<
-          ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>
-        >["capturedReadSource"];
+          ReturnType<typeof prepareGatewaySessionEntryReadOnlyInWorker>
+        >["loaded"]["capturedReadSource"];
         sources: Awaited<
-          ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>
-        >["capturedReadSources"];
+          ReturnType<typeof prepareGatewaySessionEntryReadOnlyInWorker>
+        >["loaded"]["capturedReadSources"];
         sessionId: string | undefined;
         lifecycleRevision: SessionEntry["lifecycleRevision"];
       }
     | undefined;
+  let capturedReadPlan: GatewaySessionEntryReadPlan | undefined;
   const prepare = async (input: ReplyToolAuthorityInput, route?: ReplyToolAuthorityRoute) => {
     const assertCurrent = () => {
       assertCurrentOperatorAuthority(snapshot.operatorAuthority);
       assertCurrentOperatorAuthority(input.operatorAuthority);
     };
     const key = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
-    const loaded = key
-      ? await loadGatewaySessionEntryReadOnlyInWorker({
+    capturedReadPlan?.assertCurrent();
+    const preparedLookup = key
+      ? await prepareGatewaySessionEntryReadOnlyInWorker({
           cfg: snapshot.run.config ?? {},
           key,
           agentId: resolveSessionAgentId({
@@ -519,10 +520,12 @@ export function prepareReplyToolAuthority(
           assertActive: assertCurrent,
         })
       : undefined;
-    if (loaded) {
+    if (preparedLookup) {
+      const loaded = preparedLookup.loaded;
       const identity = {
         storePath: loaded.storePath,
         canonicalKey: loaded.canonicalKey,
+        storeKeys: [...loaded.storeKeys],
         agentId: loaded.agentId,
         source: loaded.capturedReadSource,
         sources: loaded.capturedReadSources,
@@ -532,7 +535,11 @@ export function prepareReplyToolAuthority(
       if (captured && !isDeepStrictEqual(identity, captured)) {
         throw new Error("Tool authority classification source changed");
       }
-      captured ??= identity;
+      if (!captured) {
+        captured = identity;
+        capturedReadPlan = preparedLookup.readPlan;
+      }
+      capturedReadPlan?.assertCurrent();
     }
     return withPreparedReplyToolAuthorityContext(
       input,
@@ -585,8 +592,18 @@ export function prepareReplyToolAuthority(
   bindReplyToolAuthorityCallerRead(
     result.projectAsync,
     async (caller, expected, route, assertActive) => {
-      // The existing process-native incognito owner has no file-backed batch reader.
       if (isIncognitoSessionKey(snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey)) {
+        if (!captured) {
+          await prepare(snapshot, route);
+        }
+        const original = captured;
+        if (!original) {
+          throw new Error("Tool authority classification source is unavailable");
+        }
+        recordPreparedToolAuthorityRead(
+          prepareNativeReplyToolAuthorityRead(original, assertActive),
+        );
+        // Published lineage is SQL-free; mutable native policy still uses compatibility.
         return undefined;
       }
       await prepare(snapshot, route);
@@ -594,36 +611,13 @@ export function prepareReplyToolAuthority(
       const original = captured;
       const incoming = caller ? applyReplyToolAuthorityOverlay(snapshot, caller) : snapshot;
       const projected = narrow ? narrow(incoming) : incoming;
-      const source = original?.source;
-      const storePath =
-        original &&
-        (source?.path ??
-          resolveUnsuffixedSqliteTargetFromSessionStorePath(original.storePath).path);
-      const missingIdentity =
-        storePath && !source ? readDatabasePathIdentitySync(storePath) : undefined;
+      const plan = capturedReadPlan;
+      if (original && !plan) {
+        throw new Error("Tool authority classification source is unavailable");
+      }
       const assertSources = () => {
         assertActive();
-        for (const capturedSource of original?.sources ?? []) {
-          assertCapturedSessionEntryReadSource(capturedSource);
-        }
-        if (source && typeof source.databaseIdentity === "string") {
-          assertCapturedSessionEntryReadSource(source);
-          if (
-            original &&
-            captureSessionStoreReadCandidate(
-              resolveUnsuffixedSqliteTargetFromSessionStorePath(original.storePath).path,
-            ).physicalPath !== source.path
-          ) {
-            throw new Error("Tool authority classification route changed");
-          }
-        }
-        if (
-          missingIdentity &&
-          storePath &&
-          !isDeepStrictEqual(readDatabasePathIdentitySync(storePath), missingIdentity)
-        ) {
-          throw new Error("Tool authority classification source changed");
-        }
+        plan?.assertCurrent();
       };
       const assertEntry = (entry: SessionEntry | undefined) => {
         assertSources();
@@ -654,26 +648,10 @@ export function prepareReplyToolAuthority(
         }
         assertSources();
       };
-      const reads: PreparedQuestionCallerRead["reads"] =
-        original && storePath
-          ? [
-              {
-                agentId: source?.agentId ?? original.agentId,
-                storePath,
-                sessionKeys: [original.canonicalKey],
-                projection: "exact",
-                env,
-              },
-            ]
-          : [];
+      const reads = plan?.reads ?? [];
       const assertPrepared: PreparedQuestionCallerRead["assertPrepared"] = (currentReads) => {
-        for (const read of currentReads) {
-          read.assertCurrent();
-        }
-        assertEntry(
-          currentReads[0]?.result.entries.find((row) => row.sessionKey === original?.canonicalKey)
-            ?.entry,
-        );
+        assertSources();
+        assertEntry(plan?.selectPrepared(currentReads));
       };
       const prepared: PreparedQuestionCallerRead = {
         reads,
@@ -682,40 +660,25 @@ export function prepareReplyToolAuthority(
         retainNative() {
           assertSources();
           // Secret writes retain their pre-existing other-owner check at both worker grants.
-          const retained =
-            original && storePath
-              ? retainOpenClawAgentDatabaseReadOnly({
-                  agentId: source?.agentId ?? original.agentId,
-                  path: storePath,
-                  env,
-                })
-              : undefined;
-          if (retained && !retained.found && (source || retained.reason !== "database-missing")) {
-            throw new Error("Tool authority classification source is unavailable");
-          }
-          if (!retained?.found || !original) {
+          const retained = plan?.retainNative();
+          if (!retained) {
             return { assertCurrent: () => assertEntry(undefined), release: () => {} };
           }
           const assertCurrent = () => {
             assertSources();
-            retained.claim.assertCurrent();
-            if (source) {
-              assertCapturedSessionEntryReadSource(source, retained.database);
-            }
-            assertEntry(
-              readExactSessionEntryRow(
-                retained.database,
-                original.canonicalKey,
-                "list",
-                "canonical",
-              )?.entry,
-            );
+            assertEntry(retained.readCurrent());
           };
           // Consumers validate policy at the effect boundary; retention only pins the reader.
-          return { assertCurrent, release: retained.claim.release };
+          return { assertCurrent, release: retained.release };
         },
       };
-      recordPreparedToolAuthorityRead(prepared);
+      recordPreparedToolAuthorityRead({
+        ...prepared,
+        assertLegacyCurrent: () => {
+          assertSources();
+          assertEntry(plan?.readLegacy());
+        },
+      });
       return prepared;
     },
   );

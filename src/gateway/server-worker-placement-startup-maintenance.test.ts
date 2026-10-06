@@ -7,10 +7,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { observeSessionMaintenanceChanges } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationRun from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
-import {
-  collectSessionMaintenancePreserveKeys,
-  prepareSessionMaintenancePreservation,
-} from "../config/sessions/store-maintenance-preserve.js";
+import { prepareSessionMaintenancePreservation } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
@@ -84,7 +81,7 @@ function createPlacementFixture(
 function createMaintenanceRuntime(params: {
   placements: PlacementFixture[];
   preservationStore?: WorkerSessionPlacementStore;
-  onRecovery?: () => void;
+  onRecovery?: () => void | Promise<void>;
   recoveryError?: Error;
   stopError?: Error;
 }) {
@@ -147,7 +144,7 @@ function createMaintenanceRuntime(params: {
             },
       retireSessionPlacement: vi.fn(),
       pruneOrphanedWorkspaceReconciliations: async () => {
-        params.onRecovery?.();
+        await params.onRecovery?.();
         if (params.recoveryError) {
           throw params.recoveryError;
         }
@@ -183,6 +180,15 @@ async function startMaintenanceRuntime(
     throw new Error("worker placement runtime did not start");
   }
   return sidecar;
+}
+
+async function preservedSessionKeys() {
+  const prepared = await prepareSessionMaintenancePreservation("unused-store");
+  try {
+    return new Set(prepared.capture().providerKeys);
+  } finally {
+    prepared.dispose();
+  }
 }
 
 describe("worker placement session maintenance ownership", () => {
@@ -250,11 +256,15 @@ describe("worker placement session maintenance ownership", () => {
       });
       expect(loadSessionEntryReadOnly(placement)).toBeUndefined();
       const createRetention = vi.spyOn(workspaceRetention, "createNodeWorkspaceRetainCoordinator");
+      let prepared:
+        | Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>
+        | undefined;
       try {
         createMaintenanceRuntime({ placements: [placement] });
         const options = createRetention.mock.calls.at(-1)?.[0];
         const additionalManifestRefs = options?.additionalManifestRefs;
-        const currentPlacement = options?.placements.list()[0];
+        prepared = await options?.placements.prepareRuntimeRefresh(placement.sessionId);
+        const currentPlacement = prepared?.placement;
         if (!additionalManifestRefs || !currentPlacement) {
           throw new Error("startup did not bind repository manifest retention");
         }
@@ -263,6 +273,7 @@ describe("worker placement session maintenance ownership", () => {
         const currentManifestRefs = await additionalManifestRefs(currentPlacement);
         expect(currentManifestRefs()).toEqual([originalManifest]);
       } finally {
+        prepared?.release();
         createRetention.mockRestore();
       }
     });
@@ -354,10 +365,10 @@ describe("worker placement session maintenance ownership", () => {
           });
           expect(loadSessionEntry(sessionScope(sessionKey))?.archivedAt).toBeUndefined();
           expect(forceDestroyEnvironment).not.toHaveBeenCalled();
-          expect(collectSessionMaintenancePreserveKeys()?.has(sessionKey)).toBe(true);
+          expect((await preservedSessionKeys()).has(sessionKey)).toBe(true);
 
           await sidecar.stop();
-          expect(collectSessionMaintenancePreserveKeys()?.has(sessionKey)).not.toBe(true);
+          expect((await preservedSessionKeys()).has(sessionKey)).not.toBe(true);
           // A managed backdate invalidates the age fact held by the native worker.
           triggerEntry.updatedAt -= 1;
           const placementArchived = observeSessionMaintenanceChanges(storePath, sessionKey);
@@ -419,9 +430,7 @@ describe("worker placement session maintenance ownership", () => {
       expect(() => prepared.capture()).toThrow("providers changed");
       prepared.dispose();
     }
-    expect(collectSessionMaintenancePreserveKeys()?.has("agent:main:placement-requested")).not.toBe(
-      true,
-    );
+    expect((await preservedSessionKeys()).has("agent:main:placement-requested")).not.toBe(true);
   });
 
   it("unregisters preservation synchronously when environment stop fails and is retried", async () => {
@@ -433,13 +442,18 @@ describe("worker placement session maintenance ownership", () => {
     });
     const sidecar = await startMaintenanceRuntime(runtime);
 
-    expect(collectSessionMaintenancePreserveKeys()?.has(placement.sessionKey)).toBe(true);
-    const firstStop = sidecar.stop();
-    expect(collectSessionMaintenancePreserveKeys()?.has(placement.sessionKey)).not.toBe(true);
-    expect(sidecar.stop()).toBe(firstStop);
-    await expect(firstStop).rejects.toBe(stopError);
-    await expect(sidecar.stop()).resolves.toBeUndefined();
-    expect(environments.stop).toHaveBeenCalledTimes(2);
+    const prepared = await prepareSessionMaintenancePreservation("unused-store");
+    try {
+      expect(prepared.capture().providerKeys).toContain(placement.sessionKey);
+      const firstStop = sidecar.stop();
+      expect(() => prepared.capture()).toThrow("providers changed");
+      expect(sidecar.stop()).toBe(firstStop);
+      await expect(firstStop).rejects.toBe(stopError);
+      await expect(sidecar.stop()).resolves.toBeUndefined();
+      expect(environments.stop).toHaveBeenCalledTimes(2);
+    } finally {
+      prepared.dispose();
+    }
   });
 
   it("unregisters preservation and its sidecar when initial workspace recovery fails", async () => {
@@ -449,9 +463,8 @@ describe("worker placement session maintenance ownership", () => {
     const { environments, runtime } = createMaintenanceRuntime({
       placements: [placement],
       recoveryError,
-      onRecovery: () => {
-        protectedDuringRecovery =
-          collectSessionMaintenancePreserveKeys()?.has(placement.sessionKey) === true;
+      onRecovery: async () => {
+        protectedDuringRecovery = (await preservedSessionKeys()).has(placement.sessionKey);
       },
     });
     const registerSidecar = vi.fn();
@@ -469,6 +482,6 @@ describe("worker placement session maintenance ownership", () => {
     expect(registerSidecar).toHaveBeenCalledOnce();
     expect(unregisterSidecar).toHaveBeenCalledWith(registerSidecar.mock.calls[0]?.[0]);
     expect(environments.stop).toHaveBeenCalledOnce();
-    expect(collectSessionMaintenancePreserveKeys()?.has(placement.sessionKey)).not.toBe(true);
+    expect((await preservedSessionKeys()).has(placement.sessionKey)).not.toBe(true);
   });
 });

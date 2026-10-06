@@ -82,7 +82,10 @@ function applyReceipt(snapshot: PendingInputHistorySnapshot, receipt: PendingInp
 
 /** Inactive until P7d. Accepted reconciliation retains its actor through native settlement. */
 export function createIncognitoPendingInputHistoryReader(params: {
-  actor: Pick<IncognitoAgentDatabaseExecution, "path" | "sessions" | "assertCurrent">;
+  actor: Pick<
+    IncognitoAgentDatabaseExecution,
+    "path" | "sessions" | "assertCurrent" | "assertReadable"
+  >;
   authority: IncognitoSessionAuthority;
   target: IncognitoHistoryTarget;
 }) {
@@ -135,6 +138,8 @@ export function createIncognitoPendingInputHistoryReader(params: {
       options: { limit?: number; before?: number } = {},
     ): Promise<SessionPendingInputPage> {
       const { rows, total, nextBefore } = await readRows(options);
+      assertCurrent();
+      actor.assertReadable();
       return {
         items: rows.toReversed().map(projectSessionPendingInput),
         total: total ?? 0,
@@ -143,6 +148,8 @@ export function createIncognitoPendingInputHistoryReader(params: {
     },
     async read(id: string): Promise<SessionPendingInput | undefined> {
       const row = (await readRows({ id, limit: 1 })).rows[0];
+      assertCurrent();
+      actor.assertReadable();
       return row ? projectSessionPendingInput(row) : undefined;
     },
   };

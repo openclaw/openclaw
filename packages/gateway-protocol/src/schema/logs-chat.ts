@@ -131,6 +131,8 @@ export const AgentActivityItemSchema = closedObject({
   meta: Type.Optional(Type.String()),
   commandBearing: Type.Optional(Type.Boolean()),
   toolCallId: Type.Optional(Type.String()),
+  // The history page has no matching result; this is not a terminal receipt.
+  unpairedCall: Type.Optional(Type.Boolean()),
   startedAt: Type.Optional(Type.Number()),
   endedAt: Type.Optional(Type.Number()),
   error: Type.Optional(Type.String()),
@@ -182,6 +184,12 @@ export const ChatHistoryCursorResultSchema = Type.Union([
 export const ChatMetadataParamsSchema = Object.assign(
   closedObject({
     agentId: Type.Optional(NonEmptyString),
+    includeModels: Type.Optional(
+      Type.Boolean({
+        description:
+          "Include model and account selection metadata (default true). Set false when reading models.list separately.",
+      }),
+    ),
     authProfileId: Type.Optional(
       Type.String({
         minLength: 1,

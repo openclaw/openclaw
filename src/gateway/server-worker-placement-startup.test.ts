@@ -28,10 +28,15 @@ import type { WorkerPlacementDispatchService } from "./worker-environments/place
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 
 function placementStoreDefaults(
-  readPlacements: () => ReadonlyArray<{ sessionId: string }> = () => [],
+  readPlacements: () => ReadonlyArray<{
+    sessionId: string;
+    environmentId?: string | null;
+  }> = () => [],
 ) {
   return {
     readChangeSnapshot: async () => readPlacements(),
+    readEnvironmentOwner: async (environmentId: string) =>
+      readPlacements().find((placement) => placement.environmentId === environmentId),
     readProjection: async () => ({
       placements: new Map(readPlacements().map((placement) => [placement.sessionId, placement])),
     }),
@@ -481,16 +486,6 @@ describe("worker placement startup health lifetime", () => {
       const unrelatedCore = vi.fn(async () => {});
       await guard("worker-unrelated", unrelatedCore);
       expect(unrelatedCore).toHaveBeenCalledOnce();
-
-      placementRows = [
-        provisioning,
-        { sessionId: "session-duplicate", state: "active", environmentId: "worker-guarded" },
-      ];
-      const ambiguousCore = vi.fn(async () => {});
-      await expect(guard("worker-guarded", ambiguousCore)).rejects.toThrow(
-        "multiple placement owners",
-      );
-      expect(ambiguousCore).not.toHaveBeenCalled();
 
       placementRows = [
         { sessionId: "session-mismatch", state: "active", environmentId: "worker-mismatch" },

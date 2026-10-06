@@ -39,11 +39,11 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import * as persistence from "./subagent-registry-persistence.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   finalizeInterruptedSubagentRun,
   releaseSubagentRun,
@@ -742,7 +742,8 @@ it.each([
       createHookRunner(createEmptyPluginRegistry()),
     );
     const cleanup = createSubagentRegistryContextCleanup({
-      isEndedHookOwnerCurrent: (id, entry) => isSameSubagentRunOwner(subagentRuns.get(id), entry),
+      isEndedHookOwnerCurrent: (entry) =>
+        isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
       warn: () => {},
     });
     const lateStamp =

@@ -331,39 +331,6 @@ public actor GatewayNodeSession {
             admissionGeneration: expectedAdmissionGeneration)
     }
 
-    /// Keeps the flat overload source-compatible while credentials remain one reconnect identity.
-    public func connect(
-        url: URL,
-        token: String? = nil,
-        bootstrapToken: String? = nil,
-        password: String? = nil,
-        connectOptions: GatewayConnectOptions,
-        sessionBox: WebSocketSessionBox?,
-        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
-        onConnected: @escaping @Sendable () async -> Void,
-        onDisconnected: @escaping @Sendable (String) async -> Void,
-        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
-        onInvokeInput: (@Sendable (NodeInvokeInputEvent) async -> Void)? = nil,
-        onInvokeCancel: (@Sendable (String) async -> Void)? = nil,
-        onRouteInvalidated: (@Sendable () async -> Void)? = nil) async throws
-    {
-        try await self.connect(
-            url: url,
-            credentials: GatewayNodeSessionCredentials(
-                token: token,
-                bootstrapToken: bootstrapToken,
-                password: password),
-            connectOptions: connectOptions,
-            sessionBox: sessionBox,
-            extraHeadersProvider: extraHeadersProvider,
-            onConnected: onConnected,
-            onDisconnected: onDisconnected,
-            onInvoke: onInvoke,
-            onInvokeInput: onInvokeInput,
-            onInvokeCancel: onInvokeCancel,
-            onRouteInvalidated: onRouteInvalidated)
-    }
-
     public func disconnect() async {
         self.channel?.retireSocketAdmission()
         let invalidatedAdmissionGeneration = self.admissionGeneration
@@ -597,19 +564,15 @@ public actor GatewayNodeSession {
     }
 
     private func awaitPluginSurfaceRefresh(_ task: Task<String?, Never>, timeoutMs: Double) async -> String? {
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: max(0, timeoutMs) / 1000,
-                onTimeout: {
-                    NSError(
-                        domain: "Gateway",
-                        code: 8,
-                        userInfo: [NSLocalizedDescriptionKey: "plugin surface refresh timed out"])
-                },
-                operation: { await task.value })
-        } catch {
-            return nil
-        }
+        try? await AsyncTimeout.withTimeout(
+            seconds: max(0, timeoutMs) / 1000,
+            onTimeout: {
+                NSError(
+                    domain: "Gateway",
+                    code: 8,
+                    userInfo: [NSLocalizedDescriptionKey: "plugin surface refresh timed out"])
+            },
+            operation: { await task.value })
     }
 
     private func releasePluginSurfaceRefreshWaiter(surface: String, refreshID: UUID, waiterID: UUID) {

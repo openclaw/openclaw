@@ -347,6 +347,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         if (prop === "gateway") {
           const gateway: PluginRuntime["gateway"] = getRuntimeProperty();
           const withIdentity = gateway.withUserProfileIdentity;
+          const resolveGitHubAccount = gateway.resolveGitHubAccount;
           return {
             isAvailable: () => runWithPluginScope(() => gateway.isAvailable(), false),
             request: async (method, params, options) => {
@@ -368,6 +369,15 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 assertRuntimeCurrent();
                 return result;
               }),
+            withSessionFacts: (select, run) =>
+              runWithPluginScope(async () => {
+                const result = await gateway.withSessionFacts(select, (snapshot) => {
+                  assertRuntimeCurrent();
+                  return run(snapshot);
+                });
+                assertRuntimeCurrent();
+                return result;
+              }),
             subscribeSessionChanges: (listener) =>
               runWithPluginScope(() =>
                 gateway.subscribeSessionChanges((event) =>
@@ -385,6 +395,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                       assertCurrent();
                       return await run(assertCurrent);
                     });
+                    assertRuntimeCurrent();
+                    return result;
+                  })
+              : undefined,
+            resolveGitHubAccount: resolveGitHubAccount
+              ? (params) =>
+                  runWithPluginScope(async () => {
+                    const result = await resolveGitHubAccount(params);
                     assertRuntimeCurrent();
                     return result;
                   })

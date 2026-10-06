@@ -8,6 +8,7 @@ import type {
   PreparedSessionEntryWorkerRead,
   SessionEntryWorkerRead,
 } from "../../config/sessions/session-entry-read-runtime.types.js";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
@@ -145,13 +146,15 @@ const callerReadPreparers = new WeakMap<object, CallerReadPreparer>();
 export type PreparedToolAuthorityRead = {
   reads: readonly SessionEntryWorkerRead[];
   assertPrepared: (reads: readonly PreparedSessionEntryWorkerRead[]) => void;
+  /** Ordinary legacy queue admission only; never call from a worker grant. */
+  assertLegacyCurrent: () => void;
   retainNative?: PreparedQuestionCallerRead["retainNative"];
 };
 const toolAuthorityReadScope = new AsyncLocalStorage<{
   reads: PreparedToolAuthorityRead[];
   complete: boolean;
 }>();
-const workerToolPreparations = new WeakSet<() => Promise<void>>();
+const workerToolPreparations = new WeakMap<() => Promise<void>, { complete: boolean }>();
 
 export function bindWorkerToolPreparation<
   T extends Pick<ReplyToolAuthorityPreparation, "prepareCurrent">,
@@ -159,9 +162,11 @@ export function bindWorkerToolPreparation<
   preparation: T,
   dependencies: readonly Pick<ReplyToolAuthorityPreparation, "prepareCurrent">[] = [],
 ): T {
-  if (dependencies.every((dependency) => workerToolPreparations.has(dependency.prepareCurrent))) {
-    workerToolPreparations.add(preparation.prepareCurrent);
-  }
+  workerToolPreparations.set(preparation.prepareCurrent, {
+    complete: dependencies.every(
+      (dependency) => workerToolPreparations.get(dependency.prepareCurrent)?.complete === true,
+    ),
+  });
   return preparation;
 }
 
@@ -176,17 +181,24 @@ export function recordPreparedToolAuthorityRead(read: PreparedToolAuthorityRead)
 export async function capturePreparedToolAuthorityReads(
   preparation: ReplyToolAuthorityPreparation,
 ) {
+  const metadata = workerToolPreparations.get(preparation.prepareCurrent);
   const scope: { reads: PreparedToolAuthorityRead[]; complete: boolean } = {
     reads: [],
-    complete: true,
+    complete: metadata?.complete ?? false,
   };
-  if (workerToolPreparations.has(preparation.prepareCurrent)) {
+  if (metadata) {
     await toolAuthorityReadScope.run(scope, preparation.prepareCurrent);
   } else {
     await preparation.prepareCurrent();
   }
   preparation.assertCurrent();
-  return scope.complete ? scope.reads : [];
+  return {
+    reads: scope.reads,
+    // Known wrappers retain their own reads even when a dependency still needs
+    // synchronous compatibility outside worker admission.
+    assertCompatibility:
+      !scope.complete || !scope.reads.length ? preparation.compatAssertCurrent : undefined,
+  };
 }
 
 export function bindReplyToolAuthorityCallerRead(
@@ -247,20 +259,31 @@ export async function prepareQuestionInputAuthority(authority: QuestionInputAuth
   assertActive();
   const captured = await capturePreparedToolAuthorityReads(preparation);
   assertActive();
-  const supported = captured.length > 0 && captured.every((read) => read.retainNative);
+  const supported =
+    !captured.assertCompatibility &&
+    captured.reads.length > 0 &&
+    captured.reads.every((read) => read.retainNative);
+  const assertLegacyReads = () => {
+    for (const read of captured.reads) {
+      read.assertLegacyCurrent();
+    }
+  };
   const prepareCurrent = async () => {
     assertActive();
     await preparation.prepareCurrent();
+    if (!supported) {
+      assertLegacyReads();
+    }
     assertActive();
   };
   const callerRead: PreparedQuestionCallerRead | undefined = supported
     ? {
-        reads: captured.flatMap((read) => read.reads),
+        reads: captured.reads.flatMap((read) => read.reads),
         prepareCurrent,
         assertPrepared: (reads) => {
           assertActive();
           let offset = 0;
-          for (const read of captured) {
+          for (const read of captured.reads) {
             read.assertPrepared(reads.slice(offset, offset + read.reads.length));
             offset += read.reads.length;
           }
@@ -268,9 +291,19 @@ export async function prepareQuestionInputAuthority(authority: QuestionInputAuth
         },
         retainNative: () => {
           const retained: ReturnType<PreparedQuestionCallerRead["retainNative"]>[] = [];
-          const release = () => retained.forEach((read) => read.release());
+          const release = () => {
+            const errors: unknown[] = [];
+            for (const read of retained.toReversed()) {
+              try {
+                read.release();
+              } catch (error) {
+                errors.push(error);
+              }
+            }
+            throwSqliteLifecycleErrors(errors, "Question authority reader release failed");
+          };
           try {
-            for (const read of captured) {
+            for (const read of captured.reads) {
               retained.push(read.retainNative!());
             }
             return {
@@ -289,10 +322,19 @@ export async function prepareQuestionInputAuthority(authority: QuestionInputAuth
       }
     : undefined;
   const assertCompatibilityCurrent = () =>
-    assertQuestionCompatibilityCurrent(assertActive, callerRead, () =>
-      preparation.compatAssertCurrent(),
-    );
-  const assertCurrent = supported ? assertActive : assertCompatibilityCurrent;
+    assertQuestionCompatibilityCurrent(assertActive, callerRead, () => {
+      preparation.compatAssertCurrent();
+      assertLegacyReads();
+    });
+  // Partial captures retain their opaque released guard; captured legacy reads
+  // run during preparation or transport compatibility, never inside a grant.
+  const assertCurrent = supported
+    ? assertActive
+    : () => {
+        assertActive();
+        preparation.compatAssertCurrent();
+        assertActive();
+      };
   bindQuestionDispatchCapability(assertCurrent, { assertCompatibilityCurrent, callerRead });
   return { kind: authority.kind, assertCurrent, prepareCurrent };
 }

@@ -103,12 +103,15 @@ function mergeRateLimitUpdate(current: JsonValue | undefined, update: JsonObject
     (currentByLimitId && isJsonObject(currentByLimitId[limitId])
       ? currentByLimitId[limitId]
       : undefined) ?? (currentPrimaryLimitId === limitId ? currentPrimary : undefined);
-  const merged = mergeSparseSnapshot(
-    isJsonObject(currentForLimit) ? currentForLimit : undefined,
-    currentPrimary,
-    update,
-    limitId,
-  );
+  const merged: JsonObject = { ...update, limitId };
+  // Rolling updates serialize unavailable account metadata as null. Preserve
+  // only those sparse fields; window and reached-state nulls remain authoritative.
+  for (const key of SPARSE_ACCOUNT_METADATA_KEYS) {
+    const previous = currentForLimit?.[key] ?? currentPrimary?.[key];
+    if (merged[key] == null && previous != null) {
+      merged[key] = previous;
+    }
+  }
   const nextPrimary =
     !currentPrimary || currentPrimaryLimitId === limitId ? merged : currentPrimary;
   let nextByLimitId: JsonObject | undefined;
@@ -145,24 +148,6 @@ function readRateLimitIds(value: JsonValue): string[] {
     }
   }
   return [...ids];
-}
-
-function mergeSparseSnapshot(
-  current: JsonObject | undefined,
-  accountFallback: JsonObject | undefined,
-  update: JsonObject,
-  limitId: string,
-): JsonObject {
-  const merged: JsonObject = { ...update, limitId };
-  // Rolling updates serialize unavailable account metadata as null. Preserve
-  // only those sparse fields; window and reached-state nulls remain authoritative.
-  for (const key of SPARSE_ACCOUNT_METADATA_KEYS) {
-    const previous = current?.[key] ?? accountFallback?.[key];
-    if (merged[key] == null && previous != null) {
-      merged[key] = previous;
-    }
-  }
-  return merged;
 }
 
 function readLimitId(snapshot: JsonObject): string {

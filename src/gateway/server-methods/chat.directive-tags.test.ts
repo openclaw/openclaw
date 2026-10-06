@@ -61,7 +61,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
-import { agentWaitHandler } from "./agent-wait.js";
+import { agentHandlers } from "./agent.js";
 import { createScopedCliClient } from "./chat-client.test-support.js";
 import {
   createFileAttachment,
@@ -82,6 +82,7 @@ import {
   ChatDirectiveDedupe,
   createChatDirectiveReplyBackend,
   createGlobalChatDirectiveConfig,
+  createChatDirectiveSender,
   createChatDirectiveSuiteResources,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
@@ -600,6 +601,10 @@ vi.mock("../../media/store.js", async () => {
 
 const { chatHandlers } = await import("./chat.js");
 const { handleDirectExternalChatSend } = await import("./chat-send-external-entry.js");
+const runNonStreamingChatSend = createChatDirectiveSender({
+  internal: handleChatSend,
+  external: handleDirectExternalChatSend,
+});
 
 // Multi-media transcript mirroring can exceed 1s on loaded CI before the async broadcast lands.
 async function waitForAssertion(assertion: () => void, timeoutMs = 5_000, stepMs = 2) {
@@ -930,7 +935,6 @@ async function createSqliteChatRequest(prefix: string) {
   return createChatRequestFixture();
 }
 
-type NonStreamingChatSendWaitFor = "broadcast" | "dedupe" | "none";
 type ChatDeliveryRoutingCase = readonly [
   name: string,
   id: string,
@@ -1093,71 +1097,6 @@ function createMainSourceReply(params: {
 function setAgentRunReplies(replies: TestReply[]) {
   mockState.triggerAgentRunStart = true;
   mockState.dispatchedReplies = replies;
-}
-
-async function runNonStreamingChatSend(params: {
-  context: ChatContext;
-  respond: RespondFn;
-  idempotencyKey: string;
-  message?: string;
-  sessionKey?: string;
-  deliver?: boolean;
-  client?: unknown;
-  expectBroadcast?: boolean;
-  requestParams?: Record<string, unknown>;
-  directExternal?: boolean;
-  waitForCompletion?: boolean;
-  waitForDedupe?: boolean;
-  waitFor?: NonStreamingChatSendWaitFor;
-}): Promise<Record<string, any> | undefined> {
-  const sendParams: {
-    sessionKey: string;
-    message: string;
-    idempotencyKey: string;
-    deliver?: boolean;
-  } = {
-    sessionKey: params.sessionKey ?? "main",
-    message: params.message ?? "hello",
-    idempotencyKey: params.idempotencyKey,
-  };
-  if (typeof params.deliver === "boolean") {
-    sendParams.deliver = params.deliver;
-  }
-  const handler = params.directExternal === false ? handleChatSend : handleDirectExternalChatSend;
-  const handlerOptions = {
-    params: {
-      ...sendParams,
-      ...params.requestParams,
-    },
-    respond: params.respond,
-    req: {} as never,
-    client: (params.client ?? null) as never,
-    isWebchatConnect: () => false,
-    context: params.context,
-  };
-  await handler(handlerOptions);
-
-  const waitFor =
-    params.waitFor ??
-    (params.waitForCompletion === false || params.waitForDedupe === false
-      ? "none"
-      : params.expectBroadcast === false
-        ? "dedupe"
-        : "broadcast");
-  if (waitFor === "none") {
-    return undefined;
-  }
-  if (waitFor === "dedupe") {
-    await params.context.dedupe.waitForResponse(params.idempotencyKey);
-    return undefined;
-  }
-
-  const terminalCalls = () =>
-    params.context.broadcast.mock.calls.filter(
-      ([event, payload]) => event === "chat" && asOptionalRecord(payload)?.state !== "delta",
-    );
-  await waitForAssertion(() => expect(terminalCalls()).toHaveLength(1));
-  return asOptionalRecord(terminalCalls()[0]?.[1]);
 }
 
 async function expectImageOnlyFinal(params: {
@@ -1474,7 +1413,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(context.addChatRun).toHaveBeenCalledOnce();
       expect(operation.result).toEqual({ kind: "completed" });
       expect(mockState.lastDispatchCtx?.BodyForAgent).toBe("hello");
-      expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
+      expect(mockState.lastMessageInjectionDisposition).toBeUndefined();
     },
   );
 
@@ -2222,7 +2161,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(context.addChatRun).toHaveBeenCalledOnce();
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
-    expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
+    expect(mockState.lastMessageInjectionDisposition).toBeUndefined();
     expect(staleQueue).not.toHaveBeenCalled();
     expect(staleCancel).not.toHaveBeenCalled();
     expect(readPersistedUserMessages()).toHaveLength(1);
@@ -3483,7 +3422,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ...(failed ? { summary: errorMessage } : {}),
       });
       const waitRespond = vi.fn<RespondFn>();
-      await agentWaitHandler({
+      await agentHandlers["agent.wait"]!({
         params: { runId, timeoutMs: 0 },
         respond: waitRespond,
         context,

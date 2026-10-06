@@ -19,7 +19,6 @@ import {
   resolveAssistantUsage,
   resolveEventTimestamp,
   sanitizeToolDetailText,
-  type AssistantMessage,
   type AssistantProjectionChunk,
   type AssistantProjectionGroup,
   type AssistantUsageSnapshot,
@@ -92,43 +91,9 @@ interface EventBridgeSnapshot {
   readonly usage: AssistantUsageSnapshot | undefined;
 }
 
-interface BuildAssistantMessageArgs {
-  modelRef: { api?: string; id: string; provider: string };
-  now: () => number;
-}
-
-interface EventBridgeController {
-  recordSendResult(result: SessionEvent | undefined): boolean;
-  awaitCompactionChain(): Promise<void>;
-  awaitCompactionCompletion(): Promise<void>;
-  awaitSessionIdle(): Promise<void>;
-  settleCompactionWait(): void;
-  awaitDeltaChain(): Promise<void>;
-  awaitAgentEventChain(): Promise<void>;
-  flushTranscriptProjection(): void;
-  hasObservedCompaction(): boolean;
-  hasObservedSessionIdle(): boolean;
-  isCompacting(): boolean;
-  snapshot(): EventBridgeSnapshot;
-  buildAssistantMessage(args: BuildAssistantMessageArgs): AssistantMessage | undefined;
-  finalizeAssistantTexts(): string[];
-  detach(): void;
-  completeTool(tool: {
-    toolCallId: string;
-    parentToolCallId?: string;
-    toolName: string;
-    args?: unknown;
-    result?: unknown;
-    isError: boolean;
-  }): void;
-}
-
 type MessageAccumulator = { text: string };
 
-export function attachEventBridge(
-  session: SessionLike,
-  options: EventBridgeOptions,
-): EventBridgeController {
+export function attachEventBridge(session: SessionLike, options: EventBridgeOptions) {
   const messagesById = new Map<string, MessageAccumulator>();
   const reasoningById = new Map<string, string>();
   const durableReasoningById = new Map<string, string>();
@@ -523,7 +488,7 @@ export function attachEventBridge(
   });
 
   return {
-    recordSendResult(result) {
+    recordSendResult(result: SessionEvent | undefined) {
       if (
         !isAssistantMessageEvent(result) ||
         !isRootSessionEvent(result) ||
@@ -566,7 +531,7 @@ export function attachEventBridge(
     isCompacting() {
       return activeCompactionCount > 0;
     },
-    snapshot() {
+    snapshot(): EventBridgeSnapshot {
       return {
         assistantTexts: finalizeAssistantTexts(messagesById, lastAssistantEvent),
         completedCount,
@@ -577,7 +542,9 @@ export function attachEventBridge(
         usage: usage ? { ...usage } : undefined,
       };
     },
-    buildAssistantMessage(args) {
+    buildAssistantMessage(
+      args: Pick<Parameters<typeof buildAssistantMessage>[0], "modelRef" | "now">,
+    ) {
       const group = pendingAssistantProjection ?? lastAssistantProjection;
       return group
         ? buildAssistantProjectionGroup(
@@ -600,7 +567,14 @@ export function attachEventBridge(
     finalizeAssistantTexts() {
       return finalizeAssistantTexts(messagesById, lastAssistantEvent);
     },
-    completeTool(tool) {
+    completeTool(tool: {
+      toolCallId: string;
+      parentToolCallId?: string;
+      toolName: string;
+      args?: unknown;
+      result?: unknown;
+      isError: boolean;
+    }) {
       const owner = toolCallsById.get(tool.parentToolCallId ?? tool.toolCallId);
       if (detached || !owner?.root) {
         return;

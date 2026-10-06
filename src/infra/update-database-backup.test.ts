@@ -10,6 +10,7 @@ import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as diskSpace from "./disk-space.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as inspection from "./update-candidate-state.inspection.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
@@ -110,7 +111,9 @@ it.each(["legacy", "current"] as const)(
       sizeBytes: published.length,
     });
     {
-      using snapshot = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+      using snapshot = openNodeSqliteDatabase(backup.databases[0]!.snapshotPath, {
+        readOnly: true,
+      });
       expect(snapshot.prepare("SELECT rowid,value FROM payload").all()).toEqual([
         { rowid: 42, value: "retained" },
       ]);
@@ -635,7 +638,7 @@ it.each(["insufficient", "unknown"] as const)(
         expect.stringMatching(/[\\/]external-b[\\/]agent\.sqlite$/u),
       ]);
       for (const entry of backup.databases) {
-        using db = new DatabaseSync(entry.snapshotPath, { readOnly: true });
+        using db = openNodeSqliteDatabase(entry.snapshotPath, { readOnly: true });
         expect(db.prepare("SELECT rowid,value FROM payload").all()).toEqual([
           {
             rowid: 42,

@@ -161,6 +161,118 @@ Reload preconditions are optional. `installHash` is the lowercase SHA-256 of the
 
 `sourceDigests` requires a captured-source plugin instance and Node's synchronous module hooks. Runtimes without those hooks, including Bun 1.4.2, omit these digests and reject requests that supply them. Ordinary Bun reloads capture fresh source for the replacement while retaining the old instance for admitted consumers; see [runtime instance and source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
 
+## ClawHub catalog discovery
+
+`catalog.browse` and `catalog.searchKeywords` require `operator.read`. Clients
+check `hello-ok.features.methods` before using them; older Gateways continue to
+expose the existing plugin and skill RPCs. All registry requests run on the
+Gateway, including when it runs remotely or inside WSL.
+
+### Browse and search
+
+Call `catalog.browse` with these fields:
+
+| Field          | Contract                                                                                                                            |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`         | Required: `plugin` or `skill`. Results stay within that kind.                                                                       |
+| `query`        | Optional text, at most 200 characters. Whitespace-only text means browse.                                                           |
+| `feed`         | `catalog` (default) or `trending`. Search cannot select `trending`.                                                                 |
+| `officialOnly` | Optional boolean, default `false`. The Gateway excludes any listing without an explicit official flag.                              |
+| `pageSize`     | Integer from 1 to 100, default 20.                                                                                                  |
+| `cursor`       | Opaque continuation from the same kind, feed, and filter request. Search does not accept a cursor.                                  |
+| `agentId`      | Selects the skill workspace. Omit only when the Gateway can select an agent unambiguously. Plugin discovery does not need an agent. |
+
+For example:
+
+```json
+{
+  "kind": "skill",
+  "officialOnly": true,
+  "pageSize": 20,
+  "agentId": "main"
+}
+```
+
+The response contains `items` and `mode` (`catalog`, `trending`, or `search`).
+Catalog and trending pages can return `nextCursor`. Filtering can produce an
+empty page with a continuation; continue while that cursor exists. Full catalog
+browsing uses the registry's paginated plugin and native skill catalogs. Trending
+is a bounded ranking feed, not the complete catalog. The existing initial
+`plugins.catalog.browse` overview retains its bounded behavior.
+
+Text search returns at most `searchLimit` upstream candidates, equal to the
+requested page size. Official filtering can reduce that count. Upstream search
+has no continuation, so it cannot promise every possible matching listing.
+A successful empty response means no qualifying listings were returned.
+`remoteError` means registry discovery failed; any returned cursor repeats the
+input cursor so the client can retry the same page. Installation-status failure
+returns `UNAVAILABLE` instead of claiming that listings are uninstalled.
+
+Each item has `kind`, `registry`, `id`, `catalog` metadata, and `local` facts.
+Treat `(kind, registry, id)` as its canonical identity. Plugin IDs preserve the
+existing `ch_...` discovery identity, so `plugins.catalog.get` can open details;
+`catalog.packageName` supplies the existing plugin installation locator. Skill
+IDs equal `installRef`: native `@publisher/slug` or a source-qualified external
+reference. Pass `installRef` unchanged as `slug` to existing skill lifecycle
+RPCs. Respect `installOnly`; those entries have no ordinary skill detail card.
+The companion listing detail workstream does not change these identities.
+
+Skill local facts include the resolved `agentId`, `installed`, `enabled`,
+`eligible`, and, when installed, `skillKey`. They come from the selected
+workspace's existing status reader and valid tracked registry/source/publisher
+identity. A matching display name or bare slug does not establish installation.
+Plugin local facts reuse the existing managed inventory and mutation policy.
+Neither operation installs anything or changes approval requirements.
+
+### Bulk keyword discovery
+
+Call `catalog.searchKeywords` with `keywords` (1–100 nonblank strings, each at
+most 200 characters), optional `kinds` (`plugin`, `skill`, or both; default both),
+`agentId`, `pageSize` (1–100, default 20), and an optional returned `cursor`.
+The Gateway trims and collapses whitespace, lowercases and deduplicates terms,
+and searches each individual term for each selected kind. It always returns
+only official listings, deduplicated by canonical identity, in deterministic
+identity order. It never concatenates the terms or interprets application
+inventories. Clients own application detection and keyword generation.
+
+The response contains the normalized `keywords`, `items`, `searchLimit: 100`,
+`errors` (each with `kind`, `query`, and `message`), and optional `nextCursor`.
+The cursor pages the complete union of those bounded searches; no matches within
+that union are silently dropped. The upstream 100-candidate limit still applies
+to each term and kind, so this is not an exhaustive registry search. An empty
+union with no errors differs from an empty or partial union with failed queries.
+Retry a request with errors to recover failed terms.
+
+Bulk continuation re-reads the same bounded searches with at most four searches
+in flight, without retaining a second inventory. Cursors bind the normalized
+terms, kinds, registry, selected workspace, and result identities. If the matches
+change, the Gateway returns `INVALID_REQUEST` with a restart instruction rather
+than silently skipping results. Large keyword sets and subsequent pages perform
+more registry reads than ordinary searches; clients should allow a longer RPC
+request timeout and retain the original request for retries.
+
+### Upstream contracts and gaps
+
+Native skill catalog browsing and search use ClawHub's existing
+`/api/v1/packages?family=skill` and `/api/v1/packages/search?family=skill`
+contracts. These project the native skill catalog and expose the listing's
+`isOfficial` flag. `/api/v1/skills` currently omits that flag. Canonical skill
+search and trending can combine publisher and listing official status; the new
+catalog does not use publisher official status as a substitute. Native trending
+entries therefore read their listing flag from package metadata in bounded
+batches. The package-detail route can resolve a same-named package first; its
+metadata qualifies only when family, slug, and publisher match the exact skill.
+Mismatched metadata leaves official status unknown. Missing flags never qualify; featured status, verification tiers,
+publisher handles, and bundled provenance cannot qualify a listing either.
+
+The package skill catalog currently covers native ClawHub skills. External
+sources can appear in the canonical trending feed with their original
+install-only identities, but currently expose no separate listing-level official
+flag and cannot qualify for official suggestions. Existing `skills.search`
+retains its canonical cross-source search and omitted-query trending behavior;
+its public result contract also declares the existing optional `official` field.
+No cross-kind category taxonomy or global relevance ranking is introduced.
+
 ## Messaging and logs
 
 - `send` is the direct outbound-delivery RPC for channel/account/thread-targeted sends outside the chat runner.

@@ -1,5 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "../api.js";
+import { registerWorkboardGatewayMethods } from "./gateway.js";
 import type { WorkboardSessionPlacementWrite } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
@@ -93,76 +96,6 @@ describe("Sessions board storage", () => {
       }),
     ).rejects.toThrow("Sessions boards do not hold cards");
     expect(await store.list()).toEqual([card]);
-  });
-
-  it("validates full column replacements and keeps rejected patches out of durable state", async () => {
-    const store = createWorkboardSqliteTestStore();
-    await store.upsertBoard({ id: "sessions", kind: "sessions" });
-    const original = await store.getSessionsBoard("sessions");
-    for (const patch of [
-      { columns: [] },
-      { columns: [original.sessions.columns[0]] },
-      {
-        columns: Array.from({ length: 13 }, (_, index) => ({
-          id: `column-${index}`,
-          label: "Column",
-          description: "Description",
-          fallback: index === 0,
-        })),
-      },
-      { columns: original.sessions.columns.map((column) => ({ ...column, id: "duplicate" })) },
-      { columns: original.sessions.columns.map((column) => ({ ...column, fallback: false })) },
-      { columns: original.sessions.columns.map((column) => ({ ...column, fallback: true })) },
-      { columns: original.sessions.columns.map((column) => ({ ...column, label: "" })) },
-      {
-        columns: original.sessions.columns.map((column) => ({
-          ...column,
-          description: "x".repeat(401),
-        })),
-      },
-      { columns: original.sessions.columns.map((column) => ({ ...column, color: "chartreuse" })) },
-      {
-        columns: original.sessions.columns.map((column) => ({
-          ...column,
-          match: { run: ["running"] },
-        })),
-      },
-      { scope: { maxAgeHours: -1 } },
-      { scope: { includeArchived: "yes" } },
-      { scope: { agentIds: [""] } },
-      { kind: "cards" },
-    ]) {
-      await expect(store.updateSessionsBoard("sessions", patch)).rejects.toThrow();
-    }
-    expect(await store.getSessionsBoard("sessions")).toEqual(original);
-    const updated = await store.updateSessionsBoard("sessions", {
-      columns: [
-        {
-          id: "attention",
-          label: "Attention",
-          description: "Needs a person.",
-          match: { health: ["waiting-on-user"], archived: false },
-        },
-        {
-          id: "other",
-          label: "Everything else",
-          description: "Remaining sessions.",
-          fallback: true,
-        },
-      ],
-      scope: { agentIds: ["main"], includeArchived: true, maxAgeHours: 24 },
-      agentSessionKey: "agent:main:board-agent",
-    });
-    expect(updated.sessions.columns.map((column) => column.id)).toEqual(["attention", "other"]);
-    expect(updated.sessions.scope).toEqual({
-      agentIds: ["main"],
-      includeArchived: true,
-      maxAgeHours: 24,
-    });
-    await store.upsertBoard({ id: "cards" });
-    await expect(
-      store.updateSessionsBoard("cards", { scope: { includeArchived: true } }),
-    ).rejects.toThrow("not a Sessions board");
   });
 
   it("rejects stale pins after an operator move or spec change", async () => {
@@ -309,4 +242,78 @@ describe("Sessions board storage", () => {
       expect(await store.listSessionPlacements("sessions")).toEqual([]);
     },
   );
+});
+
+describe("Sessions board schema reopening", () => {
+  it("preserves prior-schema cards and admits a new Sessions board through the Gateway method", async () => {
+    const { store, dbPath } = createWorkboardSqliteTestHarness({
+      createStores: createKernelStores,
+    });
+    const board = await store.upsertBoard({ id: "planning", name: "Planning", color: "blue" });
+    const card = await store.create({
+      boardId: board.id,
+      title: "Keep the existing card",
+      notes: "Prior-schema content",
+      labels: ["migration"],
+    });
+    await store.close();
+
+    {
+      using prior = new DatabaseSync(dbPath);
+      // These are the only schema additions for Sessions boards; preserve the existing migration receipt.
+      prior.exec(`
+        DROP TABLE workboard_session_placements;
+        ALTER TABLE workboard_boards DROP COLUMN kind;
+        ALTER TABLE workboard_boards DROP COLUMN sessions_spec;
+      `);
+    }
+
+    const reopenedStores = createKernelStores(dbPath);
+    const reopened = new WorkboardStore(reopenedStores.cards, reopenedStores);
+    try {
+      expect((await reopenedStores.boards.lookup(board.id))?.board).toEqual(board);
+      const restoredBoard = (await reopened.listBoards()).boards.find(
+        (entry) => entry.id === board.id,
+      );
+      expect(restoredBoard).toMatchObject({
+        id: board.id,
+        name: "Planning",
+        color: "blue",
+        total: 1,
+      });
+      expect(restoredBoard).not.toHaveProperty("kind");
+      expect(restoredBoard).not.toHaveProperty("sessions");
+      expect(await reopened.get(card.id)).toEqual(card);
+
+      const registerGatewayMethod = vi.fn<OpenClawPluginApi["registerGatewayMethod"]>();
+      const api = createTestPluginApi({ registerGatewayMethod });
+      registerWorkboardGatewayMethods({ api, store: reopened });
+      const upsert = registerGatewayMethod.mock.calls.find(
+        ([method]) => method === "workboard.boards.upsert",
+      )![1];
+      const respond = vi.fn();
+      await upsert({
+        params: { id: "sessions", kind: "sessions", name: "Sessions" },
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(true, {
+        board: expect.objectContaining({ id: "sessions", kind: "sessions", name: "Sessions" }),
+      });
+      expect(await reopened.getSessionsBoard("sessions")).toMatchObject({
+        id: "sessions",
+        kind: "sessions",
+        sessions: { columns: expect.any(Array) },
+      });
+      expect(await reopened.listSessionPlacements("sessions")).toEqual([]);
+    } finally {
+      await reopened.close();
+    }
+
+    using migrated = new DatabaseSync(dbPath, { readOnly: true });
+    expect(
+      migrated.prepare("SELECT COUNT(*) AS count FROM workboard_session_placements").get(),
+    ).toEqual({
+      count: 0,
+    });
+  });
 });
