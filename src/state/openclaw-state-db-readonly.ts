@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
@@ -22,6 +23,7 @@ import {
   prepareSqliteReadOnlyLocationSync,
   startSqliteReadOnlyLocationAsync,
 } from "../infra/sqlite-snapshot-source.js";
+import { captureSqliteSnapshotStagingOwner } from "../infra/sqlite-snapshot-staging-owner.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -156,6 +158,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
         if (!admitted?.ok || admitted.type !== "admit") {
           throw new Error("Shared-state snapshot admission did not settle");
         }
+        assertHostAdmission();
         admission.assertCurrent();
         freshSignal.throwIfAborted();
       }
@@ -167,11 +170,22 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
         prepared = prepareSqliteReadOnlyLocationSyncInProcess(pathname);
       } else if (selection.fresh) {
         const preserveSourceArtifacts = isArtifactPreservingStateRead();
-        preparation = startSqliteReadOnlyLocationAsync(pathname, {
-          preserveSourceArtifacts,
-          signal: freshSignal,
-          ...(preserveSourceArtifacts ? { expectedSourceIdentity: admission.identity } : {}),
-        });
+        const staging = captureSqliteSnapshotStagingOwner();
+        staging.prepareResources();
+        // Keep broker launch and retained Worker construction in separate host turns.
+        await delay(0);
+        assertHostAdmission();
+        admission.assertCurrent();
+        freshSignal.throwIfAborted();
+        preparation = startSqliteReadOnlyLocationAsync(
+          pathname,
+          {
+            preserveSourceArtifacts,
+            signal: freshSignal,
+            ...(preserveSourceArtifacts ? { expectedSourceIdentity: admission.identity } : {}),
+          },
+          staging,
+        );
         prepared = await preparation.result;
       } else {
         prepared = await prepareSqliteReadOnlyLocation(pathname, {

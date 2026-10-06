@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
 import {
@@ -15,6 +17,42 @@ export function registerSubagentRestoreCacheCases(params: {
   refuseNextWrite(): void;
 }) {
   const { createRun } = params;
+  it("publishes restored rows together after replacing ownership and cached facts", async () => {
+    subagentRuns.clear();
+    const previous = { ...createRun("replaced"), generation: 1 };
+    persistRegistryFixture(new Map([[previous.runId, previous]]));
+    subagentRuns.set(previous.runId, previous);
+    const registration = subagentRuns.captureRegistrationOwnership(
+      previous.childSessionKey,
+      previous,
+    );
+    const restored = new Map<string, SubagentRunRecord>([
+      [previous.runId, { ...previous, generation: 2 }],
+      ["second", createRun("second")],
+    ]);
+    params.mockRestoredRows(restored);
+    const observe = vi.fn(() => ({
+      live: [...subagentRuns.keys()],
+      cached: [...getSubagentSessionListRunsSnapshotForRead(new Map()).keys()],
+      superseded: registration.superseded,
+    }));
+    const unsubscribe = sessionChanges.subscribe(observe);
+    try {
+      await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+      expect(observe.mock.results).toEqual([
+        {
+          type: "return",
+          value: { live: [...restored.keys()], cached: [...restored.keys()], superseded: true },
+        },
+      ]);
+      expect(registration.assertCurrent).toThrow("owner changed");
+    } finally {
+      unsubscribe();
+      registration.release();
+      subagentRuns.clear();
+    }
+  });
+
   it.each([false, true])(
     "invalidates loaded snapshots on restore, including empty stores (%s)",
     async (empty) => {

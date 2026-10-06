@@ -419,8 +419,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 
   /** Publish accepted runtime ownership after the row's commit acknowledgement. */
   commitOwnership(entry: SubagentRunRecord): void {
+    if (this.settleCommittedOwnership(entry)) {
+      publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+    }
+  }
+
+  /** Bulk restore settles custody before its one atomic row publication notifies readers. */
+  settleCommittedOwnership(entry: SubagentRunRecord): boolean {
     if (!isSameSubagentRunOwner(this.get(entry.runId), entry)) {
-      return;
+      return false;
     }
     for (const scope of this.registrationScopes) {
       if (
@@ -444,7 +451,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         scope.observation = { state: "superseded" };
       }
     }
-    publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+    return true;
   }
 
   /** Normal cleanup calls this only after its deletion commits; raw map deletion is not evidence. */
