@@ -1,6 +1,5 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
-  "src/state/agent-database-admission.test.ts",
   "src/channels/feedback-reflection.worker.test.ts",
   "src/config/sessions/session-accessor.sqlite-bounded-context.test.ts",
   "src/gateway/server-methods/chat-transcript-persistence.mirrors.test.ts",
@@ -1057,7 +1056,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/agent-deletion-journal.snapshot.test.ts",
   "src/state/agent-deletion-journal.startup.test.ts",
   "src/state/agent-deletion-journal.native-startup.test.ts",
-  "src/state/agent-database-admission.test.ts",
   "src/config/sessions/session-accessor.sqlite-branches.test.ts",
   "src/config/sessions/session-accessor.sqlite-history-query-plan.test.ts",
   "src/config/sessions/session-accessor.sqlite-message-cut.test.ts",
