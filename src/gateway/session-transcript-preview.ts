@@ -10,7 +10,10 @@ import {
 import { prepareSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
 import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-accessor.transcript-target.js";
 import { authorizeSessionFacts } from "../config/sessions/session-incognito-admission.js";
-import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+import {
+  captureIncognitoSessionHistoryBinding,
+  withIncognitoSessionActor,
+} from "../config/sessions/session-incognito-binding.js";
 import {
   prepareIncognitoSessionHistoryRead,
   type IncognitoSessionHistoryBinding,
@@ -37,8 +40,9 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
   maxItems: number,
   maxChars: number,
   view: "display" | "model-context" = "display",
-  incognito?: IncognitoSessionHistoryBinding,
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionPreviewItem[]> {
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     const { actor, authority, target } = prepareIncognitoSessionHistoryRead(incognito, scope);
     const claim = actor.sessions.captureCurrent(target.sessionKey);
@@ -65,8 +69,8 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
       sessionId: target.sessionId,
       ...(scope.env ? { env: scope.env } : {}),
     });
-    return actor.sessions.withSharedState(async () => {
-      const items =
+    const items = await actor.sessions.withSharedState(async () => {
+      const preparedItems =
         view === "display"
           ? (
               await actor.sessions.history(authority, {
@@ -80,8 +84,12 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
             );
       authority.assertCurrent();
       claim.authorize(authority, "commit");
-      return items;
+      return preparedItems;
     });
+    authority.assertCurrent();
+    claim.authorize(authority, "commit");
+    actor.assertReadable();
+    return items;
   }
   const target = prepareSessionTranscriptReadTargetCore(scope);
   if (view === "model-context") {

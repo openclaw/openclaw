@@ -27,14 +27,11 @@ export async function refreshCostUsageCacheForAgent(params: {
   rebuildRows?: SessionCostUsageRollupRow[];
   incognito?: UsageCostIncognitoBinding;
 }): Promise<"refreshed" | "busy"> {
-  const prepared = params.incognito
-    ? prepareUsageCostWorker({
-        ...params,
-        storePath: params.storePath ?? params.incognito.actor.path,
-      })
-    : undefined;
-  return withUsageCostIncognitoScope(params.incognito, (incognito) =>
-    refreshCapturedCostUsageCacheForAgent({ ...params, incognito }, prepared),
+  const prepared = prepareUsageCostWorker(params);
+  return withUsageCostIncognitoScope(
+    prepared.incognito,
+    (incognito) => refreshCapturedCostUsageCacheForAgent({ ...params, incognito }, prepared),
+    true,
   );
 }
 

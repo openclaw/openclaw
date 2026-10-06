@@ -31,6 +31,10 @@ preparation. Failed inspections and ownership refusals remain cold store owners
 with repair guidance. Unreadable stores without a matching admission refusal still
 fail preparation; a secrets reload alone cannot readmit the agent.
 
+Background preparation preserves the saved model configuration separately from
+runtime catalog defaults, so recovery does not disable otherwise compatible
+runtime choices such as Codex.
+
 ## Egress-time injection (sentinels)
 
 For model-provider credentials backed by SecretRefs, OpenClaw mints an opaque, process-local sentinel during model-auth resolution. Auth storage, stream options, SDK configuration, logs, error objects, and most runtime introspection therefore see a value such as `oc-sent-v2.<authenticated-ciphertext>.end`, not the provider credential. The guarded model fetch and managed local-provider health checks replace known sentinels in URL and header values immediately before each request leaves the process.
