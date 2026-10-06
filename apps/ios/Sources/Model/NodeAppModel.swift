@@ -2945,7 +2945,7 @@ extension NodeAppModel {
     {
         switch req.command {
         case OpenClawWatchCommand.status.rawValue:
-            return try await Self.successfulInvokeResponse(req, payload: watchMessagingService.status())
+            return try await Self.successfulInvokeResponse(req, payload: self.watchMessagingService.status())
         case OpenClawWatchCommand.notify.rawValue:
             let params = try Self.decodeParams(OpenClawWatchNotifyParams.self, from: req.paramsJSON)
             // Gateway identity comes from the installed node route, never the request payload.
