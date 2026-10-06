@@ -32,6 +32,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     JSON.stringify({
       compilerOptions: {
         target: "es2023",
+        lib: ["es5"],
         module: "nodenext",
         skipLibCheck: true,
         types: [],
