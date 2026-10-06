@@ -3,6 +3,7 @@ import {
   createLivePreviewLifecycle,
   createPreviewMessageReceipt,
   resolveChannelProgressDraftMaxLineChars,
+  resolveChannelProgressDraftLocale,
   resolveChannelProgressDraftMaxLines,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -32,8 +33,12 @@ type ReplyOptions = NonNullable<BufferedDispatchParams["replyOptions"]>;
 type CallbackPayload<K extends keyof ReplyOptions> =
   NonNullable<ReplyOptions[K]> extends (...args: infer Args) => unknown ? Args[0] : never;
 
-function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgressDraftLine {
-  const label = `Thinking… (~${Math.round(progressTokens)} tokens)`;
+function buildTelegramThinkingProgressLine(
+  progressTokens: number,
+  locale?: "ru",
+): ChannelProgressDraftLine {
+  const label =
+    locale === "ru" ? "Обдумываю ответ" : `Thinking… (~${Math.round(progressTokens)} tokens)`;
   return {
     id: "reasoning:token-progress",
     kind: "item",
@@ -64,12 +69,20 @@ const TELEGRAM_COMPACTION_PROGRESS_ID = "context-compaction";
 
 function buildTelegramCompactionProgressLine(
   phase: "start" | "complete" | "incomplete",
+  locale?: "ru",
 ): ChannelProgressDraftLine {
-  const label = {
-    start: "Compacting context...",
-    complete: "Compaction complete",
-    incomplete: "Compaction incomplete",
-  }[phase];
+  const label =
+    locale === "ru"
+      ? {
+          start: "Обновляю контекст…",
+          complete: "Контекст обновлён",
+          incomplete: "Не удалось полностью обновить контекст",
+        }[phase]
+      : {
+          start: "Compacting context...",
+          complete: "Compaction complete",
+          incomplete: "Compaction incomplete",
+        }[phase];
   return {
     id: TELEGRAM_COMPACTION_PROGRESS_ID,
     kind: "item",
@@ -108,6 +121,7 @@ export function createProgressState(
           richMessages: config.richMessages,
           maxLines: resolveChannelProgressDraftMaxLines(config.telegramCfg),
           maxLineChars: resolveChannelProgressDraftMaxLineChars(config.telegramCfg),
+          locale: resolveChannelProgressDraftLocale(config.telegramCfg),
         }),
       );
       if (options.flush) {
@@ -265,9 +279,16 @@ export async function pushThinkingTokenProgress(
   turn: Turn,
   progressTokens: number,
 ): Promise<boolean> {
-  return await pushToolProgress(turn, buildTelegramThinkingProgressLine(progressTokens), {
-    startImmediately: true,
-  });
+  return await pushToolProgress(
+    turn,
+    buildTelegramThinkingProgressLine(
+      progressTokens,
+      resolveChannelProgressDraftLocale(turn.telegramCfg),
+    ),
+    {
+      startImmediately: true,
+    },
+  );
 }
 
 export async function handleToolStart(
@@ -286,10 +307,16 @@ export async function handleToolStart(
 
 export async function handleCompactionStart(turn: Turn): Promise<boolean> {
   const progress = canPushCompactionProgress(turn)
-    ? turn.progressCompositor.pushToolProgress(buildTelegramCompactionProgressLine("start"), {
-        startImmediately: true,
-        flush: true,
-      })
+    ? turn.progressCompositor.pushToolProgress(
+        buildTelegramCompactionProgressLine(
+          "start",
+          resolveChannelProgressDraftLocale(turn.telegramCfg),
+        ),
+        {
+          startImmediately: true,
+          flush: true,
+        },
+      )
     : Promise.resolve(false);
   await turn.statusReactionController?.setCompacting();
   return await progress;
@@ -303,6 +330,7 @@ export async function handleCompactionEnd(
     ? turn.progressCompositor.pushToolProgress(
         buildTelegramCompactionProgressLine(
           payload?.completed === false ? "incomplete" : "complete",
+          resolveChannelProgressDraftLocale(turn.telegramCfg),
         ),
         { startImmediately: true, flush: true },
       )

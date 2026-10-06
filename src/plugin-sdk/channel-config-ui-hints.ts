@@ -114,6 +114,10 @@ function createChannelProgressUiHints(params: {
     },
   };
   return {
+    "streaming.progress.locale": {
+      label: `${channelLabel} Progress Locale`,
+      help: 'Set "ru" for safe human-readable Russian activity, plan, and file-diff text. Leave unset to preserve the existing technical presentation.',
+    },
     "streaming.progress.label": {
       label: `${channelLabel} Progress Label`,
       help: `Initial progress ${params.titleWording ? "title" : "draft title"}. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.`,

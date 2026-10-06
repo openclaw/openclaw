@@ -1,4 +1,7 @@
-import { buildChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  buildChannelProgressDraftLine,
+  buildChannelProgressDraftLineForEntry,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { expect, it, vi } from "vitest";
 import {
   createBot,
@@ -95,6 +98,118 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
     expect(after.text).not.toContain("Read");
     expect(after.text).toContain("Browser");
     expect(after.text).toContain("Repair");
+  });
+
+  it("renders Russian human progress and localized diff totals without raw details", () => {
+    const entry = {
+      streaming: { progress: { locale: "ru" as const, toolProgress: true } },
+    };
+    const lines = [
+      {
+        event: "item" as const,
+        itemKind: "tool",
+        name: "sessions_history",
+        meta: "session agent:main:main, limit 80",
+      },
+      {
+        event: "tool" as const,
+        name: "mcp__linear__get_issue",
+        args: { id: "OC-316", requestId: "550e8400-e29b-41d4-a716-446655440000" },
+      },
+    ].map((input) => buildChannelProgressDraftLineForEntry(entry, input)!);
+    const preview = renderTelegramProgressDraftPreview(
+      { lines, diffStat: { files: 5, added: 194, removed: 12 } },
+      { richMessages: false, toolProgress: true, maxLines: 8, maxLineChars: 300, locale: "ru" },
+    );
+
+    expect(preview.text).toContain("Проверяю историю чата");
+    expect(preview.text).toContain("Проверяю задачу OC-316 в Linear");
+    expect(preview.text).toContain("Изменено 5 файлов: добавлено 194 строки, удалено 12 строк");
+    expect(preview.text).not.toMatch(/agent:main|limit|550e8400|sessions_history|mcp__/u);
+  });
+
+  it("starts a live Russian card for a short tool event", async () => {
+    vi.useFakeTimers();
+    try {
+      const actualDraft = await vi.importActual<typeof TelegramDraftModule>("./draft-stream.js");
+      const actualDelivery = await vi.importActual<typeof TelegramDeliveryModule>(
+        "./bot/delivery.replies.js",
+      );
+      const actualEdit = await vi.importActual<typeof TelegramEditModule>("./send-edit.js");
+      deliverReplies.mockImplementation(actualDelivery.deliverStructuredReplies);
+      editMessageTelegram.mockImplementation(actualEdit.editMessageTelegram);
+      let draft: TelegramDraftStream | undefined;
+      createTelegramDraftStream.mockImplementation((params) => {
+        const stream = actualDraft.createTelegramDraftStream(params);
+        draft ??= stream;
+        return stream;
+      });
+      const bot = createBot();
+      const visible = new Map<number, string>();
+      let liveCard: string | undefined;
+      let nextMessageId = 1001;
+      const send = vi.spyOn(bot.api, "sendMessage").mockImplementation(async (_chatId, text) => {
+        const message_id = nextMessageId++;
+        visible.set(message_id, text);
+        return {
+          message_id,
+          date: 0,
+          chat: { id: 123, type: "private", first_name: "Fixture" },
+          text,
+        };
+      });
+      vi.spyOn(bot.api, "editMessageText").mockImplementation(async (_chatId, messageId, text) => {
+        if (typeof text !== "string") {
+          throw new Error("Expected a plain-text Telegram edit");
+        }
+        visible.set(messageId, text);
+        return true;
+      });
+      vi.spyOn(bot.api, "deleteMessage").mockImplementation(async (_chatId, messageId) => {
+        visible.delete(messageId);
+        return true;
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onAssistantMessageStart?.();
+          await emitToolStart(replyOptions, {
+            phase: "start",
+            name: "sessions_history",
+            toolCallId: "private-session-key",
+            args: { sessionKey: "agent:main:main", limit: 80 },
+          });
+          await draft?.flush();
+          liveCard = [...visible.values()][0];
+          await dispatcherOptions.deliver({ text: "Готово" }, { kind: "final" });
+          return { queuedFinal: false };
+        },
+      );
+
+      await dispatchWithContext({
+        bot,
+        cfg: {
+          agents: { defaults: { reasoningDefault: "stream" } },
+          channels: { telegram: { botToken: "test-token" } },
+        },
+        context: createContext({
+          ctxPayload: createDirectSessionPayload(),
+          threadSpec: { id: undefined, scope: "none" },
+          replyThreadId: undefined,
+        }),
+        streamMode: "progress",
+        telegramCfg: {
+          streaming: {
+            mode: "progress",
+            progress: { locale: "ru", toolProgress: true },
+          },
+        },
+      });
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(liveCard).toBe("<b>Работаю</b>\n<b>Проверяю историю чата</b>");
+      expect([...visible.values()]).toContain("Готово");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // The real compositor, renderer and transport expose short sends, stopped

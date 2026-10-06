@@ -38,6 +38,7 @@ import {
   mergeChannelProgressDraftLineForStreaming,
   normalizeChannelProgressDraftLineIdentity,
   resolveChannelProgressDraftMaxLineChars,
+  resolveChannelProgressDraftLocale,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingProgressCommentary,
   resolveChannelStreamingPreviewToolProgress,
@@ -334,7 +335,10 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       lines.length ||
       resolveStatusText().text ||
       planSteps?.length ||
-      formatChannelProgressDraftDiffStat(resolveDiffStat())
+      formatChannelProgressDraftDiffStat(
+        resolveDiffStat(),
+        resolveChannelProgressDraftLocale(displayEntry),
+      )
     ) {
       return await publish();
     }

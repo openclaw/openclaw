@@ -155,6 +155,110 @@ describe("buildChannelProgressDraftLine", () => {
       )?.text,
     ).toContain("echo private");
   });
+
+  it("renders safe semantic Russian progress without technical identifiers", () => {
+    const entry = {
+      streaming: { progress: { locale: "ru" as const, toolProgress: true } },
+    };
+    const inputs = [
+      {
+        event: "item" as const,
+        itemKind: "tool",
+        name: "sessions_history",
+        meta: "session agent:main:main, limit 80",
+      },
+      {
+        event: "tool" as const,
+        name: "sessions_list",
+        args: { limit: 100, activeMinutes: 180 },
+      },
+      {
+        event: "item" as const,
+        itemKind: "tool",
+        name: "subagents",
+        meta: "agent 550e8400-e29b-41d4-a716-446655440000",
+      },
+      {
+        event: "tool" as const,
+        name: "mcp__linear__get_issue",
+        args: { id: "OC-316", requestId: "550e8400-e29b-41d4-a716-446655440000" },
+      },
+      {
+        event: "tool" as const,
+        name: "vendor_private_tool",
+        args: { payload: "secret", limit: 40 },
+      },
+    ];
+    const rendered = inputs
+      .map((input) => formatChannelProgressDraftLineForEntry(entry, input))
+      .join("\n");
+
+    expect(rendered).toBe(
+      [
+        "Проверяю историю чата",
+        "Проверяю активные задачи",
+        "Проверяю фоновые процессы",
+        "Проверяю задачу OC-316 в Linear",
+        "Выполняю действие",
+      ].join("\n"),
+    );
+    expect(rendered).not.toMatch(
+      /agent:main|limit|activeMinutes|550e8400|sessions_|subagents|mcp__|payload|secret/u,
+    );
+    expect(buildChannelProgressDraftLineForEntry(entry, inputs[0]!)).toMatchObject({
+      label: "Проверяю историю чата",
+      toolName: "sessions_history",
+    });
+  });
+
+  it("keeps default lifecycle suppression in Russian human mode", () => {
+    const options = { locale: "ru" as const, commandText: "status" as const };
+    const suppressed: ChannelProgressDraftLineInput[] = [
+      { event: "plan", phase: "start", steps: [] },
+      { event: "approval", phase: "resolved", approvalId: "approval-1" },
+      { event: "command-output", phase: "start", name: "exec", status: "running" },
+      { event: "patch", phase: "start", name: "apply_patch" },
+      { event: "tool", phase: "start", name: "progress_card", args: { plan: [] } },
+      {
+        event: "item",
+        itemKind: "analysis",
+        title: "reasoning",
+        status: "running",
+      },
+    ];
+    for (const input of suppressed) {
+      expect(buildChannelProgressDraftLine(input, options)).toBeUndefined();
+    }
+
+    expect(
+      buildChannelProgressDraftLine(
+        { event: "approval", phase: "requested", approvalId: "approval-1" },
+        options,
+      ),
+    ).toMatchObject({
+      id: "approval:approval-1",
+      kind: "approval",
+      label: "Жду подтверждения",
+      status: "requested",
+      displayStatus: false,
+      toolName: "approval",
+    });
+  });
+
+  it("keeps raw diagnostics behind the explicit commandText override", () => {
+    const input = {
+      event: "tool" as const,
+      name: "exec",
+      args: { command: "echo diagnostic" },
+    };
+    expect(
+      formatChannelProgressDraftLineForEntry(
+        { streaming: { progress: { locale: "ru", commandText: "raw" } } },
+        input,
+        { detailMode: "raw" },
+      ),
+    ).toContain("echo diagnostic");
+  });
 });
 
 describe("backend tool-name casing", () => {

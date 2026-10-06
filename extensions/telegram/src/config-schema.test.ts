@@ -15,6 +15,16 @@ function expectTelegramConfigIssue(config: unknown, path: string) {
 }
 
 describe("telegram custom commands schema", () => {
+  it("accepts the Russian progress locale and rejects unsupported locales", () => {
+    expectTelegramConfigValid({
+      streaming: { mode: "progress", progress: { locale: "ru", toolProgress: true } },
+    });
+    expectTelegramConfigIssue(
+      { streaming: { mode: "progress", progress: { locale: "en" } } },
+      "streaming.progress.locale",
+    );
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     expectTelegramConfigIssue(
       { dmPolicy: "open", allowFrom: ["123456789"], botToken: "fake" },

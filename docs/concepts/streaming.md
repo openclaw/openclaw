@@ -495,6 +495,7 @@ the same policy under `streaming.progress`:
       "streaming": {
         "mode": "progress",
         "progress": {
+          "locale": "ru",
           "toolProgress": true,
           "commandText": "status"
         }
@@ -503,6 +504,11 @@ the same policy under `streaming.progress`:
   }
 }
 ```
+
+The optional `locale: "ru"` selects safe human-readable Russian progress rows
+and localized file totals. It does not infer language from message content.
+Omit it to preserve the existing tool presentation. Setting `commandText` to
+`"raw"` is an explicit diagnostic override that can expose technical detail.
 
 ## Related
 

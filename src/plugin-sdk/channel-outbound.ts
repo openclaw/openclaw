@@ -146,6 +146,7 @@ export {
   normalizeChannelProgressDraftLineIdentity,
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftConfig,
+  resolveChannelProgressDraftLocale,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockCoalesce,
@@ -173,7 +174,10 @@ export {
   createChannelProgressDraftCompositor,
   createChannelProgressWorkCounter,
 } from "../channels/progress-draft-compositor.js";
-export { formatChannelProgressDraftDiffStat } from "../channels/progress-draft-diffstat.js";
+export {
+  formatChannelProgressDraftDiffStat,
+  type ChannelProgressDraftLocale,
+} from "../channels/progress-draft-diffstat.js";
 
 /** @deprecated The streaming.progress.render key was retired (#122927). */
 export type ChannelProgressDraftRenderMode = "rich" | "text";

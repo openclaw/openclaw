@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createProgressDraftDiffStatTracker } from "./progress-draft-diffstat.js";
+import {
+  createProgressDraftDiffStatTracker,
+  formatChannelProgressDraftDiffStat,
+} from "./progress-draft-diffstat.js";
 
 type DiffStatTracker = ReturnType<typeof createProgressDraftDiffStatTracker>;
 
@@ -147,5 +150,27 @@ describe("createProgressDraftDiffStatTracker", () => {
     });
     completeMutation(tracker, "edit-known");
     expect(tracker.resolve()).toEqual({ files: 257, added: 260, removed: 2 });
+  });
+});
+
+describe("formatChannelProgressDraftDiffStat", () => {
+  it.each([
+    [1, "1 файл"],
+    [2, "2 файла"],
+    [5, "5 файлов"],
+    [11, "11 файлов"],
+    [21, "21 файл"],
+    [22, "22 файла"],
+    [25, "25 файлов"],
+  ])("uses Russian file pluralization for %i", (files, expected) => {
+    expect(formatChannelProgressDraftDiffStat({ files, added: 21, removed: 12 }, "ru")).toBe(
+      `📝 Изменено ${expected}: добавлено 21 строка, удалено 12 строк`,
+    );
+  });
+
+  it("preserves the existing default format", () => {
+    expect(formatChannelProgressDraftDiffStat({ files: 5, added: 194, removed: 12 })).toBe(
+      "📝 5 files +194 −12",
+    );
   });
 });

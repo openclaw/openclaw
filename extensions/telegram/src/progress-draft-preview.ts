@@ -2,12 +2,14 @@ import {
   compactChannelProgressDraftLine,
   formatChannelProgressDraftDiffStat,
   isChannelProgressAttentionLine,
+  resolveChannelProgressDraftLocale,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingPreviewToolProgress,
   selectPlanChecklistSteps,
   type ChannelProgressDraftCompositorLine,
   type ChannelProgressDraftCompositorSnapshot,
+  type ChannelProgressDraftLocale,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -78,15 +80,26 @@ function progressLineText(
   } else if (!line.toolName && line.text.trim() && line.text.trim() !== label) {
     parts.push(literalProgressText(compact(line.text)));
   }
-  if (line.status && line.status !== "completed" && line.status !== line.detail) {
-    parts.push(literalProgressText(line.status, "italic"));
+  const displayStatus =
+    line.displayStatus === false
+      ? undefined
+      : (line.displayStatus ??
+        (line.status && line.status !== "completed" ? line.status : undefined));
+  if (displayStatus && displayStatus !== line.detail) {
+    parts.push(literalProgressText(displayStatus, "italic"));
   }
   return joinProgressText(parts, " ");
 }
 
 export function renderTelegramProgressDraftPreview(
   snapshot: ChannelProgressDraftCompositorSnapshot,
-  options: { richMessages: boolean; maxLines: number; maxLineChars: number; toolProgress: boolean },
+  options: {
+    richMessages: boolean;
+    maxLines: number;
+    maxLineChars: number;
+    toolProgress: boolean;
+    locale?: ChannelProgressDraftLocale;
+  },
 ): TelegramDraftPreview {
   const { maxLines, maxLineChars } = options;
   const activity =
@@ -102,6 +115,7 @@ export function renderTelegramProgressDraftPreview(
   const checklist = selectPlanChecklistSteps(snapshot.plan ?? [], {
     maxLines:
       maxLines - Math.max(attention.length, options.toolProgress && activity.length ? 1 : 0),
+    locale: options.locale,
   });
   const checklistLines = checklist.steps.length + (checklist.summary ? 1 : 0);
   const lineBudget = Math.max(0, maxLines - checklistLines);
@@ -109,7 +123,7 @@ export function renderTelegramProgressDraftPreview(
   const visibleLines = lineBudget ? lines.slice(-lineBudget) : [];
   const diffStat =
     visibleLines.length + checklistLines < maxLines
-      ? formatChannelProgressDraftDiffStat(snapshot.diffStat)
+      ? formatChannelProgressDraftDiffStat(snapshot.diffStat, options.locale)
       : undefined;
   const label =
     checklistLines || visibleLines.length + (diffStat ? 1 : 0) < maxLines
@@ -157,7 +171,9 @@ export function renderTelegramProgressDraftPreview(
         const active = step.status === "in_progress";
         const text = literalProgressText(
           compactChannelProgressDraftLine(
-            active ? `${step.step} (in progress)` : step.step,
+            active
+              ? `${step.step} (${options.locale === "ru" ? "в работе" : "in progress"})`
+              : step.step,
             maxLineChars,
           ),
           active ? "bold" : undefined,
@@ -200,5 +216,6 @@ export function renderTelegramAccountProgressDraftPreview(
     ),
     maxLines: resolveChannelProgressDraftMaxLines(accountConfig),
     maxLineChars: resolveChannelProgressDraftMaxLineChars(accountConfig),
+    locale: resolveChannelProgressDraftLocale(accountConfig),
   });
 }

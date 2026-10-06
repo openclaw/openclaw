@@ -46,6 +46,10 @@ export type StreamingMode = z.input<typeof UnifiedStreamingModeSchema>;
 export type ChannelStreamingCommandTextMode = NonNullable<
   z.input<typeof ChannelStreamingProgressSchema>["commandText"]
 >;
+/** Optional human-facing language for progress-card presentation. */
+export type ChannelProgressDraftLocale = NonNullable<
+  z.input<typeof ChannelStreamingProgressSchema>["locale"]
+>;
 
 export type BlockStreamingCoalesceConfig = z.input<typeof BlockStreamingCoalesceSchema>;
 export type BlockStreamingChunkConfig = z.input<typeof BlockStreamingChunkSchema>;

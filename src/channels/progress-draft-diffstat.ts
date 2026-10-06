@@ -1,5 +1,8 @@
 import { readCompletedFileMutationDelta } from "../agents/file-mutation-args.js";
 import { resolveFileMutationToolName } from "../agents/tool-mutation-names.js";
+import type { ChannelProgressDraftLocale } from "../config/types.base.js";
+
+export type { ChannelProgressDraftLocale } from "../config/types.base.js";
 
 const MAX_TRACKED_MUTATION_FILES = 256;
 const MAX_PENDING_MUTATION_DIFFS = 64;
@@ -12,11 +15,36 @@ export type ChannelProgressDraftDiffStat = Readonly<{
   removed: number;
 }>;
 
+function formatRussianCount(
+  count: number,
+  forms: readonly [one: string, few: string, many: string],
+): string {
+  const absolute = Math.abs(count);
+  const lastTwo = absolute % 100;
+  const last = absolute % 10;
+  const form =
+    lastTwo >= 11 && lastTwo <= 14
+      ? forms[2]
+      : last === 1
+        ? forms[0]
+        : last >= 2 && last <= 4
+          ? forms[1]
+          : forms[2];
+  return `${count} ${form}`;
+}
+
 export function formatChannelProgressDraftDiffStat(
   diffStat: ChannelProgressDraftDiffStat | undefined,
+  locale?: ChannelProgressDraftLocale,
 ): string | undefined {
   if (!diffStat || (diffStat.files === 0 && diffStat.added === 0 && diffStat.removed === 0)) {
     return undefined;
+  }
+  if (locale === "ru") {
+    const files = formatRussianCount(diffStat.files, ["файл", "файла", "файлов"]);
+    const added = formatRussianCount(diffStat.added, ["строка", "строки", "строк"]);
+    const removed = formatRussianCount(diffStat.removed, ["строка", "строки", "строк"]);
+    return `📝 Изменено ${files}: добавлено ${added}, удалено ${removed}`;
   }
   return [
     `📝 ${diffStat.files} files`,

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
 import type { ChannelProgressDraftCompositorParams } from "./progress-draft-compositor.types.js";
+import { redactProgressDraftLine } from "./progress-draft-snapshot.js";
 
 function createProgress(overrides: Partial<ChannelProgressDraftCompositorParams> = {}) {
   const progress = createChannelProgressDraftCompositor({
@@ -57,6 +58,20 @@ describe("progress draft snapshot continuation", () => {
     expect(JSON.stringify(snapshot)).not.toContain(secret);
     expect(snapshot.plan?.[0]?.step).toContain("Check account");
     expect(update.mock.calls[0]?.[0]).toContain("Account");
+  });
+
+  it("preserves an explicitly hidden localized status while redacting snapshots", () => {
+    expect(
+      redactProgressDraftLine({
+        id: "localized-tool",
+        kind: "tool",
+        text: "Проверяю историю чата",
+        label: "Проверяю историю чата",
+        status: "running",
+        displayStatus: false,
+        toolName: "sessions_history",
+      }),
+    ).toMatchObject({ status: "running", displayStatus: false });
   });
 
   it.each(["live", "prepared"] as const)(

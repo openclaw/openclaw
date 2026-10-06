@@ -23,6 +23,7 @@ describe("channel config UI hint helpers", () => {
   it("builds the shared progress hint group", () => {
     const hints = createChannelConfigUiHints({ channelLabel: "Example", progress: {} });
     expect(Object.keys(hints)).toEqual([
+      "streaming.progress.locale",
       "streaming.progress.label",
       "streaming.progress.labels",
       "streaming.progress.maxLines",
@@ -31,6 +32,7 @@ describe("channel config UI hint helpers", () => {
       "streaming.progress.commandText",
     ]);
     expect(hints["streaming.progress.label"]?.label).toBe("Example Progress Label");
+    expect(hints["streaming.progress.locale"]?.label).toBe("Example Progress Locale");
   });
 
   it("builds the shared streaming hint group", () => {

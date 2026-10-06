@@ -33,6 +33,7 @@ export const ChannelStreamingPreviewSchema = z.strictObject({
   commandText: z.enum(["raw", "status"]).optional(),
 });
 export const ChannelStreamingProgressSchema = z.strictObject({
+  locale: z.literal("ru").optional(),
   label: z.union([z.string(), z.literal(false)]).optional(),
   labels: z.array(z.string()).optional(),
   maxLines: z.number().int().positive().optional(),

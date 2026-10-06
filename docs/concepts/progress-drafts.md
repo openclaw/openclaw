@@ -275,6 +275,36 @@ the tool-progress status:
 }
 ```
 
+### Russian human-readable progress
+
+Set `streaming.progress.locale: "ru"` to replace technical tool rows with short
+Russian activity descriptions. Known actions use semantic copy such as
+`Проверяю историю чата`, `Проверяю активные задачи`, and `Проверяю задачу
+OC-316 в Linear`. Unknown actions use the safe generic `Выполняю действие`
+instead of exposing a raw tool name or argument payload. File totals and plan
+status copy are localized as well.
+
+```json5
+{
+  channels: {
+    telegram: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          locale: "ru",
+          toolProgress: true,
+          commandText: "status",
+        },
+      },
+    },
+  },
+}
+```
+
+The setting is opt-in; omitting `locale` preserves the existing presentation.
+`commandText: "raw"` remains the explicit diagnostic override and restores
+technical command/tool detail for that progress configuration.
+
 ### Commentary lane
 
 `streaming.progress.commentary` (default `false`) interleaves the model's

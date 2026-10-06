@@ -13,6 +13,7 @@ import { formatToolAggregate, formatToolAggregateParts } from "../auto-reply/too
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
+  ChannelProgressDraftLocale,
   ChannelStreamingCommandTextMode,
   ChannelStreamingProgressConfig,
   StreamingMode,
@@ -120,6 +121,8 @@ export type ChannelProgressLineOptions = {
   detailMode?: "explain" | "raw";
   /** Whether command progress should show raw command text or status-only copy. */
   commandText?: ChannelStreamingCommandTextMode;
+  /** Human-facing language for safe semantic progress copy. */
+  locale?: ChannelProgressDraftLocale;
 };
 
 export type AgentPlanStepStatus = "pending" | "in_progress" | "completed";
@@ -356,6 +359,159 @@ function resolveCommandProgressCorrelationKey(input: { toolCallId?: string }): s
   return toolCallId ? `command:${toolCallId}` : undefined;
 }
 
+function extractLinearIssueIdentifier(value: unknown, depth = 0): string | undefined {
+  if (depth > 3 || value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value.match(/\b[A-Z][A-Z0-9]{1,9}-\d+\b/u)?.[0];
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value.slice(0, 8)) {
+      const issue = extractLinearIssueIdentifier(entry, depth + 1);
+      if (issue) {
+        return issue;
+      }
+    }
+    return undefined;
+  }
+  if (typeof value === "object") {
+    for (const entry of Object.values(value).slice(0, 16)) {
+      const issue = extractLinearIssueIdentifier(entry, depth + 1);
+      if (issue) {
+        return issue;
+      }
+    }
+  }
+  return undefined;
+}
+
+function normalizeProgressActionName(name: string | undefined, args?: unknown): string {
+  const resolvedName = resolveToolDisplay({ name, args }).name;
+  const dispatchId =
+    args && typeof args === "object" && typeof (args as { id?: unknown }).id === "string"
+      ? (args as { id: string }).id
+      : "";
+  const sourceName = name?.trim().toLowerCase() === "tool_call" ? dispatchId : name;
+  return [sourceName, resolvedName]
+    .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
+    .join("_")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "_");
+}
+
+function resolveRussianProgressAction(input: ChannelProgressDraftLineInput): string {
+  if (input.event === "approval") {
+    return "Жду подтверждения";
+  }
+  if (input.event === "plan") {
+    return "Обновляю план";
+  }
+  if (input.event === "patch") {
+    return "Вношу изменения";
+  }
+  if (input.event === "command-output") {
+    return "Выполняю проверку";
+  }
+  const args = input.event === "tool" ? input.args : undefined;
+  const name = normalizeProgressActionName(input.name, args);
+  if (name.includes("sessions_history") || name.includes("session_history")) {
+    return "Проверяю историю чата";
+  }
+  if (
+    name === "sessions" ||
+    name.includes("sessions_list") ||
+    name.includes("session_list") ||
+    name.includes("sessions_search")
+  ) {
+    return "Проверяю активные задачи";
+  }
+  if (
+    name.includes("subagents") ||
+    name.includes("agents_wait") ||
+    name.includes("sessions_spawn")
+  ) {
+    return "Проверяю фоновые процессы";
+  }
+  if (name.includes("linear") || name.endsWith("_get_issue") || name.endsWith("_list_issues")) {
+    const issue = extractLinearIssueIdentifier([
+      args,
+      input.event === "item" ? input.meta : undefined,
+      input.event === "item" ? input.summary : undefined,
+      "title" in input ? input.title : undefined,
+    ]);
+    if ((name.includes("get_issue") || name.includes("issue_get")) && issue) {
+      return `Проверяю задачу ${issue} в Linear`;
+    }
+    return name.includes("list") || name.includes("search")
+      ? "Ищу связанные задачи в Linear"
+      : "Проверяю задачи в Linear";
+  }
+  if (name.includes("browser")) {
+    return "Проверяю в браузере";
+  }
+  if (name.includes("github")) {
+    return "Проверяю GitHub";
+  }
+  if (/^(?:exec|bash|shell|run_command|run_terminal_cmd)$/u.test(name)) {
+    return "Выполняю проверку";
+  }
+  if (/^(?:read|read_file|readfile|notebookread|notebook_read)$/u.test(name)) {
+    return "Читаю файлы";
+  }
+  if (
+    /^(?:edit|apply_patch|applypatch|patch|edit_file|multiedit|multi_edit|write|write_file|create_file)$/u.test(
+      name,
+    )
+  ) {
+    return "Вношу изменения";
+  }
+  if (
+    /^(?:grep|glob|find|ls|list|codebase_search|web_search|web_fetch|webfetch|fetch)$/u.test(name)
+  ) {
+    return name.startsWith("web") || name === "fetch" ? "Ищу информацию" : "Ищу в проекте";
+  }
+  return "Выполняю действие";
+}
+
+function resolveRussianProgressStatus(status: string | undefined): string | false {
+  const normalized = normalizeOptionalLowercaseString(status);
+  if (
+    !normalized ||
+    normalized === "running" ||
+    normalized === "completed" ||
+    normalized === "requested"
+  ) {
+    return false;
+  }
+  if (normalized === "blocked") {
+    return "приостановлено";
+  }
+  if (normalized === "skipped") {
+    return "пропущено";
+  }
+  return "ошибка";
+}
+
+function buildRussianHumanProgressLine(
+  input: ChannelProgressDraftLineInput,
+  source: ChannelProgressDraftLine,
+): ChannelProgressDraftLine {
+  const label = resolveRussianProgressAction(input);
+  const line: ChannelProgressDraftLine = {
+    ...(source.id ? { id: source.id } : {}),
+    kind: source.kind,
+    text: label,
+    label,
+    ...(source.status
+      ? { status: source.status, displayStatus: resolveRussianProgressStatus(source.status) }
+      : {}),
+    ...(source.toolName ? { toolName: source.toolName } : {}),
+  };
+  copyProgressDraftLineMetadata(source, line);
+  return line;
+}
+
 function isTerminalProgressStatus(status: string | undefined): boolean {
   const normalized = normalizeOptionalLowercaseString(status);
   return (
@@ -425,9 +581,11 @@ export function buildChannelProgressDraftLineForEntry(
   input: ChannelProgressDraftLineInput,
   options?: ChannelProgressLineOptions,
 ): ChannelProgressDraftLine | undefined {
+  const commandText = options?.commandText ?? resolveChannelStreamingPreviewCommandText(entry);
   return buildChannelProgressDraftLine(input, {
     ...options,
-    commandText: options?.commandText ?? resolveChannelStreamingPreviewCommandText(entry),
+    commandText,
+    locale: options?.locale ?? resolveChannelProgressDraftLocale(entry),
   });
 }
 
@@ -441,6 +599,16 @@ export function formatChannelProgressDraftLineForEntry(
 }
 
 export function buildChannelProgressDraftLine(
+  input: ChannelProgressDraftLineInput,
+  options?: ChannelProgressLineOptions,
+): ChannelProgressDraftLine | undefined {
+  const line = buildDefaultChannelProgressDraftLine(input, options);
+  return line && options?.locale === "ru" && options.commandText !== "raw"
+    ? buildRussianHumanProgressLine(input, line)
+    : line;
+}
+
+function buildDefaultChannelProgressDraftLine(
   input: ChannelProgressDraftLineInput,
   options?: ChannelProgressLineOptions,
 ): ChannelProgressDraftLine | undefined {
@@ -856,6 +1024,12 @@ export function resolveChannelProgressDraftConfig(
   return asProgressConfig(getChannelStreamingConfigObject(entry)?.progress) ?? {};
 }
 
+export function resolveChannelProgressDraftLocale(
+  entry: StreamingCompatEntry | null | undefined,
+): ChannelProgressDraftLocale | undefined {
+  return resolveChannelProgressDraftConfig(entry).locale === "ru" ? "ru" : undefined;
+}
+
 export function resolveChannelProgressDraftLabel(params: {
   entry?: StreamingCompatEntry | null;
   seed?: string;
@@ -875,6 +1049,9 @@ export function resolveChannelProgressDraftLabel(params: {
     return redactToolPayloadText(progress.label.trim());
   }
   const labels = normalizeTrimmedStringList(progress.labels);
+  if (progress.locale === "ru" && labels.length === 0) {
+    return "Работаю";
+  }
   const label = selectProgressLabel({
     labels: labels.length > 0 ? labels : undefined,
     seed: params.seed,
@@ -984,7 +1161,7 @@ export function compactChannelProgressDraftLine(line: string, maxChars: number):
 
 export function selectPlanChecklistSteps(
   steps: readonly AgentPlanStep[],
-  options: { maxLines: number },
+  options: { maxLines: number; locale?: ChannelProgressDraftLocale },
 ): { steps: AgentPlanStep[]; summary?: string } {
   const normalizedSteps = steps
     .map((entry, index) => ({ ...entry, step: entry.step.replace(/\s+/g, " ").trim(), index }))
@@ -1015,7 +1192,13 @@ export function selectPlanChecklistSteps(
     (a, b) => a.index - b.index,
   );
   const completedCount = normalizedSteps.length - pendingSteps.length;
-  return { steps: visibleSteps, summary: `${completedCount}/${normalizedSteps.length} done` };
+  return {
+    steps: visibleSteps,
+    summary:
+      options.locale === "ru"
+        ? `${completedCount}/${normalizedSteps.length} готово`
+        : `${completedCount}/${normalizedSteps.length} done`,
+  };
 }
 
 export function formatPlanChecklistLines(
@@ -1023,6 +1206,7 @@ export function formatPlanChecklistLines(
   options: {
     maxLines: number;
     maxLineChars: number;
+    locale?: ChannelProgressDraftLocale;
     /** @deprecated v2026.9.1 SDK option; retain until a breaking SDK release. */
     plain?: boolean;
   },
@@ -1031,10 +1215,16 @@ export function formatPlanChecklistLines(
   const marker = (status: AgentPlanStepStatus) =>
     options.plain
       ? status === "completed"
-        ? "Completed:"
+        ? options.locale === "ru"
+          ? "Готово:"
+          : "Completed:"
         : status === "in_progress"
-          ? "In progress:"
-          : "Pending:"
+          ? options.locale === "ru"
+            ? "В работе:"
+            : "In progress:"
+          : options.locale === "ru"
+            ? "Ожидает:"
+            : "Pending:"
       : status === "completed"
         ? "✅"
         : status === "in_progress"
@@ -1245,12 +1435,14 @@ function formatProgressDraftText(
   );
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
+  const locale = resolveChannelProgressDraftLocale(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
   const attention = params.lines.filter(isPriorityLine);
   const planLines = formatPlanChecklistLines(params.plan ?? [], {
     maxLines:
       maxLines - Math.max(attention.length, reserveRollingLine && params.lines.length ? 1 : 0),
     maxLineChars,
+    locale,
     plain: params.presentation === "summary",
   }).map(formatLine);
   const resolvedLabel = resolveChannelProgressDraftLabel({
@@ -1307,7 +1499,7 @@ function formatProgressDraftText(
   const rollingLines = toolLineBudget === 0 ? [] : renderedToolLines.slice(-toolLineBudget);
   const diffStat =
     rollingLines.length + planLines.length < maxLines
-      ? formatChannelProgressDraftDiffStat(params.diffStat)
+      ? formatChannelProgressDraftDiffStat(params.diffStat, locale)
       : undefined;
   // The label is a block, not a line: it yields its slot once real work lines
   // fill the window, which is why a busy draft shows work instead of a title.

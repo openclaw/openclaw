@@ -15,6 +15,8 @@ export type ChannelProgressDraftLine = {
   detail?: string;
   /** Optional lifecycle status, such as completed or exit code. */
   status?: string;
+  /** Localized status copy, or false when the lifecycle status should stay hidden. */
+  displayStatus?: string | false;
   /** Completion metadata for authored text; never rendered as a tool status. */
   complete?: boolean;
   /** Normalized tool name when the line represents tool work. */
@@ -81,7 +83,10 @@ export function getProgressDraftLineText(line: string | ChannelProgressDraftLine
   const label = line.label.trim();
   const detail = line.detail?.trim();
   const status = line.status?.trim();
-  const displayStatus = status === "completed" ? undefined : status;
+  const displayStatus =
+    line.displayStatus === false
+      ? undefined
+      : (line.displayStatus ?? (status === "completed" ? undefined : status));
   if (detail) {
     const compactCommandLine = isShellToolDisplayName(line.toolName);
     const showStatus =

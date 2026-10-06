@@ -25,6 +25,14 @@ export function redactProgressDraftLine(
     label: redactToolPayloadText(line.label),
     ...(line.detail !== undefined ? { detail: redactToolPayloadText(line.detail) } : {}),
     ...(line.status !== undefined ? { status: redactToolPayloadText(line.status) } : {}),
+    ...(line.displayStatus !== undefined
+      ? {
+          displayStatus:
+            typeof line.displayStatus === "string"
+              ? redactToolPayloadText(line.displayStatus)
+              : line.displayStatus,
+        }
+      : {}),
     ...(line.icon !== undefined ? { icon: redactToolPayloadText(line.icon) } : {}),
     ...(line.toolName !== undefined ? { toolName: redactToolPayloadText(line.toolName) } : {}),
   };
