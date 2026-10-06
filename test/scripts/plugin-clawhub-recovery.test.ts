@@ -205,19 +205,30 @@ describe("sealed ClawHub recovery manifest", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("recovers only the exact staged attempts and waits for public completion", async () => {
+  it("recovers with current publisher authority without private original attempt access", async () => {
     const manifest = createClawHubRecoveryManifest(transactions, [pending]);
     const requests: Array<{ url: string; method: string; body?: string }> = [];
+    let publicationRequest = 0;
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
       const body = typeof init?.body === "string" ? init.body : undefined;
       requests.push({ url, method: init?.method ?? "GET", body });
-      if (init?.method !== "POST" && url.endsWith("/attempt-1")) {
+      if (url.endsWith("/publication")) {
+        publicationRequest += 1;
+        if (publicationRequest === 2) {
+          return Response.json({
+            name: pending.name,
+            version,
+            state: "failed",
+            recoverable: true,
+          });
+        }
         return Response.json({
-          attemptId: "attempt-1",
           name: pending.name,
           version,
-          publicationStatus: "failed",
+          ...(publicationRequest < 4
+            ? { state: "failed", attemptId: "attempt-1", recoverable: true }
+            : { state: "published" }),
         });
       }
       if (init?.method === "POST") {
@@ -229,12 +240,15 @@ describe("sealed ClawHub recovery manifest", () => {
           publicationStatus: "pending",
         });
       }
-      return Response.json({
-        attemptId: "attempt-2",
-        name: pending.name,
-        version,
-        publicationStatus: "published",
-      });
+      if (url.endsWith("/attempt-2")) {
+        return Response.json({
+          attemptId: "attempt-2",
+          name: pending.name,
+          version,
+          publicationStatus: "pending",
+        });
+      }
+      return new Response("Not found", { status: 404 });
     };
     const result = await executeClawHubRecoveryManifest({
       manifest,
@@ -247,7 +261,7 @@ describe("sealed ClawHub recovery manifest", () => {
     expect(result).toMatchObject({ complete: true, recovered: [{ attemptId: "attempt-2" }] });
     expect(requests).toEqual([
       {
-        url: "https://clawhub.example/api/v1/publish/attempts/attempt-1",
+        url: `https://clawhub.example/api/v1/packages/${encodeURIComponent(pending.name)}/versions/${version}/publication`,
         method: "GET",
         body: undefined,
       },
@@ -257,36 +271,352 @@ describe("sealed ClawHub recovery manifest", () => {
         body: JSON.stringify({ manualOverrideReason: "Parent failed after sealed staging" }),
       },
       {
+        url: `https://clawhub.example/api/v1/packages/${encodeURIComponent(pending.name)}/versions/${version}/publication`,
+        method: "GET",
+        body: undefined,
+      },
+      {
         url: "https://clawhub.example/api/v1/publish/attempts/attempt-2",
+        method: "GET",
+        body: undefined,
+      },
+      {
+        url: `https://clawhub.example/api/v1/packages/${encodeURIComponent(pending.name)}/versions/${version}/publication`,
+        method: "GET",
+        body: undefined,
+      },
+      {
+        url: "https://clawhub.example/api/v1/publish/attempts/attempt-2",
+        method: "GET",
+        body: undefined,
+      },
+      {
+        url: `https://clawhub.example/api/v1/packages/${encodeURIComponent(pending.name)}/versions/${version}/publication`,
         method: "GET",
         body: undefined,
       },
     ]);
   });
 
-  it("does not recover a stale manifest entry that has already published", async () => {
+  it("leaves an unrelated replacement attempt to authoritative recovery validation", async () => {
     const manifest = createClawHubRecoveryManifest(transactions, [pending]);
-    const requests: string[] = [];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          name: pending.name,
+          version,
+          state: "failed",
+          attemptId: "attempt-2",
+          recoverable: true,
+        }),
+      )
+      .mockResolvedValueOnce(new Response("Recovery replay binding changed", { status: 409 }));
+    await expect(
+      executeClawHubRecoveryManifest({
+        manifest,
+        reason: "Parent failed after sealed staging",
+        token: "fixture-token",
+        fetchImpl,
+      }),
+    ).rejects.toThrow("HTTP 409");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe(
+      "https://clawhub.ai/api/v1/publish/attempts/attempt-1/recover",
+    );
+  });
+
+  it("reattaches to an idempotent recovery after an interrupted executor", async () => {
+    const manifest = createClawHubRecoveryManifest(transactions, [pending]);
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          name: pending.name,
+          version,
+          state: "pending",
+          stage: "checks",
+          attemptId: "attempt-2",
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          recoveredFromAttemptId: pending.attemptId,
+          attemptId: "attempt-2",
+          name: pending.name,
+          version,
+          publicationStatus: "pending",
+          reused: true,
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ name: pending.name, version, state: "published" }));
+    const result = await executeClawHubRecoveryManifest({
+      manifest,
+      reason: "Parent failed after sealed staging",
+      token: "fixture-token",
+      fetchImpl,
+      wait: async () => {},
+    });
+    expect(result).toMatchObject({ complete: true, recovered: [{ attemptId: "attempt-2" }] });
+    expect(fetchImpl.mock.calls.map(([, init]) => init?.method ?? "GET")).toEqual([
+      "GET",
+      "POST",
+      "GET",
+    ]);
+  });
+
+  it.each([
+    { name: "anonymous failure", publication: { recoverable: false } },
+    {
+      name: "stale original attempt",
+      publication: { attemptId: pending.attemptId, recoverable: true },
+    },
+  ])("reports the current recovery failure behind $name", async ({ publication }) => {
+    const manifest = createClawHubRecoveryManifest(transactions, [pending]);
+    const attempt = {
+      attemptId: "attempt-2",
+      name: pending.name,
+      version,
+      publicationStatus: "pending",
+    };
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          name: pending.name,
+          version,
+          state: "failed",
+          attemptId: pending.attemptId,
+          recoverable: true,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ ...attempt, recoveredFromAttemptId: pending.attemptId }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ name: pending.name, version, state: "failed", ...publication }),
+      )
+      .mockResolvedValueOnce(Response.json({ ...attempt, publicationStatus: "failed" }));
+    await expect(
+      executeClawHubRecoveryManifest({
+        manifest,
+        reason: "Parent failed after sealed staging",
+        token: "fixture-token",
+        fetchImpl,
+      }),
+    ).rejects.toThrow(`ClawHub recovery failed: ${pending.name}.`);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    {
+      name: "current publication state",
+      publication: "published",
+      exact: undefined,
+      recovers: false,
+    },
+    {
+      name: "legacy publication-route 404",
+      publication: "not-found",
+      exact: "published",
+      recovers: false,
+    },
+    {
+      name: "legacy version JSON on the publication route",
+      publication: "version",
+      exact: "not-found",
+      recovers: true,
+    },
+  ])("resolves $name before recovery", async (testCase) => {
+    const manifest = createClawHubRecoveryManifest(transactions, [pending]);
+    const requests: Array<{ url: string; method: string }> = [];
     const result = await executeClawHubRecoveryManifest({
       manifest,
       reason: "Parent failed after sealed staging",
       token: "fixture-token",
       registry: "https://clawhub.example",
       fetchImpl: async (input, init) => {
-        expect(init?.method ?? "GET").toBe("GET");
         const url = input instanceof Request ? input.url : String(input);
-        requests.push(url);
-        return Response.json({
-          attemptId: pending.attemptId,
-          name: pending.name,
-          version,
-          publicationStatus: "published",
-        });
+        const method = init?.method ?? "GET";
+        requests.push({ url, method });
+        if (method === "POST") {
+          return Response.json({
+            recoveredFromAttemptId: pending.attemptId,
+            attemptId: "attempt-2",
+            name: pending.name,
+            version,
+            publicationStatus: "published",
+          });
+        }
+        if (url.endsWith("/publication")) {
+          if (testCase.publication === "not-found") {
+            return new Response("Not found", { status: 404 });
+          }
+          return Response.json(
+            testCase.publication === "published"
+              ? { name: pending.name, version, state: "published" }
+              : { version },
+          );
+        }
+        expect(url).toBe(
+          `https://clawhub.example/api/v1/packages/${encodeURIComponent(pending.name)}/versions/${version}`,
+        );
+        return testCase.exact === "published"
+          ? Response.json({ version })
+          : new Response("Not found", { status: 404 });
       },
       wait: async () => {},
     });
+    expect(result).toMatchObject({
+      schemaVersion: 1,
+      complete: true,
+      recovered: testCase.recovers ? [{ attemptId: "attempt-2" }] : [],
+    });
+    expect(requests).toEqual([
+      {
+        url: `https://clawhub.example/api/v1/packages/${encodeURIComponent(pending.name)}/versions/${version}/publication`,
+        method: "GET",
+      },
+      ...(testCase.exact
+        ? [
+            {
+              url: `https://clawhub.example/api/v1/packages/${encodeURIComponent(pending.name)}/versions/${version}`,
+              method: "GET",
+            },
+          ]
+        : []),
+      ...(testCase.recovers
+        ? [
+            {
+              url: "https://clawhub.example/api/v1/publish/attempts/attempt-1/recover",
+              method: "POST",
+            },
+          ]
+        : []),
+    ]);
+  });
+
+  it("waits through a legacy pending recovery conflict", async () => {
+    const manifest = createClawHubRecoveryManifest(transactions, [pending]);
+    const responses = [
+      new Response("Not found", { status: 404 }),
+      new Response("Not found", { status: 404 }),
+      new Response("Attempt is still pending", {
+        status: 409,
+        headers: { "Retry-After": "10" },
+      }),
+      new Response("Not found", { status: 404 }),
+      new Response("Not found", { status: 404 }),
+      new Response("Not found", { status: 404 }),
+      Response.json({ version }),
+    ];
+    const fetchImpl = vi.fn<typeof fetch>(async () => responses.shift()!);
+    const wait = vi.fn(async () => {});
+    const result = await executeClawHubRecoveryManifest({
+      manifest,
+      reason: "Parent failed after sealed staging",
+      token: "fixture-token",
+      fetchImpl,
+      wait,
+    });
     expect(result).toEqual({ schemaVersion: 1, complete: true, recovered: [] });
-    expect(requests).toEqual(["https://clawhub.example/api/v1/publish/attempts/attempt-1"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(7);
+    expect(wait).toHaveBeenCalledWith(10_000);
+  });
+
+  it("does not retry a permanent legacy recovery conflict", async () => {
+    const manifest = createClawHubRecoveryManifest(transactions, [pending]);
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response("Not found", { status: 404 }))
+      .mockResolvedValueOnce(new Response("Not found", { status: 404 }))
+      .mockResolvedValueOnce(new Response("Recovery replay binding changed", { status: 409 }))
+      .mockResolvedValueOnce(new Response("Not found", { status: 404 }))
+      .mockResolvedValueOnce(new Response("Not found", { status: 404 }));
+    await expect(
+      executeClawHubRecoveryManifest({
+        manifest,
+        reason: "Parent failed after sealed staging",
+        token: "fixture-token",
+        fetchImpl,
+      }),
+    ).rejects.toThrow("HTTP 409");
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+  });
+
+  it("accepts publication that wins a legacy recovery conflict race", async () => {
+    const manifest = createClawHubRecoveryManifest(transactions, [pending]);
+    const responses = [
+      new Response("Not found", { status: 404 }),
+      new Response("Not found", { status: 404 }),
+      new Response("Attempt is no longer recoverable", { status: 409 }),
+      new Response("Not found", { status: 404 }),
+      Response.json({ version }),
+    ];
+    const result = await executeClawHubRecoveryManifest({
+      manifest,
+      reason: "Parent failed after sealed staging",
+      token: "fixture-token",
+      fetchImpl: vi.fn<typeof fetch>(async () => responses.shift()!),
+    });
+    expect(result).toEqual({ schemaVersion: 1, complete: true, recovered: [] });
+    expect(responses).toEqual([]);
+  });
+
+  it("does not honor Retry-After beyond the recovery deadline", async () => {
+    const manifest = createClawHubRecoveryManifest(transactions, [pending]);
+    const responses = [
+      new Response("Not found", { status: 404 }),
+      new Response("Not found", { status: 404 }),
+      new Response("Attempt is still pending", {
+        status: 409,
+        headers: { "Retry-After": "10" },
+      }),
+      new Response("Not found", { status: 404 }),
+      new Response("Not found", { status: 404 }),
+    ];
+    const wait = vi.fn(async () => {});
+    await expect(
+      executeClawHubRecoveryManifest({
+        manifest,
+        reason: "Parent failed after sealed staging",
+        token: "fixture-token",
+        fetchImpl: vi.fn<typeof fetch>(async () => responses.shift()!),
+        timeoutMilliseconds: 5_000,
+        wait,
+      }),
+    ).rejects.toThrow(`ClawHub recovery timed out: ${pending.name}.`);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed recovery through a legacy publication fallback", async () => {
+    const manifest = createClawHubRecoveryManifest(transactions, [pending]);
+    const attempt = {
+      attemptId: "attempt-2",
+      name: pending.name,
+      version,
+    };
+    const responses = [
+      new Response("Not found", { status: 404 }),
+      new Response("Not found", { status: 404 }),
+      Response.json({
+        ...attempt,
+        recoveredFromAttemptId: pending.attemptId,
+        publicationStatus: "pending",
+      }),
+      new Response("Not found", { status: 404 }),
+      new Response("Not found", { status: 404 }),
+      Response.json({ ...attempt, publicationStatus: "failed" }),
+    ];
+    await expect(
+      executeClawHubRecoveryManifest({
+        manifest,
+        reason: "Parent failed after sealed staging",
+        token: "fixture-token",
+        fetchImpl: vi.fn<typeof fetch>(async () => responses.shift()!),
+      }),
+    ).rejects.toThrow(`ClawHub recovery failed: ${pending.name}.`);
+    expect(responses).toEqual([]);
   });
 
   it("keeps automated recovery behind approval and preserves the manifest before cancellation", () => {

@@ -6,11 +6,15 @@ import { parseArgs } from "node:util";
 import { validateClawHubTransactions } from "./clawhub-parent-authorization.mjs";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.runtime.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
-import { isClawHubPublishAttemptId } from "./lib/clawhub-publication-state.mjs";
+import {
+  classifyClawHubPublication,
+  isClawHubPublishAttemptId,
+} from "./lib/clawhub-publication-state.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const PACKAGE_PATTERN = /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u;
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+const RECOVERY_CONFLICT = Symbol("recoveryConflict");
 
 export function formatClawHubRecoveryCommand({ attemptId, clawhubSource, reason }) {
   if (!isClawHubPublishAttemptId(attemptId)) {
@@ -156,7 +160,10 @@ export function validateClawHubRecoveryRun(manifestInput, run) {
   return manifest;
 }
 
-async function requestRecovery(path, { registry, token, fetchImpl, body }) {
+async function requestRecovery(
+  path,
+  { registry, token, fetchImpl, body, allowConflict = false, allowNotFound = false },
+) {
   const response = await fetchImpl(`${registry}${path}`, {
     method: body ? "POST" : "GET",
     headers: {
@@ -169,6 +176,16 @@ async function requestRecovery(path, { registry, token, fetchImpl, body }) {
     signal: AbortSignal.timeout(60_000),
   });
   const text = await readBoundedResponseText(response, "ClawHub recovery", 256 * 1024);
+  if (allowConflict && response.status === 409) {
+    const retryAfter = response.headers.get("retry-after")?.trim();
+    const retryAfterSeconds = retryAfter && /^\d+$/u.test(retryAfter) ? Number(retryAfter) : 0;
+    const retryAfterMilliseconds =
+      retryAfterSeconds > 0 && retryAfterSeconds <= 300 ? retryAfterSeconds * 1000 : null;
+    return { [RECOVERY_CONFLICT]: retryAfterMilliseconds };
+  }
+  if (allowNotFound && response.status === 404) {
+    return undefined;
+  }
   if (!response.ok) {
     throw new Error(`ClawHub recovery returned HTTP ${response.status}.`);
   }
@@ -189,17 +206,63 @@ function validateRecoveryAttempt(attempt, expected) {
   return attempt;
 }
 
-async function waitForRecoveryAttempt(expected, context, deadline) {
+async function readPublicationState(expected, context) {
+  const path = `/api/v1/packages/${encodeURIComponent(expected.name)}/versions/${encodeURIComponent(expected.version)}`;
+  const state = await requestRecovery(`${path}/publication`, {
+    ...context,
+    allowNotFound: true,
+  });
+  const publication =
+    state === undefined
+      ? null
+      : classifyClawHubPublication(state, { name: expected.name, version: expected.version });
+  if (publication === null) {
+    const published = await requestRecovery(path, { ...context, allowNotFound: true });
+    return published === undefined ? { state: "unpublished" } : { state: "published" };
+  }
+  return publication;
+}
+
+async function waitForPublicationState(
+  expected,
+  context,
+  deadline,
+  { attemptId, recoverAttemptChange, recoverLegacyUnpublished, staleAttemptId },
+) {
   for (;;) {
-    const attempt = validateRecoveryAttempt(
-      await requestRecovery(
-        `/api/v1/publish/attempts/${encodeURIComponent(expected.attemptId)}`,
-        context,
-      ),
-      expected,
-    );
-    if (attempt.publicationStatus !== "pending") {
-      return attempt;
+    if (Date.now() >= deadline) {
+      throw new Error(`ClawHub recovery timed out: ${expected.name}.`);
+    }
+    const state = await readPublicationState(expected, context);
+    const stale = state.attemptId !== undefined && state.attemptId === staleAttemptId;
+    if (state.attemptId !== undefined && state.attemptId !== attemptId && !stale) {
+      if (recoverAttemptChange) {
+        return { state: "reconcile" };
+      }
+      throw new Error(`ClawHub publication state changed the sealed attempt: ${expected.name}.`);
+    }
+    const anonymousFailure = state.state === "failed" && state.attemptId === undefined;
+    if (anonymousFailure && recoverAttemptChange) {
+      return { state: "reconcile" };
+    }
+    const needsAttemptStatus =
+      stale || anonymousFailure || (state.state === "unpublished" && !recoverLegacyUnpublished);
+    if (needsAttemptStatus) {
+      const current = validateRecoveryAttempt(
+        await requestRecovery(`/api/v1/publish/attempts/${encodeURIComponent(attemptId)}`, context),
+        { ...expected, attemptId },
+      );
+      if (current.publicationStatus !== "pending") {
+        return { state: current.publicationStatus };
+      }
+    }
+    if (
+      !stale &&
+      !anonymousFailure &&
+      state.state !== "pending" &&
+      (state.state !== "unpublished" || recoverLegacyUnpublished)
+    ) {
+      return state;
     }
     if (Date.now() >= deadline) {
       throw new Error(`ClawHub recovery timed out: ${expected.name}.`);
@@ -238,22 +301,59 @@ export async function executeClawHubRecoveryManifest({
     }
     const deadline = Date.now() + timeoutMilliseconds;
     const context = { registry, token, fetchImpl, wait };
-    const original = await waitForRecoveryAttempt(entry, context, deadline);
-    if (original.publicationStatus === "published") {
+    let publication = await waitForPublicationState(entry, context, deadline, {
+      attemptId: entry.attemptId,
+      recoverAttemptChange: true,
+      recoverLegacyUnpublished: true,
+    });
+    if (publication.state === "published") {
       continue;
     }
-    if (original.publicationStatus !== "failed") {
-      throw new Error(`ClawHub recovery ${original.publicationStatus}: ${entry.name}.`);
+    if (!["failed", "reconcile", "unpublished"].includes(publication.state)) {
+      throw new Error(`ClawHub recovery ${publication.state}: ${entry.name}.`);
     }
-    const started = await requestRecovery(
-      `/api/v1/publish/attempts/${encodeURIComponent(entry.attemptId)}/recover`,
-      {
-        registry,
-        token,
-        fetchImpl,
-        body: { manualOverrideReason: trimmedReason },
-      },
-    );
+    let started;
+    for (;;) {
+      started = await requestRecovery(
+        `/api/v1/publish/attempts/${encodeURIComponent(entry.attemptId)}/recover`,
+        {
+          registry,
+          token,
+          fetchImpl,
+          body: { manualOverrideReason: trimmedReason },
+          allowConflict: publication.state === "unpublished",
+        },
+      );
+      const retryAfter = started?.[RECOVERY_CONFLICT];
+      if (retryAfter === undefined) {
+        break;
+      }
+      publication = await readPublicationState(entry, context);
+      if (publication.state === "published") {
+        break;
+      }
+      if (retryAfter === null) {
+        throw new Error("ClawHub recovery returned HTTP 409.");
+      }
+      if (retryAfter >= deadline - Date.now()) {
+        throw new Error(`ClawHub recovery timed out: ${entry.name}.`);
+      }
+      await wait(retryAfter);
+      publication = await waitForPublicationState(entry, context, deadline, {
+        attemptId: entry.attemptId,
+        recoverAttemptChange: true,
+        recoverLegacyUnpublished: true,
+      });
+      if (publication.state === "published") {
+        break;
+      }
+      if (!["failed", "reconcile", "unpublished"].includes(publication.state)) {
+        throw new Error(`ClawHub recovery ${publication.state}: ${entry.name}.`);
+      }
+    }
+    if (started?.[RECOVERY_CONFLICT] !== undefined) {
+      continue;
+    }
     if (
       started.recoveredFromAttemptId !== entry.attemptId ||
       started.name !== entry.name ||
@@ -267,24 +367,18 @@ export async function executeClawHubRecoveryManifest({
       name: entry.name,
       version: entry.version,
     });
-    let current = started;
-    while (current.publicationStatus !== "published") {
-      if (["blocked", "failed", "expired"].includes(current.publicationStatus)) {
-        throw new Error(`ClawHub recovery ${current.publicationStatus}: ${entry.name}.`);
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(`ClawHub recovery timed out: ${entry.name}.`);
-      }
-      await wait(10_000);
-      current = await requestRecovery(
-        `/api/v1/publish/attempts/${encodeURIComponent(started.attemptId)}`,
-        { registry, token, fetchImpl },
-      );
-      validateRecoveryAttempt(current, {
+    if (["blocked", "failed", "expired"].includes(started.publicationStatus)) {
+      throw new Error(`ClawHub recovery ${started.publicationStatus}: ${entry.name}.`);
+    }
+    if (started.publicationStatus !== "published") {
+      const state = await waitForPublicationState(entry, context, deadline, {
         attemptId: started.attemptId,
-        name: entry.name,
-        version: entry.version,
+        recoverLegacyUnpublished: false,
+        staleAttemptId: entry.attemptId,
       });
+      if (state.state !== "published") {
+        throw new Error(`ClawHub recovery ${state.state}: ${entry.name}.`);
+      }
     }
     recovered.push({
       name: entry.name,
