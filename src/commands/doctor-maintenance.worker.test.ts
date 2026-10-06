@@ -6,6 +6,9 @@ import {
   writeNativeHookRelayBridgeRecord,
   type NativeHookRelayBridgeRecord,
 } from "../agents/harness/native-hook-relay-store.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadCronStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { acquireFileLock } from "../infra/file-lock.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
 import {
   autoMigrateLegacyStateDir,
@@ -16,10 +19,12 @@ import { readUpdateDatabaseGenerations } from "../infra/update-database-generati
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { maybeMigrateHeartbeatCadenceToCron } from "./doctor-heartbeat-cadence-migration.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 function relayRecord(revision: number): NativeHookRelayBridgeRecord {
@@ -324,6 +329,45 @@ describe("Doctor maintenance with shared-state workers", () => {
           ).toEqual(successor);
         },
       );
+    },
+  );
+});
+
+it("releases cron custody before Doctor finishes, without waiting for CLI cleanup", async () => {
+  await withOpenClawTestState(
+    { scenario: "external-service", label: "doctor-cron-custody" },
+    async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: { heartbeat: { every: "30m" } } } },
+      };
+      await state.writeConfig(cfg);
+      const maintenance = await beginDoctorMaintenance({
+        options: { repair: true, nonInteractive: true },
+        root: null,
+        runtime: { log() {}, error() {}, exit() {} },
+      });
+      try {
+        const result = await maintenance!.run(() =>
+          maybeMigrateHeartbeatCadenceToCron({ cfg, shouldRepair: true, env: state.env }),
+        );
+        expect(result.warnings).toEqual([]);
+        expect(result.changes).toHaveLength(1);
+      } finally {
+        await maintenance!.finish(cfg);
+      }
+      // A successor must acquire custody while the Doctor process is still alive.
+      const successor = await acquireFileLock(
+        `${resolveOpenClawStateSqlitePath(state.env)}.cron-authority`,
+        {
+          retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+          stale: 0,
+          staleRecovery: "remove-if-definitely-stale",
+        },
+      );
+      await successor.release();
+      const jobs = await loadCronStore(resolveCronJobsStorePathFromConfig(cfg, state.env));
+      expect(jobs.jobs).toHaveLength(1);
+      expect(jobs.jobs[0]?.payload.kind).toBe("heartbeat");
     },
   );
 });

@@ -74,7 +74,7 @@ These Codex bwrap checks are omitted during `openclaw update`; run
 When Docker sandbox network egress is disabled and a local Codex runtime is
 configured, it also runs the configured Codex binary's own `workspace-write`
 sandbox with network access disabled, exercising Bubblewrap's loopback setup.
-Unrecognized probe failures are reported as unverified rather than as a
+Unrecognized check failures are reported as unverified rather than as a
 namespace diagnosis. Namespace failures usually surface
 as `bwrap: setting up uid map: Permission denied` or
 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` on

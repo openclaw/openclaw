@@ -983,7 +983,7 @@ describe("update-cli", () => {
     });
     const diagnostics = getErrorOutput();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(diagnostics).toContain("Gateway probe failed: timeout");
+    expect(diagnostics).toContain("Gateway check failed: timeout");
     expect(diagnostics).toContain("Port 18789 is already in use.");
     expect(diagnostics).not.toContain("Gateway version mismatch");
   });

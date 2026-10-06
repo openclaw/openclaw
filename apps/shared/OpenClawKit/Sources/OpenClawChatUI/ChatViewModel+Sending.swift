@@ -40,8 +40,9 @@ extension OpenClawChatViewModel {
             fallbackGeneration: runOwnershipGeneration)
     }
 
-    public func send() {
-        guard !self.usesWebConversation else { return }
+    @discardableResult
+    public func send() -> Task<Void, Never>? {
+        guard !self.usesWebConversation else { return nil }
         logDiagnostic(
             "chat.ui send invoked sessionKey=\(sessionKey) "
                 + "inputLen=\(input.count) attachments=\(attachments.count) "
@@ -49,14 +50,13 @@ extension OpenClawChatViewModel {
                 + "health=\(healthOK)")
         // Reserve the accepted draft before scheduling work so initial route
         // hydration cannot retire its owner before asynchronous validation starts.
-        guard let draft = captureSendDraft() else { return }
+        guard let draft = captureSendDraft() else { return nil }
         isSubmittingDraft = true
-        Task { await self.performSend(draft) }
+        return Task { await self.performSend(draft) }
     }
 
     public func loadSlashCommandsIfNeeded() {
-        guard transport.supportsSlashCommandCatalog else { return }
-        guard !hasLoadedSlashCommands, !isLoadingSlashCommands else { return }
+        guard transport.supportsSlashCommandCatalog, !hasLoadedSlashCommands, !isLoadingSlashCommands else { return }
         Task { await self.loadSlashCommands(force: false) }
     }
 
@@ -83,9 +83,6 @@ extension OpenClawChatViewModel {
         input = command.acceptsArgs ? "\(invocation) " : invocation
         errorText = nil
     }
-
-    private static let resetTriggers: Set<String> = ["/reset", "/clear"]
-    private static let compactTriggers: Set<String> = ["/compact"]
 
     private func loadSlashCommands(force: Bool) async {
         guard transport.supportsSlashCommandCatalog else { return }
@@ -186,12 +183,11 @@ extension OpenClawChatViewModel {
         _ command: OpenClawChatCommandChoice,
         matchesInvocationName name: String) -> Bool
     {
-        let normalizedName = name.lowercased()
-        if command.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedName {
+        if command.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == name {
             return true
         }
         return command.textAliases.contains { alias in
-            self.slashCommandName(from: alias) == normalizedName
+            self.slashCommandName(from: alias) == name
         }
     }
 
@@ -210,7 +206,12 @@ extension OpenClawChatViewModel {
         let effectiveFilter: OpenClawChatCommandFilter = targetsSkills && filter == .all ? .skills : filter
         return commands.enumerated()
             .compactMap { index, command -> (Int, Int, OpenClawChatCommandChoice)? in
-                guard self.command(command, isIncludedIn: effectiveFilter) else { return nil }
+                switch effectiveFilter {
+                case .commands where command.source == .skill, .skills where command.source != .skill:
+                    return nil
+                default:
+                    break
+                }
                 guard let rank = self.commandSearchRank(command, query: query) else { return nil }
                 return (rank, index, command)
             }
@@ -221,20 +222,6 @@ extension OpenClawChatViewModel {
                 return $0.1 < $1.1
             }
             .map(\.2)
-    }
-
-    private static func command(
-        _ command: OpenClawChatCommandChoice,
-        isIncludedIn filter: OpenClawChatCommandFilter) -> Bool
-    {
-        switch filter {
-        case .all:
-            true
-        case .commands:
-            command.source != .skill
-        case .skills:
-            command.source == .skill
-        }
     }
 
     private static func commandSearchRank(
@@ -258,42 +245,10 @@ extension OpenClawChatViewModel {
         if command.description.lowercased().contains(query) {
             return 2
         }
-        if command.source.rawValue.lowercased().contains(query) {
+        if command.source.rawValue.contains(query) {
             return 3
         }
         return nil
-    }
-
-    private func handleLocalSlashCommandIfNeeded(_ command: String, draftInput: String) async -> Bool {
-        guard Self.isLiveOnlyLocalSlashCommand(command) else { return false }
-        if input == draftInput {
-            input = ""
-        }
-        if command == "/new" {
-            await performStartNewSession(worktree: false)
-        } else if Self.resetTriggers.contains(command) {
-            await performReset()
-        } else {
-            await performCompact()
-        }
-        return true
-    }
-
-    private static func isLiveOnlyLocalSlashCommand(_ command: String) -> Bool {
-        command == "/new" || self.resetTriggers.contains(command) || self.compactTriggers.contains(command)
-    }
-
-    private func prepareLiveOnlyLocalSlashCommand(session: SessionSnapshot) async -> Bool {
-        // Always probe: a preserved view model can retain stale healthy state
-        // after its transport disconnects without a health event. performSend
-        // owns the send gate across this await.
-        await pollHealthIfNeeded(force: true, sessionSnapshot: session)
-        guard isCurrentSession(session) else { return false }
-        guard healthOK else {
-            errorText = "Connect to the gateway to run this command."
-            return false
-        }
-        return true
     }
 
     private struct SendDraft {
@@ -394,11 +349,20 @@ extension OpenClawChatViewModel {
 
     private func validateSendDraft(_ draft: SendDraft) async -> Bool {
         let command = draft.trimmed.lowercased()
-        if Self.isLiveOnlyLocalSlashCommand(command) {
-            let canRunCommand = await prepareLiveOnlyLocalSlashCommand(session: draft.session)
-            guard canRunCommand else { return false }
-        }
-        if await self.handleLocalSlashCommandIfNeeded(command, draftInput: draft.input) {
+        if ["/new", "/reset", "/clear", "/compact"].contains(command) {
+            // Preserved presentations can retain healthy state after a silent disconnect.
+            await pollHealthIfNeeded(force: true, sessionSnapshot: draft.session)
+            guard isCurrentSession(draft.session) else { return false }
+            guard healthOK else {
+                errorText = "Connect to the gateway to run this command."
+                return false
+            }
+            if input == draft.input { input = "" }
+            switch command {
+            case "/new": await performStartNewSession(worktree: false)
+            case "/compact": await performCompact()
+            default: await performReset()
+            }
             self.recordSuccessfulInput(
                 draft.trimmed,
                 submittedRevision: draft.composerRevision,
@@ -596,8 +560,7 @@ extension OpenClawChatViewModel {
                         domain: "OpenClawChatCapabilitySettings",
                         code: 1,
                         userInfo: [NSLocalizedDescriptionKey: settingsError]),
-                    attempt: attempt,
-                    canPreserveInOutbox: false)
+                    attempt: attempt)
                 return
             }
             guard isCurrentSession(attempt.draft.session) else { return }
@@ -707,12 +670,10 @@ extension OpenClawChatViewModel {
     private func handleLiveSendFailure(
         _ error: Error,
         attempt: LiveSendAttempt,
-        durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation? = nil,
-        canPreserveInOutbox: Bool = true) async
+        durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation? = nil) async
     {
         guard isCurrentSession(attempt.draft.session) else { return }
-        if canPreserveInOutbox,
-           let durableSessionSettingsExpectation,
+        if let durableSessionSettingsExpectation,
            attempt.encodedAttachments.isEmpty,
            !(error is GatewayResponseError),
            !(error is OpenClawChatSendOwnershipError)

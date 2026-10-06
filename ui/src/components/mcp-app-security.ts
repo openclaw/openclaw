@@ -1,6 +1,7 @@
 import type { ContentBlock } from "@modelcontextprotocol/client";
 import type { AppBridge } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { mcpAppMessageText } from "../lib/mcp-app-message-content.ts";
 
@@ -25,14 +26,8 @@ const widgetPromptTimestampsByKey = new Map<string, number[]>();
 export function allowWidgetPrompt(key: string, nowMs: number): boolean {
   const cutoff = nowMs - WIDGET_PROMPT_RATE_WINDOW_MS;
   const timestamps = (widgetPromptTimestampsByKey.get(key) ?? []).filter((ts) => ts > cutoff);
-  if (
-    !widgetPromptTimestampsByKey.has(key) &&
-    widgetPromptTimestampsByKey.size >= WIDGET_PROMPT_RATE_KEYS_MAX
-  ) {
-    const oldest = widgetPromptTimestampsByKey.keys().next().value;
-    if (oldest !== undefined) {
-      widgetPromptTimestampsByKey.delete(oldest);
-    }
+  if (!widgetPromptTimestampsByKey.has(key)) {
+    pruneMapToMaxSize(widgetPromptTimestampsByKey, WIDGET_PROMPT_RATE_KEYS_MAX - 1);
   }
   if (timestamps.length >= WIDGET_PROMPT_RATE_MAX) {
     widgetPromptTimestampsByKey.set(key, timestamps);

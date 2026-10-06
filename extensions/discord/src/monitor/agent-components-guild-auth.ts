@@ -40,20 +40,19 @@ async function ensureGuildComponentMemberAllowed(params: {
   channelCtx: DiscordChannelContext;
   memberRoleIds: string[];
   user: DiscordUser;
-  replyOpts: { ephemeral?: boolean };
   componentLabel: string;
   unauthorizedReply: string;
   allowNameMatching: boolean;
   groupPolicy: "open" | "disabled" | "allowlist";
 }) {
-  const { interaction, guildInfo, user, replyOpts, componentLabel, unauthorizedReply } = params;
+  const { interaction, guildInfo, user, componentLabel, unauthorizedReply } = params;
 
   if (!params.rawGuildId) {
     return true;
   }
 
   const replyUnauthorized = async () => {
-    await replySilently(interaction, { content: unauthorizedReply, ...replyOpts });
+    await replySilently(interaction, { content: unauthorizedReply, ephemeral: true });
   };
 
   const channelConfig = resolveDiscordChannelConfigWithFallback({
@@ -104,7 +103,6 @@ async function ensureComponentUserAllowed(params: {
   allowedUsers: string[];
   interaction: AgentComponentInteraction;
   user: DiscordUser;
-  replyOpts: { ephemeral?: boolean };
   componentLabel: string;
   unauthorizedReply: string;
   allowNameMatching: boolean;
@@ -131,7 +129,7 @@ async function ensureComponentUserAllowed(params: {
   );
   await replySilently(params.interaction, {
     content: params.unauthorizedReply,
-    ...params.replyOpts,
+    ephemeral: true,
   });
   return false;
 }
@@ -143,7 +141,6 @@ export async function ensureAgentComponentInteractionAllowed(params: {
   rawGuildId: string | undefined;
   memberRoleIds: string[];
   user: DiscordUser;
-  replyOpts: { ephemeral?: boolean };
   componentLabel: string;
   unauthorizedReply: string;
 }) {
@@ -170,7 +167,7 @@ export async function ensureAgentComponentInteractionAllowed(params: {
   if (ctx.isPolicyCurrent?.() === false) {
     await replySilently(params.interaction, {
       content: "Access policy changed. Try this interaction again.",
-      ...params.replyOpts,
+      ephemeral: true,
     });
     return null;
   }
@@ -184,7 +181,6 @@ export async function resolveAuthorizedComponentInteraction(params: {
   componentLabel: string;
   unauthorizedReply: string;
   allowedUsers?: string[];
-  defer?: boolean;
 }) {
   const ctx = await resolveAgentComponentPolicyContext(params);
   if (!ctx) {
@@ -195,13 +191,12 @@ export async function resolveAuthorizedComponentInteraction(params: {
     interaction: params.interaction,
     label: params.label,
     componentLabel: params.componentLabel,
-    defer: params.defer,
   });
   if (!interactionCtx) {
     return null;
   }
 
-  const { channelId, user, replyOpts, rawGuildId } = interactionCtx;
+  const { channelId, user, rawGuildId } = interactionCtx;
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
     guildId: rawGuildId,
@@ -242,7 +237,7 @@ export async function resolveAuthorizedComponentInteraction(params: {
   if (ctx.isPolicyCurrent?.() === false) {
     await replySilently(params.interaction, {
       content: "Access policy changed. Try this interaction again.",
-      ...replyOpts,
+      ephemeral: true,
     });
     return null;
   }
@@ -252,7 +247,6 @@ export async function resolveAuthorizedComponentInteraction(params: {
       ...params,
       allowedUsers: params.allowedUsers,
       user,
-      replyOpts,
       allowNameMatching,
     }))
   ) {
@@ -267,7 +261,6 @@ export async function resolveAuthorizedComponentInteraction(params: {
     allowNameMatching,
     commandAuthorized,
     user,
-    replyOpts,
   };
 }
 

@@ -9,7 +9,6 @@ import {
 } from "../../agents/harness/native-session/deletion-participant.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import { createSessionInitialization } from "../../sessions/session-initialization.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
@@ -110,15 +109,8 @@ it("releases a binding after refusal before worker dispatch and permits a fresh 
   });
 });
 
-it("does not finalize native custody or initialization from a mismatched actual A receipt", async () => {
+it("does not finalize native custody from a mismatched actual A receipt", async () => {
   await withNativeBindingFixture("agentsapi", async (fixture) => {
-    const entry = fixture.readEntry();
-    assert(entry);
-    const initializer = createSessionInitialization(
-      { ...fixture.scope, lifecycleRevision: entry.lifecycleRevision },
-      () => {},
-      { config: {}, agentId: fixture.scope.agentId, entry },
-    );
     const finalized = vi.fn();
     const prepare = fixture.harness.withSessionDeletion;
     assert(prepare);
@@ -161,49 +153,16 @@ it("does not finalize native custody or initialization from a mismatched actual 
       corrupt(value);
       corrupt(native?.committed?.facts);
     };
-    try {
-      await expect(initializer.rollback(() => fixture.remove())).rejects.toMatchObject({
-        code: "outcome-unknown",
-      });
-      expect(delivery.dispatched).toBe(1);
-      expect(fixture.readEntry()).toBeUndefined();
-      expect(fixture.readBinding()).toBeUndefined();
-      expect(finalized).not.toHaveBeenCalled();
-      expect(() => initializer.handle.assertCurrent()).not.toThrow();
-      const replay = vi.fn(async () => undefined);
-      await expect(
-        fixture.harness.withSessionDeletion({ ...fixture.scope, assertCurrent() {} }, replay),
-      ).rejects.toMatchObject({ code: "outcome-unknown" });
-      expect(replay).not.toHaveBeenCalled();
-    } finally {
-      initializer.close();
-    }
-  });
-});
-
-it("commits an initialization-only deletion without requiring a native binding participant", async () => {
-  await withNativeBindingFixture("agentsapi", async (fixture) => {
-    fixture.registry.agentHarnesses.length = 0;
-    const entry = fixture.readEntry();
-    assert(entry);
-    const initializer = createSessionInitialization(
-      { ...fixture.scope, lifecycleRevision: entry.lifecycleRevision },
-      () => {},
-      { config: {}, agentId: fixture.scope.agentId, entry },
-    );
-    try {
-      await expect(initializer.rollback(() => fixture.remove())).resolves.toMatchObject({
-        deleted: true,
-      });
-      expect(delivery.dispatched).toBe(1);
-      expect(fixture.readEntry()).toBeUndefined();
-      expect(() => initializer.handle.assertCurrent()).toThrow(
-        "Session initialization is rolling back",
-      );
-      expect(fixture.readBinding()).toBeDefined();
-    } finally {
-      initializer.close();
-    }
+    await expect(fixture.remove()).rejects.toMatchObject({ code: "outcome-unknown" });
+    expect(delivery.dispatched).toBe(1);
+    expect(fixture.readEntry()).toBeUndefined();
+    expect(fixture.readBinding()).toBeUndefined();
+    expect(finalized).not.toHaveBeenCalled();
+    const replay = vi.fn(async () => undefined);
+    await expect(
+      fixture.harness.withSessionDeletion({ ...fixture.scope, assertCurrent() {} }, replay),
+    ).rejects.toMatchObject({ code: "outcome-unknown" });
+    expect(replay).not.toHaveBeenCalled();
   });
 });
 
@@ -306,7 +265,6 @@ it.each([
   { checkpoint: "A commit", kind: "agentsapi" },
   { checkpoint: "A commit", kind: "codex" },
   { checkpoint: "A commit", kind: "acp" },
-  { checkpoint: "A commit", kind: "initialization" },
 ] as const)(
   "blocks the original $kind generation after actual worker loss at $checkpoint without replay or compensation",
   async ({ checkpoint, kind }) => {
@@ -320,20 +278,6 @@ it.each([
       }
       const original = fixture.readEntry();
       assert(original);
-      const initializer =
-        kind === "initialization"
-          ? createSessionInitialization(
-              { ...fixture.scope, lifecycleRevision: original.lifecycleRevision },
-              () => {},
-              { config: {}, agentId: fixture.scope.agentId, entry: original },
-            )
-          : undefined;
-      if (initializer) {
-        fixture.registry.agentHarnesses.length = 0;
-        fixture.bindingStore.delete(fixture.bindingKey);
-      }
-      const remove = () =>
-        initializer ? initializer.rollback(() => fixture.remove()) : fixture.remove();
       const nativeClient =
         kind === "codex"
           ? await (
@@ -386,7 +330,7 @@ it.each([
           }, attachment),
       );
       try {
-        const deletion = remove();
+        const deletion = fixture.remove();
         await expect(deletion).rejects.toBeInstanceOf(SqliteWorkerError);
         await expect(deletion).rejects.toMatchObject({ code: "outcome-unknown" });
         assert(stopped, "the test must reach the requested native commit checkpoint");
@@ -398,7 +342,7 @@ it.each([
         } else {
           expect(fixture.readBinding()).toBeUndefined();
         }
-        await expect(remove()).rejects.toMatchObject({ code: "outcome-unknown" });
+        await expect(fixture.remove()).rejects.toMatchObject({ code: "outcome-unknown" });
         expect(delivery.dispatched).toBe(1);
         expect(finalized).not.toHaveBeenCalled();
         expect(rolledBack).not.toHaveBeenCalled();
@@ -409,7 +353,6 @@ it.each([
         }
       } finally {
         await stopped;
-        initializer?.close();
         nativeClient?.close();
       }
     });

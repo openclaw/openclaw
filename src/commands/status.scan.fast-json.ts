@@ -30,7 +30,8 @@ function hasExplicitStatusJsonChannelConfig(cfg: OpenClawConfig): boolean {
   );
 }
 
-function hasStatusJsonChannelEnvConfig(env: NodeJS.ProcessEnv = process.env): boolean {
+function hasStatusJsonChannelEnvConfig(): boolean {
+  const env = process.env;
   return Object.entries(env).some(
     ([key, value]) =>
       typeof value === "string" &&

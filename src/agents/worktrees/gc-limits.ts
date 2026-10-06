@@ -36,7 +36,7 @@ export async function enforceWorktreeCleanupLimits(
   };
   let state = await refresh();
   if (!state.exceeded) {
-    progress.recordLimitState(true);
+    progress.result.limitsSatisfied = true;
     return [];
   }
   const idle: ManagedWorktreeRecord[] = [];
@@ -98,6 +98,7 @@ export async function enforceWorktreeCleanupLimits(
       try {
         // Selection is advisory. The host claims removal atomically against run
         // admission, then revalidates its claim immediately before worker writes.
+        progress.result.eligibleCount += 1;
         await params.evict(record, reasons.get(record.id) ?? "idle-age");
         removed.push(record.id);
         const containers = [...(sourceContainers.get(record.id) ?? [])].filter((id) =>
@@ -114,7 +115,7 @@ export async function enforceWorktreeCleanupLimits(
     }
     state = await refresh();
   }
-  progress.recordLimitState(!state.exceeded);
+  progress.result.limitsSatisfied = !state.exceeded;
   return removed;
 }
 

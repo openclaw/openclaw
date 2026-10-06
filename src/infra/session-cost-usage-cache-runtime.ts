@@ -128,7 +128,6 @@ export async function loadCostUsageSummaryFromCache(params: {
   config?: OpenClawConfig;
   agentId: string;
   requestRefresh?: boolean;
-  refreshMode?: "background" | "sync-when-empty";
 }): Promise<CostUsageSummary> {
   const prepared = prepareUsageCostWorker(params);
   const { databasePath, storePath } = prepared.location;
@@ -136,40 +135,19 @@ export async function loadCostUsageSummaryFromCache(params: {
     prepared.config,
     prepared.agentDir,
   );
-  const request = {
+  const snapshot = await readCostUsageSummaryFromWorker(prepared, {
     pricingFingerprint,
     startMs: params.startMs,
     endMs: params.endMs,
     dayBucket: params.dayBucket,
-  };
-  let snapshot = await readCostUsageSummaryFromWorker(prepared, request);
+  });
   if (params.requestRefresh !== false && snapshot.cacheStatus.staleFiles > 0) {
-    if (params.refreshMode === "sync-when-empty" && snapshot.cacheStatus.cachedFiles === 0) {
-      const result = await refreshCostUsageCacheForAgent({
-        config: params.config,
-        agentId: params.agentId,
-        agentDir: prepared.agentDir,
-        storePath,
-        startMs: params.startMs,
-        rebuildRows: snapshot.invalidRows,
-      });
-      snapshot = await readCostUsageSummaryFromWorker(prepared, request);
-      if (result === "refreshed" && snapshot.cacheStatus.staleFiles > 0) {
-        requestCostUsageCacheRefresh({
-          config: params.config,
-          agentId: params.agentId,
-          storePath,
-          rebuildRows: snapshot.invalidRows,
-        });
-      }
-    } else {
-      requestCostUsageCacheRefresh({
-        config: params.config,
-        agentId: params.agentId,
-        storePath,
-        rebuildRows: snapshot.invalidRows,
-      });
-    }
+    requestCostUsageCacheRefresh({
+      config: params.config,
+      agentId: params.agentId,
+      storePath,
+      rebuildRows: snapshot.invalidRows,
+    });
   }
   if (
     isUsageCostRefreshQueued(databasePath) ||

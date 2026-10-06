@@ -320,7 +320,12 @@ describe("Mattermost server thread recovery through the post handler", () => {
     const { entered, release } = holdResponse();
     const first = f.handler(newer as never, { data: { sender_name: "trusted" } });
     await entered.promise;
+    const olderReady = createDeferred<void>();
+    vi.mocked(f.monitor.core.channel.activity.record).mockImplementationOnce(() => {
+      olderReady.resolve();
+    });
     const older = f.handler(posts[2]! as never, { data: { sender_name: "trusted" } });
+    await olderReady.promise;
     release.resolve();
     await Promise.all([first, older]);
     const context = dispatch.mock.calls.find(

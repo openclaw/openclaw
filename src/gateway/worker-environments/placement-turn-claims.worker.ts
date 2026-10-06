@@ -35,6 +35,11 @@ import {
 } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
+type TransitionOps = ReturnType<typeof createPlacementTransitionOps>;
+type TransitionInput<Method extends keyof TransitionOps> = Parameters<TransitionOps[Method]>[0] & {
+  nowMs?: number;
+};
+
 type ClaimInput = {
   claim: WorkerSessionTurnClaim;
   nowMs?: number;
@@ -74,12 +79,7 @@ function operation<
         const source = guardedWorkspaceWrite ? input.sessionEntryCurrentSource : undefined;
         const admit = (stage: "transaction" | "commit", facts: unknown) =>
           requestSessionEntryCurrentAdmission(source, { stage, facts }, { lookup: "logical" });
-        admit(
-          "transaction",
-          guardedWorkspaceWrite
-            ? { placement: find(db, sessionId), placementMove: move() }
-            : undefined,
-        );
+        admit("transaction", { placement: find(db, sessionId), placementMove: move() });
         const receipt = execute(
           {
             path: database.path,
@@ -106,39 +106,22 @@ function operation<
 export const placementTurnClaimOperations = {
   "placementTurns.transition": operation(
     "placementTurns.transition",
-    (
-      runtime,
-      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["transition"]>[0] & {
-        nowMs?: number;
-      },
-    ) => createPlacementTransitionOps(runtime).transition(input),
+    (runtime, input: TransitionInput<"transition">) =>
+      createPlacementTransitionOps(runtime).transition(input),
   ),
   "placementTurns.startDrain": operation(
     "placementTurns.startDrain",
-    (
-      runtime,
-      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["startDrain"]>[0] & {
-        nowMs?: number;
-      },
-    ) => createPlacementTransitionOps(runtime).startDrain(input),
+    (runtime, input: TransitionInput<"startDrain">) =>
+      createPlacementTransitionOps(runtime).startDrain(input),
   ),
   "placementTurns.startReconcile": operation(
     "placementTurns.startReconcile",
-    (
-      runtime,
-      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["startReconcile"]>[0] & {
-        nowMs?: number;
-      },
-    ) => createPlacementTransitionOps(runtime).startReconcile(input),
+    (runtime, input: TransitionInput<"startReconcile">) =>
+      createPlacementTransitionOps(runtime).startReconcile(input),
   ),
   "placementTurns.fail": operation(
     "placementTurns.fail",
-    (
-      runtime,
-      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["fail"]>[0] & {
-        nowMs?: number;
-      },
-    ) => createPlacementTransitionOps(runtime).fail(input),
+    (runtime, input: TransitionInput<"fail">) => createPlacementTransitionOps(runtime).fail(input),
   ),
   "placementTurns.failResult": operation(
     "placementTurns.failResult",

@@ -10,6 +10,7 @@ import {
   type OAuthCredentials,
   type OAuthPrompt,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import {
   createOpenAIAuthorizationFlow,
   resolveOpenAICallbackHost,
@@ -31,28 +32,12 @@ const loadOAuthCallbackServer = createLazyRuntimeModule(() =>
 );
 
 function waitForManualPromptFallback(signal?: AbortSignal): Promise<null> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(createOAuthLoginCancelledError());
-      return;
-    }
-
-    const cleanup = () => {
-      signal?.removeEventListener("abort", abort);
-    };
-    const abort = () => {
-      clearTimeout(timeout);
-      cleanup();
-      reject(createOAuthLoginCancelledError());
-    };
-    const timeout = setTimeout(() => {
-      cleanup();
-      resolve(null);
-    }, MANUAL_PROMPT_FALLBACK_MS);
-
-    signal?.addEventListener("abort", abort, { once: true });
-    timeout.unref?.();
-  });
+  return sleepWithAbort(MANUAL_PROMPT_FALLBACK_MS, signal, { ref: false }).then(
+    () => null,
+    () => {
+      throw createOAuthLoginCancelledError();
+    },
+  );
 }
 
 function parseAuthorizationCode(input: string, state: string): string | undefined {

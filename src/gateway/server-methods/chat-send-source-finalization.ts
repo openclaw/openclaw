@@ -29,11 +29,11 @@ import {
   type WebchatReplyMediaRequesterContext,
 } from "./chat-reply-media.js";
 import {
+  buildTranscriptReplyTextFromInputs,
   readChatSendReplyPayload,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
 import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
-import { buildTranscriptReplyTextFromInputs } from "./chat-send-reply-dispatch.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import {
   assistantTranscriptScope,
@@ -253,6 +253,7 @@ async function finalizeChatSendAgentReplyPayloads(
       cfg: context.getRuntimeConfig(),
       key: sessionKey,
       ...sessionLoadOptions,
+      projection: [],
     });
   if (!authorizeDelivery("session preparation")) {
     return { kind: "dropped", reason: "no-visible-content" };

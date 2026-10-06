@@ -127,11 +127,10 @@ async function restoreArchivedDispatchSession(params: {
       }
       let assertCommitAllowed: (() => void) | undefined;
       if (currentEntry.worktree) {
-        const { synchronizeSessionWorktreeArchive } =
+        const { restoreSessionWorktree } =
           await import("../../sessions/session-worktree-lifecycle.js");
         // Keep the target fenced through Git/allocation waits without retaining the agent writer.
-        assertCommitAllowed = await synchronizeSessionWorktreeArchive({
-          archived: false,
+        assertCommitAllowed = await restoreSessionWorktree({
           entry: currentEntry,
           scope,
           commitGuard: prepareSessionWorkerPlacementMutationCheck({

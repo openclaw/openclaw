@@ -2203,7 +2203,8 @@ class GatewaySession(
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
-        invokeErrorFromThrowable(err)
+        val parsed = parseInvokeErrorFromThrowable(err, fallbackMessage = err::class.java.simpleName)
+        InvokeResult.error(code = parsed.code, message = parsed.message)
       }
     }
 
@@ -2239,11 +2240,6 @@ class GatewaySession(
           "node.invoke.result failed (ackTimeoutMs=$ackTimeoutMs): ${err.message ?: err::class.java.simpleName}",
         )
       }
-    }
-
-    private fun invokeErrorFromThrowable(err: Throwable): InvokeResult {
-      val parsed = parseInvokeErrorFromThrowable(err, fallbackMessage = err::class.java.simpleName)
-      return InvokeResult.error(code = parsed.code, message = parsed.message)
     }
 
     private fun failPending() {

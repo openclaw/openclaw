@@ -12,6 +12,7 @@ import {
   appendTranscriptMessageSnapshotSync,
 } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionMetadataWorkerOperations } from "../../config/sessions/session-manager-write-contract.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import {
@@ -39,6 +40,7 @@ import {
 } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
+import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import {
   adoptCommittedMessagePayload,
   canonicalizeSessionEntry,
@@ -50,7 +52,6 @@ import {
 } from "./session-manager-persistence-entry.js";
 import {
   committedTranscriptViewError,
-  isSqliteTranscriptMutationConflict,
   SessionEntryCommittedError,
   receiveSessionManagerCommit,
 } from "./session-manager-persistence-error.js";
@@ -59,7 +60,6 @@ import {
   withSessionManagerWrite,
   type SessionManagerWriteAdmission,
 } from "./session-manager-write-admission.js";
-import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export class SessionManagerPersistence extends SessionManagerCore {
   #initialWriter: InitialSessionTranscriptWriter | undefined;
@@ -67,6 +67,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
 
   protected recordTranscriptNavigationChange(): void {
     this.#navigationEpoch++;
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
+      (prefix) => prefix.anchorIds.length > 0,
+    );
   }
 
   /** Local branch selections revoke pending writes; committed view adoption does not. */
@@ -376,7 +379,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
           if (
             !retryMutationConflicts ||
             expectedMutationAt !== undefined ||
-            !isSqliteTranscriptMutationConflict(error)
+            !(error instanceof SqliteTranscriptMutationConflictError)
           ) {
             throw error;
           }
@@ -428,7 +431,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
 
   /** @deprecated Await persistAsync. Removal: next Plugin SDK major. */
   public persist(entry: SessionEntry, options?: PersistRecordOptions): PersistRecordResult {
-    warnSessionPersistenceDeprecation("SessionManager.persist", "persistAsync");
+    prepareSessionManagerSync("persist", this.persistenceTarget, this);
     return this.persistRecord(entry, options);
   }
 

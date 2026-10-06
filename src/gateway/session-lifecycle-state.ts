@@ -8,9 +8,11 @@ import {
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { projectMainSessionRecoveryLifecycle } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { buildUpdatedSessionGoalStatus } from "../config/sessions/goals-transitions.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryTarget } from "../config/sessions/session-accessor.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -24,9 +26,9 @@ import {
   recordGatewaySessionRunFailure,
   resolveSessionRunError,
 } from "../sessions/session-run-error.js";
-import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { runOutsideAsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const restartRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
@@ -342,7 +344,7 @@ function matchesProviderReviewWriter(
   );
 }
 
-export async function persistGatewaySessionLifecycleEvent(params: {
+type GatewaySessionLifecycleEventParams = {
   sessionKey: string;
   agentId?: string;
   event: LifecycleEventLike;
@@ -352,16 +354,36 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     sessionId: string;
     lifecycleRevision?: string;
   };
-}): Promise<void> {
+};
+
+export async function persistGatewaySessionLifecycleEvent(
+  params: GatewaySessionLifecycleEventParams,
+): Promise<void> {
+  await runOutsideAsyncWorkScope(() => prepareGatewaySessionLifecycleEvent(params)());
+}
+
+/** Capture lookup custody before the lifecycle owner waits for an earlier event. */
+export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecycleEventParams) {
   const phase = resolveLifecyclePhase(params.event);
   if (!phase) {
-    return;
+    return async () => {};
   }
-
-  const sessionEntry = loadSessionEntry(params.sessionKey, {
+  const prepared = loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: getRuntimeConfig(),
+    key: params.sessionKey,
+    excludeInternalEffects: true,
     ...(params.agentId ? { agentId: params.agentId } : {}),
-    clone: false,
   });
+  // Queue waits must not leave an early read rejection unobserved.
+  void prepared.catch(() => undefined);
+  return async () => persistPreparedGatewaySessionLifecycleEvent(params, phase, await prepared);
+}
+
+async function persistPreparedGatewaySessionLifecycleEvent(
+  params: GatewaySessionLifecycleEventParams,
+  phase: LifecyclePhase,
+  sessionEntry: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
+): Promise<void> {
   if (!sessionEntry.entry) {
     return;
   }
@@ -394,10 +416,15 @@ export async function persistGatewaySessionLifecycleEvent(params: {
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
   let terminalRecovery: { runId: string; outcome: AgentRunTerminalOutcome } | undefined;
   let failedRun: { runId: string; error: unknown; errorKind?: "state_contention" } | undefined;
-  const persisted = await patchSessionEntryCore(
+  const persisted = await patchSessionEntryTarget(
     {
+      agentId: sessionEntry.agentId,
       storePath: sessionEntry.storePath,
-      sessionKey: sessionEntry.canonicalKey,
+      readSource: sessionEntry.capturedReadSource,
+      target: {
+        canonicalKey: sessionEntry.canonicalKey,
+        storeKeys: sessionEntry.storeKeys,
+      },
     },
     async (storedEntry) => {
       terminalRecovery = undefined;
@@ -511,6 +538,12 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       skipMaintenance: true,
       takeCacheOwnership: true,
       requireWriteSuccess: true,
+      workerGuard: {
+        source: composeSessionSourceAssertion([
+          params.assertCommitAllowed,
+          providerReview?.assertCurrent,
+        ]),
+      },
       ...(providerReview ? { providerReviewMutation: true } : {}),
       onCommitted: () =>
         sessionChanges.emit({
@@ -520,14 +553,6 @@ export async function persistGatewaySessionLifecycleEvent(params: {
           // The SQLite writer already published sharing facts; this adapter only projects run state.
           facts: { kind: "unchanged" },
         }),
-      ...(params.assertCommitAllowed || providerReview
-        ? {
-            assertCommitAllowed: () => {
-              params.assertCommitAllowed?.();
-              providerReview?.assertCurrent();
-            },
-          }
-        : {}),
     },
   );
   if (persisted && terminalRecovery) {

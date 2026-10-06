@@ -2,8 +2,7 @@ import fs, { type BigIntStats } from "node:fs";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { FileMutationFingerprint } from "./file-descriptor.js";
-import { hashPublishedFileSync } from "./sqlite-snapshot-file.js";
-import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
+import { hashPublishedFileSync, sameFileStatFingerprint } from "./sqlite-snapshot-file.js";
 
 export function readSqliteIntegrityFileIdentity(
   pathname: string,
@@ -32,14 +31,6 @@ function assertRegularFile(stat: BigIntStats): void {
   }
 }
 
-function sameFileState(left: FileMutationFingerprint, right: FileMutationFingerprint): boolean {
-  return (
-    sameFileIdentity(left, right) &&
-    readDatabaseIdentityBirthtime(left) === readDatabaseIdentityBirthtime(right) &&
-    left.size === right.size
-  );
-}
-
 function fingerprintFile(pathname: string): SqliteFileFingerprint {
   const fd = fs.openSync(pathname, "r");
   try {
@@ -48,7 +39,7 @@ function fingerprintFile(pathname: string): SqliteFileFingerprint {
     const { sha256 } = hashPublishedFileSync(fs.realpathSync.native(pathname), before);
     const after = fs.fstatSync(fd, { bigint: true });
     const current = fs.statSync(pathname, { bigint: true });
-    if (!sameFileState(before, after) || !sameFileState(after, current)) {
+    if (!sameFileStatFingerprint(before, after) || !sameFileStatFingerprint(after, current)) {
       throw new Error(`SQLite generation target changed while hashing: ${pathname}`);
     }
     // Retain native descriptor IDs when Windows pathname stats report unknown IDs.
@@ -101,7 +92,7 @@ function sameFileFingerprint(left: SqliteFileFingerprint, right: SqliteFileFinge
   return (
     left.dev === right.dev &&
     left.ino === right.ino &&
-    sameFileState(left, right) &&
+    sameFileStatFingerprint(left, right) &&
     left.sha256 === right.sha256
   );
 }
@@ -122,7 +113,11 @@ export function sameSqliteFileGeneration(
   return (
     sameFileFingerprint(left.database, right.database) &&
     sameOptionalFileFingerprint(left.journal, right.journal) &&
-    sameOptionalFileFingerprint(left.wal, right.wal)
+    // SQLite can create/delete an empty WAL while opening a closed reader; it contains no frames.
+    sameOptionalFileFingerprint(
+      left.wal?.size === 0n ? undefined : left.wal,
+      right.wal?.size === 0n ? undefined : right.wal,
+    )
   );
 }
 

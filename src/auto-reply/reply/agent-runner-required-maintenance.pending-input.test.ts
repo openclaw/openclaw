@@ -272,7 +272,7 @@ describe("required maintenance with restart-safe admitted input", () => {
               }),
             );
           }
-          const request = createRestartSafeChatRequest({
+          const request = await createRestartSafeChatRequest({
             eligible: true,
             message: approved,
             senderIsOwner: true,

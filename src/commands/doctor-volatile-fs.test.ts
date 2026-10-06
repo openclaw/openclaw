@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as boundaryPath from "../infra/boundary-path.js";
 import {
   detectLinuxVolatileStateDir,
   formatLinuxVolatileStateDirWarning,
 } from "./doctor-state-integrity.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("detectLinuxVolatileStateDir", () => {
   const TMPFS_MOUNT_INFO = [
@@ -26,11 +29,10 @@ describe("detectLinuxVolatileStateDir", () => {
     ["tmpfs", TMPFS_MOUNT_INFO],
     ["ramfs", RAMFS_MOUNT_INFO],
   ])("detects %s state directories", (fsType, mountInfo) => {
-    const result = detectLinuxVolatileStateDir("/home/user/.openclaw", {
-      platform: "linux",
-      mountInfo,
-      resolveRealPath: (targetPath) => targetPath,
-    });
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(fs, "readFileSync").mockReturnValue(mountInfo);
+    vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((targetPath) => targetPath);
+    const result = detectLinuxVolatileStateDir("/home/user/.openclaw");
 
     expect(result).toMatchObject({
       path: "/home/user/.openclaw",
@@ -46,13 +48,10 @@ describe("detectLinuxVolatileStateDir", () => {
       "35 30 0:35 / /home/user/.openclaw rw - tmpfs tmpfs rw",
     ].join("\n");
 
-    expect(
-      detectLinuxVolatileStateDir("/home/user/.openclaw", {
-        platform: "linux",
-        mountInfo,
-        resolveRealPath: (targetPath) => targetPath,
-      }),
-    ).toMatchObject({
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(fs, "readFileSync").mockReturnValue(mountInfo);
+    vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((targetPath) => targetPath);
+    expect(detectLinuxVolatileStateDir("/home/user/.openclaw")).toMatchObject({
       mountPoint: "/home/user/.openclaw",
       fsType: "tmpfs",
     });
@@ -67,13 +66,14 @@ describe("detectLinuxVolatileStateDir", () => {
       fs.symlinkSync(volatileMount, stateLink, "dir");
       const resolvedVolatileMount = fs.realpathSync(volatileMount);
 
-      const result = detectLinuxVolatileStateDir(path.join(stateLink, "openclaw"), {
-        platform: "linux",
-        mountInfo: [
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        [
           "22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw",
           `35 22 0:35 / ${resolvedVolatileMount} rw - tmpfs tmpfs rw`,
         ].join("\n"),
-      });
+      );
+      const result = detectLinuxVolatileStateDir(path.join(stateLink, "openclaw"));
 
       expect(result).toMatchObject({
         path: path.join(resolvedVolatileMount, "openclaw"),
@@ -89,33 +89,26 @@ describe("detectLinuxVolatileStateDir", () => {
     ["overlay", OVERLAY_MOUNT_INFO],
     ["ext4", EXT4_MOUNT_INFO],
   ])("does not flag %s filesystems", (_name, mountInfo) => {
-    expect(
-      detectLinuxVolatileStateDir("/home/user/.openclaw", {
-        platform: "linux",
-        mountInfo,
-        resolveRealPath: (targetPath) => targetPath,
-      }),
-    ).toBeNull();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(fs, "readFileSync").mockReturnValue(mountInfo);
+    vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((targetPath) => targetPath);
+    expect(detectLinuxVolatileStateDir("/home/user/.openclaw")).toBeNull();
   });
 
   it("does not inspect mount information on non-Linux platforms", () => {
-    expect(
-      detectLinuxVolatileStateDir("/home/user/.openclaw", {
-        platform: "darwin",
-        mountInfo: TMPFS_MOUNT_INFO,
-        resolveRealPath: (targetPath) => targetPath,
-      }),
-    ).toBeNull();
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const readFile = vi.spyOn(fs, "readFileSync");
+    expect(detectLinuxVolatileStateDir("/home/user/.openclaw")).toBeNull();
+    expect(readFile).not.toHaveBeenCalled();
   });
 
   it("does not warn when mount information is unavailable", () => {
-    expect(
-      detectLinuxVolatileStateDir("/home/user/.openclaw", {
-        platform: "linux",
-        mountInfo: "",
-        resolveRealPath: (targetPath) => targetPath,
-      }),
-    ).toBeNull();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw new Error("mountinfo unavailable");
+    });
+    vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((targetPath) => targetPath);
+    expect(detectLinuxVolatileStateDir("/home/user/.openclaw")).toBeNull();
   });
 });
 

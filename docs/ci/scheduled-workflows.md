@@ -6,6 +6,36 @@ read_when:
   - You are triaging a nightly, scheduled, or maintenance workflow
 ---
 
+## PR vs hourly vs release
+
+Ordinary pull requests, including fork contributions, no longer select these
+expensive jobs in `ci.yml`:
+
+- Real-Gateway Control UI E2E (mocked/bundled `checks-ui-e2e` remains owner-selected).
+- Windows Node tests, macOS Node tests, macOS Swift jobs, and iOS build/simulator smoke.
+- The published-npm-driver × candidate update cell, including on update-owner PRs.
+- Dependency/dead-export scanning (Knip) and the full runtime topology/architecture job.
+  Runtime import-cycle checks remain in the existing PR guard; TypeScript changes
+  also select Madge there. TypeScript changes under `src/`, `extensions/`, or
+  `packages/` also select Kysely guardrails in that same job; generated Kysely
+  types remain deferred. See [scope selection](/ci/scope-and-routing/selection).
+- Android screenshot capture.
+
+The first four groups retain their existing hourly main-tier and full release
+inventories. Android screenshots were already excluded from hourly main and
+continue in full manual/release validation. Ordinary manual dispatch and
+exact-head `release_gate` fallback behavior are unchanged. SwiftLint and
+SwiftFormat are part of the moved Apple jobs; they are not split into new PR
+jobs. Other source tests, static correctness gates, Android unit/lint work,
+and independent native localization checks keep their existing PR selection.
+
+This moves frequent PR critical paths to their existing later tiers without
+changing what the jobs execute. Failures unique to those jobs can therefore
+appear after merge. `openclaw/ci-gate` requires only the jobs the manifest
+selected; its required-check identity and repository protection are unchanged.
+See [scope selection](/ci/scope-and-routing/selection#pr-vs-hourly-vs-release)
+for the tier table and owner boundaries.
+
 ## Hourly main CI
 
 The complete `main` validation tier runs directly from `ci.yml` at minute 23 of each hour.
@@ -184,8 +214,9 @@ every 3 hours at minute 7 UTC (`7 */3 * * *`) so release readiness stays current
 as commits land, with the `stable` profile, soak and blocking performance,
 `reuse_evidence=true`, `rerun_group=all`, and `main-qualification` purpose.
 It checks out the scheduler's exact main SHA and runs the SHA-pinned helper
-(`pnpm ci:full-release --sha <sha> --workflow-sha <sha>`), which uses that SHA as
-both Validation and Tooling SHA and dispatches from an immutable
+(`pnpm ci:full-release --sha <sha> --workflow-sha <sha> --trusted-workflow-ref main`),
+explicitly retaining the scheduled, non-publishing main-qualification route. It
+uses that SHA as both Validation and Tooling SHA and dispatches from an immutable
 `release-ci/<sha12>-<id>` transport ref. A raw dispatch from `main` fails once
 `main` moves, because the parent refuses to dispatch children from a moved
 workflow ref. A still-active parent for the same SHA shares the SHA-specific
@@ -235,9 +266,9 @@ The workflow installs OCM from a pinned release and Kova from `openclaw/Kova` at
 
 Before tolerating a partial Kova verdict, the report gate requires aggregate RSS and CPU samples to match the individual records, including repeated measurements. A missing or substituted sample keeps the gate nonzero even when the sample count matches.
 
-OpenClaw-native source probes run in the separate `source_performance` job, in parallel with the Kova lanes after `resolve_target`: gateway boot timing and memory across default, skipped-channel, internal-hook, and fifty-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, CLI startup commands against the booted gateway, and the SQLite state smoke performance probe. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The publisher includes these source artifacts in the `mock-provider` report bundle, with the Markdown summary at `source/index.md` and raw JSON beside it.
+OpenClaw-native source checks run in the separate `source_performance` job, in parallel with the Kova lanes after `resolve_target`: gateway boot timing and memory across default, skipped-channel, internal-hook, and fifty-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, CLI startup commands against the booted gateway, and the SQLite state smoke performance check. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The publisher includes these source artifacts in the `mock-provider` report bundle, with the Markdown summary at `source/index.md` and raw JSON beside it.
 
-Every lane uploads its complete GitHub artifact, including CPU, heap, trace, and compressed diagnostic bundles. A separate publisher job downloads and validates those artifacts, then mints a short-lived ClawSweeper GitHub App token scoped only to `openclaw/clawgrit-reports` contents and passes it only to the Git push step. It commits `report.json`, `report.md`, `index.md`, source-probe artifacts, and bundle metadata/checksums under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`; the full diagnostic archive stays in the linked Actions artifact. The publisher rejects any report file over 50 MB before attempting a push. The current tested-ref pointer is `openclaw-performance/<tested-ref>/latest-<lane>.json`. Scheduled runs and `profile=release` dispatches fail if app-token creation or report publication fails. Manual non-release dispatches keep publication advisory and retain the GitHub artifacts when authentication or publishing fails. The previous source baseline is fetched anonymously from the public reports repository, so a successful baseline fetch does not prove publisher authentication.
+Every lane uploads its complete GitHub artifact, including CPU, heap, trace, and compressed diagnostic bundles. A separate publisher job downloads and validates those artifacts, then mints a short-lived ClawSweeper GitHub App token scoped only to `openclaw/clawgrit-reports` contents and passes it only to the Git push step. It commits `report.json`, `report.md`, `index.md`, source-check artifacts, and bundle metadata/checksums under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`; the full diagnostic archive stays in the linked Actions artifact. The publisher rejects any report file over 50 MB before attempting a push. The current tested-ref pointer is `openclaw-performance/<tested-ref>/latest-<lane>.json`. Scheduled runs and `profile=release` dispatches fail if app-token creation or report publication fails. Manual non-release dispatches keep publication advisory and retain the GitHub artifacts when authentication or publishing fails. The previous source baseline is fetched anonymously from the public reports repository, so a successful baseline fetch does not prove publisher authentication.
 
 All explicit Performance workflow Git commands use the pinned Git lifecycle owner,
 prepared in `RUNNER_TEMP` before each job's selected checkout. Target resolution,
@@ -280,7 +311,7 @@ gh workflow run openclaw-performance.yml --ref main \
 One job builds the selected source once, runs the mock provider, then optionally
 runs OpenAI with a real key. Each run seeds 1,000 sessions across 32 agents and
 completes 96 turns alongside session updates, history reads, subscriptions, and
-64 probe rounds. Dreaming is disabled; normal indexing, recaps, and the database
+64 check rounds. Dreaming is disabled; normal indexing, recaps, and the database
 idle retention policy remain unchanged. The live run denies tools and caps model
 output at 128 tokens. Results include load-phase main-thread and Worker CPU
 profiles. The two providers are different workloads, not a before/after speed
@@ -289,7 +320,7 @@ comparison.
 Live execution requires the default-branch workflow and the tested SHA to equal
 the workflow SHA. A requested live run fails if that condition or
 `OPENAI_API_KEY` is missing. Omit `live_openai_candidate` for mock-only evidence.
-This mode runs no Kova lanes, source-probe jobs, or report publication, and is not
+This mode runs no Kova lanes, source-check jobs, or report publication, and is not
 selected by the daily schedule. See [Gateway concurrency](/reference/test/performance#benchmarks)
 for local invocation and result interpretation.
 
@@ -308,7 +339,7 @@ gh workflow run openclaw-performance.yml \
 
 Both inputs must be lowercase full SHAs, `target_ref` must equal the workflow
 SHA selected by `--ref`, and reruns are refused. Dispatch a fresh workflow run
-instead of retrying an attempt. Kova, source probes, report publication, and
+instead of retrying an attempt. Kova, source checks, report publication, and
 their artifact-only guard stay skipped in this mode. The benchmark job has
 read-only repository permission, does not receive secrets, does not restore or
 save Actions caches, and checks out the helper, candidate, and baseline with

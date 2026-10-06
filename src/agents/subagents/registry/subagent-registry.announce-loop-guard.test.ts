@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => ({
   onAgentEvent: vi.fn(),
   runSubagentAnnounceFlow: vi.fn().mockResolvedValue("retryable"),
   captureSubagentCompletionReply: vi.fn(),
-  loadSubagentRegistryFromSqlite: vi.fn(() => new Map()),
+  loadSubagentRegistryFromSqlite: vi.fn<() => Map<string, SubagentRunRecord>>(() => new Map()),
   persistRegistryRows: vi.fn<MockSubagentRegistryRows>(),
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
 }));
@@ -71,22 +71,22 @@ vi.mock("../../../infra/agent-events.js", () => ({
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 
-vi.mock("./subagent-registry.store.sqlite.js", () => ({
-  loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
-}));
-
+// mock-isolation: Keep loop timing independent of native snapshots and worker startup.
 vi.mock("../../../state/openclaw-state-db-readonly.js", () => ({
   getActiveOpenClawStateDatabaseReadSnapshot: () => undefined,
   executeExistingOpenClawStateRead: vi.fn<
     typeof import("../../../state/openclaw-state-db-readonly.js").executeExistingOpenClawStateRead
-  >(async (_options, command) => {
-    expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
-    return {
-      ok: true,
-      type: "subagents.runs",
-      sourceAdmitted: true,
-      runs: mocks.loadSubagentRegistryFromSqlite(),
-    };
+  >(async (_options, command, options) => {
+    expect(command).toEqual({ type: "subagents.restore" });
+    const runs = mocks.loadSubagentRegistryFromSqlite();
+    options?.onChunk?.(
+      [...runs.values()].map((entry) => ({
+        entry,
+        version: "fixture-version",
+        createdAt: entry.createdAt,
+      })),
+    );
+    return { ok: true, type: "subagents.restore", sourceAdmitted: true, count: runs.size };
   }),
 }));
 
@@ -212,8 +212,15 @@ describe("announce loop guard (#18264)", () => {
       name: "pending requester turns preserve the failure budget and schedule another observation",
       outcome: "requester_turn_pending",
       attemptCount: 3,
+      restoreDelayMs: 0,
     },
-  ])("$name", async ({ outcome, attemptCount }) => {
+    {
+      name: "restores one timer for a saved delivery backoff",
+      outcome: "requester_turn_pending",
+      attemptCount: 3,
+      restoreDelayMs: 1_000,
+    },
+  ])("$name", async ({ outcome, attemptCount, restoreDelayMs }) => {
     mocks.runSubagentAnnounceFlow.mockResolvedValue(outcome);
 
     const now = Date.now();
@@ -232,11 +239,21 @@ describe("announce loop guard (#18264)", () => {
       },
       expectsCompletionMessage: true,
       completion: { required: true },
-      delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 30_000 },
+      delivery: {
+        status: "pending",
+        attemptCount: 3,
+        lastAttemptAt: now - 30_000,
+        ...(restoreDelayMs ? { nextAttemptAt: now + restoreDelayMs } : {}),
+      },
     };
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
 
     await hydrateAndActivateRegistry();
+    if (restoreDelayMs) {
+      await registry.initSubagentRegistry();
+      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(restoreDelayMs);
+    }
     const resumed = await waitForRun(
       entry.runId,
       (run) =>

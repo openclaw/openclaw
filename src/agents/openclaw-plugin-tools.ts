@@ -45,16 +45,6 @@ type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  sandboxRoot?: string;
-  modelHasVision?: boolean;
-  modelProvider?: string;
-  modelId?: string;
-  allowMediaInvokeCommands?: boolean;
-  requesterAgentIdOverride?: string;
-  requireExplicitMessageTarget?: boolean;
-  disableMessageTool?: boolean;
   disablePluginTools?: boolean;
   clientCaps?: string[];
   authProfileStore?: AuthProfileStore;

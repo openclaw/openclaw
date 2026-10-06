@@ -38,8 +38,8 @@ import {
   renderToolSearchControlText,
   serializeToolSearchControlResult,
 } from "./tool-search-control-result.js";
-import { getTextLexicalIndex } from "./tool-search-index.js";
-import { readParameterText, scoreLexical, tokenizeQuery } from "./tool-search-ranking.js";
+import { getToolSearchLexicalIndex } from "./tool-search-index.js";
+import { scoreLexical, tokenizeQuery } from "./tool-search-ranking.js";
 import {
   formatCatalogInputError,
   formatCatalogOutputError,
@@ -72,24 +72,6 @@ function describeEntry(entry: ToolSearchCatalogEntry) {
     parameters: entry.parameters ?? {},
     ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
   };
-}
-
-/**
- * Text indexed for one catalog entry. Parameter names and their descriptions are
- * included because they often carry the only words a task shares with a tool:
- * "post a message to a channel" reaches a tool whose description says only
- * "Send a message" through its `channel` parameter. Codex and the Claude API
- * tool-search tools index argument metadata for the same reason.
- */
-function toolSearchEntryText(entry: ToolSearchCatalogEntry): string {
-  // Only first-party schemas are walked. MCP and client parameters are untrusted
-  // and deliberately never traversed: compactToolSearchCatalogEntry reports them
-  // as "unknown" for the same reason, and a client may hand us a lazy object that
-  // throws on property access.
-  const parameters = entry.source === "openclaw" ? readParameterText(entry.parameters) : "";
-  return [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
-    .filter(Boolean)
-    .join(" ");
 }
 
 function findEntry(
@@ -243,7 +225,11 @@ export class ToolSearchRuntime {
   constructor(
     private readonly ctx: ToolSearchToolContext,
     private readonly config: ToolSearchConfig,
-    private readonly options: { prepareInput?: boolean; validateInput?: boolean } = {},
+    private readonly options: {
+      prepareInput?: boolean;
+      validateInput?: boolean;
+      callIdScope?: string;
+    } = {},
   ) {}
 
   search = async (
@@ -275,7 +261,7 @@ export class ToolSearchRuntime {
     if (limit === 1 && exactMatches.length === 1) {
       return exactMatches.slice(0, limit).map(compactEntry);
     }
-    const index = getTextLexicalIndex(entries.map(toolSearchEntryText));
+    const index = getToolSearchLexicalIndex(catalog.entries, entries);
     // Resolve shared positions only against this search's effective catalog.
     const hits = scoreLexical(index, tokenizeQuery(query));
     const exactMatchSet = new Set(exactMatches);
@@ -421,7 +407,10 @@ export class ToolSearchRuntime {
     catalog.callCount += 1;
     const normalizedInput = input ?? {};
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
-    const toolCallId = `tool_call:${parentId}:${entry.name}:${++this.callSequence}`;
+    const scope = this.options.callIdScope
+      ? `${sanitizeToolCallIdPart(this.options.callIdScope)}:`
+      : "";
+    const toolCallId = `tool_call:${parentId}:${scope}${entry.name}:${++this.callSequence}`;
     bindJoinedCollectorInvocation(entry.tool, toolCallId);
     await assertCatalogOutputSchemaIsValid(entry);
     const outputVariants =
@@ -583,6 +572,7 @@ export function formatToolSearchControlResult<T>(
     parentToolCallId?: string;
     terminalBatchStatus?: "waiting" | "completed" | "failed";
     compact?: boolean;
+    images?: Extract<AgentToolResult<unknown>["content"][number], { type: "image" }>[];
   } = {},
 ): AgentToolResult<T> {
   const serialized = serializeToolSearchControlResult(payload, options.compact);
@@ -591,6 +581,9 @@ export function formatToolSearchControlResult<T>(
     runtime?.hasNetworkContent(options.parentToolCallId) ?? false,
   );
   const result = textResult(text, payload);
+  if (options.images?.length) {
+    result.content.push(...options.images);
+  }
   const terminal =
     options.terminalBatchStatus !== "waiting" &&
     runtime?.takeTerminalTargetBatch(options.parentToolCallId) === true;

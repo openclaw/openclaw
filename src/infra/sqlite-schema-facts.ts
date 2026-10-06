@@ -37,6 +37,7 @@ type SchemaOwner = {
   authorizerActive: boolean;
   scope?: SchemaScope;
   scopeRevision?: number;
+  mutationListeners?: Set<() => void>;
 };
 
 type SchemaScope = { key?: string; revision: number; users: number };
@@ -89,6 +90,9 @@ function publishSchemaChange(database: DatabaseSync, owner: SchemaOwner): void {
 export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
   const owner = owners.get(database);
   if (owner) {
+    for (const listener of owner.mutationListeners ?? []) {
+      listener();
+    }
     // Capture physical identity before DDL, while the caller owns cleanup on admission failure.
     bindScope(database, owner);
     invalidate(owner);
@@ -97,6 +101,20 @@ export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
       publishSchemaChange(database, owner);
     }
   }
+}
+
+/** Admission proof is revoked at the same producer boundary as prepared schema facts. */
+export function registerSqliteSchemaMutationListener(
+  database: DatabaseSync,
+  listener: () => void,
+): () => void {
+  const owner = owners.get(database);
+  if (!owner) {
+    throw new Error("SQLite schema observation requires a tracked connection");
+  }
+  const listeners = (owner.mutationListeners ??= new Set());
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 // Conservative matching also covers multi-statement migration batches and catalog repairs.
@@ -382,6 +400,15 @@ export function readSqliteDataVersion(database: DatabaseSync): number {
   return row.data_version;
 }
 
+function matchesSqliteSchemaFacts(database: DatabaseSync, facts: SqliteSchemaFacts): boolean {
+  return runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
+    const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
+      s.get(),
+    );
+    return facts.schemaVersion === schemaVersion && facts.userVersion === userVersion?.user_version;
+  });
+}
+
 /** Admission observes foreign commits; explicit fresh reads never reuse an operation's probe. */
 export function readSqliteCacheDataVersion(
   database: DatabaseSync,
@@ -402,16 +429,7 @@ export function readSqliteCacheDataVersion(
     if (owner.dataVersion !== dataVersion) {
       const facts = owner.facts;
       // Data commits preserve schema-derived caches; compare both markers in one snapshot.
-      const unchanged =
-        facts &&
-        runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
-          const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
-            s.get(),
-          );
-          return (
-            facts.schemaVersion === schemaVersion && facts.userVersion === userVersion?.user_version
-          );
-        });
+      const unchanged = facts && matchesSqliteSchemaFacts(database, facts);
       if (!unchanged) {
         invalidate(owner);
       }
@@ -451,6 +469,24 @@ export function admitSqliteSchema(database: DatabaseSync): void {
   owner.admitted = true;
   readSqliteCacheDataVersion(database);
   getAdmittedSqliteSchemaFacts(database);
+}
+
+/** A sibling's facts require this connection's committed schema markers, never its data_version. */
+export function adoptSqliteSchemaFacts(database: DatabaseSync, facts: SqliteSchemaFacts): boolean {
+  const owner = owners.get(database);
+  if (!owner || owner.authorizerActive || database.isTransaction) {
+    return false;
+  }
+  const dataVersion = readSqliteDataVersion(database);
+  if (!matchesSqliteSchemaFacts(database, facts)) {
+    return false;
+  }
+  owner.scopeRevision = bindScope(database, owner).revision;
+  owner.snapshot = getSqlitePinnedReadSnapshot(database);
+  owner.admitted = true;
+  owner.dataVersion = dataVersion;
+  owner.facts = { ...facts, revision: owner.revision };
+  return true;
 }
 
 /** Consume admitted facts; operation admission owns foreign-commit freshness. */

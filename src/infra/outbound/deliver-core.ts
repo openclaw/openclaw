@@ -88,7 +88,7 @@ export async function deliverOutboundPayloadsCore(
       forceDocument: params.forceDocument,
       silent: params.silent,
       abortSignal,
-      mediaAccess: resolveOutboundMediaAccessForSend(params, channel, mediaSources),
+      mediaAccess: resolveOutboundMediaAccessForSend(params, mediaSources),
       gatewayClientScopes: params.gatewayClientScopes,
       conversationReadOrigin: params.conversationReadOrigin,
       deliveryQueueId: params.deliveryQueueId,
@@ -157,7 +157,7 @@ export async function deliverOutboundPayloadsCore(
   const sendTextChunks = async (
     sendHandler: ChannelHandler,
     text: string,
-    overrides: OutboundMessageSendOverrides = {},
+    overrides: OutboundMessageSendOverrides,
   ) => {
     const units = planOutboundTextMessageUnits({
       text,
@@ -168,10 +168,7 @@ export async function deliverOutboundPayloadsCore(
       textLimit,
       chunkMode,
       formatting: params.formatting,
-      consumeReplyTo: (value) =>
-        applyReplyToConsumption(value, {
-          consumeImplicitReply: value.replyToIdSource === "implicit",
-        }),
+      consumeReplyTo: applyReplyToConsumption,
     });
     for (const unit of units) {
       throwIfAborted(abortSignal);
@@ -285,7 +282,7 @@ export async function deliverOutboundPayloadsCore(
     try {
       throwIfAborted(abortSignal);
 
-      const presentationHandler = await getDeliveryHandler(buildPayloadSummary(payload).mediaUrls);
+      const presentationHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
       const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
         await renderPresentationForDelivery(presentationHandler, payload),
       );
@@ -336,14 +333,7 @@ export async function deliverOutboundPayloadsCore(
         replyToIdSource: replyToResolution.source,
         ...(preparedTarget.threadId != null ? { threadId: preparedTarget.threadId } : {}),
         ...(effectivePayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
-        ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
       };
-      const applySendReplyToConsumption = <T extends OutboundMessageSendOverrides>(
-        overrides: T,
-      ): T =>
-        applyReplyToConsumption(overrides, {
-          consumeImplicitReply: replyToResolution.source === "implicit",
-        });
       const deliveryTarget = () =>
         deliveryHandler.buildTargetRef({ threadId: preparedTarget.threadId });
       const beforeCount = results.length;
@@ -358,7 +348,7 @@ export async function deliverOutboundPayloadsCore(
       ) {
         const delivery = await deliveryHandler.sendPayload(
           effectivePayload,
-          withPreparedTarget(applySendReplyToConsumption(sendOverrides)),
+          withPreparedTarget(applyReplyToConsumption(sendOverrides)),
         );
         await recordIdentifiedDeliveryResult(delivery);
         adoptSuccessfulResultsSince(beforeCount);
@@ -378,7 +368,7 @@ export async function deliverOutboundPayloadsCore(
           await recordIdentifiedDeliveryResults(
             await deliveryHandler.sendFormattedText(
               payloadSummary.text,
-              withPreparedTarget(applySendReplyToConsumption(sendOverrides)),
+              withPreparedTarget(applyReplyToConsumption(sendOverrides)),
             ),
           );
           adoptSuccessfulResultsSince(beforeCount);
@@ -410,7 +400,7 @@ export async function deliverOutboundPayloadsCore(
           mediaUrls: payloadSummary.mediaUrls,
           caption: payloadSummary.text,
           overrides: sendOverrides,
-          consumeReplyTo: applySendReplyToConsumption,
+          consumeReplyTo: applyReplyToConsumption,
         });
         const sendMedia = deliveryHandler.sendFormattedMedia ?? deliveryHandler.sendMedia;
         for (const unit of mediaUnits) {

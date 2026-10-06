@@ -63,16 +63,6 @@ type RawTranscriptReseedReason =
   | "orphaned-tool-use"
   | "session-expired";
 
-const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
-  "missing-transcript",
-  "orphaned-tool-use",
-  "message-policy",
-  "system-prompt",
-  "cwd",
-  "mcp",
-  "session-expired",
-]);
-
 export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {
   if (!Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
     return MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
@@ -489,9 +479,7 @@ export async function loadCliSessionPromptContext(
   if (
     !hasSummary &&
     !params.sessionManager &&
-    (params.allowRawTranscriptReseed !== true ||
-      !params.rawTranscriptReseedReason ||
-      !RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS.has(params.rawTranscriptReseedReason))
+    (params.allowRawTranscriptReseed !== true || !params.rawTranscriptReseedReason)
   ) {
     return { reseedMessages: [], durableContext };
   }

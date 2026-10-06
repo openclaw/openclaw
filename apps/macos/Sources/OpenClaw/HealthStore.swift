@@ -291,7 +291,7 @@ final class HealthStore {
             return "Health check timed out"
         }
         let code = probe.status.map { "status \($0)" } ?? "status unknown"
-        let reason = probe.error?.isEmpty == false ? probe.error! : "health probe failed"
+        let reason = probe.error?.isEmpty == false ? probe.error! : "health check failed"
         if let elapsed { return "\(reason) (\(code), \(elapsed))" }
         return "\(reason) (\(code))"
     }
@@ -358,7 +358,7 @@ final class HealthStore {
         let auth = link.summary.authAgeMs.map { msToAge($0) } ?? "unknown"
         if let probe = link.summary.probe, probe.ok == false {
             let status = probe.status.map(String.init) ?? "?"
-            let suffix = probe.status == nil ? "probe degraded" : "probe degraded · status \(status)"
+            let suffix = probe.status == nil ? "check degraded" : "check degraded · status \(status)"
             return (state, "linked · auth \(auth) · \(suffix)")
         }
         return (state, "linked · auth \(auth)" + (failure.map { " · \($0)" } ?? ""))
@@ -398,7 +398,7 @@ final class HealthStore {
         if let fallback, !fallback.isEmpty {
             return fallback
         }
-        return "health probe failed"
+        return "health check failed"
     }
 
     var degradedSummary: String? {

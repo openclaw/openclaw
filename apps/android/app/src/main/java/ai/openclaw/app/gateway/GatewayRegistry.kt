@@ -172,7 +172,7 @@ class GatewayRegistryStore(
       val previousActiveStableId = _activeStableId.value
       val nextActiveStableId = previousActiveStableId?.takeUnless { it == normalized }
       val nextConnectedStableIds = _connectedStableIds.value.filterNot { it == normalized }
-      if (!persistSynchronously(nextEntries, nextActiveStableId, nextConnectedStableIds)) return@synchronized false
+      if (!prefs.putStringSynchronously(STORAGE_KEY, encodedRegistry(nextEntries, nextActiveStableId, nextConnectedStableIds))) return@synchronized false
 
       // Publish only after the durable commit. Observer failure cannot turn a successful
       // removal into a failure that would cancel the database recovery marker.
@@ -198,17 +198,6 @@ class GatewayRegistryStore(
     if (!mutationsAllowed) return
     prefs.putString(STORAGE_KEY, encodedRegistry())
   }
-
-  private fun persistSynchronously(
-    entries: List<GatewayRegistryEntry>,
-    activeStableId: String?,
-    connectedStableIds: List<String>,
-  ): Boolean =
-    mutationsAllowed &&
-      prefs.putStringSynchronously(
-        STORAGE_KEY,
-        encodedRegistry(entries, activeStableId, connectedStableIds),
-      )
 
   private fun encodedRegistry(
     entries: List<GatewayRegistryEntry> = _entries.value,

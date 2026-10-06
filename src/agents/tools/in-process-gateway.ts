@@ -1,5 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
+import {
   createCronMutationCompletion,
   type CronMutationCompletion,
 } from "../../cron/mutation-completion.js";
@@ -29,6 +33,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { readQuestionDispatchCapability } from "../harness/host-private-capabilities.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -55,6 +60,7 @@ export type InProcessGatewayCaller = <T = Record<string, unknown>>(
 type AgentToolGatewayRequest = Pick<
   CallGatewayOptions,
   | "assertDispatchCurrent"
+  | "prepareDispatchCurrent"
   | "config"
   | "expectFinal"
   | "method"
@@ -216,17 +222,18 @@ async function callAgentToolGatewayRequestBound<T>(
   const method = request.method;
   const assertDispatchCurrent = request.assertDispatchCurrent;
   const completion = positional ? undefined : createCronMutationCompletion(method);
+  const callerSource =
+    assertCallerCurrent && Object.assign(() => assertCallerCurrent(method), assertCallerCurrent);
   const assertCurrent =
     assertCallerCurrent ||
     assertDispatchCurrent ||
     ((!revalidateOnCompletion || completion) && request.signal)
-      ? () => {
-          assertCallerCurrent?.(method);
-          assertDispatchCurrent?.();
+      ? composeSessionSourceAssertion([callerSource, assertDispatchCurrent], (assertSources) => {
+          assertSources();
           if (!revalidateOnCompletion || completion) {
             request.signal?.throwIfAborted();
           }
-        }
+        })
       : undefined;
   assertCurrent?.();
   const boundGateway = resolveGatewayContext
@@ -269,7 +276,14 @@ async function callAgentToolGatewayRequestBound<T>(
     } = request;
     return await runBoundInProcessGatewayCall(
       boundGateway,
-      () => callGateway<T>({ ...wireRequest, method }),
+      () =>
+        callGateway<T>({
+          ...wireRequest,
+          method,
+          assertDispatchCurrent:
+            readQuestionDispatchCapability(request.assertDispatchCurrent)
+              ?.assertCompatibilityCurrent ?? request.assertDispatchCurrent,
+        }),
       assertCurrent,
       revalidateOnCompletion,
     );
@@ -287,12 +301,13 @@ async function callAgentToolGatewayRequestBound<T>(
     request.agentToolCaller !== undefined;
   const assertMutationCurrent =
     assertCurrent && !transfersCreatedInput
-      ? () => {
-          assertCurrent();
-          request.sessionMutationCommitGuard?.();
-        }
-      : request.sessionMutationCommitGuard;
+      ? composeSessionSourceAssertion([
+          assertCurrent,
+          captureExternalSessionCommitGuard(request.sessionMutationCommitGuard),
+        ])
+      : captureExternalSessionCommitGuard(request.sessionMutationCommitGuard);
   const dispatchOptions = {
+    prepareDispatchCurrent: request.prepareDispatchCurrent,
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" as const },
     ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),

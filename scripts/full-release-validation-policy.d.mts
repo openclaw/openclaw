@@ -7,7 +7,6 @@ export function classifyReleaseChangelogEvidenceComparison(
   identity: { baseSha: string; version?: unknown },
 ): { changedPaths: string[]; policy: string };
 export function serializeReleaseArtifact(payload: unknown): string;
-export function releaseManifestChildEvidence(child: ReleaseRecord): ReleaseRecord;
 export function buildReleaseValidationManifest(input: {
   plan: ReleaseRecord;
   drain?: ReleaseRecord;
@@ -41,6 +40,13 @@ export interface ReleaseChild extends ReleaseRecord {
 }
 export interface ReleaseExecutionPlan extends ReleaseRecord {
   sha256: string;
+  parentRunId: string;
+  parentRunAttempt: number;
+  workflowSha: string;
+  targetSha: string;
+  candidateRequest?: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateRequest;
+  qualificationCoverage?: import("./release-qualification-admission.mjs").QualificationCoverage;
+  qualificationInputs?: import("./release-qualification-admission.mjs").QualificationInputs;
   sourceAdmissionContract?: "1";
   sourceAdmission?: import("./full-release-publication-contract.mjs").PublicationSourceFact | null;
   publicationAdmissionContract?: "1";
@@ -147,16 +153,7 @@ export function selectReleaseStateArtifacts(
   decisionCandidates: Array<{ name: string; payload: unknown }>,
   drainCandidates: Array<{ name: string; payload: unknown }>,
   expected?: Record<string, unknown>,
-): {
-  decision: ReleaseStateArtifact;
-  drain: ReleaseStateArtifact;
-  executionPlan: ReleaseExecutionPlan;
-  sourceAttempts: {
-    decision: number;
-    drain: number;
-    executionPlan: number;
-  };
-};
+): ReturnType<typeof verifyReleaseStateArtifacts>;
 export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],

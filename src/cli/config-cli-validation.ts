@@ -108,20 +108,13 @@ export async function finishConfigValidationForCli(
   return issues.length === 0 ? snapshot : { ...snapshot, valid: false, issues };
 }
 
-type ConfigMutationSecretSelection = {
-  refs: SecretRef[];
-  // Undefined selects every remaining provider after a collection replacement/deletion.
-  providerAliases: Set<string> | undefined;
-};
+type ConfigMutationSecretSelection = ReturnType<typeof selectConfigMutationSecrets>;
 
 function pathContains(parent: readonly string[], child: readonly string[]): boolean {
   return parent.length <= child.length && parent.every((part, index) => part === child[index]);
 }
 
-function selectConfigMutationSecrets(
-  config: OpenClawConfig,
-  operations: ConfigSetOperation[],
-): ConfigMutationSecretSelection {
+function selectConfigMutationSecrets(config: OpenClawConfig, operations: ConfigSetOperation[]) {
   const paths = operations.map(({ setPath }) => setPath);
   const changedProviders = new Set<string>();
   const changedDefaults = new Set<string>();
@@ -196,6 +189,7 @@ function selectConfigMutationSecrets(
   const refs = [...refsByKey.values()];
   return {
     refs,
+    // Undefined selects every remaining provider after a collection replacement/deletion.
     providerAliases: allProviders
       ? undefined
       : new Set([...changedProviders, ...refs.map((ref) => ref.provider)]),

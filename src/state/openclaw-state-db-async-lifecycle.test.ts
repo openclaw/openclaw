@@ -88,10 +88,16 @@ describe("canonical shared-state resource drainage", () => {
     const pathname = databasePath();
     const source = prepareOpenClawStateReadSource({ path: pathname });
     const absent = source.current();
+    const precreationProof = structuredClone(absent.admission.captureIntegrity?.());
+    expect(precreationProof?.identity.key).toMatch(/^path:/);
     const coordinationKey = absent.admission.coordinationKey;
     writeFileSync(pathname, "");
     const created = source.current();
     expect(created.admission.identity.key).toMatch(/^file:/);
+    expect(created.admission.captureIntegrity?.()?.identity.key).toBe(
+      created.admission.identity.key,
+    );
+    expect(precreationProof?.identity.key).toMatch(/^path:/);
     expect(created.admission.coordinationKey).toBe(coordinationKey);
     absent.admission.assertCurrent();
     await closeOpenClawStateDatabaseByPathAsync(pathname);

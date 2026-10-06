@@ -352,7 +352,7 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
       }
       const lease = readRecord(key, state.lookup(key))?.lease;
       if (!lease || lease.token !== owner.token || lease.expiresAt <= Date.now()) {
-        throw options.errors.lostLease(key);
+        throw owner.failure ?? options.errors.lostLease(key);
       }
     };
     // Host retirement can stop renewal before ownership expires. Cleanup must

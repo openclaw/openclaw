@@ -2,6 +2,7 @@ import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
   createSqliteQueryCache,
+  executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQueryIterator,
   prepareSqliteQuerySync,
@@ -106,6 +107,27 @@ export function getActiveTranscriptKysely(database: Pick<TranscriptReadDatabase,
   return getNodeSqliteKysely<ActiveTranscriptDatabase>(database.db);
 }
 
+/** Materialize only physical events already selected in the caller's admitted snapshot. */
+export function readSnapshotEventRows(
+  projection: CurrentTranscriptProjection,
+  eventSeqs: readonly number[],
+) {
+  const sessionId = projection.resolved.sessionId;
+  const query = getActiveTranscriptKysely(projection.database)
+    .selectFrom("transcript_events as event")
+    .select(["event.seq", transcriptEventJsonSql(projection.database.db, "event").as("event_json")])
+    .where("event.session_id", "=", sessionId);
+  return executeSqliteQuerySync(
+    projection.database.db,
+    query.where(
+      "event.seq",
+      "in",
+      /* kysely-allow-raw: bind physical sequences already selected in this snapshot. */
+      sql<number>`(SELECT value FROM json_each(${JSON.stringify(eventSeqs)}))`,
+    ),
+  ).rows;
+}
+
 export function parseActiveTranscriptMessageRow(row: {
   event_seq: number;
   event_json: string;
@@ -180,6 +202,7 @@ export function selectMessagePayload(
 export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows>) {
   return query
     .select([
+      "active.event_seq",
       "active.message_position",
       /* kysely-allow-raw: byte caps include each event's JSONL newline. */
       sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
@@ -187,11 +210,12 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
     .$narrowType<{ message_position: number }>();
 }
 
-function createMessageRangeReaders(database: Pick<TranscriptReadDatabase, "db">) {
+const messageRangeReaders = createSqliteQueryCache((db) => {
+  const database = { db };
   const metadata = (direction: "asc" | "desc") =>
     prepareSqliteQueryIterator<
       MessageRangeParameters,
-      { message_position: number; serialized_bytes: number }
+      { event_seq: number; message_position: number; serialized_bytes: number }
     >(database.db, (parameter) =>
       selectMessageMetadata(
         selectMessageRows(
@@ -245,9 +269,7 @@ function createMessageRangeReaders(database: Pick<TranscriptReadDatabase, "db">)
     metadata: metadata("asc"),
     metadataDescending: metadata("desc"),
   };
-}
-
-const messageRangeReaders = createSqliteQueryCache((db) => createMessageRangeReaders({ db }));
+});
 
 export function getMessageRangeReaders(database: CurrentTranscriptProjection["database"]) {
   return messageRangeReaders(database.db);

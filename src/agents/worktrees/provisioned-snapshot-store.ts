@@ -18,7 +18,7 @@ export function createProvisionedSnapshotWriter(
 ) {
   const context = captureWorktreeRunEndContext(env);
   const predicates = structuredClone(authority.predicates);
-  const lease = authority.lease;
+  const leaseSet = authority.leaseSet;
   const assertCurrent = authority.assertCurrent;
   let uncertain: { error: unknown } | undefined;
   return async (
@@ -42,7 +42,7 @@ export function createProvisionedSnapshotWriter(
           },
         },
         {
-          lease,
+          leaseSet,
           predicates,
           assertCurrent: () => {
             assertCurrent?.();

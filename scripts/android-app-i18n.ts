@@ -204,14 +204,7 @@ export function renderAndroidResourceValue(source: string, translated: string): 
   }
   const sourceTokens = sourceInterpolations.map((interpolation) => interpolation.value);
   const translatedTokens = translatedInterpolations.map((interpolation) => interpolation.value);
-  const tokenCounts = (tokens: readonly string[]) => {
-    const counts = new Map<string, number>();
-    for (const token of tokens) {
-      counts.set(token, (counts.get(token) ?? 0) + 1);
-    }
-    return [...counts].toSorted(([left], [right]) => compareText(left, right));
-  };
-  if (JSON.stringify(tokenCounts(sourceTokens)) !== JSON.stringify(tokenCounts(translatedTokens))) {
+  if (JSON.stringify(sourceTokens.toSorted()) !== JSON.stringify(translatedTokens.toSorted())) {
     throw new Error(
       `Android translation changed interpolation placeholders: ${JSON.stringify(source)} -> ${JSON.stringify(translated)}`,
     );

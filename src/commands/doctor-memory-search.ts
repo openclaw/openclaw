@@ -21,7 +21,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import type { HealthCheckContext, HealthFinding } from "../flows/health-checks.js";
-import type { DoctorMemoryEmbeddingRuntimePayload } from "../gateway/server-methods/doctor.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
@@ -43,6 +42,7 @@ import {
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../utils.js";
+import type { probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
 import {
   formatMemoryDoctorAgentMessage,
   resolveMemoryDoctorAgentScopes,
@@ -196,14 +196,10 @@ function inspectRememberAcrossConversationsHealth(params: {
   return true;
 }
 
+type GatewayMemoryProbe = Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
+
 type MemorySearchHealthOptions = {
-  gatewayMemoryProbe?: {
-    checked: boolean;
-    ready: boolean;
-    error?: string;
-    skipped?: boolean;
-    runtimeFacts?: DoctorMemoryEmbeddingRuntimePayload;
-  };
+  gatewayMemoryProbe?: Pick<GatewayMemoryProbe, "checked" | "ready"> & Partial<GatewayMemoryProbe>;
   includeWorkspaceMemoryHealth?: boolean;
   skipAuthProfileResolution?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -247,7 +243,7 @@ async function inspectMemorySearchHealth(
   const labelAgents = scopes.length > 1;
   for (const scope of scopes) {
     if (opts.includeWorkspaceMemoryHealth !== false) {
-      await noteWorkspaceMemoryHealth(cfg, {
+      await noteWorkspaceMemoryHealth({
         agentId: scope.agentId,
         workspaceDir: scope.workspaceDir,
         labelAgent: labelAgents,
@@ -481,7 +477,7 @@ async function inspectMemorySearchHealthForAgent(
         updateFix
           ? `Installed plugin "${installedOwner.id}" does not provide current local-memory setup diagnostics.`
           : null,
-        gatewayDetail && gatewayDetail !== setupReason ? `Gateway probe: ${gatewayDetail}` : null,
+        gatewayDetail && gatewayDetail !== setupReason ? `Gateway check: ${gatewayDetail}` : null,
         "",
         policyBlock?.fix ??
           updateFix ??
@@ -673,6 +669,6 @@ function buildGatewayProbeWarning(
   }
   const detail = probe.error?.trim();
   return detail
-    ? `Gateway memory probe for default agent is not ready: ${detail}`
-    : "Gateway memory probe for default agent is not ready.";
+    ? `Gateway memory check for default agent is not ready: ${detail}`
+    : "Gateway memory check for default agent is not ready.";
 }

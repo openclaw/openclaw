@@ -44,8 +44,8 @@ const loadStabilityBundleModule = createLazyPromise(
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 const SETUP_INFERENCE_DETECT_RPC_TIMEOUT_MS = 40_000;
 
-function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TIMEOUT_MS): Command {
-  return addGatewayClientOptions(cmd, { timeoutMs: defaultTimeoutMs }).option(
+function gatewayCallOpts(cmd: Command): Command {
+  return addGatewayClientOptions(cmd, { timeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS }).option(
     "--json",
     "Output JSON",
     false,
@@ -99,7 +99,7 @@ function gatewayAction(action: Parameters<Command["action"]>[0], label?: string)
   };
 }
 
-function parseDaysOption(raw: unknown, fallback = 30): number {
+function parseDaysOption(raw: unknown): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(1, Math.floor(raw));
   }
@@ -113,7 +113,7 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
     // way instead of silently defaulting.
     throw new Error(`Invalid --days. Use a positive integer, e.g. --days 30. Received: "${raw}".`);
   }
-  return fallback;
+  return 30;
 }
 
 async function renderCostUsageSummaryAsync(
@@ -407,7 +407,7 @@ export function registerGatewayCli(program: Command) {
   );
 
   addGatewayServiceCommands(gateway, {
-    statusDescription: "Show gateway service status + probe connectivity/capability",
+    statusDescription: "Show gateway service status + check connectivity/capability",
   });
   addGatewayRestartHandoffCommands(gateway);
   setCommandJsonMode(gateway, "output", ({ argv }) => isGatewayMachineOutput(argv));
@@ -720,16 +720,16 @@ export function registerGatewayCli(program: Command) {
   gateway
     .command("probe")
     .description(
-      "Show gateway reachability, auth capability, and read-probe summary (local + remote)",
+      "Show gateway reachability, auth capability, and read-check summary (local + remote)",
     )
-    .option("--url <url>", "Explicit Gateway WebSocket URL (still probes localhost)")
+    .option("--url <url>", "Explicit Gateway WebSocket URL (still checks localhost)")
     .option("--port <port>", "Local Gateway port")
     .option("--ssh <target>", "SSH target for remote gateway tunnel (user@host or user@host:port)")
     .option("--ssh-identity <path>", "SSH identity file path")
     .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)
-    .option("--token <token>", "Gateway token (applies to all probes)")
-    .option("--password <password>", "Gateway password (applies to all probes)")
-    .option("--timeout <ms>", "Overall probe budget in ms", "3000")
+    .option("--token <token>", "Gateway token (applies to all checks)")
+    .option("--password <password>", "Gateway password (applies to all checks)")
+    .option("--timeout <ms>", "Overall check budget in ms", "3000")
     .option("--json", "Output JSON", false)
     .action(
       gatewayAction(async (opts, command) => {

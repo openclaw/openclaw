@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
-import { resolveApprovedWorkerModel } from "./inference-model.js";
+import { resolveApprovedWorkerLocalModel, resolveApprovedWorkerModel } from "./inference-model.js";
 import {
   config,
   logicalModel,
@@ -36,6 +36,29 @@ const configured: OpenClawConfig = {
 };
 
 describe("worker prompt credential-owned transcript policy", () => {
+  it("approves a worker-local configured model without resolving Gateway credentials", async () => {
+    const runtime = setup(sessionEntry, {
+      config: structuredClone(configured),
+      configuredRuntimeModel: model,
+    });
+    await using lease = await runtime.acquireRuntimeLease({
+      config: configured,
+      agentId: "runtime-agent",
+      agentDir: "/gateway-agent",
+      workspaceDir: WORKSPACE,
+    });
+    const approved = await resolveApprovedWorkerLocalModel({
+      target: { ...params(request(), vi.fn()).sessionTarget, sessionEntry },
+      modelRef,
+      runtimeSnapshot: lease.snapshot,
+      assertCurrent: () => undefined,
+    });
+    assert(approved && !("error" in approved));
+    expect(approved.model).toBe(model);
+    expect(runtime.resolveAuthSelection).not.toHaveBeenCalled();
+    expect(runtime.prepareModel).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "uses the resolved credential rather than config auth hints (OAuth=%s)",
     async (oauth) => {

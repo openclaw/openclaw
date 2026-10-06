@@ -5,7 +5,6 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { registerGatewayForcedRestartTests } from "./run-loop-force.test-support.js";
-import type { RequestFixtures } from "./run-loop-request-fixtures.test-support.js";
 import {
   createActiveWorkSnapshot,
   createCloseMock,
@@ -14,44 +13,31 @@ import {
   waitForStart,
   waitForLoopCondition,
   withIsolatedSignals,
+  type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
-export function registerGatewayRequestTests({
-  createSignaledLoopHarness,
-  createGatewayActiveWorkSnapshot,
-  abortActiveCronTaskRuns,
-  acquireGatewayLock,
-  runLoopWithStart,
-  waitForGatewayActiveWork,
-  restartGatewayProcessWithFreshPid,
-  respawnGatewayProcessForUpdate,
-  captureForegroundUpdateHandoffStop,
-  readCgroup,
-  systemctl,
-  armShutdownHardExitWatchdog,
-  cancelShutdownHardExitWatchdog,
-  consumeGatewayRestartIntent,
-  consumeGatewayRestartIntentPayloadSync,
-  managedUpdateSuccessorOwner,
-  commitManagedServiceUpdateHandoff,
-  waitForSystemServiceUpdateHandoffs,
-  isGatewayWorkAdmissionClosed,
-  gatewayLog,
-}: RequestFixtures): void {
-  const idleActiveWorkSnapshot = createActiveWorkSnapshot();
-  registerGatewayForcedRestartTests({
+export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): void {
+  const {
     createSignaledLoopHarness,
-    createGatewayActiveWorkSnapshot,
-    abortActiveCronTaskRuns,
+    acquireGatewayLock,
     runLoopWithStart,
     waitForGatewayActiveWork,
-    consumeGatewayRestartIntent,
-    consumeGatewayRestartIntentPayloadSync,
-    isGatewayWorkAdmissionClosed,
-    gatewayLog,
+    restartGatewayProcessWithFreshPid,
+    respawnGatewayProcessForUpdate,
+    captureForegroundUpdateHandoffStop,
     readCgroup,
     systemctl,
-  });
+    armShutdownHardExitWatchdog,
+    cancelShutdownHardExitWatchdog,
+    consumeGatewayRestartIntent,
+    managedUpdateSuccessorOwner,
+    commitManagedServiceUpdateHandoff,
+    waitForSystemServiceUpdateHandoffs,
+    isGatewayWorkAdmissionClosed,
+    gatewayLog,
+  } = fixtures;
+  const idleActiveWorkSnapshot = createActiveWorkSnapshot();
+  registerGatewayForcedRestartTests(fixtures);
 
   it.each(["SIGTERM", "SIGUSR2"] as const)(
     "closes root admission before the %s listener returns",

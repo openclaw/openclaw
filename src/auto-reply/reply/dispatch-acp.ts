@@ -50,6 +50,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
+import { bindUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { shouldDeferFinalTtsText } from "../../tts/captioned-final.js";
 import { prepareTtsPreferences, type PreparedTtsPreferences } from "../../tts/tts-preferences.js";
@@ -94,14 +95,10 @@ type DispatchProcessedRecorder = InboundMessageAuditTerminalRecorder["note"];
 
 function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
   const id = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  const normalizedId = normalizeOptionalString(id);
-  if (normalizedId) {
-    return normalizedId;
-  }
-  if (typeof id === "number" || typeof id === "bigint") {
-    return String(id);
-  }
-  return generateSecureUuid();
+  return (
+    normalizeOptionalString(id) ??
+    (typeof id === "number" || typeof id === "bigint" ? String(id) : generateSecureUuid())
+  );
 }
 
 function isRestrictiveRuntimeToolsAllow(toolsAllow: string[] | undefined): boolean {
@@ -156,9 +153,8 @@ export async function tryDispatchAcpReplyCore(
     images?: Array<{ data: string; mimeType: string }>;
     extractedFileImages?: ExtractedFileImage[];
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-    shouldSendToolSummaries: boolean;
-    shouldSendToolSummariesNow?: () => boolean;
-    shouldSendFullToolDetails: boolean;
+    shouldSendToolSummaries: () => Promise<boolean>;
+    shouldSendFullToolDetails: () => Promise<boolean>;
     bypassForCommand: boolean;
     onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
     userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
@@ -173,12 +169,9 @@ export async function tryDispatchAcpReplyCore(
   }
   prepareChannelParticipantObservation(params.ctx);
   const inputRecorder = params.userTurnTranscriptRecorder;
-  const assertInputCurrent = () => {
-    params.abortSignal?.throwIfAborted();
-    inputRecorder?.withPendingInput?.(() => {});
-  };
+  const input = bindUserTurnInput(inputRecorder, () => params.abortSignal?.throwIfAborted());
 
-  const { getAcpSessionManager, maybeUnbindStaleBoundConversations } =
+  const { getAcpSessionManager, maybeUnbindStaleBoundConversations, prepareAcpDispatchStart } =
     await loadDispatchAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
   const acpResolution = await acpManager.resolveSessionAsync({
@@ -189,9 +182,9 @@ export async function tryDispatchAcpReplyCore(
       sessionKey,
       fallbackAgentId: params.ctx.AgentId,
     }),
-    assertCurrent: assertInputCurrent,
+    assertCurrent: input.assertLifetimeCurrent,
   });
-  assertInputCurrent();
+  await input.withCurrent(() => {});
   if (acpResolution.kind === "none") {
     return null;
   }
@@ -255,7 +248,7 @@ export async function tryDispatchAcpReplyCore(
   const effectiveDispatchAccountId =
     explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
   const preparedTtsPreferences = params.preparedTtsPreferences ?? (await prepareTtsPreferences());
-  assertInputCurrent();
+  await input.withCurrent(() => {});
   const shouldDeferVisibleTextForTts = shouldDeferFinalTtsText({
     preparedTtsPreferences,
     cfg: params.cfg,
@@ -292,9 +285,9 @@ export async function tryDispatchAcpReplyCore(
   const pendingAnswerText = params.ctx.agentText.trim();
   const persistInput = inputRecorder
     ? async () => {
-        assertInputCurrent();
+        await input.withCurrent(() => {});
         await inputRecorder.persistApproved();
-        assertInputCurrent();
+        await input.withCurrent(() => {});
         if (!inputRecorder.hasPersisted()) {
           throw new Error("ACP input must be durably committed before dispatch.");
         }
@@ -311,7 +304,8 @@ export async function tryDispatchAcpReplyCore(
           sessionKey: acpResolution.sessionKey,
           text: pendingAnswerText,
           sourceRecorder: inputRecorder,
-          authority: { kind: "run", assertCurrent: assertInputCurrent },
+          // The released question dispatcher retains its opaque synchronous source guard.
+          authority: { kind: "run", assertCurrent: input.assertNativeCurrent },
         },
         () => assertPreparedConversationBindingRouteCurrent(params.ctx),
       ))
@@ -357,7 +351,6 @@ export async function tryDispatchAcpReplyCore(
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
-    shouldSendToolSummariesNow: params.shouldSendToolSummariesNow,
     shouldSendFullToolDetails: params.shouldSendFullToolDetails,
     deliver: delivery.deliver,
     getConversationContext: () => params.ctx.agentText,
@@ -404,6 +397,14 @@ export async function tryDispatchAcpReplyCore(
   let runtimeTurnWasCancelled = false;
   let assistantTranscript: ReplyDispatchAssistantTranscript | undefined;
   let terminalOutcome: ReturnType<ReplyDispatchRun["getResult"]>["terminalOutcome"];
+  const notifyDispatchStart = await prepareAcpDispatchStart({
+    scope: participantTarget,
+    sessionId: transcriptSessionId,
+    runId: auditRunId,
+    onAgentRunStart: params.onAgentRunStart,
+    getResult: () => ({ assistantTranscript, terminalOutcome }),
+  });
+  await input.withCurrent(() => {});
   let auditEndFields: ReturnType<typeof auditRuntime.resolveAcpLifecycleEndFields> | undefined;
   const resolveAuditEndFields = () =>
     (auditEndFields ??= auditRuntime.resolveAcpLifecycleEndFields(
@@ -416,13 +417,7 @@ export async function tryDispatchAcpReplyCore(
       return;
     }
     auditStarted = true;
-    const completionOwner = params.onAgentRunStart?.(auditRunId, undefined, {
-      completionSource: "reply-dispatch",
-      getResult: () => ({ assistantTranscript, terminalOutcome }),
-    });
-    // Observers and channel wrappers also install this callback. Only an explicit
-    // synchronous acknowledgement transfers chat completion away from lifecycle events.
-    completionSource = completionOwner === "reply-dispatch" ? completionOwner : undefined;
+    completionSource = notifyDispatchStart();
     auditRuntime.emitAcpLifecycleStart({
       runId: auditRunId,
       sessionKey: canonicalSessionKey,
@@ -683,12 +678,7 @@ export async function tryDispatchAcpReplyCore(
     // before submission while leaving final assistant/outcome persistence below.
     await persistInput?.();
     await assertPreparedConversationBindingRouteCurrent(params.ctx);
-    assertInputCurrent();
-    if (getAdmittedRunDelegatedAuthority(turnAdmission) === undefined) {
-      throw new Error("ACP turn admission ended before input dispatch.");
-    }
-    turnDispatched = true;
-    await acpManager.runTurn({
+    const turnInput: Parameters<typeof acpManager.runTurn>[0] = {
       admittedRunContext,
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
@@ -724,9 +714,16 @@ export async function tryDispatchAcpReplyCore(
         }
         await projector.onEvent(event);
       },
+    };
+    await input.withCurrent(() => {
+      if (getAdmittedRunDelegatedAuthority(turnAdmission) === undefined) {
+        throw new Error("ACP turn admission ended before input dispatch.");
+      }
+      turnDispatched = true;
+      return acpManager.runTurn(turnInput);
     });
 
-    await projector.flush(true);
+    await projector.flush();
     await delivery.flushBlockText();
     if (!runtimeTurnWasCancelled && !params.abortSignal?.aborted) {
       queuedFinal =
@@ -775,7 +772,7 @@ export async function tryDispatchAcpReplyCore(
       fallbackMessage: "ACP turn failed before completion.",
     });
     emitAuditError(acpError);
-    await projector.flush(true);
+    await projector.flush();
     await delivery.flushBlockText();
     queuedFinal = (await deliverDeferredTextFallback()) || queuedFinal;
     await maybeUnbindStaleBoundConversations({

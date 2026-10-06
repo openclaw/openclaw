@@ -179,3 +179,61 @@ describe("new-session speed preferences", () => {
     expect(renderControl(control, context).querySelector("[data-chat-speed-option]")).toBeNull();
   });
 });
+
+it.each(["blue", "red"])(
+  "applies supported speed choices when switching a Fast draft to Daybreak %s",
+  async (color) => {
+    const id = "gpt-daybreak-" + color + "-latest";
+    const { context } = contextWith([
+      {
+        id: "gpt-5.6-luna",
+        name: "General model",
+        provider: "openai",
+        reasoning: true,
+        supportsFastMode: true,
+      },
+      {
+        id,
+        name: "Daybreak",
+        provider: "openai",
+        reasoning: true,
+        supportsFastMode: color === "blue",
+        supportsServiceTierRecovery: true,
+        serviceTiers: color === "blue" ? ["default", "priority"] : ["default"],
+        effectiveFastMode: "ultrafast",
+      },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(context, "main", true);
+    await waitForFast(() =>
+      expect(
+        renderControl(control, context).querySelector('[data-chat-speed-option="on"]'),
+      ).not.toBeNull(),
+    );
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!
+      .click();
+    expect(control.fastMode).toBe(true);
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/' + id + '"]')!
+      .click();
+    const container = renderControl(control, context);
+    expect(control.selected).toBe("openai/" + id);
+    expect(
+      container
+        .querySelector('[data-chat-speed-option="' + (color === "blue" ? "on" : "off") + '"]')
+        ?.getAttribute("aria-checked"),
+    ).toBe("true");
+    for (const option of container.querySelectorAll<HTMLButtonElement>(
+      "[data-chat-speed-option]",
+    )) {
+      expect(option.disabled).toBe(
+        color === "red" || option.dataset.chatSpeedOption === "ultrafast",
+      );
+    }
+    expect(
+      container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")?.disabled,
+    ).not.toBe(true);
+    control.reset();
+  },
+);

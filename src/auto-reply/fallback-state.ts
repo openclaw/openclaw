@@ -126,15 +126,9 @@ export function buildFallbackClearedNotice(params: {
 }
 
 /** Resolves fallback state transitions and the next persisted notice-state fields. */
-export function resolveFallbackTransition(params: {
-  selectedProvider: string;
-  selectedModel: string;
-  activeProvider: string;
-  activeModel: string;
-  attempts: RuntimeFallbackAttempt[];
-  state?: FallbackNoticeState;
-  cfg?: OpenClawConfig;
-}) {
+export function resolveFallbackTransition(
+  params: Parameters<typeof buildFallbackNotice>[0] & { state?: FallbackNoticeState },
+) {
   const selectedModelRef = buildModelCatalogRef(params.selectedProvider, params.selectedModel);
   const activeModelRef = buildModelCatalogRef(params.activeProvider, params.activeModel);
   const previousState = {

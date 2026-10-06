@@ -950,7 +950,7 @@ class TalkModeManager internal constructor(
     message: JsonElement?,
   ) {
     if (incomingCallSessionKey != null) return
-    val activeSession = mainSessionKey.ifBlank { "main" }
+    val activeSession = mainSessionKey
     if (sessionKey != null && sessionKey != activeSession) return
 
     // If this is a response we initiated, handle normally below.
@@ -1201,7 +1201,7 @@ class TalkModeManager internal constructor(
     val lease = change?.lease ?: session.captureRequestLease(gatewayStableId()) ?: throw GatewayRequestNotEnqueued("Gateway not connected")
     val supportsVoiceSelection = listOf("talk.voice.get", "talk.voice.set", "talk.voice.complete").all(lease::supportsMethod)
     val transportGeneration = change?.gatewayGeneration ?: gatewayGeneration.get()
-    val sessionKey = change?.sessionKey ?: incomingCallSessionKey ?: mainSessionKey.ifBlank { "main" }
+    val sessionKey = change?.sessionKey ?: incomingCallSessionKey ?: mainSessionKey
     var recoveryMetadataSupported = true
     val create: suspend (String?) -> String = { requestedLanguage ->
       val params =
@@ -1873,7 +1873,7 @@ class TalkModeManager internal constructor(
     fun isCurrent() = realtimePlayoutSession === owner && realtimeSessionId == sessionId && gatewayGeneration.get() == generation
     owner =
       RealtimePlayout.Session(
-        onState = { playing, _, statusOwner ->
+        onState = { playing, statusOwner ->
           synchronized(realtimeCapturePauseLock) {
             if (isCurrent()) {
               setRealtimePlaying(playing)
@@ -2616,7 +2616,7 @@ class TalkModeManager internal constructor(
         return
       }
       val startedAt = System.currentTimeMillis().toDouble() / 1000.0
-      Log.d(tag, "chat.send start sessionKey=${mainSessionKey.ifBlank { "main" }} chars=${transcript.length}")
+      Log.d(tag, "chat.send start sessionKey=$mainSessionKey chars=${transcript.length}")
       val ack = sendChat(transcript)
       val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
       Log.d(tag, "chat.send ok runId=$runId status=${ack.status}")
@@ -2786,7 +2786,7 @@ class TalkModeManager internal constructor(
     armPendingRun(runId)
     val params =
       buildJsonObject {
-        put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+        put("sessionKey", JsonPrimitive(mainSessionKey))
         put("message", JsonPrimitive(message))
         put("timeoutMs", JsonPrimitive(30_000))
         put("idempotencyKey", JsonPrimitive(runId))
@@ -2894,7 +2894,7 @@ class TalkModeManager internal constructor(
   private suspend fun fetchLatestAssistantText(
     sinceSeconds: Double? = null,
   ): String? {
-    val key = mainSessionKey.ifBlank { "main" }
+    val key = mainSessionKey
     val params = buildJsonObject { put("sessionKey", JsonPrimitive(key)) }
     val res = requestGateway("chat.history", params.toString())
     val root = json.parseToJsonElement(res).asObjectOrNull() ?: return null

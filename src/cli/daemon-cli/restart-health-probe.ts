@@ -64,7 +64,7 @@ export async function readGatewayStartupPhase(params: {
   }
 }
 
-export type GatewayRestartProbeAuth = {
+type GatewayRestartProbeAuth = {
   token?: string;
   password?: string;
 };
@@ -81,7 +81,7 @@ export type GatewayReachability = {
   staleConnection?: GatewayStaleConnectionReason;
 };
 
-export type GatewayHttpReadiness = {
+type GatewayHttpReadiness = {
   healthz: number | null;
   readyz: number | null;
 };
@@ -212,7 +212,7 @@ function readChannelProbeErrors(health: unknown): Array<{ id: string; error: str
       return [];
     }
     const error = probe.error;
-    return [{ id, error: typeof error === "string" && error.trim() ? error : "probe failed" }];
+    return [{ id, error: typeof error === "string" && error.trim() ? error : "check failed" }];
   });
 }
 

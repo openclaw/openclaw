@@ -9,17 +9,23 @@ sidebarTitle: "Offline and reconnect"
 
 What survives a dropped connection, and how the Control UI recovers when it returns.
 
+Agent names and avatars keep their last loaded values when an identity refresh
+fails. Reads for the same agent share one request across the sidebar and chat,
+including failures: subsequent reads back off from 500 ms to 5 seconds and honor
+longer Gateway retry hints. Reconnecting clears the retry wait so identity reads
+can resume on the new connection.
+
 ## Busy initial connection
 
 If a WebSocket upgrade fails but the same-origin Gateway still answers its
-`/healthz` liveness probe, the sign-in screen shows **Gateway busy, retrying…**
+`/healthz` liveness check, the sign-in screen shows **Gateway busy, retrying…**
 with a countdown to the next automatic attempt. No click or credential change is
 needed when capacity becomes available. This can happen when many visitors share
 one venue IP and exhaust the [preauth connection budget](/gateway/security/rate-limiting#unauthenticated-websocket-connections).
 
-The probe sends no Gateway token and does not follow redirects. Unreachable or
+The check sends no Gateway token and does not follow redirects. Unreachable or
 unverified endpoints keep **Gateway unreachable** guidance; cross-origin Gateway
-connections are not probed. Authentication and pairing rejections retain their
+connections are not checked. Authentication and pairing rejections retain their
 specific recovery instructions.
 
 ## Warm reload
@@ -105,7 +111,7 @@ An open tab checks the active UI build when it returns to the foreground, comes 
 or is restored from browser history. If an update finished while the tab was suspended, it
 can recover without receiving the original update notification or opening a new tab.
 
-Automatic build-recovery reloads spread their first page probe over up to two seconds
+Automatic build-recovery reloads spread their first page check over up to two seconds
 and reload only once per target build. Reloads wait for the page to be reachable
 and respect unsaved-work protection.
 The current route and stored drafts survive the reload. If browser storage is unavailable

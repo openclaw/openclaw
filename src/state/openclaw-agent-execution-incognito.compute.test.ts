@@ -3,20 +3,39 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import type { IncognitoComputeTarget } from "../config/sessions/session-incognito-compute-contract.js";
+import type {
+  IncognitoComputeOperations,
+  IncognitoComputeTarget,
+} from "../config/sessions/session-incognito-compute-contract.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
-import { reconcileSessionTranscriptIndexes } from "../config/sessions/session-transcript-reconcile.js";
+import * as reconcilePool from "../config/sessions/session-transcript-reconcile-pool.js";
+import {
+  reconcileSessionTranscriptIndexes,
+  startSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "../config/sessions/session-transcript-reconcile.js";
+import { refreshCostUsageCacheForAgent } from "../infra/session-cost-usage-aggregation.js";
+import { isSessionCostUsageRefreshRunning } from "../infra/session-cost-usage-cache.sqlite.js";
+import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
+import * as usagePricing from "../infra/session-cost-usage-pricing-context.js";
 import { resolveUsageCostPricingFingerprint } from "../infra/session-cost-usage-pricing-context.js";
+import {
+  loadSessionCostSummary,
+  loadSessionLogs,
+  loadSessionUsageTimeSeries,
+} from "../infra/session-cost-usage-reporting.js";
 import {
   prepareUsageCostWorker,
   runUsageCostWorker,
 } from "../infra/session-cost-usage-worker-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
@@ -24,42 +43,12 @@ import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
-let otherActor: IncognitoAgentDatabaseExecution;
-let otherWorker: Worker;
 let env: NodeJS.ProcessEnv;
 let sql: ReturnType<typeof observeHostDataSql>;
 
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-compute-") };
-  const posted = vi.spyOn(Worker.prototype, "postMessage");
-  try {
-    const opened = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "main",
-      env,
-      authority,
-    });
-    const other = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "other",
-      env,
-      authority,
-    });
-    assert(opened && other);
-    actor = opened;
-    otherActor = other;
-    const index = posted.mock.calls.findIndex(
-      ([request]) =>
-        isRecord(request) &&
-        request.type === "open" &&
-        request.databasePath === location(otherActor).path,
-    );
-    const worker: unknown = posted.mock.contexts[index];
-    assert(worker instanceof Worker);
-    otherWorker = worker;
-  } finally {
-    posted.mockRestore();
-  }
+  actor = await captureActor("main");
 });
 beforeEach(() => {
   sql = observeHostDataSql();
@@ -72,13 +61,24 @@ afterEach(() => {
   }
 });
 afterAll(async () => {
-  await Promise.all([actor?.close(), otherActor?.close()]);
+  await actor?.close();
   await closeOpenClawStateDatabaseAsync();
 });
 
+async function captureActor(agentId: string, options?: { existingOnly: true }) {
+  const opened = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId,
+    env,
+    authority,
+    ...options,
+  });
+  assert(opened);
+  return opened;
+}
+
 function location(owner = actor) {
-  const agentId = owner === otherActor ? "other" : "main";
-  return { agentId, path: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env }) };
+  return { agentId: owner.agentId, path: owner.path };
 }
 
 async function create(sessionId: string, owner = actor): Promise<IncognitoComputeTarget> {
@@ -120,6 +120,25 @@ function append(
     },
   });
 }
+async function branch(target: IncognitoComputeTarget): Promise<IncognitoComputeTarget> {
+  const sessionId = `${target.sessionId}-next`;
+  const result = await actor.sessions.transcript(authority, {
+    type: "session.manager.transcript.branch",
+    input: {
+      sessionKey: target.sessionKey,
+      command: {
+        type: "session.transcript.branch",
+        input: {
+          scope: { ...target, agentId: "main", storePath: actor.path },
+          branch: { sessionId, events: [] },
+          expectedLifecycleRevision: target.lifecycleRevision,
+        },
+      },
+    },
+  });
+  assert(result.ok);
+  return { ...target, sessionId };
+}
 function marker(target: IncognitoComputeTarget, owner = actor) {
   return formatSqliteSessionFileMarker({
     agentId: location(owner).agentId,
@@ -153,6 +172,33 @@ function stats(target: IncognitoComputeTarget, owner = actor) {
     }),
   );
 }
+function recentHistory(target: IncognitoComputeTarget) {
+  return actor.sessions.history(authority, {
+    type: "session.history.recent",
+    input: { ...target, options: { maxMessages: 10 } },
+  });
+}
+function observeCompute(observe: (type: keyof IncognitoComputeOperations) => void | Promise<void>) {
+  const withCompute = actor.sessions.withCompute;
+  return vi
+    .spyOn(actor.sessions, "withCompute")
+    .mockImplementation((caller, selected, operation, signal) =>
+      withCompute(
+        caller,
+        selected,
+        (compute) =>
+          operation({
+            assertCurrent: compute.assertCurrent,
+            async execute(command) {
+              const result = await compute.execute(command);
+              await observe(command.type);
+              return result;
+            },
+          }),
+        signal,
+      ),
+    );
+}
 async function hold(owner = actor) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
@@ -163,6 +209,412 @@ async function hold(owner = actor) {
   await entered.promise;
   return { release, held };
 }
+
+it("composes empty and multi-session store compute without holding its actor FIFO", async () => {
+  const binding = { actor, authority };
+  await expect(runUsageCostWorker(prepare(), { kind: "inventory" }, binding)).resolves.toEqual({
+    kind: "inventory",
+    files: [],
+  });
+  await expect(reconcileSessionTranscriptIndexes({ ...location(), env }, binding)).resolves.toEqual(
+    { reconciledSessions: 0 },
+  );
+  // Clean headers sort before the dirty targets and exceed one maintenance batch.
+  for (let index = 0; index < 129; index++) {
+    await create(`admission-${String(index).padStart(3, "0")}`);
+  }
+  const first = await create("store-first");
+  const second = await create("store-second");
+  for (const target of [first, second]) {
+    await append(target, "old branch");
+    await append(target, `current ${target.sessionId}`, actor, null);
+  }
+  await expect(
+    reconcileSessionTranscriptIndexes(
+      { ...location(), env, preferredSessionId: second.sessionId },
+      binding,
+    ),
+  ).resolves.toEqual({ reconciledSessions: 2 });
+  for (const target of [first, second]) {
+    await expect(recentHistory(target)).resolves.toMatchObject({
+      totalMessages: 1,
+      messages: [{ content: [{ type: "text", text: `current ${target.sessionId}` }] }],
+    });
+  }
+  const sessionFiles = [marker(first), marker(second)];
+  const inventory = await runUsageCostWorker(prepare(), { kind: "inventory" }, binding);
+  expect(inventory).toMatchObject({
+    kind: "inventory",
+    files: expect.arrayContaining(
+      sessionFiles.map((sourcePath) => expect.objectContaining({ sourcePath })),
+    ),
+  });
+  await expect(
+    runUsageCostWorker(prepare(), { kind: "inventory", sessionFiles: [] }, binding),
+  ).resolves.toEqual({ kind: "inventory", files: [] });
+  await expect(
+    runUsageCostWorker(
+      prepare(),
+      { kind: "inventory", minMtimeMs: Number.MAX_SAFE_INTEGER },
+      binding,
+    ),
+  ).resolves.toEqual({ kind: "inventory", files: [] });
+  await expect(
+    runUsageCostWorker(
+      prepare(),
+      { kind: "inventory", sessionFiles, minMtimeMs: Number.MAX_SAFE_INTEGER },
+      binding,
+    ),
+  ).resolves.toMatchObject({
+    kind: "inventory",
+    files: expect.arrayContaining(
+      sessionFiles.map((sourcePath) => expect.objectContaining({ sourcePath })),
+    ),
+  });
+  await expect(
+    runUsageCostWorker(prepare(), { kind: "refresh", sessionFiles }, binding),
+  ).resolves.toEqual({ kind: "refresh", changed: true });
+  const prepared = prepare();
+  const pricingFingerprint = await resolveUsageCostPricingFingerprint(
+    prepared.config,
+    prepared.agentDir,
+  );
+  await expect(
+    runUsageCostWorker(
+      prepared,
+      {
+        kind: "sessions",
+        pricingFingerprint,
+        sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      },
+      binding,
+    ),
+  ).resolves.toMatchObject({
+    kind: "sessions",
+    summaries: [
+      { totalTokens: 10, totalCost: 1 },
+      { totalTokens: 10, totalCost: 1 },
+    ],
+    cacheStatus: { status: "fresh", cachedFiles: 2 },
+  });
+});
+
+it("refuses new compute work through a released borrow", async () => {
+  const target = await create("released-borrow");
+  const reference = await captureActor("main", { existingOnly: true });
+  await reference.release();
+  const operation = vi.fn(async () => "late compute");
+  await expect(
+    Promise.resolve().then(() => reference.sessions.withCompute(authority, target, operation)),
+  ).rejects.toThrow("Incognito execution reference is released");
+  expect(operation).not.toHaveBeenCalled();
+});
+
+it("captures the selected compute target before accepting deferred work", async () => {
+  const selected = await create("captured-target");
+  const replacement = await create("replacement-target");
+  await append(selected, "selected transcript");
+  const target = { ...selected };
+  const read = actor.sessions.withCompute(authority, target, (compute) =>
+    compute.execute({
+      type: "session.compute.usage.stats",
+      input: { ...selected, request: {} },
+    }),
+  );
+  Object.assign(target, replacement);
+  await expect(read).resolves.toMatchObject({ eventCount: 2 });
+});
+
+describe("cross-actor compute", () => {
+  let otherActor: IncognitoAgentDatabaseExecution;
+  let otherWorker: Worker;
+
+  beforeAll(async () => {
+    const posted = vi.spyOn(Worker.prototype, "postMessage");
+    try {
+      otherActor = await captureActor("other");
+      const index = posted.mock.calls.findIndex(
+        ([request]) =>
+          isRecord(request) &&
+          request.type === "open" &&
+          request.databasePath === location(otherActor).path,
+      );
+      const worker: unknown = posted.mock.contexts[index];
+      assert(worker instanceof Worker);
+      otherWorker = worker;
+    } finally {
+      posted.mockRestore();
+    }
+  });
+  afterAll(async () => {
+    await otherActor?.close();
+  });
+
+  it("reconciles actor transcripts rewritten while yielding to a smaller backlog", async ({
+    signal,
+  }) => {
+    const first = await create("yield-large-first");
+    const targets = [first];
+    for (const name of ["second", "third", "fourth"]) {
+      targets.push(await create(`yield-large-${name}`));
+    }
+    for (const target of targets) {
+      await append(target, "old branch");
+      await append(target, "current branch", actor, null);
+    }
+    const small = await create("yield-small", otherActor);
+    await append(small, "small branch", otherActor);
+    const paused = createDeferredCore();
+    const release = createDeferredCore();
+    const queued = createDeferredCore();
+    const completed: string[] = [];
+    let held = false;
+    const wrapped = observeCompute(async (type) => {
+      if (type === "session.compute.projection.finalize" && !held) {
+        held = true;
+        // Native finalization has committed; the planner has not received its ACK.
+        paused.resolve();
+        await release.promise;
+      }
+    });
+    const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
+    const scheduled = vi
+      .spyOn(reconcilePool, "runSessionTranscriptReconcileOperation")
+      .mockImplementation((generation, run, owner) =>
+        runOperation(
+          generation,
+          (operation) =>
+            run({
+              ...operation,
+              startTask: (...args) => {
+                const pending = operation.startTask(...args);
+                if (args[0].mode === "memory" && args[0].sessionIds.includes(small.sessionId)) {
+                  queued.resolve();
+                }
+                return pending;
+              },
+            }),
+          owner,
+        ),
+      );
+    const large = reconcileSessionTranscriptIndexes(
+      { ...location(), env, preferredSessionId: first.sessionId },
+      { actor, authority },
+    ).then((result) => {
+      completed.push("large");
+      return result;
+    });
+    let smaller: ReturnType<typeof reconcileSessionTranscriptIndexes> | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(paused.promise, large, "large rebuild ended before its pause"),
+        signal,
+      );
+      smaller = reconcileSessionTranscriptIndexes(
+        { ...location(otherActor), env },
+        { actor: otherActor, authority, target: small },
+      ).then((result) => {
+        completed.push("small");
+        return result;
+      });
+      await withinTest(
+        awaitGateBeforeSettlement(queued.promise, smaller, "small rebuild ended before admission"),
+        signal,
+      );
+      await append(first, "rewritten while yielding", actor, null);
+      release.resolve();
+      await withinTest(Promise.all([large, smaller]), signal);
+      expect(completed).toEqual(["small", "large"]);
+      await expect(
+        actor.sessions.withCompute(authority, first, (compute) =>
+          compute.execute({ type: "session.compute.status", input: first }),
+        ),
+      ).resolves.toBe(false);
+      await expect(recentHistory(first)).resolves.toMatchObject({
+        totalMessages: 1,
+        messages: [{ content: [{ type: "text", text: "rewritten while yielding" }] }],
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([large, smaller]);
+      scheduled.mockRestore();
+      wrapped.mockRestore();
+    }
+  });
+
+  it("isolates equal session IDs and refuses foreign actor bindings and forged usage markers", async () => {
+    const own = await create("shared-id");
+    const foreign = await create("shared-id", otherActor);
+    await append(own, "own usage");
+    await append(foreign, "foreign usage", otherActor);
+    await append(foreign, "another foreign event", otherActor);
+    const ownStats = await stats(own);
+    const foreignStats = await stats(foreign, otherActor);
+    assert(ownStats && foreignStats);
+    expect(foreignStats.eventCount).toBe(ownStats.eventCount + 1);
+    for (const [target, owner] of [
+      [own, actor],
+      [foreign, otherActor],
+    ] as const) {
+      await expect(usage(target, { kind: "inventory" }, owner)).resolves.toMatchObject({
+        kind: "inventory",
+        files: [{ sourcePath: marker(target, owner), sessionId: "shared-id" }],
+      });
+    }
+    await expect(
+      runUsageCostWorker(
+        prepare(),
+        { kind: "inventory" },
+        { actor: otherActor, authority, target: foreign },
+      ),
+    ).rejects.toThrow("Usage actor does not own the prepared database");
+    await expect(
+      usage(own, { kind: "inventory", sessionFiles: [marker(foreign, otherActor)] }),
+    ).rejects.toThrow("Usage request contains another incognito session");
+    await expect(
+      actor.sessions.withCompute(authority, own, (compute) =>
+        compute.execute({
+          type: "session.compute.usage.cache",
+          input: { ...own, request: { filePaths: [marker(foreign, otherActor)] } },
+        }),
+      ),
+    ).rejects.toThrow("another transcript");
+  });
+
+  it("ends queued compute with the typed error when its actor is lost", async () => {
+    const target = await create("actor-loss", otherActor);
+    const barrier = await hold(otherActor);
+    const outcome = Promise.resolve()
+      .then(() => stats(target, otherActor))
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+    try {
+      await otherWorker.terminate();
+    } finally {
+      barrier.release.resolve();
+      await Promise.allSettled([barrier.held]);
+    }
+    expect(await outcome).toMatchObject({ error: { code: "INCOGNITO_SESSION_ENDED" } });
+  });
+});
+
+it("composes actor usage reports while retaining the durable cache owner", async () => {
+  const target = await create("usage-facades");
+  await append(target, "old branch");
+  await append(target, "current usage", actor, null);
+  const incognito = { actor, authority, target };
+  const params = { agentId: "main", sessionFile: marker(target), incognito };
+  const published: unknown[] = [];
+  const unsubscribe = onSessionCostUsageUpdated((event) => published.push(event));
+  try {
+    await withEnvAsync(env, async () => {
+      expect(await loadSessionCostSummary(params)).toMatchObject({ totalTokens: 10, totalCost: 1 });
+      expect(await loadSessionUsageTimeSeries(params)).toMatchObject({
+        points: [{ totalTokens: 10, cost: 1, cumulativeTokens: 10 }],
+      });
+      expect(await loadSessionLogs(params)).toMatchObject([
+        { content: "current usage", tokens: 10, cost: 1 },
+      ]);
+      expect(published).toHaveLength(1);
+      expect(
+        await refreshCostUsageCacheForAgent({
+          agentId: "main",
+          sessionFiles: [marker(target)],
+          incognito,
+        }),
+      ).toBe("refreshed");
+      expect(published).toHaveLength(1);
+      // The facade's default cache remains durable; the actor stores only the transcript.
+      await actor.sessions.withCompute(authority, target, async (compute) => {
+        expect(
+          await compute.execute({
+            type: "session.compute.usage.cache",
+            input: { ...target, request: { filePaths: [marker(target)] } },
+          }),
+        ).toEqual([]);
+      });
+    });
+  } finally {
+    unsubscribe();
+  }
+});
+
+it.each([
+  ["logs", "permission", loadSessionLogs],
+  ["logs", "generation", loadSessionLogs],
+  ["timeseries", "permission", loadSessionUsageTimeSeries],
+  ["timeseries", "generation", loadSessionUsageTimeSeries],
+] as const)(
+  "rechecks usage %s %s disclosure after asynchronous pricing",
+  async (name, revoke, read) => {
+    const target = await create(`usage-disclosure-${name}-${revoke}`);
+    await append(target, "private usage");
+    let allowed = true;
+    const grant: IncognitoSessionAuthority = {
+      assertCurrent() {},
+      authorize() {
+        if (!allowed) {
+          throw new Error("usage disclosure revoked");
+        }
+      },
+    };
+    const parse = usagePricing.parseUsageCostTranscriptEntryAsync;
+    let parsed = false;
+    const parsing = vi
+      .spyOn(usagePricing, "parseUsageCostTranscriptEntryAsync")
+      .mockImplementation(async (...args) => {
+        const entry = await parse(...args);
+        if (entry?.usage && !parsed) {
+          parsed = true;
+          if (revoke === "permission") {
+            allowed = false;
+          } else {
+            await branch(target);
+          }
+        }
+        return entry;
+      });
+    try {
+      await expect(
+        read({
+          agentId: "main",
+          sessionFile: marker(target),
+          incognito: { actor, authority: grant, ...(revoke === "permission" ? { target } : {}) },
+        }),
+      ).rejects.toThrow(
+        revoke === "permission" ? "usage disclosure revoked" : "generation is no longer current",
+      );
+      expect(parsed).toBe(true);
+    } finally {
+      parsing.mockRestore();
+    }
+  },
+);
+
+it("reads explicit retained usage windows and preserves their discovery", async () => {
+  const previous = await create("usage-retained");
+  await append(previous, "retained usage");
+  const current = await branch(previous);
+  await append(current, "current usage");
+  const incognito = { actor, authority };
+  const inventory = await runUsageCostWorker(prepare(), { kind: "inventory" }, incognito);
+  assert(inventory.kind === "inventory");
+  expect(inventory.files.map((file) => file.sourcePath)).toContain(marker(current));
+  expect(inventory.files.map((file) => file.sourcePath)).toContain(marker(previous));
+  await withEnvAsync(env, async () => {
+    const params = { agentId: "main", sessionFile: marker(previous), incognito };
+    expect(await loadSessionCostSummary(params)).toMatchObject({ totalTokens: 10, totalCost: 1 });
+    expect(await loadSessionLogs(params)).toMatchObject([
+      { content: "retained usage", tokens: 10 },
+    ]);
+    expect(await loadSessionUsageTimeSeries(params)).toMatchObject({
+      points: [{ totalTokens: 10 }],
+    });
+  });
+});
 
 it("observes a pending actor append before usage inventory, stats and rollup publication", async () => {
   const target = await create("fifo");
@@ -230,45 +682,6 @@ it("preserves explicit empty inventory and applies the cutoff only to discovery"
   await expect(
     usage(target, { kind: "inventory", sessionFiles: [marker(target)], minMtimeMs }),
   ).resolves.toEqual(all);
-});
-
-it("isolates equal session IDs and refuses foreign actor bindings and forged usage markers", async () => {
-  const own = await create("shared-id");
-  const foreign = await create("shared-id", otherActor);
-  await append(own, "own usage");
-  await append(foreign, "foreign usage", otherActor);
-  await append(foreign, "another foreign event", otherActor);
-  const ownStats = await stats(own);
-  const foreignStats = await stats(foreign, otherActor);
-  assert(ownStats && foreignStats);
-  expect(foreignStats.eventCount).toBe(ownStats.eventCount + 1);
-  for (const [target, owner] of [
-    [own, actor],
-    [foreign, otherActor],
-  ] as const) {
-    await expect(usage(target, { kind: "inventory" }, owner)).resolves.toMatchObject({
-      kind: "inventory",
-      files: [{ sourcePath: marker(target, owner), sessionId: "shared-id" }],
-    });
-  }
-  await expect(
-    runUsageCostWorker(
-      prepare(),
-      { kind: "inventory" },
-      { actor: otherActor, authority, target: foreign },
-    ),
-  ).rejects.toThrow("Usage actor does not own the prepared database");
-  await expect(
-    usage(own, { kind: "inventory", sessionFiles: [marker(foreign, otherActor)] }),
-  ).rejects.toThrow("Usage request contains another incognito session");
-  await expect(
-    actor.sessions.withCompute(authority, own, (compute) =>
-      compute.execute({
-        type: "session.compute.usage.cache",
-        input: { ...own, request: { filePaths: [marker(foreign, otherActor)] } },
-      }),
-    ),
-  ).rejects.toThrow("another transcript");
 });
 
 it.each(["transaction", "commit"] as const)(
@@ -378,6 +791,10 @@ it("keeps overlapping scopes' sources and refresh lock cleanup separate", async 
       input: { ...target, request: {} },
     });
     expect(held).not.toBeNull();
+    expect(
+      await isSessionCostUsageRefreshRunning("main", actor.path, { actor, authority, target }),
+    ).toBe(true);
+
     await actor.sessions.withCompute(authority, target, async (second) => {
       await second.execute({ type: "session.compute.source.open", input: { ...target, sourceId } });
       expect(
@@ -399,88 +816,93 @@ it("keeps overlapping scopes' sources and refresh lock cleanup separate", async 
   });
 });
 
-it("joins compute cleanup when its borrowed reference is released during preparation", async () => {
-  const target = await create("released-compute");
-  await append(target, "private borrowed frame");
-  const borrowed = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: location(actor).agentId,
-    env,
-    authority,
-    existingOnly: true,
-  });
-  assert(borrowed);
-  expect(borrowed.identity).toEqual(actor.identity);
-  const ready = createDeferredCore();
-  const resume = createDeferredCore();
-  const sourceId = "released-source";
-  const computation = borrowed.sessions.withCompute(authority, target, async (compute) => {
-    await compute.execute({ type: "session.compute.source.open", input: { ...target, sourceId } });
-    const frame = await compute.execute({
-      type: "session.compute.source.read",
-      input: { ...target, sourceId },
-    });
-    expect(
-      await compute.execute({
-        type: "session.compute.usage.acquireLock",
-        input: {
-          ...target,
-          request: {
-            previousRaw: null,
-            previousOwnerIsRunning: false,
-            lockJson: "released-lock",
-            startedAt: 1,
-          },
-        },
-      }),
-    ).toBe(true);
-    ready.resolve();
-    await resume.promise;
-    return frame;
-  });
-  void computation.catch(ready.reject);
-  const rejected = expect(computation).rejects.toThrow("Incognito execution reference is released");
-  try {
-    await ready.promise;
-    let released = false;
-    const releasing = borrowed.release().then(() => {
-      released = true;
-    });
-    await actor.sessions.withCompute(authority, target, async (compute) => {
-      expect(
+it.each([false, true])(
+  "joins compute cleanup after borrow release (whole store: %s)",
+  async (wholeStore) => {
+    const target = await create(`released-compute-${wholeStore}`);
+    await append(target, "private borrowed frame");
+    const borrowed = await captureActor(location(actor).agentId, { existingOnly: true });
+    expect(borrowed.identity).toEqual(actor.identity);
+    const ready = createDeferredCore();
+    const resume = createDeferredCore();
+    const sourceId = "released-source";
+    const computation = borrowed.sessions.withCompute(
+      authority,
+      wholeStore ? undefined : target,
+      async (compute) => {
         await compute.execute({
-          type: "session.compute.usage.refreshLock",
-          input: { ...target, request: {} },
-        }),
-      ).not.toBeNull();
-    });
-    expect(released).toBe(false);
-    resume.resolve();
-    await releasing;
-    await rejected;
-    await actor.sessions.withCompute(authority, target, async (compute) => {
-      expect(
-        await compute.execute({
-          type: "session.compute.usage.refreshLock",
-          input: { ...target, request: {} },
-        }),
-      ).toBeNull();
-      await compute.execute({
-        type: "session.compute.source.open",
-        input: { ...target, sourceId },
-      });
-      expect(
-        await compute.execute({
+          type: "session.compute.source.open",
+          input: { ...target, sourceId },
+        });
+        const frame = await compute.execute({
           type: "session.compute.source.read",
           input: { ...target, sourceId },
-        }),
-      ).toMatchObject({ type: "source-frame" });
-    });
-  } finally {
-    resume.resolve();
-    await Promise.allSettled([rejected, borrowed.release()]);
-  }
-});
+        });
+        expect(
+          await compute.execute({
+            type: "session.compute.usage.acquireLock",
+            input: {
+              ...target,
+              request: {
+                previousRaw: null,
+                previousOwnerIsRunning: false,
+                lockJson: "released-lock",
+                startedAt: 1,
+              },
+            },
+          }),
+        ).toBe(true);
+        ready.resolve();
+        await resume.promise;
+        return frame;
+      },
+    );
+    void computation.catch(ready.reject);
+    const rejected = expect(computation).rejects.toThrow(
+      "Incognito execution reference is released",
+    );
+    try {
+      await ready.promise;
+      let released = false;
+      const releasing = borrowed.release().then(() => {
+        released = true;
+      });
+      await actor.sessions.withCompute(authority, target, async (compute) => {
+        expect(
+          await compute.execute({
+            type: "session.compute.usage.refreshLock",
+            input: { ...target, request: {} },
+          }),
+        ).not.toBeNull();
+      });
+      expect(released).toBe(false);
+      resume.resolve();
+      await releasing;
+      await rejected;
+      await actor.sessions.withCompute(authority, target, async (compute) => {
+        expect(
+          await compute.execute({
+            type: "session.compute.usage.refreshLock",
+            input: { ...target, request: {} },
+          }),
+        ).toBeNull();
+        await compute.execute({
+          type: "session.compute.source.open",
+          input: { ...target, sourceId },
+        });
+        expect(
+          await compute.execute({
+            type: "session.compute.source.read",
+            input: { ...target, sourceId },
+          }),
+        ).toMatchObject({ type: "source-frame" });
+      });
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([rejected, borrowed.release()]);
+    }
+  },
+);
 
 it("discards revoked partial projections and reconciles the complete active actor branch", async () => {
   const target = await create("reconcile");
@@ -497,28 +919,12 @@ it("discards revoked partial projections and reconciles the complete active acto
       }
     },
   };
-  const withCompute = actor.sessions.withCompute;
-  const wrapped = vi
-    .spyOn(actor.sessions, "withCompute")
-    .mockImplementation((caller, selected, operation, signal) =>
-      withCompute(
-        caller,
-        selected,
-        (compute) =>
-          operation({
-            assertCurrent: compute.assertCurrent,
-            async execute(command) {
-              const result = await compute.execute(command);
-              if (command.type === "session.compute.projection.appendChunk") {
-                appendedChunk = true;
-                current = false;
-              }
-              return result;
-            },
-          }),
-        signal,
-      ),
-    );
+  const wrapped = observeCompute((type) => {
+    if (type === "session.compute.projection.appendChunk") {
+      appendedChunk = true;
+      current = false;
+    }
+  });
   try {
     await expect(
       reconcileSessionTranscriptIndexes(
@@ -530,47 +936,78 @@ it("discards revoked partial projections and reconciles the complete active acto
   } finally {
     wrapped.mockRestore();
   }
-  await expect(
-    actor.sessions.history(authority, {
-      type: "session.history.recent",
-      input: { ...target, options: { maxMessages: 10 } },
-    }),
-  ).rejects.toThrow("projection is rebuilding");
+  await expect(recentHistory(target)).rejects.toThrow("projection is rebuilding");
   await expect(
     reconcileSessionTranscriptIndexes(
       { agentId: location(actor).agentId, path: location(actor).path, env },
       { actor, authority, target },
     ),
   ).resolves.toEqual({ reconciledSessions: 1 });
-  await expect(
-    actor.sessions.history(authority, {
-      type: "session.history.recent",
-      input: { ...target, options: { maxMessages: 10 } },
-    }),
-  ).resolves.toMatchObject({
+  await expect(recentHistory(target)).resolves.toMatchObject({
     totalMessages: 1,
     messages: [{ content: [{ type: "text", text: "current branch" }] }],
   });
 });
 
-it("ends queued compute with the typed error when its actor is lost", async () => {
-  const target = await create("actor-loss", otherActor);
-  const barrier = await hold(otherActor);
-  const outcome = Promise.resolve()
-    .then(() =>
-      otherActor.sessions.withCompute(authority, target, (compute) =>
-        compute.execute({ type: "session.compute.usage.stats", input: { ...target, request: {} } }),
-      ),
-    )
-    .then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-  try {
-    await otherWorker.terminate();
-  } finally {
-    barrier.release.resolve();
-    await Promise.allSettled([barrier.held]);
-  }
-  expect(await outcome).toMatchObject({ error: { code: "INCOGNITO_SESSION_ENDED" } });
-});
+it.each(["coalesce", "handoff"] as const)(
+  "retains deferred projection and read-only readiness through %s",
+  async (mode) => {
+    const target = await create(`deferred-${mode}`);
+    await append(target, "old branch");
+    await append(target, "first branch", actor, null);
+    const binding = { actor, authority };
+    const database = { ...location(), env };
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const checked = createDeferredCore();
+    let held = false;
+    const wrapped = observeCompute(async (type) => {
+      if (type === "session.compute.store.status") {
+        checked.resolve();
+      }
+      if (type === "session.compute.source.open" && !held) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+        if (mode === "handoff") {
+          throw new Error("interrupted projection preparation");
+        }
+      }
+    });
+    let waiting: Promise<void> | undefined;
+    try {
+      startSessionTranscriptIndexReconcile(database, binding);
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        waitForSessionTranscriptIndexReconcile(database, binding),
+        "Reconciliation settled before opening its source",
+      );
+      waiting = waitForSessionTranscriptProjection(
+        { ...target, env, storePath: database.path },
+        undefined,
+        binding,
+      );
+      await awaitGateBeforeSettlement(
+        checked.promise,
+        waiting,
+        "Readiness settled before its actor probe",
+      );
+      // This append would deadlock if the deferred owner held the actor FIFO.
+      await append(target, "final branch", actor, null);
+      startSessionTranscriptIndexReconcile(database, binding);
+      release.resolve();
+      await Promise.all([waiting, waitForSessionTranscriptIndexReconcile(database, binding)]);
+      await expect(recentHistory(target)).resolves.toMatchObject({
+        totalMessages: 1,
+        messages: [{ content: [{ type: "text", text: "final branch" }] }],
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([
+        waiting,
+        waitForSessionTranscriptIndexReconcile(database, binding),
+      ]);
+      wrapped.mockRestore();
+    }
+  },
+);

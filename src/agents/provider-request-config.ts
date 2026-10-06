@@ -443,7 +443,7 @@ function applyResolvedAuthHeader(
     auth.mode === "authorization-bearer"
       ? `Bearer ${auth.value}`
       : `${auth.prefix ?? ""}${auth.value}`;
-  return Object.keys(next).length > 0 ? next : undefined;
+  return next;
 }
 
 function toTlsConnectOptions(

@@ -144,7 +144,7 @@ function renderRootView(props: ChatComposerPlusMenuContentProps) {
         ? t("chat.composer.menu.webSearchGloballyDisabled")
         : "");
   const canUpload = uploadsEnabled(props.attachments.uploadConfig);
-  const attachments = canUpload ? renderChatAttachmentMenuOptions(icons.paperclip) : nothing;
+  const attachments = canUpload ? renderChatAttachmentMenuOptions() : nothing;
   const rootToggles = props.rootToggles ?? [];
   if (!props.showCapabilities && rootToggles.length === 0) {
     return attachments;

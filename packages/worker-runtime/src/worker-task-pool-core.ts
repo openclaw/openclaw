@@ -11,8 +11,11 @@ import {
   DEFAULT_WORKER_PENDING_TASKS,
   type WorkerComputeCapacity,
 } from "./worker-task-capacity.js";
-import type { WorkerTaskHost } from "./worker-task-host.js";
+import { captureWorkerTaskContext } from "./worker-task-context.js";
+import { WorkerTaskError } from "./worker-task-error.js";
+import { serviceNativeWorkerPass, type WorkerTaskHost } from "./worker-task-host.js";
 import { createWorkerNativeSectionState } from "./worker-task-native-sections.js";
+import { createWorkerTaskPoolBootstrap } from "./worker-task-pool-bootstrap.js";
 import {
   createWorkerTaskCompletion,
   joinWorkerTaskPreparationCleanups,
@@ -29,7 +32,7 @@ import {
 } from "./worker-task-pool-owned.js";
 import { startCloseWorkerPoolResources } from "./worker-task-pool-resources.js";
 import { createWorkerTaskPoolRetirement } from "./worker-task-pool-retirement.js";
-import { createWorkerTaskPoolWorker, postWorkerTaskInput } from "./worker-task-pool-worker.js";
+import { createWorkerTaskPoolWorker, sendWorkerTaskInput } from "./worker-task-pool-worker.js";
 import type {
   OwnedWorkerTask,
   OwnedWorkerTaskOptions,
@@ -48,16 +51,6 @@ import type {
 const runInWorkerPoolContext = AsyncLocalStorage.snapshot();
 
 type WorkerReply<Output> = { status: "ok"; value: Output } | { status: "failed"; error: string };
-export class WorkerTaskError extends Error {
-  constructor(
-    message: string,
-    readonly code: "unavailable" | "timeout" | "failed" | "overloaded",
-  ) {
-    super(message);
-    this.name = "WorkerTaskError";
-  }
-}
-
 /** Bounded execution workers; each worker accepts one task at a time. */
 export class WorkerTaskPoolCore<Input, Output> {
   private readonly slots = new Set<Slot<Input, Output>>();
@@ -96,7 +89,13 @@ export class WorkerTaskPoolCore<Input, Output> {
   };
   private readonly retirement;
   private readonly queue: Task<Input, Output>[] = [];
+  private readonly bootstrap = createWorkerTaskPoolBootstrap(
+    this.slots,
+    this.queue,
+    (task, error) => this.finish(task, error),
+  );
   private readonly maxWorkers: number;
+  private readonly observeTask;
   private readonly maxPendingTasks: number;
   private readonly maxPendingBytes: number;
   private pendingTasks = 0;
@@ -120,6 +119,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     private readonly publicDispatch?: WorkerTaskPoolDispatch,
     private readonly ownerOptions: WorkerTaskPoolOwnerOptions = {},
   ) {
+    this.observeTask = host.createTaskObserver?.(options.workerUrl);
     this.maxWorkers = options.maxWorkers ?? availableParallelism();
     this.maxPendingTasks = options.maxPendingTasks ?? DEFAULT_WORKER_PENDING_TASKS;
     this.maxPendingBytes = options.maxPendingBytes ?? DEFAULT_WORKER_PENDING_BYTES;
@@ -138,8 +138,10 @@ export class WorkerTaskPoolCore<Input, Output> {
       options,
       runInContext: runInWorkerPoolContext,
       dispatch: () => this.dispatch(),
+      onRotationComplete: this.bootstrap.reset,
       serviceDeadlines: this.expireTasks,
       markWorkerRetirement: (worker, reason) => host.workerRetiring(worker, reason),
+      serviceHost: host,
     });
     host.pools.register(this);
   }
@@ -183,10 +185,7 @@ export class WorkerTaskPoolCore<Input, Output> {
 
   private service(): void {
     // Servicing can dispatch successors; visit only the owners present at entry.
-    const slots = [...this.slots];
-    for (const slot of slots) {
-      slot.native?.service();
-    }
+    serviceNativeWorkerPass(this.host, this.slots);
     this.expireTasks();
     this.retirement.service();
     const tasks = [...this.ownedTasks];
@@ -212,8 +211,8 @@ export class WorkerTaskPoolCore<Input, Output> {
       reject: completion.reject,
       read: () => completion.operation.read(),
       id: ++this.nextTaskId,
-      runInContext: AsyncLocalStorage.snapshot(),
-      controller: new AbortController(),
+      runInContext: captureWorkerTaskContext(),
+      controller: undefined,
       inputConsumed: false,
       executionNotified: false,
       exchangeSequence: 0,
@@ -231,10 +230,11 @@ export class WorkerTaskPoolCore<Input, Output> {
     if (owned) {
       this.ownedTasks.add(task);
     }
-    if (this.closedError || !Number.isSafeInteger(inputBytes) || inputBytes < 0) {
+    const unavailable = this.closedError ?? this.bootstrap.admissionError;
+    if (unavailable || !Number.isSafeInteger(inputBytes) || inputBytes < 0) {
       this.finish(
         task,
-        this.closedError ?? new RangeError("inputBytes must be a nonnegative safe integer"),
+        unavailable ?? new RangeError("inputBytes must be a nonnegative safe integer"),
       );
       return task;
     }
@@ -249,6 +249,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     task.admitted = true;
     this.pendingTasks++;
     this.pendingBytes += inputBytes;
+    task.observation = this.observeTask?.(task.options.diagnosticOperation);
     if (options.timeoutMs !== undefined) {
       this.armTimeout(task, options.timeoutMs);
     }
@@ -337,10 +338,18 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     while (!this.closedError && this.retirement.dispatchAllowed && this.queue.length) {
       let slot = [...this.slots].find(
-        (entry) => !entry.task && !entry.retiring && !entry.retirementFailed,
+        (entry) =>
+          !entry.task &&
+          !entry.retiring &&
+          !entry.retirementFailed &&
+          (!this.bootstrap.error() || entry.worker),
       );
       if (!slot) {
-        if (this.slots.size >= this.maxWorkers) {
+        const constructionBlocked = this.bootstrap.error();
+        if (constructionBlocked) {
+          this.bootstrap.rejectQueued();
+        }
+        if (constructionBlocked || this.slots.size >= this.maxWorkers) {
           // A host-waiting task can checkpoint rather than monopolize a worker.
           // Signal one owner per queued contender, in slot admission order.
           let contenders = this.queue.length;
@@ -385,6 +394,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.activeTasks++;
       task.slot = slot;
       task.startedAt = performance.now();
+      task.observation?.started();
       task.runInContext(() => {
         try {
           slot.worker?.ref();
@@ -394,7 +404,18 @@ export class WorkerTaskPoolCore<Input, Output> {
         }
         prepareWorkerTaskInput(
           task,
-          (input) => this.sendInput(slot, task, input),
+          (input) =>
+            sendWorkerTaskInput({
+              slot,
+              task,
+              input,
+              host: this.host,
+              bootstrapError: this.bootstrap.error,
+              createWorker: () => this.createWorker(slot),
+              fail: (error, nativeFailure) =>
+                this.fail(slot, new WorkerTaskError(String(error), "unavailable"), nativeFailure),
+              refuse: (error) => this.finish(task, error, undefined, true),
+            }),
           (error) => this.finish(task, toErrorObject(error, "worker task preparation failed")),
           !slot.worker && this.options.prepareWorker
             ? () => runInWorkerPoolContext(() => this.host.prepareResources())
@@ -415,6 +436,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       slot,
       options: this.options,
       host: this.host,
+      bootstrapError: this.bootstrap.error,
       runInContext: runInWorkerPoolContext,
       unavailableError: (message) => new WorkerTaskError(message, "unavailable"),
       onStarted: (worker) => {
@@ -423,46 +445,15 @@ export class WorkerTaskPoolCore<Input, Output> {
         this.host.workerStarted(worker, this);
       },
       onMessage: (message) => this.receive(slot, message),
-      onFailure: (error) => this.fail(slot, error),
+      onFailure: (error, nativeFailure) => this.fail(slot, error, nativeFailure),
       onExit: (code, counted) => {
         if (counted) {
           this.workers--;
         }
-        this.fail(slot, new WorkerTaskError(`worker exited with code ${code}`, "unavailable"));
+        const error = new WorkerTaskError(`worker exited with code ${code}`, "unavailable");
+        this.fail(slot, error, true);
       },
     });
-  }
-
-  private sendInput(slot: Slot<Input, Output>, task: Task<Input, Output>, input: Input): void {
-    // A cancelled preparation may finish later, but it must never create or feed a worker.
-    if (task.done) {
-      return;
-    }
-    task.preparedAt = performance.now();
-    try {
-      let worker = slot.worker;
-      if (!worker) {
-        slot.creating = true;
-        try {
-          worker = this.createWorker(slot);
-        } finally {
-          slot.creating = false;
-        }
-      }
-      const transferList = task.options.transferList?.(input);
-      if (!task.done) {
-        postWorkerTaskInput(
-          worker,
-          slot,
-          task,
-          input,
-          transferList,
-          this.host.captureTaskContext(),
-        );
-      }
-    } catch (error) {
-      this.fail(slot, new WorkerTaskError(String(error), "unavailable"));
-    }
   }
 
   private receive(slot: Slot<Input, Output>, message: unknown): void {
@@ -642,9 +633,12 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
   }
 
-  private fail(slot: Slot<Input, Output>, error: Error): void {
+  private fail(slot: Slot<Input, Output>, error: Error, nativeFailure?: true): void {
     if (slot.retiring) {
       return;
+    }
+    if (nativeFailure && slot.ready === false) {
+      this.bootstrap.fail(error);
     }
     if (slot.worker) {
       this.host.workerRetiring(slot.worker, "failure");
@@ -681,7 +675,9 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     this.finishHostWait(task);
     task.done = true;
-    task.runInContext(() => task.controller.abort());
+    task.observation?.completed();
+    task.observation = undefined;
+    task.runInContext(() => task.controller?.abort());
     clearTimeout(task.timer);
     task.deadline = undefined;
     task.options.signal?.removeEventListener("abort", task.abort);

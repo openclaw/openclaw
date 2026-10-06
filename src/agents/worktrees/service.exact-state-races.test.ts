@@ -8,7 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gitExec from "../../infra/git-exec.js";
 import * as commandRunner from "../../process/exec-runner.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
+import { updateRegistryWorktreeInDatabase } from "./registry-run-end.worker.js";
 import * as registry from "./registry.js";
 import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import * as leases from "./run-lease.js";
@@ -28,8 +33,9 @@ async function git(cwd: string, ...args: string[]) {
 describe("exact-state retirement admission and recovery", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   const temps = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
+    afterEach(async () => {
       vi.restoreAllMocks();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     }),
@@ -129,7 +135,9 @@ describe("exact-state retirement admission and recovery", () => {
             await fs.writeFile(path.join(f.record.path, "README.md"), "concurrent change\n");
           }
           if (kind === "activity") {
-            updateRegistryWorktree(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 1 });
+            await updateRegistryWorktree(env, f.record.id, {
+              lastActiveAt: f.record.lastActiveAt + 1,
+            });
           }
           if (kind === "claim") {
             await leases.abortWorktreeRemoval(env, f.record.id, token);
@@ -289,6 +297,15 @@ describe("exact-state retirement admission and recovery", () => {
       const recover = () => service.restore({ id: f.record.id, recoverExactState: f.exactState });
       if (phase !== "run-admission") {
         await expect(recover()).rejects.toThrow("controlled native move acknowledgement loss");
+      }
+      if (phase === "move-ack") {
+        expect(await refNames("refs/openclaw/removals/" + f.record.id)).not.toBe("");
+        await expect(leases.acquireWorktreeRunLease(f.record.id, { env })).rejects.toThrow(
+          "Worktree removal is incomplete",
+        );
+        expect(leases.hasLiveWorktreeRunLease(env, f.record.id)).toBe(false);
+      }
+      if (phase === "cleanup-ack") {
         const liveRun = await leases.acquireWorktreeRunLease(f.record.id, { env });
         try {
           await expect(recover()).rejects.toThrow(/busy|locked by live pid/);
@@ -304,6 +321,10 @@ describe("exact-state retirement admission and recovery", () => {
         }
         expect(await fs.readFile(f.indexPath)).toEqual(f.index);
         expect(await refNames("refs/openclaw/removals/" + f.record.id)).toBe("");
+        if (phase === "move-ack") {
+          admitted = await leases.acquireWorktreeRunLease(f.record.id, { env });
+          expect(leases.hasLiveWorktreeRunLease(env, f.record.id)).toBe(true);
+        }
       } finally {
         await admitted?.release();
       }
@@ -655,7 +676,9 @@ describe("exact-state retirement admission and recovery", () => {
             args[0].includes(`${result.snapshotRef}^{commit}`)
           ) {
             changed = true;
-            updateRegistryWorktree(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 1 });
+            await updateRegistryWorktree(env, f.record.id, {
+              lastActiveAt: f.record.lastActiveAt + 1,
+            });
           }
           return value;
         });
@@ -682,7 +705,7 @@ describe("exact-state retirement admission and recovery", () => {
     await service.remove(f.request);
     const update = registry.updateRegistryWorktree;
     let changed = false;
-    vi.spyOn(registry, "updateRegistryWorktree").mockImplementation((...args) => {
+    vi.spyOn(registry, "updateRegistryWorktree").mockImplementation(async (...args) => {
       if (
         !changed &&
         args[1] === f.record.id &&
@@ -690,7 +713,7 @@ describe("exact-state retirement admission and recovery", () => {
         args[2].removedAt === undefined
       ) {
         changed = true;
-        update(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 7 });
+        await update(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 7 });
       }
       return update(...args);
     });
@@ -718,7 +741,15 @@ describe("exact-state retirement admission and recovery", () => {
       const write = () => {
         attempted = true;
         try {
-          updateRegistryWorktree(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 7 });
+          // The synthetic contender runs inside the synchronous expiry transaction.
+          runOpenClawStateWriteTransaction(
+            ({ db }) =>
+              updateRegistryWorktreeInDatabase(db, {
+                id: f.record.id,
+                patch: { lastActiveAt: f.record.lastActiveAt + 7 },
+              }),
+            { env },
+          );
         } catch {
           rejected = true;
         }

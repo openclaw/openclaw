@@ -10,6 +10,10 @@ import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-r
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import {
+  captureSessionEntryReadScope,
+  readSessionEntryReadOnlyInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -38,8 +42,19 @@ export function createShouldEmitVerboseProgress(params: {
   storePath?: string;
   initialExplicitLevel?: string;
   fallbackLevel: string;
+  assertCurrent?: () => void;
 }) {
   let runVerbosity: ReplyRunVerbosity | undefined;
+  const scope =
+    params.sessionKey && params.storePath
+      ? captureSessionEntryReadScope({
+          agentId: params.agentId,
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          readConsistency: "latest",
+          clone: false,
+        }).scope
+      : undefined;
   const resolveCurrentExplicitLevel = () => {
     if (params.sessionKey && params.storePath) {
       try {
@@ -63,6 +78,26 @@ export function createShouldEmitVerboseProgress(params: {
     runVerbosity?.resolvedVerboseLevel ??
     normalizeVerboseLevel(params.fallbackLevel) ??
     "off";
+  const resolveLevelAsync = async () => {
+    params.assertCurrent?.();
+    let explicit = normalizeVerboseLevel(params.initialExplicitLevel ?? "");
+    if (scope) {
+      try {
+        const entry = await readSessionEntryReadOnlyInWorker(scope, params.assertCurrent);
+        explicit = normalizeVerboseLevel(entry?.verboseLevel ?? "");
+      } catch {
+        // Preserve the dispatch fallback on read failure, never on lost caller authority.
+      }
+    }
+    params.assertCurrent?.();
+    return (
+      runVerbosity?.verboseLevelOverride ??
+      explicit ??
+      runVerbosity?.resolvedVerboseLevel ??
+      normalizeVerboseLevel(params.fallbackLevel) ??
+      "off"
+    );
+  };
   return {
     noteRunVerbosity: (settings: ReplyRunVerbosity) => {
       // A reused queued dispatcher must clear the previous turn's explicit choice.
@@ -70,6 +105,16 @@ export function createShouldEmitVerboseProgress(params: {
     },
     shouldEmit: () => resolveLevel() !== "off",
     shouldEmitFull: () => resolveLevel() === "full",
+    shouldEmitAsync: async () => {
+      const level = await resolveLevelAsync();
+      params.assertCurrent?.();
+      return level !== "off";
+    },
+    shouldEmitFullAsync: async () => {
+      const level = await resolveLevelAsync();
+      params.assertCurrent?.();
+      return level === "full";
+    },
   };
 }
 

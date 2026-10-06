@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { resolveStateDir } from "../config/paths.js";
 import { backupFleetCell, restoreFleetCell } from "./backup.runtime.js";
 import {
@@ -45,7 +46,6 @@ import {
   cleanupFailedCreateNetwork,
   detectHostSelinux,
   inspectionHasFleetOwner,
-  inspectionState,
   prepareCellConfig,
   prepareCellDirectories,
   probeCellHealth,
@@ -161,12 +161,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     options.generateAttemptId ?? (() => crypto.randomBytes(16).toString("hex"));
   const getuid = options.getuid ?? (() => process.getuid?.());
   const getgid = options.getgid ?? (() => process.getgid?.());
-  const sleep =
-    options.sleep ??
-    ((ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleep = options.sleep ?? delay;
   const selinuxEnabled = options.selinuxEnabled ?? detectHostSelinux;
   const updateImage = options.updateImage ?? updateFleetCellImage;
   const probePort = options.probePort ?? probeLoopbackPort;
@@ -412,10 +407,11 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               localityChecks.set(record.runtime, locality);
             }
             await locality;
-            state = inspectionState(
-              record,
-              await containers.inspect(record.runtime, record.containerName),
-            );
+            const inspection = await containers.inspect(record.runtime, record.containerName);
+            state =
+              inspection.kind === "ok" && !inspectionHasFleetOwner(record, inspection)
+                ? "unknown"
+                : inspection.state;
           } catch {
             // Listing retains cells whose container runtime is unavailable.
           }

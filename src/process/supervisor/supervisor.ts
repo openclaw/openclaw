@@ -381,6 +381,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       const construction = {
         assertCurrent: input.assertCurrent,
         beforeSpawn: input.beforeSpawn,
+        initiateSpawn: input.initiateSpawn,
         cwd: input.cwd,
         env: input.env,
         abortSignal: constructionAbort.signal,
@@ -568,10 +569,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         // Windows has no catchable SIGTERM equivalent: the adapter implements it
         // with asynchronous taskkill, so waiting the cleanup grace only delays an
         // already-expired deadline before the same forced tree termination.
-        if (
-          process.platform === "win32" &&
-          (reason === "overall-timeout" || reason === "no-output-timeout")
-        ) {
+        if (process.platform === "win32" && isTimeoutReason(reason)) {
           adapter.kill("SIGKILL");
           return;
         }

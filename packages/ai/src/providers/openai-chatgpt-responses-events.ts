@@ -6,14 +6,6 @@ import {
 import { createResponseModelTracker } from "../transports/openai-transport-shared.js";
 import type { StreamOptions } from "../types.js";
 
-type CodexResponseStatus =
-  | "completed"
-  | "incomplete"
-  | "failed"
-  | "cancelled"
-  | "queued"
-  | "in_progress";
-
 export class CodexApiError extends Error {
   readonly code?: string;
   readonly status?: number;
@@ -109,7 +101,7 @@ export async function* mapCodexEvents(
   }
 }
 
-function normalizeCodexStatus(status: unknown): CodexResponseStatus | undefined {
+function normalizeCodexStatus(status: unknown) {
   switch (status) {
     case "completed":
     case "incomplete":

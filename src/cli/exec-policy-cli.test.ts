@@ -143,6 +143,15 @@ vi.mock("../infra/exec-approvals.js", async () => {
   };
 });
 
+// mock-isolation: In-memory policy cases omit filesystem ownership; the real CLI boundary is covered by local-state-owner.process.test.ts.
+vi.mock("./local-state-owner.js", () => ({
+  runWithLocalStateOwner: ({
+    runLocal,
+  }: {
+    runLocal: (scope: { assertCurrent: () => void }) => unknown;
+  }) => runLocal({ assertCurrent() {} }),
+}));
+
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return { ...actual, callGatewayFromCliWithTransport: mocks.callGateway };

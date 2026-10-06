@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
@@ -8,6 +9,32 @@ import {
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
+
+/** SQLite recovers committed WAL frames; these checks do not scan table or index contents. */
+export function sqliteProcessDeathIntegrityRefusal(
+  database: DatabaseSync,
+  pathname: string,
+): string | undefined {
+  let probe = "wal-sidecars";
+  try {
+    const journal = fs.statSync(`${pathname}-journal`, { throwIfNoEntry: false });
+    if (journal && journal.size > 0) {
+      return "rollback-journal-present";
+    }
+    // Admission has already read the schema through SQLite's recovered header.
+    probe = "journal-mode";
+    if (database.prepare("PRAGMA journal_mode").get()?.journal_mode !== "wal") {
+      return "journal-mode-not-wal";
+    }
+    probe = "wal-recovery";
+    // PASSIVE works on every supported SQLite. Busy or partially backfilled WALs
+    // are normal with concurrent readers/writers; neither implies corruption.
+    database.prepare("PRAGMA wal_checkpoint(PASSIVE)").get();
+    return undefined;
+  } catch {
+    return `${probe}-failed`;
+  }
+}
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
@@ -28,10 +55,17 @@ export type SqliteIntegrityCheck = {
 export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
 
 export type SqliteIntegrityDiagnostics = {
-  integrityGateReason?: "revoked" | "stale-lease" | "dirty-receipt" | "no-proof" | "lease-class";
-  integrityGateMode?: "full";
+  because?: string;
+  integrityGateReason?:
+    | "revoked"
+    | "stale-lease-full"
+    | "process-death"
+    | "dirty-receipt"
+    | "no-proof"
+    | "lease-class";
+  integrityGateMode?: "full" | "deferred";
   integrityGateMs?: number;
-  integrityGateOutcome?: "healthy" | "failed" | "cached";
+  integrityGateOutcome?: "healthy" | "failed" | "cached" | "pending";
   integrityCheckSyncMs?: number;
   integrityOutsideCheckMs?: number;
   integrityWorkerCheckMs?: number;

@@ -154,6 +154,14 @@ to append an ordinary saved sidebar pin. Pinning is a no-op for an unknown or
 already pinned ID; call it for a user action such as creation, not on every
 catalog refresh, so a later manual removal stays removed.
 
+Navigation items can supply `actions` with an `id`, `label`, optional `icon` and
+`destructive` flag, and a `run` callback. The sidebar opens these actions on
+right-click, **Shift+F10**, or the context-menu key on the focused link, including
+nested and pinned entries. Selecting an action closes the menu; **Escape** or an
+outside click dismisses it. Use `host.ui.isNavigationPinned(id)` to read a saved
+pin and `host.ui.unpinNavigation(id)` to remove it idempotently. Plugins choose
+which actions to offer and own confirmation for destructive actions.
+
 For a dashboard widget, also register a backend
 `api.session.controls.registerControlUiDescriptor` with `surface: "widget"`,
 the same widget `id`, and its `requiredScopes`. The Gateway advertises widget
@@ -261,11 +269,22 @@ filtered, paginated session list. `host.sessions.refresh()` preserves that
 list's filters. Use `host.sessions.observe(query, onChange)` to maintain an
 independent session query without replacing it. The query accepts `agentId`,
 `search`, `archived` (`true`, `false`, or `"all"`), `limit`, `configuredAgentsOnly`,
-`includeGlobal`, `includeUnknown`, `includeDerivedTitles`, and
+`includeGlobal`, `includeUnknown`, `excludeDock`, `includeDerivedTitles`, and
 `includeLastMessage`. The callback receives `{ result, loading, error }`,
 starting with the current snapshot; `result` is null until data is available.
 Results contain `sessions` and the Gateway's `hasMore`, `nextOffset`, and
 `totalCount` pagination metadata.
+
+Create a conversation with `host.sessions.create({ agentId, displayName?, label?,
+surface? })`. `displayName` is a reusable display title; `label` is a unique
+session label. For a conversation owned by a plugin page's dock, pass
+`surface: "plugin-dock"`. This immutable creation-surface marker hides the
+conversation from ordinary session lists without changing its human creator,
+access, sharing, or sandbox rules. Rows expose `isDock` and `createdSurface`;
+`createdVia` retains its ordinary operator provenance.
+Independent host list queries exclude dock conversations by default; pass
+`excludeDock: false` when deliberately including them.
+The session key remains usable with `host.dock.openSession` and direct reads.
 
 The host fetches the query and keeps it current through session events,
 observer recovery, and its normal deletion handling. `observe` returns

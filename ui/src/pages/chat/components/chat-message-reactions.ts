@@ -230,15 +230,19 @@ class MessageReactionPicker extends OpenClawLitElement {
       margin: 0 3px;
       background: var(--border);
     }
-    .more {
-      width: 30px;
-      height: 30px;
+    .more,
+    .back {
       border-radius: var(--radius-full);
       color: var(--muted);
     }
-    .more:hover {
+    .more:hover,
+    .back:hover {
       color: var(--text);
       background: var(--bg-hover);
+    }
+    .more {
+      width: 30px;
+      height: 30px;
     }
     .more svg {
       width: 16px;
@@ -257,12 +261,6 @@ class MessageReactionPicker extends OpenClawLitElement {
       flex: 0 0 auto;
       width: 28px;
       height: 28px;
-      border-radius: var(--radius-full);
-      color: var(--muted);
-    }
-    .back:hover {
-      color: var(--text);
-      background: var(--bg-hover);
     }
     .back svg {
       width: 14px;

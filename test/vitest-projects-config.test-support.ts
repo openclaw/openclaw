@@ -109,10 +109,7 @@ async function listFullSuiteTestFileMatches(): Promise<Map<string, string[]>> {
 }
 
 function listNormalFullSuiteTestFiles(): string[] {
-  const e2eNamedIntegrationTests = new Set([
-    "src/gateway/gateway.test.ts",
-    "src/gateway/server.startup-matrix-migration.integration.test.ts",
-  ]);
+  const e2eNamedIntegrationTests = new Set(["src/gateway/gateway.test.ts"]);
   return globSync(["**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"], {
     cwd: process.cwd(),
     exclude: ["**/.*/**", "**/dist/**", "**/node_modules/**", "**/vendor/**"],

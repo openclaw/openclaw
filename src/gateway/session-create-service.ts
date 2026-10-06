@@ -132,7 +132,6 @@ export async function createGatewaySession(
   }
   // Fresh account authority covers title generation and resource preparation,
   // not just the final row. An inherited parent pin is not a new selection.
-  let selectedDefaultProfile: string | undefined;
   let validateRuntimeSelection: (() => ErrorShape | undefined) | undefined;
   const commitGuard =
     personalModelSelection ||
@@ -158,8 +157,6 @@ export async function createGatewaySession(
             personalModelSelection,
             personalAccountDefaults,
           ],
-          personalAccountDefaults,
-          readDefaultProfile: () => selectedDefaultProfile,
           validateSelection: () => validateRuntimeSelection?.(),
         })
       : params.commitGuard;
@@ -323,13 +320,13 @@ export async function createGatewaySession(
   }
 
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
-  const creationTarget = await resolveGatewaySessionStoreTargetInWorker({
+  const target = await resolveGatewaySessionStoreTargetInWorker({
     cfg: params.cfg,
     key: targetSessionKey,
     agentId,
     assertActive: commitGuard,
   });
-  if (explicitTargetKey && creationTarget.canonicalKey === canonicalParentSessionKey) {
+  if (explicitTargetKey && target.canonicalKey === canonicalParentSessionKey) {
     return invalidSessionRequest("sessions.create key must differ from parentSessionKey");
   }
   if (explicitTargetKey && !params.initialEntry) {
@@ -340,7 +337,7 @@ export async function createGatewaySession(
         ok: false,
         error: errorShape(
           ErrorCodes.UNAVAILABLE,
-          `Session ${creationTarget.canonicalKey} is still initializing; retry creation later.`,
+          `Session ${target.canonicalKey} is still initializing; retry creation later.`,
         ),
       };
     }
@@ -361,7 +358,7 @@ export async function createGatewaySession(
 
   const authorityTargets = params.operatorAuthority
     ? [
-        { target: creationTarget, entry: initialTargetEntry },
+        { target, entry: initialTargetEntry },
         ...(parentSessionTarget
           ? [{ target: parentSessionTarget, entry: parentSessionEntry }]
           : []),
@@ -585,13 +582,13 @@ export async function createGatewaySession(
       creation: params.creation,
       parent: currentParentSessionEntry,
     });
-    const target = creationTarget;
-    const targetRead = readSessionCreateTarget(
-      params,
+    const targetRead = await readSessionCreateTarget(
+      { ...params, commitGuard },
       target,
       initialTargetEntry?.sessionId,
       targetLifecycleIdentities,
     );
+    commitGuard?.();
     if (!targetRead.ok) {
       return targetRead;
     }
@@ -852,12 +849,6 @@ export async function createGatewaySession(
               : "trusted initial session state requires an authorized owner",
           );
         }
-        if (
-          params.initialEntry?.modelSelectionLocked !== undefined &&
-          !params.initialEntry.modelSelectionLocked
-        ) {
-          return invalidSessionRequest("initial modelSelectionLocked must be true when provided");
-        }
         const catalogResolvedModel = params.catalogTarget
           ? resolveSessionModelRef(params.cfg, patched.entry, target.agentId)
           : undefined;
@@ -991,7 +982,6 @@ export async function createGatewaySession(
             }
             validateAccountModel = account.validate;
             validateRuntimeSelection = account.validate;
-            selectedDefaultProfile = account.profileId;
             commitGuard?.();
             if (account.profileId) {
               // Pin before the first turn; later default changes must not claim this session.
@@ -1011,6 +1001,8 @@ export async function createGatewaySession(
           },
           entry,
           catalog: preparedModelCatalog?.entries,
+          // Thinking policy was already validated by the patch owner; create discards hydration.
+          hydrateThinkingCatalog: false,
           validateModelSelection:
             validateAccountModel ?? patched.validateModelSelection ?? modelSelection.validate,
           ...(params.agentRuntime !== undefined || params.model !== undefined
@@ -1029,8 +1021,7 @@ export async function createGatewaySession(
         if (params.fork !== true) {
           return { ...patched, entry };
         }
-        const forkParentSessionKey = canonicalParentSessionKey;
-        if (!forkParentSessionKey || !currentParentSessionEntry || !parentSessionTarget) {
+        if (!canonicalParentSessionKey || !currentParentSessionEntry || !parentSessionTarget) {
           return {
             ok: false,
             error: errorShape(ErrorCodes.UNAVAILABLE, "failed to resolve parent session for fork"),
@@ -1057,7 +1048,7 @@ export async function createGatewaySession(
                   },
                 }
               : {}),
-            parentSessionKey: forkParentSessionKey,
+            parentSessionKey: canonicalParentSessionKey,
             sessionKey: target.canonicalKey,
             storePath: parentSessionTarget.storePath,
             ...(forkMaxTokens ? { maxTokens: forkMaxTokens } : {}),
@@ -1092,7 +1083,7 @@ export async function createGatewaySession(
             entry,
             forkResult.transcript,
             {
-              sessionKey: forkParentSessionKey,
+              sessionKey: canonicalParentSessionKey,
               entry: currentParentSessionEntry,
             },
             existingEntry,
@@ -1224,14 +1215,14 @@ export async function createGatewaySession(
   };
 
   const targetLifecycleIdentities = [
-    creationTarget.canonicalKey,
-    ...creationTarget.storeKeys,
+    target.canonicalKey,
+    ...target.storeKeys,
     ...(requestedKey ? [requestedKey] : []),
     ...(initialTargetEntry?.sessionId ? [initialTargetEntry.sessionId] : []),
   ];
   const lifecycleTargets = [
     {
-      scope: creationTarget.storePath,
+      scope: target.storePath,
       identities: targetLifecycleIdentities,
     },
   ];

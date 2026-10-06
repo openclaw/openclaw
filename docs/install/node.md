@@ -52,7 +52,7 @@ byte-order marks. If the current Node build cannot decode a service script safel
 OpenClaw prints the code page and continues searching other sources. Unsupported
 OEM pages such as CP850 are skipped rather than guessed. CP949 is also skipped:
 Node's ICU `euc-kr` decoder silently misdecodes UHC extension characters. Neither
-case probes the service executable; recovery continues with PATH and the other
+case checks the service executable; recovery continues with PATH and the other
 available runtime sources.
 
 If none is available and you are in an interactive terminal, the CLI offers:

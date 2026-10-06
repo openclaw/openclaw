@@ -6,7 +6,6 @@ type DriverClickButton = import("@trycua/cua-driver").ClickButton;
 type CuaDriverLike = import("@trycua/cua-driver").CuaDriverLike;
 type CuaDriverSessionLike = import("@trycua/cua-driver").CuaDriverSessionLike;
 type DriverScrollDirection = import("@trycua/cua-driver").ScrollDirection;
-type CuaSessionState = import("@trycua/cua-driver").SessionStateOutput;
 type CuaDriverSdk = Pick<
   typeof import("@trycua/cua-driver"),
   | "ActionTarget"
@@ -39,40 +38,11 @@ export const ScrollDirection = {
 } as const;
 export type ScrollDirection = (typeof ScrollDirection)[keyof typeof ScrollDirection];
 
-export interface CuaDriverSession {
+export type CuaDriverSession = Pick<DirectCuaDriverSession, keyof DirectCuaDriverSession> & {
   readonly generation: string;
-  isAvailable(): boolean;
   prepareAvailability?(): Promise<void>;
   resetAvailabilityCache(): void;
-  callTool(
-    name: string,
-    args: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<CuaToolResult>;
-  getCursorPosition(signal?: AbortSignal): Promise<CuaToolResult>;
-  getSessionState(signal?: AbortSignal): Promise<CuaSessionState>;
-  getDesktopState(signal?: AbortSignal): Promise<CuaToolResult>;
-  getScreenSize(signal?: AbortSignal): Promise<CuaToolResult>;
-  click(
-    input: { x: number; y: number; button: ClickButton; count: number },
-    signal?: AbortSignal,
-  ): Promise<CuaToolResult>;
-  drag(
-    input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
-    signal?: AbortSignal,
-  ): Promise<CuaToolResult>;
-  moveCursor(input: { x: number; y: number }, signal?: AbortSignal): Promise<CuaToolResult>;
-  scroll(
-    input: { x: number; y: number; direction: ScrollDirection; amount: bigint },
-    signal?: AbortSignal,
-  ): Promise<CuaToolResult>;
-  typeText(text: string, signal?: AbortSignal): Promise<CuaToolResult>;
-  pressKey(
-    input: { key: string; modifiers: string[] },
-    signal?: AbortSignal,
-  ): Promise<CuaToolResult>;
-  dispose(): Promise<void>;
-}
+};
 
 function asyncOptions(signal?: AbortSignal) {
   return signal ? { signal } : undefined;

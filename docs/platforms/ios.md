@@ -468,7 +468,7 @@ an audio interruption, or an unrecoverable failure ends the call.
 
 Physical-Watch microphone/speaker routing, wrist-down operation, Wi-Fi/cellular
 handoff, battery use, and multi-hour reliability still need device validation.
-Simulator tests and native macOS provider-audio probes do not establish those
+Simulator tests and native macOS provider-audio checks do not establish those
 behaviors. This is not an arbitrary always-on Gateway connection: watchOS
 low-level networking depends on an active audio session. UDP must be reachable;
 the Watch transport does not configure a TURN relay or TCP/WebSocket media fallback.

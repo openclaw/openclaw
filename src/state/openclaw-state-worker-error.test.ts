@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, expect, it, vi } from "vitest";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
+import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import {
@@ -89,6 +90,10 @@ describe("shared-state worker error transport", () => {
       error: new WorkerSessionAlreadyAttachedError("session", "environment"),
       fields: { sessionId: "session", environmentId: "environment" },
     },
+    {
+      error: new SqliteTranscriptMutationConflictError("session"),
+      fields: { sessionId: "session" },
+    },
     ...[undefined, "SQLITE_IOERR"].map((code) => ({
       error: Object.assign(new Error("native open refused"), { code }),
       fields: { code },
@@ -97,10 +102,12 @@ describe("shared-state worker error transport", () => {
     ...[
       { code: "ERR_SQLITE_ERROR", errcode: 517 },
       { code: "ERR_SQLITE_ERROR", errcode: 262 },
+      { code: "ERR_SQLITE_ERROR", errcode: 26 },
+      { code: "ERR_SQLITE_ERROR", errcode: 266 },
       { code: "SQLITE_BUSY" },
       { code: "SQLITE_LOCKED" },
     ].map((fields) => ({
-      error: Object.assign(new Error("native lock contention"), fields),
+      error: Object.assign(new Error("native SQLite failure"), fields),
       fields,
     })),
     ...[RangeError, SyntaxError, TypeError, SkillUploadRequestError].map((ErrorType) => ({
@@ -251,6 +258,7 @@ describe("shared-state worker error transport", () => {
     const payload = encodeOpenClawStateWorkerError(original);
     assert(payload);
     const job: Job = {
+      observation: { started() {}, completed() {} },
       request: {
         type: "execute",
         id: 1,
@@ -479,9 +487,9 @@ describe("shared-state worker error transport", () => {
   });
 
   it("opts into complete ordinary graphs without promoting name-only classifications", () => {
-    const native = Object.assign(new Error("native read failed"), {
-      code: "ERR_SQLITE_ERROR",
-      errcode: 11,
+    const native = Object.assign(new Error("ordinary read failed"), {
+      code: "EIO",
+      errno: -5,
       privateState: "fixture-not-for-transport",
     });
     const integrity = Object.assign(new Error("read refused", { cause: native }), {
@@ -505,7 +513,7 @@ describe("shared-state worker error transport", () => {
     expect(decoded.cause).toBe(decoded.errors[0]);
     expect(decoded.errors[0]).toMatchObject({ name: "SqliteIntegrityError" });
     expect(decoded.errors[0].cause).toBe(decoded.errors[1]);
-    expect(decoded.errors[1]).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 11 });
+    expect(decoded.errors[1]).toMatchObject({ code: "EIO", errno: -5 });
     expect(decoded.errors[2]).not.toBeInstanceOf(SqliteSchemaVersionError);
     expect(decoded.errors[3]).toBe(decoded);
     expect(findStartupMaintenanceRequiredError(decoded)).toBeUndefined();

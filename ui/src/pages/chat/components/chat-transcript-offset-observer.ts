@@ -18,7 +18,7 @@ type TranscriptScrollRenderState = { atEnd: boolean; touchActive: boolean };
 export class TranscriptOffsetState {
   pendingScrollOffset: ChatTranscriptPendingScrollOffset | null = null;
   scrollCommand:
-    | { behavior: ScrollBehavior; target: "end"; source: "auto" | "manual" }
+    | { behavior: ScrollBehavior; target: "end" }
     | { behavior: ScrollBehavior; target: "index" }
     | { behavior: ScrollBehavior; target: "message"; messageId: string }
     | null = null;
@@ -66,21 +66,6 @@ export function isTranscriptProgrammaticScroll(
   );
 }
 
-export function isTranscriptManualScroll(
-  state: TranscriptOffsetState,
-  element: HTMLDivElement | null,
-): boolean {
-  const command = state.scrollCommand;
-  if (!command || (command.target === "end" && command.source !== "manual")) {
-    return false;
-  }
-  // Native idle can lag a completed journey or never fire for a no-op.
-  return (
-    command.target !== "end" ||
-    Math.abs((maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0)) > 1
-  );
-}
-
 export function scrollTranscriptToEnd(
   state: TranscriptOffsetState,
   instance: Virtualizer<HTMLDivElement, HTMLElement>,
@@ -88,7 +73,7 @@ export function scrollTranscriptToEnd(
   cancelScroll: () => void,
   measureSkippedRows: () => void,
 ): void {
-  // Retargeting automatic follow must not insert an instant stop or lose manual ownership.
+  // Retargeting automatic follow must not insert an instant stop.
   if (source !== "auto" || state.scrollCommand?.target !== "end") {
     cancelScroll();
   } else if (state.scrollCommand.behavior === "smooth" && behavior !== "smooth") {
@@ -96,11 +81,9 @@ export function scrollTranscriptToEnd(
     // TanStack suppressed outside the outgoing smooth command’s target buffer.
     measureSkippedRows();
   }
-  const current = state.scrollCommand;
   state.scrollCommand = {
     behavior,
     target: "end",
-    source: source === "auto" && current?.target === "end" ? current.source : source,
   };
   instance.scrollToEnd({ behavior });
   // Instant commands and smooth no-ops can reach their target before any

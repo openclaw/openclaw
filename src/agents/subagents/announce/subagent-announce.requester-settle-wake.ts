@@ -47,9 +47,12 @@ import {
 } from "./subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
-import { readChildCompletionFindings } from "./subagent-announce-output.js";
+import {
+  readChildCompletionFindings,
+  selectCurrentRequesterCompletionRows,
+} from "./subagent-announce-output.js";
+import { SubagentAnnouncePreparationConflictError } from "./subagent-announce-result.js";
 import { hasUsableSessionEntry } from "./subagent-announce.js";
-import { selectCurrentRequesterCompletionRows } from "./subagent-announce.requester-settle-cohort.js";
 import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
 import { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
@@ -59,6 +62,8 @@ import {
   captureRequesterRunOwner,
   resolvePrivateSettlePolicy,
   retainedYieldIdentity,
+  startRequesterSettleWakeAttempt,
+  deferRequesterSettleWakePreparation,
   type RequesterSettleWakeBatchState,
   type RequesterSettleWakeBatchCallbacks,
 } from "./subagent-announce.requester-settle-state.js";
@@ -379,9 +384,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       });
     }
     if (hasUnsettledDescendants) {
-      if (frozen) {
-        await deferBatch();
-      }
+      await deferBatch();
       return false;
     }
     const requiredSettled = settledBatch.filter((entry) => entry.expectsCompletionMessage === true);
@@ -492,7 +495,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       await deferBatch();
       return false;
     }
+    if (!preparedFindings.isCurrent()) {
+      throw new SubagentAnnouncePreparationConflictError("Child completion preparation changed.");
+    }
 
+    const beforeDispatch = state;
     let attemptIndex: number;
     if (state.status === "dispatching") {
       // Ambiguous delivery reuses its attempt key. Completed-turn RPC replay
@@ -508,14 +515,13 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         return false;
       }
       attemptIndex = state.attemptCount;
-      state = {
-        status: "dispatching",
-        attemptCount: state.attemptCount + 1,
-        batchRunIds: retainedBatchRunIds,
-        ...retainedYieldIdentity(state),
-        ...admissionMarker,
-      };
+      state = startRequesterSettleWakeAttempt(state, retainedBatchRunIds, admissionMarker);
       await transitionBatch(state);
+    }
+    if (!preparedFindings.isCurrent()) {
+      // No dispatch crossed this boundary; restore its unspent reservation before retrying.
+      await transitionBatch(deferRequesterSettleWakePreparation(beforeDispatch));
+      return false;
     }
 
     const { runId: directIdempotencyKey } = buildRequesterSettleWakeIdentity({

@@ -195,7 +195,7 @@ describe("empty managed workspaces", () => {
     await service.remove({ id: created.id, reason: "archive-again" });
     now += SNAPSHOT_RETENTION_MS + 1;
     const unavailableLease = vi
-      .spyOn(stateLease, "withOpenClawStateLease")
+      .spyOn(stateLease, "withOpenClawStateLeaseAsync")
       .mockRejectedValue(new Error("allocation lease unavailable"));
     expect((await service.gc()).snapshotsPruned).toBe(0);
     expect(fsSync.existsSync(created.repoRoot)).toBe(true);

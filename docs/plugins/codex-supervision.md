@@ -321,8 +321,8 @@ real approval, elicitation, event, and delivery handlers. It uses an ephemeral
 native fork on the supervision connection to pin the source snapshot without
 supplying a model or provider override. Codex App Server selects both from its
 current native configuration and returns the actual selection. OpenClaw confirms
-the probe's subscription is released before creating the canonical branch. The
-probe never becomes stored history or an archive artifact. On that same
+the check's subscription is released before creating the canonical branch. The
+check never becomes stored history or an archive artifact. On that same
 connection, OpenClaw starts the canonical `appServer`-source full harness thread
 under its cwd and runtime policy with exactly that returned pair, injects the
 bounded visible history, and commits the branch binding. The canonical thread

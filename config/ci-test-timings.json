@@ -1971,7 +1971,6 @@
       "test/scripts/bundled-plugin-install-uninstall-probe.test.ts": 3,
       "test/scripts/bundled-plugin-source-utils.test.ts": 1,
       "test/scripts/capability-catalog-artifacts.test.ts": 1,
-      "test/scripts/changed-dependencies.test.ts": 1,
       "test/scripts/changed-lanes.stylelint.test.ts": 1,
       "test/scripts/changed-lanes.test.ts": 172,
       "test/scripts/changelog-to-html.test.ts": 1,

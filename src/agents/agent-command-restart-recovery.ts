@@ -375,8 +375,6 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
     };
   }
-  const createsTranscriptOnlySourceClaim =
-    params.sourceRunId !== undefined && params.deliveryContext === undefined;
   const createsScopedDeliveryClaim = params.sourceRunId !== undefined;
   if (createsScopedDeliveryClaim && !params.sourceIngress) {
     throw new Error("restart recovery source ownership is required for a new claim");
@@ -397,7 +395,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
     restartRecoverySuppressTextDelivery:
       createsScopedDeliveryClaim && params.suppressTextDelivery === true ? true : undefined,
     restartRecoveryDeliveryRunId:
-      params.deliveryContext || createsTranscriptOnlySourceClaim ? params.runId : undefined,
+      params.deliveryContext || createsScopedDeliveryClaim ? params.runId : undefined,
     restartRecoveryDeliverySourceRunId: params.sourceRunId,
     restartRecoverySourceIngress: createsScopedDeliveryClaim ? params.sourceIngress : undefined,
     restartRecoverySourceReplyDeliveryMode: params.sourceRunId

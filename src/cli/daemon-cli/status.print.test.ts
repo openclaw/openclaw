@@ -494,7 +494,7 @@ describe("printDaemonStatus", () => {
       gateway,
       rpc: { ok: true, kind: "connect", capability: "write_capable", url: gateway.probeUrl },
     });
-    expectMockLineContains(runtime.log, "Connectivity probe: ok");
+    expectMockLineContains(runtime.log, "Connectivity check: ok");
     expect(
       runtime.log.mock.calls.map(([line]) => line).filter((line) => line.startsWith("Capability:")),
     ).toEqual(["Capability: write-capable"]);
@@ -663,7 +663,7 @@ describe("printDaemonStatus", () => {
       runtimeLabel: "running",
       runtimeText: "running (pid 8000)",
       targetRole: "diagnostic-only",
-      suffix: " (diagnostic only, not the probe target)",
+      suffix: " (diagnostic only, not the check target)",
       rpcOk: false,
     },
     {
@@ -880,10 +880,10 @@ describe("printDaemonStatus", () => {
 
     const errors = output(runtime.error);
     const logs = output();
-    expect(errors).toContain("Read probe: timed out under event-loop load");
+    expect(errors).toContain("Read check: timed out under event-loop load");
     expect(errors).toContain("Gateway event loop: degraded max=5100ms p99=5079ms util=1 cpu=0.94");
     expect(logs).toContain("Gateway accepted the connection");
-    expect(errors).not.toContain("Connectivity probe: failed");
+    expect(errors).not.toContain("Connectivity check: failed");
     expect(logs).not.toContain("not a warm-up delay");
   });
   it("does not warn about the service install when it matches the CLI version", () => {

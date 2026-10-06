@@ -5,10 +5,10 @@ import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
-import type {
-  DiagnosticMemoryPressureEvent,
-  DiagnosticMemoryUsage,
-} from "../infra/diagnostic-events.js";
+import {
+  DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+  type DiagnosticMemoryPressureFields,
+} from "../infra/diagnostic-process-types.js";
 import {
   collectErrorGraphCandidates,
   formatErrorMessage,
@@ -78,13 +78,7 @@ type DiagnosticSessionFileSummary = {
   mtimeMs: number;
 };
 
-type DiagnosticMemoryPressureBundleEvidence = {
-  level: DiagnosticMemoryPressureEvent["level"];
-  reason: DiagnosticMemoryPressureEvent["reason"];
-  memory: DiagnosticMemoryUsage;
-  thresholdBytes?: number;
-  rssGrowthBytes?: number;
-  windowMs?: number;
+type DiagnosticMemoryPressureBundleEvidence = Omit<DiagnosticMemoryPressureFields, "type"> & {
   heapStatistics?: DiagnosticHeapStatisticsSummary;
   heapSpaces?: DiagnosticHeapSpaceSummary[];
   cgroup?: DiagnosticCgroupMemorySummary;
@@ -229,13 +223,6 @@ function resolveDiagnosticStabilityBundleDir(
     options.stateDir ?? resolveStateDir(options.env ?? process.env),
     "logs",
     "stability",
-  );
-}
-
-function buildBundlePath(dir: string, now: Date, reason: string): string {
-  return path.join(
-    dir,
-    `${BUNDLE_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}-${normalizeReason(reason)}${BUNDLE_SUFFIX}`,
   );
 }
 
@@ -449,7 +436,7 @@ function readMemoryPressureEvidence(
     result,
     pressure,
     "evidence.memoryPressure",
-    ["thresholdBytes", "rssGrowthBytes", "windowMs"],
+    DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
     readOptionalNumber,
   );
   return {
@@ -590,10 +577,7 @@ function readStabilityEventRecord(
       "costUsd",
       "count",
       "bytes",
-      "limitBytes",
-      "thresholdBytes",
-      "rssGrowthBytes",
-      "windowMs",
+      ...DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
       "ageMs",
       "queueDepth",
       "queueSize",
@@ -735,8 +719,15 @@ function sanitizeSessionEvidenceFileName(fileName: string): string {
   return "<session>";
 }
 
-function isMemoryPressureReason(reason: string): reason is DiagnosticMemoryPressureEvent["reason"] {
-  return reason === "rss_threshold" || reason === "heap_threshold" || reason === "rss_growth";
+function isMemoryPressureReason(
+  reason: string,
+): reason is DiagnosticMemoryPressureFields["reason"] {
+  return (
+    reason === "rss_threshold" ||
+    reason === "heap_threshold" ||
+    reason === "worker_heap_threshold" ||
+    reason === "rss_growth"
+  );
 }
 
 function listDiagnosticStabilityBundleFilesSync(
@@ -874,7 +865,10 @@ export function writeDiagnosticStabilityBundleForFailureSync(
     };
 
     const dir = resolveDiagnosticStabilityBundleDir(options);
-    const file = buildBundlePath(dir, now, normalizedReason);
+    const file = path.join(
+      dir,
+      `${BUNDLE_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}-${normalizedReason}${BUNDLE_SUFFIX}`,
+    );
     replaceFileAtomicSync({
       filePath: file,
       content: `${JSON.stringify(bundle, null, 2)}\n`,

@@ -97,7 +97,7 @@ describe("chat pane model controls", () => {
       steerAck.resolve({});
     });
     const container = document.createElement("div");
-    const draw = (starting = false) => {
+    const draw = () => {
       const controls = renderChatPaneComposerControls({
         state,
         selectedSession: state.sessionsResult?.sessions[0],
@@ -112,8 +112,8 @@ describe("chat pane model controls", () => {
       render(controls.composerControls, container);
       const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
       expect(trigger?.dataset.chatSelectValue).toBe("example/primary");
-      expect(trigger?.getAttribute("aria-busy")).toBe(String(starting));
-      expect(trigger?.querySelector(".btn__spinner") !== null).toBe(starting);
+      expect(trigger?.getAttribute("aria-busy")).toBe("false");
+      expect(trigger?.querySelector(".btn__spinner")).toBeNull();
       return trigger?.textContent;
     };
     state.chatSending = true;
@@ -121,10 +121,10 @@ describe("chat pane model controls", () => {
       sessionKey: state.sessionKey,
       agentId: "main",
     });
-    expect(draw(true)).toContain("Primary");
+    expect(draw()).toContain("Primary");
     adoptStartedChatRun(state, "current-run", 2);
     state.chatSending = false;
-    expect(draw(true)).toContain("Primary");
+    expect(draw()).toContain("Primary");
     const observe = (
       runId: string,
       model: string | null,
@@ -151,11 +151,11 @@ describe("chat pane model controls", () => {
     observe("elsewhere-run", "primary", 5, "agent:main:elsewhere");
     expect(draw()).toContain("Fallback");
     observe("current-run", null, 6);
-    expect(draw(true)).toContain("Primary");
+    expect(draw()).toContain("Primary");
     observe("current-run", "fallback", 7);
     expect(draw()).toContain("Fallback");
     adoptStartedChatRun(state, "replacement-run", 8);
-    expect(draw(true)).toContain("Primary");
+    expect(draw()).toContain("Primary");
     observe("replacement-run", "primary", 9);
     expect(draw()).toContain("Primary");
     state.chatSending = true;
@@ -171,7 +171,7 @@ describe("chat pane model controls", () => {
     observe("next-run", "fallback", 10);
     // A delayed event can carry the latest session projection but an older emitter ID.
     observe("replacement-run", "fallback", 10);
-    expect(draw(true)).toContain("Primary");
+    expect(draw()).toContain("Primary");
     adoptStartedChatRun(state, "next-run", 11);
     state.chatSending = false;
     expect(draw()).toContain("Fallback");

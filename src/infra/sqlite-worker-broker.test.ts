@@ -4,11 +4,13 @@ import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import * as os from "node:os";
 import { Worker } from "node:worker_threads";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import * as logging from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
+import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import {
   useSqliteWorkerStoreFixture,
@@ -40,6 +42,20 @@ poolIt("keeps an independent database responsive while another worker is at capa
   const busy = await open(databasePath());
   const independent = await open(databasePath());
   const busyThread = (await append(busy, "before saturation")).threadId;
+  await waitForDiagnosticEventsDrained();
+  const requests: DiagnosticWorkerRequestFields[] = [];
+  onTestFinished(
+    onInternalDiagnosticEvent(
+      (event) => {
+        if (event.type === "worker.request" && event.kind === "sqlite_writer") {
+          requests.push(event);
+        }
+      },
+      { include: ["worker.request"] },
+    ),
+  );
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   const held = createDeferredCore();
   let release: (() => void) | undefined;
   const messages = vi.spyOn(Worker.prototype, "emit");
@@ -60,6 +76,7 @@ poolIt("keeps an independent database responsive while another worker is at capa
   let waiting: Promise<PromiseSettledResult<unknown>[]> | undefined;
   try {
     await held.promise;
+    now = 10;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const completed = expect(append(independent, "independent write")).resolves.toMatchObject({
       writes: 1,
@@ -86,8 +103,11 @@ poolIt("keeps an independent database responsive while another worker is at capa
       append(busy, "oldest surviving waiter"),
       append(busy, "later arrival"),
     ]);
+    now = 25;
     current = false;
     cancel.abort(canceled);
+    await waitForDiagnosticEventsDrained();
+    expect(requests.at(-1)).toMatchObject({ phase: "completed", queueDepth: 130 });
   } finally {
     vi.useRealTimers();
     messages.mockRestore();
@@ -106,6 +126,20 @@ poolIt("keeps an independent database responsive while another worker is at capa
     "oldest surviving waiter",
     "later arrival",
   ]);
+  await waitForDiagnosticEventsDrained();
+  // Admission retries retain one observation; the canceled waiter never starts.
+  expect(requests.filter((event) => event.phase === "queued")).toHaveLength(135);
+  expect(requests.filter((event) => event.phase === "started")).toHaveLength(134);
+  expect(requests.filter((event) => event.phase === "completed")).toHaveLength(135);
+  expect(Math.max(...requests.map((event) => event.queueDepth))).toBe(131);
+  expect(requests.at(-1)?.queueDepth).toBe(0);
+  expect(requests).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ phase: "started", queueWaitMs: 25 }),
+      expect.objectContaining({ phase: "started", queueWaitMs: 15 }),
+      expect.objectContaining({ phase: "completed", durationMs: 25 }),
+    ]),
+  );
 });
 
 it.each([

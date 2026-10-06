@@ -3,8 +3,11 @@ import { lstatSync } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import { withWorktreeAllocationLease } from "./allocation.js";
-import { requireWorktreeDiskSpace } from "./capacity.js";
+import {
+  withWorktreeAllocationLease,
+  withWorktreeMutationLease,
+  type WorktreeAllocationGuard,
+} from "./allocation.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { removeUnusedEmptyWorktreeSource } from "./empty-source.js";
 import { requireGit, worktreePathExists, commandError, listGitWorktrees, runGit } from "./git.js";
@@ -40,6 +43,8 @@ export async function captureManagedWorktreeSnapshot(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
   workerAuthority?: WorktreeWorkerAuthority;
+  requireDiskSpace: WorktreeAllocationGuard["requireDiskSpace"];
+  onInventory?: (counts: { tracked: number; untracked: number }) => void;
 }) {
   return withWorktreeRunEnd(params.env, async () => {
     const { record, env, provisionedPaths } = params;
@@ -84,10 +89,13 @@ export async function captureManagedWorktreeSnapshot(params: {
           };
           assertCurrent();
           switch (effect.type) {
+            case "worktree.snapshot-inventory":
+              params.onInventory?.(effect.input);
+              return undefined;
             case "worktree.assert-current":
               return undefined;
             case "worktree.snapshot-capacity":
-              requireWorktreeDiskSpace(
+              await params.requireDiskSpace(
                 [
                   ...effect.input.demands,
                   ...(effect.input.stateBytes === undefined
@@ -97,6 +105,7 @@ export async function captureManagedWorktreeSnapshot(params: {
                 effect.input.purpose,
                 true,
               );
+              assertCurrent();
               return undefined;
             case "worktree.snapshot-provisioned-reset":
             case "worktree.snapshot-provisioned-chunk":
@@ -200,6 +209,31 @@ export async function retireManagedWorktreeSnapshotById(
     });
     return { retired: true as const, id: record.id };
   });
+}
+
+export async function retireExpiredManagedWorktreeSnapshot(params: {
+  env: NodeJS.ProcessEnv;
+  id: string;
+  expiresBefore: number;
+  guard: WorktreeAllocationGuard;
+}): Promise<boolean> {
+  return await withWorktreeMutationLease(
+    { ...params.guard, env: params.env, id: params.id },
+    async (guard) => {
+      const record = getRegistryWorktree(params.env, params.id);
+      if (!record || record.removedAt === undefined || record.removedAt >= params.expiresBefore) {
+        return false;
+      }
+      await retireManagedWorktreeSnapshot({
+        record,
+        env: params.env,
+        signal: guard.signal,
+        assertCurrent: guard.commitGuard,
+        workerAuthority: guard.workerAuthority,
+      });
+      return true;
+    },
+  );
 }
 
 /** Preparation remains under the allocation owner; Git commits exact ref custody atomically. */
@@ -328,7 +362,7 @@ async function prepareExactSnapshotRetirement(params: {
 }
 
 /** Retire the restore entry point before releasing accepted projection custody. */
-export async function retireManagedWorktreeSnapshot(params: {
+async function retireManagedWorktreeSnapshot(params: {
   record: ManagedWorktreeRecord;
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
@@ -338,30 +372,27 @@ export async function retireManagedWorktreeSnapshot(params: {
 }) {
   const { record, env, signal } = params;
   if (params.expected) {
-    const { localWorkspaceStore } =
+    const { withLocalWorkspaceStore } =
       await import("../../gateway/worker-environments/local-workspace-store.js");
-    const projectionStore = localWorkspaceStore(env);
-    const assertCurrent = () => {
-      params.assertCurrent();
-      assertRegistrySnapshotRetirement(env, record);
-      if (projectionStore.get(record.id)) {
-        throw new Error(
-          "Snapshot retains local workspace projection custody; preserve its recovery data",
-        );
-      }
-    };
-    assertCurrent();
-    const retireSnapshot = await prepareExactSnapshotRetirement({
-      record,
-      expected: params.expected,
-      signal,
-      assertCurrent,
-    });
-    const { expireLocalWorkspaceProjection } =
-      await import("../../gateway/worker-environments/local-workspace-projection.js");
-    await expireLocalWorkspaceProjection({ worktree: record, env, assertCurrent, retireSnapshot });
-    assertCurrent();
-    deleteRegistryWorktree(env, record.id, { assertCurrent, expectedRetired: record });
+    await withLocalWorkspaceStore(
+      { ...params, worktreeId: record.id, requireAbsent: true },
+      async (store) => {
+        const assertCurrent = () => {
+          store.assertCurrent();
+          assertRegistrySnapshotRetirement(env, record);
+        };
+        assertCurrent();
+        const retireSnapshot = await prepareExactSnapshotRetirement({
+          record,
+          expected: params.expected!,
+          signal,
+          assertCurrent,
+        });
+        await retireSnapshot(assertCurrent);
+        assertCurrent();
+        deleteRegistryWorktree(env, record.id, { assertCurrent, expectedRetired: record });
+      },
+    );
     // Retained source refs remain owned, including an otherwise empty source repository.
     return;
   }
@@ -409,6 +440,7 @@ export async function retireManagedWorktreeSnapshot(params: {
       worktree: record,
       env,
       assertCurrent,
+      workerAuthority: params.workerAuthority,
       retireSnapshot: async (assertProjectionCurrent) => {
         const beforeRun = () => {
           assertCurrent();

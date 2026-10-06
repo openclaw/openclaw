@@ -13,11 +13,11 @@ export const subscribeRuntimeSessionChanges: PluginRuntime["gateway"]["subscribe
     if (!agentId) {
       return;
     }
+    const factsInvalidated =
+      change.factsInvalidated ?? (change.facts?.kind === "category" ? "category" : undefined);
     listener({
       agentId,
       sessionKey: change.sessionKey,
-      ...(change.factsInvalidated === undefined
-        ? {}
-        : { factsInvalidated: String(change.factsInvalidated) }),
+      ...(factsInvalidated === undefined ? {} : { factsInvalidated: String(factsInvalidated) }),
     });
   });

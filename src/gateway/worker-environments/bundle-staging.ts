@@ -1,6 +1,6 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { sha256File } from "../../infra/directory-durability.js";
 import { root, type Root } from "../../infra/fs-safe.js";
 import {
   WORKER_BUNDLE_ARTIFACT_MODE,
@@ -9,11 +9,14 @@ import {
   compareWorkerBundlePaths,
   type WorkerBundleHashEntry,
 } from "../../shared/worker-bundle-hash.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+
+const WORKER_BUNDLE_STAGING_CONCURRENCY = 16;
 
 async function stageWorkerDeployArtifact(params: {
   sourceRoot: string;
   source: Root;
-  staging: Root;
+  stagingRoot: string;
   artifactPath: string;
 }): Promise<WorkerBundleHashEntry> {
   const relativeSourcePath = `dist/worker/${params.artifactPath}`;
@@ -35,33 +38,21 @@ async function stageWorkerDeployArtifact(params: {
   if (initialStats.isSymbolicLink() || !initialStats.isFile()) {
     throw new Error(`Unsafe worker deploy artifact: ${relativeSourcePath}`);
   }
-  await params.staging.copyIn(
-    params.artifactPath,
-    { root: params.source, relativePath: sourcePath },
-    {
-      overwrite: false,
-      sourceHardlinks: "allow",
-      mode: WORKER_BUNDLE_ARTIFACT_MODE,
-      maxBytes: Infinity,
-      durable: false,
-      clone: "never",
-    },
-  );
-  const opened = await params.staging.open(params.artifactPath);
-  try {
-    const { bytes, digest } = await sha256File(opened.handle, { maxBytes: opened.stat.size });
-    if (bytes !== opened.stat.size) {
-      throw new Error(`Worker deploy artifact changed while packaging: ${relativeSourcePath}`);
-    }
-    return {
-      path: params.artifactPath,
-      mode: WORKER_BUNDLE_ARTIFACT_MODE,
-      size: bytes,
-      sha256: digest,
-    };
-  } finally {
-    await opened.handle.close();
-  }
+  const { buffer } = await params.source.read(sourcePath, {
+    symlinks: "reject",
+    hardlinks: "allow",
+  });
+  // Stage exactly the hashed bytes so a concurrent rebuild cannot diverge archive and hash.
+  await fs.writeFile(path.join(params.stagingRoot, params.artifactPath), buffer, {
+    flag: "wx",
+    mode: WORKER_BUNDLE_ARTIFACT_MODE,
+  });
+  return {
+    path: params.artifactPath,
+    mode: WORKER_BUNDLE_ARTIFACT_MODE,
+    size: buffer.byteLength,
+    sha256: createHash("sha256").update(buffer).digest("hex"),
+  };
 }
 
 export async function collectWorkerBundleManifest(
@@ -77,11 +68,18 @@ export async function collectWorkerBundleManifest(
       { cause: error },
     );
   });
-  const staging = await root(stagingRoot, { maxBytes: Infinity });
-  const manifest: WorkerBundleHashEntry[] = [];
   const chunks = artifacts.filter((name) => WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(name));
-  for (const artifactPath of [...WORKER_BUNDLE_ARTIFACT_PATHS, ...chunks]) {
-    manifest.push(await stageWorkerDeployArtifact({ sourceRoot, source, staging, artifactPath }));
+  // Drain in-flight writes before cleanup can remove staging and mask the original error.
+  const { results, hasError, firstError } = await runTasksWithConcurrency({
+    tasks: [...WORKER_BUNDLE_ARTIFACT_PATHS, ...chunks].map(
+      (artifactPath) => () =>
+        stageWorkerDeployArtifact({ sourceRoot, source, stagingRoot, artifactPath }),
+    ),
+    limit: WORKER_BUNDLE_STAGING_CONCURRENCY,
+    errorMode: "stop",
+  });
+  if (hasError) {
+    throw firstError;
   }
-  return manifest.toSorted((left, right) => compareWorkerBundlePaths(left.path, right.path));
+  return results.toSorted((left, right) => compareWorkerBundlePaths(left.path, right.path));
 }

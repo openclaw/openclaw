@@ -26,7 +26,7 @@ import {
 
 describe("models.list account service tiers", () => {
   it.each(["profile", "direct"] as const)(
-    "publishes %s API-key embedded tiers without discovery and withdraws a downgraded tier",
+    "keeps %s API-key tiers selectable and projects transient fulfillment without discovery",
     async (source) => {
       const model = {
         id: "synthetic-api-model",
@@ -96,23 +96,31 @@ describe("models.list account service tiers", () => {
       if (!selectedCredential) {
         throw new Error("Missing selected fixture credential");
       }
-      accountCatalog.prepareServiceTierObserver({
+      const record = accountCatalog.prepareServiceTierObserver({
         selectedCredential,
         credential,
-      })({
+      });
+      const observation = {
         modelId: model.id,
         runtimeId: "openclaw",
         api: platformRoute.api,
         baseUrl: platformRoute.baseUrl,
-        serviceTiers: ["priority"],
-      });
+        requestedTier: "ultrafast",
+        responseTier: "priority",
+      };
+      record(observation);
       const next = await prepare();
-      expect(next.read().models.find((row) => row.id === model.id)?.serviceTiers).toEqual([
-        "priority",
-      ]);
-      expect(first.read().models.find((row) => row.id === model.id)?.serviceTiers).toEqual([
-        "priority",
-      ]);
+      for (const projection of [first, next]) {
+        expect(projection.read().models.find((row) => row.id === model.id)).toMatchObject({
+          serviceTiers: ["priority", "ultrafast"],
+          supportsServiceTierRecovery: true,
+          serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
+        });
+      }
+      record({ ...observation, responseTier: "ultrafast" });
+      expect(first.read().models.find((row) => row.id === model.id)).not.toHaveProperty(
+        "serviceTierObservation",
+      );
     },
   );
   it.each(["codex", "openclaw"] as const)(
@@ -295,4 +303,50 @@ describe("models.list account service tiers", () => {
       );
     },
   );
+});
+
+it("publishes Daybreak restrictions through the real model catalog projection", async () => {
+  const ids = ["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"];
+  const context = createModelsListTestContext({
+    cfg: {
+      agents: {
+        defaults: {
+          model: "openai/" + ids[0],
+          models: Object.fromEntries(
+            ids.map((id) => ["openai/" + id, { agentRuntime: { id: "openclaw" } }]),
+          ),
+        },
+      },
+    },
+    catalog: ids.map((id) => ({ id, name: id, provider: "openai", ...platformRoute })),
+    preparedAuthStore: {
+      version: 1,
+      profiles: {
+        "openai:daybreak-fixture": {
+          type: "api_key",
+          provider: "openai",
+          key: "synthetic-api-key",
+        },
+      },
+    },
+  });
+  const result = await prepareModelsListResult({
+    source: { kind: "gateway", context },
+    agentId: "main",
+    params: { view: "all", preparedOnly: true, includeDefaultModels: false },
+    routeResolverFactory: routeResolverFactory(dualRoutes),
+  });
+  const models = result.read().models;
+  expect(models.find((row) => row.id === ids[0])).toMatchObject({
+    available: true,
+    supportsFastMode: true,
+    supportsServiceTierRecovery: true,
+    serviceTiers: ["default", "priority"],
+  });
+  expect(models.find((row) => row.id === ids[1])).toMatchObject({
+    available: true,
+    supportsFastMode: false,
+    supportsServiceTierRecovery: true,
+    serviceTiers: ["default"],
+  });
 });

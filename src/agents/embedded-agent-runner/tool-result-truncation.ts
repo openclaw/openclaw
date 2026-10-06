@@ -3,7 +3,6 @@ import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { z } from "zod";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
@@ -20,10 +19,10 @@ import {
   resolveAutoLiveToolResultMaxChars,
   resolveLiveToolResultMaxChars,
 } from "../tool-result-limits.js";
+import { readCacheTtlCheckpoint } from "./cache-ttl-checkpoint.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import {
-  hashToolResultProjectionSnapshot,
   recordToolResultPromptProjection,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
@@ -302,7 +301,7 @@ export const toolResultWarningDedupe = {
 };
 
 type ToolResultTruncationOptions = {
-  suffix?: string | ((truncatedChars: number) => string);
+  suffix?: (truncatedChars: number) => string;
   minKeepChars?: number;
   minimumRawWeight?: number;
 };
@@ -340,16 +339,6 @@ function logToolResultSessionTruncation(params: {
   log.warn(
     `${message}; aggregate tool-result pressure detected; consider /compact or /new if pressure persists`,
   );
-}
-
-function resolveSuffixFactory(
-  suffix: ToolResultTruncationOptions["suffix"],
-): (truncatedChars: number) => string {
-  return typeof suffix === "function"
-    ? suffix
-    : typeof suffix === "string"
-      ? () => suffix
-      : DEFAULT_SUFFIX;
 }
 
 function resolveEffectiveMinKeepChars(params: {
@@ -417,7 +406,7 @@ export function truncateToolResultText(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): string {
-  const suffixFactory = resolveSuffixFactory(options.suffix);
+  const suffixFactory = options.suffix ?? DEFAULT_SUFFIX;
   const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
   const minKeepChars = resolveEffectiveMinKeepChars({
     maxChars,
@@ -524,7 +513,7 @@ export function truncateToolResultMessage(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
-  const suffixFactory = resolveSuffixFactory(options.suffix);
+  const suffixFactory = options.suffix ?? DEFAULT_SUFFIX;
   const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
   const minKeepChars = resolveEffectiveMinKeepChars({
     maxChars,
@@ -863,70 +852,37 @@ function getToolResultProjectionKeys(
   });
 }
 
-const cacheTtlProjectionSnapshotSchema = z.object({
-  prunedToolResults: z.array(
-    z.union([
-      z.object({ key: z.string(), mode: z.literal("soft") }),
-      z.object({ key: z.string(), mode: z.literal("hard"), placeholder: z.string() }),
-    ]),
-  ),
-  ambiguousToolResultBaseKeys: z.array(z.string()).optional(),
-  frozenToolResults: z
-    .array(
-      z.object({
-        key: z.string(),
-        sourceHash: z.string(),
-        texts: z.array(z.string()).optional(),
-      }),
-    )
-    .optional(),
-});
-
 /** Reads pruned keys from the active transcript branch, never from a sibling branch. */
 export function restoreCacheTtlToolResultProjections(
   projectionState: ToolResultPromptProjectionState,
   entries: readonly { type?: unknown; customType?: unknown; data?: unknown }[],
 ): void {
-  projectionState.lastWrittenSnapshotHash = undefined;
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index];
-    if (entry?.type === "reset") {
-      return;
-    }
-    if (entry?.type !== "custom" || entry.customType !== "openclaw.cache-ttl") {
-      continue;
-    }
-    const parsed = cacheTtlProjectionSnapshotSchema.safeParse(entry.data);
-    if (!parsed.success) {
-      continue;
-    }
-    projectionState.lastWrittenSnapshotHash = hashToolResultProjectionSnapshot({
-      prunedToolResults: parsed.data.prunedToolResults,
-      ambiguousToolResultBaseKeys: parsed.data.ambiguousToolResultBaseKeys ?? [],
-      frozenToolResults: parsed.data.frozenToolResults ?? [],
-    });
-    for (const key of parsed.data.ambiguousToolResultBaseKeys ?? []) {
-      projectionState.ambiguousBaseKeys.add(key);
-    }
-    for (const { key, sourceHash, texts } of parsed.data.frozenToolResults ?? []) {
-      // A live attempt can be ahead of its last marker; never roll it back.
-      if (projectionState.sourceHashByKey.has(key)) {
-        continue;
-      }
-      projectionState.sourceHashByKey.set(key, sourceHash);
-      projectionState.frozen.add(key);
-      if (texts) {
-        projectionState.replacements.set(key, {
-          content: texts.map((text) => ({ type: "text", text })),
-        });
-      }
-    }
-    for (const { key, ...mark } of parsed.data.prunedToolResults) {
-      if (!projectionState.replacements.get(key)?.cacheTtl) {
-        projectionState.restoredCacheTtl.set(key, mark);
-      }
-    }
+  const checkpoint = readCacheTtlCheckpoint(entries);
+  projectionState.cacheTtlCheckpoint = checkpoint;
+  projectionState.cacheTtlRevision = (projectionState.cacheTtlRevision ?? 0) + 1;
+  if (!checkpoint) {
     return;
+  }
+  for (const key of checkpoint.snapshot.ambiguousToolResultBaseKeys) {
+    projectionState.ambiguousBaseKeys.add(key);
+  }
+  for (const { key, sourceHash, texts } of checkpoint.snapshot.frozenToolResults) {
+    // A live attempt can be ahead of its last marker; never roll it back.
+    if (projectionState.sourceHashByKey.has(key)) {
+      continue;
+    }
+    projectionState.sourceHashByKey.set(key, sourceHash);
+    projectionState.frozen.add(key);
+    if (texts) {
+      projectionState.replacements.set(key, {
+        content: texts.map((text) => ({ type: "text", text })),
+      });
+    }
+  }
+  for (const { key, ...mark } of checkpoint.snapshot.prunedToolResults) {
+    if (!projectionState.replacements.get(key)?.cacheTtl) {
+      projectionState.restoredCacheTtl.set(key, mark);
+    }
   }
 }
 

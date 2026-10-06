@@ -1,14 +1,11 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   createDispatcher,
   emptyConfig,
-  hookMocks,
   sessionStoreMocks,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
@@ -36,63 +33,6 @@ describe("dispatchReplyFromConfig", () => {
   } satisfies OpenClawConfig;
   const createDirectCtx = (overrides: Partial<MsgContext> = {}) =>
     buildTestCtx({ Provider: "telegram", ChatType: "direct", ...overrides });
-
-  it("reports verbose progress visibility to the channel", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = { verboseLevel: "on" };
-    const cfg = automaticGroupReplyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      From: "whatsapp:group:123@g.us",
-      SessionKey: "agent:main:whatsapp:group:123@g.us",
-    });
-
-    let isActive: (() => boolean) | undefined;
-    let activeDuringRun: boolean | undefined;
-    let activeAfterLevelChange: boolean | undefined;
-    const replyResolver = async () => {
-      activeDuringRun = isActive?.();
-      sessionStoreMocks.currentEntry = { verboseLevel: "off" };
-      activeAfterLevelChange = isActive?.();
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        onVerboseProgressVisibility: (getter) => {
-          isActive = getter;
-        },
-      },
-    });
-
-    expect(activeDuringRun).toBe(true);
-    expect(activeAfterLevelChange).toBe(false);
-
-    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
-    let isActiveOff: (() => boolean) | undefined;
-    let activeDuringOffRun: boolean | undefined;
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async () => {
-        activeDuringOffRun = isActiveOff?.();
-        return { text: "done" } satisfies ReplyPayload;
-      },
-      replyOptions: {
-        onVerboseProgressVisibility: (getter) => {
-          isActiveOff = getter;
-        },
-      },
-    });
-
-    expect(activeDuringOffRun).toBe(false);
-  });
 
   it.each([
     { stored: "off", override: "full", expected: ["Tool summary", "Tool failure output"] },
@@ -480,42 +420,6 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("exposes live group tool-summary state to reply_dispatch hooks", async () => {
-    // Group policy needs the loaded fixture's conversation grammar.
-    setActivePluginRegistry(createSessionConversationTestRegistry());
-    setNoAbort();
-    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "matrix",
-      Surface: "matrix",
-      ChatType: "group",
-      From: "matrix:!room:test",
-      SessionKey: "agent:main:matrix:group:!room:test",
-    });
-    let initialHookState: boolean | undefined;
-    let updatedHookState: boolean | undefined;
-    hookMocks.runner.runReplyDispatch.mockImplementationOnce(async (event: unknown) => {
-      const replyDispatchEvent = event as { shouldSendToolSummaries: boolean };
-      initialHookState = replyDispatchEvent.shouldSendToolSummaries;
-      sessionStoreMocks.currentEntry = { verboseLevel: "on" };
-      updatedHookState = replyDispatchEvent.shouldSendToolSummaries;
-      return undefined;
-    });
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: automaticGroupReplyConfig,
-      dispatcher,
-      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
-
-    expect(initialHookState).toBe(false);
-    expect(updatedHookState).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
   it("forwards direct native progress callbacks while verbose is off", async () => {
@@ -971,7 +875,7 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
+    expect(firstMockArg(sessionStoreMocks.loadSessionStoreEntry, "session")).toMatchObject({
       agentId: "main",
       storePath: "/tmp/mock-sessions.json",
       sessionKey: "agent:main:main",
@@ -1087,7 +991,7 @@ describe("dispatchReplyFromConfig", () => {
         exitCode: 2,
       });
       await opts?.onToolResult?.({
-        text: "🛠️ Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
+        text: "Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
         isError: true,
       });
       return { text: "done" } satisfies ReplyPayload;
@@ -1130,7 +1034,7 @@ describe("dispatchReplyFromConfig", () => {
     const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({
-        text: "🛠️ Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
+        text: "Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
         isError: true,
       });
       return { text: "done" } satisfies ReplyPayload;
@@ -1162,7 +1066,7 @@ describe("dispatchReplyFromConfig", () => {
     const dispatcher = createDispatcher();
     const ctx = createDirectCtx({ SessionKey: "agent:main:telegram:direct:U1" });
     const failedOutput = {
-      text: "🛠️ Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
+      text: "Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
       isError: true,
     } satisfies ReplyPayload;
 

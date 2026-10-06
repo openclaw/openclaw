@@ -11,7 +11,9 @@ export type { SessionTranscriptWatermark } from "./session-history-read.types.js
 
 type WatermarkDatabase = Pick<DB, "transcript_events" | "transcript_rewrite_watermarks">;
 
-function prepareHotWatermarkQuery(database: DatabaseSync) {
+// Retain compiled SQL per native handle; the shared executor still owns statements
+// and reads current rows with fresh bindings on every call.
+const hotWatermarkQuery = createSqliteQueryCache((database) => {
   const db = getNodeSqliteKysely<WatermarkDatabase>(database);
   return prepareSqliteQueryTakeFirstSync<
     string,
@@ -31,11 +33,7 @@ function prepareHotWatermarkQuery(database: DatabaseSync) {
         .as("generation"),
     ]);
   });
-}
-
-// Retain compiled SQL per native handle; the shared executor still owns statements
-// and reads current rows with fresh bindings on every call.
-const hotWatermarkQuery = createSqliteQueryCache(prepareHotWatermarkQuery);
+});
 
 /** Reads hot append and rewrite tokens together on the caller's admitted connection. */
 export function readSessionTranscriptHotWatermark(

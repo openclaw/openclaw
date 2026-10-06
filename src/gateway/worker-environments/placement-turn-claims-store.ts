@@ -8,6 +8,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { isCurrentPlacementTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
+import type { WorkerSessionPlacementState } from "./placement-state.js";
 import {
   stagePlacementTurnClaimWorkerPublication,
   stagePlacementWorkspaceResultWorkerPublication,
@@ -125,6 +126,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
     let reportedContention = false;
     for (;;) {
       let prepared: PlacementTurnClaimReceipt | undefined;
+      let previousState: WorkerSessionPlacementState | null | undefined;
       let published = false;
       const mutation = createPlacementWorkerMutation({
         context,
@@ -136,12 +138,13 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
             return request.facts;
           }
           const admitted = assertSessionEntryCurrentAdmission(request, capturedEntryCheck);
-          if (current) {
-            if (!isReceipt(admitted.facts)) {
-              throw new Error("Placement admission has no current placement facts");
-            }
-            current.assertPlacementCurrent(admitted.facts.placement, admitted.facts.placementMove);
+          if (!isReceipt(admitted.facts)) {
+            throw new Error("Placement admission has no current placement facts");
           }
+          if (request.stage === "transaction") {
+            previousState = admitted.facts.placement ? admitted.facts.placement.state : null;
+          }
+          current?.assertPlacementCurrent(admitted.facts.placement, admitted.facts.placementMove);
           return admitted.facts;
         },
         readReceipt: (facts) => (isReceipt(facts) ? facts : undefined),
@@ -191,6 +194,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
                   context.admission.identity,
                   facts.placement,
                   resultFacts,
+                  previousState,
                 )
               : stagePlacementWorkspaceResultWorkerPublication(
                   context.admission.identity,

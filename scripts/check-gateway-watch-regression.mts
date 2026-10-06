@@ -179,7 +179,7 @@ export function updateWatchBuildDetection(
 ): { buffer: string; triggered: boolean; reason: string | null } {
   const combined = `${state.buffer ?? ""}${String(chunk)}`;
   const next = appendBoundedWatchLog("", combined, WATCH_BUILD_DETECTION_MAX_CHARS);
-  const reason = detectWatchBuildReason(combined, "");
+  const reason = combined.match(/Building TypeScript \(dist is stale: ([a-z_]+)/)?.[1] ?? null;
   const triggered = state.triggered || combined.includes("Building TypeScript (dist is stale");
   return {
     buffer: next.text,
@@ -875,17 +875,11 @@ function warn(message: string) {
   console.error(`WARN: ${message}`);
 }
 
-function detectWatchBuildReason(stdout: string, stderr: string): string | null {
-  const combined = `${stdout}\n${stderr}`;
-  const match = combined.match(/Building TypeScript \(dist is stale: ([a-z_]+)/);
-  return match?.[1] ?? null;
-}
-
-function buildRunNodeDeps(env: NodeJS.ProcessEnv) {
+function buildRunNodeDeps() {
   const cwd = process.cwd();
   return {
     cwd,
-    env,
+    env: process.env,
     fs,
     spawnSync,
     distRoot: path.join(cwd, "dist"),
@@ -1051,7 +1045,7 @@ async function main() {
     refreshLocalBuildStampTimes();
   }
 
-  let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+  let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps());
   if (
     shouldRefreshBuildStampForRestoredArtifacts({
       skipBuild: options.skipBuild,
@@ -1062,7 +1056,7 @@ async function main() {
     // Refresh the stamps so checkout mtimes for package/config files do not
     // force a duplicate build during the bounded gateway:watch window.
     refreshLocalBuildStampTimes();
-    preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+    preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps());
   }
   if (preflightBuildRequirement.shouldBuild) {
     const summary = {

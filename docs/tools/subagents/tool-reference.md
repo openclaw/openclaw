@@ -46,6 +46,20 @@ Channel/group, provider, sandbox, and per-agent allow/deny policies can
 still remove the tool after the profile stage. Use `/tools` from the same
 session to confirm the effective tool list.
 
+Senders restricted by a channel, group, or per-sender tool policy may start only
+hidden helpers of the same agent. `visible: true` and another `agentId` are
+refused, including for ACP spawns. Hidden helpers inherit the restricted tools,
+workspace, and session root; they cannot select another `cwd`, project, or managed
+worktree. ACP additionally refuses a spawn when it cannot enforce the inherited
+tools or filesystem restrictions; use `runtime: "subagent"` in that case.
+Ordinary global, agent, and profile tool policies alone do not impose this rule.
+Owner-authorized automations retain their own scheduling policy and workspace;
+ordinary guests cannot gain that authority through a tool allowlist.
+
+Children created before this rule was introduced lack sender-policy provenance.
+Their existing tool allow/deny snapshots still apply, but start fresh helpers to
+apply the inherited spawn limit.
+
 **Defaults:**
 
 - **Model:** same-agent native sub-agents inherit the caller's active model, including session and one-shot overrides, unless you set `agents.defaults.subagents.model` (or per-agent `agents.entries.*.subagents.model`). The inherited model ID is preserved exactly, even when it contains a provider prefix. Cross-agent spawns use the target agent's configured model. ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.

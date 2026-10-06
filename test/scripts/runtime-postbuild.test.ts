@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+import { collectPackageDistImportErrors } from "../../scripts/lib/package-dist-imports.mjs";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -24,6 +25,7 @@ import {
   isUpdateConfigRuntimeAlias,
 } from "../../scripts/lib/update-config-runtime-compat.mts";
 import {
+  listCoreRuntimePostBuildOutputs,
   rewriteRootRuntimeImportsToStableAliases,
   runRuntimePostBuild,
   writeLegacyCliExitCompatChunks,
@@ -94,6 +96,54 @@ async function writeExportHtmlBuildFixture(rootDir: string): Promise<void> {
 }
 
 describe("runtime postbuild static assets", () => {
+  it("closes private CLI diagnostic imports without adding public-build companions", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-cli-");
+    writeUpdateCompatibilityBuildFixture(rootDir);
+    const companions = [
+      "cli-process-diagnostics.test-support.cjs",
+      "cli-process-tree.test-support.cjs",
+    ];
+    await fs.mkdir(path.join(rootDir, "src/cli"), { recursive: true });
+    for (const fileName of companions) {
+      await fs.copyFile(
+        path.join(MODULE_ROOT, "src/cli", fileName),
+        path.join(rootDir, "src/cli", fileName),
+      );
+    }
+    const params = {
+      rootDir,
+      env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+      timings: false,
+    };
+    runRuntimePostBuild(params);
+    for (const fileName of companions) {
+      await expectPathMissing(path.join(rootDir, "dist", fileName));
+    }
+    await fs.mkdir(path.join(rootDir, "dist/plugin-sdk"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "dist/plugin-sdk/test-env.js"),
+      'export * from "../test-env-fixture.mjs";\n',
+    );
+    await fs.writeFile(
+      path.join(rootDir, "dist/test-env-fixture.mjs"),
+      companions.map((fileName) => `new URL("./${fileName}", import.meta.url);`).join("\n"),
+    );
+    runRuntimePostBuild(params);
+    const files = fsSync.readdirSync(path.join(rootDir, "dist")).map((name) => `dist/${name}`);
+    expect(
+      collectPackageDistImportErrors({
+        files: files.filter(
+          (name) => name.endsWith(".cjs") || name === "dist/test-env-fixture.mjs",
+        ),
+        readText: (file: string) => fsSync.readFileSync(path.join(rootDir, file), "utf8"),
+      }),
+    ).toEqual([]);
+    for (const fileName of companions) {
+      await fs.unlink(path.join(rootDir, "dist", fileName));
+      expect(listCoreRuntimePostBuildOutputs({ rootDir })).toContain(`dist/${fileName}`);
+    }
+  });
+
   it("copies bundled hook metadata without replacing compiled handlers", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-hooks-");
     writeUpdateCompatibilityBuildFixture(rootDir);
@@ -1872,6 +1922,41 @@ describe("previous release update compatibility", () => {
     const current = await import(pathToFileURL(path.join(root, "dist/worker.runtime.js")).href);
     expect(current.x()).toBe("node");
     expect(current.y()).toBe("npm");
+  });
+
+  it("retains published cleanup-scope imports after package replacement", () => {
+    const target = "runtime-cleanup-abcdefgh.mjs";
+    const { root, inventory } = recordImportedFixture(
+      `(await import("./${target}")).runCliDisposerAfterPending()`,
+      {
+        [target]:
+          '//#region src/cli/runtime-cleanup.ts\nexport function runCliDisposerAfterPending() { return "old"; }\n',
+      },
+      undefined,
+      "src/cli/runtime-cleanup-scope.ts",
+    );
+    fsSync.unlinkSync(path.join(root, "dist", target));
+    write(
+      root,
+      "dist/current.mjs",
+      '//#region src/cli/runtime-cleanup.ts\nfunction runCliDisposerAfterPending() { return "current"; } export { runCliDisposerAfterPending as cleanup };\n',
+    );
+    writeUpdateCompatibilityChunks({
+      distDir: path.join(root, "dist"),
+      sourceDir: root,
+      inventory,
+    });
+    const result = childProcess.execFileSync(
+      testNodeExecPath,
+      [
+        "--input-type=module",
+        "-e",
+        'import { unlinkSync } from "node:fs"; import { fileURLToPath } from "node:url"; const scope = await import(process.argv[1]); unlinkSync(fileURLToPath(process.argv[1])); console.log(await scope.restart());',
+        pathToFileURL(path.join(root, "dist/command.js")).href,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.trim()).toBe("current");
   });
 
   it("records emitted aliases and forwards old consumers to the current implementations", async () => {

@@ -18,6 +18,7 @@ import {
 type MaintenanceRequest = { jobId?: string; retryDeferred?: boolean };
 type MaintenanceOwner = {
   request: (options?: MaintenanceRequest) => ManagedWorktreeGcReceipt;
+  notifyArchive: () => void;
   stop: () => Promise<void>;
 };
 const owners = new WeakMap<() => OpenClawConfig, MaintenanceOwner>();
@@ -35,12 +36,13 @@ export function startWorktreeMaintenance(params: {
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let receipt: ManagedWorktreeGcReceipt | undefined;
   let inFlight: Promise<void> | undefined;
+  let archivePending = false;
+  const isActive = () =>
+    !scheduler.signal.aborted &&
+    owners.get(params.getRuntimeConfig) === owner &&
+    !isGatewayWorkAdmissionClosed();
   const assertActive = () => {
-    if (
-      scheduler.signal.aborted ||
-      owners.get(params.getRuntimeConfig) !== owner ||
-      isGatewayWorkAdmissionClosed()
-    ) {
+    if (!isActive()) {
       throw new Error(
         "Worktree cleanup canceled because the Gateway maintenance owner is stopping",
       );
@@ -142,12 +144,27 @@ export function startWorktreeMaintenance(params: {
               .finally(() => {
                 current.completedAt = scheduler.now();
                 inFlight = undefined;
+                if (archivePending && isActive()) {
+                  archivePending = false;
+                  owner.request();
+                }
               });
             return inFlight;
           },
         }),
       );
       return structuredClone(current);
+    },
+    notifyArchive: () => {
+      if (!isActive()) {
+        return;
+      }
+      if (receipt?.state === "running") {
+        // The current sweep may already have passed this newly archived session.
+        archivePending = true;
+      } else {
+        owner.request();
+      }
     },
     stop: async () => {
       // Aborting also wakes a paused batch before joining worker settlement.
@@ -182,4 +199,9 @@ export function requestGatewayWorktreeMaintenance(
     throw new Error("Worktree maintenance is not running; wait for Gateway startup to finish");
   }
   return owner.request(options);
+}
+
+/** Durable archive metadata survives startup and shutdown without a live maintenance owner. */
+export function notifyGatewayWorktreeArchive(getRuntimeConfig: () => OpenClawConfig): void {
+  owners.get(getRuntimeConfig)?.notifyArchive();
 }

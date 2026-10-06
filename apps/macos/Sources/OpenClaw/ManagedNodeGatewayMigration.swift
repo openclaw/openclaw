@@ -411,6 +411,9 @@ enum ManagedNodeGatewayMigration {
         resolveLegacyCLI: @escaping @MainActor @Sendable () throws -> GatewayLaunchAgentManager.InstalledServiceCLI? = {
             nil
         },
+        restorationInstaller: @escaping @MainActor () throws -> BundledRuntime = {
+            try BundledRuntime.resolve(bundle: .main)
+        },
         verifyHealth: @escaping () async throws -> Void,
         setServiceHosting: @escaping (Candidate) -> Void,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) -> Operations
@@ -534,17 +537,16 @@ enum ManagedNodeGatewayMigration {
                 let verified = try await self.captureServiceCustody(requireService: false)
                 if try custody.action(current: verified) == .verifyOriginalNode { return }
                 if verified.definition.plist == nil { try await self.checkAbsentService(candidate) }
-                // --runtime node clears the newly selected Bun pin. PATH starts with the captured
-                // Node directory; the retained package and environment are from the same version.
+                // --runtime node clears the newly selected Bun pin without pinning the restored Node.
                 var arguments = ["install", "--force", "--port", String(candidate.port), "--runtime", "node"]
                 if candidate.allowUnconfigured { arguments.append("--allow-unconfigured") }
                 let expectedAuthority = try verified.serviceAuthority()
-                if let error = await GatewayLaunchAgentManager
+                if let error = try await GatewayLaunchAgentManager
                     .runDaemonCommand(
                         arguments,
                         timeout: self.serviceInstallTimeout,
-                        installedCLI: candidate.cli,
-                        legacyAuthority: candidate.cli,
+                        runtime: restorationInstaller(),
+                        restoring: candidate.cli,
                         expectedServiceAuthority: expectedAuthority,
                         checkCurrent: {
                             if verified.definition.plist == nil { try await self.checkAbsentService(candidate) }

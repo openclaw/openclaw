@@ -1,6 +1,8 @@
 import net from "node:net";
 import tls from "node:tls";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -9,10 +11,15 @@ import {
   sanitizeIrcOutboundText,
   sanitizeIrcTarget,
 } from "./protocol.js";
+import type { IrcNickServConfig } from "./types.js";
 
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
 const IRC_MAX_LINE_BYTES = 512;
+// Inbound framing cap: IRCv3 allows up to 8191 bytes of message tags plus a 512-byte
+// line body. Bound a pending (unterminated) line at twice that so compliant servers
+// never trip it, while a peer that withholds the line terminator cannot grow memory.
+const IRC_MAX_INBOUND_LINE_LENGTH = 16 * 1024;
 
 function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): string {
   let end = 0;
@@ -70,23 +77,9 @@ export type IrcClientOptions = {
   onLine?: (line: string) => void;
 };
 
-type IrcNickServOptions = {
-  enabled?: boolean;
-  service?: string;
-  password?: string;
-  register?: boolean;
-  registerEmail?: string;
-};
+type IrcNickServOptions = Omit<IrcNickServConfig, "passwordFile">;
 
-export type IrcClient = {
-  nick: string;
-  isReady: () => boolean;
-  sendRaw: (line: string) => void;
-  join: (channel: string) => void;
-  sendPrivmsg: (target: string, text: string, replyTo?: string) => void;
-  quit: (reason?: string) => void;
-  close: () => void;
-};
+export type IrcClient = Awaited<ReturnType<typeof connectIrcClient>>;
 
 function toIrcError(err: unknown): Error {
   if (err instanceof Error) {
@@ -130,7 +123,7 @@ function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
   return commands;
 }
 
-export async function connectIrcClient(options: IrcClientOptions): Promise<IrcClient> {
+export async function connectIrcClient(options: IrcClientOptions) {
   const timeoutMs = options.connectTimeoutMs ?? 15000;
   const messageChunkMaxChars = Math.max(1, Math.floor(options.messageChunkMaxChars ?? 350));
 
@@ -224,7 +217,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     sendRaw(`JOIN ${target}`);
   };
 
-  const sendPrivmsg = (target: string, text: string, replyTo?: string) => {
+  const sendPrivmsg = async (target: string, text: string, replyTo?: string) => {
+    const effect = captureEffectAuthority();
     const normalizedTarget = sanitizeIrcTarget(target);
     const cleaned = sanitizeIrcOutboundText(text);
     if (!cleaned) {
@@ -234,11 +228,33 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
     // Encode the original text with the reference so escapes are not decoded twice.
     let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
+    const chunks: string[] = [];
     while (remaining.length > 0) {
       const chunk = takeIrcPrivmsgChunk(remaining, messageChunkMaxChars, maxChunkBytes).trim();
-      sendRaw(`PRIVMSG ${normalizedTarget} :${chunk}`);
+      chunks.push(chunk);
       remaining = remaining.slice(chunk.length).trimStart();
     }
+    let sent = false;
+    await effect
+      .initiate(() => {
+        for (const chunk of chunks) {
+          options.abortSignal?.throwIfAborted();
+          if (!ready || closed) {
+            throw new Error("IRC connection closed before send");
+          }
+          sendRaw(`PRIVMSG ${normalizedTarget} :${chunk}`);
+          sent = true;
+        }
+      })
+      .catch((error: unknown) => {
+        if (sent) {
+          throw createChannelPartialDeliveryError(error, {
+            messageIds: [],
+            visibleReplySent: true,
+          });
+        }
+        throw error;
+      });
   };
 
   const quit = (reason?: string) => {
@@ -272,10 +288,26 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   };
 
   let buffer = "";
+  let receiveOverflowed = false;
+  const abortOversizedInput = () => {
+    receiveOverflowed = true;
+    buffer = "";
+    fail(new Error(`IRC server sent a line longer than ${IRC_MAX_INBOUND_LINE_LENGTH} characters`));
+    // Destroy directly: close() is a no-op after quit(), which only half-closes the socket.
+    // When still open, the socket close listener reports the disconnect so callers can recover.
+    socket.destroy();
+  };
   socket.on("data", (chunk: string) => {
+    if (receiveOverflowed) {
+      return;
+    }
     buffer += chunk;
     let idx = buffer.indexOf("\n");
     while (idx !== -1) {
+      if (idx > IRC_MAX_INBOUND_LINE_LENGTH) {
+        abortOversizedInput();
+        return;
+      }
       const rawLine = buffer.slice(0, idx).replace(/\r$/, "");
       buffer = buffer.slice(idx + 1);
       idx = buffer.indexOf("\n");
@@ -375,6 +407,10 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           });
         }
       }
+    }
+    // Whatever remains has no line terminator yet; refuse to retain an unbounded partial line.
+    if (buffer.length > IRC_MAX_INBOUND_LINE_LENGTH) {
+      abortOversizedInput();
     }
   });
 

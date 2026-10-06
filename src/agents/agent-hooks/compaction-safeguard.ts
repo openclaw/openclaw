@@ -7,6 +7,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import {
   capCompactionSummary,
   fitCompactionSummary,
+  formatRequiredAskContext,
   MAX_COMPACTION_SUMMARY_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
@@ -68,7 +69,6 @@ import {
 
 const log = createSubsystemLogger("compaction-safeguard");
 
-// Track session managers that have already logged the missing-model warning to avoid log spam.
 const missedModelWarningSessions = new WeakSet<object>();
 const SPLIT_TURN_SECTION_HEADING = "**Turn Context (split turn):**";
 const MAX_TOOL_FAILURES = 8;
@@ -84,8 +84,6 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
-const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
-const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
   "Prune stale, duplicate, or superseded details instead of preserving it verbatim.";
@@ -278,11 +276,7 @@ async function resolveModelAuth(
 > {
   let requestAuth: Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
   try {
-    const modelRegistry = ctx.modelRegistry;
-    if (typeof modelRegistry.getApiKeyAndHeaders !== "function") {
-      throw new Error("model registry auth lookup unavailable");
-    }
-    requestAuth = await modelRegistry.getApiKeyAndHeaders(model);
+    requestAuth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
   } catch (err) {
     const error = formatErrorMessage(err);
     log.warn(
@@ -427,10 +421,6 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
 }
 
-function normalizeCompactionSuffix(suffix: string | CompactionSuffix): CompactionSuffix {
-  return typeof suffix === "string" ? { text: suffix, contextRanges: [] } : suffix;
-}
-
 function resolveSuffixTailStart(suffix: CompactionSuffix, tailBudget: number): number {
   const desiredStart = Math.max(0, suffix.text.length - tailBudget);
   const containingRange = suffix.contextRanges.find(
@@ -445,8 +435,7 @@ function resolveSuffixTailStart(suffix: CompactionSuffix, tailBudget: number): n
   );
 }
 
-function capCompactionSuffix(suffixInput: string | CompactionSuffix, maxChars: number): string {
-  const suffix = normalizeCompactionSuffix(suffixInput);
+function capCompactionSuffix(suffix: CompactionSuffix, maxChars: number): string {
   if (suffix.text.length <= maxChars) {
     return suffix.text;
   }
@@ -466,11 +455,10 @@ function capCompactionSuffix(suffixInput: string | CompactionSuffix, maxChars: n
 
 function budgetCompactionSummary(
   summaryBody: string,
-  suffixInput: string | CompactionSuffix,
+  suffix: CompactionSuffix,
   maxChars: number,
   qualityRetention?: SummaryQualityRetention,
 ) {
-  const suffix = normalizeCompactionSuffix(suffixInput);
   const joined = `${summaryBody}${suffix.text}`;
   // A body that fits still goes through the retention plan when it omits an
   // audited identifier or lets an audit section outgrow its cap; both would
@@ -573,11 +561,7 @@ function splitPreservedRecentTurns(params: {
   messages: AgentMessage[];
   recentTurnsPreserve: number;
 }): { summarizableMessages: AgentMessage[]; preservedMessages: AgentMessage[] } {
-  const preserveTurns = clampNonNegativeInt(
-    params.recentTurnsPreserve,
-    0,
-    MAX_RECENT_TURNS_PRESERVE,
-  );
+  const preserveTurns = params.recentTurnsPreserve;
   if (preserveTurns <= 0) {
     return { summarizableMessages: params.messages, preservedMessages: [] };
   }
@@ -768,18 +752,6 @@ function formatGeneratedSplitTurnSection(summary: string, onTruncated: () => voi
   return `${heading}${cappedSummary}`;
 }
 
-function formatRequiredAskContext(rawAsk: string): string {
-  const source = rawAsk.trim();
-  if (source.length <= MAX_REQUIRED_ASK_CONTEXT_CHARS) {
-    return source;
-  }
-  const contentBudget =
-    MAX_REQUIRED_ASK_CONTEXT_CHARS - REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER.length;
-  const headBudget = Math.floor(contentBudget / 2);
-  const tailBudget = contentBudget - headBudget;
-  return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
-}
-
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
   for (const message of messages.toReversed()) {
     if (message.role === "user") {
@@ -910,18 +882,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true as const };
     };
     if (!hasRealConversation) {
-      // When there are no summarizable messages AND no real turn-prefix content,
-      // cancelling compaction leaves context unchanged but the SDK re-triggers
-      // _checkCompaction after every assistant response — creating a cancel loop
-      // that blocks cron lanes (#41981).
-      //
-      // Strategy: always return a minimal compaction result so the SDK writes a
-      // boundary entry. The SDK's prepareCompaction() returns undefined when the
-      // last entry is a compaction, which blocks immediate re-triggering within
-      // the same turn. After a new assistant message arrives, if the SDK triggers
-      // compaction again with an empty preparation, we write another boundary —
-      // this is bounded to at most one boundary per LLM round-trip, not a tight
-      // loop.
+      // Canceling an empty preparation re-triggers compaction on the next response (#41981).
+      // A compaction boundary suppresses immediate retries until another assistant turn.
       log.info(
         "Compaction safeguard: no real conversation messages to summarize; writing compaction boundary to suppress re-trigger loop.",
       );

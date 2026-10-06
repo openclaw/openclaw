@@ -24,7 +24,7 @@ import {
   mutateSkillLibrary,
 } from "../../skills/library/service.js";
 import { captureSkillLibraryAccess } from "../../skills/library/store-access.js";
-import type { SkillLibraryAuthority } from "../../skills/library/store.js";
+import { projectSkillLibraryList, type SkillLibraryAuthority } from "../../skills/library/store.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import {
@@ -236,20 +236,18 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
     async (authority, params, options) => {
       const session = params.sessionKey ? selectedSession(options, params.sessionKey) : undefined;
       const access = captureSkillLibraryAccess(authority);
-      const listed = await access.read("list", params);
-      const result = listed.value;
+      const listed = await access.read("list", {});
+      const result = projectSkillLibraryList(listed.value, params);
       if (session) {
         const pins = session.target.entry.skillLibrarySelections ?? [];
         const selected = await access.read("pins", pins);
-        const all = params.scope ? await access.read("list", {}) : listed;
         listed.assertCurrent();
         selected.assertCurrent();
-        all.assertCurrent();
         session.assertCurrent();
         result.session = {
           sessionKey: session.target.canonicalKey,
           selections: selected.value,
-          attachable: all.value.entries.filter(
+          attachable: listed.value.entries.filter(
             (entry) => !pins.some((pin) => pin.skillId === entry.skillId),
           ),
         };

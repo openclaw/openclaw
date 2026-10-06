@@ -105,6 +105,23 @@ function assistantMessage(content: AssistantMessage["content"]): AssistantMessag
 }
 
 describe("Tool Search MCP failures", () => {
+  it("keeps deferred MCP images model-visible beside their text", async () => {
+    const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
+    const { callTool, target } = await createDeferredMcpCall({
+      content: [{ type: "text", text: "Saved preview" }, image],
+    });
+
+    const result = await callTool.execute("deferred-image", { id: target.name, args: {} });
+
+    expect(result.content).toContainEqual(image);
+    const text = result.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+    expect(text).toContain("Saved preview");
+    expect(text).not.toContain(image.data);
+  });
+
   it.each([
     { innerStatus: "timeout", outerStatus: "timed_out" },
     { innerStatus: "cancelled", outerStatus: "cancelled" },

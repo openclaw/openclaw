@@ -104,7 +104,7 @@ function queryTaskScheduler(
     if (hasErrnoCode(probe.error, "ETIMEDOUT")) {
       return {
         status: "unknown",
-        detail: `Scheduled Task probe timed out after ${probeTimeoutMs} ms (ETIMEDOUT).`,
+        detail: `Scheduled Task check timed out after ${probeTimeoutMs} ms (ETIMEDOUT).`,
         timeoutMs: probeTimeoutMs,
         diagnostic: { kind: "timeout", timeoutMs: probeTimeoutMs },
       };
@@ -128,7 +128,7 @@ function queryTaskScheduler(
     } catch {}
     return {
       status: "unknown",
-      detail: "Scheduled Task probe returned invalid JSON.",
+      detail: "Scheduled Task check returned invalid JSON.",
       diagnostic: { kind: "invalid-response" },
     };
   }
@@ -138,7 +138,7 @@ function queryTaskScheduler(
     ? { status: "missing" }
     : {
         status: "unknown",
-        detail: `Scheduled Task probe failed (exit ${probe.status}): ${probe.stdout.trim() || probe.stderr.trim() || "no output from PowerShell."}`,
+        detail: `Scheduled Task check failed (exit ${probe.status}): ${probe.stdout.trim() || probe.stderr.trim() || "no output from PowerShell."}`,
         diagnostic: {
           kind: "native",
           exitCode: probe.status,
@@ -204,7 +204,7 @@ export function probeScheduledTaskState(
     ? { status: "found", ...snapshot }
     : {
         status: "unknown",
-        detail: "Scheduled Task probe returned invalid JSON.",
+        detail: "Scheduled Task check returned invalid JSON.",
         diagnostic: { kind: "invalid-response" },
       };
 }

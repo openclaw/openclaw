@@ -1,6 +1,5 @@
 import type { PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
@@ -139,14 +138,7 @@ class OpenClawShell
   lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;
   custodianMinimizeRequestId = 0;
   lastConcreteRouteId: RouteId | undefined;
-  agentsListClient: GatewayBrowserClient | null = null;
-  agentsListSource: ApplicationContext["agents"] | null = null;
-  sessionKeyClient: GatewayBrowserClient | null = null;
-  runtimeConfigClient: GatewayBrowserClient | null = null;
-  runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   lastLocalePrefSignature: string | null = null;
-  previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
-  agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;
   storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   private outboxStoreUnsubscribe: (() => void) | null = null;
@@ -628,10 +620,17 @@ class OpenClawShell
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }
-    const gatewayDisconnected = context.gateway.snapshot.phase !== "connected";
+    const { phase, lastError } = context.gateway.snapshot;
+    // A warm shell renders before hello; initial loading is not a lost connection.
+    const gatewayDisconnected =
+      phase !== "connected" &&
+      (Boolean(lastError) ||
+        phase === "reconnecting" ||
+        phase === "offline" ||
+        phase === "reload-required");
     let title = formatDocumentTitle({
       context: primaryContext,
-      attentionCount: context.overlays.snapshot.approvalQueue.length,
+      attentionCount: phase === "connected" ? context.overlays.snapshot.approvalQueue.length : 0,
       gatewayDisconnected,
     });
     const environment = context.config?.current.environment;

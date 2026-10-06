@@ -51,7 +51,7 @@ function createTypingPane() {
 
 describe("chat pane typing presence", () => {
   it.each(["auto", "manual"] as const)(
-    "remote typing preserves the viewport with a pending %s scroll",
+    "remote typing preserves a pending %s follow command",
     (source) => {
       vi.useFakeTimers();
       const { pane, state } = createTestChatPane({
@@ -97,7 +97,7 @@ describe("chat pane typing presence", () => {
       expect(pane.typingActorViews()).toHaveLength(1);
       extent += 83;
       vi.advanceTimersToNextFrame();
-      expect(scrollport.scrollTop).toBe(1500);
+      expect(scrollport.scrollTop).toBe(source === "manual" ? 1500 : 1583);
       // Smooth sends wait through layout measurement; a peer update during
       // that frame must not cancel the reader’s pending manual command.
       pane.handleSessionTypingEvent({
@@ -107,7 +107,7 @@ describe("chat pane typing presence", () => {
       });
       expect(pane.typingActorViews()).toHaveLength(2);
       vi.advanceTimersToNextFrame();
-      expect(scrollport.scrollTop).toBe(source === "manual" ? 1583 : 1500);
+      expect(scrollport.scrollTop).toBe(1583);
       scheduleCommittedChatScroll(state, false, false, { source: "manual" });
       vi.advanceTimersToNextFrame();
       expect(scrollport.scrollTop).toBe(1583);

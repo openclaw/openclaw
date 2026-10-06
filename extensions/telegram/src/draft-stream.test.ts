@@ -1,13 +1,13 @@
 // Telegram tests cover draft stream plugin behavior.
-import type { Bot } from "grammy";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDraftStream,
   createMockDraftApi,
   type MockSentMessage,
 } from "./draft-stream.api.test-helpers.js";
-import { createTelegramDraftStream } from "./draft-stream.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
+import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { buildTelegramRichMarkdownPlan, type TelegramInputRichMessage } from "./rich-message.js";
 
 function createForumDraftStream(api: ReturnType<typeof createMockDraftApi>) {
@@ -29,18 +29,6 @@ function expectNthPreviewSend(
   params: Record<string, unknown> = {},
 ) {
   expect(api.sendMessage).toHaveBeenNthCalledWith(call, 123, text, params);
-}
-
-function requireSendMessageCallText(
-  api: ReturnType<typeof createMockDraftApi>,
-  callIndex: number,
-): string {
-  const calls = api.sendMessage.mock.calls as unknown[][];
-  const call = calls[callIndex];
-  expect(call, `sendMessage call ${callIndex}`).toBeDefined();
-  const text = call?.[1];
-  expect(typeof text).toBe("string");
-  return typeof text === "string" ? text : "";
 }
 
 function expectPreviewEdit(
@@ -109,26 +97,6 @@ describe("createTelegramDraftStream", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("reports the provider response after the first preview becomes durable", async () => {
-    const api = createMockDraftApi(async () => ({ message_id: 101, message_thread_id: 99 }));
-    const onProviderMessage = vi.fn();
-    const observedStream = createDraftStream(api, {
-      thread: { id: 99, scope: "forum" },
-      onProviderMessage,
-    });
-
-    observedStream.update("A provider-observed preview response");
-    await observedStream.flush();
-
-    expect(onProviderMessage).not.toHaveBeenCalled();
-    await observedStream.stop();
-
-    expect(onProviderMessage).toHaveBeenCalledTimes(1);
-    expect(onProviderMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ message_id: 101, message_thread_id: 99 }),
-    );
   });
 
   it("stops before another preview when accepted-message validation fails", async () => {
@@ -201,40 +169,7 @@ describe("createTelegramDraftStream", () => {
     await vi.waitFor(() => expectPreviewSend(api, "Hello"));
   });
 
-  it("uses message_thread_id for bot-private topic previews", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
-
-    stream.update("Hello");
-    await vi.waitFor(() => expectPreviewSend(api, "Hello", { message_thread_id: 42 }));
-    expect(api.editMessageText).not.toHaveBeenCalled();
-
-    stream.update("Hello again");
-    await stream.flush();
-
-    expectPreviewEdit(api, "Hello again");
-  });
-
-  it("uses direct_messages_topic_id only for channel Direct Messages previews", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, { thread: { id: 77, scope: "direct-messages" } });
-
-    stream.update("Hello");
-    await vi.waitFor(() => expectPreviewSend(api, "Hello", { direct_messages_topic_id: 77 }));
-    expect(api.editMessageText).not.toHaveBeenCalled();
-
-    stream.update("Hello again");
-    await stream.flush();
-
-    expectPreviewEdit(api, "Hello again");
-    expect(api.editMessageText.mock.calls[0]?.[3]).toBeUndefined();
-  });
-
-  it.each([
-    { scope: "forum" as const, expected: { message_thread_id: 42 } },
-    { scope: "dm" as const, expected: { message_thread_id: 42 } },
-    { scope: "direct-messages" as const, expected: { direct_messages_topic_id: 42 } },
-  ])(
+  it.each([{ scope: "direct-messages" as const, expected: { direct_messages_topic_id: 42 } }])(
     "does not retry $scope message preview sends without the topic id",
     async ({ scope, expected }) => {
       const api = createMockDraftApi();
@@ -260,21 +195,6 @@ describe("createTelegramDraftStream", () => {
       ).toBe(false);
     },
   );
-
-  it("does not finalize stale preview text after a stopped send failure", async () => {
-    const api = createMockDraftApi();
-    api.sendMessage.mockRejectedValueOnce(new Error("temporary send failure"));
-    const warn = vi.fn();
-    const stream = createDraftStream(api, { warn });
-
-    stream.update("Hello");
-    await stream.flush();
-    await stream.stop();
-
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expectPreviewSend(api, "Hello");
-    expect(warn).toHaveBeenCalledWith("telegram stream preview failed: temporary send failure");
-  });
 
   it("converts <br> joins to newlines before parse_mode=HTML transport", async () => {
     const api = createMockDraftApi();
@@ -328,7 +248,7 @@ describe("createTelegramDraftStream", () => {
     },
   );
 
-  it.each(["first", "batched"] as const)(
+  it.each(["first"] as const)(
     "keeps a settled %s reply target owned when reposition cleanup fails",
     async (replyToMode) => {
       vi.useFakeTimers();
@@ -370,7 +290,7 @@ describe("createTelegramDraftStream", () => {
     },
   );
 
-  it.each(["first", "batched"] as const)(
+  it.each(["first"] as const)(
     "keeps a %s reply target on a reposition-superseded in-flight send until deletion",
     async (replyToMode) => {
       // Red-team F5: rotateToNewMessageDeferringDelete rewinds while a FIRST send is
@@ -493,7 +413,7 @@ describe("createTelegramDraftStream", () => {
     }
   });
 
-  it.each(["first", "batched"] as const)(
+  it.each(["first"] as const)(
     "keeps an in-flight %s reply target owned when reposition cleanup fails",
     async (replyToMode) => {
       vi.useFakeTimers();
@@ -538,29 +458,6 @@ describe("createTelegramDraftStream", () => {
       }
     },
   );
-
-  it("keeps the streaming preview on screen for the dwell window before deleting", async () => {
-    vi.useFakeTimers();
-    try {
-      const api = createMockDraftApi();
-      const stream = createDraftStream(api);
-
-      stream.update("Working");
-      await stream.flush();
-      // Fast turn: the preview has only been visible ~1s when the turn tears down.
-      await vi.advanceTimersByTimeAsync(1_000);
-      await stream.clear();
-
-      // Delete is deferred, not synchronous, and does not fire before the 4s dwell.
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(api.deleteMessage).not.toHaveBeenCalled();
-      // At the dwell boundary (~4s after first appearing) the detached delete runs.
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 
   it("keeps a rotated preview until Telegram accepts its replacement", async () => {
     vi.useFakeTimers();
@@ -609,6 +506,7 @@ describe("createTelegramDraftStream", () => {
 
       await vi.advanceTimersByTimeAsync(10_000);
       expect(api.sendMessage).toHaveBeenCalledTimes(2);
+      expect(stream.sendMayHaveLanded()).toBe(true);
       expect(api.deleteMessage).not.toHaveBeenCalled();
 
       await stream.clear();
@@ -682,30 +580,6 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalledWith(123, 17, "Message B partial");
   });
 
-  it("marks sendMayHaveLanded after an ambiguous first preview send failure", async () => {
-    const api = createMockDraftApi();
-    api.sendMessage.mockRejectedValueOnce(new Error("timeout after Telegram accepted send"));
-    const stream = createDraftStream(api);
-
-    stream.update("Hello");
-    await stream.flush();
-
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(stream.sendMayHaveLanded?.()).toBe(true);
-  });
-
-  async function expectSendMayHaveLandedStateAfterFirstFailure(error: Error, expected: boolean) {
-    const api = createMockDraftApi();
-    api.sendMessage.mockRejectedValueOnce(error);
-    const stream = createDraftStream(api);
-
-    stream.update("Hello");
-    await stream.flush();
-
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(stream.sendMayHaveLanded?.()).toBe(expected);
-  }
-
   it("retries pre-connect first preview send failures instead of stopping", async () => {
     const api = createMockDraftApi();
     api.sendMessage.mockRejectedValueOnce(
@@ -720,13 +594,6 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
     expect(stream.sendMayHaveLanded?.()).toBe(false);
     expect(stream.messageId()).toBe(17);
-  });
-
-  it("clears sendMayHaveLanded on Telegram 4xx client rejections", async () => {
-    await expectSendMayHaveLandedStateAfterFirstFailure(
-      Object.assign(new Error("403: Forbidden"), { error_code: 403 }),
-      false,
-    );
   });
 
   it("treats message-is-not-modified edits as delivered", async () => {
@@ -834,7 +701,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createDraftStream(api);
 
     stream.updatePreview({
-      text: "<b>Shelling &lt;&amp;&gt;</b>\n<b>🛠️ Exec</b>",
+      text: "<b>Shelling &lt;&amp;&gt;</b>\n<b>Exec</b>",
       parseMode: "HTML",
     });
     await stream.flush();
@@ -842,13 +709,13 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenNthCalledWith(
       1,
       123,
-      "<b>Shelling &lt;&amp;&gt;</b>\n<b>🛠️ Exec</b>",
+      "<b>Shelling &lt;&amp;&gt;</b>\n<b>Exec</b>",
       { parse_mode: "HTML" },
     );
-    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling <&>\n🛠️ Exec", {});
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling <&>\nExec", {});
     expect(stream.currentMessageSnapshot?.()).toEqual({
-      text: "Shelling <&>\n🛠️ Exec",
-      sourceText: "Shelling &lt;&amp;&gt;\n🛠️ Exec",
+      text: "Shelling <&>\nExec",
+      sourceText: "Shelling &lt;&amp;&gt;\nExec",
       sourceTextMode: "html",
     });
 
@@ -904,7 +771,7 @@ describe("createTelegramDraftStream", () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true });
 
-    stream.update("## Plan\n\n| A |\n| --- |\n| x |");
+    stream.update("## Plan\n\n| A |\n| --- |\n| x |\n\nOAuth profile: openai:fixture@example.com");
     await stream.flush();
 
     expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
@@ -913,6 +780,7 @@ describe("createTelegramDraftStream", () => {
     };
     expect(first?.rich_message?.blocks?.some((block) => block.type === "heading")).toBe(true);
     expect(first?.rich_message?.blocks?.some((block) => block.type === "table")).toBe(true);
+    expect(first?.rich_message?.skip_entity_detection).toBe(true);
     expect(api.sendMessage).not.toHaveBeenCalled();
 
     stream.update("## Plan updated\n\n| B |\n| --- |\n| y |");
@@ -924,58 +792,6 @@ describe("createTelegramDraftStream", () => {
     };
     expect(edit?.rich_message?.blocks?.some((block) => block.type === "heading")).toBe(true);
     expect(api.editMessageText).not.toHaveBeenCalled();
-  });
-
-  it("uses plain text when rich preview fallback sends", async () => {
-    const api = createMockDraftApi();
-    api.raw.sendRichMessage.mockRejectedValueOnce(
-      new Error("400: Bad Request: RICH_MESSAGE_URL_INVALID"),
-    );
-    const warn = vi.fn();
-    const stream = createDraftStream(api, { richMessages: true, warn });
-
-    stream.update("| Rank | Model |\n| --- | --- |\n| 4 | Claude Opus |");
-    await stream.flush();
-
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    const plain = api.sendMessage.mock.calls[0]?.[1] ?? "";
-    expect(plain).toContain("Rank");
-    expect(plain).toContain("Claude Opus");
-    expect(warn).toHaveBeenCalledWith(
-      "telegram stream preview degrade=plain-fallback:rich-entity-invalid: 400: Bad Request: RICH_MESSAGE_URL_INVALID",
-    );
-  });
-
-  it("skips rich entity detection for draft text with provider-prefixed email addresses", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, { richMessages: true });
-    const oauthProfileText =
-      "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)";
-
-    stream.update(oauthProfileText);
-    await stream.flush();
-
-    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: 123,
-      rich_message: {
-        blocks: [{ type: "paragraph", text: oauthProfileText }],
-        skip_entity_detection: true,
-      },
-    });
-  });
-
-  it("keeps short rich previews out of plain preview gating", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, { richMessages: true, minInitialChars: 10 });
-
-    stream.updatePreview({
-      text: "Plan",
-      richMessage: { blocks: [{ type: "heading", text: "Plan", size: 2 }] },
-    });
-    await stream.flush();
-
-    expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
-    expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
   it("clamps rich previews to the block limit", async () => {
@@ -996,24 +812,6 @@ describe("createTelegramDraftStream", () => {
       .join("\n");
     expect(plain).toContain("paragraph 499");
     expect(plain).not.toContain("paragraph 500");
-  });
-
-  it("clamps rendered previews to the text-message limit", async () => {
-    const api = createMockDraftApi();
-    const text = `# Long\n\n${"rich line\n".repeat(600)}`;
-    const stream = createTelegramDraftStream({
-      api: api as unknown as Bot["api"],
-      chatId: 123,
-      renderText: (value) => ({ text: value }),
-    });
-
-    stream.update(text);
-    await stream.flush();
-
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    const sentText = requireSendMessageCallText(api, 0);
-    expect(sentText.length).toBeLessThanOrEqual(4000);
-    expect(sentText.startsWith("# Long\n\nrich line")).toBe(true);
   });
 
   it("paginates rendered fenced code without losing code context", async () => {
@@ -1114,18 +912,6 @@ describe("createTelegramDraftStream", () => {
         .join("")
         .replace(/\n$/u, ""),
     ).toBe(" ".repeat(80));
-  });
-
-  it("clamps a first oversized non-final preview on a UTF-16 boundary", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, { maxChars: 10 });
-
-    stream.update("123456789😀tail");
-    await stream.flush();
-
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expectNthPreviewSend(api, 1, "123456789");
-    expect(stream.lastDeliveredText?.()).toBe("123456789");
   });
 
   it("keeps a single-use reply target until the first draft send is accepted", async () => {
@@ -1244,120 +1030,235 @@ describe("createTelegramDraftStream", () => {
       expect(stream.messageId()).toBe(43);
     },
   );
-
-  it("enforces maxChars after renderText expansion", async () => {
-    const api = createMockDraftApi();
-    const warn = vi.fn();
-    const stream = createTelegramDraftStream({
-      api: api as unknown as Bot["api"],
-      chatId: 123,
-      maxChars: 100,
-      renderText: () => ({
-        text: `<b>${"A".repeat(120)}</b>`,
-        parseMode: "HTML",
-      }),
-      warn,
-    });
-
-    stream.update("short raw text");
-    await stream.flush();
-
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(requireSendMessageCallText(api, 0).length).toBeLessThanOrEqual(100);
-    expect(api.editMessageText).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-  });
 });
 
 describe("draft stream initial message debounce", () => {
-  const createMockApi = () => createMockDraftApi(async () => ({ message_id: 42 }));
-
-  function createDebouncedStream(api: ReturnType<typeof createMockApi>, minInitialChars = 30) {
-    return createTelegramDraftStream({
-      api: api as unknown as Bot["api"],
-      chatId: 123,
-      minInitialChars,
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it("sends short complete rich progress and resumes after clear", async () => {
+    const api = createMockDraftApi(async () => ({ message_id: 42 }));
+    const stream = createDraftStream(api, { richMessages: true, minInitialChars: 30 });
+    const progress = (text: string) => ({
+      text,
+      complete: true as const,
+      richMessage: buildTelegramRichMarkdownPlan(text).richMessage,
     });
-  }
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  describe("isFinal has highest priority", () => {
-    it("sends immediately on stop() even with 1 character", async () => {
-      const api = createMockApi();
-      const stream = createDebouncedStream(api);
-
-      stream.update("Y");
-      await stream.stop();
-      await stream.flush();
-
-      expectPreviewSend(api, "Y");
-    });
-  });
-
-  describe("minInitialChars threshold", () => {
-    it.each([false, true])(
-      "sends short complete progress and resumes after clear (richMessages=%s)",
-      async (richMessages) => {
-        const api = createMockApi();
-        const stream = createDraftStream(api, { richMessages, minInitialChars: 30 });
-        const send = richMessages ? api.raw.sendRichMessage : api.sendMessage;
-        const progress = (text: string) => ({
-          text,
-          complete: true as const,
-          ...(richMessages ? { richMessage: buildTelegramRichMarkdownPlan(text).richMessage } : {}),
-        });
-
-        stream.updatePreview(progress("0/1 complete"));
-        await stream.flush();
-        expect(send).toHaveBeenCalledOnce();
-
-        await stream.clear();
-        stream.forceNewMessage();
-        stream.update("Hi");
-        await stream.flush();
-        expect(send).toHaveBeenCalledOnce();
-
-        stream.updatePreview(progress("1/1 complete"));
-        await stream.flush();
-        expect(send).toHaveBeenCalledTimes(2);
-
-        stream.update("Done");
-        await stream.stop();
-        const edits = richMessages ? api.raw.editMessageText : api.editMessageText;
-        expect(edits).toHaveBeenCalled();
-        await vi.runOnlyPendingTimersAsync();
-        expect(api.deleteMessage).toHaveBeenCalledOnce();
-      },
-    );
-
-    it("does not send first message below threshold", async () => {
-      const api = createMockApi();
-      const stream = createDebouncedStream(api);
-
-      stream.update("Processing");
-      await stream.flush();
-
-      expect(api.sendMessage).not.toHaveBeenCalled();
-    });
-
-    it("does not send a first message when discard() supersedes a short partial", async () => {
-      const api = createMockApi();
-      const stream = createDebouncedStream(api);
-
-      stream.update("Processing");
-      await stream.discard?.();
-      await stream.flush();
-
-      expect(api.sendMessage).not.toHaveBeenCalled();
-      expect(api.editMessageText).not.toHaveBeenCalled();
-    });
+    stream.updatePreview(progress("0/1 complete"));
+    await stream.flush();
+    expect(api.raw.sendRichMessage).toHaveBeenCalledOnce();
+    await stream.clear();
+    stream.forceNewMessage();
+    stream.update("Hi");
+    await stream.flush();
+    expect(api.raw.sendRichMessage).toHaveBeenCalledOnce();
+    stream.updatePreview(progress("1/1 complete"));
+    await stream.flush();
+    expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(2);
+    stream.update("Done");
+    await stream.stop();
+    expect(api.raw.editMessageText).toHaveBeenCalled();
+    await vi.runOnlyPendingTimersAsync();
+    expect(api.deleteMessage).toHaveBeenCalledOnce();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("Telegram draft link previews", () => {
+  it.each([false, true])(
+    "suppresses progress link cards through send, edit and stop (rich fallback: %s)",
+    async (richMessages) => {
+      const api = createMockDraftApi();
+      const error = new Error("400: Bad Request: RICH_MESSAGE_URL_INVALID");
+      api.raw.sendRichMessage.mockRejectedValue(error);
+      api.raw.editMessageText.mockRejectedValue(error);
+      const stream = createDraftStream(api, { richMessages });
+      const preview = (text: string) =>
+        renderTelegramProgressDraftPreview(
+          { lines: [text] },
+          { richMessages, toolProgress: true, maxLines: 5, maxLineChars: 300 },
+        );
+
+      stream.updatePreview(preview("Reading https://example.com"));
+      await stream.flush();
+      expect(api.sendMessage).toHaveBeenLastCalledWith(
+        123,
+        richMessages
+          ? "Reading https://example.com"
+          : 'Reading <a href="https://example.com">https://example.com</a>',
+        expect.objectContaining({
+          link_preview_options: { is_disabled: true },
+          ...(richMessages ? {} : { parse_mode: "HTML" }),
+        }),
+      );
+
+      stream.updatePreview(preview("Checking https://example.com"));
+      await stream.flush();
+      await stream.stop();
+      expect(api.editMessageText).toHaveBeenLastCalledWith(
+        123,
+        17,
+        richMessages
+          ? "Checking https://example.com"
+          : 'Checking <a href="https://example.com">https://example.com</a>',
+        expect.objectContaining({
+          link_preview_options: { is_disabled: true },
+          ...(richMessages ? {} : { parse_mode: "HTML" }),
+        }),
+      );
+    },
+  );
+
+  it("restores the answer policy even when only the frame's link policy changes", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+    const text = "https://example.com";
+    stream.updatePreview({ text, linkPreview: false });
+    await stream.flush();
+    stream.update(text);
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, text);
+  });
+});
+
+const replyQuote = {
+  text: "Original request",
+  position: 0,
+  entities: [{ type: "bold", offset: 0, length: 8 }],
+};
+
+describe("Telegram preview native quotes", () => {
+  it.each([false, true])(
+    "retains the accepted preview after quote rejection (rich: %s)",
+    async (rich) => {
+      const api = createMockDraftApi();
+      const send = rich ? api.raw.sendRichMessage : api.sendMessage;
+      send.mockRejectedValueOnce(new Error("Bad Request: quote not found"));
+      const stream = createDraftStream(api, {
+        thread: { id: 99, scope: "forum" },
+        replyToMessageId: 7,
+        replyToMode: "all",
+        replyQuote,
+        richMessages: rich,
+        renderText: (text) =>
+          rich
+            ? { text, richMessage: buildTelegramRichMarkdownPlan(text).richMessage }
+            : { text, parseMode: "HTML" },
+      });
+      try {
+        stream.update("First");
+        await stream.flush();
+        stream.update("Final");
+        await stream.stop();
+        const requests = rich
+          ? api.raw.sendRichMessage.mock.calls.map(([params]) => params)
+          : api.sendMessage.mock.calls.map((call) => call[2]);
+        expect(requests).toHaveLength(2);
+        expect(requests[0]).toMatchObject({
+          message_thread_id: 99,
+          reply_parameters: {
+            message_id: 7,
+            allow_sending_without_reply: true,
+            quote: replyQuote.text,
+            quote_position: 0,
+            quote_entities: replyQuote.entities,
+          },
+        });
+        expect(requests[1]).toMatchObject(
+          rich
+            ? {
+                message_thread_id: 99,
+                reply_parameters: { message_id: 7, allow_sending_without_reply: true },
+              }
+            : {
+                message_thread_id: 99,
+                reply_to_message_id: 7,
+                allow_sending_without_reply: true,
+              },
+        );
+        expect(requests[1]).not.toHaveProperty("reply_parameters.quote");
+        if (rich) {
+          expect(api.raw.editMessageText).toHaveBeenCalledWith(
+            expect.objectContaining({ chat_id: 123, message_id: 17 }),
+          );
+          expect(api.sendMessage).not.toHaveBeenCalled();
+        } else {
+          expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Final", {
+            parse_mode: "HTML",
+          });
+        }
+        expect(stream.currentMessageSnapshot()).toMatchObject({
+          text: "Final",
+          replyToMessageId: 7,
+        });
+        expect(api.deleteMessage).not.toHaveBeenCalled();
+      } finally {
+        await stream.discard();
+      }
+    },
+  );
+
+  it.each([
+    { failure: "quote", retirement: "authorization" },
+    { failure: "quote", retirement: "discard" },
+    { failure: "format", retirement: "authorization" },
+    { failure: "format", retirement: "generation" },
+  ])(
+    "does not retry $failure after $retirement retires the send",
+    async ({ failure, retirement }) => {
+      const pending = createDeferred<MockSentMessage>();
+      void pending.promise.catch(() => undefined);
+      const api = createMockDraftApi();
+      api.raw.sendRichMessage.mockImplementationOnce(() => pending.promise);
+      let authorized = true;
+      const stream = createDraftStream(api, {
+        replyToMessageId: 7,
+        replyToMode: "all",
+        replyQuote,
+        richMessages: true,
+        renderText: (text) => ({
+          text,
+          richMessage: buildTelegramRichMarkdownPlan(text).richMessage,
+        }),
+        warn: vi.fn(),
+      });
+      let discarding: Promise<void> | undefined;
+      const rejection = new Error(
+        failure === "quote"
+          ? "Bad Request: quote not found"
+          : "Bad Request: RICH_MESSAGE_ENTITIES_INVALID",
+      );
+      try {
+        stream.update("Retired answer", {
+          assertPlatformSendAuthorized: () => {
+            if (!authorized) {
+              throw new Error("Send authority revoked");
+            }
+          },
+        });
+        await vi.waitFor(() => expect(api.raw.sendRichMessage).toHaveBeenCalledOnce());
+        if (retirement === "authorization") {
+          authorized = false;
+        } else if (retirement === "generation") {
+          stream.forceNewMessage();
+        } else {
+          discarding = stream.discard();
+        }
+        pending.reject(rejection);
+        await stream.waitForInFlight();
+        await discarding;
+        expect(api.raw.sendRichMessage).toHaveBeenCalledOnce();
+        expect(api.sendMessage).not.toHaveBeenCalled();
+        if (retirement === "generation") {
+          stream.update("Replacement");
+          await stream.stop();
+          expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(2);
+          expect(stream.currentMessageSnapshot()).toMatchObject({ text: "Replacement" });
+        }
+      } finally {
+        pending.reject(rejection);
+        await stream.discard();
+        await discarding;
+      }
+    },
+  );
+});

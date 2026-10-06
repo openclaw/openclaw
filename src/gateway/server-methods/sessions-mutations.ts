@@ -67,6 +67,7 @@ function createSessionPatchHandler(
     } = options;
     const requestAuthority = readGatewayRequestMutationAuthority(options);
     const diagnostics = startSessionPatchDiagnostics(method);
+    let archivedSessionsCommitted = false;
     let preparingOperator: ReturnType<typeof captureGatewayOperatorRunAuthority> | undefined;
     try {
       let request:
@@ -154,6 +155,7 @@ function createSessionPatchHandler(
         respond(false, undefined, executed.error);
         return;
       }
+      archivedSessionsCommitted = executed.archivedSessionsCommitted;
       if (request.many) {
         diagnostics?.scope("response");
         const outcomes: SessionsPatchManyResult["outcomes"] = executed.outcomes.map(
@@ -206,11 +208,18 @@ function createSessionPatchHandler(
         undefined,
       );
     } finally {
-      if (preparingOperator) {
-        const capturedOperator = await preparingOperator.catch(() => undefined);
-        capturedOperator?.release();
+      try {
+        if (preparingOperator) {
+          const capturedOperator = await preparingOperator.catch(() => undefined);
+          capturedOperator?.release();
+        }
+      } finally {
+        diagnostics?.finish();
+        if (archivedSessionsCommitted) {
+          const { notifyGatewayWorktreeArchive } = await import("../worktree-maintenance.js");
+          notifyGatewayWorktreeArchive(context.getRuntimeConfig);
+        }
       }
-      diagnostics?.finish();
     }
   };
 }

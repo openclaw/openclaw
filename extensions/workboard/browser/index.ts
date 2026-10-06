@@ -1,6 +1,8 @@
 import { defineControlUiPlugin } from "openclaw/plugin-sdk/control-ui";
 import { WorkboardCatalog } from "./catalog.ts";
+import { deleteWorkboardBoard } from "./delete-board.ts";
 import { bindWorkboardHost } from "./host.ts";
+import { t } from "./i18n/index.ts";
 import { workboardBoardName } from "./lib/workboard/board-presentation.ts";
 import { createWorkboardCapability } from "./lib/workboard/capability.ts";
 import { WORKBOARD_CHANGED_EVENT, type WorkboardBoardSummary } from "./lib/workboard/types.ts";
@@ -19,6 +21,7 @@ export default defineControlUiPlugin({
     const unbind = bindWorkboardHost(host);
     const workboard = createWorkboardCapability();
     const client = host;
+    let pendingDeletion: Promise<void> | undefined;
     const navigation = new Map<
       string,
       { board: NavigationBoard; order: number; signature: string; dispose: () => void }
@@ -59,6 +62,41 @@ export default defineControlUiPlugin({
             icon: board.icon ?? "kanban",
             order,
             defaultVisible: false,
+            get actions() {
+              const pinned = host.ui.isNavigationPinned(`board-${board.id}`);
+              return [
+                {
+                  id: "pin",
+                  label: t(pinned ? "workboard.unpinBoard" : "workboard.pinBoard"),
+                  icon: pinned ? "pinOff" : "pin",
+                  run: () => {
+                    const id = `board-${board.id}`;
+                    if (host.ui.isNavigationPinned(id)) {
+                      host.ui.unpinNavigation(id);
+                    } else {
+                      host.ui.pinNavigation(id);
+                    }
+                  },
+                },
+                ...(host.connection.canWrite
+                  ? [
+                      {
+                        id: "delete",
+                        label: t("workboard.deleteBoard"),
+                        icon: "trash",
+                        destructive: true,
+                        run: () =>
+                          (pendingDeletion ??= deleteWorkboardBoard(host, board, () => {
+                            host.ui.unpinNavigation(`board-${board.id}`);
+                            catalog.removeBoard(board.id);
+                          }).finally(() => {
+                            pendingDeletion = undefined;
+                          })),
+                      },
+                    ]
+                  : []),
+              ];
+            },
           }),
         });
       }
@@ -103,8 +141,8 @@ export default defineControlUiPlugin({
       ),
       workboard.subscribe(host.ui.invalidate),
       host.subscribe(() => catalog.sync(client, host.connection.connected)),
-      host.onEvent(WORKBOARD_CHANGED_EVENT, () =>
-        catalog.handleGatewayEvent(WORKBOARD_CHANGED_EVENT),
+      host.onEvent(WORKBOARD_CHANGED_EVENT, (payload) =>
+        catalog.handleGatewayEvent(WORKBOARD_CHANGED_EVENT, payload),
       ),
     ];
     catalog.sync(client, host.connection.connected);

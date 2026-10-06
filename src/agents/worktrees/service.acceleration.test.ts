@@ -19,6 +19,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
@@ -56,6 +57,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
   let backend: WorktreeFilesystemBackend;
 
   beforeEach(async () => {
+    useInProcessWorktreeCapacityTransport();
     // Hosted runners can install system-wide LFS filters, which intentionally
     // disable acceleration. Each case owns its checkout policy instead.
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
@@ -103,7 +105,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       worktreeRoot: path.dirname(destination),
       destination,
       base: commit,
-      requireSpace: () => {},
+      requireSpace: async () => {},
       commitGuard: () => {},
     });
 
@@ -495,7 +497,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     const removed = await service.remove({ id: created.id, reason: "retention" });
     now += SNAPSHOT_RETENTION_MS + 1;
     const allocation = vi
-      .spyOn(stateLease, "withOpenClawStateLease")
+      .spyOn(stateLease, "withOpenClawStateLeaseAsync")
       .mockRejectedValue(new Error("allocation lease unavailable"));
 
     expect((await service.gc()).snapshotsPruned).toBe(0);
@@ -534,9 +536,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     );
     const lease = await held.promise;
     const allocationRequested = createDeferredCore();
-    const acquireLease = stateLease.withOpenClawStateLease;
+    const acquireLease = stateLease.withOpenClawStateLeaseAsync;
     const allocation = vi
-      .spyOn(stateLease, "withOpenClawStateLease")
+      .spyOn(stateLease, "withOpenClawStateLeaseAsync")
       .mockImplementation((...args) => {
         allocationRequested.resolve();
         return acquireLease(...args);

@@ -139,7 +139,7 @@ const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
 };
 
 function categoryIcon(icon: string | undefined): TemplateResult {
-  return (icon && CATEGORY_ICONS[icon]) || icons.box;
+  return (icon && Object.hasOwn(CATEGORY_ICONS, icon) && CATEGORY_ICONS[icon]) || icons.box;
 }
 
 function renderCatalogIcon(

@@ -10,7 +10,6 @@ import { MAX_RECOVERY_RETRIES } from "../../agents/main-session-recovery/main-se
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../agents/media-generation-activity.js";
 import {
   mergeSessionEntry,
-  resolveSessionLifecycleTimestamps,
   type SessionEntry,
   type InternalSessionEntry,
 } from "../../config/sessions.js";
@@ -19,6 +18,7 @@ import {
   type SessionEntryPatchOptions,
 } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
@@ -104,7 +104,7 @@ export async function persistAgentSessionPhase(params: {
     "lifecycleRevision" | "sessionId"
   >;
   initialPatchBuild: AgentSessionPatchBuild;
-  buildSessionPatch: (entry: SessionEntry | undefined) => AgentSessionPatchBuild;
+  buildSessionPatch: (entry: SessionEntry | undefined) => Promise<AgentSessionPatchBuild>;
   initialSessionEntry?: SessionEntry;
   initialResolvedSessionId?: string;
   initialSessionPersistedBeforeGatewayAdmission: boolean;
@@ -151,18 +151,6 @@ export async function persistAgentSessionPhase(params: {
       channel: sessionDeliveryChannel(entry),
       chatType: entry?.chatType,
     }) === "deny";
-  const recoveredSessionStartedAt =
-    !patchBuild.isNewSession &&
-    params.entry !== undefined &&
-    params.entry.sessionStartedAt === undefined
-      ? resolveSessionLifecycleTimestamps({
-          entry: params.entry,
-          storePath: params.storePath,
-          agentId: params.sessionAgentId,
-          sessionKey: params.canonicalSessionKey,
-        }).sessionStartedAt
-      : undefined;
-
   if (params.storePath && !params.suppressVisibleSessionEffects) {
     if (abortForLifecycleRotation()) {
       return undefined;
@@ -187,21 +175,9 @@ export async function persistAgentSessionPhase(params: {
               storeKeys: params.storeKeys ?? [params.canonicalSessionKey],
             },
           },
-          (_currentEntry, patchContext) => {
+          async (_currentEntry, patchContext) => {
             assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
             const freshEntry = patchContext.existingEntry;
-            if (!freshEntry) {
-              creationAuthorizationError = authorizeGatewaySessionCreation({
-                cfg: params.cfg,
-                agentId: params.sessionAgentId,
-                ...(params.operatorRoleActor
-                  ? { actor: params.operatorRoleActor }
-                  : { profileId: params.requestingOperatorProfileId }),
-              });
-              if (creationAuthorizationError) {
-                throw new Error(creationAuthorizationError.message);
-              }
-            }
             assertExpectedExistingSession({
               constraint: params.expectedSession,
               entry: freshEntry,
@@ -326,13 +302,22 @@ export async function persistAgentSessionPhase(params: {
                 ),
               });
             }
-            patchBuild = params.buildSessionPatch(entryForPatch);
-            const lifecyclePatch =
-              recoveredSessionStartedAt !== undefined &&
-              entryForPatch?.sessionStartedAt === undefined &&
-              entryForPatch?.sessionId === params.entry?.sessionId
-                ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
-                : patchBuild.patch;
+            patchBuild = await params.buildSessionPatch(entryForPatch);
+            params.assertAdmissionCurrent?.();
+            assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+            if (!freshEntry) {
+              creationAuthorizationError = authorizeGatewaySessionCreation({
+                cfg: params.cfg,
+                agentId: params.sessionAgentId,
+                ...(params.operatorRoleActor
+                  ? { actor: params.operatorRoleActor }
+                  : { profileId: params.requestingOperatorProfileId }),
+              });
+              if (creationAuthorizationError) {
+                throw new Error(creationAuthorizationError.message);
+              }
+            }
+            const lifecyclePatch = patchBuild.patch;
             const previousSessionId = normalizeOptionalString(freshEntry?.sessionId);
             const nextSessionId = normalizeOptionalString(lifecyclePatch.sessionId);
             const rotationLineage =
@@ -415,11 +400,16 @@ export async function persistAgentSessionPhase(params: {
             replaceEntry: true,
             takeCacheOwnership: true,
             maintenanceConfig: params.maintenanceConfig,
-            assertCommitAllowed: () => {
-              params.assertAdmissionCurrent?.();
-              if (createdNewEntry) {
-                assertPreparedSkillLibrarySelection(params.creation.skillLibrarySelections);
-              }
+            workerGuard: {
+              source: composeSessionSourceAssertion(
+                [params.assertAdmissionCurrent],
+                (assertSource) => {
+                  assertSource();
+                  if (createdNewEntry) {
+                    assertPreparedSkillLibrarySelection(params.creation.skillLibrarySelections);
+                  }
+                },
+              ),
             },
           },
         )) ?? undefined;

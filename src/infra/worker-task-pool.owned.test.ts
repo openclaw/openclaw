@@ -204,14 +204,17 @@ it.each(["reply", "rejection", "cancellation"] as const)(
     const sent = [createDeferredCore(), createDeferredCore()];
     const diagnostics = diagnosticsChannel("openclaw.worker.task");
     const events: unknown[] = [];
+    const hostSignals: AbortSignal[] = [];
     const onCompletion = (event: unknown) => events.push(event);
     diagnostics.subscribe(onCompletion);
     const task = pool.run("timed", {
       signal: controller.signal,
-      onRequest: (value) => {
+      onRequest: (value, { signal }) => {
         if (value !== 1 && value !== 2) {
           throw new Error("Unexpected host request");
         }
+        expect(signal.aborted).toBe(false);
+        hostSignals.push(signal);
         entered[value - 1]!.resolve();
         return responses[value - 1]!.promise;
       },
@@ -237,6 +240,7 @@ it.each(["reply", "rejection", "cancellation"] as const)(
       now = 200;
       request(worker, "timed", 2);
       await entered[1]!.promise;
+      expect(hostSignals[1]).toBe(hostSignals[0]);
       now = 400;
       if (ending === "reply") {
         responses[1]!.resolve({ input: "second reply", timeoutMs: 10_000 });
@@ -256,6 +260,7 @@ it.each(["reply", "rejection", "cancellation"] as const)(
         native.release();
         await expect(task).rejects.toBe(failure);
       }
+      expect(hostSignals[0]?.aborted).toBe(true);
       expect(events).toEqual([
         expect.objectContaining({
           outcome: ending === "reply" ? "ok" : "failed",

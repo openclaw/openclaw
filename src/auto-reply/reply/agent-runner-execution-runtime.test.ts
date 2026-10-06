@@ -265,7 +265,7 @@ describe("executeAgentTurn: runtime selection", () => {
     followupRun.run.config = {
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli" },
+          models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
         },
       },
     };
@@ -559,7 +559,7 @@ describe("executeAgentTurn: runtime selection", () => {
     followupRun.run.config = {
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli" },
+          models: { "openai/gpt-5.4": { agentRuntime: { id: "claude-cli" } } },
         },
       },
     };

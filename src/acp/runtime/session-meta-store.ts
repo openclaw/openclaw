@@ -11,20 +11,12 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
-import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 
-export type AcpSessionStoreEntry = {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  storePath: string;
-  sessionKey: string;
-  storeSessionKey: string;
-  entry?: SessionEntry;
-  acp?: SessionAcpMeta;
-  storeReadFailed?: boolean;
-};
+export type { AcpSessionStoreEntry } from "./session-meta-read.types.js";
 
 /** Resolves the session store path that owns an ACP session key. */
 export function resolveSessionStorePathForAcp(params: {
@@ -106,35 +98,30 @@ export function readSessionEntryFromStore(params: {
   clone?: boolean;
 }): {
   cfg: OpenClawConfig;
-  agentId?: string;
-  storePath?: string;
+  agentId: string;
+  storePath: string;
   storeSessionKey: string;
   entry?: SessionEntry;
   storeReadFailed?: boolean;
 } {
-  const {
-    cfg,
-    agentId,
-    storePath,
-    storeSessionKey: canonicalKey,
-  } = resolveSessionStorePathForAcp(params);
+  const { cfg, agentId, storePath, storeSessionKey } = resolveSessionStorePathForAcp(params);
   try {
-    const storeSessionKey = normalizeStoreSessionKey(canonicalKey);
     const entry = storeSessionKey
       ? loadSessionEntryReadOnly({
-          ...(agentId ? { agentId } : {}),
+          agentId,
           storePath,
           sessionKey: storeSessionKey,
           ...(params.clone === false ? { clone: false } : {}),
         })
       : undefined;
     return { cfg, agentId, storePath, storeSessionKey, entry };
-  } catch {
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     return {
       cfg,
       agentId,
       storePath,
-      storeSessionKey: canonicalKey,
+      storeSessionKey,
       storeReadFailed: true,
     };
   }

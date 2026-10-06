@@ -165,15 +165,14 @@ function resolveConfiguredKeyProviderOrder(params: {
   return uniqueStrings([...supportedProviders, ...params.fallbackProviders]);
 }
 
-function resolveConfiguredImageModel(params: {
+function resolveConfiguredImageModelId(params: {
   cfg: OpenClawConfig;
   providerId: string;
-}): { id?: string; input?: string[] } | undefined {
+}): string | undefined {
   const providerCfg = findNormalizedProviderValue(params.cfg.models?.providers, params.providerId);
-  return providerCfg?.models?.find((entry) => {
-    const id = entry?.id?.trim();
-    return Boolean(id) && entry?.input?.includes("image");
-  });
+  return providerCfg?.models
+    ?.find((entry) => entry?.id?.trim() && entry.input?.includes("image"))
+    ?.id.trim();
 }
 
 function resolveCatalogImageModelId(params: {
@@ -209,8 +208,7 @@ async function explicitImageModelVisionStatus(params: {
   ) {
     return "unsupported";
   }
-  const configured = resolveConfiguredImageModel(params);
-  if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
+  if (resolveConfiguredImageModelId(params) === params.model) {
     return "supported";
   }
   const { findModelInCatalog, readPreparedModelCatalog, modelSupportsVision } =
@@ -254,7 +252,7 @@ async function resolveAutoImageModelId(params: {
   if (isMinimaxVlmProvider(params.providerId)) {
     return "MiniMax-VL-01";
   }
-  const configuredModel = resolveConfiguredImageModel(params)?.id?.trim();
+  const configuredModel = resolveConfiguredImageModelId(params);
   if (configuredModel) {
     return configuredModel;
   }
@@ -323,16 +321,12 @@ function resolveImageModelFromAgentDefaults(params: {
   cfg: OpenClawConfig;
   agentId?: string;
 }): MediaUnderstandingModelConfig[] {
-  const refs: string[] = [];
-  const primary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.imageModel);
-  if (primary?.trim()) {
-    refs.push(primary.trim());
-  }
-  for (const fb of resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.imageModel)) {
-    if (fb?.trim()) {
-      refs.push(fb.trim());
-    }
-  }
+  const refs = [
+    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.imageModel),
+    ...resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.imageModel),
+  ]
+    .map((ref) => ref?.trim())
+    .filter((ref): ref is string => Boolean(ref));
   if (refs.length === 0) {
     return [];
   }
@@ -716,7 +710,7 @@ export async function runCapability(params: {
   const resolveNativeVisionFlag = (): Promise<boolean | undefined> => {
     nativeVisionProbe ??= activeModelSupportsNativeVision(params).catch((err: unknown) => {
       if (shouldLogVerbose()) {
-        logVerbose(`native vision support probe failed: ${String(err)}`);
+        logVerbose(`native vision support check failed: ${String(err)}`);
       }
       return undefined;
     });

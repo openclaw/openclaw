@@ -18,7 +18,7 @@ import type {
 } from "./chat-metadata-session-projection.js";
 import type { GatewayModelCatalogContext } from "./models-list-context.js";
 
-export type PreparedAgentFacts = ChatMetadataProjectionFacts & {
+type PreparedAgentFacts = ChatMetadataProjectionFacts & {
   authStoreRevision: string;
   catalogRefreshFailed: boolean;
   skillsVersion: number;
@@ -56,6 +56,26 @@ export class ChatMetadataSnapshotUnavailableError extends Error {
     super(message);
     this.name = "ChatMetadataSnapshotUnavailableError";
   }
+}
+
+// Only publication can replace a retired owner's facts; retrying the same generation cannot.
+export function assertPreparedAgentCurrent(agent: ChatMetadataProjectionFacts) {
+  if (!agent.owner.isCurrent()) {
+    throw new ChatMetadataSnapshotUnavailableError(
+      `prepared chat metadata owner retired for agent "${agent.agentId}"`,
+    );
+  }
+}
+
+export function authStoresCurrent(
+  facts: PreparedGenerationFacts,
+  deps: Pick<ChatMetadataRuntimeDeps, "getAuthStoreRevision">,
+) {
+  return facts.agents.every(
+    ({ owner, authStoreRevision }) =>
+      authStoreRevision ===
+      `${deps.getAuthStoreRevision(owner.agentDir)}:${deps.getAuthStoreRevision(owner.inheritedAuthDir)}`,
+  );
 }
 
 export function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerationFacts {

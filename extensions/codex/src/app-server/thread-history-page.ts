@@ -3,12 +3,10 @@ import {
   parseTranscriptPage,
   readControlCursor,
 } from "../session-catalog-parsing.js";
+import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import type {
   CodexThread,
   CodexThreadItem,
-  CodexThreadItemsListParams,
-  CodexThreadItemsListResponse,
-  CodexThreadTurnsListParams,
   CodexThreadTurnsListResponse,
   CodexTurn,
 } from "./protocol.js";
@@ -20,10 +18,6 @@ export type CodexHistoryItemEntry = {
 };
 export type CodexHistoryPageRequest = { threadId: string; cursor?: string; limit: number };
 export type CodexHistoryPage<T> = { items: T[]; nextCursor?: string };
-type HistoryReader = {
-  listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  listItemPage(params: CodexThreadItemsListParams): Promise<CodexThreadItemsListResponse>;
-};
 type HistoryProjection<T> = {
   project(entries: CodexHistoryItemEntry[], limit: number): T[];
   fits(page: CodexHistoryPage<T>): boolean;
@@ -118,7 +112,7 @@ export async function readLegacyCodexHistoryPage<T>(
 
 /** Callers authorize the thread; this reader owns native cursor and response-size semantics. */
 export async function readCodexThreadHistoryPage<T>(
-  control: HistoryReader,
+  control: Pick<CodexSessionCatalogControl, "listTurnPage" | "listItemPage">,
   thread: Pick<CodexThread, "historyMode">,
   request: CodexHistoryPageRequest,
   projection: HistoryProjection<T>,

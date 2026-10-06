@@ -1,7 +1,4 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -17,7 +14,10 @@ import { assertSecretOwnerAvailable } from "../../../secrets/runtime-degraded-st
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../../talk/agent-run-control-shared.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session.js";
-import { projectInternalRealtimeVoicePublicConfig } from "../../../talk/provider-internal.js";
+import {
+  projectInternalRealtimeVoicePublicConfig,
+  resolveInternalRealtimeVoiceGatewayRelayLaunchError,
+} from "../../../talk/provider-internal.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../../talk/provider-resolver.js";
 import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { ADMIN_SCOPE, hasGatewayAdminScope } from "../../operator-scopes.js";
@@ -44,12 +44,8 @@ import {
   buildRealtimeVoiceLaunchOptions,
   buildTalkRealtimeConfig,
   buildTalkTranscriptionConfig,
-  normalizeTalkSessionBrain,
-  normalizeTalkSessionMode,
-  normalizeTalkSessionTransport,
   resolveConfiguredRealtimeTranscriptionProvider,
   resolveTalkRealtimeProviderInstructions,
-  resolveTalkRealtimeGatewayRelayLaunch,
 } from "../session-config.js";
 import {
   buildTalkRealtimeHistoryInstructions,
@@ -112,9 +108,9 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       hasCurrentClientAuthority,
     }) => {
       const receivedAt = performance.now();
-      const mode = normalizeTalkSessionMode(params);
-      const transport = normalizeTalkSessionTransport({ mode, transport: params.transport });
-      const brain = normalizeTalkSessionBrain({ mode, brain: params.brain });
+      const mode = params.mode ?? (params.transport === "managed-room" ? "stt-tts" : "realtime");
+      const transport = params.transport ?? (mode === "stt-tts" ? "managed-room" : "gateway-relay");
+      const brain = params.brain ?? (mode === "transcription" ? "none" : "agent-consult");
       let operatorCapture: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
 
       if (transport === "webrtc" || transport === "provider-websocket") {
@@ -294,15 +290,23 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             surface: "gateway-relay",
             autoRespondToAudio: realtimeConfig.consultRouting !== "force-agent-consult",
           });
-          const relayLaunch = resolveTalkRealtimeGatewayRelayLaunch({
-            ...resolution,
+          const forceAgentConsultOnFinalTranscript =
+            realtimeConfig.consultRouting === "force-agent-consult";
+          const { model: _model, ...overrides } = launchOptions;
+          const providerConfig =
+            Object.keys(overrides).length > 0
+              ? { ...resolution.providerConfig, ...overrides }
+              : resolution.providerConfig;
+          const launchError = resolveInternalRealtimeVoiceGatewayRelayLaunchError({
+            provider: resolution.provider,
             cfg: runtimeConfig,
-            launchOptions,
-            consultRouting: realtimeConfig.consultRouting,
+            providerConfig,
+            model: launchOptions.model,
+            autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
           });
-          if (relayLaunch.error) {
+          if (launchError) {
             // GPT-Live delegates natively; forced transcript consults are a GA-model mode.
-            return respondInvalidRequest(respond, relayLaunch.error);
+            return respondInvalidRequest(respond, launchError);
           }
           const capabilities = resolution.capabilities;
           const controlSource =
@@ -339,8 +343,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
           assertEnsuredTargetCurrent();
           const model =
-            normalizeOptionalString(relayLaunch.providerConfig.model) ??
-            resolution.provider.defaultModel;
+            normalizeOptionalString(providerConfig.model) ?? resolution.provider.defaultModel;
           const voices = [
             ...(capabilities?.voices ??
               (model ? capabilities?.voicesByModel?.[model] : undefined) ??
@@ -360,7 +363,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             consultAuthority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
             operatorAuthority: operatorCapture?.authority,
             provider: resolution.provider,
-            providerConfig: relayLaunch.providerConfig,
+            providerConfig,
             controlSource,
             capabilities,
             clientCapabilities: params.capabilities,
@@ -398,8 +401,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             model: launchOptions.model,
             sessionTarget: target,
             voice: launchOptions.voice,
-            language: normalizeOptionalLowercaseString(params.language),
-            forceAgentConsultOnFinalTranscript: relayLaunch.forceAgentConsultOnFinalTranscript,
+            language: params.language,
+            forceAgentConsultOnFinalTranscript,
           });
           rememberUnifiedTalkSession(session.relaySessionId, {
             kind: "realtime-relay",
@@ -409,7 +412,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           });
           const publicSession = projectInternalRealtimeVoicePublicConfig({
             provider: resolution.provider,
-            providerConfig: relayLaunch.providerConfig,
+            providerConfig,
             config: session,
           });
           return respondOk(respond, {
@@ -574,7 +577,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
           sessionKey: normalizeOptionalString(params.sessionKey),
           text: params.text,
-          mode: normalizeOptionalString(params.mode),
+          mode: params.mode,
           assertCurrent,
         });
         respondOk(respond, result);

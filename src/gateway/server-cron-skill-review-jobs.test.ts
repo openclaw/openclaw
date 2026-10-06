@@ -8,7 +8,7 @@ import { CronService } from "../cron/service.js";
 import { saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   getOpenClawAgentDatabaseIfOpen,
 } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -275,7 +275,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
           ...preferences,
         },
       );
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(testState.root);
       await expect(reconcileSkillCollectionReviewJobs({ cron, cfg, logger })).resolves.toEqual({
         ok: true,
       });

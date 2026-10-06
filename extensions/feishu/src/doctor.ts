@@ -73,22 +73,8 @@ type FeishuDoctorSessionEntry = {
   entry: FeishuSessionEntry;
 };
 
-type FeishuDoctorInspection = {
-  stateDir: string;
-  feishuStateDir: string;
-  findings: FeishuDoctorFinding[];
-  sessionEntries: FeishuDoctorSessionEntry[];
-};
-
-type FeishuDoctorRepairReport = {
-  backupDir: string;
-  stateDirRepairAttempted: boolean;
-  rebuiltStateDir: boolean;
-  removedSessionEntries: number;
-  touchedSessionStores: number;
-  archivedSessionArtifacts: number;
-  warnings: string[];
-};
+type FeishuDoctorInspection = ReturnType<typeof inspectFeishuDoctorState>;
+type FeishuDoctorRepairReport = Awaited<ReturnType<typeof repairFeishuDoctorState>>;
 
 function timestampForPath(now = new Date()): string {
   return now.toISOString().replaceAll(":", "-");
@@ -547,15 +533,12 @@ function collectRepairSessionEntries(
   );
 }
 
-function inspectFeishuDoctorState(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): FeishuDoctorInspection {
+function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env, os.homedir);
   const feishuStateDir = path.join(stateDir, FEISHU_STATE_DIR);
   const findings: FeishuDoctorFinding[] = collectCorruptFeishuStateJsonFindings(feishuStateDir);
-  const sessionEntries: FeishuDoctorInspection["sessionEntries"] = [];
+  const sessionEntries: FeishuDoctorSessionEntry[] = [];
 
   for (const target of collectFeishuSessionTargets({ cfg: params.cfg, env, stateDir })) {
     for (const { sessionKey: key, entry } of listSessionEntries({
@@ -689,7 +672,7 @@ async function repairFeishuDoctorState(params: {
   env?: NodeJS.ProcessEnv;
   now?: Date;
   inspection?: FeishuDoctorInspection;
-}): Promise<FeishuDoctorRepairReport> {
+}) {
   const env = params.env ?? process.env;
   const now = params.now ?? new Date();
   const inspection = params.inspection ?? inspectFeishuDoctorState({ cfg: params.cfg, env });

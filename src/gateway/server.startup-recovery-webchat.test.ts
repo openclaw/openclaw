@@ -316,27 +316,31 @@ it(
             idempotencyKey: runId,
           }),
         ).resolves.toMatchObject({ runId, status: "started" });
+        // The started ACK precedes dispatch inserting the turn into the followup
+        // queue; agent.wait reports the queued registration once insertion commits.
+        await expect(
+          client.request("agent.wait", { runId, timeoutMs: 30_000 }),
+        ).resolves.toMatchObject({ runId, status: "pending", timeoutPhase: "queue" });
       };
+      const readInFlightRunIds = () =>
+        [...(getExistingFollowupQueue(sessionKey)?.inFlight ?? [])].map((item) => item.messageId);
       // Hold the cancellation target in flight before queueing the survivor.
-      // A started ACK precedes insertion into the followup queue.
+      // Insertion starts the drain, which reserves the queue head before yielding to I/O.
       await sendQueuedTurn(canceledRunId, canceledMessage);
-      await vi.waitFor(() => {
-        const queue = getExistingFollowupQueue(sessionKey);
-        expect([...(queue?.inFlight ?? [])].map((item) => item.messageId)).toEqual([canceledRunId]);
-      });
+      expect(readInFlightRunIds()).toEqual([canceledRunId]);
       await sendQueuedTurn(survivorRunId, survivorMessage);
-      await vi.waitFor(() => {
-        const queue = getExistingFollowupQueue(sessionKey);
-        // Active sources remain in items; started ACKs can precede queue admission.
-        expect(queue?.items).toHaveLength(expectedQueuedMessages.size);
-        expect(new Map(queue?.items.map(({ messageId, prompt }) => [messageId, prompt]))).toEqual(
-          expectedQueuedMessages,
-        );
-        expect(queue?.inFlight).toHaveLength(1);
-        expect(queue?.items.map((item) => item.messageId)).toEqual([canceledRunId, survivorRunId]);
-        expect(countPendingQueueItems(queue?.items ?? [], queue?.inFlight)).toBe(1);
-        expect(targetRequests).toHaveLength(1);
-      });
+      const followupQueue = getExistingFollowupQueue(sessionKey);
+      // Active sources remain in items while the drain holds them in flight.
+      expect(
+        new Map(followupQueue?.items.map(({ messageId, prompt }) => [messageId, prompt])),
+      ).toEqual(expectedQueuedMessages);
+      expect(followupQueue?.items.map((item) => item.messageId)).toEqual([
+        canceledRunId,
+        survivorRunId,
+      ]);
+      expect(readInFlightRunIds()).toEqual([canceledRunId]);
+      expect(countPendingQueueItems(followupQueue?.items ?? [], followupQueue?.inFlight)).toBe(1);
+      expect(targetRequests).toHaveLength(1);
       replacementOwner = await beginSessionWorkAdmission({
         scope: storePath,
         identities: [sessionKey, sessionId],

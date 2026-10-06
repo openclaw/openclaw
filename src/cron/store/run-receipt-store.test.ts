@@ -1,13 +1,16 @@
-import childProcess from "node:child_process";
-import { syncBuiltinESMExports } from "node:module";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
-import * as nodeSqlite from "../../infra/node-sqlite.js";
-import * as pidAlive from "../../shared/pid-alive.js";
+import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { withPreparedChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { withEffectPreparation, type PreparedEffectUse } from "../../shared/effect-authority.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -20,6 +23,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   advanceCronActiveJobGeneration,
   bindCronJobAdmittedRun,
@@ -38,6 +42,7 @@ import {
   markServiceCronJobActive,
 } from "../service/run-receipts.js";
 import {
+  makeForeignOwner,
   observeCronRecoveryForTest,
   recoverCronRunForTest,
 } from "../service/run-recovery.test-support.js";
@@ -46,7 +51,6 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob, CronJobPatch, CronStoredJob, CronToolsAllowProvenance } from "../types.js";
 import { cronStoreKey } from "./key.js";
 import {
-  readCronRunReceiptCurrentJob,
   activateCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
@@ -66,45 +70,12 @@ import {
   isCronRunTriggerStateRetiredInDatabase,
   retireCronRunTriggerStateInDatabase,
 } from "./run-receipt-trigger-state.js";
-import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-receipt-" });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  syncBuiltinESMExports();
 });
-
-it.each(["implicit", "supplied"] as const)(
-  "checks receipt availability with the %s transaction without spawning or opening another database",
-  async (source) => {
-    const { storePath, job } = await storeJob(makeCronReceiptJob("transaction-availability"));
-    const handle = claimCronRunReceiptForTest(storePath, job, 1);
-    const state = makeState(storePath, (agentId, database) => {
-      if (source === "supplied") {
-        expect(database?.isTransaction).toBe(true);
-      }
-      return !isAgentDeletionBlocked(agentId, {}, source === "supplied" ? database : undefined);
-    });
-    const spawn = vi.spyOn(childProcess, "spawnSync");
-    syncBuiltinESMExports();
-    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-    let connections = 0;
-    for (let index = 0; index < 3; index += 1) {
-      runOpenClawStateWriteTransaction(() => {
-        const before = open.mock.calls.length;
-        readCronRunReceiptCurrentJob({
-          handle,
-          resolveAgentId: () => handle.agentId,
-          isAgentAvailable: state.deps.isAgentAvailable,
-        });
-        connections += open.mock.calls.length - before;
-      });
-    }
-    expect(spawn.mock.calls.length).toBe(0);
-    expect(connections).toBe(0);
-  },
-);
 
 async function storeJob(job: CronJob) {
   const { storePath } = await makeStorePath();
@@ -144,21 +115,139 @@ function receipts(storePath: string, jobId: string) {
   }>;
 }
 
-function makeForeignOwner(handle: CronRunReceiptHandle) {
-  const ownerPid = 2_147_483_646;
-  openOpenClawStateDatabase()
-    .db.prepare("UPDATE cron_run_receipts SET owner_pid = ? WHERE receipt_id = ?")
-    .run(ownerPid, handle.receiptId);
-  releaseLocalCronRunReceiptOwnership(handle);
-  vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
-  const getStartTime = pidAlive.getFileLockProcessStartTime;
-  const startTimeProbe = vi
-    .spyOn(pidAlive, "getFileLockProcessStartTime")
-    .mockImplementation((pid) => (pid === ownerPid ? handle.ownerStartTime : getStartTime(pid)));
-  return { handle: { ...handle, ownerPid }, startTimeProbe, getStartTime };
-}
-
 describe("cron run receipt store", () => {
+  it("prepares an exact force-disabled message use without host SQL and releases at initiation", async ({
+    signal,
+  }) => {
+    const { storePath, job } = await storeJob({
+      ...makeCronReceiptJob("force-disabled-message"),
+      enabled: false,
+      payload: { kind: "agentTurn", message: "synthetic", toolsAllow: ["message"] },
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+    });
+    const receipt = claimCronRunReceiptForTest(storePath, job, Date.now());
+    const state = makeState(storePath);
+    const marker = markServiceCronJobActive(state, job, receipt);
+    const operationalRunInstance = createOperationalRunInstanceRef("message-use-run");
+    const admission = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance,
+      facts: {
+        runId: operationalRunInstance.runId,
+        agentId: job.agentId!,
+        ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+      },
+    });
+    const response = createDeferred<string>();
+    const dnsEntered = createDeferred();
+    const releaseDns = createDeferred();
+    const readResponse = createDeferred<string>();
+    const pending: Promise<unknown>[] = [];
+    let use: PreparedEffectUse | undefined;
+    let sql: ReturnType<typeof observeMainThreadSql> | undefined;
+    try {
+      const admitted = await admission.admit("embedded");
+      bindCronJobAdmittedRun(marker, admitted, new AbortController().signal);
+      const message = captureCronJobMessageActionAuthority({
+        jobId: job.id,
+        operationalRunInstance,
+      });
+      const source = captureCronJobMessageSourceAuthority({
+        jobId: job.id,
+        operationalRunInstance,
+      });
+      const copiedRunId = captureCronJobMessageActionAuthority({
+        jobId: job.id,
+        operationalRunInstance: createOperationalRunInstanceRef(operationalRunInstance.runId),
+      });
+      expect(message?.prepareUse).toBeTypeOf("function");
+      expect(source?.prepareUse).toBeTypeOf("function");
+      expect(copiedRunId).toThrow("no longer active");
+      expect(() => copiedRunId!.prepareUse!()).toThrow("no longer active");
+      sql = observeMainThreadSql();
+      sql.calibrate();
+      use = await source!.prepareUse!();
+      use.assertCurrent();
+      expect(source).not.toThrow();
+      use.release();
+      use = await message!.prepareUse!();
+      const initiate = vi.fn(() => {
+        message!();
+        return response.promise;
+      });
+      const delivered = use.initiate(initiate);
+      sql.expectIdle();
+      sql.restore();
+      sql = undefined;
+      expect(initiate).toHaveBeenCalledOnce();
+      expect(() => use!.initiate(initiate)).toThrow();
+      const providerError = new Error("provider read failed");
+      await expect(
+        withPreparedChannelReadAuthority(source!.prepareUse, source, async () => {
+          const result = await fetchWithSsrFGuard({
+            url: "https://public.example/provider-failure",
+            lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
+            fetchImpl: async () => {
+              throw providerError;
+            },
+          });
+          await result.release();
+        }),
+      ).rejects.toBe(providerError);
+      const fetchImpl = vi.fn(async () => new Response("private provider response"));
+      const fetched = withEffectPreparation(message!.prepareUse, async () => {
+        const result = await fetchWithSsrFGuard({
+          url: "https://public.example/cron-message",
+          fetchImpl,
+          lookupFn: async () => {
+            dnsEntered.resolve();
+            await releaseDns.promise;
+            return [{ address: "93.184.216.34", family: 4 }];
+          },
+        });
+        await result.release();
+        return result.response;
+      });
+      const fetchDenied = expect(fetched).rejects.toThrow("no longer active");
+      const read = withPreparedChannelReadAuthority(
+        source!.prepareUse,
+        source,
+        () => readResponse.promise,
+        signal,
+      );
+      const disclosureDenied = expect(read).rejects.toThrow("no longer active");
+      pending.push(fetched, fetchDenied, read, disclosureDenied);
+      await withinTest(
+        awaitGateBeforeSettlement(dnsEntered.promise, fetched, "Provider request skipped DNS gate"),
+        signal,
+      );
+      await withinTest(
+        update(state, job.id, { payload: { kind: "agentTurn", toolsAllow: ["read"] } }),
+        signal,
+      );
+      releaseDns.resolve();
+      readResponse.resolve("private contents must not be disclosed");
+      await Promise.all([fetchDenied, disclosureDenied]);
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(message).toThrow("no longer active");
+      expect(() => message!.prepareUse!()).toThrow("no longer active");
+      response.resolve("accepted before revocation");
+      await expect(delivered).resolves.toBe("accepted before revocation");
+      expect(initiate).toHaveBeenCalledOnce();
+    } finally {
+      sql?.restore();
+      use?.release();
+      response.resolve("settled");
+      releaseDns.resolve();
+      readResponse.resolve("settled");
+      await Promise.allSettled(pending);
+      admission.close();
+      state.timer?.cancel();
+      resetCronActiveJobs();
+      await finishCronRunReceiptAsync({ handle: receipt, status: "ok", finishedAtMs: Date.now() });
+    }
+  });
+
   it.each([
     { writer: "service", enabled: true, mutation: "tool policy" },
     { writer: "service", enabled: false, mutation: "tool policy" },
@@ -264,6 +353,8 @@ describe("cron run receipt store", () => {
           jobId: job.id,
           operationalRunInstance: admitted.operationalRunInstance,
         });
+        const prepared = await assertMessageCurrent!.prepareUse!();
+        prepared.release();
         expect(assertMessageCurrent).not.toThrow();
         expect(assertSourceCurrent).not.toThrow();
         if (native) {
@@ -370,10 +461,18 @@ describe("cron run receipt store", () => {
             await saveCronStore(storePath, { version: 1, jobs: [job] });
           }
         }
+        await expect(
+          Promise.resolve().then(async () => {
+            const use = await assertSourceCurrent!.prepareUse!();
+            use.release();
+          }),
+        ).rejects.toThrow();
         expect(assertSourceCurrent).toThrow();
         if (mutation === "tool policy") {
           expect(assertMessageCurrent).toThrow();
         } else {
+          const use = await assertMessageCurrent!.prepareUse!();
+          use.initiate(() => assertMessageCurrent!());
           expect(assertMessageCurrent).not.toThrow();
         }
         expect(controller.signal.aborted).toBe(false);
@@ -423,13 +522,14 @@ describe("cron run receipt store", () => {
       },
     ]);
     try {
-      expect(() =>
-        readCronRunReceiptCurrentJob({
-          handle: receipt,
-          resolveAgentId: (current) => current.agentId!,
-          isAgentAvailable: () => false,
-        }),
-      ).toThrow(reason);
+      await expect(
+        assertServiceCronRunReceiptCurrent(
+          makeState(storePath, () => false),
+          receipt,
+          undefined,
+          captureOpenClawStateReadWorkerContext(),
+        ),
+      ).rejects.toThrow(reason);
     } finally {
       recordAgentDatabaseAdmissions([]);
       await finishCronRunReceiptAsync({
@@ -565,9 +665,6 @@ describe("cron run receipt store", () => {
         } else {
           const database = openOpenClawStateDatabase().db;
           database.exec("DROP TABLE cron_run_receipts");
-          expect(() =>
-            readCronRunReceiptCurrentJob({ handle, resolveAgentId: () => job.agentId! }),
-          ).toThrow(CronRunReceiptRevisionError);
           await expect(
             assertServiceCronRunReceiptCurrent(state, handle, undefined, context),
           ).rejects.toBeInstanceOf(CronRunReceiptRevisionError);
@@ -774,12 +871,14 @@ describe("cron run receipt store", () => {
       expect(receipts(storePath, job.id)).toMatchObject([
         { receiptId: foreign.handle.receiptId, status: "interrupted" },
       ]);
-      expect(() =>
-        readCronRunReceiptCurrentJob({
-          handle: foreign.handle,
-          resolveAgentId: () => job.agentId!,
-        }),
-      ).toThrow(CronRunReceiptRevisionError);
+      await expect(
+        assertServiceCronRunReceiptCurrent(
+          state,
+          foreign.handle,
+          undefined,
+          captureOpenClawStateReadWorkerContext(),
+        ),
+      ).rejects.toBeInstanceOf(CronRunReceiptRevisionError);
       expect(definition()).toBe(originalDefinition);
       if (delivery === "unrepaired") {
         expect(() => claimCronRunReceiptForTest(storePath, recovered, Date.now())).toThrow(
@@ -878,12 +977,14 @@ describe("cron run receipt store", () => {
     const reassigned = { ...admitted, agentId: "beta", updatedAtMs: 2 };
     await saveCronStore(storePath, { version: 1, jobs: [reassigned] });
 
-    expect(() =>
-      readCronRunReceiptCurrentJob({
-        handle: receipt,
-        resolveAgentId: (job) => job.agentId!,
-      }),
-    ).toThrow(CronRunReceiptRevisionError);
+    await expect(
+      assertServiceCronRunReceiptCurrent(
+        makeState(storePath),
+        receipt,
+        undefined,
+        captureOpenClawStateReadWorkerContext(),
+      ),
+    ).rejects.toBeInstanceOf(CronRunReceiptRevisionError);
 
     await finishCronRunReceiptAsync({
       handle: receipt,

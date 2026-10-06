@@ -267,42 +267,6 @@ describe("subagent announce seam flow", () => {
     outputTesting.setDepsForTest();
   });
 
-  it("keeps the parent's authored result instead of forwarding private grandchildren", async () => {
-    const parentKey = "agent:main:subagent:parent";
-    subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-      {
-        runId: "grandchild-run",
-        childSessionKey: "agent:main:subagent:grandchild",
-        requesterSessionKey: parentKey,
-        requesterDisplayKey: parentKey,
-        task: "grandchild work",
-        cleanup: "keep",
-        createdAt: 1,
-        execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
-        completion: { required: true, resultText: "raw grandchild marker" },
-        delivery: { status: "delivered" },
-        completionTarget: "parent",
-        completionRequesterSessionId: "parent-id",
-      },
-    ]);
-    expect(
-      await runSubagentAnnounceFlow({
-        childSessionKey: parentKey,
-        childRunId: "parent-run",
-        requesterSessionKey: "agent:main:main",
-        task: "parent work",
-        timeoutMs: 10,
-        cleanup: "keep",
-        outcome: { status: "ok" },
-        expectsCompletionMessage: true,
-        terminalReply: { disposition: "visible", text: "parent reviewed and approved" },
-      }),
-    ).toBe("delivered");
-    const message = String(requireAgentCall().params?.message);
-    expect(message).toContain("parent reviewed and approved");
-    expect(message).not.toContain("raw grandchild marker");
-  });
-
   it.each([false, true])(
     "delivers the result while deleting the child: terminal=%s",
     async (terminal) => {

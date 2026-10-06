@@ -47,26 +47,6 @@ const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "topic-edit",
 ]);
 
-function resolveContextGuardTarget(
-  action: ChannelMessageActionName,
-  params: Record<string, unknown>,
-): string | undefined {
-  if (!CONTEXT_GUARDED_ACTIONS.has(action)) {
-    return undefined;
-  }
-
-  const keys =
-    action === "thread-reply" || action === "thread-create"
-      ? ["channelId", "to"]
-      : ["to", "channelId"];
-  for (const key of keys) {
-    if (typeof params[key] === "string") {
-      return params[key];
-    }
-  }
-  return undefined;
-}
-
 function normalizeTarget(channel: ChannelId, raw: string): string | undefined {
   return normalizeTargetForProvider(channel, raw) ?? raw.trim();
 }
@@ -233,7 +213,17 @@ export function enforceCrossContextPolicy(params: {
     return;
   }
 
-  const target = resolveContextGuardTarget(params.action, params.args);
+  const targetKeys =
+    params.action === "thread-reply" || params.action === "thread-create"
+      ? ["channelId", "to"]
+      : ["to", "channelId"];
+  let target: string | undefined;
+  for (const key of targetKeys) {
+    if (typeof params.args[key] === "string") {
+      target = params.args[key];
+      break;
+    }
+  }
   if (!target) {
     return;
   }

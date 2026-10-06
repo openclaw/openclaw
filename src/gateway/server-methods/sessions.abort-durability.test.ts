@@ -120,7 +120,7 @@ it.each([
       let replacement: Promise<void> | undefined;
       const writeFailure = new Error("terminal session write failed");
       let persistenceSpy:
-        | MockInstance<typeof lifecycleState.persistGatewaySessionLifecycleEvent>
+        | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
         | undefined;
       const responseRows: Array<ReturnType<typeof loadSessionEntry>> = [];
       const respond = vi.fn<RespondFn>(() => {
@@ -160,8 +160,10 @@ it.each([
         }
         if (outcome === "write-failed") {
           persistenceSpy = vi
-            .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
-            .mockRejectedValueOnce(writeFailure);
+            .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
+            .mockReturnValueOnce(async () => {
+              throw writeFailure;
+            });
         }
         request = Promise.resolve(
           sessionAbortHandlers["sessions.abort"]!({

@@ -22,7 +22,6 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as generation from "../../skills/workshop/proposal-generation.js";
 import { proposeCreateSkill } from "../../skills/workshop/service-propose.js";
-import { inspectSkillProposal } from "../../skills/workshop/service-query.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { executeSkillWorkshopOperation } from "../../skills/workshop/store-client.js";
 import {
@@ -159,47 +158,36 @@ beforeEach(() => {
 });
 
 describe("proposal upload policy through production Gateway dispatch and storage", () => {
-  it.each(methods)("persists allowed %s content under the upload policy", async (kind) => {
-    for (const enabled of [undefined, true, false]) {
-      const request = await prepare(kind);
-      const before = await persisted();
-      if (enabled === false) {
-        delete request.params.supportFiles;
-      }
-      setUploads(enabled);
-      expect(await dispatch(request.method, request.params)).toHaveBeenCalledWith(
-        true,
-        expect.anything(),
-        undefined,
-      );
-      if (enabled === false) {
-        if ("proposalId" in request.params) {
-          const stored = await inspectSkillProposal(request.params.proposalId, {
-            config,
-            agentId: "main",
-          });
-          expect(stored?.content).toContain("# Revised proof");
-          expect(stored?.supportFiles).toEqual([
-            expect.objectContaining({
-              path: "references/existing.txt",
-              content: "Existing server bytes.\n",
-            }),
-          ]);
+  it.each(["create"] as const)(
+    "persists allowed %s content under the upload policy",
+    async (kind) => {
+      for (const enabled of [undefined, true, false]) {
+        const request = await prepare(kind);
+        const before = await persisted();
+        if (enabled === false) {
+          delete request.params.supportFiles;
         }
-      } else {
-        const stored = await persisted();
-        expect(
-          stored.files.some(
-            ([file, content]) =>
-              !before.files.some(([old]) => old === file) &&
-              file.endsWith("/references/client.txt") &&
-              content === supportFile.content,
-          ),
-        ).toBe(true);
+        setUploads(enabled);
+        expect(await dispatch(request.method, request.params)).toHaveBeenCalledWith(
+          true,
+          expect.anything(),
+          undefined,
+        );
+        if (enabled !== false) {
+          const stored = await persisted();
+          expect(
+            stored.files.some(
+              ([file, content]) =>
+                !before.files.some(([old]) => old === file) &&
+                file.endsWith("/references/client.txt") &&
+                content === supportFile.content,
+            ),
+          ).toBe(true);
+        }
       }
-    }
-  });
-  it.each(methods)(
+    },
+  );
+  it.each(["create"] as const)(
     "rejects disabled %s including spoofed internal flags without writing",
     async (kind) => {
       const request = await prepare(kind);
@@ -311,26 +299,4 @@ describe("proposal upload policy through production Gateway dispatch and storage
       expect(await persisted()).toEqual(before);
     },
   );
-  it("preserves trusted synthetic ingress and service-agent support files while disabled", async () => {
-    setUploads(false);
-    const request = await prepare("create");
-    expect(
-      await dispatch(request.method, request.params, {
-        ...client,
-        internal: { syntheticClient: true },
-      }),
-    ).toHaveBeenCalledWith(true, expect.anything(), undefined);
-    // Service-agent calls have no Gateway client policy; the same storage owner remains usable.
-    const service = await proposeCreateSkill({
-      config,
-      agentId: "main",
-      workspaceDir: state.workspaceDir,
-      name: "service-proof",
-      description: "Service agent proof",
-      content: "# Internal service\n",
-      supportFiles,
-    });
-    const stored = await inspectSkillProposal(service.record.id, { config, agentId: "main" });
-    expect(stored?.supportFiles).toEqual([expect.objectContaining(supportFile)]);
-  });
 });

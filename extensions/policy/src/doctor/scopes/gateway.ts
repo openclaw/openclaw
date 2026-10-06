@@ -1,6 +1,6 @@
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence, PolicyGatewayExposureEvidence } from "../../policy-state-types.js";
+import { getPolicyPath } from "../../policy-value.js";
 import { CHECK_IDS } from "../check-ids.js";
 import { policyEvidenceFinding } from "../policy-evidence-finding.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
@@ -177,13 +177,7 @@ function gatewayNodeCommandFindings(
 }
 
 function hasValidOptionalStringList(policy: unknown, path: readonly string[]): boolean {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return true;
-    }
-    current = current[part];
-  }
+  const current = getPolicyPath(policy, path);
   return (
     current === undefined ||
     (Array.isArray(current) &&

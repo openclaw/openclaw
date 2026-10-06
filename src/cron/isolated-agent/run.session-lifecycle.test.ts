@@ -23,11 +23,11 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "../../gateway/server-chat-state.js";
+import { subscribeAgentEvents } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import {
   createAgentEventHandler,
   type AgentEventHandlerOptions,
 } from "../../gateway/server-chat.js";
-import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import {
   clearAgentRunContext,
   getAgentRunContextOwnership,
@@ -261,17 +261,20 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         };
       });
       const patchWithAbort: typeof accessor.patchSessionEntryCore = (scope, update, options) => {
-        const assertCommitAllowed = options?.assertCommitAllowed;
+        const assertCommitAllowed = options?.workerGuard?.assertCurrent;
         return accessor.patchSessionEntryCore(scope, update, {
           ...options,
           ...(assertCommitAllowed
             ? {
-                assertCommitAllowed: () => {
-                  const isBase = scope.sessionKey === target.sessionKey;
-                  if ((failurePoint !== "continuation") === isBase) {
-                    interrupt();
-                  }
-                  assertCommitAllowed();
+                workerGuard: {
+                  ...options?.workerGuard,
+                  assertCurrent: () => {
+                    const isBase = scope.sessionKey === target.sessionKey;
+                    if ((failurePoint !== "continuation") === isBase) {
+                      interrupt();
+                    }
+                    assertCommitAllowed();
+                  },
                 },
               }
             : {}),
@@ -715,7 +718,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         persistGatewaySessionLifecycleEventForEvent: persist,
         clearTrackedActiveRun,
       });
-      const unsubscribe = onAgentRuntimeEvent(handler);
+      const unsubscribe = subscribeAgentEvents(handler);
       const runIds = new Set<string>();
       let attemptIndex = 0;
       runCliAgentMock.mockImplementation(async (runParams: RunCliAgentParams) => {
@@ -919,6 +922,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         releaseFirst.resolve();
         await Promise.race([secondPreparing.promise, exited]);
         await vi.advanceTimersByTimeAsync(15_000);
+        await unsubscribe.drain();
         expect(attemptIndex).toBe(2);
         expect(runCliAgentMock).toHaveBeenCalledTimes(cliFallback ? 1 : 0);
         expect(broadcast.mock.calls.filter(([event]) => event === "chat")).toHaveLength(0);
@@ -942,6 +946,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         }
         const succeeded = outcome === "cli-success";
         await expect(run).resolves.toMatchObject({ status: succeeded ? "ok" : "error" });
+        await unsubscribe.drain();
         if (error) {
           await expect(run).resolves.toMatchObject({
             error: retryPreparationFailure ? expect.stringContaining(error) : error,
@@ -998,8 +1003,8 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         releaseSecond.resolve();
         releasePostExecutionWrite.resolve();
         await run.catch(() => {});
-        unsubscribe();
-        handler.dispose();
+        await unsubscribe();
+        await handler.dispose();
         vi.useRealTimers();
       }
     },

@@ -32,13 +32,15 @@ import {
   readCodexMirroredSessionHistoryMessages,
   type CodexMirroredSessionHistoryTarget,
 } from "./session-history.js";
-import { stabilizeJsonValue } from "./thread-fingerprints.js";
 import {
-  areCodexDynamicToolFingerprintsCompatible,
   buildContextEngineBinding,
   isContextEngineBindingCompatible,
   type CodexContextEngineThreadBootstrapProjection,
-} from "./thread-lifecycle.js";
+} from "./thread-context-engine.js";
+import {
+  stabilizeJsonValue,
+  areCodexDynamicToolFingerprintsCompatible,
+} from "./thread-fingerprints.js";
 
 export type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];

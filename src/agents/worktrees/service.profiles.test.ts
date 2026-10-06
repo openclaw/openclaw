@@ -67,7 +67,7 @@ describe("repository source profile creation", () => {
       sourceProfile: await resolveWorktreeSourceProfile(repo, commit, ["alpha"], {
         commitGuard: () => undefined,
       }),
-      requireSpace: vi.fn(),
+      requireSpace: vi.fn(async () => {}),
       commitGuard: () => undefined,
     };
   }

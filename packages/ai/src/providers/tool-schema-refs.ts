@@ -38,15 +38,10 @@ function extendSchemaDefs(
     return defs;
   }
 
-  const next: SchemaDefs = defs
-    ? {
-        $defs: new Map(defs.$defs),
-        definitions: new Map(defs.definitions),
-      }
-    : {
-        $defs: new Map<string, unknown>(),
-        definitions: new Map<string, unknown>(),
-      };
+  const next: SchemaDefs = {
+    $defs: new Map(defs?.$defs),
+    definitions: new Map(defs?.definitions),
+  };
   if (defsEntry) {
     for (const [key, value] of Object.entries(defsEntry)) {
       next.$defs.set(key, value);
@@ -161,7 +156,7 @@ function inlineLocalSchemaRefsWithDefs(
       }
       return { ...obj };
     }
-    const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
+    const nextRefStack = new Set(refStack);
     nextRefStack.add(refValue);
     const inlined = inlineLocalSchemaRefsWithDefs(
       resolved,

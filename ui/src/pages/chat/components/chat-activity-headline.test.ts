@@ -60,6 +60,32 @@ describe("activity headline cadence", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("keeps outcome labels with a held purpose and drops them beside the count", () => {
+    const draw = (activity: ActivityHeadline) =>
+      render(
+        html`<button>
+          ${activityHeadline("session:run", activity, "2 reads · 1 unknown", undefined, undefined, [
+            "1 unknown",
+          ])}
+        </button>`,
+        container,
+      );
+    const outcomes = () =>
+      [...container.querySelectorAll(".chat-activity-group__outcome")].map(
+        (node) => node.textContent,
+      );
+    draw(operation("first"));
+    vi.advanceTimersByTime(100);
+    // A step with no title waits its turn; the purpose still on show keeps its label.
+    draw({ ...operation("untitled"), title: "" });
+    expect(label()).toBe("Read first…");
+    expect(outcomes()).toEqual(["1 unknown"]);
+    vi.advanceTimersByTime(2_900);
+    // The count line carries the outcome itself.
+    expect(label()).toBe("2 reads · 1 unknown");
+    expect(outcomes()).toEqual([]);
+  });
+
   it("clears to the summary immediately and cannot resurrect a pending headline", () => {
     update(operation("first"));
     update(operation("pending"));
@@ -151,7 +177,8 @@ it.each([
     status: "unknown",
     expected: "Outcome unknown",
   },
-  { name: "session_status", phase: "result", isError: false, expected: "" },
+  // A step with no title of its own leaves the row reading as its count.
+  { name: "session_status", phase: "result", isError: false, expected: "1 other operation" },
 ] as const)("renders accessible $name activity: $expected", ({ expected, ...params }) => {
   const activity = projectAgentToolActivity({ toolCallId: "purpose", ...params });
   render(renderActivityGroup([group("current", [activity])], liveOptions), container);
@@ -418,6 +445,48 @@ it.each(["failed", "blocked"] as const)(
     );
   },
 );
+
+it("keeps the live row for a step with a routine nested call until the run settles", () => {
+  const step = (status: AgentActivityItem["status"]) =>
+    createToolGroup("current", [
+      createMessageEntry(
+        "step",
+        createAssistantMessage(
+          [
+            createToolCall(
+              "parent",
+              "exec",
+              { title: "Build the snake game", code: "// Build game" },
+              { runId: "active-run" },
+            ),
+            createToolCall(
+              "child",
+              "progress_card",
+              { plan: [] },
+              { runId: "active-run", parentToolCallId: "parent" },
+            ),
+          ],
+          {
+            runId: "active-run",
+            activity: [
+              { ...prepared("parent", status), name: "exec", title: "Build the snake game" },
+              { ...prepared("child", "completed"), hideFromChannelProgress: true },
+            ],
+          },
+        ),
+      ),
+    ]);
+  render(renderActivityGroup([step("running")], liveOptions), container);
+  expect(label()).toBe("Build the snake game…");
+  // Finishing mid-run keeps the live row; only settlement swaps in the step's own row.
+  render(renderActivityGroup([step("completed")], liveOptions), container);
+  expect(label()).toBe("Build the snake game");
+  render(renderActivityGroup([step("completed")], { ...liveOptions, runActive: false }), container);
+  expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
+  expect(container.querySelector(".chat-tool-row__title")?.textContent).toBe(
+    "Build the snake game",
+  );
+});
 
 it.each([false, true])(
   "refreshes a held operation when completion and the next start coexist (duplicate start: %s)",

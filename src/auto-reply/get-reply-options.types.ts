@@ -36,6 +36,16 @@ export type ReplyDispatchRun = {
   };
 };
 
+/** Prepared transcript boundary; current run and writer authority remain caller-owned. */
+export type PreparedReplyTranscriptStart = {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  generation: string | null;
+  maxSeq: number | null;
+};
+
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
@@ -170,6 +180,7 @@ export type GetReplyOptions = {
     runId: string,
     executionIdentityToken?: ExecutionIdentityAdmissionToken,
     options?: ReplyDispatchRun,
+    transcriptStart?: PreparedReplyTranscriptStart | null,
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
@@ -216,6 +227,8 @@ export type GetReplyOptions = {
   enableHeartbeatTool?: boolean;
   /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
   forceHeartbeatTool?: boolean;
+  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
+  continuesConversation?: boolean;
   /**
    * @deprecated Ignored. The tool-failure warning is delivered whenever a run ends
    * without a reply and cannot be suppressed. Kept only so plugin-sdk callers that
@@ -237,8 +250,11 @@ export type GetReplyOptions = {
    * commentary progress inside an ephemeral streaming draft should yield those
    * draft lines while the getter returns true, so progress is not rendered in
    * both lanes at once.
+   * @deprecated Use onVerboseProgressVisibilityAsync; retained until the next Plugin SDK major.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
+  /** Registers awaited visibility before dispatch; preferred over the deprecated callback. */
+  onVerboseProgressVisibilityAsync?: (isActive: () => Promise<boolean>) => Promise<void> | void;
   /** Preserve source-event callback start order for stateful channel progress renderers. */
   preserveProgressCallbackStartOrder?: boolean;
   onPartialReply?: (

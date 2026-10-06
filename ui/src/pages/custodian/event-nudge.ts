@@ -1,6 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
-import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 
@@ -45,17 +45,6 @@ export function shouldConsumeNudge(
     current.severity === finished.severity &&
     current.message === finished.message
   );
-}
-
-export function reconcileCustodianEventNudge(
-  current: CustodianEventNudge | null,
-  pending: CustodianEventNudge | null,
-  event: Pick<GatewayEventFrame, "event" | "payload">,
-): [CustodianEventNudge | null, CustodianEventNudge | null] {
-  if (event.event !== "health") {
-    return [current, pending];
-  }
-  return [classifyHealth(event.payload), pending];
 }
 
 function eventNudgeText(nudge: CustodianEventNudge): string {
@@ -230,7 +219,7 @@ function classifyChannelAccount(
   return null;
 }
 
-function classifyHealth(payload: unknown): CustodianEventNudge | null {
+export function classifyCustodianHealthNudge(payload: unknown): CustodianEventNudge | null {
   const health = asRecord(payload);
   if (!health) {
     return null;

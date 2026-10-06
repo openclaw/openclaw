@@ -145,45 +145,23 @@ function profileStatus(profile: ProviderProfile, providerAuthRejected: boolean) 
   }
 }
 
-function profilesForProvider(card: ModelProviderCard, provider: string): ProviderProfile[] {
-  return card.profiles.filter(
-    (profile) => (card.profileProviderIds[profile.profileId] ?? card.id) === provider,
-  );
-}
-
-function logoutProviderForProfile(card: ModelProviderCard, profileId: string): string | undefined {
-  return card.logoutTargets.find((target) => target.profileIds.includes(profileId))?.provider;
-}
-
-function completeOrder(profiles: readonly ProviderProfile[], order: readonly string[]): string[] {
-  const members = new Set(profiles.map((profile) => profile.profileId));
-  return [
-    ...order.filter((profileId) => members.delete(profileId)),
-    ...profiles.flatMap((profile) =>
-      members.delete(profile.profileId) ? [profile.profileId] : [],
-    ),
-  ];
-}
-
-function hasExactProfileOrder(profiles: readonly ProviderProfile[], order: readonly string[]) {
-  if (profiles.length !== order.length) {
-    return false;
-  }
-  const remaining = new Set(profiles.map((profile) => profile.profileId));
-  return (
-    remaining.size === profiles.length && order.every((profileId) => remaining.delete(profileId))
-  );
-}
-
 function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>) {
   const providers = new Set(
     card.profiles.map((profile) => card.profileProviderIds[profile.profileId] ?? card.id),
   );
   return [...providers].map((provider) => {
-    const profiles = profilesForProvider(card, provider);
+    const profiles = card.profiles.filter(
+      (profile) => (card.profileProviderIds[profile.profileId] ?? card.id) === provider,
+    );
     const order = drafts[provider] ?? card.profileOrders[provider] ?? [];
+    const remaining = new Map(profiles.map((profile) => [profile.profileId, profile]));
+    const ordered = order.flatMap((profileId) => {
+      const profile = remaining.get(profileId);
+      remaining.delete(profileId);
+      return profile ? [profile] : [];
+    });
+    const complete = order.length === profiles.length && ordered.length === profiles.length;
     const lock = card.profileOrderLocks[provider];
-    const complete = hasExactProfileOrder(profiles, order);
     const stored = card.profileOrderStoredProviders.includes(provider);
     const explicit =
       drafts[provider] !== undefined || card.profileOrderExplicitProviders.includes(provider);
@@ -196,7 +174,6 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
               : "modelProviders.profiles.partialOrder",
           )
         : undefined;
-    const profileById = new Map(profiles.map((profile) => [profile.profileId, profile]));
     return {
       provider,
       order,
@@ -205,10 +182,7 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
       stored,
       explicit,
       explanation,
-      profiles: completeOrder(profiles, order).flatMap((profileId) => {
-        const profile = profileById.get(profileId);
-        return profile ? [profile] : [];
-      }),
+      profiles: [...ordered, ...remaining.values()],
     };
   });
 }
@@ -511,7 +485,9 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
             const canMove = props.canMutate && !lock && complete && order.length > 1 && index >= 0;
             const showMoves = !lock && (complete || stored) && order.length > 1;
             const identity = identities.get(profile.profileId)!;
-            const logoutProvider = logoutProviderForProfile(card, profile.profileId);
+            const logoutProvider = card.logoutTargets.find((target) =>
+              target.profileIds.includes(profile.profileId),
+            )?.provider;
             const logoutLabel = t("modelProviders.logout.actionFor", { account: identity });
             const logoutBlocked = !props.canMutate
               ? (props.mutationBlockedReason ?? "")

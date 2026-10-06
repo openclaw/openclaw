@@ -97,7 +97,7 @@ it.for(["complete", "reject undefined"] as const)(
           observing &&
           lane.getStore() !== undefined &&
           scope !== "all" &&
-          !("runIds" in scope) &&
+          "sessionKeys" in scope &&
           scope.sessionKeys.includes(rootKey);
         const index = observe ? contexts.push(lane.getStore()) - 1 : -1;
         return read(runs, select, consume, scope).then(async (result) => {
@@ -246,7 +246,7 @@ it.for(["await refresh", "reject undefined"] as const)(
         const index =
           observing &&
           scope !== "all" &&
-          !("runIds" in scope) &&
+          "sessionKeys" in scope &&
           scope.sessionKeys.includes(rootKey)
             ? ++reads
             : 0;

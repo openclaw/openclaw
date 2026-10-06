@@ -10,6 +10,7 @@ import {
   readOperatorModelPolicyMembership,
   type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -357,31 +358,36 @@ export async function captureGatewayOperatorRunAuthority(input: {
       }
     }
   };
-  const assertSourceCurrent = () => {
-    if (revoked || references === 0) {
-      throw new Error("operator execution authority is no longer active");
-    }
-    if (isSourceCurrent?.() === false || !isGatewayCurrent()) {
-      throw new Error("operator source authority is no longer active");
-    }
-    for (const authority of sourceAuthorities) {
-      authority?.signal?.throwIfAborted();
-      authority?.assertCurrent();
-      authority?.signal?.throwIfAborted();
-    }
-    if (revoked || references === 0) {
-      throw new Error("operator execution authority is no longer active");
-    }
-  };
-  const assertCurrent = () => {
+  const assertSourceCurrent = composeSessionSourceAssertion(
+    sourceAuthorities.map((authority) =>
+      composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
+        authority?.signal?.throwIfAborted();
+        assertSource();
+        authority?.signal?.throwIfAborted();
+      }),
+    ),
+    (assertSources) => {
+      if (revoked || references === 0) {
+        throw new Error("operator execution authority is no longer active");
+      }
+      if (isSourceCurrent?.() === false || !isGatewayCurrent()) {
+        throw new Error("operator source authority is no longer active");
+      }
+      assertSources();
+      if (revoked || references === 0) {
+        throw new Error("operator execution authority is no longer active");
+      }
+    },
+  );
+  const assertCurrent = composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
     try {
-      assertSourceCurrent();
+      assertSource();
       assertRoleCurrent();
     } catch (error) {
       revoked = true;
       throw error;
     }
-  };
+  });
   const releaseHold = () => {
     let released = false;
     return () => {

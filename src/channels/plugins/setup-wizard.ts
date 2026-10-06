@@ -149,10 +149,7 @@ function applySetupInput(params: {
       name: params.input.name,
     });
   }
-  return {
-    cfg: next,
-    accountId: resolvedAccountId,
-  };
+  return next;
 }
 
 function collectCredentialValues(params: {
@@ -173,31 +170,6 @@ function collectCredentialValues(params: {
     }
   }
   return values;
-}
-
-// Text inputs can either update custom config state or reuse the same generic
-// setup input contract as credential steps.
-async function applyWizardTextInputValue(params: {
-  plugin: ChannelSetupPlugin;
-  input: ChannelSetupWizardTextInput;
-  cfg: OpenClawConfig;
-  accountId: string;
-  value: string;
-}) {
-  return params.input.applySet
-    ? await params.input.applySet({
-        cfg: params.cfg,
-        accountId: params.accountId,
-        value: params.value,
-      })
-    : applySetupInput({
-        plugin: params.plugin,
-        cfg: params.cfg,
-        accountId: params.accountId,
-        input: {
-          [params.input.inputKey]: params.value,
-        },
-      }).cfg;
 }
 
 function resolveTextInputKeepMessage(
@@ -397,7 +369,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
                       [credential.inputKey]: undefined,
                       useEnv: true,
                     },
-                  }).cfg,
+                  }),
             applySet: async (currentCfg, value, resolvedValue) =>
               credential.applySet
                 ? await credential.applySet({
@@ -415,7 +387,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
                       [credential.inputKey]: value,
                       useEnv: false,
                     },
-                  }).cfg,
+                  }),
           });
 
           next = credentialResult.cfg;
@@ -434,13 +406,14 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
       const runTextInputSteps = async () => {
         for (const textInput of wizard.textInputs ?? []) {
           const applyValue = async (value: string) => {
-            next = await applyWizardTextInputValue({
-              plugin,
-              input: textInput,
-              cfg: next,
-              accountId,
-              value,
-            });
+            next = textInput.applySet
+              ? await textInput.applySet({ cfg: next, accountId, value })
+              : applySetupInput({
+                  plugin,
+                  cfg: next,
+                  accountId,
+                  input: { [textInput.inputKey]: value },
+                });
           };
           let currentValue = normalizeOptionalString(credentialValues[textInput.inputKey]);
           if (!currentValue && textInput.currentValue) {

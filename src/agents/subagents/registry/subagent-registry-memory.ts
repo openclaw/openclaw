@@ -9,11 +9,13 @@ import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,
@@ -33,10 +35,30 @@ function freezeValue(value: unknown): void {
   Object.freeze(value);
 }
 
-export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
+const immutableSessionListFacts = new WeakMap<SubagentRunRecord, SubagentRunReadRecord>();
+
+/** A row replacement owns a new projection; retired immutable rows release theirs through GC. */
+export function immutableSubagentRunSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
+  const prepared = immutableSessionListFacts.get(entry);
+  if (prepared) {
+    return prepared;
+  }
   prepareGatewayContextBindingOwner(entry);
-  freezeValue(entry);
+  freezeSubagentRunReadRecord(entry);
+  const projection = freezeSubagentRunReadRecord(projectSubagentRunForSessionList(entry));
+  immutableSessionListFacts.set(entry, projection);
+  return projection;
+}
+
+export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
+  immutableSubagentRunSessionList(entry);
   return entry;
+}
+
+/** Registry projections contain only canonical JSON fields and owner-created containers. */
+export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(record: T): T {
+  freezeValue(record);
+  return record;
 }
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
@@ -413,8 +435,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 
   /** Publish accepted runtime ownership after the row's commit acknowledgement. */
   commitOwnership(entry: SubagentRunRecord): void {
+    if (this.settleCommittedOwnership(entry)) {
+      publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+    }
+  }
+
+  /** Bulk restore settles custody before its one atomic row publication notifies readers. */
+  settleCommittedOwnership(entry: SubagentRunRecord): boolean {
     if (!isSameSubagentRunOwner(this.get(entry.runId), entry)) {
-      return;
+      return false;
     }
     for (const scope of this.registrationScopes) {
       if (
@@ -438,7 +467,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         scope.observation = { state: "superseded" };
       }
     }
-    publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+    return true;
   }
 
   /** Normal cleanup calls this only after its deletion commits; raw map deletion is not evidence. */

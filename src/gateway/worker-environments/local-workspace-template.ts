@@ -9,13 +9,11 @@ import {
 } from "../../agents/sandbox/dependency-template.js";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
-import {
-  requireWorktreeDiskSpace,
-  WORKTREE_SETUP_HEADROOM_BYTES,
-} from "../../agents/worktrees/capacity.js";
+import { WORKTREE_SETUP_HEADROOM_BYTES } from "../../agents/worktrees/capacity.js";
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
 import { detectWorktreeFilesystemBackend } from "../../agents/worktrees/filesystem-backend.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
+import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { prepareWorktreeTemplate } from "../../agents/worktrees/template-cache.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -51,7 +49,7 @@ async function hasContainedVirtualStore(directory: string, workdir: string): Pro
 async function validateTemplate(
   directory: string,
   commit: string,
-  guard: WorktreeAllocationGuard,
+  guard: Pick<WorktreeAllocationGuard, "signal" | "commitGuard">,
   trim = false,
 ) {
   return await withWorktreeGitConfig(
@@ -126,23 +124,25 @@ async function validateTemplate(
   );
 }
 
-/** The caller holds allocation before projection custody, matching removal's lock order. */
-export async function cloneLocalWorkspaceTemplate(params: {
+type LocalWorkspaceTemplateParams = {
   source: string;
   repoRoot: string;
   baseCommit: string;
-  branch: string;
-  destination: string;
   temporaryRoot: string;
   templateRoot: string;
   env: NodeJS.ProcessEnv;
   sandbox: SandboxConfig;
-  guard: WorktreeAllocationGuard & { signal: AbortSignal };
-}): Promise<boolean> {
+  guard: Pick<WorktreeAllocationGuard, "commitGuard" | "rollbackGuard" | "requireDiskSpace"> & {
+    signal: AbortSignal;
+  };
+};
+
+/** Preparation and first use share allocation custody and the same persisted generation. */
+export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTemplateParams) {
   const { guard } = params;
-  const backend = await detectWorktreeFilesystemBackend(path.dirname(params.destination), guard);
+  const backend = await detectWorktreeFilesystemBackend(params.temporaryRoot, guard);
   if (!backend) {
-    return false;
+    return undefined;
   }
   const gitOptions = { signal: guard.signal, beforeRun: guard.commitGuard, killProcessTree: true };
   const lockfile = await runGit(
@@ -154,7 +154,7 @@ export async function cloneLocalWorkspaceTemplate(params: {
     log.debug(
       "sandbox dependency template skipped: no complete pnpm lockfile at the selected commit",
     );
-    return false;
+    return undefined;
   }
   const identity = await resolveSandboxDependencyTemplateIdentity(params.sandbox, {
     signal: guard.signal,
@@ -162,27 +162,29 @@ export async function cloneLocalWorkspaceTemplate(params: {
   });
   if (!identity) {
     log.debug("sandbox dependency template skipped: local image identity unavailable");
-    return false;
+    return undefined;
   }
   const commonDir = path.resolve(
     params.source,
     await requireGit(params.source, ["rev-parse", "--git-common-dir"], gitOptions),
   );
   const prepareSource = async (directory: string) => {
-    requireWorktreeDiskSpace(
+    await guard.requireDiskSpace(
       [{ path: params.templateRoot, bytes: WORKTREE_SETUP_HEADROOM_BYTES }],
       "sandbox dependency template",
     );
     await backend.createTemplate(directory, guard);
-    await prepareLocalWorkspaceCheckout({
-      source: params.source,
-      destination: directory,
-      temporaryRoot: params.temporaryRoot,
-      baseCommit: params.baseCommit,
-      branch: "openclaw-template",
-      signal: guard.signal,
-      assertCurrent: guard.commitGuard,
-    });
+    await timeWorktreePreparationPhase("checkout", () =>
+      prepareLocalWorkspaceCheckout({
+        source: params.source,
+        destination: directory,
+        temporaryRoot: params.temporaryRoot,
+        baseCommit: params.baseCommit,
+        branch: "openclaw-template",
+        signal: guard.signal,
+        assertCurrent: guard.commitGuard,
+      }),
+    );
   };
   const record = await prepareWorktreeTemplate({
     env: params.env,
@@ -196,7 +198,7 @@ export async function cloneLocalWorkspaceTemplate(params: {
     sourceCommit: params.baseCommit,
     backend: `sandbox-${backend.id}`,
     requireSpace: () =>
-      requireWorktreeDiskSpace(
+      guard.requireDiskSpace(
         [{ path: params.templateRoot, bytes: WORKTREE_SETUP_HEADROOM_BYTES }],
         "sandbox dependency template",
       ),
@@ -230,11 +232,23 @@ export async function cloneLocalWorkspaceTemplate(params: {
       await prepareSource(preparing.path);
     },
   });
-  if (!record) {
+  return record ? { record, backend } : undefined;
+}
+
+/** The caller holds allocation before projection custody, matching removal's lock order. */
+export async function cloneLocalWorkspaceTemplate(
+  params: LocalWorkspaceTemplateParams & { branch: string; destination: string },
+): Promise<boolean> {
+  const prepared = await timeWorktreePreparationPhase("templatePrepare", () =>
+    prepareLocalWorkspaceTemplate(params),
+  );
+  if (!prepared) {
     return false;
   }
+  const { record, backend } = prepared;
+  const { guard } = params;
   guard.commitGuard();
-  requireWorktreeDiskSpace(
+  await guard.requireDiskSpace(
     [
       {
         path: params.destination,
@@ -245,7 +259,9 @@ export async function cloneLocalWorkspaceTemplate(params: {
     "sandbox workspace clone",
   );
   try {
-    await backend.cloneTemplate(record.path, params.destination, guard);
+    await timeWorktreePreparationPhase("templateApply", () =>
+      backend.cloneTemplate(record.path, params.destination, guard),
+    );
   } catch {
     guard.commitGuard();
     await fs.rm(params.destination, { recursive: true, force: true });
@@ -254,6 +270,10 @@ export async function cloneLocalWorkspaceTemplate(params: {
   }
   // This .git was host-created and read-only throughout installation; guests only
   // receive the independent cloned metadata after its session branch is selected.
-  await requireGit(params.destination, ["branch", "-m", params.branch], gitOptions);
+  await requireGit(params.destination, ["branch", "-m", params.branch], {
+    signal: guard.signal,
+    beforeRun: guard.commitGuard,
+    killProcessTree: true,
+  });
   return true;
 }

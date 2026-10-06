@@ -19,6 +19,7 @@ import {
   ExecApprovalsMigrationRequiredError,
   resetExecApprovalsMigrationGateForTest,
 } from "./exec-approvals-migration-gate.js";
+import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -256,6 +257,7 @@ export function mintMcpToolGrantLocked(
       },
     },
   };
+  assertExecApprovalsHostPolicyUnchanged(current, next);
   assertExecApprovalsMutationAllowed({ db, current, next });
   writeExecApprovalsConfigRow({ db, file: next, now: nowMs });
 }

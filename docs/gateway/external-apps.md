@@ -278,8 +278,8 @@ resumes; an in-flight restart makes preparation return `busy`.
 
 While draining or ready, `/healthz` remains live and `/readyz` returns `503`.
 Local or authenticated readiness responses include `gateway-draining`;
-unauthenticated remote probes receive only `{ "ready": false }`. The HTTP health
-probe, suspension methods on authenticated operator WebSocket connections, and
+unauthenticated remote checks receive only `{ "ready": false }`. The HTTP health
+check, suspension methods on authenticated operator WebSocket connections, and
 an already-enabled Admin HTTP RPC route remain available. Other unrelated RPCs
 return retryable `UNAVAILABLE`. Built-in HTTP user-work routes and ordinary
 plugin HTTP routes,

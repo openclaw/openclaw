@@ -1,7 +1,9 @@
 import * as http from "node:http";
 import * as https from "node:https";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { classifyTransientNetworkErrorCode, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
@@ -119,30 +121,52 @@ export async function sendMessage(
   allowInsecureSsl = false,
   onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<boolean> {
+  const effect = captureEffectAuthority();
   const chunks = chunkTextForOutbound(text, SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT);
+  const acceptedChunks: string[] = [];
   for (const chunk of chunks.length > 0 ? chunks : [text]) {
-    // Synology Chat API requires numeric user_ids to specify the recipient.
-    const body = buildWebhookBody({ text: chunk }, userId);
-    // Retry only proven pre-connect failures; ambiguous webhook replays can duplicate messages.
-    await waitForSendSlot();
-    await onPlatformSendDispatch?.();
-    let result: SynologyHostedFileSendResult["status"];
+    let initiated = false;
     try {
-      result = await retryAsync(() => doPost(incomingUrl, body, allowInsecureSsl), {
-        attempts: 3,
-        minDelayMs: 0,
-        shouldRetry: isProvenPreConnectFailure,
-        delayMs: ({ attempt }) => 300 * 2 ** (attempt - 1),
-        sleep: async (delayMs) => {
-          await sleepWithAbort(delayMs);
-          await waitForSendSlot();
-          await onPlatformSendDispatch?.();
+      // Synology Chat API requires numeric user_ids to specify the recipient.
+      const body = buildWebhookBody({ text: chunk }, userId);
+      // Retry only proven pre-connect failures; ambiguous webhook replays can duplicate messages.
+      await waitForSendSlot();
+      await onPlatformSendDispatch?.();
+      const result = await retryAsync(
+        () => {
+          initiated = false;
+          return effect.initiate(() => {
+            initiated = true;
+            return doPost(incomingUrl, body, allowInsecureSsl);
+          });
         },
-      });
-    } catch {
-      return false;
-    }
-    if (result !== "accepted") {
+        {
+          attempts: 3,
+          minDelayMs: 0,
+          shouldRetry: (error) => initiated && isProvenPreConnectFailure(error),
+          delayMs: ({ attempt }) => 300 * 2 ** (attempt - 1),
+          sleep: async (delayMs) => {
+            initiated = false;
+            await sleepWithAbort(delayMs);
+            await waitForSendSlot();
+            await onPlatformSendDispatch?.();
+          },
+        },
+      );
+      if (result !== "accepted") {
+        throw new Error(`Failed to send message to Synology Chat (${result})`);
+      }
+      acceptedChunks.push(chunk);
+    } catch (error) {
+      if (acceptedChunks.length > 0) {
+        throw createChannelPartialDeliveryError(error, {
+          visibleReplySent: true,
+          content: acceptedChunks.join(""),
+        });
+      }
+      if (!initiated) {
+        throw error;
+      }
       return false;
     }
   }
@@ -156,6 +180,7 @@ export async function sendHostedFileUrl(
   allowInsecureSsl = false,
   onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<SynologyHostedFileSendResult> {
+  const effect = captureEffectAuthority();
   let body: string;
   try {
     body = buildWebhookBody({ file_url: assertHostedMediaUrl(fileUrl) }, userId);
@@ -166,9 +191,17 @@ export async function sendHostedFileUrl(
   await waitForSendSlot();
   await onPlatformSendDispatch?.();
 
+  let initiated = false;
   try {
-    return { status: await doPost(incomingUrl, body, allowInsecureSsl) };
+    const status = await effect.initiate(() => {
+      initiated = true;
+      return doPost(incomingUrl, body, allowInsecureSsl);
+    });
+    return { status };
   } catch (error) {
+    if (!initiated) {
+      throw error;
+    }
     // Proven pre-connect failures cannot have queued the capability. All other
     // transport errors stay indeterminate because Synology may have the POST.
     return { status: isProvenPreConnectFailure(error) ? "not-dispatched" : "indeterminate" };
