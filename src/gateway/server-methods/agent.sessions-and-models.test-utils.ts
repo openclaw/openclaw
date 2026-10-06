@@ -114,7 +114,7 @@ describe("gateway agent handler", () => {
     const entry = {
       sessionId: "exhausted-session",
       updatedAt: Date.now(),
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       mainRestartRecovery: {
         cycleId: "cycle-exhausted",

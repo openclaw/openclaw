@@ -39,7 +39,7 @@ describe("pending-final delivery completion", () => {
     completion.storePath = storePath;
     const entry: InternalSessionEntry = {
       sessionId: completion.sessionId,
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       updatedAt: Date.now(),
       mainRestartRecovery: {

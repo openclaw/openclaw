@@ -554,7 +554,6 @@ describe("createPersistCronSessionEntry", () => {
   it("persists isolated cron state only under the stable cron session key", async () => {
     const cronSession = makeCronSession(
       makeSessionEntry({
-        status: "running",
         startedAt: 900,
         skillsSnapshot: {
           prompt: "old prompt",
@@ -599,7 +598,6 @@ describe("createPersistCronSessionEntry", () => {
       makeSessionEntry({
         lifecycleRevision: "run-revision",
         label: "Cron: shell-only",
-        status: "running",
       }),
     );
     const persistSessionEntry = vi.fn(async () => {});
@@ -624,7 +622,6 @@ describe("createPersistCronSessionEntry", () => {
         label: "Cron: shell-only",
         lifecycleRevision: "run-revision",
         sessionId: "run-session-id",
-        status: "running",
         updatedAt: 1000,
         systemSent: true,
       },
@@ -804,7 +801,6 @@ describe("createPersistCronSessionEntry", () => {
     const runRevision = crypto.randomUUID();
     const initialSessionEntry = makeSessionEntry({
       lifecycleRevision: initialRevision,
-      status: "running",
       totalTokens: 10,
     });
     const cronSession = {
@@ -893,7 +889,6 @@ describe("createPersistCronSessionEntry", () => {
       ...makeCronSession(
         makeSessionEntry({
           lifecycleRevision,
-          status: "running",
         }),
       ),
       initialSessionEntry,
@@ -919,9 +914,9 @@ describe("createPersistCronSessionEntry", () => {
       label: "Renamed before claim",
       lifecycleRevision,
       pinnedAt: 2000,
-      status: "running",
       updatedAt: 2000,
     });
+    expect(persistedStore[sessionKey]?.status).toBeUndefined();
   });
 
   it.each([
