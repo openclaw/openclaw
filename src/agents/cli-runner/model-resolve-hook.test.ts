@@ -21,6 +21,7 @@ const hookRunnerStub = vi.hoisted(() => ({
   ),
 }));
 
+// mock-isolation: hook dispatch must observe the stubbed runner, not live plugin state.
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunnerStub,
 }));
