@@ -1270,6 +1270,7 @@ export function createAgentEventHandler({
     if (lifecyclePhase !== null && lifecyclePhase !== "error") {
       clearPendingTerminalLifecycleError(evt.runId);
     }
+    const publishLifecycle = evt.admitLifecyclePublication?.() ?? true;
 
     // Include sessionKey so Control UI can filter tool streams per session.
     const spawnedBy = sessionKey ? resolveSpawnedBy(sessionKey) : null;
@@ -1339,7 +1340,7 @@ export function createAgentEventHandler({
         ...(explanation ? { explanation } : {}),
       };
     }
-    if (recordsInFlightProgress && !isAborted && !suppressHeartbeatToolEvents) {
+    if (recordsInFlightProgress && !isAborted && !suppressHeartbeatToolEvents && publishLifecycle) {
       // Persist the client-facing identity after run/session remapping. Route
       // changes discard transient UI rows, so history replay must use the same
       // payload identity as live delivery or tool results cannot reconcile.
@@ -1500,16 +1501,17 @@ export function createAgentEventHandler({
         flushBufferedAgentDeltaIfNeeded(clientRunId);
       }
       if (
-        isControlUiVisible ||
-        (sessionKey &&
-          hasSessionMessageSubscribers &&
-          (isItemEvent ||
-            evt.stream === "thinking" ||
-            evt.stream === "approval" ||
-            evt.stream === "lifecycle" ||
-            (!isAborted &&
-              evt.stream === "assistant" &&
-              shouldMirrorAssistantEventToHiddenSessionMessages(evt.data))))
+        publishLifecycle &&
+        (isControlUiVisible ||
+          (sessionKey &&
+            hasSessionMessageSubscribers &&
+            (isItemEvent ||
+              evt.stream === "thinking" ||
+              evt.stream === "approval" ||
+              evt.stream === "lifecycle" ||
+              (!isAborted &&
+                evt.stream === "assistant" &&
+                shouldMirrorAssistantEventToHiddenSessionMessages(evt.data)))))
       ) {
         sendOrBufferAgentTextEvent(
           clientRunId,

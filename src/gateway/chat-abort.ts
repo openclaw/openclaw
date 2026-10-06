@@ -7,12 +7,15 @@ import {
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
-import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  resolveAgentRunAbortLifecycleFields,
+} from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  emitAgentEvent,
+  captureAgentEventEmitter,
   getAgentEventLifecycleGeneration,
   type AgentEventPayload,
 } from "../infra/agent-events.js";
@@ -509,6 +512,7 @@ export function abortChatRunById(
     return { aborted: false };
   }
 
+  const emitAgentEvent = captureAgentEventEmitter(runId);
   const bufferedText = ops.chatRunState.resolveBuffer(runId, { final: true }).text;
   const run = ops.chatRunState.runs.get(runId);
   const liveTextGroup = run?.liveTextGroup?.signal;
@@ -576,8 +580,7 @@ export function abortChatRunById(
     data: {
       phase: "end",
       status: "cancelled",
-      aborted: true,
-      stopReason,
+      ...resolveAgentRunAbortLifecycleFields(active.controller.signal),
       ...(active.toolErrorSummary ? { toolErrorSummary: active.toolErrorSummary } : {}),
       // Pre-execution admission time is not an execution start.
       startedAt: active.executionStarted === false ? undefined : active.startedAtMs,

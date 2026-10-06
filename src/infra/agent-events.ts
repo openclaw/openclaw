@@ -1,4 +1,5 @@
 // Stores and broadcasts agent lifecycle and streaming events.
+import { isDefinitiveRunLifecycle } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -18,7 +19,7 @@ import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "./agent-run-registry.js";
-import type { AgentRunContext } from "./agent-run-registry.types.js";
+import type { AgentRunContext, AgentRunEventState } from "./agent-run-registry.types.js";
 import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
 /** Payload for approval requests and their later resolution events. */
@@ -75,6 +76,7 @@ export type AgentEventPayload = {
 
 /** Gateway-only routing metadata stamped onto events after public input validation. */
 export type AgentEventRuntimePayload = AgentEventPayload & {
+  readonly admitLifecyclePublication?: () => boolean;
   readonly controlUiVisible?: boolean;
   readonly contextClaimId?: string;
   readonly deliverySessionKey?: string;
@@ -94,7 +96,7 @@ type AgentEventRegistration = {
 type AgentEventListeners = Map<AgentEventListener, AgentEventRegistration>;
 
 type AgentEventState = {
-  seqByRun: Map<string, number>;
+  runs: Map<string, AgentRunEventState>;
   listeners: AgentEventListeners;
   runListeners: Map<string, AgentEventListeners>;
   nextListenerId: number;
@@ -116,7 +118,7 @@ const AGENT_EVENT_ROUTING_FIELDS = [
 function getAgentEventState(): AgentEventState {
   // Lifecycle owners can register before an importing runtime chunk finishes initialization.
   return resolveGlobalSingleton<AgentEventState>(Symbol.for("openclaw.agentEvents.state"), () => ({
-    seqByRun: new Map<string, number>(),
+    runs: new Map(),
     listeners: new Map(),
     runListeners: new Map(),
     nextListenerId: 0,
@@ -126,7 +128,7 @@ function getAgentEventState(): AgentEventState {
 }
 
 registerAgentRunSequenceResetHandler((runId) => {
-  getAgentEventState().seqByRun.delete(runId);
+  getAgentEventState().runs.delete(runId);
 });
 
 /** Runs one execution with immutable ownership inherited by every emitted stream event. */
@@ -139,6 +141,19 @@ export function withAgentRunLifecycleGeneration<T>(lifecycleGeneration: string, 
   // run id replaces only its own binding. Neither scope retains live authority.
   const routingByRun = new Map(parent?.routingByRun);
   return storage.run({ lifecycleGeneration, onceByRun, routingByRun }, run);
+}
+
+/** Retains event routing when synchronous cancellation hooks retire the run context. */
+export function captureAgentEventEmitter(runId: string): typeof emitAgentEvent {
+  const context = getAgentRunContext(runId);
+  return withAgentRunLifecycleGeneration(captureAgentRunLifecycleGeneration(runId), () => {
+    if (context) {
+      recordAgentEventRouting(runId, context);
+    }
+    const storage = getAgentEventExecutionContext();
+    const scope = storage.getStore()!;
+    return (event) => storage.run(scope, () => emitAgentEvent(event));
+  });
 }
 
 /** Shares one operation across fallback attempts that belong to the same admitted run. */
@@ -397,6 +412,7 @@ function enrichAgentEvent(
       return undefined;
     }
   }
+  const runState = routing?.eventState ?? state.runs.get(event.runId) ?? { seq: 0 };
   let data = event.data;
   if (routing && event.stream === "lifecycle") {
     if (routing.completionSource) {
@@ -418,8 +434,9 @@ function enrichAgentEvent(
   if (context) {
     recordAgentEventRouting(event.runId, context);
   }
-  const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
-  state.seqByRun.set(event.runId, nextSeq);
+  const nextSeq = (state.runs.get(event.runId)?.seq ?? 0) + 1;
+  runState.seq = nextSeq;
+  state.runs.set(event.runId, runState);
   if (context) {
     context.lastActiveAt = Date.now();
     recordExecutionActivity(context, event);
@@ -460,6 +477,19 @@ function enrichAgentEvent(
     seq: nextSeq,
     ts: Date.now(),
   };
+  if (event.stream === "lifecycle") {
+    // A listener can synchronously emit a terminal before this event reaches the publisher.
+    // Internal settlement observers consume the event without claiming publication.
+    Object.defineProperty(enriched, "admitLifecyclePublication", {
+      value: () => {
+        if (runState.terminalPublished) {
+          return false;
+        }
+        runState.terminalPublished = isDefinitiveRunLifecycle({ phase: data.phase, data });
+        return true;
+      },
+    });
+  }
   if (lifecycleGeneration) {
     // Persistence needs restart ownership, but agent events are also spread into
     // public payloads. Keep the internal generation readable without serializing it.
@@ -598,7 +628,7 @@ export function emitAgentAuditEvent(event: Omit<AgentEventPayload, "seq" | "ts">
     if ((phase === "end" || phase === "error") && !getAgentRunContext(event.runId)) {
       // Private synthetic runs bypass public terminal cleanup. Release sequence state only
       // after synchronous audit listeners consume the terminal event and its final ordering.
-      state.seqByRun.delete(event.runId);
+      state.runs.delete(event.runId);
     }
   }
 }
@@ -653,7 +683,7 @@ export function onAgentAuditEvent(listener: (evt: AgentEventPayload) => void) {
 /** Clears agent event state; test suites with a live Gateway can preserve its listeners. */
 export function resetAgentEventsForTest(options?: { preserveListeners?: boolean }) {
   const state = getAgentEventState();
-  state.seqByRun.clear();
+  state.runs.clear();
   resetAgentRunRegistryForTest();
   if (!options?.preserveListeners) {
     state.listeners.clear();

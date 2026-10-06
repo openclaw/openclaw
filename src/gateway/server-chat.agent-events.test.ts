@@ -27,6 +27,7 @@ import {
   getAgentEventLifecycleGeneration,
   onAgentRuntimeEvent,
   resetAgentEventsForTest,
+  withAgentRunLifecycleGeneration,
   type AgentEventPayload,
 } from "../infra/agent-events.js";
 import {
@@ -88,6 +89,7 @@ vi.mock("./session-utils-store-worker.js", () => ({
 
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
 import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -1990,6 +1992,59 @@ describe("agent event handler", () => {
       expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledOnce();
     },
   );
+
+  it("publishes one abort terminal while late lifecycle facts still settle internally", async () => {
+    const h = createHarness();
+    const runId = "run-abort-publication";
+    const sessionKey = "session-abort-publication";
+    const chatAbortControllers = new Map();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId,
+      sessionKey,
+      sessionId: "session-id",
+      timeoutMs: 60_000,
+    });
+    const unlisten = subscribeAgentEvents(h.handler);
+    onTestFinished(unlisten);
+    await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), async () => {
+      registerAgentRunContext(runId, { sessionKey, sessionId: "session-id" });
+      h.register(runId, sessionKey, runId);
+      registration.controller.signal.addEventListener("abort", () => {
+        clearRegisteredAgentRunContext(runId);
+      });
+      expect(
+        abortChatRunById(
+          {
+            ...h,
+            chatAbortControllers,
+            removeChatRun: h.chatRunState.registry.remove,
+          },
+          { runId, sessionKey, stopReason: "rpc" },
+        ),
+      ).toEqual({ aborted: true });
+      for (const data of [
+        { phase: "model", provider: null, model: null },
+        { phase: "finishing" },
+        { phase: "error", aborted: true, stopReason: "aborted", executionSettled: true },
+      ]) {
+        emitRuntimeAgentEvent({ runId, stream: "lifecycle", data });
+      }
+      await unlisten.drain();
+    });
+    expect(h.agent().map(([, event]) => event.data)).toEqual([
+      expect.objectContaining({ phase: "end", aborted: true, stopReason: "aborted" }),
+    ]);
+    expect(h.nodeAgent()).toHaveLength(1);
+    expect(h.chat().filter(([, event]) => event.state === "aborted")).toHaveLength(1);
+    expect(h.clearAgentRunContext).toHaveBeenCalledWith(runId);
+    expect(persistGatewaySessionLifecycleEventMock.mock.calls.at(-1)?.[0].event.data).toMatchObject(
+      {
+        phase: "error",
+        executionSettled: true,
+      },
+    );
+  });
 
   it("keeps deferred lifecycle-error cleanup across phase-less lifecycle events", async () => {
     vi.useFakeTimers();

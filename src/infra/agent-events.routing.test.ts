@@ -37,14 +37,100 @@ function emitModel(
   );
 }
 
-function captureEvents() {
+function captureEvents({ publishedOnly = false } = {}) {
   const events: AgentEventRuntimePayload[] = [];
-  onTestFinished(onAgentRuntimeEvent((event) => events.push(event)));
+  onTestFinished(
+    onAgentRuntimeEvent((event) => {
+      if (!publishedOnly || (event.admitLifecyclePublication?.() ?? true)) {
+        events.push(event);
+      }
+    }),
+  );
   return events;
 }
 
 describe("agent event routing after cancellation", () => {
   beforeEach(() => resetAgentEventsForTest());
+
+  it.each(["end", "error"])(
+    "publishes one aborted %s and suppresses lifecycle events through cleanup",
+    async (phase) => {
+      const runId = "aborted-run";
+      const generation = getAgentEventLifecycleGeneration();
+      const events = captureEvents();
+      const published = captureEvents({ publishedOnly: true });
+      const emit = (data: Record<string, unknown>) =>
+        emitAgentEventIfCurrent({ runId, stream: "lifecycle", data });
+      await withAgentRunLifecycleGeneration(generation, async () => {
+        registerAgentRunContext(runId, { sessionKey: "agent:main:aborted" });
+        const owner = getAgentRunContext(runId)!;
+        emit({ phase: "start", startedAt: 1 });
+        emitModel(runId, owner, "provider", "model");
+        onTestFinished(
+          onAgentRuntimeEvent((event) => {
+            if (event.runId === runId && event.data.phase === phase) {
+              emit({ phase: "finishing" });
+            }
+          }),
+        );
+        // Cancellation publishes in another scope sharing the same registration.
+        await withAgentRunLifecycleGeneration(generation, async () => {
+          expect(emit({ phase, aborted: true, stopReason: "aborted" })).toBe(true);
+        });
+        emitModel(runId, owner, null, null);
+        expect(owner.activeModel).toBeUndefined();
+        clearAgentRunContext(runId);
+        await Promise.resolve();
+        expect(
+          emit({ phase: "error", aborted: true, stopReason: "aborted", executionSettled: true }),
+        ).toBe(true);
+        expect(emit({ phase: "start", startedAt: 2 })).toBe(true);
+        emitAgentEvent({ runId, stream: "tool", data: { phase: "result", toolCallId: "held" } });
+      });
+      expect(published.map((event) => [event.stream, event.data.phase])).toEqual([
+        ["lifecycle", "start"],
+        ["lifecycle", "model"],
+        ["lifecycle", phase],
+        ["tool", "result"],
+      ]);
+      expect(events.some((event) => event.data.executionSettled)).toBe(true);
+    },
+  );
+
+  it("suppresses a lifecycle frame overtaken by a reentrant abort terminal", () => {
+    const runId = "reentrant-abort";
+    registerAgentRunContext(runId, {});
+    onTestFinished(
+      onAgentRuntimeEvent((event) => {
+        if (event.runId === runId && event.data.phase === "start") {
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: { phase: "end", aborted: true, stopReason: "aborted" },
+          });
+        }
+      }),
+    );
+    const published = captureEvents({ publishedOnly: true });
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1 } });
+    expect(published.map((event) => event.data.phase)).toEqual(["end"]);
+  });
+
+  it("keeps retryable errors open until the fallback execution settles", () => {
+    const runId = "retry-run";
+    const events = captureEvents({ publishedOnly: true });
+    registerAgentRunContext(runId, {});
+    for (const data of [
+      { phase: "start", startedAt: 1 },
+      { phase: "error", error: "retryable failure" },
+      { phase: "start", startedAt: 2 },
+      { phase: "error", error: "final failure", executionSettled: true },
+      { phase: "end" },
+    ]) {
+      emitAgentEvent({ runId, stream: "lifecycle", data });
+    }
+    expect(events.map((event) => event.data.phase)).toEqual(["start", "error", "start", "error"]);
+  });
 
   it.each([
     { name: "visible", hidden: false, messages: true },
