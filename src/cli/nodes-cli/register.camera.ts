@@ -111,7 +111,8 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera snap", async () => {
-          const facing = normalizeLowercaseStringOrEmpty(opts.facing) || undefined;
+          const facing =
+            opts.facing === undefined ? undefined : normalizeLowercaseStringOrEmpty(opts.facing);
           if (
             facing !== undefined &&
             facing !== "both" &&

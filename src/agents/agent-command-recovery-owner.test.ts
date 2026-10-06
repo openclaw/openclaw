@@ -70,7 +70,6 @@ describe("agent command restart recovery ownership", () => {
   function runningRecovery(lifecycleGeneration: string): Partial<SessionEntry> {
     return {
       updatedAt: 200,
-      status: "running",
       abortedLastRun: false,
       restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],
       mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 1 },
@@ -96,12 +95,15 @@ describe("agent command restart recovery ownership", () => {
     {
       name: "interruption appears during preparation",
       before: {},
-      duringPreparation: { status: "running", abortedLastRun: true },
+      duringPreparation: {
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+      },
     },
     {
       name: "an admitted recovery is still running",
       before: {
-        status: "running",
         abortedLastRun: false,
         restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration: "gateway-generation" }],
         mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 1 },
@@ -110,12 +112,20 @@ describe("agent command restart recovery ownership", () => {
     {
       name: "freshness rollover still has an interrupted predecessor",
       target: { isNewSession: true, previousSessionId: "session-1", sessionId: "session-2" },
-      before: { status: "running", abortedLastRun: true },
+      before: {
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+      },
     },
     {
       name: "an explicit replacement still has an interrupted predecessor",
       target: { isNewSession: true, previousSessionId: "session-1", sessionId: "fresh-session" },
-      before: { status: "running", abortedLastRun: true },
+      before: {
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+      },
       explicitSession: true,
     },
     {
@@ -135,7 +145,11 @@ describe("agent command restart recovery ownership", () => {
     {
       name: "a fresh key acquires an interruption during preparation",
       target: { isNewSession: true, sessionId: "fresh-session" },
-      duringPreparation: { status: "running", abortedLastRun: true },
+      duringPreparation: {
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+      },
     },
   ])("rejects standalone work when $name", async (scenario) => {
     const target = { ...createTarget(), ...scenario.target };
@@ -173,8 +187,9 @@ describe("agent command restart recovery ownership", () => {
     const staleEntry: SessionEntry = {
       sessionId: base.sessionId,
       updatedAt: 100,
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
+      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
     };
     const target = {
       ...base,
@@ -190,7 +205,11 @@ describe("agent command restart recovery ownership", () => {
         expect(claims?.tokens).toEqual([expect.any(String)]);
         expect(Object.values(claims?.runIdsByClaimId ?? {})).toContain("foreground-run");
         expect(prepared.sessionStore[sessionKey]).toEqual(prepared.sessionEntry);
-        const completed = { ...prepared.sessionEntry, abortedLastRun: false };
+        const completed: SessionEntry = {
+          ...prepared.sessionEntry,
+          status: "done",
+          abortedLastRun: false,
+        };
         await write(target, completed);
       },
     });
@@ -209,12 +228,17 @@ describe("agent command restart recovery ownership", () => {
   ] as const)("handles terminal residue in $mode mode", async ({ mode, status, cleared }) => {
     const target = createTarget();
     const restartRecoveryRuns = [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }];
-    await write(target, { status, abortedLastRun: true, restartRecoveryRuns });
+    await write(target, {
+      status,
+      abortedLastRun: false,
+      restartRecoveryRuns,
+      restartRecoveryTerminalRunIds: ["stale-run"],
+    });
     const run = vi.fn(async () => "ran");
     await expect(execute(target, { mode, run })).resolves.toBe("ran");
     expect(run).toHaveBeenCalledOnce();
     const stored = read(target);
-    expect(stored).toMatchObject({ status, abortedLastRun: !cleared });
+    expect(stored).toMatchObject({ status, abortedLastRun: false });
     expect(stored?.restartRecoveryRuns).toEqual(cleared ? undefined : restartRecoveryRuns);
     expect(stored?.mainRestartRecovery).toBeUndefined();
   });
@@ -232,7 +256,11 @@ describe("agent command restart recovery ownership", () => {
       name: "cleared interruption",
       mode: "reject_uncoordinated",
       result: "ran",
-      before: { status: "running", abortedLastRun: true },
+      before: {
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+      },
       duringPreparation: { updatedAt: 200 },
     },
     {
@@ -290,6 +318,7 @@ describe("agent command restart recovery ownership", () => {
     const restoreAdmittedRecovery = vi.fn(async () => {
       const entry = read(target) as SessionEntry;
       entry.abortedLastRun = true;
+      entry.status = "interrupted";
       await write(target, entry);
       return restoredTarget;
     });
@@ -495,7 +524,9 @@ describe("agent command restart recovery ownership", () => {
     const entry = { sessionId: target.sessionId, ...runningRecovery(lifecycleGeneration) };
     await write(
       target,
-      outcome === "cancelled during claim" ? { ...entry, abortedLastRun: true } : entry,
+      outcome === "cancelled during claim"
+        ? { ...entry, status: "interrupted", abortedLastRun: true }
+        : entry,
     );
     const owner =
       outcome === "ownerless" || outcome === "cancelled during claim"
@@ -586,7 +617,11 @@ describe("agent command restart recovery ownership", () => {
     "binds a transferred recovery lease to its %s",
     async (binding) => {
       const base = createTarget();
-      await write(base, { status: "running", abortedLastRun: true });
+      await write(base, {
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+      });
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const claim = await claimMainSessionRecoveryOwner({
         lifecycleGeneration,

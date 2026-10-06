@@ -100,6 +100,7 @@ export async function enrichWhatsAppInboundMessage(params: {
     : undefined;
   const nativeMedia = mediaKind ? { contentType: mediaType, kind: mediaKind } : undefined;
   let mediaFileName: string | undefined;
+  let savedContentType: string | undefined;
   const maxMb =
     typeof params.mediaMaxMb === "number" && params.mediaMaxMb > 0 ? params.mediaMaxMb : 50;
   const maxBytes = maxMb * 1024 * 1024;
@@ -112,6 +113,7 @@ export async function enrichWhatsAppInboundMessage(params: {
     mediaPath = inboundMedia.saved.path;
     mediaType = inboundMedia.mimetype;
     mediaFileName = inboundMedia.fileName;
+    savedContentType = inboundMedia.saved.contentType;
   };
   try {
     // Entry zero is exactly the Baileys normalization that downloadInboundMedia performed here
@@ -159,6 +161,10 @@ export async function enrichWhatsAppInboundMessage(params: {
         notice: "[whatsapp quoted attachment unavailable]",
       });
     }
+  }
+
+  if (mediaKind === "document" && savedContentType?.startsWith("image/")) {
+    mediaKind = "image";
   }
 
   return {

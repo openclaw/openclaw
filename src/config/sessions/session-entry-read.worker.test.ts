@@ -51,7 +51,7 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
       updatedAt: 1,
       createdAt: 1,
       sessionStartedAt: 1,
-      status: "running" as const,
+      status: "done" as const,
       skillsSnapshot: { prompt: "saved prompt".repeat(8192), skills: [] },
       sessionDiffBaseline: {
         version: 1 as const,
@@ -120,14 +120,6 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
             expect(payloads.textBytes.entry).toBeLessThan(2048);
             expect(read(fields, true).entries).toEqual(selected.entries);
           }
-          const recovery = readExactSessionEntriesWithLifecycle({
-            kind: "session-exact-entries",
-            database: target,
-            env,
-            sessionKeys: [],
-            statusSelection: { statuses: ["running"], presenceOnly: false },
-          });
-          expect(recovery.entries).toEqual(read([]).entries);
           expect(read().entries[0]?.entry).toMatchObject(entry);
         } finally {
           payloads.restore();

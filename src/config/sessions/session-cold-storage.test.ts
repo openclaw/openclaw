@@ -7,6 +7,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
@@ -739,15 +740,24 @@ describe("cold transcript storage workers", () => {
     await replaceSessionEntry(fixture.scope, {
       sessionId: currentId,
       updatedAt: 1,
-      status: "running",
     });
     setTranscriptActivity(fixture.options, currentId);
     const running = fixture.snapshot();
-    expect(await runSessionColdStorageMaintenance({ config })).toEqual({
-      archivedTranscripts: 0,
-      externalizedTranscripts: 0,
+    registerAgentRunContext("cold-current-run", {
+      agentId: "main",
+      sessionKey: fixture.scope.sessionKey,
+      sessionId: currentId,
+      projectSessionActive: true,
     });
-    expect(fixture.snapshot()).toEqual(running);
+    try {
+      expect(await runSessionColdStorageMaintenance({ config })).toEqual({
+        archivedTranscripts: 0,
+        externalizedTranscripts: 0,
+      });
+      expect(fixture.snapshot()).toEqual(running);
+    } finally {
+      clearAgentRunContext("cold-current-run");
+    }
   });
 
   it("applies the configured day cutoff to historical transcript activity", async () => {
@@ -769,12 +779,12 @@ describe("cold transcript storage workers", () => {
     expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
   });
 
-  it("archives old unreferenced history despite a recently updated running session", async () => {
+  it("archives old unreferenced history despite a recently updated idle session", async () => {
     const fixture = await createFixture();
     await replaceSessionEntry(fixture.scope, {
       sessionId: currentId,
       updatedAt: Date.now(),
-      status: "running",
+      status: "done",
     });
     const currentBefore = transcriptRows(fixture, currentId);
     const nodesBefore = fixture.database().prepare("SELECT * FROM session_nodes").all();

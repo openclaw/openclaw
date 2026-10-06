@@ -594,7 +594,7 @@ describe("chat metadata dispatch authority", () => {
     { change: "title", patch: { displayName: "First reply" }, current: true },
     {
       change: "run start",
-      patch: { updatedAt: 2, startedAt: 2, status: "running" },
+      patch: { updatedAt: 2, startedAt: 2 },
       current: true,
     },
     { change: "ordinary patch", patch: { thinkingLevel: "high" }, current: true },

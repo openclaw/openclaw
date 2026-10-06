@@ -11,6 +11,12 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { classifyOpenClawAgentDatabaseReadError } from "./openclaw-agent-db-read-error.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
+const validationTables = new Set([
+  "session_nodes",
+  "session_windows",
+  "session_key_contract",
+  "session_canonical_validation_pending",
+]);
 const definitionsSql = `SELECT name, sql FROM main.sqlite_schema
   WHERE name = 'session_canonical_validation_pending'
     OR (type = 'trigger' AND tbl_name IN (
@@ -25,11 +31,24 @@ const validatedSchemas = resolveGlobalSingleton(
     >(),
 );
 
-function readDefinitions(database: DatabaseSync): Map<string, string | null> {
+function readDefinitions(
+  database: DatabaseSync,
+  schema?: SqliteSchemaFacts,
+): Map<string, string | null> {
   const definitions = new Map<string, string | null>();
-  const rows =
-    // sqlite-allow-raw -- Read canonical schema definitions before admitting ordinary queries.
-    database.prepare(definitionsSql).all();
+  const pending = "session_canonical_validation_pending";
+  const rows = schema
+    ? [
+        ...(schema.tableSql.has(pending)
+          ? [{ name: pending, sql: schema.tableSql.get(pending) }]
+          : []),
+        ...Array.from(schema.triggers).flatMap(([name, trigger]) =>
+          name === pending || validationTables.has(trigger.table)
+            ? [{ name, sql: trigger.sql }]
+            : [],
+        ),
+      ]
+    : database.prepare(definitionsSql).all(); // sqlite-allow-raw -- Native schema definitions.
   for (const row of rows) {
     if (typeof row.name !== "string" || typeof row.sql !== "string") {
       throw new Error("Session canonical validation schema has an unreadable definition");
@@ -79,7 +98,7 @@ export function assertCanonicalSessionValidationSchema(database: DatabaseSync): 
   cached?.unregister();
   validatedSchemas.delete(database);
   const expected = expectedDefinitions();
-  const actual = readDefinitions(database);
+  const actual = readDefinitions(database, schema);
   for (const name of new Set([...expected.keys(), ...actual.keys()])) {
     if (expected.get(name) !== actual.get(name)) {
       throw classifyOpenClawAgentDatabaseReadError(

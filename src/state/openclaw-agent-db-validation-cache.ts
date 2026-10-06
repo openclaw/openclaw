@@ -150,6 +150,16 @@ function readTransferredSchema(value: unknown): OpenClawAgentDatabaseValidation[
     !(facts.tableSql instanceof Map) ||
     ![...facts.tableSql].every(
       ([name, sql]) => typeof name === "string" && (sql === null || typeof sql === "string"),
+    ) ||
+    !(facts.indexes instanceof Set) ||
+    ![...facts.indexes].every((index) => typeof index === "string") ||
+    !(facts.triggers instanceof Map) ||
+    ![...facts.triggers].every(
+      ([name, trigger]) =>
+        typeof name === "string" &&
+        isRecord(trigger) &&
+        typeof trigger.table === "string" &&
+        (trigger.sql === null || typeof trigger.sql === "string"),
     )
   ) {
     return undefined;
@@ -162,6 +172,8 @@ function readTransferredSchema(value: unknown): OpenClawAgentDatabaseValidation[
       schemaVersion: facts.schemaVersion,
       tables: facts.tables,
       tableSql: facts.tableSql,
+      indexes: facts.indexes,
+      triggers: facts.triggers,
     },
   };
 }
