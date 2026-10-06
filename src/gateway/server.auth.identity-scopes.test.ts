@@ -3,7 +3,8 @@ import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest";
+import type { WebSocket } from "ws";
 import {
   buildGatewayConnectAuth,
   selectGatewayConnectAuth,
@@ -687,6 +688,86 @@ describe("gateway identity scope grants", () => {
         expect(await waitForWsClose(reconnectWs, 1_000)).toBe(true);
       }
     });
+  });
+
+  test("keeps a verified GitHub person signed in while anonymous GitHub quota is exhausted", async () => {
+    await configureGatewayAuth(
+      { mode: "token", token: "secret", allowTailscale: true },
+      { tailscaleMode: "serve" },
+    );
+    const realFetch = globalThis.fetch;
+    const githubRequests: string[] = [];
+    let quotaExhausted = false;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.origin !== "https://api.github.com") {
+        return await realFetch(input, init);
+      }
+      githubRequests.push(url.pathname);
+      return quotaExhausted
+        ? new Response("{}", {
+            status: 403,
+            headers: {
+              "x-ratelimit-remaining": "0",
+              "x-ratelimit-reset": String(Math.ceil(Date.now() / 1_000) + 3_600),
+            },
+          })
+        : Response.json({ id: 583231, login: "ada" });
+    });
+    onTestFinished(() => fetchSpy.mockRestore());
+
+    await withGatewayServer(async ({ server }) => {
+      const endpoint = server.getTailscaleIngressEndpoint();
+      if (!endpoint) {
+        throw new Error("expected managed Tailscale listener");
+      }
+      // The GitHub API transport is the GitHub plugin's public surface; load it lazily from source.
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+      vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+      const withPerson = async (login: string, run: (ws: WebSocket) => Promise<void>) => {
+        testTailscaleWhois.value = { login, name: login };
+        const ws = await openTailscaleWs(endpoint, {
+          origin: BROWSER_ORIGIN,
+          "tailscale-user-login": login,
+        });
+        try {
+          const connected = await connectIdentity(ws, {
+            skipDefaultAuth: true,
+            scopes: ["operator.read"],
+            deviceIdentityPath: deviceIdentityPath(`github-quota-${login}`),
+          });
+          expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
+          await run(ws);
+        } finally {
+          ws.close();
+        }
+      };
+      let profileId: string | undefined;
+      await withPerson("ada@github", async (ws) => {
+        const self = await rpcReq<UsersSelfResult>(ws, "users.self");
+        expect(self.ok, JSON.stringify(self.error)).toBe(true);
+        profileId = self.payload?.profile.id;
+      });
+
+      quotaExhausted = true;
+      await withPerson("ada@github", async (ws) => {
+        const self = await rpcReq<UsersSelfResult>(ws, "users.self");
+        expect(self.payload?.profile.id, JSON.stringify(self.error)).toBe(profileId);
+        const sessions = await rpcReq(ws, "sessions.list");
+        expect(sessions.ok, JSON.stringify(sessions.error)).toBe(true);
+      });
+      await withPerson("eve@github", async (ws) => {
+        for (const method of ["users.self", "sessions.list"]) {
+          const response = await rpcReq(ws, method);
+          expect(response.error, method).toMatchObject({
+            code: "UNAVAILABLE",
+            message: expect.stringContaining("GitHub is rate limiting profile verification"),
+            retryAfterMs: expect.toSatisfy((ms: number) => ms > 60_000),
+          });
+        }
+      });
+    });
+    expect(githubRequests).toEqual(["/users/ada", "/users/ada"]);
   });
 
   test("caps a broader reconnect before device scope-upgrade comparison", async () => {
