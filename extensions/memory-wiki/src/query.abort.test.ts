@@ -20,8 +20,7 @@ it("stops parsing vault pages after cancellation during a scan", async () => {
     ),
   );
   const controller = new AbortController();
-  const { scanWikiPageSummary: original } =
-    await vi.importActual<typeof markdown>("./markdown.js");
+  const { scanWikiPageSummary: original } = await vi.importActual<typeof markdown>("./markdown.js");
   const scan = vi.spyOn(markdown, "scanWikiPageSummary").mockImplementation((params) => {
     const page = original(params);
     controller.abort(new Error("Turn cancelled"));

@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import type * as QueryModule from "./query.js";
+import type * as SourceSyncModule from "./source-sync.js";
 import { createWikiSearchTool } from "./tool.js";
 
 const search = vi.hoisted(() => ({ signal: undefined as AbortSignal | undefined }));
-vi.mock("./source-sync.js", () => ({ syncMemoryWikiImportedSources: async () => {} }));
+vi.mock("./source-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof SourceSyncModule>()),
+  syncMemoryWikiImportedSources: async () => {},
+}));
 vi.mock("./query.js", async (importOriginal) => ({
   ...(await importOriginal<typeof QueryModule>()),
   searchMemoryWiki: ({ signal }: { signal?: AbortSignal }) => {

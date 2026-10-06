@@ -154,7 +154,9 @@ export function createWikiSearchTool(
       const deadline = new AbortController();
       const timer = setTimeout(
         () =>
-          deadline.abort(new Error(`wiki_search timed out after ${WIKI_SEARCH_TIMEOUT_MS / 1000}s`)),
+          deadline.abort(
+            new Error(`wiki_search timed out after ${WIKI_SEARCH_TIMEOUT_MS / 1000}s`),
+          ),
         WIKI_SEARCH_TIMEOUT_MS,
       );
       timer.unref?.();
