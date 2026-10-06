@@ -15,9 +15,9 @@ function notifySnapshotInvalidation(invalidation: SnapshotInvalidation): Promise
   if (!invalidation.sessionKey && !invalidation.scopePrefix) {
     snapshotStoreGeneration += 1;
   }
-  return Promise.all(
-    [...invalidationListeners].map((listener) => Promise.resolve(listener(invalidation))),
-  ).then(() => undefined);
+  return Promise.all([...invalidationListeners].map((listener) => listener(invalidation))).then(
+    () => undefined,
+  );
 }
 
 function broadcastSnapshotInvalidation(invalidation: SnapshotInvalidation): void {
