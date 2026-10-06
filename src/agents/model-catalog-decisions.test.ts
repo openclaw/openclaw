@@ -518,7 +518,7 @@ describe("captured model decisions", () => {
     const owner = nativeOwner(true, true, () => current);
     expect(await owner.runtimeChoices(entry)).toEqual(["codex"]);
     current = false;
-    await expect(owner.runtimeChoices(entry)).rejects.toThrow("Model catalog changed");
+    expect(() => owner.runtimeChoices(entry)).toThrow("Model catalog changed");
   });
 
   it("keeps a different provider's account pin out of the selected route", async () => {

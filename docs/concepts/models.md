@@ -304,6 +304,8 @@ harness here.
 Catalog preparation and explicit Refresh acquire the requested native inventories
 once per runtime while preserving the configured default.
 Opening the picker reuses prepared catalog facts; explicit Refresh owns discovery.
+Session-scoped pickers evaluate model and runtime choices together after checking
+session access, and recheck access before returning the catalog.
 
 An agent can replace the inherited list through
 `agents.entries.<id>.models["provider/model"].pickerRuntimes`; an empty array removes
