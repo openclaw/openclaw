@@ -587,11 +587,15 @@ describe("ollama provider models", () => {
     expect(deepseekCloudModel.reasoning).toBe(true);
     expect(deepseekCloudModel.compat?.supportsTools).toBe(true);
 
-    const deepseekCloudModelWithoutCapabilities = buildOllamaModelDefinition(
+    for (const modelId of [
       "deepseek-v4-flash:cloud",
-      1048576,
-    );
-    expect(deepseekCloudModelWithoutCapabilities.reasoning).toBe(true);
+      "deepseek-v4.1-flash:cloud",
+      "glm-5.3:cloud",
+      "glm-5.3-flash:cloud",
+      "kimi-k3:cloud",
+    ]) {
+      expect(buildOllamaModelDefinition(modelId, 1_048_576).reasoning).toBe(true);
+    }
 
     const noCapabilities = buildOllamaModelDefinition("unknown-model", 65536);
     expect(noCapabilities.input).toEqual(["text"]);

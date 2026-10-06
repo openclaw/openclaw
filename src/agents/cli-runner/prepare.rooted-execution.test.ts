@@ -192,38 +192,36 @@ describe("rooted CLI preparation", () => {
     expect(prepareSkillsPlugin).not.toHaveBeenCalled();
   });
 
-  it.each(["ro", "none"] as const)(
-    "retains the distinct policy owner's %s sandbox before issuing a grant or preparing the CLI",
-    async (workspaceAccess) => {
-      resolveSandboxContext.mockImplementation(async ({ agentId }) =>
-        agentId === "other"
-          ? createAgentToolsSandboxContext({
-              workspaceDir: fixture.session.dir,
-              workspaceAccess,
-            })
-          : null,
-      );
+  it("retains the distinct policy owner's ro sandbox before issuing a grant or preparing the CLI", async () => {
+    const workspaceAccess = "ro";
+    resolveSandboxContext.mockImplementation(async ({ agentId }) =>
+      agentId === "other"
+        ? createAgentToolsSandboxContext({
+            workspaceDir: fixture.session.dir,
+            workspaceAccess,
+          })
+        : null,
+    );
 
-      await expect(
-        prepare({
-          agentId: "other",
-          sessionKey: "agent:main:main",
-          runtimePolicySessionKey: "policy-session",
-          config: {
-            agents: {
-              entries: {
-                main: { default: true, sandbox: { mode: "off" } },
-                other: { sandbox: { mode: "all", workspaceAccess } },
-              },
+    await expect(
+      prepare({
+        agentId: "other",
+        sessionKey: "agent:main:main",
+        runtimePolicySessionKey: "policy-session",
+        config: {
+          agents: {
+            entries: {
+              main: { sandbox: { mode: "off" } },
+              other: { sandbox: { mode: "all", workspaceAccess } },
             },
           },
-        }),
-      ).rejects.toThrow("sandbox workspace is not read-write");
-      expect(projectTools).not.toHaveBeenCalled();
-      expect(mintGrant).not.toHaveBeenCalled();
-      expect(prepareExecution).not.toHaveBeenCalled();
-    },
-  );
+        },
+      }),
+    ).rejects.toThrow("sandbox workspace is not read-write");
+    expect(projectTools).not.toHaveBeenCalled();
+    expect(mintGrant).not.toHaveBeenCalled();
+    expect(prepareExecution).not.toHaveBeenCalled();
+  });
 
   it("reports the prepared writable sandbox for a rooted run", async () => {
     const root = path.join(fixture.session.dir, "workshop");

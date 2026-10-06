@@ -4,6 +4,7 @@ import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js"
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
+import { resolveCompatibleRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { createPluginCapabilityCatalogContext } from "./capability-catalog-context.js";
 import { isPluginRegistryLoadInFlight } from "./loader-cache.js";
 import {
@@ -11,7 +12,6 @@ import {
   type InternalPluginLoadOverrides,
   type NativePluginLoadBindings,
 } from "./loader-runtime-core.js";
-import { createPluginRuntimeRegistryResolver } from "./loader-runtime-registry.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
   createPluginCache,
@@ -35,8 +35,18 @@ import type { PluginRuntime } from "./runtime/types.js";
 
 // Construction only binds callbacks. No profile reads, plugin loads, or network work occur here.
 // Hoisted entry functions let cold auth discovery re-enter this same binding without a module cycle.
-export const resolveRuntimePluginRegistry =
-  createPluginRuntimeRegistryResolver(loadOpenClawPlugins);
+export function resolveRuntimePluginRegistry(
+  options?: PluginLoadOptions,
+): PluginRegistry | undefined {
+  const activeRegistry = resolveCompatibleRuntimePluginRegistry(options);
+  if (activeRegistry) {
+    return activeRegistry;
+  }
+  // Runtime helpers must not recurse while this exact snapshot is registering.
+  return isPluginRegistryLoadInFlight(options)
+    ? undefined
+    : loadOpenClawPlugins({ ...options, activate: false });
+}
 const providerRegistry = Object.freeze(
   createProviderRegistryResolver({
     loadOpenClawPlugins,
@@ -91,6 +101,24 @@ export function resolvePluginCapabilityCatalogContext() {
 }
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   return loadOpenClawPluginsCore(options, loaderBindings);
+}
+
+/** Publishes synchronously, then joins every accepted health write before returning to its host. */
+export async function loadAndActivateRootPluginRegistry(
+  options: PluginLoadOptions = {},
+): Promise<PluginRegistry> {
+  const cleanup: Promise<void>[] = [];
+  try {
+    return loadOpenClawPluginsCore(
+      { ...options, activate: true },
+      loaderBindings,
+      undefined,
+      undefined,
+      (completion) => cleanup.push(completion),
+    );
+  } finally {
+    await Promise.allSettled(cleanup);
+  }
 }
 
 /** Acquires a fresh discovery registry; release waits for its registration resources. */

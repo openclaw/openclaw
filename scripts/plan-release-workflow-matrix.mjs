@@ -17,10 +17,14 @@ const DOCKER_E2E_CHUNKS = [
   },
   {
     chunk_id: "package-update-openai",
-    label: "package/update OpenAI and recovery",
-    // Five weight-3 npm lanes serialize at limit 5: 30m + 30m + 20m + 25m + 43m.
-    // The 10m chat lane overlaps; add 10m for setup/artifacts => 158m, round to 160m.
-    timeout_minutes: 160,
+    label: "package/update OpenAI",
+    timeout_minutes: 60,
+    profiles: "beta minimum stable full",
+  },
+  {
+    chunk_id: "package-update-restart-auth",
+    label: "package/update restart auth",
+    timeout_minutes: 55,
     profiles: "beta minimum stable full",
   },
   {
@@ -33,15 +37,6 @@ const DOCKER_E2E_CHUNKS = [
     chunk_id: "package-update-migrations",
     label: "package/update migrations",
     timeout_minutes: 60,
-    profiles: "beta minimum stable full",
-  },
-  {
-    chunk_id: "package-update-self-upgrade",
-    label: "package/update self-upgrade",
-    // Each lane runs multiple updates measured at 540-720s each; retain its 3500s budget.
-    // Six weight-2 lanes need three waves at npm limit 5. Budget the weight-3 survivor
-    // separately despite overlap: 3 x 3500s + 20m survivor + 10m setup/artifacts = 205m.
-    timeout_minutes: 210,
     profiles: "beta minimum stable full",
   },
   {
@@ -137,6 +132,11 @@ const LIVE_MODEL_PROVIDERS = [
   {
     provider_label: "OpenCode",
     providers: "opencode-go",
+    // The release workspace does not enable Global regions, so the default high-signal
+    // selection includes DeepSeek routes that reject every request. Keep this list aligned
+    // with models proven reachable from the release workspace.
+    models: "opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3",
+    max_models: "3",
     profiles: "full",
   },
   {
@@ -445,7 +445,6 @@ export function createReleaseSourceSelection(options = {}) {
   const releaseProfile = options.releaseProfile ?? "stable";
   const includeOpenWebUI = isEnabled(options.includeOpenWebUI);
   const prepareOnly = isEnabled(options.prepareOnly);
-  const consumers = [];
   const codexSuites = [];
   const docker = [];
   const baseline = options.upgradeSurvivorBaseline ?? "";
@@ -500,14 +499,11 @@ export function createReleaseSourceSelection(options = {}) {
       if (row.suite_id.startsWith("live-codex-harness")) {
         codexSuites.push(row.suite_id);
       }
-      if (row.suite_id.startsWith("live-gateway-") || row.suite_id.startsWith("live-cli-")) {
-        consumers.push("live-cli-backend");
-      }
     }
   }
   return {
     docker,
-    consumers: [...new Set(consumers)],
+    consumers: [],
     codexSuites,
     fsSafeNative: prepareOnly || docker.length > 0,
     preparationLanes,

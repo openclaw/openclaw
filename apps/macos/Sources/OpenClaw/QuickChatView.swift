@@ -406,7 +406,7 @@ struct QuickChatView: View {
                 format: String(localized: "%@ — %@ (%lld chars)"),
                 context.appName,
                 context.windowTitle,
-                context.characterCount))
+                context.text.count))
                 .font(.system(size: 12))
                 .lineLimit(1)
                 .truncationMode(.middle)

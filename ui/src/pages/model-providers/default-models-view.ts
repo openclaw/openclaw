@@ -22,6 +22,7 @@ import {
   listEffectiveModelAuthProviders,
 } from "../../lib/model-auth.ts";
 import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
+import { formatCompletionRoute, type CompletionRoute } from "../../lib/model-runtime-label.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
 import { renderMutationMessage } from "./view-status.ts";
@@ -32,12 +33,13 @@ export type DefaultModelsViewProps = {
   selection: DefaultModelSelection;
   authStatus?: ModelAuthStatusResult | null;
   automaticUtilityModel?: string | null;
+  /** Route the utility model in effect (automatic or explicit) runs on. */
+  utilityRuntime?: CompletionRoute;
   thinkingLevel: string | undefined;
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
   loading?: boolean;
-  /** True while the Gateway is discovering additional models. */
   catalogDiscovering?: boolean;
   /** Retryable discovery error from the current catalog publication or explicit Retry. */
   catalogDiscoveryError?: string | null;
@@ -49,7 +51,7 @@ export type DefaultModelsViewProps = {
   onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;
   onDecisionChange: (model: string | null) => void;
-  onThinkingChange: (level: string, element: HTMLElement) => void;
+  onThinkingChange: (level: string) => void;
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
@@ -172,6 +174,13 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
     modelOption(model, authProviders),
   );
   const automaticRef = props.automaticUtilityModel;
+  const utilityValue = props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE;
+  const utilityRoute = formatCompletionRoute(props.utilityRuntime);
+  // The route describes the model in effect, so it joins that option's account detail.
+  const withUtilityRoute = (value: string, detail: string | undefined) =>
+    value === utilityValue && utilityRoute
+      ? [detail, utilityRoute.label].filter(Boolean).join(" · ")
+      : detail;
   const automaticBaseRef = automaticRef ? splitTrailingAuthProfile(automaticRef).model : "";
   const automaticEntry = props.models.find((model) => modelCatalogRef(model) === automaticBaseRef);
   const automaticModel = automaticRef
@@ -229,7 +238,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
         control: renderModelPicker({
           id: UTILITY_MODEL_PICKER_ID,
           label: t("modelProviders.defaults.utility"),
-          value: props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE,
+          value: utilityValue,
           options: [
             {
               value: AUTOMATIC_UTILITY_VALUE,
@@ -240,13 +249,17 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
               detail:
                 automaticRef === null
                   ? t("modelProviders.defaults.automaticUnavailable")
-                  : automaticModel?.detail,
+                  : withUtilityRoute(AUTOMATIC_UTILITY_VALUE, automaticModel?.detail),
             },
             { value: "", label: t("modelProviders.defaults.disabled") },
-            ...options,
+            ...options.map((option) => {
+              const detail = withUtilityRoute(option.value, option.detail);
+              return detail === option.detail ? option : { ...option, detail };
+            }),
           ],
           disabled: modelControlsDisabled || saving,
-          title,
+          // A blocked mutation explains itself first; otherwise the tooltip explains the route.
+          title: title || utilityRoute?.detail || "",
           showSelectedDetail: true,
           onChange: (value) =>
             props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value),
@@ -306,8 +319,8 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
               })),
             ],
             disabled: saving || behaviorControlsDisabled,
-            onChange: (value, element) =>
-              value === "" ? props.onThinkingReset() : props.onThinkingChange(value, element),
+            onChange: (value) =>
+              value === "" ? props.onThinkingReset() : props.onThinkingChange(value),
             onReselect: (value) => {
               if (value === "" && props.thinkingOverridden) {
                 props.onThinkingReset();

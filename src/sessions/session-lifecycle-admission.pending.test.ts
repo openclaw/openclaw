@@ -28,7 +28,7 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
       },
       (error: unknown) => error,
     );
-  const stop = runExclusiveSessionLifecycleMutation({
+  const stop = runExclusiveSessionLifecycleMutation("drain", {
     scope,
     identities,
     prepare: async (owner) => {
@@ -71,7 +71,7 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
   const release = createDeferred();
   const interrupted = vi.fn();
   let validated = false;
-  const blocker = runExclusiveSessionLifecycleMutation({
+  const blocker = runExclusiveSessionLifecycleMutation("patch", {
     scope,
     identities,
     prepare: async () => {
@@ -130,7 +130,7 @@ it("ordinary compaction still queues work and acquired-release queries do not de
   const entered = createDeferred();
   const release = createDeferred();
   let validated = false;
-  const compaction = runExclusiveSessionLifecycleMutation({
+  const compaction = runExclusiveSessionLifecycleMutation("compact", {
     scope,
     identities,
     kind: "compaction",
@@ -169,7 +169,7 @@ it("single-use identity iterators still wait for the exact lifecycle fence", asy
   const entered = createDeferred();
   const release = createDeferred();
   let validated = false;
-  const mutation = runExclusiveSessionLifecycleMutation({
+  const mutation = runExclusiveSessionLifecycleMutation("patch", {
     scope,
     identities,
     prepare: async () => {
@@ -238,7 +238,7 @@ it("an initial validator finishing after pending cancellation cannot enter the w
     expect(await pending).toBe(reason);
     release.resolve();
     // A later mutation must wait for the validator's existing identity lock to finish.
-    await runExclusiveSessionLifecycleMutation({ scope, identities, run: async () => {} });
+    await runExclusiveSessionLifecycleMutation("patch", { scope, identities, run: async () => {} });
     expect(writer).not.toHaveBeenCalled();
   } finally {
     release.resolve();

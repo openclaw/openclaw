@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import * as spawnPs from "../infra/spawn-ps.js";
@@ -45,7 +49,7 @@ import {
   waitForOwnedNodeWorkerTreeDeath,
 } from "./node-worker-tree-control.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
-import { NodeWorkerWorkspaceProcesses } from "./node-worker-workspace-processes.js";
+import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 type CleanupContract = "owned-anchor" | "linux-subreaper";
 const cleanupContracts: CleanupContract[] =
@@ -252,7 +256,7 @@ describe("node worker supervisor recovery", () => {
                 testWorkerLaunchInput(workspaceDir, "fenced-during-recovery"),
                 TEST_WORKER_ENDPOINT,
               ),
-            ).rejects.toThrow("node worker environment is stopping");
+            ).rejects.toThrow("retired");
             process.kill(anchor.pid, "SIGCONT");
             await closing;
             expect(inspectOwnedNodeWorkerTree(anchor)).toBe("dead");
@@ -545,13 +549,13 @@ describe("node worker supervisor recovery", () => {
     await supervisor.close();
   });
 
-  it.runIf(process.platform !== "win32").each([
+  it.runIf(process.platform !== "win32").for([
     { operation: "cancel", state: "cancelled", leader: "live" },
     { operation: "initialize", state: "interrupted", leader: "dead" },
     { operation: "environment stop", state: "cancelled", leader: "live" },
   ])(
     "$operation kills the exact stale-owner worker group with a $leader leader before releasing capacity",
-    async ({ operation, state, leader }) => {
+    async ({ operation, state, leader }, { signal }) => {
       const { bundleRoot, env, root, workspaceDir } = fixture("node-worker-stale-running-");
       const marker = path.join(root, "recovery-grandchild.pid");
       const workerSource = `
@@ -574,9 +578,11 @@ describe("node worker supervisor recovery", () => {
       const grandchild = requireNodeWorkerProcessIdentity(Number(fs.readFileSync(marker, "utf8")));
       const input = testWorkerLaunchInput(workspaceDir, "stale-running-launch", "wait");
       const capacitySnapshots: Array<{ total: number; available: number }> = [];
+      const workspace = new NodeWorkerWorkspaceRuntime({ root: bundleRoot, env });
       const supervisor = createNodeWorkerSupervisor({
         bundleRoot,
         env,
+        workspace,
         capacity: operation === "environment stop" ? 4 : 1,
         onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
       });
@@ -625,9 +631,18 @@ describe("node worker supervisor recovery", () => {
             await store.get(replaced.launchId),
           ];
           const cleanupError = new Error("workspace process cleanup failed");
+          const stop = workspace.processes.stopEnvironment.bind(workspace.processes);
           const stopWorkspace = vi
-            .spyOn(NodeWorkerWorkspaceProcesses.prototype, "stopEnvironment")
-            .mockRejectedValueOnce(cleanupError);
+            .spyOn(workspace.processes, "stopEnvironment")
+            .mockImplementationOnce((environment, stopExecution) =>
+              stop(environment, async () => {
+                const result = await Promise.allSettled([stopExecution?.()]);
+                const failure = result[0];
+                throw failure?.status === "rejected"
+                  ? new AggregateError([cleanupError, failure.reason], "workspace cleanup failed")
+                  : cleanupError;
+              }),
+            );
           const delayed = testWorkerLaunchInput(workspaceDir, "stalled-readiness-launch", "wait");
           const readiness = holdNodeWorkerReadiness(delayed.launchId);
           const admission = supervisor.launch(delayed, TEST_WORKER_ENDPOINT);
@@ -635,10 +650,13 @@ describe("node worker supervisor recovery", () => {
           let stopping: Promise<unknown> | undefined;
           let stopSettled = false;
           try {
-            const startupOwner = await withTestTimeout(
-              readiness.ready,
-              5_000,
-              "native readiness was not captured",
+            const startupOwner = await withinTest(
+              awaitGateBeforeSettlement(
+                readiness.ready,
+                admission,
+                "admission settled before native readiness was captured",
+              ),
+              signal,
             );
             expect((await store.get(delayed.launchId))?.state).toBe("pending");
             expect(inspectNodeWorkerProcessIdentity(startupOwner)).toBe("live");
@@ -661,7 +679,7 @@ describe("node worker supervisor recovery", () => {
                 testWorkerLaunchInput(workspaceDir, "stop-fenced-launch"),
                 TEST_WORKER_ENDPOINT,
               ),
-            ).rejects.toThrow("environment is stopping");
+            ).rejects.toThrow("retired");
             readiness.release();
             const stopError = await stopping;
             await admission;

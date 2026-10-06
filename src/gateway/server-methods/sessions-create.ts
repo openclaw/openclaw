@@ -1,41 +1,38 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../../packages/gateway-client/src/timeouts.js";
 import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
+import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  ProjectCheckoutError,
-  resolveProjectCheckout,
-  resolveProjectDirectory,
-  resolveProjectRegistry,
-} from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
 import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveSessionCreateCatalogSelectionError } from "../session-create-model-selection.js";
 import { createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import {
-  loadGatewaySessionEntryReadOnly,
-  resolveGatewaySessionStoreTarget,
-} from "../session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   prepareSessionWorktreeCreation,
+  resolveSessionProjectRoot,
   validateSessionWorktreeSelection,
 } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
@@ -62,8 +59,10 @@ import {
   prepareSessionCreateFilesystemRoot,
   resolveSessionCreateRootParameters,
 } from "./session-create-root.js";
-import { resolveSessionCreateSpawnContext } from "./session-create-spawn.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import {
+  resolveSessionCreateSpawnContext,
+  validateSessionCreateSpawnRequest,
+} from "./session-create-spawn.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
   readGatewayRequestMutationAuthority,
@@ -113,21 +112,27 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
-    const sessionCreation = prepareSkillLibrarySessionCreation(
+    const creation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
+    if (p.surface && creation.via !== "operator") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Dock conversations require operator creation"),
+      );
+      return;
+    }
+    const sessionCreation = await prepareSkillLibrarySessionCreation(
       client,
       context.getRuntimeConfig,
-      resolveOperatorSessionCreation(client, { allowTrustedHint: true }),
+      { ...creation, ...(p.surface ? { surface: p.surface } : {}) },
     );
     const spawnRequesterSessionKey =
       sessionCreation.via === "spawn"
         ? normalizeOptionalString(sessionCreation.requesterSessionKey)
         : undefined;
-    if (sessionCreation.inheritedToolPolicy && parentSessionKey !== spawnRequesterSessionKey) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "spawn parent must match the trusted agent caller"),
-      );
+    const spawnError = validateSessionCreateSpawnRequest(sessionCreation, p);
+    if (spawnError) {
+      respond(false, undefined, spawnError);
       return;
     }
     const requestedModel = normalizeOptionalString(p.model);
@@ -349,35 +354,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       p.worktree === true && !emptyWorkspace && hasInitialTurn && !existingTargetEntry;
     let projectRoot: string | undefined;
     if (requestedProjectId) {
-      const project = await resolveProjectRegistry(cfg, requestedProjectId);
-      if (!project) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown project id: ${requestedProjectId}`),
-        );
+      const project = await resolveSessionProjectRoot(cfg, requestedProjectId, p.worktree === true);
+      if (!project.ok) {
+        respond(false, undefined, project.error);
         return;
       }
-      try {
-        const checkout =
-          p.worktree === true ? await resolveProjectCheckout(project.repoRoot) : undefined;
-        projectRoot = checkout?.path ?? (await resolveProjectDirectory(project.repoRoot));
-        if (checkout && project.source !== "workspace" && checkout.path !== checkout.repoRoot) {
-          throw new ProjectCheckoutError(`project root is no longer a git checkout`);
-        }
-      } catch (error) {
-        const detail =
-          error instanceof ProjectCheckoutError ? error.message : formatErrorMessage(error);
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `project ${requestedProjectId} is unavailable (${detail}); update the agent workspace path or re-register the project`,
-          ),
-        );
-        return;
-      }
+      projectRoot = project.value;
     }
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     if (repository) {
@@ -442,7 +424,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         }
       }
       targetKey ??= buildDashboardSessionKey(agentId);
-      const target = resolveGatewaySessionStoreTarget({ cfg, key: targetKey, agentId });
+      const target = await resolveGatewaySessionStoreTargetInWorker({
+        cfg,
+        key: targetKey,
+        agentId,
+        assertActive: commitGuard,
+      });
       sessionKey = preservesUnspecifiedKey ? undefined : targetKey;
       sessionAgentId = target.agentId;
       const inheritParentWorktree =
@@ -486,6 +473,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         return prepared;
       };
     }
+    let publicRead = false;
     let runPayload: Record<string, unknown> | undefined;
     let initialTurnSourceAccepted = false;
     let runError: unknown;
@@ -497,6 +485,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!authority.ensureActive()) {
       return;
     }
+    let catalogDeadline: number | undefined;
+    const catalogUnavailable = new Error(
+      "The model catalog is still loading. The session was not created; retry shortly.",
+    );
+    const stopCatalogWait = (): never => {
+      throw catalogUnavailable;
+    };
     const createParams: Parameters<typeof createGatewaySession>[0] = {
       cfg,
       getCurrentConfig,
@@ -556,10 +551,28 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       resetMainWhenUnspecified: !hasInitialTurn,
       commandSource: "webchat",
       creation: sessionCreation,
+      childSessionPublication: sessionCreation.childSessionPublication,
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       armSessionDiffBaselineCapture: !repository,
-      loadGatewayModelCatalogSnapshot: () =>
-        context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+      loadGatewayModelCatalogSnapshot: async () => {
+        const captured = await operatorCapture.preparation;
+        const waitSignal = AbortSignal.any(
+          [signal, client?.connectionSignal, captured?.authority.signal].filter(
+            (value): value is AbortSignal => value !== undefined,
+          ),
+        );
+        if (waitSignal.aborted) {
+          stopCatalogWait();
+        }
+        // Leave response headroom below the Node Gateway client's 30-second request budget.
+        catalogDeadline ??= performance.now() + (DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS * 2) / 3;
+        return raceWithTimeout(
+          () => context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+          Math.max(0, catalogDeadline - performance.now()),
+          stopCatalogWait,
+          { signal: waitSignal, onAbort: stopCatalogWait },
+        );
+      },
       commitGuard,
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
@@ -568,6 +581,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           source,
         ),
       onCreatedSessionCommitted: (committed) => {
+        publicRead = Boolean(resolveSessionPublicShare(committed.entry));
         sessionMutationAuthorization?.recordCreatedSession?.({
           agentId: committed.agentId,
           sessionKey: committed.key,
@@ -616,6 +630,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       },
     };
     const created = await createGatewaySession(createParams).catch((error: unknown) => {
+      if (error === catalogUnavailable) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, catalogUnavailable.message, { retryable: true }),
+        );
+        return undefined;
+      }
       if (error instanceof ModelAccountConnectAuthorityError) {
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
         return undefined;
@@ -656,6 +678,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       sessionId: created.entry.sessionId,
       entry: responseEntry,
       runStarted,
+      publicRead,
       ...(!created.resetExisting && runPayload ? runPayload : {}),
       ...(!created.resetExisting && runError ? { runError } : {}),
       resolved: created.resolved,

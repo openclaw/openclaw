@@ -80,7 +80,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       model: attemptModel,
       config: {
         agents: {
-          list: [{ id: "main", default: true }, { id: "marketing" }],
+          entries: { main: {}, marketing: {} },
         },
       },
       modelId: "gpt-5.4",
@@ -125,7 +125,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
           agents: {
             ownership: "explicit",
             defaults: { sandbox: { mode: "off" } },
-            list: [{ id: "main" }, { id: "marketing" }],
+            entries: { main: {}, marketing: {} },
           },
         },
       });
@@ -142,7 +142,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       resolveAttemptWorkspaceSandbox({
         agentId: "marketing",
         config: {
-          agents: { ownership: "explicit", list: [{ id: "main" }, { id: "marketing" }] },
+          agents: { ownership: "explicit", entries: { main: {}, marketing: {} } },
         },
         sessionId: "policy-attempt",
         sessionKey: "agent:marketing:main",
@@ -164,7 +164,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       activeSession: { agent, settingsManager } as never,
       agentDir: workspaceDir,
       attempt: {
-        config: { agents: { list: [{ id: "marketing", workspace: workspaceDir }] } },
+        config: { agents: { entries: { marketing: { workspace: workspaceDir } } } },
         contextTokenBudget: 32_000,
         model: { input: ["text", "image"] },
         modelId: "gpt-5.4",

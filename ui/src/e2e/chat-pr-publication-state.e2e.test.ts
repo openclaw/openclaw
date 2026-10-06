@@ -159,7 +159,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps a failed publication attempt separate from a merged PR with readable recovery", async () => {
+  it("retires superseded publication failure after a merge without hiding new unpublished failures", async () => {
     await suite.withPage(publicationContextOptions(), async ({ page }) => {
       const failure = {
         requestId: "3a9d86d9-87fb-4aa1-afc3-e98df3b2cb56",
@@ -183,7 +183,7 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "chat");
       const key = await waitForWatchedSessionKey(gateway);
-      await page.getByText(failure.message, { exact: true }).waitFor();
+      await page.getByText(failure.nextAction, { exact: true }).waitFor({ state: "attached" });
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
         sessions: {
           [key]: {
@@ -213,7 +213,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, surface, [merged]),
         );
       }
-      expect(await merged.textContent()).not.toContain(failure.message);
+      expect(await merged.textContent()).not.toContain(failure.nextAction);
       expect(await merged.locator("[data-publication-account]").count()).toBe(0);
       const history = surface.locator("details.chat-pr__publication-history");
       expect(await history.count()).toBe(1);
@@ -225,7 +225,6 @@ suite.define(() => {
       expect(await guidance.isVisible()).toBe(false);
       await summary.click();
       await guidance.waitFor();
-      expect(await history.getByText(failure.message, { exact: true }).isVisible()).toBe(true);
       const account = history.locator("[data-publication-account]");
       expect(await account.textContent()).toContain("Publish as @agent-bot");
       expect(await account.textContent()).toContain("Agent override");
@@ -264,6 +263,92 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.github.options", { after: readsBefore });
       await refresh.waitFor();
       expect(await merged.textContent()).toContain("Merged");
+      const target = (await gateway.waitForRequest("sessions.github.options")).params;
+      if (target === null || typeof target !== "object" || Array.isArray(target)) {
+        throw new Error("Expected publication request parameters");
+      }
+      const published = {
+        pullRequests: [
+          {
+            owner: "synthetic",
+            repo: "publication-demo",
+            number: 45,
+            branch: "feature/finished-task",
+            title: "Completed task",
+            url: "https://github.com/synthetic/publication-demo/pull/45",
+            state: "merged",
+            headSha: "f".repeat(40),
+          },
+        ],
+        status: "ready",
+        rateLimited: false,
+      };
+      // An inconclusive coverage observation must not permanently suppress another
+      // automatic check of this same PR head after GitHub becomes readable again.
+      const beforeInconclusive = (await gateway.getRequests("sessions.github.options")).length;
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: { [key]: published },
+      });
+      await gateway.waitForRequest("sessions.github.options", { after: beforeInconclusive });
+      await refresh.waitFor({ state: "visible" });
+      await expect.poll(() => refresh.isEnabled()).toBe(true);
+      expect(await history.count()).toBe(1);
+      await gateway.setMethodResponse("sessions.github.options", publicationOptions);
+      const beforeRetirement = (await gateway.getRequests("sessions.github.options")).length;
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: { [key]: published },
+      });
+      await gateway.waitForRequest("sessions.github.options", { after: beforeRetirement });
+      await expect.poll(() => history.count()).toBe(0);
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, "superseded-publication-retired.png"),
+          await takeControlUiViewportScreenshot(page, surface, [merged]),
+        );
+      }
+      await page.reload();
+      const reloadedKey = await waitForWatchedSessionKey(gateway);
+      await gateway.waitForRequest("sessions.github.options");
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: { [reloadedKey]: published },
+      });
+      await merged.waitFor();
+      expect(await history.count()).toBe(0);
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: {
+          [reloadedKey]: {
+            pullRequests: [],
+            status: "ready",
+            rateLimited: false,
+            branch: {
+              owner: "synthetic",
+              repo: "publication-demo",
+              branch: "feature/next-work",
+              changedFiles: 1,
+            },
+          },
+        },
+      });
+      await surface.locator("article[data-state=branch]").waitFor();
+      expect(await page.getByText(failure.nextAction, { exact: true }).count()).toBe(0);
+      await gateway.setMethodResponse("sessions.github.options", {
+        ...publicationOptions,
+        latestShared: {
+          result: {
+            ...failure,
+            requestId: "18bcedb0-bc8f-468d-88e8-6a048b8e9ed9",
+            nextAction: "Publish the new changes.",
+          },
+          confirmation: null,
+        },
+      });
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...target,
+        reason: "github-publication",
+      });
+      await page
+        .getByText("Publish the new changes.", { exact: true })
+        .waitFor({ state: "attached" });
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
     });

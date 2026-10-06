@@ -182,13 +182,7 @@ export type ParsedCommentLinkedDocument = {
   isCurrentDocument?: boolean;
 };
 
-export type ParsedCommentContent = {
-  plainText?: string;
-  semanticText?: string;
-  mentions: ParsedCommentMention[];
-  linkedDocuments: ParsedCommentLinkedDocument[];
-  botMentioned: boolean;
-};
+export type ParsedCommentContent = ReturnType<typeof parseCommentContentElements>;
 
 function readDocsLinkUrl(element: Record<string, unknown>): string | undefined {
   const docsLink = isRecord(element.docs_link) ? element.docs_link : undefined;
@@ -290,31 +284,27 @@ function resolveCommentLinkedDocumentFromUrl(params: {
     rawUrl: params.rawUrl,
     urlKind: "unknown",
   };
-  try {
-    const parsed = new URL(params.rawUrl);
-    const parsedPath = parseCommentLinkedDocumentPath(parsed.pathname);
-    if (!parsedPath) {
-      return link;
-    }
-    const { urlKind, token } = parsedPath;
-    link.urlKind = urlKind;
-    if (urlKind === "wiki") {
-      link.wikiNodeToken = token;
-    } else {
-      link.resolvedObjType = urlKind;
-      link.resolvedObjToken = token;
-    }
-    if (
-      link.resolvedObjType &&
-      link.resolvedObjToken &&
-      normalizeCommentFileType(link.resolvedObjType)
-    ) {
-      link.isCurrentDocument =
-        params.currentDocument?.fileType === link.resolvedObjType &&
-        params.currentDocument.fileToken === link.resolvedObjToken;
-    }
-  } catch {
+  const parsed = URL.parse(params.rawUrl);
+  const parsedPath = parsed && parseCommentLinkedDocumentPath(parsed.pathname);
+  if (!parsedPath) {
     return link;
+  }
+  const { urlKind, token } = parsedPath;
+  link.urlKind = urlKind;
+  if (urlKind === "wiki") {
+    link.wikiNodeToken = token;
+  } else {
+    link.resolvedObjType = urlKind;
+    link.resolvedObjToken = token;
+  }
+  if (
+    link.resolvedObjType &&
+    link.resolvedObjToken &&
+    normalizeCommentFileType(link.resolvedObjType)
+  ) {
+    link.isCurrentDocument =
+      params.currentDocument?.fileType === link.resolvedObjType &&
+      params.currentDocument.fileToken === link.resolvedObjToken;
   }
   return link;
 }
@@ -323,7 +313,7 @@ export function parseCommentContentElements(params: {
   elements?: unknown[];
   botOpenIds?: Iterable<string | undefined>;
   currentDocument?: ParsedCommentDocumentRef;
-}): ParsedCommentContent {
+}) {
   const elements = Array.isArray(params.elements) ? params.elements : [];
   const plainTextParts: string[] = [];
   const semanticTextParts: string[] = [];

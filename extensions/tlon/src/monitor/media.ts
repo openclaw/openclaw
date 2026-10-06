@@ -4,15 +4,13 @@ import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 
 const MAX_IMAGES_PER_MESSAGE = 8;
 
-type ExtractedImages = { images: Array<{ url: string }>; unavailableCount: number };
 type TlonInboundMedia = { path: string; contentType: string };
-type TlonInboundMediaDownload = { attachments: TlonInboundMedia[]; unavailableCount: number };
 
 /** Keeps Tlon's shipped path-duplicating prompt bytes paired with ordered facts. */
 export function buildTlonInboundMediaPrompt(
   messageText: string,
   attachments: readonly TlonInboundMedia[],
-): { body: string; media: TlonInboundMedia[] } {
+) {
   const media = attachments.map((attachment) => ({ ...attachment }));
   if (media.length === 0) {
     return { body: messageText, media };
@@ -30,7 +28,7 @@ export function buildTlonInboundMediaPrompt(
  * Extract image blocks from Tlon message content.
  * Returns up to the download cap plus the number omitted by that cap.
  */
-function extractImageBlocks(content: unknown): ExtractedImages {
+function extractImageBlocks(content: unknown) {
   if (!content || !Array.isArray(content)) {
     return { images: [], unavailableCount: 0 };
   }
@@ -81,10 +79,7 @@ async function downloadMedia(url: string, maxBytes?: number): Promise<TlonInboun
  * Download all images from a message and return attachment metadata.
  * Format matches OpenClaw's expected attachment structure.
  */
-export async function downloadMessageImages(
-  content: unknown,
-  maxBytes?: number,
-): Promise<TlonInboundMediaDownload> {
+export async function downloadMessageImages(content: unknown, maxBytes?: number) {
   const { images, unavailableCount: overCapCount } = extractImageBlocks(content);
   const attachments: TlonInboundMedia[] = [];
   let unavailableCount = overCapCount;

@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable, Selectable } from "kysely";
+import type { Selectable } from "kysely";
 import {
   type WorkerInferenceTerminalOutcome,
   validateWorkerInferenceTerminalOutcome,
@@ -13,39 +13,25 @@ import type {
   DB as StateDatabase,
   WorkerInferenceTurns,
 } from "../../state/openclaw-state-db.generated.js";
+import type {
+  WorkerInferenceTurnInput,
+  WorkerInferenceTurnBeginResult,
+  WorkerInferenceRetentionPolicy,
+} from "./inference-store.types.js";
 
 type InferenceDb = Pick<StateDatabase, "worker_inference_turns"> & {
   pragma_encoding: { encoding: string };
 };
-type TurnRow = Selectable<WorkerInferenceTurns>;
-type TurnIdentityRow = Pick<TurnRow, "session_id" | "run_epoch" | "run_id" | "turn_id">;
-type TurnInsert = Insertable<WorkerInferenceTurns>;
-
-export type WorkerInferenceTurnInput = {
-  environmentId: string;
-  sessionId: string;
-  runEpoch: number;
-  runId: string;
-  turnId: string;
-  requestHash: string;
-};
-
-type WorkerInferenceTurnBeginResult =
-  | { kind: "claimed" }
-  | { kind: "recover" }
-  | { kind: "replay"; outcome: WorkerInferenceTerminalOutcome }
-  | { kind: "rejected"; reason: "conflict" };
+type TurnIdentityRow = Pick<
+  Selectable<WorkerInferenceTurns>,
+  "session_id" | "run_epoch" | "run_id" | "turn_id"
+>;
 
 type NormalizedTurnInput = WorkerInferenceTurnInput & { nowMs: number };
 type WorkerInferenceTurnIdentity = Pick<
   WorkerInferenceTurnInput,
   "sessionId" | "runEpoch" | "runId" | "turnId"
 >;
-export type WorkerInferenceRetentionPolicy = {
-  maxAgeMs: number;
-  maxRows: number;
-  maxBytes: number;
-};
 type ExistingTurnResult = Extract<
   WorkerInferenceTurnBeginResult,
   { kind: "recover" | "replay" | "rejected" }
@@ -115,164 +101,142 @@ function serializeTerminalOutcome(outcome: WorkerInferenceTerminalOutcome): stri
   return serialized;
 }
 
-const query = (db: DatabaseSync) => getNodeSqliteKysely<InferenceDb>(db);
-
-function findTurn(db: DatabaseSync, input: NormalizedTurnInput): TurnRow | undefined {
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    query(db)
-      .selectFrom("worker_inference_turns")
-      .selectAll()
-      .where("session_id", "=", input.sessionId)
-      .where("run_epoch", "=", input.runEpoch)
-      .where("run_id", "=", input.runId)
-      .where("turn_id", "=", input.turnId),
-  );
-}
-
-function findPendingTurn(db: DatabaseSync, input: NormalizedTurnInput): TurnRow | undefined {
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    query(db)
-      .selectFrom("worker_inference_turns")
-      .selectAll()
-      .where("session_id", "=", input.sessionId)
-      .where("run_epoch", "=", input.runEpoch)
-      .where("run_id", "=", input.runId)
-      .where("state", "=", "pending"),
-  );
-}
-
-function classifyExistingTurn(
-  row: TurnRow | undefined,
-  input: NormalizedTurnInput,
-): ExistingTurnResult | undefined {
-  if (!row) {
-    return undefined;
-  }
-  if (row.environment_id !== input.environmentId || row.request_hash !== input.requestHash) {
-    return { kind: "rejected", reason: "conflict" };
-  }
-  if (row.state === "pending" && row.terminal_json === null) {
-    return { kind: "recover" };
-  }
-  if (row.state === "terminal" && row.terminal_json !== null) {
-    return { kind: "replay", outcome: parseTerminalJson(row.terminal_json) };
-  }
-  throw new Error("Worker inference turn row has invalid terminal state");
-}
-
-function insertPendingTurn(db: DatabaseSync, input: NormalizedTurnInput): void {
-  const turn: TurnInsert = {
-    session_id: input.sessionId,
-    run_epoch: input.runEpoch,
-    run_id: input.runId,
-    turn_id: input.turnId,
-    environment_id: input.environmentId,
-    request_hash: input.requestHash,
-    state: "pending",
-    terminal_json: null,
-    created_at_ms: input.nowMs,
-    updated_at_ms: input.nowMs,
-  };
-  executeSqliteQuerySync(db, query(db).insertInto("worker_inference_turns").values(turn));
-}
-
-function deleteTurn(db: DatabaseSync, row: TurnIdentityRow): void {
-  executeSqliteQuerySync(
-    db,
-    query(db)
-      .deleteFrom("worker_inference_turns")
-      .where("session_id", "=", row.session_id)
-      .where("run_epoch", "=", row.run_epoch)
-      .where("run_id", "=", row.run_id)
-      .where("turn_id", "=", row.turn_id)
-      .where("state", "=", "terminal"),
-  );
-}
-
-function pruneTerminalTurns(params: {
-  db: DatabaseSync;
-  nowMs: number;
-  policy: WorkerInferenceRetentionPolicy;
-  preserve?: WorkerInferenceTurnIdentity;
-}): void {
-  const db = query(params.db);
-  const utf8 =
-    executeSqliteQueryTakeFirstSync(params.db, db.selectFrom("pragma_encoding").select("encoding"))
-      ?.encoding === "UTF-8";
-  const retained = db
-    .selectFrom("worker_inference_turns")
-    .select(["session_id", "run_epoch", "run_id", "turn_id", "updated_at_ms"])
-    .where("state", "=", "terminal")
-    .orderBy("updated_at_ms", "desc")
-    .orderBy("session_id", "asc")
-    .orderBy("run_epoch", "desc")
-    .orderBy("run_id", "asc")
-    .orderBy("turn_id", "asc");
-  // UTF-8 lengths need no payload reads; UTF-16 stores retain the UTF-8 budget.
-  const rows = utf8
-    ? executeSqliteQuerySync(
-        params.db,
-        retained.select((eb) =>
-          eb.fn<number>("octet_length", ["terminal_json"]).as("terminal_bytes"),
-        ),
-      ).rows
-    : executeSqliteQuerySync(params.db, retained.select("terminal_json")).rows.map((row) => ({
-        session_id: row.session_id,
-        run_epoch: row.run_epoch,
-        run_id: row.run_id,
-        turn_id: row.turn_id,
-        updated_at_ms: row.updated_at_ms,
-        terminal_bytes: Buffer.byteLength(row.terminal_json ?? "", "utf8"),
-      }));
-  const isPreserved = (row: TurnIdentityRow) =>
-    params.preserve !== undefined &&
-    row.session_id === params.preserve.sessionId &&
-    row.run_epoch === params.preserve.runEpoch &&
-    row.run_id === params.preserve.runId &&
-    row.turn_id === params.preserve.turnId;
-  rows.sort((left, right) => Number(isPreserved(right)) - Number(isPreserved(left)));
-  const cutoffMs = Math.max(0, params.nowMs - params.policy.maxAgeMs);
-  let retainedRows = 0;
-  let retainedBytes = 0;
-  for (const row of rows) {
-    const terminalBytes = row.terminal_bytes;
-    const preserve = isPreserved(row);
-    const expired = row.updated_at_ms < cutoffMs;
-    const exceedsRows = retainedRows >= params.policy.maxRows;
-    const exceedsBytes = retainedRows > 0 && retainedBytes + terminalBytes > params.policy.maxBytes;
-    if (!preserve && (expired || exceedsRows || exceedsBytes)) {
-      // Expired identities leave the bounded replay window.
-      deleteTurn(params.db, row);
-      continue;
-    }
-    retainedRows += 1;
-    retainedBytes += terminalBytes;
-  }
-}
-
 /** The shared-state worker supplies the already-admitted transaction connection. */
 export function createWorkerInferenceStoreKernel(options: {
   db: DatabaseSync;
   now: () => number;
   retention?: Partial<WorkerInferenceRetentionPolicy>;
 }) {
-  const now = options.now;
+  const { db, now } = options;
+  const query = getNodeSqliteKysely<InferenceDb>(db);
   const retention = { ...DEFAULT_RETENTION, ...options.retention };
+
+  const classifyTurn = (input: NormalizedTurnInput): ExistingTurnResult | undefined => {
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      query
+        .selectFrom("worker_inference_turns")
+        .selectAll()
+        .where("session_id", "=", input.sessionId)
+        .where("run_epoch", "=", input.runEpoch)
+        .where("run_id", "=", input.runId)
+        .where("turn_id", "=", input.turnId),
+    );
+    if (!row) {
+      return undefined;
+    }
+    if (row.environment_id !== input.environmentId || row.request_hash !== input.requestHash) {
+      return { kind: "rejected", reason: "conflict" };
+    }
+    if (row.state === "pending" && row.terminal_json === null) {
+      return { kind: "recover" };
+    }
+    if (row.state === "terminal" && row.terminal_json !== null) {
+      return { kind: "replay", outcome: parseTerminalJson(row.terminal_json) };
+    }
+    throw new Error("Worker inference turn row has invalid terminal state");
+  };
+
+  const pruneTerminalTurns = (nowMs: number, preserve?: WorkerInferenceTurnIdentity): void => {
+    const utf8 =
+      executeSqliteQueryTakeFirstSync(db, query.selectFrom("pragma_encoding").select("encoding"))
+        ?.encoding === "UTF-8";
+    const retained = query
+      .selectFrom("worker_inference_turns")
+      .select(["session_id", "run_epoch", "run_id", "turn_id", "updated_at_ms"])
+      .where("state", "=", "terminal")
+      .orderBy("updated_at_ms", "desc")
+      .orderBy("session_id", "asc")
+      .orderBy("run_epoch", "desc")
+      .orderBy("run_id", "asc")
+      .orderBy("turn_id", "asc");
+    // UTF-8 lengths need no payload reads; UTF-16 stores retain the UTF-8 budget.
+    const rows = utf8
+      ? executeSqliteQuerySync(
+          db,
+          retained.select((eb) =>
+            eb.fn<number>("octet_length", ["terminal_json"]).as("terminal_bytes"),
+          ),
+        ).rows
+      : executeSqliteQuerySync(db, retained.select("terminal_json")).rows.map((row) => ({
+          session_id: row.session_id,
+          run_epoch: row.run_epoch,
+          run_id: row.run_id,
+          turn_id: row.turn_id,
+          updated_at_ms: row.updated_at_ms,
+          terminal_bytes: Buffer.byteLength(row.terminal_json ?? "", "utf8"),
+        }));
+    const isPreserved = (row: TurnIdentityRow) =>
+      preserve !== undefined &&
+      row.session_id === preserve.sessionId &&
+      row.run_epoch === preserve.runEpoch &&
+      row.run_id === preserve.runId &&
+      row.turn_id === preserve.turnId;
+    rows.sort((left, right) => Number(isPreserved(right)) - Number(isPreserved(left)));
+    const cutoffMs = Math.max(0, nowMs - retention.maxAgeMs);
+    let retainedRows = 0;
+    let retainedBytes = 0;
+    for (const row of rows) {
+      const terminalBytes = row.terminal_bytes;
+      const preserved = isPreserved(row);
+      const expired = row.updated_at_ms < cutoffMs;
+      const exceedsRows = retainedRows >= retention.maxRows;
+      const exceedsBytes = retainedRows > 0 && retainedBytes + terminalBytes > retention.maxBytes;
+      if (!preserved && (expired || exceedsRows || exceedsBytes)) {
+        // Expired identities leave the bounded replay window.
+        executeSqliteQuerySync(
+          db,
+          query
+            .deleteFrom("worker_inference_turns")
+            .where("session_id", "=", row.session_id)
+            .where("run_epoch", "=", row.run_epoch)
+            .where("run_id", "=", row.run_id)
+            .where("turn_id", "=", row.turn_id)
+            .where("state", "=", "terminal"),
+        );
+        continue;
+      }
+      retainedRows += 1;
+      retainedBytes += terminalBytes;
+    }
+  };
 
   const begin = (rawInput: WorkerInferenceTurnInput): WorkerInferenceTurnBeginResult => {
     const input = normalizeInput(rawInput, now());
-    const db = options.db;
-    pruneTerminalTurns({ db, nowMs: input.nowMs, policy: retention });
-    const existing = classifyExistingTurn(findTurn(db, input), input);
+    pruneTerminalTurns(input.nowMs);
+    const existing = classifyTurn(input);
     if (existing) {
       return existing;
     }
-    if (findPendingTurn(db, input)) {
+    if (
+      executeSqliteQueryTakeFirstSync(
+        db,
+        query
+          .selectFrom("worker_inference_turns")
+          .selectAll()
+          .where("session_id", "=", input.sessionId)
+          .where("run_epoch", "=", input.runEpoch)
+          .where("run_id", "=", input.runId)
+          .where("state", "=", "pending"),
+      )
+    ) {
       return { kind: "rejected", reason: "conflict" };
     }
-    insertPendingTurn(db, input);
+    executeSqliteQuerySync(
+      db,
+      query.insertInto("worker_inference_turns").values({
+        session_id: input.sessionId,
+        run_epoch: input.runEpoch,
+        run_id: input.runId,
+        turn_id: input.turnId,
+        environment_id: input.environmentId,
+        request_hash: input.requestHash,
+        state: "pending",
+        terminal_json: null,
+        created_at_ms: input.nowMs,
+        updated_at_ms: input.nowMs,
+      }),
+    );
     return { kind: "claimed" };
   };
 
@@ -281,8 +245,7 @@ export function createWorkerInferenceStoreKernel(options: {
   ): WorkerInferenceTerminalOutcome => {
     const input = normalizeInput(rawInput, now());
     const terminalJson = serializeTerminalOutcome(rawInput.outcome);
-    const db = options.db;
-    const existing = classifyExistingTurn(findTurn(db, input), input);
+    const existing = classifyTurn(input);
     if (!existing) {
       throw new Error("Worker inference turn must begin before terminal completion");
     }
@@ -295,7 +258,7 @@ export function createWorkerInferenceStoreKernel(options: {
 
     const update = executeSqliteQuerySync(
       db,
-      query(db)
+      query
         .updateTable("worker_inference_turns")
         .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: input.nowMs })
         .where("session_id", "=", input.sessionId)
@@ -309,12 +272,7 @@ export function createWorkerInferenceStoreKernel(options: {
     if (update.numAffectedRows !== 1n) {
       throw new Error("Worker inference turn changed during terminal completion");
     }
-    pruneTerminalTurns({
-      db,
-      nowMs: input.nowMs,
-      policy: retention,
-      preserve: input,
-    });
+    pruneTerminalTurns(input.nowMs, input);
     return rawInput.outcome;
   };
 
@@ -332,10 +290,9 @@ export function createWorkerInferenceStoreKernel(options: {
       runId: required(params.runId, "run id"),
       turnId: required(params.turnId, "turn id"),
     };
-    const db = options.db;
     executeSqliteQuerySync(
       db,
-      query(db)
+      query
         .updateTable("worker_inference_turns")
         .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: nowMs })
         .where("session_id", "=", identity.sessionId)
@@ -345,21 +302,20 @@ export function createWorkerInferenceStoreKernel(options: {
         .where("environment_id", "=", identity.environmentId)
         .where("state", "=", "pending"),
     );
-    pruneTerminalTurns({ db, nowMs, policy: retention, preserve: identity });
+    pruneTerminalTurns(nowMs, identity);
   };
 
   const recoverPending = (outcome: WorkerInferenceTerminalOutcome): void => {
     const nowMs = nonNegativeInteger(now(), "timestamp");
     const terminalJson = serializeTerminalOutcome(outcome);
-    const db = options.db;
     executeSqliteQuerySync(
       db,
-      query(db)
+      query
         .updateTable("worker_inference_turns")
         .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: nowMs })
         .where("state", "=", "pending"),
     );
-    pruneTerminalTurns({ db, nowMs, policy: retention });
+    pruneTerminalTurns(nowMs);
   };
 
   return { begin, cancelPending, complete, recoverPending };

@@ -207,23 +207,6 @@ export function assertThreadReplyArtifact(
   }
 }
 
-function getOrCreateMatrixQaActorSyncStream(params: MatrixQaActorSyncParams) {
-  const existingStream = params.syncStreams?.[params.actorId];
-  if (existingStream) {
-    return existingStream;
-  }
-  const stream = createMatrixQaRoomObserver({
-    accessToken: params.accessToken,
-    baseUrl: params.baseUrl,
-    observedEvents: params.observedEvents,
-    since: params.syncState[params.actorId],
-  });
-  if (params.syncStreams) {
-    params.syncStreams[params.actorId] = stream;
-  }
-  return stream;
-}
-
 export function createMatrixQaScenarioClient(params: {
   accessToken: string;
   actorId?: MatrixQaActorId;
@@ -234,14 +217,12 @@ export function createMatrixQaScenarioClient(params: {
 }) {
   const syncObserver =
     params.actorId && params.observedEvents && params.syncState && params.syncStreams
-      ? getOrCreateMatrixQaActorSyncStream({
+      ? (params.syncStreams[params.actorId] ??= createMatrixQaRoomObserver({
           accessToken: params.accessToken,
-          actorId: params.actorId,
           baseUrl: params.baseUrl,
           observedEvents: params.observedEvents,
-          syncState: params.syncState,
-          syncStreams: params.syncStreams,
-        })
+          since: params.syncState[params.actorId],
+        }))
       : undefined;
   return createMatrixQaClient({
     accessToken: params.accessToken,
@@ -492,10 +473,6 @@ export async function runNoReplyExpectedScenario(
     roomId: string;
     sendClient?: MatrixQaScenarioClient;
     sutUserId: string;
-    replyPredicate?: (
-      event: MatrixQaObservedEvent,
-      match: { driverEventId: string; token: string },
-    ) => boolean;
     timeoutMs: number;
     token: string;
   },
@@ -519,11 +496,7 @@ export async function runNoReplyExpectedScenario(
         return false;
       }
       return (
-        observedTriggerEvent &&
-        event.sender === params.sutUserId &&
-        event.type === "m.room.message" &&
-        (params.replyPredicate?.(event, { driverEventId: triggerEventId, token: params.token }) ??
-          true)
+        observedTriggerEvent && event.sender === params.sutUserId && event.type === "m.room.message"
       );
     },
     roomId: params.roomId,

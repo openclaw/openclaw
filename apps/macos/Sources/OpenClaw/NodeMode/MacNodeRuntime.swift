@@ -149,7 +149,7 @@ actor MacNodeRuntime {
             await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
         },
         computerControlEnabled: @escaping @Sendable () -> Bool = {
-            MacNodeRuntime.computerControlEnabledDefault()
+            isComputerControlEnabled()
         },
         computerControlProvider: @escaping @Sendable () -> ComputerControlProvider = {
             ComputerControlProvider.current()
@@ -556,7 +556,7 @@ extension MacNodeRuntime {
                 OpenClawCameraSnapParams()
             let delayMs = min(10000, max(0, params.delayMs ?? 2000))
             let res = try await cameraCapture.snap(
-                facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
+                facing: params.facing ?? .front,
                 maxWidth: params.maxWidth,
                 quality: params.quality,
                 deviceId: params.deviceId,
@@ -577,11 +577,10 @@ extension MacNodeRuntime {
             let params = (try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraClipParams()
             let res = try await cameraCapture.clip(
-                facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
+                facing: params.facing ?? .front,
                 durationMs: params.durationMs,
                 includeAudio: params.includeAudio ?? true,
-                deviceId: params.deviceId,
-                outPath: nil)
+                deviceId: params.deviceId)
             defer { try? FileManager().removeItem(atPath: res.path) }
             let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
             struct ClipPayload: Encodable {
@@ -763,8 +762,7 @@ extension MacNodeRuntime {
             screenIndex: params.screenIndex,
             durationMs: params.durationMs,
             fps: params.fps,
-            includeAudio: params.includeAudio,
-            outPath: nil)
+            includeAudio: params.includeAudio)
         defer { try? FileManager().removeItem(atPath: res.path) }
         let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
         struct ScreenPayload: Encodable {
@@ -879,11 +877,9 @@ extension MacNodeRuntime {
             task = initializationTask
         }
         let services = await task.value
-        if cachedMainActorServices == nil {
-            cachedMainActorServices = services
-            self.mainActorServicesInitializationTask = nil
-        }
-        return cachedMainActorServices ?? services
+        self.cachedMainActorServices = services
+        self.mainActorServicesInitializationTask = nil
+        return services
     }
 
     /// Releases any synthetic input the computer.act service is still holding
@@ -913,8 +909,7 @@ extension MacNodeRuntime {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: empty notification")
         }
 
-        let priority = params.priority.flatMap { NotificationPriority(rawValue: $0.rawValue) }
-        let delivery = params.delivery.flatMap { NotificationDelivery(rawValue: $0.rawValue) } ?? .system
+        let delivery = params.delivery ?? .system
         let manager = NotificationManager()
 
         if delivery != .overlay {
@@ -922,7 +917,7 @@ extension MacNodeRuntime {
                 title: title,
                 body: body,
                 sound: params.sound,
-                priority: priority)
+                priority: params.priority)
             if ok {
                 return BridgeInvokeResponse(id: req.id, ok: true)
             }
@@ -951,22 +946,16 @@ extension MacNodeRuntime {
     }
 
     private static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
-        guard let json, let data = json.data(using: .utf8) else {
+        guard let json else {
             throw NSError(domain: "Gateway", code: 20, userInfo: [
                 NSLocalizedDescriptionKey: "INVALID_REQUEST: paramsJSON required",
             ])
         }
-        return try JSONDecoder().decode(type, from: data)
+        return try JSONDecoder().decode(type, from: Data(json.utf8))
     }
 
     private static func encodePayload(_ obj: some Encodable) throws -> String {
-        let data = try JSONEncoder().encode(obj)
-        guard let json = String(bytes: data, encoding: .utf8) else {
-            throw NSError(domain: "Node", code: 21, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode payload as UTF-8",
-            ])
-        }
-        return json
+        try String(bytes: JSONEncoder().encode(obj), encoding: .utf8)!
     }
 
     static func projectedOuterFrameBytes(
@@ -1009,10 +998,6 @@ extension MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         AppDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
-    }
-
-    nonisolated static func computerControlEnabledDefault() -> Bool {
-        isComputerControlEnabled()
     }
 
     private nonisolated static func locationMode() -> OpenClawLocationMode {

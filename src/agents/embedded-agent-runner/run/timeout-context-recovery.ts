@@ -108,6 +108,8 @@ export async function recoverEmbeddedRunTimeout(
         sessionKey: input.runParams.sessionKey,
         sessionId: activeSession.id,
         agentId: input.sessionAgentId,
+        memoryAudience: input.runInput?.hookContext.memoryAudience,
+        sandboxed: input.runInput?.hookContext.sandboxed,
         sessionFile: activeSession.file,
         assertActive: input.assertRecoveryActive,
       });

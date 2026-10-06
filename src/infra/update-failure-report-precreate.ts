@@ -1,3 +1,4 @@
+import { sleep } from "../utils/sleep.js";
 export type UpdateReportPreCreateGuardReason = "authority" | "reservation" | "stale" | "validation";
 
 export class UpdateReportPreCreateGuardError extends Error {
@@ -31,9 +32,7 @@ export async function retryUpdateReportStateWriteAfterNoStart(
   const retryDelaysMs = [0, 25, 100, 250, 500] as const;
   for (const delayMs of retryDelaysMs) {
     if (delayMs > 0) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, delayMs);
-      });
+      await sleep(delayMs);
     }
     try {
       if (write()) {

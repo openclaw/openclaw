@@ -1,6 +1,7 @@
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { missingScopeErrorShape } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -34,6 +35,8 @@ import {
   rememberAuthoritativeTerminal,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
+import type { ToolStreamHost } from "./tool-stream-contract.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { createHost } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
@@ -56,6 +59,26 @@ function receive(state: ChatState, ...args: Parameters<typeof chatEvent>) {
 
 function visibleParts(state: ChatState, includeCurrent = false) {
   return visibleAssistantStreamParts(state, { includeCurrent, isHiddenStreamText: () => false });
+}
+
+function renderedMessageTexts(state: ChatState, paneId: string) {
+  return buildChatItems({
+    paneId,
+    sessionKey: state.sessionKey,
+    runId: state.chatRunId,
+    messages: state.chatMessages,
+    toolMessages: [],
+    streamSegments: state.chatStreamSegments ?? [],
+    stream: state.chatStream,
+    streamStartedAt: state.chatStreamStartedAt,
+    showToolCalls: true,
+  }).flatMap((item) =>
+    item.kind === "group"
+      ? item.messages.map(({ message }) => extractText(message))
+      : item.kind === "stream"
+        ? [item.text.trim()]
+        : [],
+  );
 }
 
 function expectSettled(state: ChatState) {
@@ -88,6 +111,78 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     ...overrides,
   };
 }
+
+it.each([true, false])(
+  "keeps identical injected notes separate without adopting a run (persisted first=%s)",
+  (persistedFirst) => {
+    const user = textMessage("user", "Previous question", { id: "user", seq: 1 });
+    const reply = textMessage("assistant", "Previous reply", { id: "reply", seq: 2 });
+    const state = createState({ chatMessages: [user, reply] });
+    const ids = ["note-one", "note-two"];
+    const notes = ids.map((id, index) =>
+      textMessage("assistant", "Synthetic weekly report", { id, seq: index + 3 }),
+    );
+    for (const [index, saved] of notes.entries()) {
+      if (persistedFirst) {
+        applySessionMessagePayload(state, { message: saved }, false, { kind: "history-delta" });
+      }
+      const event = {
+        runId: `inject-${ids[index]}`,
+        seq: 0,
+        message: textMessage("assistant", "Synthetic weekly report"),
+      };
+      receive(state, "final", event);
+      receive(state, "final", event);
+      if (!persistedFirst) {
+        applySessionMessagePayload(state, { message: saved }, false, { kind: "history-delta" });
+      }
+      expect(state.chatMessages).toEqual([user, reply, ...notes.slice(0, index + 1)]);
+      expectSettled(state);
+      expect(Object.keys(getChatSessionProjection(state).runs)).toEqual([]);
+    }
+    expect(renderedMessageTexts(state, "injected-notes")).toEqual([
+      "Previous question",
+      "Previous reply",
+      "Synthetic weekly report",
+      "Synthetic weekly report",
+    ]);
+  },
+);
+
+it("does not settle the foreground run when an injected note arrives", () => {
+  const state = createState({
+    chatRunId: "real-run",
+    chatStream: "Still working",
+    chatStreamStartedAt: 100,
+  });
+  receive(state, "final", {
+    runId: "inject-note",
+    seq: 0,
+    message: textMessage("assistant", "An independent note"),
+  });
+  expect(state.chatRunId).toBe("real-run");
+  expect(state.chatStream).toBe("Still working");
+  expect(state.chatStreamStartedAt).toBe(100);
+  expect(state.chatMessages.map(extractText)).toEqual(["An independent note"]);
+  expect(getChatSessionProjection(state).runs["inject-note"]).toBeUndefined();
+});
+
+it("settles a regular streamed run with an inject-prefixed client ID", () => {
+  const state = createState({ chatRunId: "inject-job" });
+  receive(state, "delta", {
+    runId: "inject-job",
+    seq: 1,
+    message: textMessage("assistant", "Regular reply"),
+  });
+  receive(state, "final", {
+    runId: "inject-job",
+    seq: 2,
+    message: textMessage("assistant", "Regular reply"),
+  });
+  expectSettled(state);
+  expect(state.chatMessages.map(extractText)).toEqual(["Regular reply"]);
+  expect(getChatSessionProjection(state).runs["inject-job"]?.status).toBe("completed");
+});
 
 it.each([
   { persistedFirst: false, transformed: false },
@@ -333,13 +428,12 @@ function createStateWithRunningSession(overrides: Partial<ChatState>): SessionTe
 }
 
 type HistoryToolSegment = { text: string; ts: number; toolCallId?: string };
-type LiveToolState = ChatHistoryHost & {
-  chatStreamSegments: HistoryToolSegment[];
-  chatToolMessages: Record<string, unknown>[];
-  toolStreamById: Map<string, unknown>;
-  toolStreamOrder: string[];
-  toolStreamSyncTimer: number | null;
-};
+type LiveToolState = ChatHistoryHost &
+  Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder"> & {
+    chatStreamSegments: HistoryToolSegment[];
+    chatToolMessages: Record<string, unknown>[];
+    toolStreamSyncTimer: number | null;
+  };
 
 function attachLiveToolState(
   state: ChatHistoryHost,
@@ -350,9 +444,23 @@ function attachLiveToolState(
   liveState.chatStreamSegments = segments;
   liveState.chatToolMessages = tools;
   liveState.toolStreamById = new Map(
-    tools.map((tool) => [String(tool.toolCallId), { message: tool }]),
+    tools.map((tool) => {
+      const toolCallId = String(tool.toolCallId);
+      const runId = typeof tool.runId === "string" ? tool.runId : (state.chatRunId ?? "run-1");
+      return [
+        buildToolStreamIdentity(runId, toolCallId),
+        {
+          toolCallId,
+          runId,
+          message: tool,
+          name: "shell",
+          startedAt: 0,
+          receivedAt: 0,
+        },
+      ];
+    }),
   );
-  liveState.toolStreamOrder = tools.map((tool) => String(tool.toolCallId));
+  liveState.toolStreamOrder = [...liveState.toolStreamById.keys()];
   liveState.toolStreamSyncTimer = null;
   return liveState;
 }
@@ -1179,28 +1287,12 @@ describe("handleChatGatewayEvent", () => {
             ["assistant", partial],
           ],
           verify: (state) => {
-            const streamState = state as ChatState & {
-              chatStreamSegments: NonNullable<TerminalErrorFixture["segments"]>;
-            };
-            expect(streamState.chatStreamSegments).toEqual([]);
-            const rendered = buildChatItems({
-              paneId: "terminal-error-stream-owner",
-              sessionKey: state.sessionKey,
-              runId: state.chatRunId,
-              messages: state.chatMessages,
-              toolMessages: [],
-              streamSegments: streamState.chatStreamSegments,
-              stream: state.chatStream,
-              streamStartedAt: state.chatStreamStartedAt,
-              showToolCalls: true,
-            }).flatMap((item) =>
-              item.kind === "group"
-                ? item.messages.map(({ message }) => extractText(message))
-                : item.kind === "stream"
-                  ? [item.text.trim()]
-                  : [],
-            );
-            expect(rendered.filter((text) => text === partial)).toHaveLength(1);
+            expect(state.chatStreamSegments).toEqual([]);
+            expect(
+              renderedMessageTexts(state, "terminal-error-stream-owner").filter(
+                (text) => text === partial,
+              ),
+            ).toHaveLength(1);
           },
         };
       },
@@ -1611,7 +1703,7 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.not.objectContaining({ agentId: expect.anything() }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 
@@ -1634,7 +1726,7 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 
@@ -1708,7 +1800,7 @@ describe("loadChatHistory filtering", () => {
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
@@ -1717,7 +1809,7 @@ describe("loadChatHistory filtering", () => {
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 
@@ -1772,7 +1864,7 @@ describe("loadChatHistory retry handling", () => {
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     expect(request).toHaveBeenCalledTimes(1);
     expect(getChatHistoryLoadState(state)).toMatchObject({
@@ -1856,7 +1948,7 @@ describe("loadChatHistory retry handling", () => {
     expect(secondState.chatLoading).toBe(true);
     expect(request.mock.calls[1]?.[2]?.signal.aborted).toBe(false);
     secondAttempt.reject(retryableError);
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(1_000);
     await secondLoad;
 
     expect(request).toHaveBeenCalledTimes(3);
@@ -2005,10 +2097,16 @@ describe("loadChatHistory retry handling", () => {
     ).toEqual(remainingSegments);
     expect(state.toolStreamById.size).toBe(remainingTools.length);
     expect(state.toolStreamOrder).toEqual(
-      remainingTools.map((index) => String(tools[index]?.toolCallId)),
+      remainingTools.map((index) =>
+        buildToolStreamIdentity("run-1", String(tools[index]?.toolCallId)),
+      ),
     );
     for (const index of remainingTools) {
-      expect(state.toolStreamById.has(String(tools[index]?.toolCallId))).toBe(true);
+      expect(
+        state.toolStreamById.has(
+          buildToolStreamIdentity("run-1", String(tools[index]?.toolCallId)),
+        ),
+      ).toBe(true);
     }
   });
 
@@ -2100,19 +2198,21 @@ describe("loadChatHistory retry handling", () => {
     expect(state.toolStreamOrder).toEqual([]);
   });
 
-  it("timestamps materialized streamed text after the persisted user prompt", async () => {
+  it("places materialized streamed text after a persisted user prompt with a later clock", async () => {
+    // Prompt and stream timestamps come from different clocks, so the prompt can be the later one.
+    // The user turn owns placement; retiming the saved stream would reorder live tools.
     const userTimestamp = 200;
+    const streamTimestamp = 100;
 
     const persistedUser = textMessage("user", "first", { seq: 1 }, userTimestamp);
     const { state } = createHistorySnapshot([persistedUser], {
       chatMessages: [persistedUser],
       chatRunId: null,
       chatStream: "Partial answer before history catch-up.",
-      chatStreamStartedAt: 100,
+      chatStreamStartedAt: streamTimestamp,
     });
 
     await loadChatHistory(state);
-
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(persistedUser);
     expectTextMessage(
@@ -2120,7 +2220,11 @@ describe("loadChatHistory retry handling", () => {
       "assistant",
       "Partial answer before history catch-up.",
     );
-    expect(requireRecord(state.chatMessages[1]).timestamp).toBe(201);
+    expect(renderedMessageTexts(state, "materialized-stream-order")).toEqual([
+      "first",
+      "Partial answer before history catch-up.",
+    ]);
+    expect(requireRecord(state.chatMessages[1]).timestamp).toBe(streamTimestamp);
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
   });
@@ -2193,17 +2297,15 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatToolMessages).toEqual([liveToolMessage]);
     expect(visibleParts(state)).toEqual([]);
     expect(state.toolStreamById.size).toBe(1);
-    expect(state.toolStreamOrder).toEqual(["call_current"]);
+    expect(state.toolStreamOrder).toEqual([buildToolStreamIdentity("run-1", "call_current")]);
   });
 
   it("shows a targeted message when chat history is unauthorized", async () => {
-    const request = vi.fn().mockRejectedValue(
-      new GatewayRequestError({
-        code: "PERMISSION_DENIED",
-        message: "not allowed",
-        details: { code: "AUTH_UNAUTHORIZED" },
-      }),
-    );
+    const scopeError = missingScopeErrorShape({
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    });
+    const request = vi.fn().mockRejectedValue(new GatewayRequestError(scopeError));
     const state = createHistoryState(request, {
       chatMessages: [textMessage("assistant", "old")],
       chatThinkingLevel: "high",
@@ -2218,7 +2320,7 @@ describe("loadChatHistory retry handling", () => {
     expect(getChatHistoryLoadState(state)).toMatchObject({
       phase: "failed",
       message:
-        "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
+        "You don't have permission to view existing chat history. Ask the person who manages OpenClaw for access.",
       retryable: false,
     });
     expect(state.lastError).toBeNull();

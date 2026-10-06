@@ -54,6 +54,7 @@ function sendProcessMessage(message: ServiceChildAnchorMessage): Promise<void> {
 }
 
 export function runServiceChildWindowsJobAnchor(): void {
+  const launchGrant = createDeferredCore();
   let start: ServiceChildStart | undefined;
   let state: AnchorState = "starting";
   let sequence = 0;
@@ -462,6 +463,13 @@ export function runServiceChildWindowsJobAnchor(): void {
 
       const commandStdio = bindings.createCommandStdio();
       pendingCommandStdio = commandStdio;
+      if (next.type === "prepare") {
+        await send({ type: "prepared" });
+        await Promise.race([launchGrant.promise, cleanupFinished.promise]);
+        if (state !== "starting") {
+          return;
+        }
+      }
       let processAttributes:
         | ReturnType<WindowsJobBindings["createProcessAttributeList"]>
         | undefined;
@@ -573,7 +581,9 @@ export function runServiceChildWindowsJobAnchor(): void {
       !start ||
       state === "closed" ||
       !message ||
-      (message.type !== "cancel" && message.type !== "startup-error-ack") ||
+      (message.type !== "cancel" &&
+        message.type !== "startup-error-ack" &&
+        message.type !== "launch") ||
       typeof message.generation !== "string" ||
       typeof message.sequence !== "number" ||
       message.generation !== start.generation ||
@@ -585,7 +595,9 @@ export function runServiceChildWindowsJobAnchor(): void {
       return;
     }
     lastHostSequence = message.sequence;
-    if (message.type === "startup-error-ack") {
+    if (message.type === "launch") {
+      launchGrant.resolve();
+    } else if (message.type === "startup-error-ack") {
       startupErrorAcknowledged.resolve();
     } else {
       void requestCleanup("cancel");

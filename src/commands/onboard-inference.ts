@@ -21,7 +21,6 @@ import {
   GEMINI_CLI_DEFAULT_MODEL_REF,
   detectAmbientInferenceBackends,
   type InferenceBackendCandidate,
-  type InferenceBackendKind,
 } from "./onboard-inference-ambient.js";
 
 export {
@@ -41,17 +40,8 @@ export {
 
 type DetectInferenceBackendsDeps = {
   probeLocalCommand?: typeof probeLocalCommand;
-  detectClaudeLoginState?: (
-    _probe: typeof probeLocalCommand,
-    command: string,
-    env?: NodeJS.ProcessEnv,
-  ) => Promise<CliLoginState>;
   readCodexCliCredentials?: () => { type: string } | null;
   readGeminiCliCredentials?: () => { type: string } | null;
-  detectCodexLoginState?: (
-    probe: typeof probeLocalCommand,
-    command: string,
-  ) => Promise<boolean | undefined>;
   randomInt?: (maxExclusive: number) => number;
 };
 
@@ -63,52 +53,12 @@ type DetectInferenceBackendsOptions = {
   deps?: DetectInferenceBackendsDeps;
 };
 
-type CliAuthKind = "api-key" | "chatgpt-subscription" | "claude-subscription" | "token";
-type CliLoginState = {
-  credentials: boolean | undefined;
-  authKind?: CliAuthKind;
-  email?: string;
-};
-
-const CLI_AUTH_KIND_LABEL: Record<CliAuthKind, string> = {
-  "api-key": "API key (usage-billed)",
-  "chatgpt-subscription": "ChatGPT account",
-  "claude-subscription": "Claude account",
-  token: "OAuth token",
-};
-
-function describeCliDetail(state: CliLoginState, loginHint: string): string {
-  if (state.authKind) {
-    const account =
-      state.authKind === "chatgpt-subscription" || state.authKind === "claude-subscription";
-    const identity = account ? ` · ${state.email || "email unavailable"}` : "";
-    return `logged in · ${CLI_AUTH_KIND_LABEL[state.authKind]}${identity}`;
-  }
-  if (state.credentials === true) {
-    return "logged in · authentication method unavailable";
-  }
-  if (state.credentials === false) {
-    return `installed, not logged in — ${loginHint}, then check again`;
-  }
-  return "installed";
-}
-
-function describeGeminiCliDetail(credentials: boolean | undefined): string {
-  return credentials === true
-    ? "installed; credentials found"
-    : "installed; login status unavailable";
-}
-
 function randomizeClaudeCodexTie(
   candidates: InferenceBackendCandidate[],
   pickRandomInt: (maxExclusive: number) => number,
 ): void {
-  const claudeIndex = candidates.findIndex(
-    (candidate) => candidate.kind === "claude-cli" && candidate.credentials !== false,
-  );
-  const codexIndex = candidates.findIndex(
-    (candidate) => candidate.kind === "codex-cli" && candidate.credentials !== false,
-  );
+  const claudeIndex = candidates.findIndex((candidate) => candidate.kind === "claude-cli");
+  const codexIndex = candidates.findIndex((candidate) => candidate.kind === "codex-cli");
   if (claudeIndex === -1 || codexIndex === -1 || pickRandomInt(2) === 0) {
     return;
   }
@@ -154,8 +104,7 @@ async function probeCodexCommand(params: {
 /**
  * Detect usable inference backends in ladder order. Returns candidates only
  * for backends that exist on this machine; explicit setup owns selection.
- * Backends that are definitively logged out sink below logged-in and
- * unknown ones so a stale install never outranks a working login.
+ * Native CLI discovery stays passive; environment credentials precede unverified CLIs.
  */
 export async function detectInferenceBackends(
   options: DetectInferenceBackendsOptions = {},
@@ -216,44 +165,25 @@ export async function detectInferenceBackends(
     probe("gemini"),
   ]);
   const cliCandidates: InferenceBackendCandidate[] = [];
-  const subscriptionPromotionEligibleCliKinds = new Set<InferenceBackendKind>();
   if (claudeProbe.found && !claudeProbe.timedOut) {
-    const loginState: CliLoginState = options.deps?.detectClaudeLoginState
-      ? await options.deps.detectClaudeLoginState(probe, claudeProbe.command)
-      : { credentials: undefined };
-    const credentials = loginState.credentials;
-    if (credentials === true && loginState.authKind === "claude-subscription") {
-      subscriptionPromotionEligibleCliKinds.add("claude-cli");
-    }
-    const detail = options.deps?.detectClaudeLoginState
-      ? describeCliDetail(loginState, "run `claude auth login`")
-      : "installed; login status unverified";
     cliCandidates.push({
       kind: "claude-cli",
       modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       label: "Claude Code",
-      detail,
-      ...(credentials === undefined ? {} : { credentials }),
+      detail: "installed; login status unverified",
     });
   }
   if (codexProbe.found && !codexProbe.timedOut) {
     const storedCredentials = readCodex() !== null;
     // Native status starts provider initialization (including migrations and
     // token refresh). A saved record proves neither the active store nor login.
-    const credentials = options.deps?.detectCodexLoginState
-      ? await options.deps.detectCodexLoginState(probe, codexProbe.command)
-      : undefined;
-    const detail = options.deps?.detectCodexLoginState
-      ? describeCliDetail({ credentials }, "run `codex login`")
-      : storedCredentials
-        ? "installed; stored credentials found; login status unverified"
-        : "installed; login status unverified";
     cliCandidates.push({
       kind: "codex-cli",
       modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       label: "Codex",
-      detail,
-      ...(credentials === undefined ? {} : { credentials }),
+      detail: storedCredentials
+        ? "installed; stored credentials found; login status unverified"
+        : "installed; login status unverified",
     });
   }
   if (geminiProbe.found && !geminiProbe.timedOut) {
@@ -266,28 +196,11 @@ export async function detectInferenceBackends(
       kind: "gemini-cli",
       modelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
       label: "Gemini CLI",
-      detail: describeGeminiCliDetail(credentials),
+      detail: credentials ? "installed; credentials found" : "installed; login status unavailable",
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
-  // Randomize only within a credential tier; stored credentials never establish
-  // a verified subscription or outrank environment-key evidence.
+  // Stored CLI credentials do not establish a verified subscription.
   randomizeClaudeCodexTie(cliCandidates, options.deps?.randomInt ?? randomInt);
-  const loggedInSubscriptionCliCandidates = cliCandidates.filter(
-    (candidate) =>
-      candidate.credentials === true && subscriptionPromotionEligibleCliKinds.has(candidate.kind),
-  );
-  const remainingCliCandidates = cliCandidates.filter(
-    (candidate) => !loggedInSubscriptionCliCandidates.includes(candidate),
-  );
-  // Verified flat-rate subscription logins outrank metered environment keys.
-  // Existing models stay first so guided setup never silently replaces one.
-  candidates.push(
-    ...loggedInSubscriptionCliCandidates,
-    ...envCandidates,
-    // Unknown login states and Gemini remain fallbacks; definitive logouts sink last.
-    ...remainingCliCandidates.filter((candidate) => candidate.credentials !== false),
-    ...remainingCliCandidates.filter((candidate) => candidate.credentials === false),
-  );
-  return candidates;
+  return [...candidates, ...envCandidates, ...cliCandidates];
 }

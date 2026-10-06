@@ -1,10 +1,3 @@
-/**
- * Anthropic OAuth flow (Claude Pro/Max)
- *
- * NOTE: This module uses Node.js http.createServer for the OAuth callback server.
- * It is only intended for CLI use, not browser environments.
- */
-
 import { toErrorObject } from "../../../infra/errors.js";
 import { readResponseWithLimit } from "../../../infra/http-body.js";
 import { startOAuthLoopbackCallbackServer } from "../../../infra/oauth-loopback-callback.js";
@@ -20,18 +13,7 @@ import {
   throwIfOAuthLoginAborted,
   withOAuthLoginAbort,
 } from "./abort.js";
-import type {
-  OAuthCredentials,
-  OAuthLoginCallbacks,
-  OAuthPrompt,
-  OAuthProviderInterface,
-} from "./types.js";
-
-type CallbackServerInfo = {
-  cancelWait: () => void;
-  waitForCode: () => Promise<{ code: string; state: string } | null>;
-  close: () => Promise<void>;
-};
+import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
 
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
@@ -130,7 +112,7 @@ function parseTokenCredentials(
   };
 }
 
-async function startCallbackServer(expectedState: string): Promise<CallbackServerInfo> {
+async function startCallbackServer(expectedState: string) {
   if (typeof process === "undefined" || (!process.versions?.node && !process.versions?.bun)) {
     throw new Error("Anthropic OAuth is only available in Node.js environments");
   }
@@ -165,20 +147,18 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
 }
 
 async function postJson(
-  url: string,
   body: Record<string, string | number>,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  signal?: AbortSignal,
 ): Promise<string> {
-  const timeoutMs = options.timeoutMs ?? 30_000;
-  throwIfOAuthLoginAborted(options.signal);
-  const response = await fetch(url, {
+  throwIfOAuthLoginAborted(signal);
+  const response = await fetch(TOKEN_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
     },
     body: JSON.stringify(body),
-    signal: buildOAuthRequestSignal({ signal: options.signal, timeoutMs }),
+    signal: buildOAuthRequestSignal({ signal, timeoutMs: 30_000 }),
   });
 
   const buffer = await readResponseWithLimit(response, OAUTH_RESPONSE_MAX_BYTES, {
@@ -188,7 +168,7 @@ async function postJson(
 
   if (!response.ok) {
     throw new Error(
-      `HTTP request failed. status=${response.status}; url=${url}; body=${responseBody}`,
+      `HTTP request failed. status=${response.status}; url=${TOKEN_URL}; body=${responseBody}`,
     );
   }
 
@@ -205,7 +185,6 @@ async function exchangeAuthorizationCode(
   let responseBody: string;
   try {
     responseBody = await postJson(
-      TOKEN_URL,
       {
         grant_type: "authorization_code",
         client_id: CLIENT_ID,
@@ -214,7 +193,7 @@ async function exchangeAuthorizationCode(
         redirect_uri: redirectUri,
         code_verifier: verifier,
       },
-      { signal },
+      signal,
     );
   } catch (error) {
     if (signal?.aborted) {
@@ -232,16 +211,7 @@ async function exchangeAuthorizationCode(
   });
 }
 
-/**
- * Login with Anthropic OAuth (authorization code + PKCE)
- */
-async function loginAnthropic(options: {
-  onAuth: (info: { url: string; instructions?: string }) => void;
-  onPrompt: (prompt: OAuthPrompt) => Promise<string>;
-  onProgress?: (message: string) => void;
-  onManualCodeInput?: () => Promise<string>;
-  signal?: AbortSignal;
-}): Promise<OAuthCredentials> {
+async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCredentials> {
   throwIfOAuthLoginAborted(options.signal);
   const { verifier, challenge } = await generatePKCE();
   const expectedState = generateOAuthState();
@@ -278,55 +248,43 @@ async function loginAnthropic(options: {
     });
     throwIfOAuthLoginAborted(options.signal);
 
-    if (options.onManualCodeInput) {
-      let manualInput: string | undefined;
-      let manualError: Error | undefined;
-      const manualPromise = options
-        .onManualCodeInput()
-        .then((input) => {
-          manualInput = input;
-          server.cancelWait();
-        })
-        .catch((err: unknown) => {
-          manualError = err instanceof Error ? err : new Error(String(err));
-          server.cancelWait();
-        });
+    let manualInput: string | undefined;
+    let manualError: Error | undefined;
+    const manualPromise = options
+      .onManualCodeInput?.()
+      .then((input) => {
+        manualInput = input;
+        server.cancelWait();
+      })
+      .catch((err: unknown) => {
+        manualError = err instanceof Error ? err : new Error(String(err));
+        server.cancelWait();
+      });
 
-      const result = await withOAuthLoginAbort(
-        server.waitForCode(),
-        options.signal,
-        server.cancelWait,
-      );
+    const result = await withOAuthLoginAbort(
+      server.waitForCode(),
+      options.signal,
+      server.cancelWait,
+    );
 
+    if (manualError) {
+      throw manualError;
+    }
+
+    if (result?.code) {
+      code = result.code;
+      state = result.state;
+    } else if (manualInput) {
+      applyAuthorizationInput(manualInput);
+    }
+
+    if (!code && manualPromise) {
+      await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
       if (manualError) {
-        throw manualError;
+        throw toErrorObject(manualError, "Non-Error thrown");
       }
-
-      if (result?.code) {
-        code = result.code;
-        state = result.state;
-      } else if (manualInput) {
+      if (manualInput) {
         applyAuthorizationInput(manualInput);
-      }
-
-      if (!code) {
-        await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
-        if (manualError) {
-          throw toErrorObject(manualError, "Non-Error thrown");
-        }
-        if (manualInput) {
-          applyAuthorizationInput(manualInput);
-        }
-      }
-    } else {
-      const result = await withOAuthLoginAbort(
-        server.waitForCode(),
-        options.signal,
-        server.cancelWait,
-      );
-      if (result?.code) {
-        code = result.code;
-        state = result.state;
       }
     }
 
@@ -357,13 +315,10 @@ async function loginAnthropic(options: {
   }
 }
 
-/**
- * Refresh Anthropic OAuth token
- */
 async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
   let responseBody: string;
   try {
-    responseBody = await postJson(TOKEN_URL, {
+    responseBody = await postJson({
       grant_type: "refresh_token",
       client_id: CLIENT_ID,
       refresh_token: refreshToken,
@@ -387,13 +342,7 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
   usesCallbackServer: true,
 
   async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-    return loginAnthropic({
-      onAuth: callbacks.onAuth,
-      onPrompt: callbacks.onPrompt,
-      onProgress: callbacks.onProgress,
-      onManualCodeInput: callbacks.onManualCodeInput,
-      signal: callbacks.signal,
-    });
+    return loginAnthropic({ ...callbacks });
   },
 
   async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {

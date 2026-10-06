@@ -64,8 +64,6 @@ export type BlockStreamingCoalescing = {
   maxChars: number;
   idleMs: number;
   joiner: string;
-  /** Internal escape hatch for transports that truly need per-enqueue flushing. */
-  flushOnEnqueue?: boolean;
 };
 
 type BlockStreamingChunking = {
@@ -94,18 +92,21 @@ export function resolveEffectiveBlockStreamingConfig(params: {
   chunking?: BlockStreamingChunking;
   /** Optional upper bound for chunking/coalescing max chars. */
   maxChunkChars?: number;
-  /** Optional coalescer idle flush override in milliseconds. */
   coalesceIdleMs?: number;
 }): {
   chunking: BlockStreamingChunking;
   coalescing: BlockStreamingCoalescing;
 } {
-  const { textLimit } = resolveProviderChunkContext(params.cfg, params.provider, params.accountId);
+  const providerContext = resolveProviderChunkContext(
+    params.cfg,
+    params.provider,
+    params.accountId,
+  );
   const chunkingDefaults =
     params.chunking ?? resolveBlockStreamingChunking(params.cfg, params.provider, params.accountId);
   const chunkingMax = clampPositiveInteger(params.maxChunkChars, chunkingDefaults.maxChars, {
     min: 1,
-    max: Math.max(1, textLimit),
+    max: Math.max(1, providerContext.textLimit),
   });
   const chunking: BlockStreamingChunking = {
     ...chunkingDefaults,
@@ -114,7 +115,7 @@ export function resolveEffectiveBlockStreamingConfig(params: {
   };
   const coalescingDefaults = resolveBlockStreamingCoalescing(
     params.cfg,
-    params.provider,
+    providerContext,
     params.accountId,
     chunking,
   );
@@ -164,16 +165,10 @@ export function resolveBlockStreamingChunking(
 
 function resolveBlockStreamingCoalescing(
   cfg: OpenClawConfig | undefined,
-  provider: string | undefined,
+  { providerKey, providerId, textLimit }: ReturnType<typeof resolveProviderChunkContext>,
   accountId: string | null | undefined,
   chunking: BlockStreamingChunking,
 ): BlockStreamingCoalescing {
-  const { providerKey, providerId, textLimit } = resolveProviderChunkContext(
-    cfg,
-    provider,
-    accountId,
-  );
-
   const providerDefaults = providerId
     ? getChannelPlugin(providerId)?.streaming?.blockStreamingCoalesceDefaults
     : undefined;

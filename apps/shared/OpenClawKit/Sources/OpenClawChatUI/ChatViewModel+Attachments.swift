@@ -9,12 +9,6 @@ private enum ChatAttachmentReadError: Error {
     case unreadable
 }
 
-#if canImport(AppKit)
-import AppKit
-#elseif canImport(UIKit)
-import UIKit
-#endif
-
 extension OpenClawChatViewModel {
     /// Bound memory for resize input independently of the encoded upload budget.
     private static let maxImageSourceBytes = 64 * 1024 * 1024
@@ -117,7 +111,7 @@ extension OpenClawChatViewModel {
                 data: data,
                 fileName: "image-\(index + 1).\(fileExtension)",
                 mimeType: attachment.mimeType,
-                preview: Self.previewImage(data: data))
+                preview: OpenClawPlatformImage(data: data))
         }
     }
 
@@ -296,7 +290,7 @@ extension OpenClawChatViewModel {
             return baseName.isEmpty ? "image.jpg" : "\(baseName).jpg"
         }()
 
-        let preview = Self.previewImage(data: processed)
+        let preview = OpenClawPlatformImage(data: processed)
         return self.stageAttachment(
             OpenClawPendingAttachment(
                 url: url,
@@ -374,22 +368,12 @@ extension OpenClawChatViewModel {
             data: data,
             fileName: fileName,
             mimeType: mimeType,
-            preview: thumbnailData.flatMap { Self.previewImage(data: $0) }), limits: limits)
+            preview: thumbnailData.flatMap(OpenClawPlatformImage.init(data:))), limits: limits)
         else { throw ChatAttachmentReadError.tooLarge }
     }
 
     private func ownsAttachmentSession(_ expectedSession: SessionSnapshot?) -> Bool {
         expectedSession.map(self.isCurrentSession) ?? true
-    }
-
-    static func previewImage(data: Data) -> OpenClawPlatformImage? {
-        #if canImport(AppKit)
-        NSImage(data: data)
-        #elseif canImport(UIKit)
-        UIImage(data: data)
-        #else
-        nil
-        #endif
     }
 
     private nonisolated static func readAttachmentData(from url: URL, maximumBytes: Int) async throws -> Data {

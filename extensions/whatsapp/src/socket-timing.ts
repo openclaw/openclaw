@@ -4,11 +4,13 @@ import type {
   WAMessage,
   WAPresence,
 } from "baileys";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 export type WhatsAppSocketTimingOptions = {
   keepAliveIntervalMs?: number;
@@ -26,6 +28,7 @@ export type WhatsAppSocketOperationAdapter = {
 };
 
 type WhatsAppSocketOperationTimeoutHooks = {
+  assertCurrent?: () => void;
   onSendMessageTimeout?: (params: { jid: string; promise: Promise<WAMessage | undefined> }) => void;
 };
 
@@ -96,23 +99,15 @@ export async function withWhatsAppSocketOperationTimeout<T>(
   onTimeout?: () => void,
 ): Promise<T> {
   const resolvedTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(timeoutMs);
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          onTimeout?.();
-          reject(new WhatsAppSocketOperationTimeoutError(operation, resolvedTimeoutMs));
-        }, resolvedTimeoutMs);
-        timeout.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  return await raceWithTimeout(
+    promise,
+    resolvedTimeoutMs,
+    () => {
+      onTimeout?.();
+      throw new WhatsAppSocketOperationTimeoutError(operation, resolvedTimeoutMs);
+    },
+    { ref: false },
+  );
 }
 
 export function createWhatsAppSocketOperationTimeoutAdapter(
@@ -123,26 +118,41 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
   const operationTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(timeoutMs);
   return {
     sendMessage: (jid, content, options) => {
+      const effect = captureEffectAuthority();
       return runSerializedSocketSendMessage(sock, () => {
-        const send = options
-          ? sock.sendMessage(jid, content, options)
-          : sock.sendMessage(jid, content);
-        return withWhatsAppSocketOperationTimeout(
-          "sendMessage",
-          send,
-          operationTimeoutMs,
-          hooks?.onSendMessageTimeout
-            ? () => hooks.onSendMessageTimeout?.({ jid, promise: send })
-            : undefined,
-        );
+        let active = true;
+        const send = effect.initiate(() => {
+          if (!active) {
+            throw new WhatsAppSocketOperationTimeoutError("sendMessage", operationTimeoutMs);
+          }
+          hooks?.assertCurrent?.();
+          return options ? sock.sendMessage(jid, content, options) : sock.sendMessage(jid, content);
+        });
+        return withWhatsAppSocketOperationTimeout("sendMessage", send, operationTimeoutMs, () => {
+          active = false;
+          hooks?.onSendMessageTimeout?.({ jid, promise: send });
+        });
       });
     },
     sendPresenceUpdate: (presence, jid) => {
-      const send =
-        jid === undefined
+      let active = true;
+      const send = captureEffectAuthority().initiate(() => {
+        if (!active) {
+          throw new WhatsAppSocketOperationTimeoutError("sendPresenceUpdate", operationTimeoutMs);
+        }
+        hooks?.assertCurrent?.();
+        return jid === undefined
           ? sock.sendPresenceUpdate(presence)
           : sock.sendPresenceUpdate(presence, jid);
-      return withWhatsAppSocketOperationTimeout("sendPresenceUpdate", send, operationTimeoutMs);
+      });
+      return withWhatsAppSocketOperationTimeout(
+        "sendPresenceUpdate",
+        send,
+        operationTimeoutMs,
+        () => {
+          active = false;
+        },
+      );
     },
   };
 }

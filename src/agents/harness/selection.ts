@@ -39,8 +39,7 @@ import { normalizeToolPolicyName } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
-import { selectContextEngineForTranscriptHost } from "./context-engine-logical-turn.js";
-import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
+import { beginContextEngineLogicalTurn } from "./context-engine-turn-begin.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
@@ -265,24 +264,17 @@ export async function runAgentHarnessAttempt(
     );
   }
   if (internalParams.contextEngineLogicalTurnLease) {
-    selectContextEngineForTranscriptHost({
+    const effective = await beginContextEngineLogicalTurn({
       lease: internalParams.contextEngineLogicalTurnLease,
       host: {
         id: `agent-harness:${harness.id}`,
         label: `agent harness "${harness.id}"`,
         capabilities: harness.contextEngineHostCapabilities ?? [],
       },
-      operation: "agent-run",
       recorder: internalParams.userTurnTranscriptRecorder,
-    });
-    await drainPendingContextEngineTurnsBeforeRun({
-      admission: internalParams.userTurnTranscriptRecorder?.getAdmissionReceipt(),
       isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
-      lease: internalParams.contextEngineLogicalTurnLease,
-      recorder: internalParams.userTurnTranscriptRecorder,
       sessionTarget: internalParams.sessionTarget,
     });
-    const effective = internalParams.contextEngineLogicalTurnLease.begin();
     internalParams = {
       ...internalParams,
       contextEngine: effective.engine.info.id === "legacy" ? undefined : effective.engine,
@@ -621,6 +613,7 @@ function withoutPluginHarnessPrivateState(
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
     trajectoryRecorder: _trajectoryRecorder,
     inputAttachmentMedia: _inputAttachmentMedia,
+    supportsTurnScopedToolRestrictions: _supportsTurnScopedToolRestrictions,
     __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
     ...pluginParams
   } = params as EmbeddedRunAttemptInternalParams & {

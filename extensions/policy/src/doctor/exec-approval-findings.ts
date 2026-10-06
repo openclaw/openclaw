@@ -81,17 +81,6 @@ export function execApprovalsFindings(
       continue;
     }
     const requirementBase = `scopes/${ocPathSegment(target.scopeName)}/execApprovals`;
-    const shapeFinding = execApprovalsPolicyShapeFinding(target.overlay.execApprovals, {
-      policyDocName,
-      policyPath,
-      targetPrefix: requirementBase,
-      propertyPrefix: `scopes.${target.scopeName}.execApprovals`,
-      allowDefaults: false,
-    });
-    if (shapeFinding !== undefined) {
-      findings.push(shapeFinding);
-      continue;
-    }
     const fileFindings = execApprovalsFileFindings(target.overlay.execApprovals, {
       policyDocName,
       file,

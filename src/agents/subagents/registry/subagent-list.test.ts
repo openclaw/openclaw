@@ -35,8 +35,8 @@ afterAll(async () => {
   });
 });
 
-beforeEach(() => {
-  resetSubagentRegistryForTests();
+beforeEach(async () => {
+  await resetSubagentRegistryForTests();
 });
 
 describe("buildSubagentList", () => {
@@ -107,7 +107,7 @@ describe("buildSubagentList", () => {
       execution: { status: "terminal", endedAt: now - 3_500_000, outcome: { status: "ok" } },
       delivery: { status: "pending" },
     };
-    addSubagentRunForTests(parent);
+    await addSubagentRunForTests(parent);
     const list = () => buildSubagentList({ cfg: {}, runs: [parent], recentMinutes: 30 });
     expect((await list()).active[0]).toMatchObject({
       status: "waiting for external continuation",
@@ -125,7 +125,7 @@ describe("buildSubagentList", () => {
       execution: { status: "running", startedAt: now },
       expectsCompletionMessage: true,
     };
-    addSubagentRunForTests(child);
+    await addSubagentRunForTests(child);
     expect((await list()).active[0]?.execution).toEqual({
       state: "waiting",
       wait: {
@@ -134,14 +134,14 @@ describe("buildSubagentList", () => {
         dependencies: [{ runId: child.runId, sessionKey: child.childSessionKey }],
       },
     });
-    addSubagentRunForTests({ ...child, expectsCompletionMessage: false });
+    await addSubagentRunForTests({ ...child, expectsCompletionMessage: false });
     expect((await list()).active[0]).toMatchObject({
       status: "waiting for external continuation",
       execution: { state: "waiting", wait: { kind: "external" } },
     });
-    resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests();
     const killed = { ...parent, endedReason: SUBAGENT_ENDED_REASON_KILLED };
-    addSubagentRunForTests(killed);
+    await addSubagentRunForTests(killed);
     expect(
       (await buildSubagentList({ cfg: {}, runs: [killed], recentMinutes: 30 })).active,
     ).toEqual([]);
@@ -187,7 +187,7 @@ describe("buildSubagentList", () => {
           createdAt: Date.now(),
           execution: { status: "queued" },
         } satisfies SubagentRunRecord;
-        addSubagentRunForTests(run);
+        await addSubagentRunForTests(run);
 
         const parse = vi.spyOn(JSON, "parse");
         try {
@@ -216,7 +216,7 @@ describe("buildSubagentList", () => {
           parse.mockRestore();
         }
       } finally {
-        resetSubagentRegistryForTests();
+        await resetSubagentRegistryForTests();
         await cleanupSessionStateForTest({ stateDir });
         await fs.rm(stateDir, { recursive: true, force: true });
       }
@@ -234,7 +234,7 @@ describe("buildSubagentList", () => {
       createdAt: 1000,
       execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+    await addSubagentRunForTests(run);
     const list = await buildSubagentList({
       cfg: {},
       runs: [run],
@@ -259,7 +259,7 @@ describe("buildSubagentList", () => {
       createdAt: 1000,
       execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+    await addSubagentRunForTests(run);
 
     const list = await buildSubagentList({
       cfg: {},
@@ -288,12 +288,59 @@ describe("buildSubagentList", () => {
         outcome: { status: "error", error: "provider rejected the request" },
       },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+    await addSubagentRunForTests(run);
 
     const list = await buildSubagentList({ cfg: {}, runs: [run], recentMinutes: 30 });
 
     expect(list.recent[0]?.status).toBe("failed");
     expect(list.recent[0]?.line).toContain(" failed");
+  });
+
+  it("shows finished ancestors as done while suspended child results remain available", async () => {
+    const now = Date.now();
+    const parent = {
+      runId: "finished-parent",
+      childSessionKey: "agent:main:subagent:finished-parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate child workers",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      execution: { status: "terminal", endedAt: now - 60_000, outcome: { status: "ok" } },
+    } satisfies SubagentRunRecord;
+    const child = {
+      ...parent,
+      runId: "suspended-child",
+      childSessionKey: "agent:main:subagent:suspended-child",
+      requesterSessionKey: parent.childSessionKey,
+      delivery: { status: "suspended", suspendedAt: now, suspendedReason: "expiry" },
+    } satisfies SubagentRunRecord;
+    await addSubagentRunForTests(parent);
+    await addSubagentRunForTests(child);
+    const list = () => buildSubagentList({ cfg: {}, runs: [parent, child], recentMinutes: 30 });
+
+    const finished = await list();
+    expect(finished.active).toEqual([]);
+    expect(finished.recent).toMatchObject([
+      { runId: parent.runId, status: "done", pendingDescendants: 0 },
+      { runId: child.runId, status: "done", deliveryStatus: "suspended" },
+    ]);
+    expect(finished.text).not.toContain("waiting on");
+
+    await addSubagentRunForTests({
+      ...parent,
+      runId: "live-grandchild",
+      childSessionKey: "agent:main:subagent:live-grandchild",
+      requesterSessionKey: child.childSessionKey,
+      createdAt: now,
+      execution: { status: "running", startedAt: now },
+    });
+    const active = await list();
+    expect(active.active).toMatchObject([
+      { runId: parent.runId, status: "active (waiting on 1 child)", pendingDescendants: 1 },
+      { runId: child.runId, status: "active (waiting on 1 child)", pendingDescendants: 1 },
+    ]);
+    expect(active.recent).toEqual([]);
   });
 
   it.each([
@@ -351,9 +398,9 @@ describe("buildSubagentList", () => {
               },
         ...(endedReason ? { endedReason } : {}),
       } satisfies SubagentRunRecord;
-      addSubagentRunForTests(parentRun);
+      await addSubagentRunForTests(parentRun);
       for (let childIndex = 0; childIndex < pendingChildren; childIndex += 1) {
-        addSubagentRunForTests({
+        await addSubagentRunForTests({
           runId: `${parentRun.runId}-child-${childIndex}`,
           childSessionKey: `${parentRun.childSessionKey}:subagent:child-${childIndex}`,
           requesterSessionKey: parentRun.childSessionKey,
@@ -400,8 +447,8 @@ describe("buildSubagentList", () => {
       createdAt: now - 120_000,
       execution: { status: "running", startedAt: now - 120_000 },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(parentRun);
-    addSubagentRunForTests({
+    await addSubagentRunForTests(parentRun);
+    await addSubagentRunForTests({
       runId: "run-old-ended-child-summary",
       childSessionKey: `${parentRun.childSessionKey}:subagent:old-ended-child`,
       requesterSessionKey: parentRun.childSessionKey,
@@ -439,7 +486,7 @@ describe("buildSubagentList", () => {
         startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
       },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(staleRun);
+    await addSubagentRunForTests(staleRun);
 
     const list = await buildSubagentList({
       cfg: {},
@@ -472,8 +519,8 @@ describe("buildSubagentList", () => {
         outcome: { status: "ok" },
       },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(parentRun);
-    addSubagentRunForTests({
+    await addSubagentRunForTests(parentRun);
+    await addSubagentRunForTests({
       runId: "run-stale-child",
       childSessionKey: `${parentRun.childSessionKey}:subagent:stale-child`,
       requesterSessionKey: parentRun.childSessionKey,

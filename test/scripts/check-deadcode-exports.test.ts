@@ -158,7 +158,6 @@ describe("check-deadcode-exports", () => {
         "scripts/check-openclaw-package-tarball.mts!",
         "scripts/crabbox-wrapper.mjs!",
         "scripts/crabbox-wrapper.mts!",
-        "scripts/check-live-cache.ts!",
         "scripts/lib/vitest-resource-reporter.mts!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
@@ -244,10 +243,6 @@ describe("check-deadcode-exports", () => {
     expect(packageJson.scripts["deadcode:full"]).toContain("--exclude duplicates");
   });
 
-  it("models the jiti virtual agent-sessions SDK entry", () => {
-    expect(knipConfig.workspaces["."].entry).toContain("src/agents/sessions/extension-sdk.ts!");
-  });
-
   it("models the spawned system-agent MCP stdio entry", () => {
     expect(knipConfig.workspaces["."].entry).toContain("src/mcp/openclaw-tools-serve.ts!");
   });
@@ -286,12 +281,6 @@ describe("check-deadcode-exports", () => {
         "src/config/doc-baseline.ts!",
         "src/plugins/runtime-sidecar-paths-baseline.ts!",
         "tsdown.ai.config.ts!",
-      ]),
-    );
-    expect(knipConfig.workspaces["extensions/acpx"].entry).toEqual(
-      expect.arrayContaining([
-        "src/runtime-internals/mcp-command-line.mjs!",
-        "src/runtime-internals/mcp-proxy.mjs!",
       ]),
     );
     expect(knipConfig.workspaces["extensions/canvas"].entry).toEqual(

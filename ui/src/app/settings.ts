@@ -54,8 +54,6 @@ type PersistedUiSettings = Omit<
   "token" | "sessionKey" | "lastActiveSessionKey" | "selectedAgentId" | "navCollapsed"
 > & {
   token?: never;
-  sessionKey?: string;
-  lastActiveSessionKey?: string;
   sessionsByGateway?: Record<string, ScopedSessionSelection>;
 };
 
@@ -143,9 +141,9 @@ export function normalizeAccentColor(value: unknown): string | undefined {
   return normalizeUiAppearancePreference("ui.accent", value);
 }
 
-export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
+export function normalizeTextScale(value: unknown): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
+    return 100;
   }
   let best: TextScaleStop = TEXT_SCALE_STOPS[0];
   let bestDist = Math.abs(value - best);
@@ -251,14 +249,6 @@ function isViteDevPage(): boolean {
   return Boolean(document.querySelector('script[src*="/@vite/client"]'));
 }
 
-function formatHostWithPort(hostname: string, port: string): string {
-  // location.hostname already carries brackets for IPv6 literals; wrapping
-  // again would produce an undialable ws://[[::1]]:port default.
-  const needsBrackets = hostname.includes(":") && !hostname.startsWith("[");
-  const normalizedHost = needsBrackets ? `[${hostname}]` : hostname;
-  return `${normalizedHost}:${port}`;
-}
-
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const basePath = resolveControlUiPaths(location.pathname)[0];
@@ -270,8 +260,11 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   if (!isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
-  const effectiveUrl = `${proto}://${formatHostWithPort(location.hostname, "18789")}`;
-  return { pageUrl, effectiveUrl };
+  // location.hostname already carries brackets for IPv6 literals; wrapping
+  // again would produce an undialable ws://[[::1]]:port default.
+  const hostname = location.hostname;
+  const host = hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname;
+  return { pageUrl, effectiveUrl: `${proto}://${host}:18789` };
 }
 
 /**
@@ -302,18 +295,14 @@ type PersistedSettingsSource = {
   parsed: PersistedUiSettings;
 };
 
-function parsePersistedSettings(raw: string | null): PersistedUiSettings | null {
-  if (!raw) {
-    return null;
-  }
-  return (safeParseJson(raw) as PersistedUiSettings | undefined) ?? null;
-}
-
 function readSettingsForGateway(
   storage: Storage | null,
   targetUrl: string,
 ): PersistedSettingsSource | null {
-  const scoped = parsePersistedSettings(storage?.getItem(settingsKeyForGateway(targetUrl)) ?? null);
+  const scoped = safeParseJson(storage?.getItem(settingsKeyForGateway(targetUrl)) ?? "") as
+    | PersistedUiSettings
+    | null
+    | undefined;
   const storedUrl = normalizeOptionalString(scoped?.gatewayUrl);
   if (scoped && (!storedUrl || gatewayOriginScope(storedUrl) === gatewayOriginScope(targetUrl))) {
     return {
@@ -347,11 +336,7 @@ function resolveScopedSessionSelection(
     };
   }
 
-  const legacySessionKey = normalizeOptionalString(parsed.sessionKey) ?? fallback.sessionKey;
-  return {
-    sessionKey: legacySessionKey,
-    lastActiveSessionKey: normalizeOptionalString(parsed.lastActiveSessionKey) ?? legacySessionKey,
-  };
+  return fallback;
 }
 
 export function loadGatewaySessionSelection(gatewayUrl: string): ScopedSessionSelection {
@@ -389,8 +374,7 @@ export function resolveGatewayCredentialsForUrlEdit(
   const sameCredentialScope =
     gatewayCredentialScope(currentGatewayUrl) === gatewayCredentialScope(nextGatewayUrl);
   return {
-    // Gateway tokens stay session-scoped across endpoint edits. Durable settings
-    // may contain scrubbed legacy tokens, but must not restore them here.
+    // Gateway tokens stay session-scoped across endpoint edits.
     token: sameTokenScope ? credentials.token : loadSessionToken(nextGatewayUrl),
     password: sameCredentialScope ? credentials.password : "",
   };
@@ -493,6 +477,7 @@ export function loadUiPreferences(
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const customTheme = parseImportedCustomTheme(parsed.customTheme);
     const { theme, mode } = parseThemeSelection(parsed.theme, parsed.themeMode);
+    const textScale = normalizeTextScale(parsed.textScale);
     const parsedRecord = asOptionalRecord(parsed) ?? {};
     const hasSidebarEntries = Object.hasOwn(parsedRecord, "sidebarEntries");
     // One-time read of the retired route-only shape; all writes use sidebarEntries.
@@ -574,11 +559,7 @@ export function loadUiPreferences(
         defaults.showAdvancedSettings,
       ),
       pinnedAgentIds: normalizeUniqueTrimmedStringList(parsed.pinnedAgentIds),
-      textScale:
-        typeof parsed.textScale === "number" &&
-        normalizeTextScale(parsed.textScale) !== UI_APPEARANCE_DEFAULTS.textScale
-          ? normalizeTextScale(parsed.textScale)
-          : undefined,
+      textScale: textScale !== UI_APPEARANCE_DEFAULTS.textScale ? textScale : undefined,
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
       ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
@@ -587,9 +568,7 @@ export function loadUiPreferences(
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
       ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
     };
-    // Scoped blobs from builds that persisted tokens durably get rewritten once
-    // so the plaintext token leaves localStorage.
-    if ("token" in parsed || migratedSidebarEntries !== null) {
+    if (migratedSidebarEntries !== null) {
       saveSettings(
         { ...settings, token: loadSessionToken(gatewayUrl) },
         { selectGateway: !targetGatewayUrl },

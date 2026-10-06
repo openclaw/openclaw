@@ -8,18 +8,18 @@ import type {
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { WebSocket, type RawData } from "ws";
 import { VoiceCallConfigSchema, type VoiceCallRealtimeConfig } from "../config.js";
 import { CallManager } from "../manager.js";
-import type { CallRecord, NormalizedEvent } from "../types.js";
+import type { CallRecord, NormalizedEvent, ToolHandlerContext } from "../types.js";
 import {
   connectWs as openWebSocket,
   startUpgradeWsServer as openUpgradeServer,
   waitForClose,
 } from "../websocket-test-support.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
-import { RealtimeCallHandler, type ToolHandlerContext } from "./realtime-handler.js";
+import { RealtimeCallHandler } from "./realtime-handler.js";
 import {
   createRealtimeConfig,
   createBridge as createTestBridge,
@@ -798,7 +798,7 @@ describe("RealtimeCallHandler path routing", () => {
     }
 
     await waitForRealtimeTest(() => {
-      expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: false });
+      expect(handleBargeIn).not.toHaveBeenCalled();
       expect(outboundMessages.filter((message) => message.event === "clear").length).toBe(
         clearCountBeforeBargeIn + 1,
       );

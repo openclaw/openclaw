@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
+import type { TeamReportsConfig } from "./config.js";
 import type {
   GithubCounts,
   GithubItem,
@@ -14,17 +15,9 @@ export type SummaryLlm = Pick<OpenClawPluginApi["runtime"]["llm"], "complete">;
 type CompletionParams = Parameters<SummaryLlm["complete"]>[0];
 type SummaryLogger = Pick<SourceRuntime["logger"], "warn">;
 
-type SummaryOptions = {
-  enabled: boolean;
-  model?: string;
-  reasoning?: CompletionParams["reasoning"];
-  agentId?: string;
-};
-
 type SummaryResult = {
   report: ReportDocument;
   summary: SummaryDocument;
-  reused: boolean;
 };
 
 const MAX_RESPONSE_CHARS = 128 * 1024;
@@ -295,7 +288,6 @@ function fallbackResult(
     ],
   ];
   return {
-    reused: false,
     summary: {
       source: "fallback",
       ...(warning ? { warnings: [warning] } : {}),
@@ -323,7 +315,7 @@ function fallbackResult(
 
 export async function generateSummaries(params: {
   report: ReportDocument;
-  options: SummaryOptions;
+  options: TeamReportsConfig["summaries"];
   llm: SummaryLlm;
   previous?: { report: ReportDocument; summary: SummaryDocument };
   signal?: AbortSignal;
@@ -352,7 +344,6 @@ export async function generateSummaries(params: {
           })),
         },
         summary: previous.summary,
-        reused: true,
       };
     }
   }
@@ -393,7 +384,6 @@ export async function generateSummaries(params: {
       const parsed = parseResponse(result.text, report);
       const summaries = new Map(parsed.members.map((member) => [member.login, member]));
       return {
-        reused: false,
         summary: {
           source: "model",
           model: `${result.provider}/${result.model}`,

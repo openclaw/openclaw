@@ -1,8 +1,27 @@
+// Register the shared Git transport before any publication or run-lease consumer.
+// oxfmt-ignore
+import {
+  BRANCH,
+  NEW_HEAD,
+  OLD_HEAD,
+  SESSION_ID,
+  SESSION_KEY,
+  WORKSPACE_TREE,
+  commandCalls,
+  commandResult,
+  commands,
+  createTestGitHubPublicationCoordinator,
+  createRealPublicationWorkspace,
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
+} from "./github-publication.test-support.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -28,22 +47,6 @@ import {
   personalPublicationAccount as account,
   expectPersonalPublicationReplay,
 } from "./github-personal-publication.test-support.js";
-import {
-  BRANCH,
-  NEW_HEAD,
-  OLD_HEAD,
-  SESSION_ID,
-  SESSION_KEY,
-  WORKSPACE_TREE,
-  commandCalls,
-  commandResult,
-  commands,
-  createTestGitHubPublicationCoordinator,
-  createRealPublicationWorkspace,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-  persistPublicationTestSession,
-} from "./github-publication.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -57,17 +60,6 @@ import { seedAttachedPlacementEnvironment } from "./worker-environments/placemen
 const mocks = githubPublicationTestMocks();
 
 const table = "github_personal_publication_requests";
-
-vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/worktrees/git-lock.js")>()),
-  lockWorktreeForProcess: vi.fn(async () => undefined),
-  unlockWorktree: vi.fn(async () => undefined),
-}));
-vi.mock("../process/exec.js", () => ({
-  runCommandBuffered: (
-    ...args: Parameters<typeof import("../process/exec.js").runCommandBuffered>
-  ) => mocks.runCommand(...args),
-}));
 
 describe("personal publication authority and recovery", () => {
   installGitHubPublicationTestHarness();
@@ -400,11 +392,19 @@ describe("personal publication authority and recovery", () => {
   });
 
   it("creates its private table only on admission, publishes the exact account and snapshot, and replays only for its owner", async () => {
+    setRuntimeConfigSnapshot({
+      ...getRuntimeConfigSnapshot(),
+      gateway: {
+        github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+      },
+    });
     const db = openOpenClawStateDatabase().db;
     expect(tableExists(db, table)).toBe(false);
     expect(() => status(randomUUID())).toThrow("not found");
     expect(tableExists(db, table)).toBe(false);
-    const result = await coordinator.requestPersonalForSession(request(), action);
+    const response = await rpc("sessions.github.publish", request());
+    expect(response[0], JSON.stringify(response[2])).toBe(true);
+    const result = response[1];
     expect(result).toMatchObject({
       status: "published",
       publisher: { source: "personal", ...account },
@@ -491,7 +491,7 @@ describe("personal publication authority and recovery", () => {
             runId: "pending-run",
             owner: { kind: "worker", environmentId: "remote", ownerEpoch: 1 },
           });
-          placements.markWorkspaceResultPending(claim);
+          await placements.markWorkspaceResultPending(claim);
         }
       }
       await expect(
@@ -690,7 +690,7 @@ describe("personal publication authority and recovery", () => {
     client = { ...client, connId: "cold-browser" };
     runtime.client = client;
     const discovered = await rpc("sessions.github.options");
-    expect(discovered[0]).toBe(true);
+    expect(discovered[0], JSON.stringify(discovered[2])).toBe(true);
     expect(discovered[1].pendingPersonal).toMatchObject({
       result: { requestId: result.requestId, status: "needs_confirmation" },
       confirmation: {

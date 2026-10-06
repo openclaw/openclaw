@@ -12,6 +12,8 @@ import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js"
 import * as updateWriter from "../../infra/update-run-write.async.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import * as postUpdateMaintenance from "./update-command-post-update-maintenance.js";
+import { registerServiceStartRefusalFinalizationTests } from "./update-command-post-update-runtime-refresh.test-support.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
@@ -35,8 +37,106 @@ export function registerBoundaryFinalizationControls({
   mocks: {
     readServiceState: Mock;
     restartService: Mock<typeof import("./update-command-service.js").maybeRestartService>;
+    printResult: Mock;
   };
 }) {
+  registerServiceStartRefusalFinalizationTests({ makeTempDir, mocks });
+
+  it.each(["confirmed", "unknown", "refused", "revoked", "replaced"] as const)(
+    "settles progress before finalization and retains its failure (%s)",
+    async (outcome) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const receiptFailure =
+        outcome === "unknown"
+          ? new CommandProcessCleanupError({ cause: new Error("receipt reply lost") })
+          : new Error("progress receipt refused");
+      const env = { OPENCLAW_STATE_DIR: makeTempDir("finalizer-progress-") };
+      const record = createUpdateRun({ trigger: "cli" }, { env });
+      let current = true;
+      const run = {
+        runId: record.runId,
+        env,
+        executorFence: { assertCurrent() {} },
+        ...(outcome === "revoked"
+          ? { requesterAuthority: { requester: {}, isCurrent: () => current } }
+          : {}),
+      };
+      const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
+      const prepareService = vi.spyOn(postUpdateMaintenance, "preparePostUpdateService");
+      const finishing = finishSuccessfulPackageSwitch(
+        outcome === "revoked" || outcome === "replaced" ? { run } : {},
+        {},
+        {
+          beforeFinalization: async () => {
+            entered.resolve();
+            await release.promise;
+            if (outcome !== "confirmed") {
+              throw receiptFailure;
+            }
+          },
+        },
+      );
+      try {
+        await Promise.race([
+          entered.promise,
+          finishing.then(() => {
+            throw new Error("Finalization completed before progress settlement entered.");
+          }),
+        ]);
+        expect(mocks.readServiceState).not.toHaveBeenCalled();
+        expect(prepareService).not.toHaveBeenCalled();
+        expect(mocks.restartService).not.toHaveBeenCalled();
+        expect(rollback).not.toHaveBeenCalled();
+        current = outcome !== "revoked";
+        if (outcome === "replaced") {
+          run.executorFence = { assertCurrent() {} };
+        }
+        release.resolve();
+        if (outcome === "confirmed") {
+          await finishing;
+          expect(prepareService).toHaveBeenCalledOnce();
+          expect(mocks.restartService).toHaveBeenCalledOnce();
+        } else if (outcome === "unknown") {
+          await expect(finishing).rejects.toBe(receiptFailure);
+        } else if (outcome === "refused") {
+          await expect(finishing).rejects.toMatchObject({
+            result: {
+              status: "error",
+              steps: expect.arrayContaining([
+                expect.objectContaining({ stderrTail: receiptFailure.message }),
+              ]),
+            },
+            cause: receiptFailure,
+          });
+        } else {
+          await expect(finishing).rejects.toMatchObject({
+            errors: [
+              outcome === "revoked"
+                ? expect.objectContaining({ message: "requester-revoked" })
+                : expect.objectContaining({
+                    cause: expect.objectContaining({
+                      message: "Package finalization lost its original executor.",
+                    }),
+                  }),
+              receiptFailure,
+            ],
+          });
+          expect(getUpdateRun(record.runId, { env })?.status).toBe("running");
+        }
+        if (outcome !== "confirmed") {
+          expect(prepareService).not.toHaveBeenCalled();
+          expect(mocks.readServiceState).not.toHaveBeenCalled();
+          expect(mocks.restartService).not.toHaveBeenCalled();
+          expect(rollback).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        await finishing.catch(() => undefined);
+      }
+    },
+  );
+
   it
     .runIf(process.platform !== "win32")
     .each([

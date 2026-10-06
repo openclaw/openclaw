@@ -3,10 +3,12 @@ import { vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCronListSnapshotRevision } from "../../cron/list-snapshot-revision.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronService } from "../../cron/service.js";
 import type { CronJob } from "../../cron/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -37,19 +39,6 @@ function createPrefixOnlyChannelPlugin(
   };
 }
 
-function createEnablementHostileChannelPlugin(id: string): ChannelPlugin {
-  const base = createPrefixOnlyChannelPlugin(id, [id]);
-  return {
-    ...base,
-    config: {
-      ...base.config,
-      // Mirrors twitch/discord: an unlisted or credential-suppressed account
-      // resolves to a not-enabled account, which must NOT read as operator intent.
-      isEnabled: () => false,
-    },
-  };
-}
-
 export function setCronValidationTestRegistry(): void {
   setActivePluginRegistry(
     createTestRegistry([
@@ -67,11 +56,6 @@ export function setCronValidationTestRegistry(): void {
         pluginId: "slack",
         plugin: createPrefixOnlyChannelPlugin("slack", ["slack"]),
         source: "test:slack",
-      },
-      {
-        pluginId: "twitch",
-        plugin: createEnablementHostileChannelPlugin("twitch"),
-        source: "test:twitch",
       },
       {
         pluginId: "msteams",
@@ -161,6 +145,7 @@ export function createCronTestContext(
           return { ok: true, enqueued: true, runId: "run-1" };
         },
       ),
+      waitForManualRun: vi.fn(async () => false),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
       prepareWake: vi.fn(async () => undefined),
@@ -202,8 +187,8 @@ export function createCronTestContext(
           const pageJobs = filteredJobs.slice(offset, offset + limit);
           const nextOffset = offset + pageJobs.length;
           return {
-            jobs: pageJobs,
-            snapshotRevision: `fixture:${filteredJobs.map((job) => job.id).join(",")}`,
+            jobs: freezeJsonSnapshot(structuredClone(pageJobs)),
+            snapshotRevision: resolveCronListSnapshotRevision(filteredJobs),
             total,
             offset,
             limit,
@@ -222,6 +207,18 @@ export function createCronTestContext(
     validateAgentRuntimeApprovalAuthority: undefined as
       | GatewayRequestContext["validateAgentRuntimeApprovalAuthority"]
       | undefined,
+  };
+}
+
+export function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "cron job",
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
+    ...overrides,
   };
 }
 

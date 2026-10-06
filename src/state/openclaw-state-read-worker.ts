@@ -1,13 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
-  ensureSqliteLibrarySelected,
-  getSqliteRuntimeCapabilities,
-} from "../infra/bun-sqlite-library.js";
-import {
   createRetainedOperation,
   flatMapRetainedOperation,
   type RetainedOperation,
-} from "../infra/retained-operation.js";
+} from "@openclaw/worker-runtime/lifecycle";
+import {
+  ensureSqliteLibrarySelected,
+  getSqliteRuntimeCapabilities,
+} from "../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -35,6 +35,7 @@ import type {
   OpenClawStateReadCommand,
   OpenClawStateReadLocation,
   OpenClawStateReadOutcome,
+  OpenClawStateReadOptions,
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
@@ -125,6 +126,21 @@ function readRuntimes() {
   });
 }
 
+/** Retire cached workers only after every independently admitted reader has joined. */
+export async function retireIdleOpenClawStateReadWorkers(
+  nativeSource: RetainedNativeWorkerSource,
+): Promise<boolean> {
+  const state = readRuntimes().get(nativeSource);
+  if (!state) {
+    return true;
+  }
+  if (state.operations.size > 0) {
+    return false;
+  }
+  await closeReadPool(state);
+  return true;
+}
+
 function readPool(state: ReadRuntime, admitted: boolean): ReadPool {
   // Accepted owners may still need a final read while generation admission is sealed.
   if ((state.sealed && !admitted) || state.closing) {
@@ -193,8 +209,10 @@ export function captureOpenClawStateReadSource() {
   const state = runtime;
   const admitted = new Set<ReadOperation>();
   return {
-    createTransport: (command: OpenClawStateReadCommand) =>
-      createReadTransport(command, state, () => admitted.size > 0),
+    createTransport: (
+      command: OpenClawStateReadCommand,
+      onChunk?: OpenClawStateReadOptions["onChunk"],
+    ) => createReadTransport(command, state, () => admitted.size > 0, onChunk),
     own(service: () => void, close: () => Promise<void>): () => void {
       if (state.sealed || state.closing) {
         throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
@@ -254,6 +272,7 @@ function createReadTransport(
   command: OpenClawStateReadCommand,
   state: ReadRuntime,
   ownsAdmission: () => boolean,
+  onChunk?: OpenClawStateReadOptions["onChunk"],
 ) {
   // Capture nested input before the read owner can yield during snapshot preparation.
   const capturedCommand = captureCommand(command);
@@ -358,6 +377,7 @@ function createReadTransport(
         context: {
           environment: { ...context.environment },
           existingSchemaPath: context.existingSchemaPath,
+          stateIntegrity: context.stateIntegrity,
         },
         databasePath: context.admission.databasePath,
         location,
@@ -371,7 +391,20 @@ function createReadTransport(
           authority.assertCurrent();
           return request;
         },
-        { signal: authority.signal, inputBytes: requestBytes(request) },
+        {
+          signal: authority.signal,
+          inputBytes: requestBytes(request),
+          diagnosticOperation: readCommand.type,
+          ...(onChunk
+            ? {
+                onRequestSync(value: unknown) {
+                  authority.assertCurrent();
+                  onChunk(value);
+                  return { input: null, timeoutMs: 300_000 };
+                },
+              }
+            : {}),
+        },
       );
       tasks.set(task, cleanup);
       void task.result.then(

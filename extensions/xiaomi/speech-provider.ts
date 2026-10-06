@@ -37,15 +37,6 @@ const XIAOMI_TTS_FORMATS = ["mp3", "wav"] as const;
 
 type XiaomiTtsFormat = (typeof XIAOMI_TTS_FORMATS)[number];
 
-type XiaomiTtsProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  model: string;
-  voice: string;
-  format: XiaomiTtsFormat;
-  style?: string;
-};
-
 function normalizeXiaomiTtsBaseUrl(baseUrl?: string): string {
   return (baseUrl?.trim() || DEFAULT_XIAOMI_TTS_BASE_URL).replace(/\/+$/, "");
 }
@@ -66,9 +57,7 @@ function resolveXiaomiTtsConfigRecord(
   );
 }
 
-function normalizeXiaomiTtsProviderConfig(
-  rawConfig: Record<string, unknown>,
-): XiaomiTtsProviderConfig {
+function normalizeXiaomiTtsProviderConfig(rawConfig: Record<string, unknown>) {
   const raw = resolveXiaomiTtsConfigRecord(rawConfig);
   const options = readXiaomiTtsOptions(raw);
   return {
@@ -91,7 +80,7 @@ function normalizeXiaomiTtsProviderConfig(
   };
 }
 
-function resolveXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTtsProviderConfig {
+function resolveXiaomiTtsProviderConfig(config: SpeechProviderConfig) {
   const providerConfig = normalizeXiaomiTtsProviderConfig({ xiaomi: config });
   const resolvedKey = resolveSpeechProviderApiKey(
     providerConfig.apiKey,

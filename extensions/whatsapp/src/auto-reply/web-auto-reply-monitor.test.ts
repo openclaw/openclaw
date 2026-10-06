@@ -666,12 +666,11 @@ describe("applyGroupGating", () => {
         groupChat: { mentionPatterns: ["@global"] },
       },
       agents: {
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             groupChat: { mentionPatterns: ["@workbot"] },
           },
-        ],
+        },
       },
       bindings: [
         {

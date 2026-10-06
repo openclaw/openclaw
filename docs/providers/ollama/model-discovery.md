@@ -3,7 +3,7 @@ summary: "How OpenClaw discovers Ollama models implicitly, plus narrow smoke tes
 read_when:
   - You want to know which models OpenClaw discovers and how
   - You need capability, reasoning, or cost detection rules
-  - You want a narrow text or vision probe that skips the agent tool surface
+  - You want a narrow text or vision check that skips the agent tool surface
 title: "Ollama model discovery"
 sidebarTitle: "Model discovery"
 ---
@@ -14,14 +14,14 @@ When `OLLAMA_API_KEY` (or an auth profile) is set and neither
 `models.providers.ollama` nor another custom provider with `api: "ollama"` is
 defined, OpenClaw discovers models from `http://127.0.0.1:11434`:
 
-| Behavior             | Detail                                                                                                                                                                                                                                                                                        |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Catalog query        | `/api/tags`                                                                                                                                                                                                                                                                                   |
-| Capability detection | Best-effort `/api/show` reads `contextWindow`, `num_ctx` Modelfile parameters, and capabilities (vision/tools/thinking)                                                                                                                                                                       |
-| Vision models        | A `vision` capability from `/api/show` marks the model image-capable (`input: ["text", "image"]`)                                                                                                                                                                                             |
-| Reasoning detection  | Uses the `thinking` capability from `/api/show` when available; falls back to a name heuristic (`r1`, `reason`, `reasoning`, `think`) when Ollama omits capabilities. `glm-5.2:cloud` and `deepseek-v4-flash\|pro:cloud` are always treated as reasoning regardless of reported capabilities. |
-| Token limits         | `maxTokens` defaults to OpenClaw's Ollama max-token cap                                                                                                                                                                                                                                       |
-| Costs                | All costs are `0`                                                                                                                                                                                                                                                                             |
+| Behavior             | Detail                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Catalog query        | `/api/tags`                                                                                                                                                                                                                                                                                                                                                                          |
+| Capability detection | Best-effort `/api/show` reads `contextWindow`, `num_ctx` Modelfile parameters, and capabilities (vision/tools/thinking)                                                                                                                                                                                                                                                              |
+| Vision models        | A `vision` capability from `/api/show` marks the model image-capable (`input: ["text", "image"]`)                                                                                                                                                                                                                                                                                    |
+| Reasoning detection  | Uses the `thinking` capability from `/api/show` when available; falls back to a name heuristic (`r1`, `reason`, `reasoning`, `think`) when Ollama omits capabilities. `glm-5.2:cloud`, `glm-5.3:cloud`, `glm-5.3-flash:cloud`, `kimi-k3:cloud`, `deepseek-v4-flash\|pro:cloud`, and `deepseek-v4.1-flash:cloud` are always treated as reasoning regardless of reported capabilities. |
+| Token limits         | `maxTokens` defaults to OpenClaw's Ollama max-token cap                                                                                                                                                                                                                                                                                                                              |
+| Costs                | All costs are `0`                                                                                                                                                                                                                                                                                                                                                                    |
 
 ```bash
 ollama list
@@ -53,7 +53,7 @@ confirms metadata — typos still fail as unknown models.
 
 ### Smoke tests
 
-For a narrow text probe that skips the full agent tool surface:
+For a narrow text check that skips the full agent tool surface:
 
 ```bash
 OLLAMA_API_KEY=ollama-local \
@@ -64,7 +64,7 @@ OLLAMA_API_KEY=ollama-local \
     --json
 ```
 
-Add `--file` with an image for a lean vision-model probe (accepts PNG/JPEG/WebP;
+Add `--file` with an image for a lean vision-model check (accepts PNG/JPEG/WebP;
 non-image files are rejected before Ollama is called — use
 `openclaw infer audio transcribe` for audio):
 

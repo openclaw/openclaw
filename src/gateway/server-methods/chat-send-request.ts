@@ -15,6 +15,7 @@ import type {
   ChatSendParamsSchema,
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { isAbortRequestText } from "../../auto-reply/reply/abort-primitives.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import {
   captureChatWorkContext,
@@ -36,13 +37,12 @@ import {
   isBrowserOperatorUiClient,
   isOperatorUiClient,
 } from "../../utils/message-channel.js";
-import { isChatStopCommandText } from "../chat-abort.js";
 import type { ChatAttachment } from "../chat-attachments.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeChatHumanMentions } from "./chat-human-mentions.js";
 import {
-  hasGatewayAdminScope,
   normalizeExplicitChatSendOrigin,
   normalizeOptionalChatSystemReceipt,
   type ChatSendExplicitOrigin,
@@ -227,7 +227,7 @@ export function normalizeChatSendRequest(params: {
     return { ok: false, error: "Progress refresh input is reserved for progressCard.refresh." };
   }
   const systemProvenanceReceipt = systemReceiptResult.receipt;
-  const stopCommand = !commandInterpretationSuppressed && isChatStopCommandText(inboundMessage);
+  const stopCommand = !commandInterpretationSuppressed && isAbortRequestText(inboundMessage);
   if (p.toolBindings) {
     if (
       !client ||

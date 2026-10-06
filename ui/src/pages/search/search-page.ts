@@ -372,9 +372,6 @@ class SearchPage extends OpenClawLightDomElement {
                   path: credential.path,
                   value: readConfigValue(config, credential.path),
                   disabled: !this.canEdit || this.busy,
-                  onPatch: (path, value) => {
-                    void patch(path, value);
-                  },
                 },
                 credential,
                 {
@@ -546,9 +543,7 @@ class SearchPage extends OpenClawLightDomElement {
                         options: [
                           {
                             value: "",
-                            label: result.model
-                              ? `${t("searchPage.agentDefault")} · ${result.model.provider}/${result.model.id}`
-                              : t("searchPage.agentDefault"),
+                            label: `${t("searchPage.agentDefault")} · ${result.model.provider}/${result.model.id}`,
                           },
                           ...this.models.map((model) => ({
                             value: `${model.provider}/${model.id}`,

@@ -44,3 +44,31 @@ it.each([
     );
   },
 );
+
+it("rejects an authored delivery object without a mode", async () => {
+  await withCronServiceForTest(
+    {
+      makeStorePath,
+      scheduler: createTestGatewayScheduler(),
+      logger: createNoopLogger(),
+      cronEnabled: false,
+    },
+    async ({ cron, enqueueSystemEvent }) => {
+      const delivery = { mode: "announce" as const, channel: "telegram", to: "123" };
+      Reflect.deleteProperty(delivery, "mode");
+      await expect(
+        cron.add({
+          name: "partial-delivery",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "hello" },
+          delivery,
+        }),
+      ).rejects.toThrow("delivery requires an explicit mode");
+      expect(await cron.list()).toEqual([]);
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    },
+  );
+});

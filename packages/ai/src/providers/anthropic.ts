@@ -1,31 +1,20 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { Stream } from "@anthropic-ai/sdk/core/streaming.js";
-import type {
-  MessageCreateParamsStreaming,
-  MessageParam,
-  RawMessageStreamEvent,
-} from "@anthropic-ai/sdk/resources/messages.js";
+import type { RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import type { AnthropicContextManagementOptions, AnthropicOptions } from "../provider-options.js";
-import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import {
-  buildAnthropicReplayPlan,
   isAnthropicReplayRejection,
   suppressAnthropicCompaction,
 } from "../transports/anthropic-compaction-replay.js";
 import {
-  convertAnthropicMessages,
-  convertAnthropicTools,
-  buildAnthropicGenerationParams,
+  buildAnthropicRequest,
+  prepareAnthropicRequest,
 } from "../transports/anthropic-messages.js";
 import {
-  applyAnthropicRequestCacheControl,
-  buildAnthropicSystemBlocks,
-  resolveAnthropicCacheOptions,
-  applyAnthropicContextManagementToRequest,
   isDirectAnthropicModel,
-  resolveAnthropicRequestBetaHeader,
+  supportsAnthropicServerSideFallback,
 } from "../transports/anthropic-payload-policy.js";
 import { consumeAnthropicStream } from "../transports/anthropic-stream-reducer.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
@@ -38,7 +27,6 @@ import {
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
   AssistantMessageEvent,
-  Context,
   Model,
   SimpleStreamOptions,
   StreamFunction,
@@ -54,24 +42,15 @@ import {
   usesFoundryBearerAuth,
 } from "./anthropic-auth-headers.js";
 import {
-  applyClaudeRequestContract,
   buildAnthropicClaudeCodeIdentity,
   prepareClaudeNoPrefillRequestContext,
   resolveAnthropicThinkingEffort,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
-  resolveClaudeSonnet55ModelIdentity,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
-  usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
 } from "./anthropic-model-contract.js";
-import { ANTHROPIC_SERVER_SIDE_FALLBACKS } from "./anthropic-server-fallback.js";
-import { applyAnthropicThinkingBindingControls } from "./anthropic-thinking-replay.js";
-import {
-  normalizeAnthropicToolCallId,
-  type AnthropicToolProjection,
-} from "./anthropic-tool-projection.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders } from "./github-copilot-headers.js";
@@ -103,7 +82,6 @@ function getAnthropicCompat(model: Model<"anthropic-messages">) {
     supportsEagerToolInputStreaming: model.compat?.supportsEagerToolInputStreaming ?? !isFireworks,
     sendSessionAffinityHeaders:
       model.compat?.sendSessionAffinityHeaders ?? (isFireworks || isCloudflareAiGatewayAnthropic),
-    allowEmptySignature: model.compat?.allowEmptySignature ?? false,
   };
 }
 
@@ -149,9 +127,9 @@ async function* iterateAnthropicEvents(
 }
 
 export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicCompactionOptions> = (
-  model: Model<"anthropic-messages">,
-  context: Context,
-  options?: AnthropicCompactionOptions,
+  model,
+  context,
+  options,
 ) => {
   const stream = new AssistantMessageEventStream();
   const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
@@ -207,36 +185,27 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         directApiKeyBetaHeader = created.directApiKeyBetaHeader;
         claudeCodeVersion = created.claudeCodeVersion;
       }
-      const builtParams = await buildParams(
+      const builtParams = await buildAnthropicRequest(
         model,
         requestContext,
-        isOAuth,
         requestOptions,
+        "provider",
+        isOAuth,
         serverSideFallback,
         claudeCodeVersion,
       );
       usedCompactionReplay = builtParams.usedCompactionReplay;
-      let params = builtParams.params;
-      const toolProjection = builtParams.toolProjection;
-      applyAnthropicContextManagementToRequest(
-        params,
+      const { params, headers } = await prepareAnthropicRequest(
+        builtParams.params,
         model,
         requestOptions,
         directApiKeyBetaHeader,
       );
-      const nextParams = await requestOptions?.onPayload?.(params, model);
-      if (nextParams !== undefined) {
-        params = nextParams as MessageCreateParamsStreaming;
-      }
-      applyClaudeRequestContract(params, model);
-      const betaHeader = resolveAnthropicRequestBetaHeader(params, directApiKeyBetaHeader);
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
         maxRetries: 0,
-        headers:
-          applyAnthropicThinkingBindingControls(params, betaHeader) ??
-          (betaHeader ? { "anthropic-beta": betaHeader } : undefined),
+        headers,
       };
       const response = await client.messages
         .create({ ...params, stream: true }, sdkRequestOptions)
@@ -251,7 +220,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         stream,
         refusalBuffer,
         isOAuthToken: isOAuth,
-        toolProjection,
+        toolProjection: builtParams.toolProjection,
         profile: "provider",
       });
       finalizeTransportStream({ stream, output });
@@ -307,11 +276,7 @@ type AnthropicSimpleStreamOptions = SimpleStreamOptions &
 export const streamSimpleAnthropic: StreamFunction<
   "anthropic-messages",
   AnthropicSimpleStreamOptions
-> = (
-  model: Model<"anthropic-messages">,
-  context: Context,
-  options?: AnthropicSimpleStreamOptions,
-) => {
+> = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = {
@@ -374,23 +339,6 @@ export const streamSimpleAnthropic: StreamFunction<
   } satisfies AnthropicCompactionOptions);
 };
 
-/**
- * Server-side refusal fallback is a first-party Claude API beta: proxies and
- * Bedrock/Vertex/Foundry reject the `fallbacks` param, and OAuth (Claude Code
- * identity) requests are excluded until the beta is verified there.
- */
-function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">): boolean {
-  if (
-    (!usesClaudeFable5MessagesContract(model) &&
-      resolveClaudeOpus5ModelIdentity(model) === undefined &&
-      resolveClaudeSonnet55ModelIdentity(model) === undefined) ||
-    model.provider !== "anthropic"
-  ) {
-    return false;
-  }
-  return isDirectAnthropicModel(model);
-}
-
 function createClient(
   model: Model<"anthropic-messages">,
   apiKey: string,
@@ -434,187 +382,82 @@ function createClient(
     ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
   };
 
-  if (model.provider === "cloudflare-ai-gateway") {
-    const client = new Anthropic({
-      ...clientOptions,
-      apiKey,
-      authToken: null,
-      baseURL: resolveCloudflareBaseUrl(model),
-      defaultHeaders: Object.assign(
-        {},
-        {
-          accept: baseHeaders.accept,
-          "anthropic-dangerous-direct-browser-access": "true",
-          Authorization: null,
-          ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
-        },
-        model.headers,
-        optionsHeaders,
-      ),
-    });
-
-    return { client, isOAuthToken: false, serverSideFallback: false };
-  }
-
+  let configuredApiKey: string | null = apiKey;
+  let authToken: string | null = null;
+  let defaultHeaders: Record<string, string | null>;
+  let isOAuthToken = false;
+  let serverSideFallback = false;
+  let directApiKeyBetaHeader: string | undefined;
+  let claudeCodeVersion: string | undefined;
   const isCopilot = model.provider === "github-copilot";
-  if (
+
+  if (model.provider === "cloudflare-ai-gateway") {
+    clientOptions.baseURL = resolveCloudflareBaseUrl(model);
+    defaultHeaders = Object.assign(
+      {},
+      baseHeaders,
+      { Authorization: null },
+      model.headers,
+      optionsHeaders,
+    );
+  } else if (
     isCopilot ||
     usesFoundryBearerAuth({
       ...model,
       headers: resolveAiTransportHeaderSentinels(model.headers),
     })
   ) {
-    const client = new Anthropic({
-      ...clientOptions,
-      apiKey: null,
-      authToken: apiKey,
-      defaultHeaders: Object.assign(
-        {},
-        baseHeaders,
-        isCopilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
-        dynamicHeaders,
-        optionsHeaders,
-      ),
-    });
-    return { client, isOAuthToken: false, serverSideFallback: false };
-  }
-
-  // OAuth: Bearer auth, Claude Code identity headers
-  if (isAnthropicOAuthApiKey(apiKey)) {
+    configuredApiKey = null;
+    authToken = apiKey;
+    defaultHeaders = Object.assign(
+      {},
+      baseHeaders,
+      isCopilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
+      dynamicHeaders,
+      optionsHeaders,
+    );
+  } else if (isAnthropicOAuthApiKey(apiKey)) {
     const identity = buildAnthropicClaudeCodeIdentity(
       ["claude-code-20250219", "oauth-2025-04-20", ...betaFeatures].join(","),
       model.headers,
       optionsHeaders,
     );
-    const client = new Anthropic({
-      ...clientOptions,
-      apiKey: null,
-      authToken: apiKey,
-      defaultHeaders: identity.headers,
-    });
-
-    return {
-      client,
-      isOAuthToken: true,
-      serverSideFallback: false,
-      claudeCodeVersion: identity.version,
-    };
+    configuredApiKey = null;
+    authToken = apiKey;
+    defaultHeaders = identity.headers;
+    isOAuthToken = true;
+    claudeCodeVersion = identity.version;
+  } else {
+    serverSideFallback =
+      model.provider === "anthropic" && supportsAnthropicServerSideFallback(model);
+    defaultHeaders = Object.assign(
+      {},
+      baseHeaders,
+      sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders
+        ? { "x-session-affinity": sessionId }
+        : {},
+      model.headers,
+      optionsHeaders,
+    );
+    // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
+    if (isDirectAnthropicModel(model)) {
+      directApiKeyBetaHeader =
+        Object.entries(defaultHeaders).findLast(
+          ([name]) => name.toLowerCase() === "anthropic-beta",
+        )?.[1] ?? "";
+    }
   }
-
-  // API key auth
-  const serverSideFallback = supportsAnthropicServerSideFallback(model);
-  const sessionAffinityHeaders: Record<string, string | null> =
-    sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders
-      ? { "x-session-affinity": sessionId }
-      : {};
-  const defaultHeaders: Record<string, string | null> = Object.assign(
-    {},
-    baseHeaders,
-    sessionAffinityHeaders,
-    model.headers,
-    optionsHeaders,
-  );
-  const client = new Anthropic({
-    ...clientOptions,
-    apiKey,
-    authToken: null,
-    defaultHeaders,
-  });
 
   return {
-    client,
-    isOAuthToken: false,
+    client: new Anthropic({
+      ...clientOptions,
+      apiKey: configuredApiKey,
+      authToken,
+      defaultHeaders,
+    }),
+    isOAuthToken,
     serverSideFallback,
-    // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
-    directApiKeyBetaHeader: isDirectAnthropicModel(model)
-      ? (Object.entries(defaultHeaders).findLast(
-          ([name]) => name.toLowerCase() === "anthropic-beta",
-        )?.[1] ?? "")
-      : undefined,
-  };
-}
-
-async function buildParams(
-  model: Model<"anthropic-messages">,
-  context: Context,
-  isOAuthTokenResult: boolean,
-  options?: AnthropicCompactionOptions,
-  serverSideFallback = false,
-  claudeCodeVersion?: string,
-): Promise<{
-  params: MessageCreateParamsStreaming;
-  toolProjection?: AnthropicToolProjection;
-  usedCompactionReplay: boolean;
-}> {
-  const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
-  const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
-  const { cacheControl, supportsCacheControlOnTools } = resolveAnthropicCacheOptions(
-    model,
-    options?.cacheRetention,
-  );
-  const system = buildAnthropicSystemBlocks(
-    context.systemPrompt,
-    isOAuthTokenResult,
-    cacheControl,
+    directApiKeyBetaHeader,
     claudeCodeVersion,
-  );
-  const compat = getAnthropicCompat(model);
-  const convertedTools = context.tools
-    ? convertAnthropicTools(
-        context.tools,
-        isOAuthTokenResult,
-        compat.supportsEagerToolInputStreaming,
-      )
-    : undefined;
-  const tools = convertedTools?.tools;
-  const toolProjection = convertedTools?.projection;
-  const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
-    enabled: !isOAuthTokenResult && options?.anthropicServerCompaction === true,
-    authProfileId: options?.authProfileId,
-    sessionId: options?.sessionId,
-  });
-  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
-  const params: MessageCreateParamsStreaming = {
-    model: model.id,
-    // The SDK's stable message union omits compaction blocks accepted by its beta endpoint.
-    messages: (await convertAnthropicMessages(
-      transformMessages(replayPlan.messages, model, normalizeAnthropicToolCallId),
-      model,
-      isOAuthTokenResult,
-      {
-        profile: "provider",
-        allowEmptySignature: compat.allowEmptySignature,
-        compaction: replayPlan.compaction,
-        replayThinkingEnabled,
-        cacheBreakpointOptOutMessageIndexes,
-      },
-    )) as MessageParam[],
-    max_tokens: options?.maxTokens ?? model.maxTokens,
-    stream: true,
   };
-
-  if (system) {
-    params.system = system;
-  }
-
-  // Fable 5, Opus 5, and Sonnet 5.5 safety classifiers can decline benign-adjacent work.
-  // Anthropic owns the per-category fallback recommendation so routing can
-  // evolve without a client release.
-  if (serverSideFallback) {
-    (params as { fallbacks?: "default" }).fallbacks = ANTHROPIC_SERVER_SIDE_FALLBACKS;
-  }
-
-  Object.assign(
-    params,
-    buildAnthropicGenerationParams({ model, options, tools, toolProjection, profile: "provider" }),
-  );
-
-  applyAnthropicRequestCacheControl(
-    params,
-    cacheControl,
-    supportsCacheControlOnTools,
-    cacheBreakpointOptOutMessageIndexes,
-  );
-
-  return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
 }

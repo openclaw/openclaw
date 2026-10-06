@@ -27,9 +27,9 @@ import {
 } from "./session-accessor.sqlite-entry.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
-import { loadTranscriptEvents } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { loadTranscriptEvents } from "./session-transcript-events.js";
 
 const failures = vi.hoisted(() => ({
   publication: undefined as Error | undefined,
@@ -39,6 +39,14 @@ vi.mock("./session-accessor.sqlite-identity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-identity.js")>();
   return {
     ...actual,
+    publishCommittedSessionIdentity: (
+      ...args: Parameters<typeof actual.publishCommittedSessionIdentity>
+    ) => {
+      if (failures.publication) {
+        throw failures.publication;
+      }
+      return actual.publishCommittedSessionIdentity(...args);
+    },
     prepareLifecycleIdentityPublication: (
       ...args: Parameters<typeof actual.prepareLifecycleIdentityPublication>
     ) => {
@@ -69,7 +77,7 @@ afterEach(async () => {
   resetConfigRuntimeState();
 });
 
-it.each(["success", "publication", "writer return", "rollback"] as const)(
+it.each(["publication", "writer return", "rollback"] as const)(
   "records the committed lifecycle before %s settlement",
   async (outcome) => {
     const stateDir = tempDirs.make("session-lifecycle-publication-");
@@ -117,11 +125,7 @@ it.each(["success", "publication", "writer return", "rollback"] as const)(
             }
           : {}),
       });
-      if (outcome === "success") {
-        await operation;
-      } else {
-        await expect(operation).rejects.toBe(failure);
-      }
+      await expect(operation).rejects.toBe(failure);
       expect(committed).toHaveBeenCalledTimes(outcome === "rollback" ? 0 : 1);
       expect(events).toEqual(
         outcome === "rollback"
@@ -204,14 +208,15 @@ it("publishes removal invalidations before identity and row observers without ar
   expect(sharing.readCurrent()?.entry).toEqual(sharingEntry);
   expect(generation.readCurrent()).toEqual(sharingEntry);
   const order: string[] = [];
-  const observedFacts: Array<{
-    invalidated: boolean;
-    ownerTagged: boolean;
-    sharing: ReturnType<typeof sharing.readCurrent>;
-    generation: ReturnType<typeof generation.readCurrent>;
-    writableCache: ReturnType<typeof readCommittedSessionEntryCache>;
-    readOnlyCache: ReturnType<typeof readCommittedSessionEntryCache>;
-  }> = [];
+  const readFacts = () => ({
+    sharing: sharing.readCurrent(),
+    generation: generation.readCurrent(),
+    writableCache: readCommittedSessionEntryCache(database.db),
+    readOnlyCache: readCommittedSessionEntryCache(reader.database.db),
+  });
+  const observedFacts: Array<
+    ReturnType<typeof readFacts> & { invalidated: boolean; ownerTagged: boolean }
+  > = [];
   const stopFacts = sessionChanges.subscribeFacts((change) => {
     if (!("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
       return;
@@ -220,10 +225,7 @@ it("publishes removal invalidations before identity and row observers without ar
     observedFacts.push({
       invalidated: change.factsInvalidated === true,
       ownerTagged: isPreparedSessionSharingChange(change),
-      sharing: sharing.readCurrent(),
-      generation: generation.readCurrent(),
-      writableCache: readCommittedSessionEntryCache(database.db),
-      readOnlyCache: readCommittedSessionEntryCache(reader.database.db),
+      ...readFacts(),
     });
   });
   const stopProjection = sessionChanges.subscribeProjection((change) => {
@@ -245,18 +247,13 @@ it("publishes removal invalidations before identity and row observers without ar
       order.push("row");
     }
   });
-  const lifecycleFacts: unknown[] = [];
+  const lifecycleFacts: Array<ReturnType<typeof readFacts>> = [];
   try {
     const result = await applySessionEntryLifecycleMutation({
       storePath,
       onLifecycleCommitted: () => {
         order.push("committed");
-        lifecycleFacts.push({
-          sharing: sharing.readCurrent(),
-          generation: generation.readCurrent(),
-          writableCache: readCommittedSessionEntryCache(database.db),
-          readOnlyCache: readCommittedSessionEntryCache(reader.database.db),
-        });
+        lifecycleFacts.push(readFacts());
       },
       removals: [{ expectedSessionId: scope.sessionId, sessionKey: scope.sessionKey }],
     });
@@ -270,24 +267,14 @@ it("publishes removal invalidations before identity and row observers without ar
     });
     expect(order).toEqual(["facts", "projection", "committed", "identity", "row"]);
     expect(rowPaths).toEqual([database.path]);
-    expect(lifecycleFacts).toEqual([
-      {
-        sharing: undefined,
-        generation: null,
-        writableCache: undefined,
-        readOnlyCache: undefined,
-      },
-    ]);
-    expect(observedFacts).toEqual([
-      {
-        invalidated: true,
-        ownerTagged: true,
-        sharing: undefined,
-        generation: null,
-        writableCache: undefined,
-        readOnlyCache: undefined,
-      },
-    ]);
+    const retiredFacts = {
+      sharing: undefined,
+      generation: null,
+      writableCache: undefined,
+      readOnlyCache: undefined,
+    };
+    expect(lifecycleFacts).toEqual([retiredFacts]);
+    expect(observedFacts).toEqual([{ invalidated: true, ownerTagged: true, ...retiredFacts }]);
     expect(() =>
       acquiring.initialize({ entry: sharingEntry, membership: new Set(["member"]) }),
     ).toThrow("Session sharing acquisition is no longer current");

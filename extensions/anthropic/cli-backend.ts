@@ -175,6 +175,7 @@ export function buildAnthropicCliBackend(
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
+    hostOwnedTools: ["exec", "process"],
     toolAvailabilityEnforcement: "execution-args",
     isolatesInstructionsWithExactTools: true,
     projectNativeToolAuthority: projectClaudeNativeToolAuthority,

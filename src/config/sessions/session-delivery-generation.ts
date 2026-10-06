@@ -23,6 +23,7 @@ import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite
 import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
 import type { SessionDeliveryGeneration } from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 
@@ -78,12 +79,14 @@ async function prepareSessionGenerationLease(
 ): Promise<{
   assertCurrent: () => void;
   assertDeliveryCurrent: () => void;
+  prepareRead: () => Promise<void> | undefined;
   release: () => void;
 }> {
   if (!isSessionGenerationFacts(input)) {
     throw new SessionDeliveryGenerationUnavailableError();
   }
   const generation = { ...input };
+  const binding = captureIncognitoSessionBinding(generation);
   const releases: Array<() => void> = [];
   const paths = new Set([path.resolve(generation.storePath)]);
   let active = true;
@@ -175,7 +178,15 @@ async function prepareSessionGenerationLease(
     ) {
       return;
     }
-    if (!isPreparedSessionSharingChange(change)) {
+    if (binding && observeIncognito) {
+      try {
+        observeIncognito();
+      } catch (error) {
+        if (!isSessionDeliveryGenerationRevokedError(error)) {
+          invalidated = true;
+        }
+      }
+    } else if (!isPreparedSessionSharingChange(change)) {
       invalidated = true;
     } else if (observeIncognito && change.facts?.kind === "removed") {
       revoked = true;
@@ -193,7 +204,21 @@ async function prepareSessionGenerationLease(
   releases.push(sessionChanges.subscribeFacts(changed));
   try {
     let readCurrent: () => void;
-    if (isIncognitoSessionKey(generation.sessionKey)) {
+    let prepareRead: () => Promise<void> | undefined = () => {
+      assertActive();
+      return undefined;
+    };
+    if (binding) {
+      const { actor, admissionSignal } = binding;
+      const claim = actor.sessions.captureCurrent(generation.sessionKey);
+      readCurrent = () => {
+        admissionSignal?.throwIfAborted();
+        actor.assertReadable();
+        claim.assertCurrent();
+        checkEntry(actor.sessions.readSharing(generation.sessionKey)?.entry ?? null);
+      };
+      observeIncognito = readCurrent;
+    } else if (isIncognitoSessionKey(generation.sessionKey)) {
       const database = getOpenIncognitoAgentDatabase(generation.agentId, generation.storePath);
       if (!database && generation.sessionId !== null) {
         throw new SessionDeliveryGenerationRevokedError();
@@ -297,7 +322,8 @@ async function prepareSessionGenerationLease(
           },
         );
       }
-      readCurrent = () => {
+      const assertSourceCurrent = () => {
+        assertActive();
         for (const candidate of candidates) {
           if (
             captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
@@ -309,7 +335,14 @@ async function prepareSessionGenerationLease(
         if (!source || readDatabasePathIdentitySync(source.path).key !== source.identity) {
           throw new SessionDeliveryGenerationUnavailableError();
         }
+      };
+      readCurrent = () => {
+        assertSourceCurrent();
         checkEntry(retained?.readCurrent());
+      };
+      prepareRead = () => {
+        assertSourceCurrent();
+        return retained?.prepareRead()?.then(assertSourceCurrent);
       };
     }
     const assertCurrent = (delivery = false) => {
@@ -339,6 +372,9 @@ async function prepareSessionGenerationLease(
         throw failure;
       }
     };
+    for (let pending = prepareRead(); pending; pending = prepareRead()) {
+      await pending;
+    }
     assertCurrent();
     if (onRevoked) {
       let checkedPublications = publications;
@@ -357,7 +393,12 @@ async function prepareSessionGenerationLease(
         }),
       );
     }
-    return { assertCurrent, assertDeliveryCurrent: () => assertCurrent(true), release };
+    return {
+      assertCurrent,
+      assertDeliveryCurrent: () => assertCurrent(true),
+      prepareRead,
+      release,
+    };
   } catch (error) {
     release();
     if (
@@ -372,8 +413,8 @@ async function prepareSessionGenerationLease(
 
 /** Session lifecycle owners compose these facts with their own admitted mutation authority. */
 export async function prepareSessionGenerationFacts(input: SessionGenerationFacts) {
-  const { assertCurrent, release } = await prepareSessionGenerationLease(input);
-  return { assertCurrent, release };
+  const { assertCurrent, prepareRead, release } = await prepareSessionGenerationLease(input);
+  return { assertCurrent, prepareRead, release };
 }
 
 /** Stable cron roots retain their admitted run; exact-run keys already name one generation. */

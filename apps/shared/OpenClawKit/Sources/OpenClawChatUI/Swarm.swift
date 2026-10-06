@@ -322,7 +322,7 @@ extension OpenClawChatViewModel {
             return
         }
         do {
-            let enabled = try await routeLease.isEnabled(sessionKey: session.key)
+            let enabled = try await routeLease.isEnabled(session.key)
             guard isCurrent() else { return }
             self.swarmEnabled = enabled
             guard enabled else {
@@ -336,8 +336,10 @@ extension OpenClawChatViewModel {
                 self.updateSwarmProjection()
             }
             let rosterRead = self.sidebarData?.beginRead()
-            let rows = try await routeLease.listChildSessions(parentKey: session.key)
+            let result = try await routeLease.listChildSessions(session.key)
             guard isCurrent() else { return }
+            // iOS and macOS Swarm keep showing partial rows; only sidebar hydration uses completeness for retry UI.
+            let rows = result.rows
             if let owner = self.sidebarData, let rosterRead {
                 self.swarmRowIDs = owner.receive(rows, read: rosterRead)
             } else if self.sidebarData == nil {

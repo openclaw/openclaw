@@ -1,8 +1,8 @@
 // Matrix tests cover logger plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConsoleLogger, setMatrixConsoleLogging } from "./logger.js";
+import { LogService, setMatrixConsoleLogging } from "./logger.js";
 
-describe("ConsoleLogger", () => {
+describe("Matrix logging", () => {
   afterEach(() => {
     setMatrixConsoleLogging(false);
     vi.restoreAllMocks();
@@ -10,9 +10,9 @@ describe("ConsoleLogger", () => {
 
   it("redacts sensitive tokens in emitted log messages", () => {
     setMatrixConsoleLogging(true);
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    new ConsoleLogger().error(
+    LogService.warn(
       "MatrixHttpClient",
       "Authorization: Bearer 123456:abcdefghijklmnopqrstuvwxyzABCDEFG",
     );

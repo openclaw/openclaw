@@ -282,4 +282,109 @@ describe("chat pane read markers", () => {
       { agentId: "main", expectedMarkedUnreadAt: 20 },
     );
   });
+
+  describe("hidden runs folded into the parent", () => {
+    const parentKey = "agent:main:current";
+    const parent: GatewaySessionRow = {
+      key: parentKey,
+      kind: "direct",
+      updatedAt: 10,
+      unread: false,
+    };
+    const run = (name: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
+      key: `agent:main:subagent:${name}`,
+      kind: "direct",
+      spawnedBy: parentKey,
+      updatedAt: 20,
+      status: "done",
+      unread: true,
+      ...extra,
+    });
+
+    function createParentPane(rows: GatewaySessionRow[]) {
+      const pane = createReadMarkerPane({});
+      pane.state.sessionsResult = sessionsResult([parent, ...rows], 20);
+      return pane;
+    }
+
+    it("acknowledges unread hidden runs when the parent is already read", () => {
+      const nested = run("nested", { spawnedBy: "agent:main:subagent:done" });
+      const { pane, patch } = createParentPane([run("done"), nested]);
+
+      pane.markSessionRead(parent);
+      pane.markSessionRead(parent);
+
+      expect(patch.mock.calls).toEqual([
+        [
+          "agent:main:subagent:done",
+          { unread: false },
+          { agentId: "main", expectedMarkedUnreadAt: null },
+        ],
+        [nested.key, { unread: false }, { agentId: "main", expectedMarkedUnreadAt: null }],
+      ]);
+    });
+
+    it("leaves persistent children, read runs, failures, and manual markers unread", () => {
+      const { pane, patch } = createParentPane([
+        {
+          key: "agent:main:dashboard:child",
+          kind: "direct",
+          parentSessionKey: parentKey,
+          spawnedBy: parentKey,
+          updatedAt: 20,
+          unread: true,
+        },
+        run("read", { unread: false }),
+        run("failed", { status: "failed" }),
+        run("marked", { markedUnreadAt: 15 }),
+      ]);
+
+      pane.markSessionRead(parent);
+
+      expect(patch).not.toHaveBeenCalled();
+    });
+
+    it("acknowledges newer run activity only on a later read", () => {
+      const { pane, state, patch } = createParentPane([run("done", { unread: false })]);
+
+      pane.markSessionRead(parent);
+      expect(patch).not.toHaveBeenCalled();
+
+      state.sessionsResult = sessionsResult([parent, run("done", { updatedAt: 30 })], 30);
+      pane.markSessionRead(parent);
+
+      expect(patch).toHaveBeenCalledOnce();
+      expect(patch).toHaveBeenCalledWith(
+        "agent:main:subagent:done",
+        { unread: false },
+        { agentId: "main", expectedMarkedUnreadAt: null },
+      );
+    });
+
+    it.each([
+      { code: ErrorCodes.UNAVAILABLE, calls: 2 },
+      { code: ErrorCodes.INVALID_REQUEST, calls: 1 },
+    ])(
+      "retries a hidden run after a $code failure only when transient",
+      async ({ code, calls }) => {
+        const { pane, patch } = createParentPane([run("done")]);
+        patch.mockRejectedValueOnce(new GatewayRequestError({ code, message: "ack failed" }));
+
+        pane.markSessionRead(parent);
+        await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
+        await Promise.resolve();
+        pane.markSessionRead(parent);
+
+        expect(patch).toHaveBeenCalledTimes(calls);
+      },
+    );
+
+    it("does not acknowledge hidden runs from a parent the caller only views", () => {
+      const { pane, patch } = createParentPane([run("done")]);
+
+      pane.markSessionRead({ ...parent, visibility: "shared", sharingRole: "viewer" });
+
+      expect(patch).not.toHaveBeenCalled();
+    });
+  });
 });

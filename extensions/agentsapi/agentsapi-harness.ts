@@ -1,15 +1,28 @@
 import {
   abortAndDrainAgentHarnessRun,
+  embeddedAgentLog,
+  resolveAgentExecutorController,
   AgentHarnessPreflightError,
+  AgentHarnessSessionCleanupError,
   AgentHarnessSessionSupersededError,
+  formatErrorMessage,
   toolPolicy,
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { captureNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import {
+  combineNativeSessionBindingAuthority,
+  createNativeSessionBindingAuthority,
+  prepareNativeSessionGenerationAuthority,
+  wrapNativeSessionDeletionMutation,
+} from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
-import { createAgentsApiBindings } from "./agentsapi-bindings.js";
+import { createAgentsApiBindings, type AgentsApiBinding } from "./agentsapi-bindings.js";
+import { AgentsApiClient } from "./agentsapi-client.js";
+import { retireAgentsApiExecutor } from "./agentsapi-environment.js";
 import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
 import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 
@@ -30,8 +43,58 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
   const runningSessions = new Map<string, number>();
   const isolatedRuns = new Map<AbortController, Promise<unknown>>();
   const promptHistories: AgentsApiPromptHistories = new WeakMap();
+  const preparedNativeCleanup = new Map<
+    string,
+    {
+      nativeSessionId: string;
+      configFingerprint: string;
+      settle: (assertCleanupCurrent: () => void) => Promise<void>;
+    }
+  >();
   let bindings: ReturnType<typeof createAgentsApiBindings> | undefined;
-  const getBindings = () => (bindings ??= createAgentsApiBindings(runtime));
+  const getBindings = () =>
+    (bindings ??= createAgentsApiBindings(runtime, {
+      settle: async (localSessionId, binding, assertCleanupCurrent) => {
+        let prepared = preparedNativeCleanup.get(localSessionId);
+        if (
+          prepared?.nativeSessionId !== binding.sessionId ||
+          prepared.configFingerprint !== binding.configFingerprint
+        ) {
+          assertCurrent();
+          assertCleanupCurrent();
+          // Reacquire agent-scoped auth after restart without persisting credentials
+          // or validating the new configuration against the session being removed.
+          const config = getRuntimeConfig();
+          const agentId = binding.executor!.agentId;
+          const auth = await resolveApiKeyForProvider({
+            provider: "openai",
+            cfg: config,
+            agentDir: runtime.agent.resolveAgentDir(config, agentId),
+            workspaceDir: runtime.agent.resolveAgentWorkspaceDir(config, agentId),
+            signal: AbortSignal.timeout(30_000),
+          });
+          assertCurrent();
+          assertCleanupCurrent();
+          if (auth.mode !== "api-key" || !auth.apiKey?.trim()) {
+            throw new Error(
+              "Agents API session cleanup requires an OpenAI API key; restore API-key authentication and retry reset or deletion",
+            );
+          }
+          prepared = prepareNativeCleanup(localSessionId, binding, auth.apiKey);
+        }
+        // Losing the binding before native settlement would orphan active work.
+        try {
+          await prepared.settle(assertCleanupCurrent);
+        } catch (error) {
+          // Retry with current authentication after an operator repairs access.
+          preparedNativeCleanup.delete(localSessionId);
+          throw error;
+        }
+      },
+      retire: async (_localSessionId, binding, assertCleanupCurrent) => {
+        await retireExecutor(binding, assertCleanupCurrent);
+      },
+    }));
   const assertCurrent = () => {
     if (disposed) {
       throw new Error("Agents API harness is disposed");
@@ -102,7 +165,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
         throw new Error("Agents API harness is closing");
       }
       const target = validateAgentsApiInput(params);
-      const authority = captureNativeSessionGenerationAuthority({
+      const captured = await prepareNativeSessionGenerationAuthority({
         target,
         config: params.config,
         storePath: target.storePath,
@@ -115,12 +178,13 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
             `Agents API session generation is no longer current: ${sessionId}`,
           ),
       });
-      authority.assertCurrent();
+      const authority = captured.authority;
+      authority.assertLegacyCurrent();
       runningSessions.set(params.sessionId, (runningSessions.get(params.sessionId) ?? 0) + 1);
       try {
         return await getBindings().withSession(
           params.sessionId,
-          () => authority.assertCurrent(),
+          () => authority.assertLegacyCurrent(),
           (binding, bind, assertLeaseCurrent) => {
             if (closing) {
               throw new Error("Agents API harness is closing");
@@ -129,10 +193,10 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
               params,
               binding,
               bind,
-              () => {
-                authority.assertCurrent();
-                assertLeaseCurrent();
-              },
+              combineNativeSessionBindingAuthority(
+                authority,
+                createNativeSessionBindingAuthority([], assertLeaseCurrent),
+              ).assertLegacyCurrent,
               () => {
                 assertCurrent();
                 assertLeaseCurrent();
@@ -140,6 +204,13 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
               target,
               () => runtime.config.current().plugins?.entries?.agentsapi?.config,
               promptHistories,
+              (nativeBinding, apiKey) =>
+                prepareNativeCleanup(params.sessionId, nativeBinding, apiKey),
+              (failedBinding) =>
+                retireExecutor(failedBinding, () => {
+                  assertCurrent();
+                  assertLeaseCurrent();
+                }),
             );
           },
         );
@@ -153,22 +224,62 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
       }
     },
     reset: async (params) => {
-      assertCurrent();
-      if (params.sessionId) {
-        await getBindings().reset(params.sessionId, assertCurrent);
+      try {
+        assertCurrent();
+        if (params.sessionId) {
+          if (
+            runningSessions.has(params.sessionId) ||
+            preparedNativeCleanup.has(params.sessionId)
+          ) {
+            await drainForExecutorCleanup(params.sessionId);
+            assertCurrent();
+          }
+          await getBindings().reset(params.sessionId, assertCurrent);
+          preparedNativeCleanup.delete(params.sessionId);
+        }
+      } catch (error) {
+        // Native ownership is required cleanup, not a best-effort reset observer.
+        throw new AgentHarnessSessionCleanupError(formatErrorMessage(error), { cause: error });
       }
     },
-    withSessionDeletion: (params, run) =>
-      getBindings().withSessionDeletion(
-        {
-          ...params,
-          assertCurrent: () => {
-            params.assertCurrent();
-            assertCurrent();
+    withSessionDeletion: async (params, run) => {
+      if (runningSessions.has(params.sessionId) || preparedNativeCleanup.has(params.sessionId)) {
+        await drainForExecutorCleanup(params.sessionId);
+        params.assertCurrent();
+        assertCurrent();
+      }
+      let committed = false;
+      try {
+        return await getBindings().withSessionDeletion(
+          {
+            ...params,
+            assertCurrent: () => {
+              params.assertCurrent();
+              assertCurrent();
+            },
           },
-        },
-        run,
-      ),
+          (mutation) =>
+            run(
+              wrapNativeSessionDeletionMutation(mutation, {
+                assertCurrent: () => {
+                  params.assertCurrent();
+                  assertCurrent();
+                },
+                committed: () => {
+                  committed = true;
+                },
+                rolledBack: () => {
+                  committed = false;
+                },
+              }),
+            ),
+        );
+      } finally {
+        if (committed) {
+          preparedNativeCleanup.delete(params.sessionId);
+        }
+      }
+    },
     dispose: async () => {
       closing = true;
       for (const controller of isolatedRuns.keys()) {
@@ -187,8 +298,78 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
       } else {
         disposed = true;
       }
+      // A Gateway restart drops credential handles, but retains the executor and
+      // canonical native bindings so the next input can reconcile them.
+      preparedNativeCleanup.clear();
     },
   };
+
+  async function retireExecutor(binding: AgentsApiBinding, assertCleanupCurrent: () => void) {
+    const executor = binding.executor;
+    if (!executor) {
+      return;
+    }
+    await attemptExecutorCleanup(
+      () =>
+        retireAgentsApiExecutor(
+          resolveAgentExecutorController(binding.executorControllerPluginId!),
+          executor,
+          assertCleanupCurrent,
+        ),
+      assertCleanupCurrent,
+    );
+  }
+
+  async function attemptExecutorCleanup(
+    run: () => Promise<void>,
+    assertCleanupCurrent: () => void,
+  ) {
+    try {
+      assertCleanupCurrent();
+      await run();
+      assertCleanupCurrent();
+    } catch (error) {
+      // Lost authority still stops mutation; an unused remote child must not
+      // prevent the user from resetting or deleting the conversation.
+      assertCleanupCurrent();
+      embeddedAgentLog.warn("Agents API executor cleanup was not acknowledged", { error });
+    }
+  }
+
+  async function drainForExecutorCleanup(sessionId: string) {
+    const result = await abortAndDrainAgentHarnessRun({ sessionId, settleMs: 95_000 });
+    assertCurrent();
+    if ((result.aborted && !result.drained) || runningSessions.has(sessionId)) {
+      throw new Error(
+        "Agents API session is still settling; retry reset or deletion after its active turn finishes",
+      );
+    }
+  }
+
+  function prepareNativeCleanup(localSessionId: string, binding: AgentsApiBinding, apiKey: string) {
+    assertCurrent();
+    const prepared = {
+      nativeSessionId: binding.sessionId,
+      configFingerprint: binding.configFingerprint,
+      settle: async (assertCleanupCurrent: () => void) => {
+        const assertCleanup = () => {
+          assertCurrent();
+          assertCleanupCurrent();
+        };
+        assertCleanup();
+        const client = new AgentsApiClient(apiKey, assertCleanup);
+        const signal = AbortSignal.timeout(30_000);
+        const session = await client.session(binding.sessionId, signal);
+        assertCleanup();
+        if (session.status !== "idle" && session.status !== "failed") {
+          await client.cancel(binding.sessionId, signal);
+          assertCleanup();
+        }
+      },
+    };
+    preparedNativeCleanup.set(localSessionId, prepared);
+    return prepared;
+  }
 }
 
 function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
@@ -202,17 +383,23 @@ function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
   ) {
     throw new AgentHarnessPreflightError(
       "Agents API cannot enforce this run's restrictions on native shell, file, or web-search tools.",
-      { scope: "harness" },
+      {
+        scope: "harness",
+        userMessage:
+          "Agents API cannot run with this chat's tool restrictions because it cannot enforce them on native tools. Choose a harness that supports these restrictions or update the tool settings.",
+      },
     );
   }
   const target = requireAgentsApiSessionTarget(params);
   if (!params.resolvedApiKey) {
     throw new Error("Agents API MVP requires an OpenAI API key");
   }
-  if (params.images?.length || params.sandbox) {
-    throw new Error(
-      "Agents API MVP supports text in its selected execution environment only; images and Gateway sandbox placement are unsupported",
-    );
+  if (params.sandbox) {
+    throw new AgentHarnessPreflightError("Agents API does not support Gateway sandbox placement.", {
+      scope: "harness",
+      userMessage:
+        "Agents API cannot run in the configured Gateway sandbox. Choose a harness that supports Gateway sandbox placement before retrying.",
+    });
   }
   if (params.contextEngine && params.contextEngine.info.id !== "legacy") {
     throw new Error("Agents API MVP currently supports only the default legacy context engine");

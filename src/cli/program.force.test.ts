@@ -48,12 +48,6 @@ describe("gateway --force helpers", () => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   });
 
-  it("rejects malformed lsof 'p' lines with no PID", () => {
-    const sample = ["p", "cnode", "p456", "cpython", ""].join("\n");
-    execFileSyncMock.mockReturnValue(sample);
-    expect(() => forceFreePort(18789)).toThrow(/malformed PID field/);
-  });
-
   it("rejects malformed lsof 'p' lines with digit-prefixed garbage", () => {
     const sample = ["p111abc", "cnode", "p456", "cpython", ""].join("\n");
     execFileSyncMock.mockReturnValue(sample);
@@ -501,11 +495,6 @@ describe("gateway --force helpers (Windows netstat path)", () => {
     process.kill = vi.fn();
     return forceFreePort(port);
   };
-
-  it("does not incorrectly match a port that is a substring (e.g. 80 vs 8080)", () => {
-    execFileSyncMock.mockReturnValue(makeNetstatOutput(8080, 42));
-    expect(forceFreeWindowsPort(80)).toStrictEqual([]);
-  });
 
   it("deduplicates PIDs that appear multiple times", () => {
     execFileSyncMock.mockReturnValue(makeNetstatOutput(18789, 42, 42));

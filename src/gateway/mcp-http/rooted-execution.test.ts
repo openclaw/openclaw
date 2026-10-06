@@ -94,7 +94,7 @@ async function withRootedCli(
   const root = path.join(parent, "workshop");
   const previousConfig = getRuntimeConfigSnapshot();
   const config: OpenClawConfig = {
-    agents: { defaults: { workspace: parent }, entries: { main: { default: true } } },
+    agents: { defaults: { workspace: parent }, entries: { main: {} } },
     plugins: { enabled: false },
     tools: { profile: "full", fs: { workspaceOnly: false } },
   };

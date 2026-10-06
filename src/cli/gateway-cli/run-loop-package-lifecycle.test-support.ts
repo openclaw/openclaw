@@ -4,7 +4,13 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import {
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
@@ -20,6 +26,13 @@ import type { UpdateRespawnFixtures } from "./run-loop.test-support.js";
 
 /** Real package staging, helper IPC and run-loop Stop share one held script. */
 export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixtures): void {
+  let receipts: FixtureReceiptChannel;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts?.close();
+  });
   it.runIf(fixtures.originalPlatformDescriptor?.value !== "win32").for([
     { signal: "SIGINT", uncertain: false, closeFailure: false, phase: "staging" },
     { signal: "SIGTERM", uncertain: true, closeFailure: false, phase: "staging" },
@@ -59,7 +72,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
         JSON.stringify({ name: "openclaw", version: "1.0.0", type: "module" }),
       );
       await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
-      const entrypoint = await writePackageLifecycleFixture(root, control);
+      const entrypoint = await writePackageLifecycleFixture(root, control, receipts.endpoint);
       try {
         context.signal.throwIfAborted();
         const work = withEnvAsync(
@@ -72,6 +85,10 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
           },
           async () => {
             const server = createServer((socket) => socket.end("serving"));
+            const closeServer = () =>
+              new Promise<void>((resolve) => {
+                server.close(() => resolve());
+              });
             server.listen(0, "127.0.0.1");
             await once(server, "listening");
             const address = server.address();
@@ -101,9 +118,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
               await fixtures.withIsolatedSignals(async ({ captureSignal }) => {
                 const close = vi.fn(async () => {
                   if (server.listening) {
-                    await new Promise<void>((resolve) => {
-                      server.close(() => resolve());
-                    });
+                    await closeServer();
                   }
                   if (closeFailure) {
                     throw new Error("fixture Gateway close failed");
@@ -310,7 +325,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     // The RPC caller already cancels when its transfer is refused.
                     // Process closure and lease absence establish the joined result.
                     await handoff.cancelManagedServiceUpdateHandoff(identity);
-                    await helper.waitForClose();
+                    await withinTest(helper.waitForClose(), context.signal);
                     expect(await withTimeout(exited, 15000)).toBe(0);
                     expect(store.read(root).kind).toBe("absent");
                     expect(fixtures.respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
@@ -318,11 +333,17 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     return;
                   }
                   expect(await handoff.transferManagedServiceUpdateHandoff(identity)).toBe(true);
-                  await expect
-                    .poll(() => fsSync.existsSync(path.join(control, "script-entered")), {
-                      timeout: 15000,
-                    })
-                    .toBe(true);
+                  // The script writes the marker before reporting on its separate receipt
+                  // socket; helper close can overtake that socket's final delivery.
+                  await withinTest(
+                    Promise.race([
+                      receipts.waitFor(control, "script-entered"),
+                      helper.waitForClose().then(() => {
+                        expect(fsSync.existsSync(path.join(control, "script-entered"))).toBe(true);
+                      }),
+                    ]),
+                    context.signal,
+                  );
                   lifecycleScriptPid = Number(
                     await fs.readFile(path.join(control, "script-entered"), "utf8"),
                   );
@@ -382,9 +403,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                         persistedReads + 1,
                       "persisted SIGTERM restart was not consumed",
                     );
-                    await new Promise<void>((resolve) => {
-                      setImmediate(resolve);
-                    });
+                    await setImmediate();
                     expect(close).not.toHaveBeenCalled();
                     expect(runtime.exit).not.toHaveBeenCalled();
                     const localReads = fixtures.consumeGatewayRestartIntent.mock.calls.length;
@@ -398,9 +417,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                         fixtures.consumeGatewayRestartIntent.mock.calls.length === localReads + 1,
                       "same-owner SIGUSR2 restart was not consumed",
                     );
-                    await new Promise<void>((resolve) => {
-                      setImmediate(resolve);
-                    });
+                    await setImmediate();
                     expect(close).not.toHaveBeenCalled();
                     expect(runtime.exit).not.toHaveBeenCalled();
                     expect(server.listening).toBe(true);
@@ -442,7 +459,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                       identity,
                     );
                     expect(fsSync.existsSync(path.join(control, "before-activate"))).toBe(true);
-                    await helper.waitForClose();
+                    await withinTest(helper.waitForClose(), context.signal);
                   } else {
                     await withTimeout(exited, handoffParams.timeoutMs!);
                     expect(fsSync.existsSync(path.join(control, "outcome.json"))).toBe(true);
@@ -450,11 +467,8 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   await competing;
                   await expect.poll(() => store.read(root).kind, { timeout: 15000 }).toBe("absent");
                   const { isPidAlive } = await import("../../shared/pid-alive.js");
-                  await expect
-                    .poll(() => prepared.pid !== undefined && isPidAlive(prepared.pid), {
-                      timeout: 15000,
-                    })
-                    .toBe(false);
+                  await withinTest(helper.waitForClose(), context.signal);
+                  expect(prepared.pid !== undefined && isPidAlive(prepared.pid)).toBe(false);
                   expect(isPidAlive(lifecycleScriptPid)).toBe(false);
                   expect(competingScripts).toBe(0);
                   expect(fsSync.existsSync(path.join(control, "script-settled"))).toBe(true);
@@ -563,9 +577,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   });
                   await settle(async () => {
                     if (server.listening) {
-                      await new Promise<void>((resolve) => {
-                        server.close(() => resolve());
-                      });
+                      await closeServer();
                     }
                   });
                   await settle(() => gatewayLock.current?.release());
@@ -603,9 +615,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
               });
             } finally {
               if (server.listening) {
-                await new Promise<void>((resolve) => {
-                  server.close(() => resolve());
-                });
+                await closeServer();
               }
               await gatewayLock.current?.release();
             }

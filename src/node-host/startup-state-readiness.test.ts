@@ -99,10 +99,13 @@ const retiredStores = [
   },
 ];
 
-describe.each([
+const entrypoints = [
   { name: "node runner", run: () => runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 }) },
   { name: "JSONL worker", run: runNodeHostWorker },
-])("$name state readiness", ({ run }) => {
+];
+const run = entrypoints[0]!.run;
+
+describe("node-host state readiness", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
       closeOpenClawStateDatabaseForTest();
@@ -134,153 +137,137 @@ describe.each([
     return { sourcePath, raw };
   }
 
-  it("awaits SQLite runtime admission before opening native state", async () => {
-    const { stateDir } = useStateDir();
-    const entered = createDeferredCore();
-    const decided = createDeferredCore();
-    fixture.initializeSqlite.mockImplementationOnce(() => {
-      entered.resolve();
-      return decided.promise;
-    });
-    const starting = run();
-    const outcome = expect(starting).rejects.toBe(fixture.admitted);
-    try {
-      await Promise.race([entered.promise, starting]);
-      expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
-      expect(fixture.configure).not.toHaveBeenCalled();
-      expect(fixture.prepare).not.toHaveBeenCalled();
-    } finally {
-      decided.resolve();
-      await outcome;
-    }
-    expect(fixture.prepare).toHaveBeenCalledOnce();
-  });
-
-  it.each(retiredStores)("leaves $name for Doctor before preparing capabilities", async (store) => {
-    const { env, stateDir } = useStateDir();
-    const contents = store.contents();
-    const { sourcePath, raw } = writeSource(stateDir, store.relativePath, contents);
-
-    await expect(run()).rejects.toThrow(/openclaw doctor --fix/);
-
-    expect(fs.readFileSync(sourcePath, "utf8")).toBe(raw);
-    expect(fixture.configure).not.toHaveBeenCalled();
-    expect(fixture.prepare).not.toHaveBeenCalled();
-    const { db } = openOpenClawStateDatabase({ env });
-    expect(db.prepare("SELECT count(*) AS count FROM device_identities").get()).toEqual({
-      count: 0,
-    });
-    expect(db.prepare("SELECT count(*) AS count FROM device_auth_tokens").get()).toEqual({
-      count: 0,
-    });
-    expect(readExecApprovalsConfigRow(db)).toBeUndefined();
-
-    const repaired = await store.repair(env, stateDir);
-    expect(repaired.warnings).toEqual([]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    await expect(run()).rejects.toBe(fixture.admitted);
-    expect(fixture.prepare).toHaveBeenCalledOnce();
-    if (store.name === "device auth") {
-      expect(readDeviceAuthTokenForTest({ deviceId: "device-1", role: "node", env })?.token).toBe(
-        "test-legacy-token",
-      );
-    } else if (store.name === "device identity") {
-      expect(contents).toMatchObject({ deviceId: loadDeviceIdentityIfPresent({ env })?.deviceId });
-    } else {
-      expect(JSON.parse(readExecApprovalsConfigRow(db)!.raw_json)).toMatchObject({
-        defaults: { security: "deny" },
+  it.each(entrypoints)(
+    "$name awaits SQLite admission without creating identity or exec authority",
+    async ({ run: start }) => {
+      const { env, stateDir } = useStateDir();
+      const entered = createDeferredCore();
+      const decided = createDeferredCore();
+      fixture.initializeSqlite.mockImplementationOnce(() => {
+        entered.resolve();
+        return decided.promise;
       });
-    }
-  });
+      const starting = start();
+      const outcome = expect(starting).rejects.toBe(fixture.admitted);
+      try {
+        await Promise.race([entered.promise, starting]);
+        expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
+        expect(fixture.configure).not.toHaveBeenCalled();
+        expect(fixture.prepare).not.toHaveBeenCalled();
+      } finally {
+        decided.resolve();
+        await outcome;
+      }
+      expect(fixture.prepare).toHaveBeenCalledOnce();
+      expect(loadDeviceIdentityIfPresent({ env })).toBeNull();
+      expect(readExecApprovalsConfigRow(openOpenClawStateDatabase({ env }).db)).toBeUndefined();
+    },
+  );
 
   it.each([
-    "identity/device.json.doctor-importing",
-    "identity/device.json.native-importing",
-    "exec-approvals.json.doctor-importing",
-  ])("leaves pending claim %s untouched before creating authority", async (relativePath) => {
-    const { env, stateDir } = useStateDir();
-    const { sourcePath, raw } = writeSource(stateDir, relativePath, { pending: true });
+    ...retiredStores.map((store) => ({ relativePath: store.relativePath, store })),
+    ...[
+      "identity/device.json.doctor-importing",
+      "identity/device.json.native-importing",
+      "exec-approvals.json.doctor-importing",
+    ].map((relativePath) => ({ relativePath, store: undefined })),
+  ])(
+    "leaves $relativePath for Doctor before preparing capabilities",
+    async ({ relativePath, store }) => {
+      const { env, stateDir } = useStateDir();
+      const contents = store?.contents() ?? { pending: true };
+      const { sourcePath, raw } = writeSource(stateDir, relativePath, contents);
+      // Both entrypoints must reject legacy state; the shared readiness owner owns the matrix.
+      const start = store?.name === "device identity" ? runNodeHostWorker : run;
 
-    await expect(run()).rejects.toThrow(/openclaw doctor --fix/);
+      await expect(start()).rejects.toThrow(/openclaw doctor --fix/);
 
-    expect(fs.readFileSync(sourcePath, "utf8")).toBe(raw);
-    expect(fixture.configure).not.toHaveBeenCalled();
-    expect(fixture.prepare).not.toHaveBeenCalled();
-    const { db } = openOpenClawStateDatabase({ env });
-    expect(db.prepare("SELECT count(*) AS count FROM device_identities").get()).toEqual({
-      count: 0,
-    });
-    expect(readExecApprovalsConfigRow(db)).toBeUndefined();
-  });
-
-  it("admits fresh state without creating a device identity or exec authority", async () => {
-    const { env } = useStateDir();
-
-    await expect(run()).rejects.toBe(fixture.admitted);
-
-    expect(fixture.prepare).toHaveBeenCalledOnce();
-    expect(loadDeviceIdentityIfPresent({ env })).toBeNull();
-    expect(readExecApprovalsConfigRow(openOpenClawStateDatabase({ env }).db)).toBeUndefined();
-  });
-
-  it("admits managed runtime state without attempting schema bootstrap", async () => {
-    const { env, stateDir } = useStateDir();
-    openOpenClawStateDatabase({ env });
-    closeOpenClawStateDatabaseForTest();
-    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-
-    await expect(withExistingOpenClawStateSchema({ path: databasePath }, run)).rejects.toBe(
-      fixture.admitted,
-    );
-
-    expect(fixture.prepare).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the canonical identity authoritative and leaves divergent retired bytes for Doctor", async () => {
-    const { env, stateDir } = useStateDir();
-    const canonical = loadOrCreateDeviceIdentity({ env });
-    const { sourcePath, raw } = writeSource(stateDir, "identity/device.json", {
-      version: 1,
-      ...generateStoredDeviceIdentity(1_700_000_000_000),
-    });
-
-    await expect(run()).rejects.toBe(fixture.admitted);
-
-    expect(fs.readFileSync(sourcePath, "utf8")).toBe(raw);
-    expect(loadDeviceIdentityIfPresent({ env })).toEqual(canonical);
-  });
-
-  it("completes native version-zero bootstrap before read-only identity admission", async () => {
-    const { env, stateDir } = useStateDir();
-    const expected = generateStoredDeviceIdentity(1_700_000_000_000);
-    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-    seedMacNodeWorkerProofState(databasePath);
-    const seed = new DatabaseSync(databasePath);
-    seed
-      .prepare("INSERT INTO device_identities VALUES (?, ?, ?, ?, ?, ?)")
-      .run(
-        "primary",
-        expected.deviceId,
-        expected.publicKeyPem,
-        expected.privateKeyPem,
-        expected.createdAtMs,
-        expected.createdAtMs,
-      );
-    seed.close();
-
-    await expect(run()).rejects.toBe(fixture.admitted);
-
-    expect(loadDeviceIdentityIfPresent({ env })?.deviceId).toBe(expected.deviceId);
-    const verified = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(verified.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      expect(fs.readFileSync(sourcePath, "utf8")).toBe(raw);
+      expect(fixture.configure).not.toHaveBeenCalled();
+      expect(fixture.prepare).not.toHaveBeenCalled();
+      const { db } = openOpenClawStateDatabase({ env });
+      expect(db.prepare("SELECT count(*) AS count FROM device_identities").get()).toEqual({
+        count: 0,
       });
-      expect(JSON.parse(readExecApprovalsConfigRow(verified)!.raw_json)).toMatchObject({
-        defaults: { security: "deny" },
+      expect(db.prepare("SELECT count(*) AS count FROM device_auth_tokens").get()).toEqual({
+        count: 0,
       });
-    } finally {
-      verified.close();
-    }
-  });
+      expect(readExecApprovalsConfigRow(db)).toBeUndefined();
+
+      if (!store) {
+        return;
+      }
+      const repaired = await store.repair(env, stateDir);
+      expect(repaired.warnings).toEqual([]);
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      await expect(start()).rejects.toBe(fixture.admitted);
+      expect(fixture.prepare).toHaveBeenCalledOnce();
+      if (store.name === "device auth") {
+        expect(readDeviceAuthTokenForTest({ deviceId: "device-1", role: "node", env })?.token).toBe(
+          "test-legacy-token",
+        );
+      } else if (store.name === "device identity") {
+        expect(contents).toMatchObject({
+          deviceId: loadDeviceIdentityIfPresent({ env })?.deviceId,
+        });
+      } else {
+        expect(JSON.parse(readExecApprovalsConfigRow(db)!.raw_json)).toMatchObject({
+          defaults: { security: "deny" },
+        });
+      }
+    },
+  );
+
+  it.each(["managed", "canonical", "native"] as const)(
+    "admits %s state without replacing its authority",
+    async (mode) => {
+      const { env, stateDir } = useStateDir();
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      if (mode === "managed") {
+        openOpenClawStateDatabase({ env });
+        closeOpenClawStateDatabaseForTest();
+        await expect(withExistingOpenClawStateSchema({ path: databasePath }, run)).rejects.toBe(
+          fixture.admitted,
+        );
+      } else if (mode === "canonical") {
+        const canonical = loadOrCreateDeviceIdentity({ env });
+        const { sourcePath, raw } = writeSource(stateDir, "identity/device.json", {
+          version: 1,
+          ...generateStoredDeviceIdentity(1_700_000_000_000),
+        });
+        await expect(run()).rejects.toBe(fixture.admitted);
+        expect(fs.readFileSync(sourcePath, "utf8")).toBe(raw);
+        expect(loadDeviceIdentityIfPresent({ env })).toEqual(canonical);
+      } else {
+        const expected = generateStoredDeviceIdentity(1_700_000_000_000);
+        seedMacNodeWorkerProofState(databasePath);
+        const seed = new DatabaseSync(databasePath);
+        seed
+          .prepare("INSERT INTO device_identities VALUES (?, ?, ?, ?, ?, ?)")
+          .run(
+            "primary",
+            expected.deviceId,
+            expected.publicKeyPem,
+            expected.privateKeyPem,
+            expected.createdAtMs,
+            expected.createdAtMs,
+          );
+        seed.close();
+        await expect(run()).rejects.toBe(fixture.admitted);
+        expect(loadDeviceIdentityIfPresent({ env })?.deviceId).toBe(expected.deviceId);
+        const verified = new DatabaseSync(databasePath, { readOnly: true });
+        try {
+          expect(verified.prepare("PRAGMA user_version").get()).toEqual({
+            user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+          });
+          expect(JSON.parse(readExecApprovalsConfigRow(verified)!.raw_json)).toMatchObject({
+            defaults: { security: "deny" },
+          });
+        } finally {
+          verified.close();
+        }
+      }
+      expect(fixture.prepare).toHaveBeenCalledOnce();
+    },
+  );
 });

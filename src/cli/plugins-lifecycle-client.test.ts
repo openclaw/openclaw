@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -292,6 +293,26 @@ describe("plugin lifecycle CLI transport", () => {
       );
     },
   );
+
+  it("refuses capability consent when inspection has no artifact review token", async () => {
+    mocks.call
+      .mockRejectedValueOnce(
+        Object.assign(new Error("consent required"), {
+          details: buildCapabilityConsentErrorDetails({
+            pluginId: "demo",
+            reviewToken: "a".repeat(64),
+          }),
+        }),
+      )
+      .mockResolvedValueOnce({ plugin: { id: "demo", name: "Demo" }, declared: {}, grants: {} });
+    const consent = vi.fn();
+    const gateway = await resolvePluginLifecycleGateway();
+    await expect(
+      gateway?.("plugins.setEnabled", { pluginId: "demo", enabled: true }, consent),
+    ).rejects.toThrow("Gateway did not return a capability-consent token");
+    expect(consent).not.toHaveBeenCalled();
+    expect(mocks.call).toHaveBeenCalledTimes(2);
+  });
 
   it.each(["accepted", "declined", "rejected-again", "connection-lost"])(
     "reviews successive batch capabilities without repeating uncertain mutations (%s)",

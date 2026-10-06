@@ -7,17 +7,6 @@ import type { TwitchClientManager } from "./twitch-client.js";
 import type { TwitchAccountConfig } from "./types.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
 
-/**
- * Result from sending a message to Twitch.
- */
-interface SendMessageResult {
-  outcome?: "not_sent";
-  /** The message ID (generated for tracking) */
-  messageId: string;
-  /** Receipt for visible sends; empty when no Twitch message was sent */
-  receipt: MessageReceipt;
-}
-
 function createTwitchSendReceipt(messageId?: string, channel?: string): MessageReceipt {
   return createMessageReceiptFromOutboundResults({
     results: messageId ? [{ channel: "twitch", messageId, conversationId: channel }] : [],
@@ -33,11 +22,11 @@ export async function sendMessageTwitchInternal(params: {
   account: TwitchAccountConfig;
   accountId: string;
   clientManager: TwitchClientManager | undefined;
-}): Promise<SendMessageResult> {
+}) {
   const cleanedText = stripMarkdownForTwitch(params.text);
   if (!cleanedText) {
     return {
-      outcome: "not_sent",
+      outcome: "not_sent" as const,
       messageId: "",
       receipt: createTwitchSendReceipt(),
     };

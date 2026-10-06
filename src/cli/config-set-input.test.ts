@@ -1,9 +1,17 @@
 // Config set input tests cover config value parsing from CLI input and files.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { parseBatchSource, parseConfigSetCurrentExpectation } from "./config-set-input.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  parseBatchSource,
+  parseConfigSetCurrentExpectation,
+  readConfigMutationFileSync,
+} from "./config-set-input.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function withBatchFile<T>(prefix: string, contents: string, run: (batchPath: string) => T): T {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -143,6 +151,45 @@ describe("config set input parsing", () => {
       fs.rmSync(batchPath, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(process.platform === "win32").each(["--file", "--batch-file"] as const)(
+    "rejects a FIFO passed as %s without waiting for a writer",
+    (sourceLabel) => {
+      const fifoPath = path.join(tempDirs.make("openclaw-config-input-fifo-"), "input.pipe");
+      execFileSync("mkfifo", [fifoPath]);
+      const originalOpenSync = fs.openSync;
+      const openSpy = vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+        // Fail instead of hanging the test if a regression opens this FIFO in blocking mode.
+        if (
+          file === fifoPath &&
+          (typeof flags !== "number" || (flags & fs.constants.O_NONBLOCK) === 0)
+        ) {
+          throw new Error("Opening this FIFO would wait for a writer.");
+        }
+        return originalOpenSync(file, flags, mode);
+      });
+      try {
+        expect(() => readConfigMutationFileSync(fifoPath, sourceLabel)).toThrow(
+          `${sourceLabel} must be a regular file: ${fifoPath}. Choose a JSON5 input file and try again.`,
+        );
+      } finally {
+        openSpy.mockRestore();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["--file", "--batch-file"] as const)(
+    "reads a regular-file symlink passed as %s",
+    (sourceLabel) => {
+      const root = tempDirs.make("openclaw-config-input-symlink-");
+      const inputPath = path.join(root, "input.json5");
+      const linkPath = path.join(root, "input-link.json5");
+      const contents = "{ name: '会议', enabled: true }";
+      fs.writeFileSync(inputPath, contents, "utf8");
+      fs.symlinkSync("input.json5", linkPath);
+      expect(readConfigMutationFileSync(linkPath, sourceLabel)).toBe(contents);
+    },
+  );
 
   it("rejects --batch-file payloads above the config mutation limit", () => {
     withBatchFile(

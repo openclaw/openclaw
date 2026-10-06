@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.ts";
 import type { GatewayEventListener } from "../../api/gateway.ts";
 import type {
@@ -187,7 +188,7 @@ function channelSnapshotAllowsScope(
   });
 }
 
-function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = {}): ChannelsState {
+function createInitialChannelsState(snapshot: ChannelGatewaySnapshot): ChannelsState {
   return {
     client: snapshot.client ?? null,
     connected: snapshot.phase === "connected",
@@ -284,14 +285,13 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
   const state = createInitialChannelsState(gateway.snapshot);
   const lifecycle = { whatsappEpoch: 0, pairingEpoch: 0 };
   async function mutateChannelPairing<T>(
-    params: Parameters<ChannelCapability["dismissPairing"]>[0],
+    requestId: string,
     request: (client: ChannelGatewayClient) => Promise<T>,
   ): Promise<{ result: T } | null> {
     const client = state.client;
     if (!client || !state.connected || state.pairingBusyRequestId) {
       return null;
     }
-    const requestId = params.requestId;
     const pairingEpoch = lifecycle.pairingEpoch;
     const isCurrent = () =>
       state.connected &&
@@ -299,14 +299,14 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       lifecycle.pairingEpoch === pairingEpoch &&
       state.pairingBusyRequestId === requestId;
     invalidatePairingRefresh(state);
-    state.pairingBusyRequestId = params.requestId;
+    state.pairingBusyRequestId = requestId;
     state.pairingError = null;
     try {
       const result = await request(client);
       if (!isCurrent()) {
         return null;
       }
-      removePairingRequestFromSnapshot(state, params.requestId);
+      removePairingRequestFromSnapshot(state, requestId);
       invalidatePairingRefresh(state);
       await loadChannelPairing(state, { duringMutation: true });
       return isCurrent() ? { result } : null;
@@ -583,7 +583,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     refreshPairing: () => run(() => loadChannelPairing(state)),
     approvePairing: async (params) => {
       const mutation = await run(() =>
-        mutateChannelPairing(params, (client) =>
+        mutateChannelPairing(params.requestId, (client) =>
           client.request<ChannelsPairingApproveResult>("channels.pairing.approve", params),
         ),
       );
@@ -592,7 +592,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     dismissPairing: async (params) =>
       Boolean(
         await run(() =>
-          mutateChannelPairing(params, (client) =>
+          mutateChannelPairing(params.requestId, (client) =>
             client.request("channels.pairing.dismiss", params),
           ),
         ),
@@ -600,10 +600,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     startWhatsApp: (force, accountId) => runWhatsApp(() => startWhatsAppLogin(force, accountId)),
     waitWhatsApp: (accountId) => runWhatsApp(() => waitWhatsAppLogin(accountId)),
     logoutWhatsApp: (accountId) => runWhatsApp(() => logoutWhatsApp(accountId)),
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       if (disposed) {
         return;

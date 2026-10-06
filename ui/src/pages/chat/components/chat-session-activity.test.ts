@@ -131,9 +131,15 @@ describe("inter-session activity", () => {
     }
     disclosure.open = true;
     disclosure.dispatchEvent(new Event("toggle"));
-    expect(disclosure.querySelector("a[data-session-key]")?.getAttribute("data-session-key")).toBe(
-      sourceKey,
-    );
+    expect(disclosure.querySelectorAll(".chat-reply-attribution")).toHaveLength(1);
+    expect(disclosure.querySelector("summary")?.textContent).not.toContain("2 updates from");
+    expect(disclosure.querySelector("summary")?.textContent).toContain("From");
+    expect(
+      disclosure.querySelector("summary a[data-session-key]")?.getAttribute("data-session-key"),
+    ).toBe(sourceKey);
+    expect(
+      disclosure.querySelector(".chat-session-activity__body .chat-reply-attribution"),
+    ).toBeNull();
     expect(container.textContent).toContain("END first");
     expect(container.textContent).toContain("END second");
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
@@ -209,6 +215,12 @@ describe("inter-session activity", () => {
     );
     expect(container.querySelector<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(true);
     expect(container.textContent).toContain("END search");
+    expect(container.querySelectorAll(".chat-reply-attribution")).toHaveLength(1);
+    const sourceLink = container.querySelector("summary a[data-session-key]");
+    expect(sourceLink).not.toBeNull();
+    const sourceClick = new MouseEvent("click", { bubbles: true, cancelable: true });
+    sourceLink?.dispatchEvent(sourceClick);
+    expect(sourceClick.defaultPrevented).toBe(false);
     const collapsed = new Map([["inter-session:" + group.key, false]]);
     expect(
       projectTranscriptIndex(projection, collapsed, { assistantName: "Assistant" }).positionIndex

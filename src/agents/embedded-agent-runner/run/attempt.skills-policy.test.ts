@@ -21,6 +21,7 @@ import type {
 } from "../../tool-search-types.js";
 import { createToolSearchTools } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
+import { createInstalledSkillTools } from "../../tools/installed-skill-tools.js";
 import {
   beginPromptCacheObservation,
   collectPromptCacheTools,
@@ -97,6 +98,7 @@ function toolDigest(
   session = { sessionId: "embedded-session", sessionKey: "agent:main:main" },
 ) {
   return beginPromptCacheObservation({
+    messages: [],
     ...session,
     provider: "openai",
     modelId: "gpt-test",
@@ -120,6 +122,59 @@ function run(
 }
 
 describe("runEmbeddedAttempt skill policy projections", () => {
+  it("rebuilds skill prompt inputs from the sandbox workspace for non-rw sandbox runs", async () => {
+    const sandboxWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
+    tempPaths.push(sandboxWorkspace);
+    hoisted.resolveSandboxContextMock.mockResolvedValue({
+      enabled: true,
+      workspaceAccess: "ro",
+      workspaceDir: sandboxWorkspace,
+    });
+
+    await run({
+      sessionKey: "agent:main:guildchat:channel:test-ctx-engine",
+      attemptOverrides: {
+        skillsSnapshot: {
+          prompt:
+            "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
+          skills: [{ name: "smaug" }],
+          resolvedSkills: [
+            {
+              name: "smaug",
+              description: "Host copy",
+              disableModelInvocation: false,
+              filePath: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
+              baseDir: "/Users/alice/.openclaw/skills/smaug",
+              source: "openclaw-workspace",
+              sourceInfo: {
+                path: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
+                source: "openclaw-workspace",
+                scope: "project",
+                origin: "top-level",
+                baseDir: "/Users/alice/.openclaw/skills/smaug",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(hoisted.resolveEmbeddedRunSkillEntriesMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ workspaceDir: sandboxWorkspace, skillsSnapshot: undefined }),
+    );
+    expect(hoisted.resolveSkillsPromptForRunMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        workspaceDir: sandboxWorkspace,
+        skillsSnapshot: expect.objectContaining({
+          prompt: "",
+          skills: [],
+          resolvedSkills: [],
+          discoverySkills: [],
+        }),
+      }),
+    );
+  });
+
   it("preserves local operator tool schemas in the detached experience review", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-parity-"));
     tempPaths.push(workspaceDir);
@@ -202,6 +257,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         },
         attemptOverrides: {
           disableTools: false,
+          disableToolSearch: true,
           disableMessageTool: false,
           reasoningLevel: "on",
           sessionId: session.sessionId,
@@ -252,12 +308,19 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     }> = [
       { label: "unrestricted", skillsPrompt, available: true },
       { label: "wildcard", toolsAllow: ["*"], skillsPrompt, available: true },
+      { label: "mixed wildcard", toolsAllow: ["message", "*"], skillsPrompt, available: true },
       { label: "finite", toolsAllow: ["message"], available: false },
       {
         label: "read executable",
-        toolExecutionAllow: ["skill_workshop", "read"],
+        toolExecutionAllow: ["skill_workshop", "read", "skills_read", "skills_search"],
         skillsPrompt,
         available: true,
+      },
+      {
+        label: "skill read denied",
+        toolExecutionAllow: ["read"],
+        skillsPrompt,
+        available: false,
       },
       {
         label: "read denied",
@@ -265,10 +328,14 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         skillsPrompt: "",
         available: false,
       },
+      { label: "execution denied", toolExecutionAllow: [], skillsPrompt: "", available: false },
     ];
     for (const testCase of cases) {
       resetEmbeddedAttemptHarness();
       enableSkills();
+      hoisted.createOpenClawCodingToolsMock.mockImplementation((options) =>
+        createInstalledSkillTools(options?.installedSkills ?? []),
+      );
       await run({
         sessionKey: `agent:main:${testCase.label.replace(" ", "-")}`,
         attemptOverrides: {

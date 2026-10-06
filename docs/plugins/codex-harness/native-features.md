@@ -274,3 +274,43 @@ Short version: OpenClaw does not vendor the desktop-control app or execute
 desktop actions itself. It prepares Codex app-server, verifies that the
 `computer-use` MCP server is available, and then lets Codex own the native
 MCP tool calls during Codex-mode turns.
+
+## Rich MCP forms
+
+OpenClaw accepts Codex's `openaiForm` elicitation variant for the
+`openai/elicitation/create` extension and retains the legacy
+`openai/form` variant. Ordinary MCP form and URL requests keep their own
+protocol semantics; opening a URL is not confirmation that the step is complete.
+
+Codex applies its native approval policy before forwarding a form. For manual
+Apps in OpenClaw-created threads, use a prompting permission mode such as Guarded
+or Workspace when a tool requires interactive input. Full access maps to the
+native `never` approval policy, which can decline these forms before OpenClaw
+receives them. OpenClaw does not open a second MCP connection to bypass that policy.
+
+The Control UI displays option descriptions and base64 image thumbnails,
+including a fallback tile when only some choices have an image. HTTPS thumbnails
+use an explicit external-image link, not an automatic private-network browser fetch. String suggestions
+allow custom answers. String arrays accept suggested choices and one custom entry
+per line, with the same string, pattern, length, uniqueness, and cardinality
+constraints applied to every submitted value. Unsafe or unsupported patterns are
+refused instead of evaluated without a bound.
+
+Explicit resource selection returns the supplied URI, not its display title.
+Both single-resource and multi-resource fields accept the deprecated
+`type: "file"` alias. Defaults must refer to supplied resources and appear as
+initial selections; clearing an optional default does not silently restore it.
+Resource previews and uploads require a capability bound to the pending form and
+its originating MCP runtime. With that capability, explicit selection chooses
+supplied resources, implicit selection removes resources from the submitted set,
+and file/directory upload controls return only host-admitted URIs. Preview actions
+read the linked MCP resource or open the originating server's MCP App tool.
+Web MCP App surfaces that do not support uploads must not advertise that capability.
+A form requiring an unavailable operation is refused in full, with an explanation;
+it is never partially displayed or replaced with an unscoped URI text box.
+
+Rich forms are bounded to 12 fields, 64 choices per field, and 16 custom array
+entries. Ordinary questions retain their four-option limit. Choices and semantic inputs are not truncated. Invalid, unsupported, or
+over-limit fields refuse the entire form before any question is published.
+Answers retain the originating request's turn correlation, cancellation, and
+live execution authority.

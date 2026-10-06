@@ -36,7 +36,6 @@ type WorkspaceBootstrapRoutingInput = {
 type WorkspaceBootstrapRouting = {
   bootstrapMode: BootstrapMode;
   includeBootstrapInSystemContext: boolean;
-  includeBootstrapInRuntimeContext: boolean;
 };
 
 /**
@@ -73,6 +72,5 @@ export async function resolveWorkspaceBootstrapRouting(
   return {
     bootstrapMode,
     includeBootstrapInSystemContext: bootstrapMode === "full",
-    includeBootstrapInRuntimeContext: false,
   };
 }

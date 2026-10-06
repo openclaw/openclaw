@@ -133,6 +133,7 @@ export async function prepareSessionsSendFollowup(params: {
                     actor.profileId,
                     profile?.role ?? null,
                     currentConfig,
+                    profile?.githubLogin ?? null,
                   ),
             aliases: new Set(profile?.aliases ?? []),
           },

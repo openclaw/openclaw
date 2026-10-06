@@ -80,8 +80,7 @@ final class CloudflareAccessSessionStore {
         _ = self.revision
         if self.states[origin] == nil {
             if let encoded = self.persistence.load(origin),
-               let data = encoded.data(using: .utf8),
-               let session = try? JSONDecoder().decode(CloudflareAccessSession.self, from: data),
+               let session = try? JSONDecoder().decode(CloudflareAccessSession.self, from: Data(encoded.utf8)),
                session.origin == origin, (try? session.validate(now: now)) != nil
             {
                 self.revision &+= 1

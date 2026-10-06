@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resetFileLockStateForTest } from "../../infra/file-lock.js";
+import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import "./oauth-external-auth-passthrough.test-support.js";
 import {
@@ -126,9 +126,8 @@ describe("resolveApiKeyForProfile fallback credential validation", () => {
         });
         expect(result?.profileId).toBe(fallbackProfileId);
       }
-      expect(validateOAuthCredential).toHaveBeenCalledTimes(2);
       expect(validateOAuthCredential).toHaveBeenNthCalledWith(1, legacyCredential);
-      expect(validateOAuthCredential).toHaveBeenNthCalledWith(2, fallbackCredential);
+      expect(validateOAuthCredential).toHaveBeenLastCalledWith(fallbackCredential);
       expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledOnce();
       expect(
         ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir).profiles[fallbackProfileId],

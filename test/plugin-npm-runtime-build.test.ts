@@ -15,7 +15,7 @@ import { runInNewContext } from "node:vm";
 import { Worker } from "node:worker_threads";
 // Plugin npm runtime build tests validate plugin runtime package builds.
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, vi } from "vitest";
 import {
   buildPluginNpmRuntime,
   listMissingPluginNpmRuntimeHostExports,
@@ -24,11 +24,13 @@ import {
 } from "../scripts/lib/plugin-npm-runtime-build.mts";
 import { resolveRuntimeWorkerThreadExecArgv } from "../src/infra/runtime-worker-url.js";
 import { defineBundledChannelSetupEntry } from "../src/plugin-sdk/channel-entry-contract.js";
+import { createCommandTest } from "./helpers/command-fixture.js";
 import { writePublicRuntimeSurfacePluginFixture } from "./helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const it = createCommandTest();
 
 type PluginNpmRuntimeBuildPlan = NonNullable<ReturnType<typeof resolvePluginNpmRuntimeBuildPlan>>;
 
@@ -119,84 +121,91 @@ describe("plugin npm runtime build planning", () => {
     );
   });
 
-  it.each([
+  it.for([
     ["esm", "@openclaw/telegram"],
     ["cjs", "@openclaw/telegram"],
     ["esm", "@openclaw/old-host-fixture"],
     ["cjs", "@openclaw/old-host-fixture"],
-  ])(
+  ] as const)(
     "bundles compatible SDK operations while retaining host ownership (%s, %s)",
-    async (runtimeFormat, packageName) => {
-      const packageDir = tempDirs.make("openclaw-plugin-runtime-old-host-");
-      writeFileSync(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({
-          name: packageName,
-          version: "1.0.0",
-          type: "module",
-          openclaw: {
-            extensions: ["./index.ts"],
-            build: { runtimeFormat },
-          },
-        }),
-      );
-      writeFileSync(
-        path.join(packageDir, "index.ts"),
-        [
-          'export { createLegacyWebhookListenerDoctorContract, normalizeChannelConfigEntries } from "openclaw/plugin-sdk/runtime-doctor-migrations";',
-          'export { classifyGatewayProbePath, resolvePluginRoutePathContext, isProtectedPluginRoutePathFromContext, resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";',
-          'export { resolveBotThreadMentionPolicy, resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-mention-gating";',
-          'export { createLivePreviewLifecycle, createPreviewMessageReceipt } from "openclaw/plugin-sdk/channel-outbound";',
-          'export { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";',
-        ].join("\n"),
-      );
-      const hostDir = path.join(packageDir, "node_modules", "openclaw");
-      mkdirSync(hostDir, { recursive: true });
-      const hostBindings = {
-        "runtime-doctor-migrations": "normalizeChannelConfigEntries",
-        "gateway-config-runtime": "resolveGatewayPort",
-        "channel-mention-gating": "resolveInboundMentionDecision",
-        "channel-outbound": "createPreviewMessageReceipt",
-        "error-runtime": "formatErrorMessage",
-      };
-      writeFileSync(
-        path.join(hostDir, "package.json"),
-        JSON.stringify({
-          name: "openclaw",
-          exports: Object.fromEntries(
-            Object.keys(hostBindings).map((name) => [`./plugin-sdk/${name}`, `./${name}.cjs`]),
-          ),
-        }),
-      );
-      for (const [name, binding] of Object.entries(hostBindings)) {
-        writeFileSync(path.join(hostDir, `${name}.cjs`), `exports.${binding} = () => 31337;\n`);
-      }
-      writeFileSync(
-        path.join(hostDir, "channel-outbound.cjs"),
-        "exports.createPreviewMessageReceipt = () => 31337;\n" +
-          "exports.createLivePreviewLifecycle = () => ({ finalStarted: false });\n",
-      );
-      writeFileSync(
-        path.join(hostDir, "error-runtime.cjs"),
-        "let calls = 0; exports.formatErrorMessage = () => { calls++; return 'host-redacted'; };\n" +
-          "exports.formatterCalls = () => calls;\n",
-      );
+    ([runtimeFormat, packageName], { command }) =>
+      command.lifetime.run(async () => {
+        const packageDir = command.createTempDir("openclaw-plugin-runtime-old-host-");
+        writeFileSync(
+          path.join(packageDir, "package.json"),
+          JSON.stringify({
+            name: packageName,
+            version: "1.0.0",
+            type: "module",
+            openclaw: {
+              extensions: ["./index.ts"],
+              build: { runtimeFormat },
+            },
+          }),
+        );
+        writeFileSync(
+          path.join(packageDir, "index.ts"),
+          [
+            'export { createLegacyWebhookListenerDoctorContract, normalizeChannelConfigEntries } from "openclaw/plugin-sdk/runtime-doctor-migrations";',
+            'export { classifyGatewayProbePath, resolvePluginRoutePathContext, isProtectedPluginRoutePathFromContext, resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";',
+            'export { resolveBotThreadMentionPolicy, resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-mention-gating";',
+            'export { createLivePreviewLifecycle, createPreviewMessageReceipt } from "openclaw/plugin-sdk/channel-outbound";',
+            'export { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";',
+          ].join("\n"),
+        );
+        const hostDir = path.join(packageDir, "node_modules", "openclaw");
+        mkdirSync(hostDir, { recursive: true });
+        const hostBindings = {
+          "runtime-doctor-migrations": "normalizeChannelConfigEntries",
+          "gateway-config-runtime": "resolveGatewayPort",
+          "channel-mention-gating": "resolveInboundMentionDecision",
+          "channel-outbound": "createPreviewMessageReceipt",
+          "error-runtime": "formatErrorMessage",
+        };
+        writeFileSync(
+          path.join(hostDir, "package.json"),
+          JSON.stringify({
+            name: "openclaw",
+            exports: Object.fromEntries(
+              Object.keys(hostBindings).map((name) => [`./plugin-sdk/${name}`, `./${name}.cjs`]),
+            ),
+          }),
+        );
+        for (const [name, binding] of Object.entries(hostBindings)) {
+          writeFileSync(path.join(hostDir, `${name}.cjs`), `exports.${binding} = () => 31337;\n`);
+        }
+        writeFileSync(
+          path.join(hostDir, "channel-outbound.cjs"),
+          "exports.createPreviewMessageReceipt = () => 31337;\n" +
+            "exports.createLivePreviewLifecycle = () => ({ finalStarted: false });\n",
+        );
+        writeFileSync(
+          path.join(hostDir, "error-runtime.cjs"),
+          "let calls = 0; exports.formatErrorMessage = () => { calls++; return 'host-redacted'; };\n" +
+            "exports.formatterCalls = () => calls;\n",
+        );
 
-      const plan = expectPluginNpmRuntimeBuildPlan(
-        await buildPluginNpmRuntime({ repoRoot, packageDir, logLevel: "silent" }),
-      );
-      // Native loading catches absent old-host exports without Vitest's source SDK aliases.
-      const worker = new Worker(
-        `const { parentPort, workerData } = require("node:worker_threads");
+        const plan = expectPluginNpmRuntimeBuildPlan(
+          await buildPluginNpmRuntime({ repoRoot, packageDir, logLevel: "silent" }),
+        );
+        // Published runtime proof must not inherit Vitest's source SDK aliases.
+        const tsconfigPath = path.join(packageDir, "tsconfig.native.json");
+        writeFileSync(tsconfigPath, "{}\n");
+        const loaded = await command.run(
+          process.execPath,
+          [
+            ...(process.versions.bun ? ["--no-install", "--tsconfig-override", tsconfigPath] : []),
+            "--eval",
+            `const probeData = JSON.parse(process.argv[1]);
         (async () => {
           const symbols = new Set(Object.getOwnPropertySymbols(globalThis));
-          const entry = await import(workerData.entry);
+          const entry = await import(probeData.entry);
           const cfg = { channels: { telegram: { webhookPort: 8123 } } };
           const migrated = entry.createLegacyWebhookListenerDoctorContract({
             channelKey: "telegram", defaultPort: 8787,
           }).normalizeCompatibilityConfig({ cfg });
           let preview;
-          if (workerData.packageName === "@openclaw/telegram") {
+          if (probeData.packageName === "@openclaw/telegram") {
             const lifecycle = entry.createLivePreviewLifecycle();
             lifecycle.beginFinalDelivery();
             lifecycle.observeSuppression();
@@ -214,15 +223,15 @@ describe("plugin npm runtime build planning", () => {
             }
             preview = { suppressed, reset: !lifecycle.finalStarted,
               accepted: accepted.finalSucceeded, failure,
-              formatterCalls: require(workerData.hostDir + "/error-runtime.cjs").formatterCalls() };
+              formatterCalls: require(probeData.hostDir + "/error-runtime.cjs").formatterCalls() };
           } else {
             preview = { hostFactoryPreserved: entry.createLivePreviewLifecycle ===
-              require(workerData.hostDir + "/channel-outbound.cjs").createLivePreviewLifecycle };
+              require(probeData.hostDir + "/channel-outbound.cjs").createLivePreviewLifecycle };
           }
-          parentPort.postMessage({
+          console.log(JSON.stringify({
             preview,
-            hostBindingsPreserved: Object.entries(workerData.hostBindings).every(
-              ([name, binding]) => entry[binding] === require(workerData.hostDir + "/" + name + ".cjs")[binding],
+            hostBindingsPreserved: Object.entries(probeData.hostBindings).every(
+              ([name, binding]) => entry[binding] === require(probeData.hostDir + "/" + name + ".cjs")[binding],
             ),
             config: migrated.config,
             sourceUnchanged: cfg.channels.telegram.webhookPort === 8123,
@@ -235,27 +244,20 @@ describe("plugin npm runtime build planning", () => {
             }).requireMention,
             newGlobalSymbols: Object.getOwnPropertySymbols(globalThis)
               .filter((symbol) => !symbols.has(symbol)).map(String),
-          });
+          }));
         })().catch((error) => { throw error; });`,
-        {
-          eval: true,
-          workerData: {
-            entry: pathToFileURL(path.join(packageDir, plan.runtimeExtensions[0]!)).href,
-            hostDir,
-            hostBindings,
-            packageName,
-          },
-        },
-      );
-      try {
-        const result = await new Promise((resolve, reject) => {
-          worker.once("message", resolve);
-          worker.once("error", reject);
-          worker.once("exit", (code) =>
-            reject(new Error(`Worker exited before replying: ${code}`)),
-          );
-        });
-        expect(result).toEqual({
+            JSON.stringify({
+              entry: pathToFileURL(path.join(packageDir, plan.runtimeExtensions[0]!)).href,
+              hostDir,
+              hostBindings,
+              packageName,
+            }),
+          ],
+          { cwd: packageDir, encoding: "utf8" },
+        );
+        expect(loaded.error, loaded.stderr).toBeUndefined();
+        expect(loaded.status, loaded.stderr).toBe(0);
+        expect(JSON.parse(loaded.stdout)).toEqual({
           preview:
             packageName === "@openclaw/telegram"
               ? {
@@ -278,10 +280,7 @@ describe("plugin npm runtime build planning", () => {
           mention: false,
           newGlobalSymbols: [],
         });
-      } finally {
-        await worker.terminate();
-      }
-    },
+      }),
   );
 
   it("packages declared theme definitions and artwork outside conventional asset paths", () => {
@@ -601,20 +600,30 @@ describe("plugin npm runtime build planning", () => {
     ]);
   });
 
-  it("builds doctor contract surfaces for publishable channel plugins", () => {
-    for (const pluginDir of ["msteams", "nostr"]) {
+  it.each([
+    { plugins: ["msteams", "nostr"], entries: ["doctor-contract-api"] },
+    { plugins: ["tencent"], entries: ["setup-api"] },
+    { plugins: ["zalo"], entries: ["setup-api", "setup-surface"] },
+  ])("plans public runtime surfaces for $plugins", ({ plugins, entries }) => {
+    for (const pluginDir of plugins) {
+      const packageDir = path.join(repoRoot, "extensions", pluginDir);
       const plan = expectPluginNpmRuntimeBuildPlan(
-        resolvePluginNpmRuntimeBuildPlan({
-          repoRoot,
-          packageDir: path.join(repoRoot, "extensions", pluginDir),
-        }),
+        resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir }),
       );
-      expect(plan.entry["doctor-contract-api"]).toBe(
-        path.join(repoRoot, "extensions", pluginDir, "doctor-contract-api.ts"),
-      );
-      const extension = plan.runtimeFormat === "cjs" ? ".cjs" : ".js";
-      expect(plan.runtimeBuildOutputs).toContain(`./dist/doctor-contract-api${extension}`);
-      expect(plan.packageFiles).toContain("dist/**");
+      const extension =
+        entries[0] === "doctor-contract-api" && plan.runtimeFormat === "cjs" ? ".cjs" : ".js";
+      for (const entry of entries) {
+        expect(plan.entry[entry]).toBe(path.join(packageDir, `${entry}.ts`));
+        expect(plan.runtimeBuildOutputs).toContain(`./dist/${entry}${extension}`);
+      }
+      if (pluginDir === "tencent") {
+        expect(plan.runtimeSetupEntry).toBe("./dist/setup-api.js");
+      } else {
+        expect(plan.packageFiles).toContain("dist/**");
+      }
+      if (pluginDir === "zalo") {
+        expect(plan.runtimeBuildOutputs).not.toContain("./dist/src/setup-surface.js");
+      }
     }
   });
 
@@ -691,69 +700,32 @@ describe("plugin npm runtime build planning", () => {
     });
   });
 
-  it("builds Tencent setup metadata for installed-package migrations", () => {
-    const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({
+  it.each(["codex", "llama-cpp"])(
+    "keeps published %s runtime imports resolvable from the host package",
+    async (plugin) => {
+      const result = await buildPluginNpmRuntime({
         repoRoot,
-        packageDir: path.join(repoRoot, "extensions", "tencent"),
-      }),
-    );
+        packageDir: copyPluginBuildFixture(plugin),
+        logLevel: "silent",
+      });
+      expect(
+        listMissingPluginNpmRuntimeHostExports(expectPluginNpmRuntimeBuildPlan(result)),
+      ).toEqual([]);
+    },
+  );
 
-    expect(plan.entry["setup-api"]).toBe(
-      path.join(repoRoot, "extensions", "tencent", "setup-api.ts"),
-    );
-    expect(plan.runtimeSetupEntry).toBe("./dist/setup-api.js");
-    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
-  });
-
-  it("plans the Zalo public setup API with its lazy package surface", () => {
-    const packageDir = path.join(repoRoot, "extensions", "zalo");
-    const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({
-        repoRoot,
-        packageDir,
-      }),
-    );
-    expect(plan.entry["setup-api"]).toBe(path.join(packageDir, "setup-api.ts"));
-    expect(plan.entry["setup-surface"]).toBe(path.join(packageDir, "setup-surface.ts"));
-    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
-    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-surface.js");
-    expect(plan.runtimeBuildOutputs).not.toContain("./dist/src/setup-surface.js");
-    expect(plan.packageFiles).toContain("dist/**");
-  });
-
-  it("keeps published Codex runtime imports resolvable from the host package", async () => {
-    const result = await buildPluginNpmRuntime({
-      repoRoot,
-      packageDir: copyPluginBuildFixture("codex"),
-      logLevel: "silent",
-    });
-    const plan = expectPluginNpmRuntimeBuildPlan(result);
-
-    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
-  });
-
-  it("keeps published llama.cpp runtime imports resolvable from the host package", async () => {
-    const result = await buildPluginNpmRuntime({
-      repoRoot,
-      packageDir: copyPluginBuildFixture("llama-cpp"),
-      logLevel: "silent",
-    });
-    const plan = expectPluginNpmRuntimeBuildPlan(result);
-
-    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
-  });
-
-  it("detects unresolved side-effect host imports in built plugin runtimes", () => {
+  it.each([true, false])("checks emitted host imports only when present (%s)", (hasHostImports) => {
     const outDir = tempDirs.make("openclaw-plugin-runtime-host-import-");
     writeFileSync(
       path.join(outDir, "index.js"),
-      [
-        'import "openclaw/plugin-sdk/not-exported";',
-        'const runtime = __require("openclaw/plugin-sdk/not-exported-from-require");',
-        "void runtime;",
-        "",
-      ].join("\n"),
+      hasHostImports
+        ? [
+            'import "openclaw/plugin-sdk/not-exported";',
+            'const runtime = __require("openclaw/plugin-sdk/not-exported-from-require");',
+            "void runtime;",
+            "",
+          ].join("\n")
+        : "export default {};\n",
     );
     const plan = expectPluginNpmRuntimeBuildPlan(
       resolvePluginNpmRuntimeBuildPlan({
@@ -761,26 +733,18 @@ describe("plugin npm runtime build planning", () => {
         packageDir: path.join(repoRoot, "extensions", "codex"),
       }),
     );
-
-    expect(listMissingPluginNpmRuntimeHostExports({ ...plan, outDir })).toEqual([
-      "openclaw/plugin-sdk/not-exported",
-      "openclaw/plugin-sdk/not-exported-from-require",
-    ]);
-  });
-
-  it("does not require host metadata when the runtime has no host imports", () => {
-    const syntheticRepoRoot = tempDirs.make("openclaw-plugin-runtime-synthetic-repo-");
-    const outDir = tempDirs.make("openclaw-plugin-runtime-no-host-import-");
-    writeFileSync(path.join(outDir, "index.js"), "export default {};\n");
-    const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({
-        repoRoot,
-        packageDir: path.join(repoRoot, "extensions", "codex"),
-      }),
-    );
-
     expect(
-      listMissingPluginNpmRuntimeHostExports({ ...plan, repoRoot: syntheticRepoRoot, outDir }),
-    ).toEqual([]);
+      listMissingPluginNpmRuntimeHostExports({
+        ...plan,
+        repoRoot: hasHostImports
+          ? repoRoot
+          : tempDirs.make("openclaw-plugin-runtime-synthetic-repo-"),
+        outDir,
+      }),
+    ).toEqual(
+      hasHostImports
+        ? ["openclaw/plugin-sdk/not-exported", "openclaw/plugin-sdk/not-exported-from-require"]
+        : [],
+    );
   });
 });

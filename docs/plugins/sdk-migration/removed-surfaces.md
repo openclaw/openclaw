@@ -18,6 +18,34 @@ access to bundled-only SDK modules. Private-local build mappings remain for
 repository owners, and production-private JavaScript exports support official
 plugin runtimes. Neither provides typed third-party SDK access.
 
+### Channel, config, and infrastructure compatibility facades
+
+`channel-lifecycle`, `channel-message`, `channel-reply-pipeline`,
+`config-runtime`, and `infra-runtime` were removed with SDK-owner approval on
+September 30, 2026. Channel imports move to focused outbound and inbound
+contracts; config access uses supplied config, snapshots, and mutation helpers;
+infrastructure imports move to the matching focused runtime or injected API.
+System-event snapshot inspection and consumption use `system-event-runtime`.
+
+Some legacy helpers and named types require caller changes rather than an
+import-path substitution. See the [channel mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
+and [config and infrastructure migration steps](/plugins/sdk-migration/how-to-migrate).
+
+### Command, Discord, and Telegram account facades
+
+`command-auth`, `discord`, and `telegram-account` were removed with explicit
+SDK-owner approval on October 2, 2026. Move sender authorization to
+`channel-ingress-runtime`, native command helpers to `command-auth-native`, and
+help builders to `command-status`. Discord and Telegram behavior remains owned
+by their plugins; use generic channel contracts and injected runtime helpers
+from external plugins, and the owning plugin's `api.ts` / `runtime-api.ts`
+barrels for repository consumers.
+
+These are breaking removals for third-party plugins that still import the old
+subpaths, including older published `@openclaw/discord` packages. Upgrade affected
+plugins before upgrading the host. Not every export has a path-only replacement;
+see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
+
 ### Process-global API-provider publication
 
 `registerApiProvider(...)` and `unregisterApiProviders(...)` were removed from

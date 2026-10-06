@@ -19,7 +19,6 @@ type ParsedBindArgs = {
 type ParsedComputerUseArgs = {
   action: "status" | "install";
   overrides: Partial<CodexComputerUseConfig>;
-  hasOverrides: boolean;
   persistentIdentity: Partial<Pick<CodexComputerUseConfig, "pluginName" | "mcpServerName">>;
   help?: boolean;
 };
@@ -299,7 +298,6 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
   const parsed: ParsedComputerUseArgs = {
     action: "status",
     overrides: {},
-    hasOverrides: false,
     persistentIdentity: {},
   };
   let sawAction = false;
@@ -332,7 +330,7 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
         parsed.help = true;
         continue;
       }
-      parsed.overrides[option] = value;
+      parsed.overrides[option] = value.trim();
       index += 1;
       continue;
     }
@@ -348,15 +346,6 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
       continue;
     }
     parsed.help = true;
-  }
-  const overrides = parsed.overrides;
-  parsed.overrides = {};
-  for (const key of ["marketplaceSource", "marketplacePath", "marketplaceName"] as const) {
-    const value = normalizeOptionalString(overrides[key]);
-    if (value) {
-      parsed.overrides[key] = value;
-      parsed.hasOverrides = true;
-    }
   }
   return parsed;
 }

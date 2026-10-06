@@ -14,8 +14,10 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
-import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
+import {
+  insertLegacySession,
+  repairCanonicalSessionKeys,
+} from "./doctor-session-canonical-keys.test-support.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
@@ -73,7 +75,7 @@ describe("doctor canonical session decision races", () => {
       ).toEqual({ entry_json: JSON.stringify(changedEntry) });
 
       const cfg = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         session: { store: storeTemplate },
       } as OpenClawConfig;
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({

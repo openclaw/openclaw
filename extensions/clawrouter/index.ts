@@ -231,9 +231,9 @@ export default defineSingleProviderPluginEntry({
         }
         return openAiReplay.buildReplayPolicy?.(ctx);
       },
-      sanitizeReplayHistory: (ctx) =>
+      sanitizeReplayHistoryAsync: (ctx) =>
         ctx.modelApi === "google-generative-ai"
-          ? googleReplay.sanitizeReplayHistory?.(ctx)
+          ? googleReplay.sanitizeReplayHistoryAsync?.(ctx)
           : undefined,
       resolveReasoningOutputMode: (ctx) =>
         ctx.modelApi === "google-generative-ai"

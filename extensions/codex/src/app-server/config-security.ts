@@ -16,9 +16,7 @@ import { selectGuardianSandbox } from "./config-exec-policy.js";
 import { DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX } from "./config-parsing.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
-  parseAllowedApprovalPoliciesFromCodexRequirements,
-  parseAllowedApprovalsReviewersFromCodexRequirements,
-  parseAllowedSandboxModesFromCodexRequirements,
+  parseCodexRequirementsPolicy,
   readCodexRequirementsToml,
   selectGuardianApprovalPolicy,
   selectGuardianApprovalsReviewer,
@@ -71,7 +69,9 @@ export function resolveCodexAppServerNetworkProxy(
     },
     network: networkConfig,
   };
-  const profileName = resolveNetworkProxyPermissionProfileName(config, profile);
+  const profileName =
+    readNonEmptyString(config.profileName) ??
+    `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${fingerprintCodexPolicy({ version: 1, profile }).slice(0, 16)}`;
   const configPatch: JsonObject = {
     "features.network_proxy.enabled": true,
     default_permissions: profileName,
@@ -86,18 +86,6 @@ export function resolveCodexAppServerNetworkProxy(
       configPatch,
     },
   };
-}
-
-function resolveNetworkProxyPermissionProfileName(
-  config: CodexAppServerNetworkProxyConfig,
-  profile: JsonObject,
-): string {
-  const explicitProfileName = readNonEmptyString(config.profileName);
-  if (explicitProfileName) {
-    return explicitProfileName;
-  }
-  const suffix = fingerprintCodexPolicy({ version: 1, profile }).slice(0, 16);
-  return `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${suffix}`;
 }
 
 function normalizeNetworkProxyPermissionMap(
@@ -165,10 +153,6 @@ export function withMcpElicitationsApprovalPolicy(
   };
 }
 
-export function resolveTransport(value: unknown): CodexAppServerTransportMode {
-  return value === "websocket" || value === "unix" ? value : "stdio";
-}
-
 export function inferCodexAppServerConnectionClass(params: {
   transport: CodexAppServerTransportMode;
   url?: string;
@@ -197,13 +181,8 @@ export function assertCodexAppServerConnectionSecurity(params: {
 }
 
 function isLoopbackWebSocketUrl(value: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+  const parsed = URL.parse(value);
+  if (parsed?.protocol !== "ws:" && parsed?.protocol !== "wss:") {
     return false;
   }
   return isLoopbackHost(parsed.hostname);
@@ -246,19 +225,11 @@ export function resolveDefaultCodexAppServerPolicy(params: {
   if (content === undefined && !params.forceGuardian) {
     return { mode: "yolo", dangerFullAccessAllowed: true };
   }
-  const allowedSandboxModes =
-    content === undefined
-      ? undefined
-      : parseAllowedSandboxModesFromCodexRequirements(
-          content,
-          readNonEmptyString(params.hostName) ?? readHostName(),
-        );
-  const allowedApprovalPolicies =
-    content === undefined ? undefined : parseAllowedApprovalPoliciesFromCodexRequirements(content);
-  const allowedApprovalsReviewers =
-    content === undefined
-      ? undefined
-      : parseAllowedApprovalsReviewersFromCodexRequirements(content);
+  const { allowedSandboxModes, allowedApprovalPolicies, allowedApprovalsReviewers } =
+    parseCodexRequirementsPolicy(
+      content,
+      content === undefined ? undefined : (readNonEmptyString(params.hostName) ?? readHostName()),
+    );
   const yoloSandboxAllowed =
     allowedSandboxModes === undefined || allowedSandboxModes.has("danger-full-access");
   const yoloApprovalAllowed =

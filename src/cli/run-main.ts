@@ -11,7 +11,7 @@ import {
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
 import { resolveGatewayPort, resolveStateDir } from "../config/paths.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
@@ -101,10 +101,9 @@ async function tryRunGatewayRunFastPath(
   }
   const [
     { Command },
-    { addGatewayRunCommand },
+    { addGatewayRunCommand, bootstrapGatewayRun },
     { VERSION },
     { emitCliBanner },
-    { ensureCliExecutionBootstrap },
     { defaultRuntime },
   ] = await startupTrace.measure("gateway-run-imports", () =>
     Promise.all([
@@ -112,7 +111,6 @@ async function tryRunGatewayRunFastPath(
       import("./gateway-cli/run-command.js"),
       import("../version.js"),
       import("./banner.js"),
-      import("./command-execution-startup.js"),
       import("../runtime.js"),
     ]),
   );
@@ -133,37 +131,14 @@ async function tryRunGatewayRunFastPath(
     process.exitCode = typeof err.exitCode === "number" ? err.exitCode : 1;
     throw err;
   });
-  const beforeRun = async (opts: { force?: boolean; reset?: boolean }) => {
-    let beforeStatePreparation: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
-    const shouldBootstrap = await startupTrace.measure("gateway-run-pre-bootstrap", async () => {
-      const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =
-        await import("./gateway-cli/pre-bootstrap.js");
-      const prepared = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
-      if (prepared) {
-        beforeStatePreparation = (snapshot) =>
-          recheckGatewayRunBootstrap({
-            opts,
-            runtime: defaultRuntime,
-            ...(snapshot ? { snapshot } : {}),
-          });
-      }
-      return prepared;
+  const beforeRun = (opts: { force?: boolean; reset?: boolean }) =>
+    bootstrapGatewayRun({
+      opts,
+      runtime: defaultRuntime,
+      commandPath,
+      startupPolicy,
+      startupTrace,
     });
-    if (!shouldBootstrap) {
-      return;
-    }
-    await startupTrace.measure("gateway-run-bootstrap", async () => {
-      await ensureCliExecutionBootstrap({
-        runtime: defaultRuntime,
-        commandPath,
-        startupPolicy,
-        loadPlugins: false,
-        ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
-      });
-      const { reloadTrustedGatewayRunEnvironment } = await import("./gateway-cli/pre-bootstrap.js");
-      await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });
-    });
-  };
   const gateway = addGatewayRunCommand(
     program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
     { beforeRun },
@@ -186,19 +161,7 @@ async function tryRunGatewayRunFastPath(
   return true;
 }
 
-export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
-  if (!shouldHandleBareRoot(argv)) {
-    return false;
-  }
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  return shouldStartLocalOnboarding(snapshot);
-}
-
-async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaunchTarget | null> {
-  if (!shouldHandleBareRoot(argv)) {
-    return null;
-  }
+async function resolveBareRootLaunchTarget(): Promise<BareRootLaunchTarget> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (await shouldStartLocalOnboarding(snapshot)) {
@@ -456,15 +419,12 @@ function pauseNonTtyStdinForCliExit(): void {
   }
 }
 
-function shouldLoadCliDotEnv(
-  loadGlobalEnv: boolean,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
   const cwd = tryProcessCwd();
   if (cwd && existsSync(path.join(cwd, ".env"))) {
     return true;
   }
-  return loadGlobalEnv && existsSync(path.join(resolveStateDir(env), ".env"));
+  return loadGlobalEnv && existsSync(path.join(resolveStateDir(), ".env"));
 }
 
 function isCommanderParseExit(error: unknown): error is { exitCode: number } {
@@ -547,13 +507,6 @@ function normalizeRootNoColorArgvForProgram(argv: string[], program: CommanderCo
   return normalizeRootNoColorArgv(argv, {
     shouldPreserveNoColor: ({ remainingArgs, noColorIndex }) =>
       resolveRootOptionRole(program, remainingArgs, noColorIndex) === "value",
-  });
-}
-
-function normalizeRootLogLevelArgvForProgram(argv: string[], program: CommanderCommand): string[] {
-  return normalizeRootLogLevelArgv(argv, {
-    shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
-      resolveRootOptionRole(program, remainingArgs, logLevelIndex) !== "root",
   });
 }
 
@@ -750,7 +703,7 @@ async function resolveExpectedPluginPolicyError(params: {
 
 async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
-  options: { ensureDispatcher?: boolean } = {},
+  ensureDispatcher: boolean,
 ): Promise<void> {
   // Capture init and coverage warnings no-op unless the
   // debug-proxy env requests capture; importing their sqlite-store graph anyway
@@ -766,7 +719,7 @@ async function bootstrapCliProxyCaptureAndDispatcher(
     await initializeDebugProxyCaptureAsync("cli");
     maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
   }
-  if (options.ensureDispatcher !== false) {
+  if (ensureDispatcher) {
     await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
   }
 }
@@ -1240,7 +1193,7 @@ async function runCliWithPreparedOutputMode(
       await ensureCliEnvProxyDispatcher();
     }
     const bareRootLaunchTarget = shouldRunBareRootCommand
-      ? await resolveBareRootLaunchTarget(normalizedArgv)
+      ? await resolveBareRootLaunchTarget()
       : null;
 
     if (bareRootLaunchTarget) {
@@ -1328,9 +1281,7 @@ async function runCliWithPreparedOutputMode(
     }
 
     if (!isHelpOrVersionInvocation && !isDatabaseInvocation) {
-      await bootstrapCliProxyCaptureAndDispatcher(startupTrace, {
-        ensureDispatcher: shouldUseCliEnvProxy,
-      });
+      await bootstrapCliProxyCaptureAndDispatcher(startupTrace, shouldUseCliEnvProxy);
     }
 
     if (
@@ -1470,9 +1421,12 @@ async function runCliWithPreparedOutputMode(
         }
       }
 
-      parseArgv = normalizeRootLogLevelArgvForProgram(
+      parseArgv = normalizeRootLogLevelArgv(
         normalizeRootNoColorArgvForProgram(parseArgv, program),
-        program,
+        {
+          shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
+            resolveRootOptionRole(program, remainingArgs, logLevelIndex) !== "root",
+        },
       );
       startupProgress.done();
 

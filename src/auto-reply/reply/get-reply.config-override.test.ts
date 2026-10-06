@@ -129,7 +129,7 @@ function createPreparedDispatchRuntime(
     workspaceDir: "/tmp/prepared-model-workspace",
     config: {
       ...resolvedConfig,
-      agents: { ...resolvedConfig.agents, list: [{ id: "main", default: true }] },
+      agents: { ...resolvedConfig.agents, entries: { main: {} } },
     },
     modelCatalog: { entries: [], routeVariants: [] },
     inboundPluginRegistry: createEmptyPluginRegistry(),
@@ -261,7 +261,7 @@ describe("getReplyFromConfig configOverride", () => {
   it("rejects a prepared dispatch runtime that crosses the admitted session agent", async () => {
     const preparedRuntime = createPreparedDispatchRuntime({
       agentId: "worker",
-      config: { agents: { list: [{ id: "worker", default: true }] } },
+      config: { agents: { entries: { worker: {} } } },
     });
     await expect(
       bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(buildGetReplyCtx()),
@@ -350,7 +350,6 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
   beforeEach(async () => {
     delete process.env.OPENCLAW_TEST_FAST;
     const catalog = await import("../../agents/model-catalog.runtime.js");
-    vi.spyOn(catalog, "loadManifestModelCatalog").mockReturnValue([]);
     vi.spyOn(catalog, "loadProviderScopedThinkingCatalog").mockResolvedValue([]);
     vi.spyOn(catalog, "loadPreparedModelCatalogSnapshot").mockResolvedValue({
       entries: [],

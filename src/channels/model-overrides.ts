@@ -22,7 +22,6 @@ import {
   resolveSessionConversationRef,
 } from "./plugins/session-conversation.js";
 
-/** Resolved model override for a channel conversation plus the config key that matched. */
 type ChannelModelOverride = {
   channel: string;
   model: string;
@@ -124,7 +123,6 @@ function buildGenericParentOverrideCandidates(sessionKey: string | null | undefi
   return buildChannelKeyCandidates(threadId ? baseSessionKey : raw.rawId);
 }
 
-/** Expand prefixed peer IDs by also trying the raw form after the channel prefix. */
 function expandPeerIds(
   ids: (string | null | undefined)[],
   channel: string,
@@ -142,7 +140,6 @@ function expandPeerIds(
   return expanded;
 }
 
-/** Resolves a channel-scoped model override from direct, parent, and wildcard config entries. */
 export function resolveChannelModelOverride(
   params: ChannelModelOverrideParams,
 ): ChannelModelOverride | null {

@@ -146,7 +146,7 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
     const releaseBlocker = createDeferred();
     const blocker =
       revocation === "before interruption"
-        ? runExclusiveSessionLifecycleMutation({
+        ? runExclusiveSessionLifecycleMutation("subagent-kill", {
             scope: storePath,
             identities: [sessionKey, sessionId],
             run: async () => {
@@ -250,7 +250,7 @@ it.each([
     const releaseBlocker = createDeferred();
     const blocker =
       phase === "queued"
-        ? runExclusiveSessionLifecycleMutation({
+        ? runExclusiveSessionLifecycleMutation("subagent-kill", {
             scope: storePath,
             identities: [sessionKey, sessionId],
             run: async () => {
@@ -266,12 +266,12 @@ it.each([
     if (phase === "queued") {
       const mutate = lifecycleAdmission.runExclusiveSessionLifecycleMutation;
       vi.spyOn(lifecycleAdmission, "runExclusiveSessionLifecycleMutation").mockImplementation(
-        (params) => {
-          const operation = mutate(params);
+        (operation, params) => {
+          const mutation = mutate(operation, params);
           if ("scope" in params && params.scope === storePath && params.prepare) {
             mutationQueued.resolve();
           }
-          return operation;
+          return mutation;
         },
       );
     }
@@ -615,7 +615,8 @@ it.each(["after interrupt", "before capacity release"] as const)(
       expect(interruptD).not.toHaveBeenCalled();
       expect(startG).not.toHaveBeenCalled();
       admissionA.release();
-      expect(await pending).toMatchObject({
+      const result = await pending;
+      expect(result, JSON.stringify(result)).toMatchObject({
         status: "ok",
         killed: 5,
         labels: ["a", "d", "x", "g", "b"],

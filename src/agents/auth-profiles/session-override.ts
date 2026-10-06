@@ -15,7 +15,6 @@ import {
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
-import { hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import {
   isActiveUnusableWindow,
   isModelScopedCooldownReason,
@@ -30,6 +29,7 @@ import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
 
 // Read-only auth resolution must not import session persistence.
@@ -270,19 +270,13 @@ export async function clearSessionAuthProfileOverride(params: {
   storePath?: string;
   assertCommitAllowed?: () => void;
 }) {
-  const { sessionEntry, sessionStore, sessionKey, storePath } = params;
   await persistSessionAuthProfileOverrideState({
-    agentId: params.agentId,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
+    ...params,
     state: {
       authProfileOverride: undefined,
       authProfileOverrideSource: undefined,
       authProfileOverrideCompactionCount: undefined,
     },
-    storePath,
-    assertCommitAllowed: params.assertCommitAllowed,
   });
 }
 
@@ -323,7 +317,7 @@ async function resolveSessionAuthProfileOverride(params: {
     !sessionEntry.authProfileOverride?.trim() &&
     !params.requesterProfileId &&
     !hasConfiguredAuthProfiles &&
-    !hasAnyAuthProfileStoreSource(agentDir)
+    !(await hasAnyAuthProfileStoreSourceAsync(agentDir))
   ) {
     return { profileId: undefined, store: undefined };
   }

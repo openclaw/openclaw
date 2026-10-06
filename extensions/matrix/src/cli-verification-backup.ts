@@ -185,7 +185,7 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
               console.log(
                 `Cross-signing published: ${result.crossSigning.published ? "yes" : "no"} (master=${result.crossSigning.masterKeyPublished ? "yes" : "no"}, self=${result.crossSigning.selfSigningKeyPublished ? "yes" : "no"}, user=${result.crossSigning.userSigningKeyPublished ? "yes" : "no"})`,
               );
-              cli.printVerificationBackupStatus(result.verification);
+              cli.printBackupStatus(result.verification.backup);
               cli.printTimestamp(
                 "Recovery key created at",
                 result.verification.recoveryKeyCreatedAt,
@@ -195,7 +195,7 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
               console.log(
                 `Cross-signing published: ${result.crossSigning.published ? "yes" : "no"}`,
               );
-              cli.printVerificationBackupSummary(result.verification);
+              cli.printBackupSummary(result.verification.backup);
             }
             cli.printVerificationGuidance(
               {
@@ -247,10 +247,10 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
             console.log(`Recovery key accepted: ${result.recoveryKeyAccepted ? "yes" : "no"}`);
             console.log(`Backup usable: ${result.backupUsable ? "yes" : "no"}`);
             console.log(`Device verified by owner: ${result.deviceOwnerVerified ? "yes" : "no"}`);
-            cli.printVerificationBackupSummary(result);
+            cli.printBackupSummary(result.backup);
             if (verbose) {
               cli.printVerificationTrustDiagnostics(result);
-              cli.printVerificationBackupStatus(result);
+              cli.printBackupStatus(result.backup);
               cli.printTimestamp("Recovery key created at", result.recoveryKeyCreatedAt);
               if (result.success) {
                 cli.printTimestamp("Verified at", result.verifiedAt);

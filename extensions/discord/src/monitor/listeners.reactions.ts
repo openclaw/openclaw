@@ -10,6 +10,7 @@ import {
   type User,
 } from "../internal/discord.js";
 import {
+  hasConfiguredDiscordChannels,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordSlug,
   resolveDiscordChannelConfigWithFallback,
@@ -120,10 +121,11 @@ async function runDiscordReactionHandler(initialParams: {
   });
 }
 
-type DiscordReactionIngressAuthorizationParams = {
-  isPolicyCurrent?: () => boolean;
+type DiscordReactionIngressAuthorizationParams = Omit<
+  DiscordReactionRoutingParams,
+  "botUserId" | "guildEntries"
+> & {
   cfg: OpenClawConfig;
-  accountId: string;
   user: User;
   memberRoleIds: string[];
   isDirectMessage: boolean;
@@ -132,13 +134,6 @@ type DiscordReactionIngressAuthorizationParams = {
   channelId: string;
   channelName?: string;
   channelSlug: string;
-  dmEnabled: boolean;
-  groupDmEnabled: boolean;
-  groupDmChannels: string[];
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  allowFrom: string[];
-  groupPolicy: "open" | "allowlist" | "disabled";
-  allowNameMatching: boolean;
   guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
   channelConfig?: import("./allow-list.js").DiscordChannelConfigResolved | null;
 };
@@ -190,8 +185,7 @@ async function authorizeDiscordReactionIngress(
   if (!params.isGuildMessage) {
     return { allowed: true };
   }
-  const channelAllowlistConfigured =
-    Boolean(params.guildInfo?.channels) && Object.keys(params.guildInfo?.channels ?? {}).length > 0;
+  const channelAllowlistConfigured = hasConfiguredDiscordChannels(params.guildInfo?.channels);
   const channelAllowed = params.channelConfig?.allowed !== false;
   if (
     !isDiscordGroupAllowedByPolicy({
@@ -223,12 +217,6 @@ async function authorizeDiscordReactionIngress(
   return { allowed: true };
 }
 
-function hasDiscordGuildChannelOverrides(
-  guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null,
-) {
-  return Boolean(guildInfo?.channels && Object.keys(guildInfo.channels).length > 0);
-}
-
 function shouldSkipGuildReactionBeforeChannelFetch(params: {
   reactionMode: DiscordReactionMode;
   guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
@@ -244,7 +232,7 @@ function shouldSkipGuildReactionBeforeChannelFetch(params: {
   if (params.reactionMode !== "allowlist") {
     return false;
   }
-  if (hasDiscordGuildChannelOverrides(params.guildInfo)) {
+  if (hasConfiguredDiscordChannels(params.guildInfo?.channels)) {
     return false;
   }
   return !shouldEmitDiscordReactionNotification({

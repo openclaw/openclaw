@@ -1,4 +1,3 @@
-// Resolves runtime safe-bin policy and trust warnings.
 import { resolveSafeBins } from "./exec-approvals-allowlist.js";
 import {
   normalizeSafeBinProfileFixtures,
@@ -79,7 +78,6 @@ export function isInterpreterLikeSafeBin(raw: string): boolean {
   return INTERPRETER_LIKE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-/** Lists normalized interpreter-like safeBins from a configured entry set. */
 export function listInterpreterLikeSafeBins(entries: Iterable<string>): string[] {
   return Array.from(entries)
     .map((entry) => normalizeSafeBinName(entry))
@@ -103,7 +101,6 @@ export function resolveMergedSafeBinProfileFixtures(params: {
   };
 }
 
-/** Resolves safe-bin names, profiles, trusted dirs, and warning metadata for exec evaluation. */
 export function resolveExecSafeBinRuntimePolicy(params: {
   global?: ExecSafeBinConfigScope | null;
   local?: ExecSafeBinConfigScope | null;
@@ -139,12 +136,7 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   );
   if (params.onWarning) {
     for (const hit of writableTrustedSafeBinDirs) {
-      const scope =
-        hit.worldWritable || hit.groupWritable
-          ? hit.worldWritable
-            ? "world-writable"
-            : "group-writable"
-          : "writable";
+      const scope = hit.worldWritable ? "world-writable" : "group-writable";
       params.onWarning(
         `exec: safeBinTrustedDirs includes ${scope} directory '${hit.dir}'; remove trust or tighten permissions (for example chmod 755).`,
       );

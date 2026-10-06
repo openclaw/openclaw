@@ -29,9 +29,8 @@ import {
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { resolveCodexUltrafastServiceTier } from "./service-tier.js";
-import { buildTurnStartParams } from "./thread-lifecycle.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
-import { buildCodexParentLocalInstructions } from "./turn-params.js";
+import { buildCodexParentLocalInstructions, buildTurnStartParams } from "./turn-params.js";
 import type { CodexThreadRouteReservation } from "./turn-router.js";
 import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
@@ -205,8 +204,7 @@ export async function prepareCodexAttemptTurnRequest(
       ),
     });
     const serviceTier = await resolveCodexUltrafastServiceTier({
-      enabled:
-        fastMode === "ultrafast" || (turnAppServer.enableUltrafast === true && fastMode !== false),
+      enabled: fastMode === "ultrafast" && turnAppServer.enableUltrafast !== false,
       serviceTier: turnStartParams.serviceTier,
       model: turnStartParams.model ?? model,
       modelProvider,
@@ -261,7 +259,7 @@ export async function prepareCodexAttemptTurnRequest(
         signal: runAbortController.signal,
         assertCurrent: () => {
           params.hostCapabilities.assertActive();
-          connection.assertCurrent();
+          connection.assertLegacyCurrent();
           if (
             resourceState.thread !== inferenceThread ||
             getCodexInferenceThread(resourceState.client, inferenceThread.threadId) !==
@@ -326,6 +324,7 @@ export async function prepareCodexAttemptTurnRequest(
         await turnClient.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
           signal: runAbortController.signal,
+          withCurrent: connection.withCurrent,
           assertCurrent: () => {
             assertTurnCurrent();
             continuation?.dispatch();

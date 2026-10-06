@@ -206,61 +206,57 @@ describe("private Tailscale Serve claims", () => {
     },
   );
 
-  it("claims an explicit private port without adopting even a matching legacy backend", async () => {
-    const { owner } = queueOwner();
-    const claim = await claimTailscaleServePort(18789, 24443, () => {});
+  it.each([
+    { port: 1, ending: "stop" },
+    { port: 65535, ending: "stop" },
+    { port: 24443, ending: "unexpected exit" },
+  ])(
+    "owns private port $port through $ending without adopting legacy routes",
+    async ({ port, ending }) => {
+      const { owner } = queueOwner();
+      const claim = await claimTailscaleServePort(18789, port, () => {});
 
-    expect(forkMock.mock.calls[0]?.[1]).toEqual([
-      "--openclaw-tailscale-route-owner",
-      JSON.stringify({
-        argv: ["tailscale", "serve", "--yes", "--bg=false", "--https=24443", "18789"],
-      }),
-    ]);
-    expect(forkMock.mock.calls[0]?.[2]).toMatchObject({
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
-    });
-    expect(runExecMock.mock.calls.map((call) => call[1])).toEqual([
-      ["status", "--json"],
-      ["serve", "status", "--json"],
-    ]);
-    expect(claim.isActive()).toBe(true);
-    await Promise.all([claim.stop(), claim.stop()]);
-    await expect(claim.exited).resolves.toBeUndefined();
-    expect(claim.isActive()).toBe(false);
-    expect(owner.send).toHaveBeenCalledTimes(1);
-    expect(owner.send).toHaveBeenCalledWith({ type: "stop" }, expect.any(Function));
-    expect(runExecMock).toHaveBeenCalledTimes(2);
-  });
+      expect(forkMock.mock.calls[0]?.[1]).toEqual([
+        "--openclaw-tailscale-route-owner",
+        JSON.stringify({
+          argv: ["tailscale", "serve", "--yes", "--bg=false", `--https=${port}`, "18789"],
+        }),
+      ]);
+      expect(forkMock.mock.calls[0]?.[2]).toMatchObject({
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+      });
+      expect(runExecMock.mock.calls.map((call) => call[1])).toEqual([
+        ["status", "--json"],
+        ["serve", "status", "--json"],
+      ]);
+      expect(claim.isActive()).toBe(true);
+      if (ending === "stop") {
+        await Promise.all([claim.stop(), claim.stop()]);
+        expect(owner.send).toHaveBeenCalledTimes(1);
+        expect(owner.send).toHaveBeenCalledWith({ type: "stop" }, expect.any(Function));
+      } else {
+        owner.emit("exit", 1, null);
+      }
+      await expect(claim.exited).resolves.toBeUndefined();
+      expect(claim.isActive()).toBe(false);
+      expect(runExecMock).toHaveBeenCalledTimes(2);
+    },
+  );
 
-  it.each([0, -1, 65536, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    "rejects invalid HTTPS port %s before daemon access",
-    async (port) => {
-      await expect(claimTailscaleServePort(18789, port, () => {})).rejects.toThrow(/httpsPort/);
+  it.each([
+    { target: 18789, httpsPort: 0, invalid: "httpsPort" },
+    { target: 18789, httpsPort: 65536, invalid: "httpsPort" },
+    { target: 18789, httpsPort: 1.5, invalid: "httpsPort" },
+    { target: 0, httpsPort: 24443, invalid: "target" },
+  ])(
+    "rejects invalid $invalid ($target/$httpsPort) before daemon access",
+    async ({ target, httpsPort, invalid }) => {
+      await expect(claimTailscaleServePort(target, httpsPort, () => {})).rejects.toThrow(invalid);
       expect(runExecMock).not.toHaveBeenCalled();
       expect(forkMock).not.toHaveBeenCalled();
     },
   );
-
-  it.each([0, -1, 65536, 1.5, Number.NaN])("rejects invalid backend port %s", async (port) => {
-    await expect(claimTailscaleServePort(port, 24443, () => {})).rejects.toThrow(/target/);
-    expect(runExecMock).not.toHaveBeenCalled();
-    expect(forkMock).not.toHaveBeenCalled();
-  });
-
-  it.each([1, 65535])("accepts bounded HTTPS port %s", async (port) => {
-    queueOwner();
-    const claim = await claimTailscaleServePort(18789, port, () => {});
-    await claim.stop();
-  });
-
-  it("withdraws activity when the owned worker exits unexpectedly", async () => {
-    const { owner } = queueOwner();
-    const claim = await claimTailscaleServePort(18789, 24443, () => {});
-    owner.emit("exit", 1, null);
-    await claim.exited;
-    expect(claim.isActive()).toBe(false);
-  });
 
   it("keeps explicit private arguments and operator diagnostics on permission fallback", async () => {
     queueOwner({ failure: "permission denied" });

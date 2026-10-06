@@ -56,7 +56,7 @@ import {
   type CodexSandboxExecEnvironment,
 } from "./sandbox-exec-server.js";
 import { buildScheduledCodexAppAuthorityInputFingerprint } from "./scheduled-app-authority.js";
-import type { CodexAppServerBindingStore } from "./session-binding.js";
+import type { CodexBindingAuthority, CodexAppServerBindingStore } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrent,
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
@@ -68,14 +68,12 @@ import {
   type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
+import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
 import {
   CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED,
   CodexThreadClientReplacementError,
 } from "./thread-lifecycle-errors.js";
-import {
-  startOrResumeThread,
-  type CodexContextEngineThreadBootstrapProjection,
-} from "./thread-lifecycle.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import { isCodexWebSocketOpenFailure } from "./transport-websocket.js";
 import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from "./turn-router.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
@@ -84,8 +82,13 @@ const CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS = 3;
 
 type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 
+/**
+ * Starts or resumes the Codex app-server thread and returns the resources the
+ * run loop must later release.
+ */
 export async function startCodexAttemptThread(params: {
   assertCurrent?: () => void;
+  authority?: CodexBindingAuthority;
   attemptClientFactory: CodexAppServerClientFactory;
   bindingStore: CodexAppServerBindingStore;
   runtime?: PluginRuntime;
@@ -212,7 +215,12 @@ export async function startCodexAttemptThread(params: {
               throw new CodexAppServerStartupError("aborted");
             }
             startupClient = await params.attemptClientFactory({
-              assertCurrent: params.assertCurrent,
+              // Process startup retains its synchronous admission contract. Ordinary
+              // native requests use the retained worker authority at wire admission.
+              assertCurrent: () => {
+                params.assertCurrent?.();
+                params.authority?.assertLegacyCurrent();
+              },
               startOptions: params.appServer.start,
               pluginConfig: params.pluginConfig,
               ...(params.startupPreparedAuth
@@ -447,6 +455,7 @@ export async function startCodexAttemptThread(params: {
                 reserveResumeThread,
                 bindingStore: params.bindingStore,
                 assertCurrent: params.assertCurrent,
+                authority: params.authority,
                 params: params.buildAttemptParams(),
                 runtimeModelId: params.runtimeModelId,
                 agentId: params.sessionAgentId,

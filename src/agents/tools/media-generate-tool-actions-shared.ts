@@ -46,6 +46,7 @@ export function createMediaGenerateProviderListActionResult<
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   listModes: (provider: TProvider) => string[];
   summarizeCapabilities: (
     provider: TProvider,
@@ -76,6 +77,7 @@ export function createMediaGenerateProviderListActionResult<
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
+        authProfileStoreSource: params.authProfileStoreSource,
       }),
       authEnvVars: getProviderEnvVarsCore(provider.id),
       capabilities: provider.capabilities,
@@ -89,10 +91,7 @@ export function createMediaGenerateProviderListActionResult<
   });
 
   const lines = providerDetails.flatMap((details, index) => {
-    const provider = params.providers.at(index);
-    if (!provider) {
-      return [];
-    }
+    const provider = params.providers[index]!;
     const authHints = details.authEnvVars;
     const capabilities = params.summarizeCapabilities(provider);
     const modelLine = details.models.length > 0 ? details.models.join(", ") : "unknown";

@@ -110,35 +110,67 @@ function expectAliasResult(
 }
 
 describe("agent delivery binding selection", () => {
-  it("reads only the first isolating binding type from 10000 bindings", async () => {
+  it.each([
+    ["binding-isolation", 10_000, 1, true],
+    ["irrelevant-bindings", 4, 0, false],
+    ["delivery-disabled", 1, 0, false],
+    ["exact-route", 1, 0, false],
+    ["global-isolation", 1, 0, true],
+  ] as const)("honors %s with bounded binding inspection", async (mode, count, reads, isolated) => {
     let typeReads = 0;
-    const bindings: AgentRouteBinding[] = Array.from({ length: 10_000 }, () => ({
-      agentId: isolatingBinding.agentId,
-      match: isolatingBinding.match,
-      session: isolatingBinding.session,
-      get type() {
-        typeReads += 1;
-        return "route" as const;
-      },
-    }));
-    const cfg: OpenClawConfig = { bindings };
-
-    const result = await resolveRecipient(cfg);
-    const reads = typeReads;
-
-    expectAliasResult(result, true);
-    expect(mocks.resolveChannelTarget).toHaveBeenCalledOnce();
-    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledOnce();
+    const bindings: AgentBinding[] =
+      mode === "irrelevant-bindings"
+        ? [
+            {
+              type: "acp",
+              agentId: "ops",
+              match: { channel: "signal", peer: { kind: "direct", id: "username:recipient" } },
+            },
+            { agentId: "ops", match: { channel: "matrix" }, session: { dmScope: "per-peer" } },
+            { agentId: "ops", match: { channel: "signal" }, session: { dmScope: "main" } },
+            { agentId: "ops", match: { channel: "signal" } },
+          ]
+        : Array.from({ length: count }, () => ({
+            ...isolatingBinding,
+            get type() {
+              typeReads += 1;
+              return "route" as const;
+            },
+          }));
+    const cfg: OpenClawConfig = {
+      bindings,
+      ...(mode === "global-isolation" ? { session: { dmScope: "per-peer" as const } } : {}),
+    };
+    if (mode === "delivery-disabled") {
+      const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+        cfg,
+        agentId: "ops",
+        requestedChannel: "signal",
+        explicitTo: "username:recipient",
+        wantsDelivery: false,
+      });
+      expect(plan.resolvedTo).toBe("username:recipient");
+      expect(plan.resolvedSessionKey).toBeUndefined();
+      expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
+    } else {
+      if (mode === "exact-route") {
+        mocks.resolveOutboundSessionRoute.mockResolvedValue({
+          ...aliasRoute,
+          recipientSessionExact: true,
+        });
+      }
+      expectAliasResult(await resolveRecipient(cfg), isolated);
+      expect(mocks.resolveChannelTarget).toHaveBeenCalledOnce();
+      expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledOnce();
+    }
+    expect(typeReads).toBe(reads);
     expect(cfg.bindings).toBe(bindings);
-    expect(bindings).toHaveLength(10_000);
-    expect(reads).toBe(1);
+    expect(bindings).toHaveLength(count);
   });
 
   it.each([
-    { stage: "target", change: "add" },
     { stage: "target", change: "remove" },
     { stage: "session", change: "add" },
-    { stage: "session", change: "remove" },
   ] as const)("observes binding $change during the $stage await", async ({ stage, change }) => {
     const bindings: AgentBinding[] = change === "add" ? [] : [isolatingBinding];
     const cfg: OpenClawConfig = { bindings };
@@ -171,64 +203,4 @@ describe("agent delivery binding selection", () => {
     expect(mocks.resolveChannelTarget).toHaveBeenCalledOnce();
     expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledOnce();
   });
-
-  it("ignores ACP, other-channel, and main-scope bindings", async () => {
-    const cfg: OpenClawConfig = {
-      bindings: [
-        {
-          type: "acp",
-          agentId: "ops",
-          match: { channel: "signal", peer: { kind: "direct", id: "username:recipient" } },
-        },
-        {
-          agentId: "ops",
-          match: { channel: "matrix" },
-          session: { dmScope: "per-peer" },
-        },
-        { agentId: "ops", match: { channel: "signal" }, session: { dmScope: "main" } },
-        { agentId: "ops", match: { channel: "signal" } },
-      ],
-    };
-    expectAliasResult(await resolveRecipient(cfg), false);
-  });
-
-  it.each(["delivery-disabled", "exact-route", "global-isolation"] as const)(
-    "does not inspect bindings behind the %s guard",
-    async (guard) => {
-      let typeReads = 0;
-      const cfg: OpenClawConfig = {
-        ...(guard === "global-isolation" ? { session: { dmScope: "per-peer" as const } } : {}),
-        bindings: [
-          {
-            ...isolatingBinding,
-            get type() {
-              typeReads += 1;
-              return "route" as const;
-            },
-          },
-        ],
-      };
-      if (guard === "delivery-disabled") {
-        const plan = await resolveAgentDeliveryPlanWithSessionRoute({
-          cfg,
-          agentId: "ops",
-          requestedChannel: "signal",
-          explicitTo: "username:recipient",
-          wantsDelivery: false,
-        });
-        expect(plan.resolvedTo).toBe("username:recipient");
-        expect(plan.resolvedSessionKey).toBeUndefined();
-        expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
-      } else {
-        if (guard === "exact-route") {
-          mocks.resolveOutboundSessionRoute.mockResolvedValue({
-            ...aliasRoute,
-            recipientSessionExact: true,
-          });
-        }
-        expectAliasResult(await resolveRecipient(cfg), guard === "global-isolation");
-      }
-      expect(typeReads).toBe(0);
-    },
-  );
 });

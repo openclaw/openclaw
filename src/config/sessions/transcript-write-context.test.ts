@@ -66,47 +66,49 @@ const mutations = [
 ];
 
 describe("owned transcript commit boundary", () => {
-  it.each(mutations)(
-    "rejects a revoked owner at $name without a scalar writer",
-    async ({ write }) => {
-      await withWriteTarget(async (target) => {
-        const revoked = new Error("owner closed before commit");
-        await withOwnedSessionTranscriptWrites(
-          {
-            sessionTarget: target,
-            assertCommitAllowed: () => {
-              throw revoked;
-            },
-            withTranscriptWrite: async (run) => await run(),
-          },
-          async () => {
-            expect(() => write(target)).toThrow(revoked);
-          },
-        );
-        expect(loadSessionEntry(target)).toBeUndefined();
-        expect(loadTranscriptEventsSync(target)).toEqual([]);
-      });
-    },
-  );
-
-  it.each(mutations)("rejects a different physical target at $name", async ({ write }) => {
+  it.each(
+    mutations.flatMap((mutation) =>
+      [
+        { reason: "a revoked owner without a scalar writer", rebound: false },
+        { reason: "a different physical target", rebound: true },
+      ].map(({ reason, rebound }) => ({
+        name: mutation.name,
+        write: mutation.write,
+        reason,
+        rebound,
+      })),
+    ),
+  )("rejects $reason at $name", async ({ write, rebound }) => {
     await withWriteTarget(async (target) => {
-      const other = { ...target, sessionId: "other-session" };
-      replaceSessionEntrySync(other, { sessionId: other.sessionId, updatedAt: 1 });
-      appendTranscriptEventSync(other, { type: "custom", id: "original" });
-      const before = loadTranscriptEventsSync(other);
+      const writeTarget = rebound ? { ...target, sessionId: "other-session" } : target;
+      if (rebound) {
+        replaceSessionEntrySync(writeTarget, { sessionId: writeTarget.sessionId, updatedAt: 1 });
+        appendTranscriptEventSync(writeTarget, { type: "custom", id: "original" });
+      }
+      const before = rebound ? loadTranscriptEventsSync(writeTarget) : [];
+      const revoked = new Error("owner closed before commit");
       await withOwnedSessionTranscriptWrites(
         {
           sessionTarget: target,
-          assertCommitAllowed: () => {},
+          assertCommitAllowed: () => {
+            if (!rebound) {
+              throw revoked;
+            }
+          },
           withTranscriptWrite: async (run) => await run(),
         },
         async () => {
-          expect(() => write(other)).toThrow(SessionTranscriptWriterClaimReboundError);
+          expect(() => write(writeTarget)).toThrow(
+            rebound ? SessionTranscriptWriterClaimReboundError : revoked,
+          );
         },
       );
-      expect(loadSessionEntry(other)?.updatedAt).toBe(1);
-      expect(loadTranscriptEventsSync(other)).toEqual(before);
+      if (rebound) {
+        expect(loadSessionEntry(writeTarget)?.updatedAt).toBe(1);
+      } else {
+        expect(loadSessionEntry(writeTarget)).toBeUndefined();
+      }
+      expect(loadTranscriptEventsSync(writeTarget)).toEqual(before);
     });
   });
 
@@ -157,63 +159,43 @@ describe("owned transcript writer fence scope", () => {
     expectedWriterRunId: "run-running",
   };
 
-  async function withRunningWriter(run: () => void): Promise<void> {
+  it("scopes writer fences to matching keys and targets while retaining the ambient lookup", async () => {
+    const fence = { expectedLifecycleRevision: "rev-3", expectedWriterRunId: "run-running" };
+    const cases: Array<{
+      request: Parameters<typeof getOwnedSessionTranscriptWriterFence>[0];
+      allowed: boolean;
+    }> = [
+      { request: { sessionKey: runningTarget.sessionKey }, allowed: true },
+      { request: { sessionKey: "agent:main:elsewhere" }, allowed: false },
+      { request: { sessionTarget: runningTarget }, allowed: true },
+      {
+        request: {
+          sessionTarget: {
+            ...runningTarget,
+            storePath: "/state/agents/other/openclaw-agent.sqlite",
+          },
+        },
+        allowed: false,
+      },
+      { request: undefined, allowed: true },
+    ];
     await withOwnedSessionTranscriptWrites(
       {
         sessionKey: runningTarget.sessionKey,
         sessionTarget: runningTarget,
         withTranscriptWrite: async (operation) => await operation(),
       },
-      async () => run(),
+      async () => {
+        for (const { request, allowed } of cases) {
+          const actual = getOwnedSessionTranscriptWriterFence(request);
+          if (allowed) {
+            expect(actual).toEqual(fence);
+          } else {
+            expect(actual).toBeUndefined();
+          }
+        }
+      },
     );
-  }
-
-  it("inherits the fence for a caller that names the running session by key alone", async () => {
-    await withRunningWriter(() => {
-      expect(
-        getOwnedSessionTranscriptWriterFence({ sessionKey: runningTarget.sessionKey }),
-      ).toEqual({
-        expectedLifecycleRevision: "rev-3",
-        expectedWriterRunId: "run-running",
-      });
-    });
-  });
-
-  it("withholds the fence from a caller naming another session by key alone", async () => {
-    await withRunningWriter(() => {
-      // A key-only caller cannot form a target, so before this scoping it was refused by
-      // the target comparison and fell back to the ambient claim - a claim about a
-      // different session entirely.
-      expect(
-        getOwnedSessionTranscriptWriterFence({ sessionKey: "agent:main:elsewhere" }),
-      ).toBeUndefined();
-    });
-  });
-
-  it("still compares targets when the caller can express one", async () => {
-    await withRunningWriter(() => {
-      expect(getOwnedSessionTranscriptWriterFence({ sessionTarget: runningTarget })).toEqual({
-        expectedLifecycleRevision: "rev-3",
-        expectedWriterRunId: "run-running",
-      });
-      expect(
-        getOwnedSessionTranscriptWriterFence({
-          sessionTarget: {
-            ...runningTarget,
-            storePath: "/state/agents/other/openclaw-agent.sqlite",
-          },
-        }),
-      ).toBeUndefined();
-    });
-  });
-
-  it("keeps the unscoped lookup reading the ambient claim", async () => {
-    await withRunningWriter(() => {
-      expect(getOwnedSessionTranscriptWriterFence()).toEqual({
-        expectedLifecycleRevision: "rev-3",
-        expectedWriterRunId: "run-running",
-      });
-    });
     expect(getOwnedSessionTranscriptWriterFence()).toBeUndefined();
   });
 });

@@ -2,6 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -230,21 +231,8 @@ function createSqliteLedgerQueries(db: DatabaseSync) {
   };
 }
 
-const sqliteLedgerQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof createSqliteLedgerQueries>
->();
-
-function getSqliteLedgerQueries(db: DatabaseSync) {
-  let queries = sqliteLedgerQueries.get(db);
-  if (!queries) {
-    // Retain compilation per physical connection; native statements and their
-    // invalidation remain owned by the bounded shared executor cache.
-    queries = createSqliteLedgerQueries(db);
-    sqliteLedgerQueries.set(db, queries);
-  }
-  return queries;
-}
+// Native statements and their invalidation remain owned by the shared executor cache.
+const getSqliteLedgerQueries = createSqliteQueryCache(createSqliteLedgerQueries);
 
 function sqliteRowToLedgerEvent(row: AcpReplayEventRow): AcpEventLedgerEntry | undefined {
   let update: unknown;

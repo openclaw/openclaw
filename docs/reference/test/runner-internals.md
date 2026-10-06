@@ -41,6 +41,15 @@ Runtime-consuming tests prepare checkout artifacts through the explicit build ow
 not by launching the CLI with `--version`. Preparation reuses source-runner freshness
 checks and checkout artifact ownership, without updater service or database-maintenance
 custody. Current artifacts need no writable checkout or service inspection.
+`build-all` fingerprints production inputs in the existing stamps. Test preparation
+can reuse a coherent runtime after a source refresh or test-only correction,
+including a new private transport commit. Ordinary CLI and immutable deployment
+HEAD checks remain strict; UI E2E preparation also keeps its current-head checks.
+Changed production inputs, build configuration, dependencies, compiler identity,
+or required missing outputs still require preparation. Partial postbuilds that skip
+static assets cannot satisfy readers requiring those assets. A full build before E2E
+checks should use `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build`; scope that flag to the
+build command so its artifacts satisfy the strongest test prerequisite.
 
 Before writing, automatic preparation requires verified artifact separation or an
 observed offline managed Gateway. On Linux it reads the loaded command location without reading service
@@ -130,7 +139,7 @@ be local, and a valid root `package.json` bounds source-package scope lookup.
 The shared snapshot policy still validates consumed bytes and resolution topology.
 Source and namespace changes during compilation prevent acceptance. New local
 module candidates invalidate cached records, as do ancestor-install appearance
-and removal. Outside probes always see missing files, so later changes to ancestor
+and removal. Outside checks always see missing files, so later changes to ancestor
 package contents cannot enter the compiler's filesystem view.
 Each emitted declaration must have one source-map owner in the successful compiler
 membership. The bundler consumes those declarations under their original source
@@ -177,6 +186,12 @@ Gateway port claims remain in the common temporary directory outside all enclosi
 Vitest namespaces, found through their explicit resource owners. Parallel invocations
 therefore share port ownership while a fixture hands its reserved socket to a child;
 removing one invocation's files cannot remove another fixture's port claim.
+
+A fixture that binds a Gateway, in-process or spawned, on a shared pool port holds
+that port's claim from selection until the Gateway closes. A Gateway retries a busy
+port while starting, so an unclaimed fixture can take another fixture's port during
+its handoff. `getDeterministicFreePortBlock` is a check, not a lease; in-process
+Gateway E2E fixtures use `acquireGatewayE2ePortBlock` with `startClaimedGateway`.
 
 Live-aware setup still loads the original profile and stages live state when
 requested. A bounded invocation artifact carries the original home to that setup;
@@ -229,7 +244,7 @@ reuse during the file and releasing it before isolated fork shutdown.
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
 - `test/helpers/openclaw-test-instance.ts`: process-level E2E tests needing a running Gateway, CLI env, log capture, and cleanup in one place.
-- Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node --import tsx scripts/lib/openclaw-test-state.mts -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness probes, state env export, log dumps, and process cleanup.
+- Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node --import tsx scripts/lib/openclaw-test-state.mts -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness checks, state env export, log dumps, and process cleanup.
 
 `createOpenClawTestState` selects and owns temporary paths and process environment
 selectors. It is not filesystem sandboxing and does not stop external producers.

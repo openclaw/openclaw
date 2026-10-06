@@ -55,7 +55,7 @@ function createDispatch(
       resolveMoveDestination: async () => undefined,
       runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
       runReclaimBarrier: async ({ begin, reclaim }) =>
-        await reclaim({ kind: "local", path: support.testState.root }, begin()),
+        await reclaim({ kind: "local", path: support.testState.root }, await begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       ...createWorkerWorkspaceRecoveryFixture({
         resolveWorkspace: async () => ({ kind: "local", path: support.testState.root }),
@@ -205,7 +205,7 @@ describe("targeted worker placement recovery", () => {
         },
         target: { kind: "profile", profileId: "development" },
       });
-      const reconciling = placements.startReconcile({
+      const reconciling = await placements.startReconcile({
         sessionId: active.sessionId,
         environmentId: sourceId,
         ownerEpoch: sourceIdentity.ownerEpoch,

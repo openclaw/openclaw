@@ -107,6 +107,7 @@ describe("startup legacy store classification", () => {
       const stateDir = path.join(root, "state");
       const configPath = path.join(root, "openclaw.json");
       const config = {
+        meta: { migrations: { webhookListeners: true } },
         gateway: { mode: "local", auth: { mode: "none" } },
         agents: {
           ownership: "explicit",

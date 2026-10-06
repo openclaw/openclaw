@@ -5,7 +5,6 @@ import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import { removePathValue, setPathValue } from "../lib/config-form-utils.ts";
-import { arrayAddCandidates } from "./config-form-array-candidates.ts";
 import { ConfigFormArrayIdentity } from "./config-form-array-identity.ts";
 import {
   openCollectionDraft,
@@ -15,12 +14,16 @@ import {
 import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import { arrayItemSchema } from "./config-form.array-items.ts";
 import {
+  arrayConstraintCandidates,
   arrayInputConstraints,
   canApplyArrayCandidate,
   canApplyObjectCandidate,
   configValuesEqual,
+  defaultValue,
   isSupportedConfigValueValid,
   isObjectPropertyNameValid,
+  MAX_AUTO_ARRAY_DEFAULT_ITEMS,
+  NO_SAFE_DEFAULT,
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
   objectPropertySchema,
@@ -29,8 +32,10 @@ import {
 import { renderMapField } from "./config-form.node.collection-map.ts";
 import {
   configChildRenderOptions,
-  renderCollectionDefaultDescription,
+  getSensitiveRenderState,
+  removeCollectionRow,
   renderFieldRow,
+  renderSchemaDefaultDescription,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
@@ -231,7 +236,9 @@ function renderArrayContent(
       : undefined;
   const arrayValue = arraySource ?? [];
   const arraySourceIdentity = arraySource ?? UNSET_ARRAY_SOURCE_IDENTITY;
-  const defaultDescription = renderCollectionDefaultDescription(params, arrayValue);
+  const defaultDescription = getSensitiveRenderState({ ...params, value: arrayValue }).isRedacted
+    ? nothing
+    : renderSchemaDefaultDescription(schema, value);
   const rowIdentities = rows.read(arrayValue);
   const patch = (nextValue: unknown[], identities: readonly symbol[]) =>
     rows.patch(nextValue, identities, (next) => onPatch(path, next));
@@ -242,16 +249,47 @@ function renderArrayContent(
   } = arrayInputConstraints(schema);
   const itemSchemaAt = (index: number): JsonSchema =>
     arrayItemSchema(schema, index) ?? (tupleItems ? {} : itemsSchema);
-  const { atomicCandidate, autoCandidate } = arrayAddCandidates({
-    schema,
-    value: arrayValue,
-    minimumItems,
-    maximumItems,
-    uniqueItems,
-    isUnset: value === undefined,
-    isRequired: params.isRequired ?? false,
-    itemSchemaAt,
-  });
+  const requiredAppendCount = Math.max(1, minimumItems - arrayValue.length);
+  const autoAppendCount =
+    requiredAppendCount > MAX_AUTO_ARRAY_DEFAULT_ITEMS ? 1 : requiredAppendCount;
+  const generatedItems: unknown[] = [];
+  for (let offset = 0; offset < autoAppendCount; offset += 1) {
+    const generatedDefault = defaultValue(itemSchemaAt(arrayValue.length + offset));
+    if (generatedDefault === NO_SAFE_DEFAULT) {
+      generatedItems.length = 0;
+      break;
+    }
+    generatedItems.push(generatedDefault);
+  }
+  const generatedCandidate =
+    generatedItems.length === autoAppendCount ? [...arrayValue, ...generatedItems] : undefined;
+  const autoCandidate =
+    generatedCandidate !== undefined &&
+    !uniqueItems &&
+    (maximumItems === undefined || generatedCandidate.length <= maximumItems) &&
+    (generatedCandidate.length < minimumItems ||
+      isSupportedConfigValueValid(schema, generatedCandidate))
+      ? generatedCandidate
+      : undefined;
+
+  const currentValueValid = isSupportedConfigValueValid(schema, arrayValue);
+  const constrainedCandidate = arrayConstraintCandidates(schema).find(
+    (candidate) =>
+      isSupportedConfigValueValid(schema, candidate) &&
+      (value === undefined ||
+        !currentValueValid ||
+        (candidate.length > arrayValue.length &&
+          arrayValue.every((entry, index) => configValuesEqual(entry, candidate[index])))),
+  );
+  const wholeArrayDefault =
+    constrainedCandidate ??
+    (value === undefined &&
+    params.isRequired &&
+    maximumItems === 0 &&
+    isSupportedConfigValueValid(schema, [])
+      ? []
+      : undefined);
+  const atomicCandidate = wholeArrayDefault && structuredClone(wholeArrayDefault);
   const canAppend = maximumItems === undefined || arrayValue.length < maximumItems;
   const requiresDraft = atomicCandidate === undefined && autoCandidate === undefined;
   const nextItemSchema = itemSchemaAt(arrayValue.length);
@@ -411,22 +449,10 @@ function renderArrayContent(
                         aria-label=${t("configForm.removeItem")}
                         ?disabled=${disabled || arrayValue.length <= minimumItems || !canRemove}
                         @click=${(event: MouseEvent) => {
-                          const focused = event.currentTarget === document.activeElement;
-                          const add = document.activeElement
-                            ?.closest(".cfg-array")
-                            ?.querySelector<HTMLButtonElement>("button[aria-controls]");
-                          if (
-                            canRemove &&
-                            patch(nextValue, rowIdentities.toSpliced(index, 1)) &&
-                            focused
-                          ) {
-                            // A keyed removal retires the focused button; keep keyboard
-                            // navigation in this array without stealing a later focus choice.
-                            queueMicrotask(() => {
-                              if (document.activeElement === document.body) {
-                                add?.focus();
-                              }
-                            });
+                          if (canRemove) {
+                            removeCollectionRow(event, () =>
+                              patch(nextValue, rowIdentities.toSpliced(index, 1)),
+                            );
                           }
                         }}
                       >

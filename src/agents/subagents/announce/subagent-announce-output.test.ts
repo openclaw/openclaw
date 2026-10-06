@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import {
   testing,
-  applySubagentWaitOutcome,
   buildCompactAnnounceStatsLine,
   buildChildCompletionFindings,
   dedupeLatestChildCompletionRows,
@@ -588,21 +587,6 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain(`${"&lt;".repeat(2_000)}-required-tail\n</prompt-data>`);
   });
 
-  it("keeps failed ANNOUNCE_SKIP child completions visible", () => {
-    const findings = buildChildCompletionFindings([
-      {
-        childSessionKey: "agent:main:subagent:silent",
-        task: "silent task",
-        createdAt: 1,
-        completion: { resultText: "ANNOUNCE_SKIP" },
-        execution: { outcome: { status: "error", error: "boom" } },
-      },
-    ]);
-
-    expect(findings).toContain("status: error: boom");
-    expect(findings).toContain("ANNOUNCE_SKIP");
-  });
-
   it("does not recover result text from delivery metadata after completion text is cleared", () => {
     const findings = buildChildCompletionFindings([
       {
@@ -642,39 +626,43 @@ describe("buildChildCompletionFindings", () => {
 
   it.each([
     {
-      name: "visible",
+      name: "required visible",
+      required: true,
       terminalReply: { disposition: "visible", text: "authoritative final output" } as const,
       resultText: "older captured output",
       expected: "authoritative final output",
     },
     {
-      name: "silent",
+      name: "required silent",
+      required: true,
       terminalReply: { disposition: "silent" } as const,
       resultText: "NO_REPLY",
-      expected: undefined,
+      expected: "(no output)",
     },
     {
-      name: "empty",
+      name: "required empty",
+      required: true,
       terminalReply: { disposition: "empty" } as const,
       resultText: null,
-      expected: undefined,
+      expected: "(no output)",
     },
     {
-      name: "announce skip",
-      terminalReply: { disposition: "visible", text: "ANNOUNCE_SKIP" } as const,
-      resultText: "ANNOUNCE_SKIP",
-      expected: undefined,
+      name: "optional empty",
+      required: false,
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+      expected: "(no output)",
     },
   ])(
-    "keeps producer-owned $name terminal evidence authoritative over older fallback",
-    ({ terminalReply, resultText, expected }) => {
+    "preserves $name terminal evidence as a child finding",
+    ({ required, terminalReply, resultText, expected }) => {
       const findings = buildChildCompletionFindings([
         {
           childSessionKey: "agent:main:subagent:child",
           task: "child task",
           createdAt: 1,
           completion: {
-            required: true,
+            required,
             resultText,
             fallbackResultText: "older captured fallback",
             terminalReply,
@@ -683,16 +671,13 @@ describe("buildChildCompletionFindings", () => {
         },
       ]);
 
-      if (expected === undefined) {
-        expect(findings).toBeUndefined();
-      } else {
-        expect(findings).toContain(expected);
-        expect(findings).not.toContain("older captured output");
-      }
+      expect(findings).toContain(expected);
+      expect(findings).not.toContain("older captured output");
+      expect(findings).not.toContain("older captured fallback");
     },
   );
 
-  it.each(["ANNOUNCE_SKIP", "REPLY_SKIP", "HEARTBEAT_OK"])(
+  it.each(["HEARTBEAT_OK"])(
     "does not override an intentional %s completion with fallback output",
     (resultText) => {
       const findings = buildChildCompletionFindings([
@@ -718,7 +703,7 @@ describe("buildChildCompletionFindings", () => {
         childSessionKey: "agent:main:subagent:silent",
         task: "silent task",
         createdAt: 1,
-        completion: { resultText: "ANNOUNCE_SKIP" },
+        completion: { terminalReply: { disposition: "silent" } },
         execution: { outcome: { status: "ok" } },
       },
       {
@@ -754,77 +739,5 @@ describe("buildChildCompletionFindings", () => {
 
     expect(forward).toBe(reverse);
     expect(forward).toMatch(/1\. Child task[\s\S]*A task[\s\S]*2\. Child task[\s\S]*Z task/);
-  });
-});
-
-describe("applySubagentWaitOutcome", () => {
-  it.each([
-    {
-      name: "treats blocked ok waits as errors",
-      wait: {
-        status: "ok",
-        livenessState: "blocked",
-        error: "Context overflow: prompt too large for the model.",
-      },
-      expected: { status: "error", error: "Context overflow: prompt too large for the model." },
-    },
-    {
-      name: "treats abandoned ok waits as incomplete failures",
-      wait: { status: "ok", livenessState: "abandoned" },
-      expected: { status: "error", error: "Agent run ended before producing a complete result." },
-    },
-    {
-      name: "keeps provider hard timeouts stronger than blocked metadata",
-      wait: {
-        status: "error",
-        livenessState: "blocked",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: "model timed out",
-      },
-      expected: { status: "timeout" },
-    },
-    ...(["rpc", "superseded"] as const).map((stopReason) => ({
-      name: `keeps explicit ${stopReason} cancellation distinct from timeouts`,
-      wait: { status: "timeout", stopReason },
-      expected: { status: "error", error: "subagent run terminated" },
-    })),
-    // Explicit cancellation must outrank blocked liveness (openclaw#125407).
-    ...(["restart", "aborted"] as const).map((stopReason) => ({
-      name: `keeps ${stopReason} as cancellation even when liveness is blocked`,
-      wait: {
-        status: "ok",
-        stopReason,
-        livenessState: "blocked",
-        error: "Context overflow: prompt too large for the model.",
-      },
-      expected: { status: "error", error: "subagent run terminated" },
-    })),
-    {
-      name: "keeps the failure cause on pending-error timeout waits",
-      wait: {
-        status: "timeout",
-        pendingError: true,
-        error: "model returned an unrecoverable tool-call sequence",
-      },
-      expected: { status: "timeout", error: "model returned an unrecoverable tool-call sequence" },
-    },
-    {
-      name: "ignores error text when the run did not end in a pending error",
-      wait: { status: "timeout", error: "waited too long" },
-      expected: { status: "timeout" },
-    },
-  ])("$name", ({ wait, expected }) => {
-    const applied = applySubagentWaitOutcome({
-      wait: { ...wait, startedAt: 100, endedAt: 150 },
-      outcome: undefined,
-    });
-
-    expect(applied.outcome).toEqual({
-      ...expected,
-      startedAt: 100,
-      endedAt: 150,
-      elapsedMs: 50,
-    });
   });
 });

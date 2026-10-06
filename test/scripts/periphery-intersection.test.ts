@@ -186,7 +186,7 @@ describe("shared OpenClawKit Periphery workflow", () => {
       const scan = workflow.jobs?.[jobName]?.steps?.find((step) => step.name === "Scan shared kit");
       expect(scan?.run).toContain("--report-include '../shared/OpenClawKit/Sources/**'");
       expect(scan?.run).toContain(
-        "--retain-files '../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift'",
+        "--retain-files '**/GenerateGatewayProtocol/GatewayModels.swift'",
       );
       expect(scan?.run).not.toContain("--strict");
     }

@@ -65,13 +65,11 @@ export function resolveCodexNativeCommandSandboxBlock(
   subcommand: string,
   args: readonly string[],
 ): string | undefined {
-  if (isReadOnlyCodexGoalCommand(subcommand, args)) {
-    return undefined;
-  }
-  if (!CODEX_NATIVE_EXECUTION_SUBCOMMANDS.has(subcommand)) {
-    return undefined;
-  }
-  if (returnsBeforeNativeCodexExecution(subcommand, args)) {
+  if (
+    isReadOnlyCodexGoalCommand(subcommand, args) ||
+    !CODEX_NATIVE_EXECUTION_SUBCOMMANDS.has(subcommand) ||
+    returnsBeforeNativeCodexExecution(subcommand, args)
+  ) {
     return undefined;
   }
   if (isCodexCliNodeResumeBind(subcommand, args)) {
@@ -139,14 +137,10 @@ function isCodexCliNodeResumeBind(subcommand: string, args: readonly string[]): 
 
 function returnsBeforeNativeCodexResume(args: readonly string[]): boolean {
   const parsed = parseResumeArgs([...args]);
-  const normalizedThreadId = parsed.threadId?.trim();
-  if (parsed.help) {
+  if (parsed.help || !parsed.threadId) {
     return true;
   }
-  if (parsed.host) {
-    return !normalizedThreadId || parsed.bindHere !== true;
-  }
-  return !normalizedThreadId || args.length !== 1;
+  return parsed.host ? parsed.bindHere !== true : args.length !== 1;
 }
 
 export async function handleComputerUseCommand(
@@ -173,7 +167,7 @@ export async function handleComputerUseCommand(
     pluginConfig,
     config: ctx.config,
     agentDir,
-    forceEnable: parsed.action === "install" || parsed.hasOverrides,
+    forceEnable: parsed.action === "install" || Object.keys(parsed.overrides).length > 0,
     ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
   };
   if (parsed.action === "install") {
@@ -304,42 +298,27 @@ function formatNativeGoal(response: JsonValue | undefined): string {
   ].join("\n");
 }
 
-export async function stopConversationTurn(
+export async function controlConversationTurn(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-): Promise<string> {
-  const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
-  const { target, binding } = authority;
-  if (!target) {
-    return "Cannot stop Codex because this command did not include a stable binding identity.";
-  }
-  return (
-    await deps.stopCodexConversationTurn({
-      identity: target.identity,
-      binding,
-      assertCurrent: authority.assertMutationCurrent,
-    })
-  ).message;
-}
-
-export async function steerConversationTurn(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  command: "stop" | "steer",
   message: string,
 ): Promise<string> {
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
   const { target, binding } = authority;
   if (!target) {
-    return "Cannot steer Codex because this command did not include a stable binding identity.";
+    return `Cannot ${command} Codex because this command did not include a stable binding identity.`;
   }
-  return (
-    await deps.steerCodexConversationTurn({
-      identity: target.identity,
-      binding,
-      message,
-      assertCurrent: authority.assertMutationCurrent,
-    })
-  ).message;
+  const params = {
+    identity: target.identity,
+    binding,
+    assertCurrent: authority.assertMutationCurrent,
+  };
+  const result =
+    command === "stop"
+      ? await deps.stopCodexConversationTurn(params)
+      : await deps.steerCodexConversationTurn({ ...params, message });
+  return result.message;
 }
 
 export async function setConversationModel(

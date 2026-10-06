@@ -125,6 +125,11 @@ policy. Supply `assertCurrent` when native session or transport ownership can be
 revoked independently of the host attempt. The host retains this additional check
 through the final media write and publication. Keep the reader alive until preparation finishes.
 
+Raw file paths in these replies belong to the remote workspace. Paths outside
+that workspace fail with a labeled remote-file notice, even if a Gateway-local
+file exists at the same path. HTTP references and securely validated Gateway
+managed media, including `media://` attachments, remain available.
+
 For artifacts whose bytes the provider has already admitted, use `kind: "artifact"`
 with `buffer`, `fileName`, `assertCurrent`, and an optional `signal`. The host
 stages those exact bytes under the captured channel/account byte limit and returns
@@ -280,12 +285,14 @@ snapshots and persisted billing usage separate from this live counter.
 
 ## Agent-end side effects
 
-Native harnesses must call `runAgentEndSideEffects(...)` from
+Native harnesses must await `runAgentEndSideEffectsAsync(...)` from
 `openclaw/plugin-sdk/agent-harness-runtime` after they finalize an attempt. It
-dispatches the portable `agent_end` hook and OpenClaw's research capture
-without delaying interactive replies. Use `awaitAgentEndSideEffects(...)` for
-local, non-interactive runs where the attempt must not resolve until those
-side effects finish. Both helpers accept the same `{ event, ctx }` payload as
+prepares transcript anchors through the history reader before releasing the
+turn lease, then starts the portable `agent_end` hook without waiting for it.
+Use `awaitAgentEndSideEffects(...)` for local, non-interactive runs that must
+also wait for plugin hooks. The synchronous `runAgentEndSideEffects(...)`
+remains deprecated until the next Plugin SDK major. These helpers accept the
+same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.
 

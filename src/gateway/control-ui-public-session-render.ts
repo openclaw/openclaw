@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import MarkdownIt from "markdown-it";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
@@ -12,20 +13,50 @@ import { escapeHtml } from "../shared/html-escape.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
 import { stripSuppressedControlReplyToken } from "./control-reply-text.js";
 
+/** Public-reader lifecycle only; never starts the operator app, socket, or roster. */
+export const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
+  const link=document.getElementById("session-login");
+  if(link)fetch(link.href+"&probe=1",{credentials:"same-origin",redirect:"error",cache:"no-store",signal:AbortSignal.timeout(5000)}).then(response=>{if(response.status===204)location.replace(link.href+location.hash)}).catch(()=>{});
+  document.addEventListener("click",event=>{const login=event.target.closest?.("#session-login");if(login)login.hash=location.hash});
+  let timer,etag="",running=false,retryAt=0;
+  const enabled=()=>document.querySelector("main[data-public-refresh='true']")!==null;
+  const jitter=()=>Math.floor(Math.random()*3000);
+  const schedule=(delay=15000+jitter())=>{clearTimeout(timer);if(!document.hidden&&enabled())timer=setTimeout(refresh,Math.max(delay,retryAt-Date.now()))};
+  async function refresh(){
+    if(document.hidden||!enabled()||running)return;
+    running=true;
+    let delay;
+    try{
+      const response=await fetch(location.href,{credentials:"same-origin",redirect:"error",cache:"no-store",headers:etag?{"If-None-Match":etag}:{},signal:AbortSignal.timeout(10000)});
+      if(response.status===429||response.status===503){const seconds=Number(response.headers.get("Retry-After"));if(Number.isFinite(seconds)&&seconds>0){delay=Math.max(15000,seconds*1000)+jitter();retryAt=Date.now()+delay}return}
+      if(response.status===304||document.hidden)return;
+      if(response.status!==200&&response.status!==404)return;
+      const next=new DOMParser().parseFromString(await response.text(),"text/html");
+      const main=next.querySelector("main[data-public-session]");
+      const current=document.querySelector("main[data-public-session]");
+      if(document.hidden||!main||!current)return;
+      current.replaceWith(main);
+      document.title=next.title;
+      etag=response.headers.get("ETag")||"";
+    }catch{}finally{running=false;schedule(delay)}
+  }
+  document.addEventListener("visibilitychange",()=>{if(document.hidden)clearTimeout(timer);else schedule(0)});
+  schedule();
+})();`;
+
 const MAX_MESSAGES = 100;
 const MAX_MESSAGE_CHARS = 32_768;
 const MAX_DOCUMENT_CHARS = 262_144;
 
 const markdown = new MarkdownIt({ html: false, linkify: false, breaks: true });
 markdown.validateLink = (value) => {
-  try {
-    const url = new URL(value);
-    return (
-      (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password
-    );
-  } catch {
-    return false;
-  }
+  const url = URL.parse(value);
+  return Boolean(
+    url &&
+    (url.protocol === "https:" || url.protocol === "http:") &&
+    !url.username &&
+    !url.password,
+  );
 };
 // Images must not contact third parties or load authenticated session media.
 markdown.renderer.rules.image = () => '<span class="omitted">[Image omitted]</span>';
@@ -111,11 +142,18 @@ export function renderPublicSessionDocument(params: {
   cardUrl: string;
   olderUrl?: string;
   isLatest?: boolean;
+  entryUrl?: string;
+  unavailable?: boolean;
 }): string {
-  const isLatest = params.isLatest !== false;
+  const isLatest = params.isLatest !== false && !params.unavailable;
+  const entryLink = params.entryUrl
+    ? `<a class="login" id="session-login" href="${escapeHtml(params.entryUrl)}">Log in <span aria-hidden="true">→</span></a>`
+    : "";
   const title = escapeHtml(
-    redactToolPayloadText(stripInternalMetadataForDisplay(params.title)).slice(0, 200).trim() ||
-      "Shared conversation",
+    truncateUtf16Safe(
+      redactToolPayloadText(stripInternalMetadataForDisplay(params.title)),
+      200,
+    ).trim() || "Shared conversation",
   );
   let truncated = params.truncated || params.messages.length > MAX_MESSAGES;
   let remaining = MAX_DOCUMENT_CHARS;
@@ -130,7 +168,7 @@ export function renderPublicSessionDocument(params: {
       truncated = true;
       break;
     }
-    const text = message.text.slice(0, Math.min(MAX_MESSAGE_CHARS, remaining));
+    const text = truncateUtf16Safe(message.text, Math.min(MAX_MESSAGE_CHARS, remaining));
     const clipped = text.length < message.text.length;
     truncated ||= clipped;
     remaining -= text.length;
@@ -138,7 +176,9 @@ export function renderPublicSessionDocument(params: {
       `<article class="message ${message.role}" aria-label="${message.role === "user" ? "User" : "Assistant"} message"><h2>${message.role === "user" ? "User" : "OpenClaw"}</h2><div class="content">${markdown.render(text)}${clipped ? '<p class="omitted">Message shortened for this public view.</p>' : ""}</div></article>`,
     );
   }
-  const description = "A public, read-only OpenClaw conversation. No login required.";
+  const description = params.unavailable
+    ? "Log in to open conversations you have access to."
+    : "A public, read-only OpenClaw conversation. No login required.";
   const canonicalMetadata = params.canonicalUrl
     ? `<link rel="canonical" href="${escapeHtml(params.canonicalUrl)}">
 <meta property="og:url" content="${escapeHtml(params.canonicalUrl)}">`
@@ -150,7 +190,7 @@ export function renderPublicSessionDocument(params: {
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex, nofollow">
-${isLatest ? '<meta http-equiv="refresh" content="15">' : ""}
+${isLatest && !params.entryUrl ? '<meta http-equiv="refresh" content="15">' : ""}
 <title>${title} · OpenClaw</title>${canonicalMetadata}
 <meta property="og:type" content="website"><meta property="og:site_name" content="OpenClaw">
 <meta property="og:title" content="${title}"><meta property="og:description" content="${description}">
@@ -159,18 +199,22 @@ ${isLatest ? '<meta http-equiv="refresh" content="15">' : ""}
 <style>
 :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0b1016;color:#edf1f5;font-synthesis:none}
 *{box-sizing:border-box}body{margin:0;border-top:3px solid #ff6257}a{color:#91c9ff;text-underline-offset:3px}a:focus-visible{outline:2px solid #ff8b81;outline-offset:4px}
-main{width:min(820px,calc(100% - 40px));margin:0 auto;padding:44px 0 60px}.brand{font-weight:750;letter-spacing:-.03em;font-size:19px;color:#edf1f5}.brand span{color:#ff786b;margin-right:9px}.masthead{display:flex;align-items:center;justify-content:space-between;gap:16px}.badge{border:1px solid #345044;background:#14281f;border-radius:99px;padding:6px 11px;color:#a3ddba;font-size:12px;font-weight:650;white-space:nowrap}.badge::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#91d6ab;margin-right:7px}
+main{width:min(820px,calc(100% - 40px));margin:0 auto;padding:44px 0 60px}.brand{font-weight:750;letter-spacing:-.03em;font-size:19px;color:#edf1f5}.brand span{color:#ff786b;margin-right:9px}.login{display:inline-flex;align-items:center;gap:14px;border:1px solid #42515f;border-radius:8px;padding:9px 14px;color:#edf1f5;text-decoration:none;font-size:13px;font-weight:650;white-space:nowrap}.login:hover{background:#1a2631}.header-actions{display:flex;align-items:center;gap:14px}.masthead{display:flex;align-items:center;justify-content:space-between;gap:16px}.badge{border:1px solid #345044;background:#14281f;border-radius:99px;padding:6px 11px;color:#a3ddba;font-size:12px;font-weight:650;white-space:nowrap}.badge::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#91d6ab;margin-right:7px}
 h1{font-size:clamp(28px,5vw,42px);line-height:1.15;letter-spacing:-.045em;margin:40px 0 16px;overflow-wrap:anywhere}.intro{color:#a6b3c0;font-size:14px;line-height:1.7;margin:0 0 30px;max-width:660px}.intro strong{color:#d6dee6;font-weight:550}.notice{padding:14px 18px;border:1px solid #554735;background:#261f16;color:#d7c4a7;font-size:13px;line-height:1.6;border-radius:10px;margin-bottom:28px}
 .pagination{display:flex;justify-content:space-between;gap:18px;margin:24px 0;font-size:13px}.pagination a{padding:9px 0}.transcript{border-top:1px solid #26313b}.message{padding:27px 0;display:grid;grid-template-columns:90px minmax(0,1fr);gap:18px;border-bottom:1px solid #202b35}.message h2{margin:3px 0 0;font-size:12px;letter-spacing:.02em;font-weight:650;color:#99a9ba}.assistant h2{color:#ff958b}.content{min-width:0;font-size:15px;line-height:1.75;overflow-wrap:anywhere}.content>:first-child{margin-top:0}.content>:last-child{margin-bottom:0}.content p{margin:0 0 16px}.content h1,.content h2,.content h3,.content h4{color:#edf1f5;font-size:18px;line-height:1.4;letter-spacing:-.02em;margin:24px 0 12px}.content li{padding-left:3px;margin:5px 0}.content ul,.content ol{padding-left:24px}.content blockquote{margin:20px 0;border-left:3px solid #465b6d;padding:0 18px;color:#b1bfcb}.content pre{overflow:auto;max-width:100%;padding:16px 18px;border:1px solid #283541;border-radius:10px;background:#080d12;font-size:12px;line-height:1.7}.content code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.88em}.content :not(pre)>code{background:#1a2631;padding:2px 5px;border-radius:4px}.content table{display:block;max-width:100%;overflow:auto;border-collapse:collapse;font-size:13px}.content th,.content td{border:1px solid #34414d;text-align:left;padding:8px 12px}.content hr{border:0;border-top:1px solid #34414d;margin:24px 0}.omitted,.empty{color:#8c9dad;font-size:13px}.empty{padding:36px 0;line-height:1.7}footer{display:flex;justify-content:space-between;gap:20px;color:#80909f;font-size:12px;line-height:1.6;margin-top:30px}footer a{color:#a6b3c0}
-@media(max-width:560px){main{width:calc(100% - 32px);padding-top:26px}.message{display:block;padding:23px 0}.message h2{margin:0 0 10px}.content h2{margin:24px 0 12px}.badge{font-size:11px}h1{margin-top:32px}footer{display:block}footer a{display:inline-block;margin-top:10px}}
-</style></head><body><main>
-<header><div class="masthead"><div class="brand"><span aria-hidden="true">✳</span>OpenClaw</div><span class="badge">Public · Read-only</span></div>
-<h1>${title}</h1><p class="intro"><strong>Shared with everyone, no login required.</strong> This ${isLatest ? "live view" : "page"} includes conversation text. Tool output, files, images, reasoning, and interactive content are omitted.</p></header>
-${!isLatest ? `<p class="page-label">Earlier conversation · <a href="${escapeHtml(params.latestUrl)}">Back to latest</a></p>` : ""}
+@media(max-width:560px){.masthead{flex-wrap:wrap}.header-actions{flex-wrap:wrap}main{width:calc(100% - 32px);padding-top:26px}.message{display:block;padding:23px 0}.message h2{margin:0 0 10px}.content h2{margin:24px 0 12px}.badge{font-size:11px}h1{margin-top:32px}footer{display:block}footer a{display:inline-block;margin-top:10px}}
+</style></head><body><main data-public-session data-public-refresh="${params.entryUrl && isLatest ? "true" : "false"}">
+<header><div class="masthead"><div class="brand"><span aria-hidden="true">✳</span>OpenClaw</div><div class="header-actions">${params.unavailable ? "" : '<span class="badge">Public · Read-only</span>'}${entryLink}</div></div>
+<h1>${title}</h1><p class="intro">${
+    params.unavailable
+      ? "This conversation is not publicly available. Log in to open conversations you have access to."
+      : `<strong>Shared with everyone, no login required.</strong> This ${isLatest ? "live view" : "page"} includes conversation text. Tool output, files, images, reasoning, and interactive content are omitted.${entryLink ? " Log in to open the full conversation if you have access." : ""}`
+  }</p></header>
+${!isLatest && !params.unavailable ? `<p class="page-label">Earlier conversation · <a href="${escapeHtml(params.latestUrl)}">Back to latest</a></p>` : ""}
 ${truncated ? '<aside class="notice">Some messages or long text are omitted to keep this public page within its size limit.</aside>' : ""}
 ${navigation}
-<section class="transcript" aria-label="Conversation">${rows.length ? rows.toReversed().join("\n") : `<p class="empty">${isLatest ? "No public conversation text yet. New messages will appear here as the conversation continues." : "No public conversation text on this page. Use the page links to continue reading."}</p>`}</section>
+${params.unavailable ? "" : `<section class="transcript" aria-label="Conversation">${rows.length ? rows.toReversed().join("\n") : `<p class="empty">${isLatest ? "No public conversation text yet. New messages will appear here as the conversation continues." : "No public conversation text on this page. Use the page links to continue reading."}</p>`}</section>`}
 ${navigation}
-<footer><span>${isLatest ? "Live view · Refreshes every 15 seconds" : "Earlier conversation · Updates when you reload"}<br>Public access can be revoked by the session owner.</span><a href="${escapeHtml(params.latestUrl)}">${isLatest ? "Refresh now" : "Back to latest"}</a></footer>
-</main></body></html>`;
+${params.unavailable ? "" : `<footer><span>${isLatest ? (params.entryUrl ? "Live view · Updates while this tab is visible" : "Live view · Refreshes every 15 seconds") : "Earlier conversation · Updates when you reload"}<br>Public access can be revoked by the session owner.</span><a href="${escapeHtml(params.latestUrl)}">${isLatest ? "Refresh now" : "Back to latest"}</a></footer>`}
+</main>${params.entryUrl ? `<script>${PUBLIC_SESSION_ENTRY_SCRIPT}</script>` : ""}</body></html>`;
 }

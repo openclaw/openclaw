@@ -149,7 +149,7 @@ actor GatewayWizardClient {
         socket.maximumMessageSize = 16 * 1024 * 1024
         socket.resume()
         self.task = socket
-        try await self.sendConnect()
+        try await self.sendConnect(task: socket)
     }
 
     func close() {
@@ -201,21 +201,17 @@ actor GatewayWizardClient {
     }
 
     private func decodeFrame(_ message: URLSessionWebSocketTask.Message) throws -> GatewayFrame {
-        let data: Data? = switch message {
-        case let .data(data): data
-        case let .string(text): text.data(using: .utf8)
-        @unknown default: nil
-        }
-        guard let data else {
+        let data: Data
+        switch message {
+        case let .data(value): data = value
+        case let .string(text): data = Data(text.utf8)
+        @unknown default:
             throw WizardCliError.decodeError("empty gateway response")
         }
         return try self.decoder.decode(GatewayFrame.self, from: data)
     }
 
-    private func sendConnect() async throws {
-        guard let task = self.task else {
-            throw WizardCliError.gatewayError("gateway not connected")
-        }
+    private func sendConnect(task: URLSessionWebSocketTask) async throws {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let platform = "macos \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         let clientId = "openclaw-macos"
@@ -248,7 +244,7 @@ actor GatewayWizardClient {
         } else if let password = self.password {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
-        let connectChallenge = try await self.waitForConnectChallenge()
+        let connectChallenge = try await self.waitForConnectChallenge(task: task)
         let connectNonce = connectChallenge.nonce
         guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else {
             throw NSError(
@@ -280,9 +276,8 @@ actor GatewayWizardClient {
         _ = try self.decodePayload(response, as: HelloOk.self)
     }
 
-    private func waitForConnectChallenge() async throws -> GatewayConnectChallenge {
-        guard let task = self.task else { throw ConnectChallengeError.timeout }
-        return try await AsyncTimeout.withTimeout(
+    private func waitForConnectChallenge(task: URLSessionWebSocketTask) async throws -> GatewayConnectChallenge {
+        try await AsyncTimeout.withTimeout(
             seconds: self.connectChallengeTimeoutSeconds,
             onTimeout: { ConnectChallengeError.timeout },
             operation: {
@@ -420,59 +415,44 @@ private func promptAnswer(for step: WizardStep) throws -> Any {
         if trimmed.isEmpty { return initial }
         return trimmed == "y" || trimmed == "yes" || trimmed == "true"
     case "select":
-        return try promptSelect(step)
+        return try promptSelect(step, multiple: false).first ?? NSNull()
     case "multiselect":
-        return try promptMultiSelect(step)
+        return try promptSelect(step, multiple: true)
     default:
         _ = try readLineWithPrompt("Continue? (enter)")
         return NSNull()
     }
 }
 
-private func promptSelect(_ step: WizardStep) throws -> Any {
-    let options = parseWizardOptions(step.options)
-    guard !options.isEmpty else { return NSNull() }
-    for (idx, option) in options.enumerated() {
-        let hint = option.hint?.isEmpty == false ? " — \(option.hint!)" : ""
-        print("  [\(idx + 1)] \(option.label)\(hint)")
-    }
-    let initialIndex = options.firstIndex(where: { anyCodableEqual($0.value, step.initialvalue) })
-    let defaultLabel = initialIndex.map { " [\($0 + 1)]" } ?? ""
-    while true {
-        let input = try readLineWithPrompt("Select one\(defaultLabel)")
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty, let initialIndex {
-            return options[initialIndex].value?.value ?? options[initialIndex].label
-        }
-        if trimmed.lowercased() == "q" { throw WizardCliError.cancelled }
-        if let number = Int(trimmed), (1...options.count).contains(number) {
-            let option = options[number - 1]
-            return option.value?.value ?? option.label
-        }
-        print("Invalid selection.")
-    }
-}
-
-private func promptMultiSelect(_ step: WizardStep) throws -> [Any] {
+private func promptSelect(_ step: WizardStep, multiple: Bool) throws -> [Any] {
     let options = parseWizardOptions(step.options)
     guard !options.isEmpty else { return [] }
     for (idx, option) in options.enumerated() {
         let hint = option.hint?.isEmpty == false ? " — \(option.hint!)" : ""
         print("  [\(idx + 1)] \(option.label)\(hint)")
     }
-    let initialValues = anyCodableArray(step.initialvalue)
-    let initialIndices = options.enumerated().compactMap { index, option in
-        initialValues.contains { anyCodableEqual($0, option.value) } ? index + 1 : nil
+    let initialIndices: [Int]
+    if multiple {
+        let initialValues = anyCodableArray(step.initialvalue)
+        initialIndices = options.enumerated().compactMap { index, option in
+            initialValues.contains { anyCodableEqual($0, option.value) } ? index + 1 : nil
+        }
+    } else {
+        initialIndices = options.firstIndex(where: { anyCodableEqual($0.value, step.initialvalue) })
+            .map { [$0 + 1] } ?? []
     }
     let defaultLabel = initialIndices.isEmpty ? "" : " [\(initialIndices.map(String.init).joined(separator: ","))]"
+    let prompt = multiple ? "Select (comma-separated)" : "Select one"
     while true {
-        let input = try readLineWithPrompt("Select (comma-separated)\(defaultLabel)")
+        let input = try readLineWithPrompt("\(prompt)\(defaultLabel)")
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
+        if trimmed.isEmpty, multiple || !initialIndices.isEmpty {
             return initialIndices.map { options[$0 - 1].value?.value ?? options[$0 - 1].label }
         }
         if trimmed.lowercased() == "q" { throw WizardCliError.cancelled }
-        let parts = trimmed.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let parts = multiple
+            ? trimmed.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            : [trimmed]
         let indices = parts.compactMap { Int($0) }.filter { (1...options.count).contains($0) }
         if indices.isEmpty {
             print("Invalid selection.")

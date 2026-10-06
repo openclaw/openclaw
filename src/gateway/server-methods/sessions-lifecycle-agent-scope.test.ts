@@ -5,12 +5,10 @@ import {
   createQueueSettings,
   createQueueTestRun,
 } from "../../auto-reply/reply/queue.test-helpers.js";
-import {
-  clearSessionQueues,
-  hasSessionLifecycleQueueWork,
-} from "../../auto-reply/reply/queue/cleanup.js";
+import { hasSessionLifecycleQueueWork } from "../../auto-reply/reply/queue/cleanup.js";
+import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
-import { FOLLOWUP_QUEUES } from "../../auto-reply/reply/queue/state.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES } from "../../auto-reply/reply/queue/state.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
@@ -42,7 +40,7 @@ it.each([
     ...getRuntimeConfig(),
     agents: {
       ...getRuntimeConfig().agents,
-      entries: { main: { default: true }, research: {} },
+      entries: { main: {}, research: {} },
     },
   };
   setRuntimeConfigSnapshot(cfg);
@@ -156,7 +154,10 @@ it.each([
   } finally {
     operation.complete();
     release.resolve();
-    clearSessionQueues(queueKeys);
+    for (const queueKey of queueKeys) {
+      clearFollowupQueue(queueKey);
+      clearFollowupDrainCallback(queueKey);
+    }
     clearCommandLane(lane);
     await Promise.allSettled([blocker, queuedResult, ownedResult]);
   }
@@ -198,7 +199,10 @@ it.each(["sessions.delete", "sessions.reset", "sessions.patch"])(
       expect(operation.abortSignal.aborted).toBe(true);
     } finally {
       operation.complete();
-      clearSessionQueues([key, sessionId]);
+      for (const queueKey of [key, sessionId]) {
+        clearFollowupQueue(queueKey);
+        clearFollowupDrainCallback(queueKey);
+      }
     }
   },
 );

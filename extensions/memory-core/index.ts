@@ -217,6 +217,7 @@ export default definePluginEntry({
     registerShortTermPromotionDreaming(api);
     registerSessionBackfillGatewayMethods(api);
     api.registerMemoryCapability({
+      recallToolNames: ["memory_search", "memory_get"],
       deterministicRecallToolName: "memory_search",
       supportsPrivateTranscriptRecall: true,
       promptBuilder: (params) => {

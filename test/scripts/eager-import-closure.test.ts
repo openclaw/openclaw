@@ -14,6 +14,7 @@ import {
 import { join, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
@@ -25,6 +26,20 @@ const inventoryCheck =
   'pnpm test test/scripts/eager-import-closure.test.ts -t "PR wrapper inventory"';
 const wrapperFailure = (output: string) =>
   `${output}\nCheck the inventory first: ${inventoryCheck}`;
+
+it("keeps packaged scripts closed over runtime imports", () => {
+  const files: string[] = JSON.parse(readFileSync("package.json", "utf8")).files;
+  const scripts = files.filter(
+    (file) => file.startsWith("scripts/") && !/\.d\.[cm]?ts$/.test(file),
+  );
+  const closure = collectRuntimeImportClosure(process.cwd(), scripts, {
+    includeDynamicImports: true,
+  });
+  expect(
+    closure.filter((file) => !files.includes(file)),
+    "Package lifecycle scripts must ship their guarded imports and transitive dependencies.",
+  ).toEqual([]);
+});
 
 it("keeps the PR wrapper inventory closed over runtime imports", () => {
   const components = readFileSync(wrapperInventory, "utf8").trim().split("\n");
@@ -63,16 +78,18 @@ it("keeps the PR wrapper inventory closed over runtime imports", () => {
   expect({ missing, stale }, diagnostic).toEqual({ missing: [], stale: [] });
 });
 
-it("acquires and releases wrapper leases without the application command runtime", async () => {
+it("acquires wrapper leases and manages templates without the application command runtime", async () => {
   const root = tempDirs.make("openclaw-pr-lease-bootstrap-");
   copyPrWrapperSources(root);
   linkPrWrapperDependencies(root);
   await prepareCopiedSourceModules(root, [
+    "src/agents/worktrees/template-registry-async.ts",
     "src/state/openclaw-state-lease.ts",
     "src/state/openclaw-state-db.ts",
     "src/state/openclaw-state.worker.ts",
     "src/state/openclaw-state-lease-worker.ts",
     "src/state/openclaw-state-lease-heartbeat.worker.ts",
+    "src/infra/gateway-state-owner-heartbeat.worker.ts",
     "src/infra/sqlite-store.worker.ts",
     "src/infra/sqlite-readonly-location.worker.ts",
   ]);
@@ -84,6 +101,10 @@ it("acquires and releases wrapper leases without the application command runtime
       "-e",
       `
         import assert from "node:assert/strict";
+        import {
+          deleteTemplateAsync, hasTemplatesAsync, listTemplatesAsync,
+          markTemplateReadyAsync, readTemplateAsync, reserveTemplateAsync, touchTemplateAsync,
+        } from "./src/agents/worktrees/template-registry-async.js";
         import { withOpenClawStateLease } from "./src/state/openclaw-state-lease.js";
         import {
           closeOpenClawStateDatabaseAsync,
@@ -99,6 +120,26 @@ it("acquires and releases wrapper leases without the application command runtime
         for (let grant = 0; grant < 2; grant += 1) {
           await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
         }
+        await withOpenClawStateLease(options, async (lease) => {
+          const guard = () => lease.assertOwned();
+          const template = {
+            cacheKey: "wrapper-template", id: "generation-1",
+            repoRoot: process.cwd(), commonDir: process.cwd() + "/.git",
+            worktreeRoot: process.cwd() + "/worktrees", path: process.cwd() + "/template",
+            backend: "apfs", sourceCommit: "a".repeat(40), contentKey: "source",
+            status: "preparing", createdAt: 1, lastUsedAt: 1,
+          };
+          assert.equal(await hasTemplatesAsync(process.env), false);
+          await reserveTemplateAsync(process.env, template, guard);
+          assert.deepEqual(await readTemplateAsync(process.env, template.cacheKey), template);
+          assert.equal(await markTemplateReadyAsync(process.env, template.id, 2, guard), true);
+          assert.equal(await touchTemplateAsync(process.env, template.id, 3, guard), true);
+          assert.deepEqual(await listTemplatesAsync(process.env), [
+            { ...template, status: "ready", lastUsedAt: 3 },
+          ]);
+          assert.equal(await deleteTemplateAsync(process.env, template.id, guard), true);
+          assert.equal(await hasTemplatesAsync(process.env), false);
+        });
         const database = openOpenClawStateDatabase({ env: process.env });
         const row = database.db.prepare(
           "SELECT COUNT(*) AS count FROM state_leases WHERE scope = ? AND lease_key = ?",
@@ -167,7 +208,7 @@ it.each([
   const root = tempDirs.make("openclaw-eager-import-closure-");
   const entry = join(root, "entry.mts");
   writeFileSync(entry, `${source}\nconsole.log("entry executed");\n`);
-  const result = spawnSync(process.execPath, [entry], {
+  const result = spawnSync(resolveTestNodeExecPath(), [entry], {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
@@ -445,25 +486,27 @@ it("resolves runtime aliases and import/require conditions without following dec
   );
 });
 
-it("keeps native update authority free of eager recovery reporting and handoff staging", () => {
-  const closure = collectRuntimeImportClosure(process.cwd(), [
-    "src/cli/update-cli/update-command-executor.ts",
-    "src/cli/update-cli/update-command-retained-service.ts",
-    "src/cli/daemon-cli/update-executor.ts",
-    "src/daemon/exec-file.ts",
-  ]);
-  const deferredOwners = new Set([
-    "src/cli/update-cli/update-command-recovery.ts",
-    "src/cli/update-cli/update-command-result.ts",
-    "src/infra/update-managed-service-handoff.ts",
-  ]);
-  expect(closure.filter((file) => deferredOwners.has(file))).toEqual([]);
-});
-
-it("keeps migrated finalization free of eager CLI registration", () => {
-  const closure = collectRuntimeImportClosure(process.cwd(), [
-    "src/infra/update-migrated-finalize.worker.ts",
-  ]);
-  const validationOnly = new Set(["src/cli/daemon-cli.ts", "src/cli/daemon-cli/register.ts"]);
-  expect(closure.filter((file) => validationOnly.has(file))).toEqual([]);
+it.each([
+  {
+    name: "native update authority",
+    entrypoints: [
+      "src/cli/update-cli/update-command-executor.ts",
+      "src/cli/update-cli/update-command-retained-service.ts",
+      "src/cli/daemon-cli/update-executor.ts",
+      "src/daemon/exec-file.ts",
+    ],
+    deferredOwners: [
+      "src/cli/update-cli/update-command-recovery.ts",
+      "src/cli/update-cli/update-command-result.ts",
+      "src/infra/update-managed-service-handoff.ts",
+    ],
+  },
+  {
+    name: "migrated finalization",
+    entrypoints: ["src/infra/update-migrated-finalize.worker.ts"],
+    deferredOwners: ["src/cli/daemon-cli.ts", "src/cli/daemon-cli/register.ts"],
+  },
+])("keeps $name free of eager validation imports", ({ entrypoints, deferredOwners }) => {
+  const closure = collectRuntimeImportClosure(process.cwd(), entrypoints);
+  expect(closure.filter((file) => deferredOwners.includes(file))).toEqual([]);
 });

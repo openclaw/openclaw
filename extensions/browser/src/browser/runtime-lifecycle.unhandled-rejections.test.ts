@@ -31,21 +31,7 @@ const { getUnhandledRejectionHandlers, registerUnhandledRejectionHandlerMock, re
     };
   });
 
-const {
-  startTrackedBrowserTabCleanupTimerMock,
-  stopKnownBrowserProfilesMock,
-  trackedTabCleanupMock,
-} = vi.hoisted(() => {
-  const trackedTabCleanupMockLocal = vi.fn();
-  return {
-    startTrackedBrowserTabCleanupTimerMock: vi.fn(
-      (_params: { getResolvedBrowserConfig?: () => unknown; onWarn: (message: string) => void }) =>
-        trackedTabCleanupMockLocal,
-    ),
-    stopKnownBrowserProfilesMock: vi.fn(async () => {}),
-    trackedTabCleanupMock: trackedTabCleanupMockLocal,
-  };
-});
+const stopKnownBrowserProfilesMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
@@ -56,10 +42,6 @@ vi.mock("./server-lifecycle.js", () => ({
   stopKnownBrowserProfiles: stopKnownBrowserProfilesMock,
 }));
 
-vi.mock("./session-tab-cleanup.js", () => ({
-  startTrackedBrowserTabCleanupTimer: startTrackedBrowserTabCleanupTimerMock,
-}));
-
 const { createBrowserRuntimeState, stopBrowserRuntime } = await import("./runtime-lifecycle.js");
 const { getGatewayExtensionRelayModule } = await import("./extension-relay.runtime.js");
 
@@ -67,9 +49,7 @@ beforeEach(() => {
   getGatewayExtensionRelayModule.clear();
   resetHandlers();
   registerUnhandledRejectionHandlerMock.mockClear();
-  startTrackedBrowserTabCleanupTimerMock.mockClear();
   stopKnownBrowserProfilesMock.mockClear();
-  trackedTabCleanupMock.mockClear();
   relay.dispose.mockClear();
 });
 
@@ -84,7 +64,6 @@ describe("browser unhandled rejection lifecycle", () => {
       const state = await createBrowserRuntimeState({
         resolved: makeBrowserServerState().resolved,
         port: 18791,
-        onWarn: vi.fn(),
       });
       if (acquired) {
         await getGatewayExtensionRelayModule();
@@ -94,7 +73,6 @@ describe("browser unhandled rejection lifecycle", () => {
 
       await stopBrowserRuntime({
         current: state,
-        getState: () => state,
         clearState,
         onWarn: vi.fn(),
       });
@@ -104,31 +82,10 @@ describe("browser unhandled rejection lifecycle", () => {
     },
   );
 
-  it("binds periodic cleanup to the current runtime config", async () => {
-    const firstResolved = { profiles: {}, marker: "first" } as never;
-    const secondResolved = { profiles: {}, marker: "second" } as never;
-    const state = await createBrowserRuntimeState({
-      resolved: firstResolved,
-      port: 18791,
-      onWarn: vi.fn(),
-    });
-    const cleanupParams = startTrackedBrowserTabCleanupTimerMock.mock.calls[0]?.[0];
-    expect(cleanupParams?.getResolvedBrowserConfig?.()).toBe(firstResolved);
-    state.resolved = secondResolved;
-    expect(cleanupParams?.getResolvedBrowserConfig?.()).toBe(secondResolved);
-    await stopBrowserRuntime({
-      current: state,
-      getState: () => state,
-      clearState: vi.fn(),
-      onWarn: vi.fn(),
-    });
-  });
-
   it("matches direct and nested Playwright dialog-race protocol errors", async () => {
     const state = await createBrowserRuntimeState({
       resolved: { profiles: {} } as never,
       port: 18791,
-      onWarn: vi.fn(),
     });
     const handler = getUnhandledRejectionHandlers()[0];
     const direct = Object.assign(
@@ -149,7 +106,6 @@ describe("browser unhandled rejection lifecycle", () => {
     expect(handler?.(wrapped)).toBe(true);
     await stopBrowserRuntime({
       current: state,
-      getState: () => state,
       clearState: vi.fn(),
       onWarn: vi.fn(),
     });
@@ -159,7 +115,6 @@ describe("browser unhandled rejection lifecycle", () => {
     const state = await createBrowserRuntimeState({
       resolved: { profiles: {} } as never,
       port: 18791,
-      onWarn: vi.fn(),
     });
     const handler = getUnhandledRejectionHandlers()[0];
     expect(
@@ -171,7 +126,6 @@ describe("browser unhandled rejection lifecycle", () => {
     expect(handler?.(new Error("No dialog is showing"))).toBe(false);
     await stopBrowserRuntime({
       current: state,
-      getState: () => state,
       clearState: vi.fn(),
       onWarn: vi.fn(),
     });
@@ -184,7 +138,6 @@ describe("browser unhandled rejection lifecycle", () => {
     const state = await createBrowserRuntimeState({
       resolved: { profiles: {} } as never,
       port: 18791,
-      onWarn: vi.fn(),
     });
 
     expect(registerUnhandledRejectionHandlerMock).toHaveBeenCalledTimes(1);
@@ -198,49 +151,12 @@ describe("browser unhandled rejection lifecycle", () => {
     const clearState = vi.fn();
     await stopBrowserRuntime({
       current: state,
-      getState: () => state,
       clearState,
       onWarn: vi.fn(),
     });
 
-    expect(trackedTabCleanupMock).toHaveBeenCalledTimes(1);
     expect(stopKnownBrowserProfilesMock).toHaveBeenCalledTimes(1);
     expect(clearState).toHaveBeenCalledTimes(1);
     expect(getUnhandledRejectionHandlers()).toStrictEqual([]);
-  });
-
-  it("drains profiles when a custom tab-cleanup disposer throws synchronously", async () => {
-    let releaseProfiles!: () => void;
-    const profileGate = new Promise<void>((resolve) => {
-      releaseProfiles = resolve;
-    });
-    let profilesDrained = false;
-    stopKnownBrowserProfilesMock.mockImplementationOnce(async () => {
-      await profileGate;
-      profilesDrained = true;
-    });
-    const state = {
-      port: 18_791,
-      resolved: { profiles: {} },
-      profiles: new Map(),
-      stopTrackedTabCleanup: () => {
-        throw new Error("tab cleanup failed");
-      },
-    } as never;
-    const clearState = vi.fn();
-
-    const stopping = stopBrowserRuntime({
-      current: state,
-      getState: () => state,
-      clearState,
-      onWarn: vi.fn(),
-    });
-    await Promise.resolve();
-    expect(profilesDrained).toBe(false);
-    releaseProfiles();
-
-    await expect(stopping).rejects.toThrow("tab cleanup failed");
-    expect(profilesDrained).toBe(true);
-    expect(clearState).not.toHaveBeenCalled();
   });
 });

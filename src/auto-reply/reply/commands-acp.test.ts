@@ -848,12 +848,11 @@ describe("/acp command", () => {
       const cfg = {
         ...baseCfg,
         agents: {
-          list: [
-            {
-              id: "codex",
+          entries: {
+            codex: {
               workspace,
             },
-          ],
+          },
         },
       } satisfies OpenClawConfig;
 
@@ -882,12 +881,11 @@ describe("/acp command", () => {
     const cfg = {
       ...baseCfg,
       agents: {
-        list: [
-          {
-            id: "codex",
+        entries: {
+          codex: {
             workspace: "/home/bob/codex-workspace-missing",
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
 

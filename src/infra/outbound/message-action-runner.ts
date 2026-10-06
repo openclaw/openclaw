@@ -1,4 +1,3 @@
-// Stable facade for message-action normalization, routing, and execution.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -16,7 +15,8 @@ import {
   getReplyPayloadMetadata,
 } from "../../auto-reply/reply-payload.js";
 import { isFencedProviderReadAction } from "../../channels/plugins/message-action-dispatch.js";
-import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -48,6 +48,7 @@ import { MessageActionDeniedError } from "./message-action-denial.js";
 import {
   assertMessageDeliveryCurrent,
   beforeMessageDeliveryAttempt,
+  withMessageActionEffectAuthority,
   executeMessagePlugin,
   executeMessagePoll,
 } from "./message-action-execution.js";
@@ -168,25 +169,19 @@ async function handleBroadcastAction(
   for (const { channel: targetChannel, plugin: targetChannelPlugin } of targetChannels) {
     for (const target of rawTargets) {
       const receiptDiscriminator = `broadcast:${attemptIndex++}`;
-      if (interrupted) {
-        results.push({
-          channel: targetChannel,
-          to: target,
-          ok: false,
-          attempted: false,
-          error: "Broadcast canceled before this target was attempted.",
-        });
-        continue;
-      }
-      const hadAcceptedResult = hasAcceptedResult();
-      try {
-        throwIfAborted(input.abortSignal);
-        input.assertDirectAdapterHandoff?.();
-      } catch (err) {
-        if (!hadAcceptedResult) {
-          throw err;
+      const hadAcceptedResult = !interrupted && hasAcceptedResult();
+      if (!interrupted) {
+        try {
+          throwIfAborted(input.abortSignal);
+          input.assertDirectAdapterHandoff?.();
+        } catch (err) {
+          if (!hadAcceptedResult) {
+            throw err;
+          }
+          interrupted = true;
         }
-        interrupted = true;
+      }
+      if (interrupted) {
         results.push({
           channel: targetChannel,
           to: target,
@@ -520,6 +515,12 @@ async function handleInternalSourceReplySendAction(
 }
 
 export async function runMessageAction(input: MessageActionInput): Promise<MessageActionResult> {
+  return withMessageActionEffectAuthority(input, () => runMessageActionWithAuthority(input));
+}
+
+async function runMessageActionWithAuthority(
+  input: MessageActionInput,
+): Promise<MessageActionResult> {
   throwIfAborted(input.abortSignal);
   const cfg = input.cfg;
   let params = { ...input.params };
@@ -671,7 +672,6 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
             channel,
             channelPlugin,
             mediaAccess,
-            extraActionMediaSourceParamKeys,
             accountId,
             dryRun,
             gateway,

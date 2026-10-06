@@ -1,23 +1,18 @@
 import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
-import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
-import { normalizeAgentLabel } from "../lib/agents/display.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
 import { renderSidebarMenuAction, renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
 import { icons, type IconName } from "./icons.ts";
 import {
-  consumeDropdownKeyboardDismissal,
-  syncDropdownItemRadio,
-  trackDropdownKeyboardDismissal,
-} from "./web-awesome.ts";
+  AGENT_VALUE_PREFIX,
+  renderSidebarAgentMenuSwitcher,
+  type SidebarAgentMenuSwitcherParams,
+} from "./sidebar-agent-menu-switcher.ts";
+import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 // External rows of the footer identity menu. Docs-first: public docs pages over
 // raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
@@ -40,9 +35,8 @@ const IDENTITY_MENU_LINKS: ReadonlyArray<{
   },
 ];
 
-const AGENT_VALUE_PREFIX = "agent:";
 export const COMMAND_VALUE_PREFIX = "command:";
-export const LINK_VALUE_PREFIX = "link:";
+const LINK_VALUE_PREFIX = "link:";
 const sidebarMenuTypeahead = new WeakMap<
   HTMLElement,
   { query: string; timeout: ReturnType<typeof setTimeout> }
@@ -51,7 +45,7 @@ const sidebarMenuTypeahead = new WeakMap<
 function sidebarMenuItems(dropdown: Element | null) {
   return [
     ...(dropdown?.querySelectorAll<HTMLElement & { active: boolean }>(
-      ":scope > wa-dropdown-item:not([disabled]), :scope > .sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
+      ":scope > wa-dropdown-item:not([disabled]), :scope > .sidebar-agent-menu__agent-list > wa-dropdown-item:not([disabled])",
     ) ?? []),
   ];
 }
@@ -91,6 +85,10 @@ export function consumeSidebarMenuSelection(
   const value = item.value;
   if (value) {
     onClose(false);
+    if (value.startsWith(LINK_VALUE_PREFIX)) {
+      openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
+      return undefined;
+    }
   }
   return value;
 }
@@ -105,11 +103,16 @@ export function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
   const dropdown = (event.currentTarget as HTMLElement).closest("wa-dropdown");
   const items = sidebarMenuItems(dropdown);
   const footer = dropdown?.querySelector<HTMLElement>(".sidebar-identity-menu__footer");
+  const search = dropdown?.querySelector<HTMLInputElement>(".sidebar-agent-menu__filter");
   const controls = [
+    ...(search ? [search] : []),
     ...items,
     ...(footer?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])") ?? []),
   ];
-  const current = event.target instanceof HTMLElement ? event.target : null;
+  const current =
+    event.target instanceof HTMLElement
+      ? (event.target.closest<HTMLElement>("wa-dropdown-item") ?? event.target)
+      : null;
   const index = current ? controls.indexOf(current) : -1;
   if (footer && index < 0) {
     return false;
@@ -164,21 +167,23 @@ function typeaheadSidebarMenuFocus(event: KeyboardEvent): boolean {
   return true;
 }
 
-type SidebarAgentMenuParams = {
+export function focusActiveAgentMenuItem(dropdown: HTMLElement) {
+  const items = sidebarMenuItems(dropdown);
+  const target = items.find((item) => item.hasAttribute("autofocus")) ?? items[0];
+  if (!target) {
+    return;
+  }
+  focusSidebarMenuItem(items, target);
+}
+
+type SidebarAgentMenuParams = Omit<SidebarAgentMenuSwitcherParams, "allAgentsScope"> & {
   position: { x: number; top: number };
   basePath: string;
-  activeId: string;
-  activeName: string;
-  agents: readonly GatewayAgentRow[];
-  identities: ReadonlyMap<string, AgentIdentityResult>;
-  pinnedAgentIds: readonly string[];
-  connected: boolean;
-  resolveAvatarUrl: (url: string) => string | null;
-  avatarErrorHandler: (url: string) => () => void;
-  openMode: "hover" | "click";
   rosterMode: boolean;
+  activeName: string;
+  connected: boolean;
+  onQueryChange: (query: string) => void;
   onToggleRoster: () => void;
-  agentUnreadCount: (agentId: string) => number;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
   onAfterShow: () => void;
@@ -188,70 +193,6 @@ type SidebarAgentMenuParams = {
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
 };
-
-function sidebarAgentMenuRows(params: {
-  agents: readonly GatewayAgentRow[];
-  pinnedAgentIds: readonly string[];
-}) {
-  const { agents } = params;
-  const pinnedIds = new Set(params.pinnedAgentIds.map(normalizeAgentId));
-  return agents.toSorted((a, b) => {
-    const aPinned = pinnedIds.has(normalizeAgentId(a.id)) ? 0 : 1;
-    const bPinned = pinnedIds.has(normalizeAgentId(b.id)) ? 0 : 1;
-    return aPinned - bPinned;
-  });
-}
-
-function renderAgentRow(
-  agent: GatewayAgentRow,
-  params: SidebarAgentMenuParams,
-  autofocus: boolean,
-) {
-  const agentId = normalizeAgentId(agent.id);
-  const identity = params.identities.get(agentId) ?? null;
-  const label = normalizeAgentLabel(agent, identity);
-  const active = agentId === params.activeId;
-  const unread = active ? 0 : params.agentUnreadCount(agentId);
-  const option = { value: agentId, label, agent };
-  const avatarUrl = resolveAgentAvatarUrl(agent, identity);
-  const resolvedAvatarUrl = avatarUrl ? params.resolveAvatarUrl(avatarUrl) : null;
-  return html`
-    <wa-dropdown-item
-      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${
-        active ? "sidebar-agent-menu__agent-switch--active" : ""
-      }"
-      value=${`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
-      type="checkbox"
-      role="menuitemradio"
-      aria-checked=${String(active)}
-      ?autofocus=${autofocus}
-      ${ref((element) => syncDropdownItemRadio(element, active))}
-    >
-      <span class="sidebar-agent-menu__agent-tile">
-        <span class="sidebar-agent-menu__agent-avatar">
-          ${renderAgentSelectAvatar(
-            option,
-            identity,
-            resolvedAvatarUrl,
-            avatarUrl ? params.avatarErrorHandler(avatarUrl) : undefined,
-          )}
-        </span>
-        ${renderAgentSelectCopy(option)}
-        <span class="sidebar-agent-menu__agent-status">
-          ${
-            unread > 0
-              ? html`<span
-                  class="session-unread-dot"
-                  role="img"
-                  aria-label=${t("sessionsView.unread")}
-                ></span>`
-              : nothing
-          }
-        </span>
-      </span>
-    </wa-dropdown-item>
-  `;
-}
 
 function renderIdentityMenuHelpSubmenu() {
   return html`
@@ -298,12 +239,7 @@ export function renderSidebarHelpMenu() {
 
 export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
   const position = params.position;
-  const { activeId, activeName, agents } = params;
-  const agentRows = !params.rosterMode && agents.length > 1 ? sidebarAgentMenuRows(params) : [];
-  const autofocusAgent =
-    params.openMode === "click"
-      ? (agentRows.find((agent) => normalizeAgentId(agent.id) === activeId) ?? agentRows[0])
-      : undefined;
+  const { activeId, activeName } = params;
   const menuLabel = t(params.rosterMode ? "agentChip.workspaceMenuLabel" : "agentChip.menuLabel");
   return html`
     <wa-dropdown
@@ -316,12 +252,12 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       @pointerenter=${params.onPointerEnter}
       @pointerleave=${params.onPointerLeave}
       @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
-        const value = consumeSidebarMenuSelection(event, params.onClose);
+        const value = consumeSidebarMenuSelection(event, (restoreFocus) =>
+          params.onClose(
+            restoreFocus || (event.detail.item.value === "scope:all" && params.rosterMode),
+          ),
+        );
         if (!value) {
-          return;
-        }
-        if (value.startsWith(LINK_VALUE_PREFIX)) {
-          openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
           return;
         }
         if (value.startsWith(AGENT_VALUE_PREFIX)) {
@@ -329,10 +265,12 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           return;
         }
         switch (value) {
-          case `${COMMAND_VALUE_PREFIX}sidebar-agents`:
-            params.onToggleRoster();
+          case "scope:all":
+            if (!params.rosterMode) {
+              params.onToggleRoster();
+            }
             break;
-          case `${COMMAND_VALUE_PREFIX}all-agents`:
+          case `${COMMAND_VALUE_PREFIX}agents-directory`:
             params.onNavigate("agents-home");
             break;
           case `${COMMAND_VALUE_PREFIX}new-agent`:
@@ -350,6 +288,35 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       }}
       @wa-after-show=${params.onAfterShow}
       @keydown=${(event: KeyboardEvent) => {
+        const target = event.target;
+        const row =
+          target instanceof HTMLElement
+            ? target.closest<HTMLElement>(".sidebar-agent-menu__agent-switch")
+            : null;
+        const pin = row?.querySelector<HTMLButtonElement>(".sidebar-agent-menu__pin");
+        if (pin && target === pin && (event.key === "Enter" || event.key === " ")) {
+          // Let the native button click without selecting its enclosing agent.
+          event.stopPropagation();
+          return;
+        }
+        if (
+          event.key === "Tab" &&
+          row &&
+          pin &&
+          ((target === row && !event.shiftKey) || (target === pin && event.shiftKey))
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          (event.shiftKey ? row : pin).focus();
+          return;
+        }
+        if (
+          event.target instanceof HTMLInputElement &&
+          (event.isComposing || !["ArrowDown", "ArrowUp", "Escape", "Tab"].includes(event.key))
+        ) {
+          event.stopPropagation();
+          return;
+        }
         if (moveSidebarMenuFocus(event)) {
           return;
         }
@@ -359,7 +326,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         const item =
           event.target instanceof HTMLElement
             ? event.target.closest<HTMLElement>(
-                ".sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
+                ".sidebar-agent-menu__agent-list > wa-dropdown-item:not([disabled])",
               )
             : null;
         if ((event.key === "Enter" || event.key === " ") && item) {
@@ -368,49 +335,50 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           item.click();
           return;
         }
+        // Let the dropdown consume Escape before the mobile drawer or settings shell.
+        if (event.key === "Escape") {
+          event.preventDefault();
+        }
         trackDropdownKeyboardDismissal(event, params.onTabAway);
       }}
       @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
     >
       ${renderSidebarMenuTrigger({ x: position.x, y: position.top }, menuLabel)}
+      ${params.agents.length > 0 ? html`<div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>` : nothing}
       ${
-        agentRows.length > 0
+        params.agents.length > 6
           ? html`
-              <div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>
-              <div class="sidebar-agent-menu__agent-grid">
-                ${agentRows.map((entry) => renderAgentRow(entry, params, entry === autofocusAgent))}
-              </div>
-              <div class="sidebar-customize-menu__separator" role="separator"></div>
+              <input
+                class="sidebar-agent-menu__filter"
+                type="search"
+                aria-label=${t("agentChip.search")}
+                placeholder=${t("agentChip.search")}
+                .value=${params.query}
+                @input=${(event: InputEvent) => {
+                  // SAFETY: This handler is attached directly to the native search input.
+                  const input = event.currentTarget as HTMLInputElement;
+                  params.onQueryChange(input.value);
+                }}
+              />
             `
           : nothing
       }
-      <wa-dropdown-item
-        class="sidebar-customize-menu__item"
-        value="command:sidebar-agents"
-        type=${params.rosterMode ? "normal" : "checkbox"}
-      >
-        ${t(params.rosterMode ? "agentChip.showOneAgent" : "agentChip.showAllAgents")}
-      </wa-dropdown-item>
+      ${renderSidebarAgentMenuSwitcher({ ...params, allAgentsScope: params.rosterMode && params.agents.length > 1 })}
+      ${params.agents.length > 0 ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>` : nothing}
+      ${renderSidebarMenuAction("command:new-agent", t("custodian.newAgent"), "userPlus")}
+      ${renderSidebarMenuAction("command:agents-directory", t("agentChip.seeAllAgents"), "list")}
+      <div class="sidebar-customize-menu__separator" role="separator"></div>
       ${
-        !params.rosterMode
-          ? html`
-              ${renderSidebarMenuAction("command:all-agents", t("agentChip.allAgents"), "bot")}
-              ${renderSidebarMenuAction("command:new-agent", t("custodian.newAgent"), "users")}
-              ${
-                activeId
-                  ? renderSidebarMenuAction(
-                      "command:capabilities",
-                      t("agentChip.whatCanAgentDo", { name: activeName }),
-                      "bot",
-                      { disabled: !params.connected },
-                    )
-                  : nothing
-              }
-            `
+        activeId
+          ? renderSidebarMenuAction(
+              "command:capabilities",
+              t("agentChip.whatCanAgentDo", { name: activeName }),
+              "circleQuestionMark",
+              { disabled: !params.connected },
+            )
           : nothing
       }
-      ${renderSidebarMenuAction("command:agent-settings", t("agentChip.agentSettings"), "settings", { disabled: !activeId })}
-      ${params.rosterMode ? renderSidebarHelpMenu() : nothing}
+      ${renderSidebarMenuAction("command:agent-settings", activeId ? t("agentChip.namedSettings", { name: activeName }) : t("agentChip.agentSettings"), "settings", { disabled: !activeId })}
     </wa-dropdown>
   `;
 }

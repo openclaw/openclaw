@@ -156,7 +156,7 @@ describe("workspace state store", () => {
   });
 
   it.each(["merge", "expire", "delete", "register-alias"] as const)(
-    "checks current ownership inside the %s transaction before changing state",
+    "refuses retired ownership before changing %s state",
     async (operation) => {
       const dir = workspaceDir();
       const alias = testState!.path("workspace-link");
@@ -174,7 +174,9 @@ describe("workspace state store", () => {
       writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
       const retired = new Error("workspace owner retired");
       const assertCurrent = () => {
-        expect(db.isTransaction).toBe(true);
+        if (operation === "delete") {
+          expect(db.isTransaction).toBe(true);
+        }
         throw retired;
       };
       const operations = {

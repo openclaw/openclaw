@@ -240,6 +240,13 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
   if (params.healthOk) {
+    if (process.platform === "linux" && (await shouldManageGatewayService())) {
+      const state = await readGatewayServiceState(resolveGatewayService(), { env: process.env });
+      const refusal = state.runtime?.systemd?.startRefusal;
+      if (refusal) {
+        note(refusal.message, "Gateway");
+      }
+    }
     await maybeReportEstablishedGatewayClients(params.cfg, params.options.deep ?? false);
     return;
   }
@@ -282,6 +289,11 @@ export async function maybeRepairGatewayDaemon(params: {
   if (serviceOwner) {
     await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
     note(formatInstallOwnerMessage(serviceOwner), "Gateway");
+    return;
+  }
+  const startRefusal = serviceState.runtime?.systemd?.startRefusal;
+  if (startRefusal) {
+    note(startRefusal.message, "Gateway");
     return;
   }
   if (serviceState.loadState.status === "unknown") {
@@ -448,7 +460,7 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
 
-  noteGatewayRuntime(serviceRuntime, process.env);
+  noteGatewayRuntime(serviceRuntime, serviceEnv);
 
   if (serviceRuntime?.status !== "running") {
     if (params.healthSkipped && serviceRuntime?.status !== "stopped") {
@@ -467,6 +479,15 @@ export async function maybeRepairGatewayDaemon(params: {
       serviceRepairPolicy,
     );
     if (start) {
+      if (process.platform === "win32" && serviceRuntime?.state === "Disabled") {
+        try {
+          await service.start({ env: serviceEnv, stdout: process.stdout });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          note(`Gateway service start failed: ${detail}`, "Gateway");
+        }
+        return;
+      }
       const restartResult = await restartGatewayService();
       if (!restartResult) {
         return;

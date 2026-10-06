@@ -17,39 +17,57 @@ const matchesPersonalAccount = (incoming: AuthProfileCredential, existing: AuthP
   incoming.accountId === existing.accountId;
 
 describe("re-login identity boundaries", () => {
-  it("does not choose between ambiguous existing accounts", () => {
-    const result = resolveReloginProfileIdentity({
-      profiles,
+  it.each<
+    Partial<Parameters<typeof resolveReloginProfileIdentity>[0]> & {
+      name: string;
+      expected?: typeof profiles;
+    }
+  >([
+    {
+      name: "ambiguous existing accounts",
       existingProfiles: { "fixture:one": credential("a"), "fixture:two": credential("a") },
-      matchesPersonalAccount,
-    });
-    expect(result.profiles).toEqual(profiles);
-  });
-
-  it("does not reuse an identity if any candidate cannot be checked", () => {
-    const result = resolveReloginProfileIdentity({
-      profiles,
+    },
+    {
+      name: "an unverifiable candidate",
       existingProfiles: { "fixture:one": credential("a"), "fixture:unknown": credential("b") },
-      matchesPersonalAccount: (incoming, existing) => {
+      matchesPersonalAccount: (
+        incoming: AuthProfileCredential,
+        existing: AuthProfileCredential,
+      ) => {
         if (existing.type === "oauth" && existing.accountId === "b") {
           throw new Error("identity unavailable");
         }
         return matchesPersonalAccount(incoming, existing);
       },
-    });
-    expect(result.profiles).toEqual(profiles);
-  });
-
-  it("does not collapse multiple returned credentials onto one profile", () => {
-    const multiple = [...profiles, { ...profiles[0]!, profileId: "fixture:second" }];
-    expect(
-      resolveReloginProfileIdentity({
-        profiles: multiple,
-        existingProfiles: { "fixture:old": credential("a") },
-        matchesPersonalAccount,
-      }).profiles,
-    ).toEqual(multiple);
-  });
+    },
+    {
+      name: "multiple returned credentials",
+      profiles: [...profiles, { ...profiles[0]!, profileId: "fixture:second" }],
+    },
+    {
+      name: "an explicit profile override",
+      requestedProfileId: "fixture:chosen",
+      expected: [{ ...profiles[0]!, profileId: "fixture:chosen" }],
+    },
+  ])(
+    "preserves identity selection for $name",
+    ({
+      profiles: incoming = profiles,
+      existingProfiles = { "fixture:old": credential("a") },
+      matchesPersonalAccount: matcher = matchesPersonalAccount,
+      requestedProfileId,
+      expected = incoming,
+    }) => {
+      expect(
+        resolveReloginProfileIdentity({
+          profiles: incoming,
+          existingProfiles,
+          matchesPersonalAccount: matcher,
+          requestedProfileId,
+        }).profiles,
+      ).toEqual(expected);
+    },
+  );
 
   it("rejects a vanished identity unless the login explicitly purged it", () => {
     const result = resolveReloginProfileIdentity({
@@ -60,16 +78,5 @@ describe("re-login identity boundaries", () => {
     expect(() => result.validateCurrentCredential?.("fixture:old", undefined)).toThrow(
       "identity changed",
     );
-  });
-
-  it("keeps an explicit profile override authoritative", () => {
-    expect(
-      resolveReloginProfileIdentity({
-        profiles,
-        requestedProfileId: "fixture:chosen",
-        existingProfiles: { "fixture:old": credential("a") },
-        matchesPersonalAccount,
-      }).profiles,
-    ).toEqual([{ ...profiles[0], profileId: "fixture:chosen" }]);
   });
 });

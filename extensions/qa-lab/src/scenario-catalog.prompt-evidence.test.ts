@@ -200,7 +200,7 @@ async function runNestedToolHistoryEvidence(params: { leakContextMarker?: boolea
 }
 
 describe("instruction profile prompt evidence", () => {
-  it("acquires full injection evidence despite truncated metadata and stale provider mismatches", async () => {
+  it("bounds prompt evidence to current dispatches despite stale mismatches and marker-bearing diagnostics", async () => {
     const result = await runPromptEvidence({
       events: [
         {
@@ -209,19 +209,12 @@ describe("instruction profile prompt evidence", () => {
           data: { ...currentObservation, observedChars: 0, matchesAssembledPrompt: false },
         },
         currentEvent,
-      ],
-    });
-    expect(result.status).toBe("pass");
-  });
-
-  it("excludes marker-bearing diagnostic context from bounded no-leak evidence", async () => {
-    const marker = "INSTRUCTION-PROFILE-CONTEXT-MARKER-A6E29D4B";
-    const result = await runPromptEvidence({
-      events: [
         {
           type: "context.compiled",
           runId: "current-run",
-          data: { systemPrompt: `diagnostic support context ${marker}` },
+          data: {
+            systemPrompt: "diagnostic support context INSTRUCTION-PROFILE-CONTEXT-MARKER-A6E29D4B",
+          },
         },
         {
           ...currentEvent,

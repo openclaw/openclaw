@@ -108,7 +108,7 @@ async function createMirrorFixture(
   projection: boolean | "inexact",
 ) {
   const cfg = heartbeatTestConfig(tmpDir, "last", "whatsapp", storePath);
-  cfg.agents!.list = [{ id: "main", default: true }];
+  cfg.agents!.entries = { main: {} };
   cfg.agents!.defaults!.heartbeat!.isolatedSession = true;
   if (projection) {
     installWhatsAppRoute({ exact: projection !== "inexact" });

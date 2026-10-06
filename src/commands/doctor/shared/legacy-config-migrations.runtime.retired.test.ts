@@ -554,6 +554,29 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
   ["tools.exec", { mode: "deny", security: "full", ask: "off" }, { mode: "deny" }],
   ["session", { idleMinutes: 45 }, { reset: { mode: "idle", idleMinutes: 45 } }],
   ["session", { idleMinutes: 45, reset: { idleMinutes: 90 } }, { reset: { idleMinutes: 90 } }],
+  ["session.maintenance", { pruneDays: 7, pruneAfter: false }, { pruneAfter: false }],
+  [
+    "session.resetByType",
+    { dm: { mode: "idle" }, direct: { mode: "daily" } },
+    { direct: { mode: "daily" } },
+  ],
+  [
+    "channels.discord",
+    {
+      voice: { realtime: { voice: "alloy", speakerVoice: "marin" } },
+      accounts: {
+        work: { voice: { realtime: { voice: "cedar", enabled: true } } },
+        malformed: null,
+      },
+    },
+    {
+      voice: { realtime: { speakerVoice: "marin" } },
+      accounts: {
+        work: { voice: { realtime: { speakerVoice: "cedar", enabled: true } } },
+        malformed: null,
+      },
+    },
+  ],
   [
     "channels.signal",
     { httpHost: "::1", httpPort: 9090 },

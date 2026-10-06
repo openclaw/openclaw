@@ -779,6 +779,10 @@ verify_release_tag_target() {
     echo "Release tag ${RELEASE_TAG} no longer exists on origin." >&2
     exit 1
   fi
+  if [[ -n "${SIGNED_RELEASE_TAG_OBJECT_SHA:-}" && "${direct_sha}" != "${SIGNED_RELEASE_TAG_OBJECT_SHA}" ]]; then
+    echo "Release tag ${RELEASE_TAG} changed after signature verification: expected tag object ${SIGNED_RELEASE_TAG_OBJECT_SHA}, found ${direct_sha:-<missing>}." >&2
+    exit 1
+  fi
   if [[ "${remote_sha}" != "${TARGET_SHA}" ]]; then
     echo "Release tag ${RELEASE_TAG} moved: expected ${TARGET_SHA}, found ${remote_sha}." >&2
     exit 1
@@ -1167,7 +1171,7 @@ upload_release_evidence_assets() {
 
 wait_for_core_npm_visibility() {
   local version="${RELEASE_TAG#v}" selector="${RELEASE_NPM_DIST_TAG}" started=$SECONDS
-  local deadline=$((SECONDS + ${RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS:-600})) document state last_state=""
+  local deadline=$((SECONDS + ${RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS:-1800})) document state last_state=""
   while true; do
     state="registry unavailable"
     if document="$(curl -fsSL --connect-timeout 10 --max-time 60 \

@@ -43,20 +43,20 @@ export async function prepareSubagentSessionContext(params: {
   if (params.contextMode === "isolated") {
     return { status: "ok", mode: "isolated" };
   }
-  const childTarget = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: params.cfg,
-    key: params.childSessionKey,
-    agentId: params.targetAgentId,
-    assertActive: params.assertActive,
-  });
-  const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: params.cfg,
-    key: params.requesterInternalKey,
-    agentId: params.requesterAgentId,
-    assertActive: params.assertActive,
-  });
-
   try {
+    const childTarget = await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: params.childSessionKey,
+      agentId: params.targetAgentId,
+      assertActive: params.assertActive,
+    });
+    const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: params.requesterInternalKey,
+      agentId: params.requesterAgentId,
+      assertActive: params.assertActive,
+    });
+
     if (params.targetAgentId !== params.requesterAgentId) {
       throw new Error(
         'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',

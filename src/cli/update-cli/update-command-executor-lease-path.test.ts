@@ -34,14 +34,12 @@ it.skipIf(process.platform === "win32")(
       owner: randomUUID(),
       payload_json: JSON.stringify({ version: 1, ...parent }),
       updated_at: 7,
+      recovery_json: null,
     };
     createManagedHandoffLeaseDatabase(databasePath)(true, (db) => {
-      db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-        original.install_root,
-        original.owner,
-        original.payload_json,
-        original.updated_at,
-      );
+      db.prepare(
+        "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+      ).run(original.install_root, original.owner, original.payload_json, original.updated_at);
     });
     const identity = captureManagedUpdateLeaseDatabaseIdentity(databasePath);
     const alias = path.join(dirs.make("legacy-lease-alias-"), "root");

@@ -132,7 +132,6 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): BrowserToolOp
   };
 }
 
-/** Browser plugin reload policy. */
 export const browserPluginReload = {
   restartPrefixes: ["browser"],
   hotPrefixes: [
@@ -150,7 +149,6 @@ export const browserPluginReload = {
   ],
 };
 
-/** Node-host command descriptors exposed by the Browser plugin. */
 function createBrowserProxyNodeHostCommand(command: string): OpenClawPluginNodeHostCommand {
   return {
     command,
@@ -185,7 +183,6 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   createBrowserProxyNodeHostCommand(BROWSER_PROXY_UPLOAD_COMMAND),
 ];
 
-/** Security audit collectors contributed by the Browser plugin. */
 export const browserSecurityAuditCollectors: OpenClawPluginSecurityAuditCollector[] = [
   async (ctx) => {
     const { collectBrowserSecurityAuditFindings } = await loadBrowserRegistrationRuntimeModule();
@@ -198,6 +195,8 @@ function createLazyBrowserPluginService(
 ): OpenClawPluginService {
   let service: OpenClawPluginService | null = null;
   let stopDashboardEvents: (() => Promise<void>) | undefined;
+  let stopTabCleanup: (() => Promise<void>) | undefined;
+  let accepting = false;
   return {
     id: "browser-control",
     // Policy changes drain the service's generation before adopting new values.
@@ -211,21 +210,33 @@ function createLazyBrowserPluginService(
       ],
     },
     start: async (ctx) => {
-      await stopDashboardEvents?.();
+      await Promise.all([stopTabCleanup?.(), stopDashboardEvents?.()]);
       stopDashboardEvents = ctx.gatewayEvents
         ? bindBrowserDashboardEvents(ctx.gatewayEvents, (message) => logger.warn(message))
         : undefined;
-      if (!isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
-        return;
+      if (isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
+        const { createBrowserPluginService, stopBrowserControlService } =
+          await loadBrowserRegistrationRuntimeModule();
+        service ??= createBrowserPluginService({ stopOnDemand: stopBrowserControlService });
+        await service.start(ctx);
       }
-      const { createBrowserPluginService, stopBrowserControlService } =
-        await loadBrowserRegistrationRuntimeModule();
-      service ??= createBrowserPluginService({ stopOnDemand: stopBrowserControlService });
-      await service.start(ctx);
+      const { startTrackedBrowserTabCleanupTimer } =
+        await import("./src/browser/session-tab-cleanup.js");
+      accepting = true;
+      stopTabCleanup = startTrackedBrowserTabCleanupTimer({
+        isCurrent: () => accepting && getOptionalBrowserStateRuntime() === runtime,
+        getResolvedBrowserConfig: async () => {
+          const { getBrowserControlState } = await import("./src/browser-control-state.js");
+          return getBrowserControlState()?.resolved ?? null;
+        },
+        onWarn: (message) => logger.warn(message),
+      });
     },
     stop: async (ctx) => {
+      accepting = false;
       try {
-        await stopDashboardEvents?.();
+        await Promise.all([stopTabCleanup?.(), stopDashboardEvents?.()]);
+        stopTabCleanup = undefined;
         stopDashboardEvents = undefined;
         if (!service) {
           const loadedRuntime = loadBrowserRegistrationRuntimeModule.peek();
@@ -244,7 +255,6 @@ function createLazyBrowserPluginService(
   };
 }
 
-/** Register Browser tool factories, CLI, gateway methods, services, and audits. */
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
   const runtime = initializeBrowserSessionTabStore(api.runtime);
   api.session.controls.registerControlUiDescriptor({

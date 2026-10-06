@@ -1,3 +1,5 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
+import { sleepWithAbort } from "@openclaw/retry";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 // Durable outbound notice ownership for restart-sentinel recovery.
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
@@ -47,8 +49,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
-import { withTimeout } from "../utils/with-timeout.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const RESTART_NOTICE_RECOVERY_DELAY_MS = process.env.VITEST ? 1 : 1_000;
@@ -182,15 +184,12 @@ async function enqueueGatewayLifecycleNotice(
     await active;
     return { id: deliveryIntentId, created: false };
   }
-  const enqueue = enqueueRestartSentinelNoticeOwned(params, deliveryIntentId, context);
-  activeRestartNoticeEnqueues.set(deliveryIntentId, enqueue);
-  try {
-    return await enqueue;
-  } finally {
-    if (activeRestartNoticeEnqueues.get(deliveryIntentId) === enqueue) {
-      activeRestartNoticeEnqueues.delete(deliveryIntentId);
-    }
-  }
+  return await getOrCreatePromise(
+    activeRestartNoticeEnqueues,
+    deliveryIntentId,
+    () => enqueueRestartSentinelNoticeOwned(params, deliveryIntentId, context),
+    { evictOnSettled: true },
+  );
 }
 
 async function enqueueRestartSentinelNoticeOwned(
@@ -261,13 +260,6 @@ async function enqueueRestartSentinelNoticeClaimed(
   return queued;
 }
 
-async function waitForRecoveryDrain(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, RESTART_NOTICE_RECOVERY_DELAY_MS);
-    timer.unref?.();
-  });
-}
-
 async function drainFailedRestartSentinelNotice(
   params: {
     cfg: OpenClawConfig;
@@ -297,7 +289,7 @@ async function drainFailedRestartSentinelNotice(
     // Atomic queue reservation blocks attempt 46. Exhausted rows get an
     // immediate terminal drain; live retry attempts retain one-second spacing.
     if (attemptCount < RESTART_NOTICE_MAX_ATTEMPTS) {
-      await waitForRecoveryDrain();
+      await sleepWithAbort(RESTART_NOTICE_RECOVERY_DELAY_MS, undefined, { ref: false });
     }
     await drainPendingDeliveriesCore(
       {

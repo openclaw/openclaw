@@ -2,15 +2,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import * as packageFilesystem from "./package-update-filesystem.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as retry from "./retry.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const runRetry = retry.retryAsync;
+const backupPackageRoot = packageFilesystem.backupNpmPackageRoot;
+let backupPlatform: NodeJS.Platform;
 let wait: ReturnType<typeof vi.fn<(ms: number) => Promise<void>>>;
 beforeEach(() => {
+  backupPlatform = "win32";
+  // Select only the rename policy; fs-safe must retain the host's native platform.
+  vi.spyOn(packageFilesystem, "backupNpmPackageRoot").mockImplementation(
+    (source, destination, assertCurrent, warnings) =>
+      backupPackageRoot(source, destination, assertCurrent, warnings, backupPlatform),
+  );
   wait = vi.fn(async (_ms: number) => {});
   // Keep the real retry policy; only replace its waiting clock.
   vi.spyOn(retry, "retryAsync").mockImplementation((fn, options) =>
@@ -19,77 +27,66 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["EPERM", "EACCES", "EBUSY"])(
-  "activates the Windows package after a transient %s backup rename failure",
-  async (code) => {
-    const { params, packageRoot, launcher } = await createPackageSwapFixture(
-      dirs.make("openclaw-swap-windows-"),
-    );
-    const rename = fs.rename.bind(fs);
-    let attempts = 0;
-    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (String(from) === packageRoot && ++attempts <= 2) {
-        throw Object.assign(new Error(`${code}: package is in use`), { code });
-      }
-      return rename(from, to);
-    });
-    const result = await withMockedPlatform("win32", () => swapStagedPackageInstall(params));
-    expect(result).toMatchObject({ status: "committed", step: { exitCode: 0 } });
-    expect(attempts).toBe(3);
-    expect(result.step.warnings).toEqual([
-      expect.stringContaining(`${code}: package is in use`),
-      expect.stringContaining(`${code}: package is in use`),
-    ]);
-    await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-      '"version":"2.0.0"',
-    );
-    await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
-  },
-);
-
 it.each([
-  { platform: "win32", code: "EPERM", retries: true },
-  { platform: "win32", code: "EBUSY", retries: true },
-  { platform: "win32", code: "EACCES", retries: true },
-  { platform: "win32", code: "EXDEV", retries: false },
-  { platform: "linux", code: "EPERM", retries: false },
+  { platform: "win32", code: "EPERM", transient: true, retries: true },
+  ...["EPERM", "EBUSY", "EACCES"].map((code) => ({
+    platform: "win32" as const,
+    code,
+    transient: false,
+    retries: true,
+  })),
+  { platform: "win32", code: "EXDEV", transient: false, retries: false },
+  ...(process.platform === "win32"
+    ? []
+    : [{ platform: process.platform, code: "EPERM", transient: false, retries: false }]),
 ] as const)(
-  "preserves the package after persistent $code on $platform (retries=$retries)",
-  async ({ platform, code, retries }) => {
+  "handles $code on $platform without losing the installation (transient=$transient)",
+  async ({ platform, code, transient, retries }) => {
+    backupPlatform = platform;
     const { params, packageRoot, launcher } = await createPackageSwapFixture(
-      dirs.make("openclaw-swap-locked-"),
+      dirs.make("openclaw-swap-rename-"),
     );
     const rename = fs.rename.bind(fs);
     let attempts = 0;
     vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (String(from) === packageRoot) {
-        attempts++;
+      if (String(from) === packageRoot && (++attempts <= 2 || !transient)) {
         throw Object.assign(new Error(`${code}: package is in use`), { code });
       }
       return rename(from, to);
     });
-    const result = await withMockedPlatform(platform, () => swapStagedPackageInstall(params));
-    expect(result).toMatchObject({
-      status: "failed",
-      activePackageRoot: packageRoot,
-      packageRollbackVerified: true,
-      step: { exitCode: 1, failureFacts: [expect.objectContaining({ code })] },
-    });
-    if (retries) {
-      expect(attempts).toBe(16);
-      expect(result.step.warnings).toHaveLength(attempts - 1);
-      expect(result.step.stderrTail).toContain(packageRoot);
-      expect(result.step.stderrTail).toContain("after 16 attempts");
-      expect(wait.mock.calls.reduce((total, [ms]) => total + ms, 0)).toBe(57_750);
+    const result = await swapStagedPackageInstall(params);
+    if (transient) {
+      expect(result).toMatchObject({ status: "committed", step: { exitCode: 0 } });
+      expect(attempts).toBe(3);
+      expect(result.step.warnings).toEqual([
+        expect.stringContaining(`${code}: package is in use`),
+        expect.stringContaining(`${code}: package is in use`),
+      ]);
     } else {
-      expect(attempts).toBe(1);
-      expect(wait).not.toHaveBeenCalled();
-      expect(result.step.warnings).toBeUndefined();
+      expect(result).toMatchObject({
+        status: "failed",
+        activePackageRoot: packageRoot,
+        packageRollbackVerified: true,
+        step: { exitCode: 1, failureFacts: [expect.objectContaining({ code })] },
+      });
+      if (retries) {
+        expect(attempts).toBe(16);
+        expect(result.step.warnings).toHaveLength(attempts - 1);
+        expect(result.step.stderrTail).toContain(packageRoot);
+        expect(result.step.stderrTail).toContain("after 16 attempts");
+        expect(wait.mock.calls.reduce((total, [ms]) => total + ms, 0)).toBe(57_750);
+      } else {
+        expect(attempts).toBe(1);
+        expect(wait).not.toHaveBeenCalled();
+        expect(result.step.warnings).toBeUndefined();
+      }
     }
     await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-      '"version":"1.0.0"',
+      `"version":"${transient ? "2.0.0" : "1.0.0"}"`,
     );
-    await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+    await expect(fs.readFile(launcher, "utf8")).resolves.toBe(
+      transient ? "candidate launcher\n" : "old launcher\n",
+    );
   },
 );
 
@@ -121,16 +118,14 @@ it.each(["authority", "source", "destination"])(
       }
       return rename(from, to);
     });
-    const result = await withMockedPlatform("win32", () =>
-      swapStagedPackageInstall({
-        ...params,
-        assertCurrent: () => {
-          if (revoked) {
-            throw Object.assign(new Error("update owner revoked"), { code: "EPERM" });
-          }
-        },
-      }),
-    );
+    const result = await swapStagedPackageInstall({
+      ...params,
+      assertCurrent: () => {
+        if (revoked) {
+          throw Object.assign(new Error("update owner revoked"), { code: "EPERM" });
+        }
+      },
+    });
     expect(result.status).toBe("failed");
     expect(attempts).toBe(1);
     expect(result.step.stderrTail).toContain(

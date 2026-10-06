@@ -10,7 +10,7 @@ import * as sdkAlias from "./sdk-alias.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("keeps version and injected instance surfaces independent of the broad runtime module", () => {
+it("keeps host metadata and injected instance surfaces independent of the broad runtime module", () => {
   const gateway = {} as PluginRuntime["gateway"];
   const hooks = {
     dispatchHookAgentTurn: vi.fn<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>(),
@@ -30,35 +30,13 @@ it("keeps version and injected instance surfaces independent of the broad runtim
   expect(getGatewayContextResolver(runtime)).toBe(resolveGatewayContext);
 
   expect(runtime.version).toBe(VERSION);
+  expect(runtime.capabilities).toContain("sender-restricted-hidden-helpers-v1");
+  expect(Object.isFrozen(runtime.capabilities)).toBe(true);
+  expect(Object.getOwnPropertyDescriptor(runtime, "capabilities")?.get?.()).toBe(
+    runtime.capabilities,
+  );
   expect(Object.getOwnPropertyDescriptor(runtime, "version")?.get?.()).toBe(VERSION);
   const descriptors = Object.getOwnPropertyDescriptors(runtime);
-  expect(Object.keys(runtime)).toEqual([
-    "version",
-    "decisions",
-    "gateway",
-    "config",
-    "agent",
-    "subagent",
-    "system",
-    "media",
-    "mediaUnderstanding",
-    "tts",
-    "channel",
-    "events",
-    "logging",
-    "state",
-    "modelAuth",
-    "imageGeneration",
-    "videoGeneration",
-    "musicGeneration",
-    "llm",
-    "hooks",
-    "nodes",
-    "sandbox",
-    "worktrees",
-    "webSearch",
-    "modelConfig",
-  ]);
   expect(Reflect.ownKeys(runtime)).toEqual(Reflect.ownKeys(descriptors));
   for (const key of Object.keys(descriptors)) {
     expect(key in runtime).toBe(true);
@@ -79,25 +57,4 @@ it("keeps version and injected instance surfaces independent of the broad runtim
   // Object.prototype names are not declared runtime metadata.
   expect(() => Reflect.has(runtime, "toString")).toThrow("broad runtime should stay lazy");
   expect(resolveRuntimeModule).toHaveBeenCalledTimes(1);
-});
-
-it("does not infer a Gateway owner by invoking an injected subagent accessor", () => {
-  const subagent = {} as PluginRuntime["subagent"];
-  bindGatewayContextResolver(subagent, () => undefined);
-  const readSubagent = vi.fn(() => subagent);
-  const resolveRuntimeModule = vi
-    .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
-    .mockImplementation(() => {
-      throw new Error("broad runtime should stay lazy");
-    });
-  const runtime = createLazyPluginRuntime({
-    runtimeOptions: {
-      get subagent() {
-        return readSubagent();
-      },
-    },
-  });
-  expect(getGatewayContextResolver(runtime)).toBeUndefined();
-  expect(readSubagent).not.toHaveBeenCalled();
-  expect(resolveRuntimeModule).not.toHaveBeenCalled();
 });

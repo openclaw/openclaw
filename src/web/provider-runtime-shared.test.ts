@@ -32,7 +32,6 @@ describe("hasWebProviderEntryCredential", () => {
   const defaults = {
     provider,
     config: {},
-    toolConfig: undefined,
     resolveEnvValue: () => undefined,
   };
 
@@ -40,11 +39,14 @@ describe("hasWebProviderEntryCredential", () => {
     expect(
       hasWebProviderEntryCredential({
         ...defaults,
-        resolveRawValue: () => ({
-          source: "file",
-          provider: "mounted-json",
-          id: "/custom/apiKey",
-        }),
+        provider: {
+          ...provider,
+          getConfiguredCredentialValue: () => ({
+            source: "file",
+            provider: "mounted-json",
+            id: "/custom/apiKey",
+          }),
+        },
       }),
     ).toBe(true);
   });
@@ -53,12 +55,15 @@ describe("hasWebProviderEntryCredential", () => {
     expect(
       hasWebProviderEntryCredential({
         ...defaults,
-        resolveRawValue: () => ({
-          source: "env",
-          provider: "default",
-          id: "CUSTOM_API_KEY",
-        }),
-        resolveEnvValue: ({ configuredEnvVarId }) =>
+        provider: {
+          ...provider,
+          getConfiguredCredentialValue: () => ({
+            source: "env",
+            provider: "default",
+            id: "CUSTOM_API_KEY",
+          }),
+        },
+        resolveEnvValue: (configuredEnvVarId) =>
           configuredEnvVarId === "CUSTOM_API_KEY" ? "secret" : undefined,
       }),
     ).toBe(true);
@@ -73,8 +78,12 @@ describe("hasWebProviderEntryCredential", () => {
     expect(
       hasWebProviderEntryCredential({
         ...defaults,
-        resolveRawValue: () => raw,
-        resolveFallbackRawValue: fallback === undefined ? undefined : () => fallback,
+        provider: {
+          ...provider,
+          getConfiguredCredentialValue: () => raw,
+          getConfiguredCredentialFallback:
+            fallback === undefined ? undefined : () => ({ value: fallback, path: "custom.apiKey" }),
+        },
       }),
     ).toBe(false);
   });
@@ -83,7 +92,7 @@ describe("hasWebProviderEntryCredential", () => {
     expect(
       hasWebProviderEntryCredential({
         ...defaults,
-        resolveRawValue: () => "literal-secret",
+        provider: { ...provider, getConfiguredCredentialValue: () => "literal-secret" },
       }),
     ).toBe(true);
   });
@@ -96,7 +105,6 @@ describe("hasWebProviderEntryCredential", () => {
           ...provider,
           authProviderId: "custom-auth",
         },
-        resolveRawValue: () => undefined,
         resolveProviderAuthValue: (providerId) => providerId === "custom-auth",
       }),
     ).toBe(true);

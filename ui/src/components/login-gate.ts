@@ -1,4 +1,3 @@
-// Control UI component renders the login gate.
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
@@ -129,27 +128,6 @@ function renderRefreshAction(feedback: LoginFailureFeedback, action: RefreshActi
   `;
 }
 
-function renderSecretToggle(
-  revealed: boolean,
-  labels: [string, string, string],
-  onToggle: () => void,
-) {
-  const [show, hide, toggle] = labels;
-  return html`
-    <openclaw-tooltip .content=${revealed ? hide : show}>
-      <button
-        type="button"
-        class="settings-secret__toggle"
-        aria-label=${toggle}
-        aria-pressed=${revealed}
-        @click=${onToggle}
-      >
-        ${revealed ? icons.eye : icons.eyeOff}
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
 function renderForm(params: {
   props: LoginGateProps;
   feedback: LoginFailureFeedback | null;
@@ -203,11 +181,19 @@ function renderForm(params: {
             @keydown=${submitOnEnter}
             placeholder=${t("login.secretPlaceholder")}
           />
-          ${renderSecretToggle(
-            props.showGatewaySecret,
-            [t("login.showSecret"), t("login.hideSecret"), t("login.toggleSecretVisibility")],
-            props.onToggleGatewaySecret,
-          )}
+          <openclaw-tooltip
+            .content=${t(props.showGatewaySecret ? "login.hideSecret" : "login.showSecret")}
+          >
+            <button
+              type="button"
+              class="settings-secret__toggle"
+              aria-label=${t("login.toggleSecretVisibility")}
+              aria-pressed=${props.showGatewaySecret}
+              @click=${props.onToggleGatewaySecret}
+            >
+              ${props.showGatewaySecret ? icons.eye : icons.eyeOff}
+            </button>
+          </openclaw-tooltip>
         </span>
         ${isSetupCode ? html`<p id="login-gate-secret-hint" class="muted" role="status">${t("login.setupCodeHint")}</p>` : nothing}
       </div>
@@ -299,7 +285,7 @@ function renderStatusBody(params: {
       <div class="login-gate__actions">
         ${renderRefreshAction(feedback, params.refreshAction)}
         <button class="btn login-gate__connect" @click=${props.onConnect}>
-          ${waitingForPairing ? t("login.failure.pairing.checkNow") : t("common.connect")}
+          ${feedback.kind === "pairing-rejected" || feedback.kind === "pairing-expired" ? t("login.failure.pairing.requestAgain") : waitingForPairing ? t("login.failure.pairing.checkNow") : t("common.connect")}
         </button>
       </div>
       <details class="login-gate__connection">

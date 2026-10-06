@@ -37,8 +37,8 @@ function resolveCodeModeRequesterSessionKey(ctx: ToolSearchToolContext): string 
   if (!sessionKey) {
     throw new ToolInputError("code mode swarm globals require session and run identity.");
   }
-  const { mainKey, alias } = resolveMainSessionAlias(ctx.runtimeConfig ?? ctx.config ?? {});
-  return resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+  const { alias } = resolveMainSessionAlias(ctx.runtimeConfig ?? ctx.config ?? {});
+  return resolveInternalSessionKey({ key: sessionKey, alias });
 }
 
 function resolveCodeModeSwarmGroupId(ctx: ToolSearchToolContext): string {
@@ -147,7 +147,7 @@ async function runAgentSpawnBridge(params: {
   // The registry persists this exact tuple and payload hash before launch.
   const idempotencyKey = `${params.codeModeRunId}:${params.request.id}`;
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  let existing = getSwarmRunByLaunchReplayKey(
+  let existing = await getSwarmRunByLaunchReplayKey(
     idempotencyKey,
     requesterSessionKey,
     params.ctx.agentId,
@@ -163,8 +163,11 @@ async function runAgentSpawnBridge(params: {
       // Cold-start restore idempotently re-enqueues this durable launch before agentWait parks.
       await initSubagentRegistry();
       existing =
-        getSwarmRunByLaunchReplayKey(idempotencyKey, requesterSessionKey, params.ctx.agentId) ??
-        existing;
+        (await getSwarmRunByLaunchReplayKey(
+          idempotencyKey,
+          requesterSessionKey,
+          params.ctx.agentId,
+        )) ?? existing;
       if (existing.swarmLaunchPending === true && !existing.queuedLaunch) {
         throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
       }

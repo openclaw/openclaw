@@ -10,6 +10,8 @@ import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
+  requireRecord,
+  requireString,
 } from "./chat-flow.test-support.ts";
 import {
   holdOutboxPreviewReads,
@@ -637,7 +639,22 @@ suite.define(() => {
         }),
       );
       expect(await composerFor(page).inputValue()).toBe("Mock Gateway: newer input must survive");
-      expect(await paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
+      expect(await paneFor(page).locator(".chat-attachment-thumb").count()).toBe(0);
+      const firstRunId = requireString(
+        requireRecord(sent.params).idempotencyKey,
+        "first send run id",
+      );
+      await gateway.resolveDeferred("chat.send");
+      await gateway.emitChatFinal({
+        runId: firstRunId,
+        text: "Mock Gateway: first message completed.",
+      });
+      await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+      const next = await gateway.waitForRequest("chat.send", { after: 1 });
+      const nextParams = requireRecord(next.params);
+      expect(nextParams.message).toBe("Mock Gateway: newer input must survive");
+      expect(nextParams).not.toHaveProperty("attachments");
+      expect(requireString(nextParams.idempotencyKey, "second send run id")).not.toBe(firstRunId);
     });
   });
   it("keeps another credential owner isolated and retains a corrupt bundle without sending partial content", async () => {

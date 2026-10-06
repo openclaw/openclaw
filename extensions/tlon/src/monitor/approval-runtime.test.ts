@@ -1,4 +1,3 @@
-// Tlon tests cover bounded pending approval behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -6,7 +5,6 @@ import {
   type PendingApproval,
   type TlonSettingsStore,
 } from "../settings.js";
-import type { UrbitSSEClient } from "../urbit/sse-client.js";
 import { createTlonApprovalRuntime } from "./approval-runtime.js";
 
 function createApproval(index: number): PendingApproval {
@@ -18,27 +16,29 @@ function createApproval(index: number): PendingApproval {
   };
 }
 
-function createFixture(initialApprovals: PendingApproval[]) {
-  let pendingApprovals = initialApprovals;
+function createFixture() {
+  const approvals = Array.from({ length: TLON_PENDING_APPROVAL_LIMIT }, (_, index) =>
+    createApproval(index),
+  );
+  let pendingApprovals = approvals;
   const poke = vi.fn().mockResolvedValue(undefined);
   const api = {
     poke,
     scry: vi.fn().mockResolvedValue([]),
-    // SAFETY: the approval runtime only consumes these two mocked Urbit client methods.
-  } as unknown as Pick<UrbitSSEClient, "poke" | "scry">;
+  };
   const runtime = {
     error: vi.fn(),
     log: vi.fn(),
-    // SAFETY: the approval runtime only consumes these two mocked runtime callbacks.
-  } as unknown as RuntimeEnv;
+    exit: vi.fn(),
+  } satisfies RuntimeEnv;
   let currentSettings: TlonSettingsStore = {};
   const approvalRuntime = createTlonApprovalRuntime({
     api,
     runtime,
     botShipName: "~bot",
     getPendingApprovals: () => pendingApprovals,
-    setPendingApprovals: (approvals) => {
-      pendingApprovals = approvals;
+    setPendingApprovals: (nextApprovals) => {
+      pendingApprovals = nextApprovals;
     },
     getCurrentSettings: () => currentSettings,
     setCurrentSettings: (settings) => {
@@ -51,7 +51,7 @@ function createFixture(initialApprovals: PendingApproval[]) {
     refreshWatchedChannels: vi.fn().mockResolvedValue(0),
   });
   return {
-    api,
+    approvals,
     poke,
     runtime,
     approvalRuntime,
@@ -60,54 +60,39 @@ function createFixture(initialApprovals: PendingApproval[]) {
 }
 
 describe("Tlon pending approval limit", () => {
-  it("rejects unique overflow and notifies the owner once", async () => {
-    const approvals = Array.from({ length: TLON_PENDING_APPROVAL_LIMIT }, (_, index) =>
-      createApproval(index),
-    );
-    const fixture = createFixture(approvals);
-
-    const firstQueued = await fixture.approvalRuntime.queueApprovalRequest(
-      createApproval(TLON_PENDING_APPROVAL_LIMIT),
-    );
-    const secondQueued = await fixture.approvalRuntime.queueApprovalRequest(
-      createApproval(TLON_PENDING_APPROVAL_LIMIT + 1),
-    );
-
-    expect(firstQueued).toBe(false);
-    expect(secondQueued).toBe(false);
-    expect(fixture.getPendingApprovals()).toEqual(approvals);
-    expect(fixture.poke).toHaveBeenCalledOnce();
-    expect(fixture.poke).toHaveBeenCalledWith(
-      expect.objectContaining({ app: "chat", mark: "chat-dm-action" }),
-    );
-    expect(fixture.runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Pending approval limit reached"),
-    );
-  });
-
-  it("retries failed overflow notices with a per-run bound", async () => {
-    const approvals = Array.from({ length: TLON_PENDING_APPROVAL_LIMIT }, (_, index) =>
-      createApproval(index),
-    );
-    const fixture = createFixture(approvals);
-    fixture.poke.mockRejectedValue(new Error("owner unavailable"));
-
-    for (let index = 0; index < 4; index += 1) {
-      await fixture.approvalRuntime.queueApprovalRequest(
-        createApproval(TLON_PENDING_APPROVAL_LIMIT + index),
-      );
-    }
-
-    expect(fixture.poke).toHaveBeenCalledTimes(3);
-    expect(fixture.runtime.error).toHaveBeenCalledTimes(3);
-    expect(fixture.getPendingApprovals()).toEqual(approvals);
-  });
+  it.each([
+    { fails: false, requests: 2, notices: 1 },
+    { fails: true, requests: 4, notices: 3 },
+  ])(
+    "bounds overflow notifications when delivery fails=$fails",
+    async ({ fails, requests, notices }) => {
+      const fixture = createFixture();
+      if (fails) {
+        fixture.poke.mockRejectedValue(new Error("owner unavailable"));
+      }
+      for (let index = 0; index < requests; index += 1) {
+        expect(
+          await fixture.approvalRuntime.queueApprovalRequest(
+            createApproval(TLON_PENDING_APPROVAL_LIMIT + index),
+          ),
+        ).toBe(false);
+      }
+      expect(fixture.getPendingApprovals()).toEqual(fixture.approvals);
+      expect(fixture.poke).toHaveBeenCalledTimes(notices);
+      expect(fixture.runtime.error).toHaveBeenCalledTimes(fails ? notices : 0);
+      if (!fails) {
+        expect(fixture.poke).toHaveBeenCalledWith(
+          expect.objectContaining({ app: "chat", mark: "chat-dm-action" }),
+        );
+        expect(fixture.runtime.log).toHaveBeenCalledWith(
+          expect.stringContaining("Pending approval limit reached"),
+        );
+      }
+    },
+  );
 
   it("still updates an existing approval when the queue is full", async () => {
-    const approvals = Array.from({ length: TLON_PENDING_APPROVAL_LIMIT }, (_, index) =>
-      createApproval(index),
-    );
-    const fixture = createFixture(approvals);
+    const fixture = createFixture();
     const updated = {
       ...createApproval(0),
       messagePreview: "updated",

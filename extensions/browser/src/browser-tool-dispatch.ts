@@ -1,6 +1,15 @@
 /** Browser tab action dispatch. Execution routing is prepared once by the tool owner. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/channel-actions";
+import {
+  asNullableRecord,
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
@@ -17,29 +26,22 @@ import {
   executeTabsAction,
   formatBrowserExternalToolResult,
 } from "./browser-tool.actions.js";
-import {
-  type BrowserToolCapabilities,
-  browserAct,
-  browserArmDialog,
-  browserArmFileChooser,
-  browserCloseTab,
-  browserFocusTab,
-  browserNavigate,
-  browserOpenTab,
-  browserPdfSave,
-  jsonResult,
-  normalizeOptionalString,
-  readPositiveIntegerParam,
-  readStringParam,
-  readStringValue,
-  resolveExistingUploadPaths,
-} from "./browser-tool.runtime.js";
+import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
 import {
   executeScreenshotAction,
   type BrowserScreenshotOptions,
 } from "./browser-tool.screenshot.js";
 import { appendNavigatedPageState, executeSnapshotAction } from "./browser-tool.snapshot.js";
+import {
+  browserAct,
+  browserArmDialog,
+  browserArmFileChooser,
+  browserNavigate,
+  browserPdfSave,
+} from "./browser/client-actions.js";
+import { browserCloseTab, browserFocusTab, browserOpenTab } from "./browser/client.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
+import { resolveExistingUploadPaths } from "./browser/paths.js";
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
@@ -57,7 +59,6 @@ function readTargetUrlParam(params: Record<string, unknown>) {
   return targetUrl;
 }
 
-/** Run tab actions against the prepared host, node, or sandbox route. */
 export async function executeBrowserTabAction(context: {
   action: string;
   actRequest?: Parameters<typeof browserAct>[1];

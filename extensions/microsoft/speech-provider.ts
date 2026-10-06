@@ -24,23 +24,7 @@ const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 const DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS = 30_000;
 
-type MicrosoftProviderConfig = {
-  enabled: boolean;
-  voice: string;
-  lang: string;
-  outputFormat: string;
-  outputFormatConfigured: boolean;
-  pitch?: string;
-  rate?: string;
-  volume?: string;
-  saveSubtitles: boolean;
-  proxy?: string;
-  timeoutMs?: number;
-};
-
-function normalizeMicrosoftProviderConfig(
-  rawConfig: Record<string, unknown>,
-): MicrosoftProviderConfig {
+function normalizeMicrosoftProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const rawEdge = asOptionalRecord(rawConfig.edge);
   const rawMicrosoft = asOptionalRecord(rawConfig.microsoft);
@@ -52,7 +36,7 @@ function normalizeMicrosoftProviderConfig(
   });
 }
 
-function readMicrosoftProviderConfig(config: SpeechProviderConfig): MicrosoftProviderConfig {
+function readMicrosoftProviderConfig(config: SpeechProviderConfig) {
   return {
     enabled: asBoolean(config.enabled) ?? true,
     voice: trimToUndefined(config.voice) ?? DEFAULT_EDGE_VOICE,

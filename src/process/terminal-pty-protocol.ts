@@ -3,6 +3,8 @@ import type { TerminalPtySpawnParams } from "./terminal-pty.js";
 
 export type TerminalPtyControl =
   | { type: "start"; params: TerminalPtySpawnParams }
+  | { type: "prepare"; params: TerminalPtySpawnParams }
+  | { type: "launch" }
   | { type: "input"; data: string }
   | { type: "input"; dataBase64: string }
   | { type: "resize"; cols: number; rows: number }
@@ -10,6 +12,7 @@ export type TerminalPtyControl =
 
 export type TerminalPtyEvent =
   | { type: "boot" }
+  | { type: "prepared" }
   | { type: "ready"; pid: number }
   | { type: "error"; message: string }
   | { type: "exit"; exitCode: number; signal?: number };
@@ -18,7 +21,7 @@ export function decodeTerminalPtyControl(raw: unknown): TerminalPtyControl | und
   if (!isRecord(raw)) {
     return undefined;
   }
-  if (raw.type === "start") {
+  if (raw.type === "start" || raw.type === "prepare") {
     const params = raw.params;
     if (
       isRecord(params) &&
@@ -32,7 +35,7 @@ export function decodeTerminalPtyControl(raw: unknown): TerminalPtyControl | und
       typeof params.rows === "number"
     ) {
       return {
-        type: "start",
+        type: raw.type,
         params: {
           file: params.file,
           args: params.args,
@@ -44,6 +47,8 @@ export function decodeTerminalPtyControl(raw: unknown): TerminalPtyControl | und
         },
       };
     }
+  } else if (raw.type === "launch") {
+    return { type: "launch" };
   } else if (raw.type === "input") {
     if (typeof raw.data === "string") {
       return { type: "input", data: raw.data };
@@ -67,8 +72,8 @@ export function decodeTerminalPtyEvent(raw: unknown): TerminalPtyEvent | undefin
   if (!isRecord(raw)) {
     return undefined;
   }
-  if (raw.type === "boot") {
-    return { type: "boot" };
+  if (raw.type === "boot" || raw.type === "prepared") {
+    return { type: raw.type };
   }
   if (
     raw.type === "ready" &&

@@ -88,10 +88,8 @@ export const TERMINAL_FONT_FAMILY =
   'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
 export const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
 
-/** Reduces a shell path to a tab label, e.g. "/bin/zsh" -> "zsh". */
 export function shellBasename(shell: string): string {
-  const base = shell.split(/[\\/]/).pop()?.trim();
-  return base && base.length > 0 ? base : "shell";
+  return shell.split(/[\\/]/).pop()?.trim() || "shell";
 }
 
 export function forceTerminalRender(controller: GhosttyTerminalController): void {

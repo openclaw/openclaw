@@ -22,6 +22,7 @@ import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-r
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
@@ -36,11 +37,7 @@ import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
 import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-cache-key.js";
-import {
-  consumeCodexAppServerLiveThread,
-  releaseCodexAppServerLiveThread,
-  retainCodexAppServerLiveThread,
-} from "./client-runtime.js";
+import { releaseCodexAppServerLiveThread } from "./client-runtime.js";
 import { CodexAppServerRpcError, CodexAppServerClient } from "./client.js";
 import {
   readCodexPluginConfig,
@@ -74,6 +71,12 @@ import {
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import { registerCodexFastModeTests } from "./run-attempt-fast-mode.test-support.js";
+import {
+  advanceAttemptRetryBackoff,
+  expectRetainedSuccessfulThread,
+  observeAttemptProjectionReady,
+  startClockControlledAttempt,
+} from "./run-attempt-lifecycle.test-support.js";
 import { registerCodexMemoryInstructionTests } from "./run-attempt-memory.test-support.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
 import {
@@ -112,8 +115,6 @@ import {
   resetCodexTestBindingStore,
   type CodexAppServerBindingIdentity,
   readCodexAppServerBinding,
-  registerCodexTestSessionIdentity,
-  testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import * as sharedClientModule from "./shared-client.js";
@@ -124,18 +125,16 @@ import {
   readTranscriptMessagesByIdentity,
 } from "./sqlite-session.test-helpers.js";
 import { createCodexTestModel, createCodexTestOAuthProfile } from "./test-support.js";
+import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import {
-  buildDeveloperInstructions,
-  buildThreadStartParams,
-  buildTurnStartParams,
-  codexDynamicToolsFingerprint,
-  startOrResumeThread as startOrResumeThreadImpl,
-} from "./thread-lifecycle.js";
-import {
+  startOrResumeAttemptThread as startOrResumeThread,
   createAppServerOptions as createBaseAppServerOptions,
   createCodexLifecycleHarness,
   createLeasedCodexLifecycleHarness,
 } from "./thread-lifecycle.test-fixtures.js";
+import { buildDeveloperInstructions } from "./thread-prompt.js";
+import { buildThreadStartParams } from "./thread-requests.js";
+import { buildTurnStartParams } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
 
@@ -146,17 +145,6 @@ const testing = {
   resolveCodexDynamicToolDirectNames,
   shouldEnableCodexAppServerNativeToolSurface,
 };
-
-function startOrResumeThread(
-  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
-) {
-  registerCodexTestSessionIdentity(
-    params.params.sessionFile,
-    params.params.sessionId,
-    params.params.sessionKey,
-  );
-  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
-}
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -212,7 +200,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
   return {
     ...createBaseAppServerOptions(),
     connectionClass: "local-loopback",
-    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -476,13 +463,6 @@ function createRunParams() {
   return createParams(sessionFile, workspaceDir);
 }
 
-function startClockControlledAttempt(params: EmbeddedRunAttemptParams) {
-  // Cold transcript workers must not consume a success scenario's execution budget.
-  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-  const run = runCodexAppServerAttempt(params);
-  return { run, started: run.waitForTurnAccepted() };
-}
-
 const GOOGLE_CALENDAR_PLUGIN_CONFIG = {
   codexPlugins: {
     enabled: true,
@@ -735,35 +715,15 @@ async function runSharedClientRestartTest(
         config: {},
       }),
   );
-  const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-  const readyClient = await Promise.race([
-    turnStarted.promise,
-    run.then(() => {
-      throw new Error("Codex startup retry ended before turn/start");
-    }),
-  ]);
+  advanceAttemptRetryBackoff();
+  const { run, started } = startClockControlledAttempt(createParams(sessionFile, workspaceDir));
+  const [readyClient] = await Promise.all([turnStarted.promise, started]);
   readyClient.notify({
     method: "turn/completed",
     params: { threadId: "thread-existing", turn: { id: "turn-1", status: "completed", items: [] } },
   });
   const result = await run;
   return { result, requests, client: readyClient.client };
-}
-
-async function expectRetainedSuccessfulThread(client: CodexAppServerClient, threadId: string) {
-  const ownership = await consumeCodexAppServerLiveThread(client, threadId);
-  expect(ownership).toEqual(expect.objectContaining({ release: expect.any(Function) }));
-  // Restore the exact branded owner so this assertion itself cannot orphan
-  // the persistent subscription or alter later cleanup in the same test.
-  await expect(
-    retainCodexAppServerLiveThread(
-      client,
-      threadId,
-      ownership?.release,
-      ownership?.configFingerprint,
-      ownership?.serviceTier,
-    ),
-  ).resolves.toBe(true);
 }
 
 async function startFastAutoProgressTest(
@@ -1339,29 +1299,30 @@ describe("runCodexAppServerAttempt", () => {
       const params = createParams(sessionFile, workspaceDir);
       await attachSqliteSessionTarget(params, storePath, "session-early-prompt");
       params.prompt = "external channel prompt";
-      const onUserMessagePersisted = vi.fn();
+      const userMessagePersisted = createDeferred<void>();
+      const onUserMessagePersisted = vi.fn(() => userMessagePersisted.resolve());
       params.onUserMessagePersisted = onUserMessagePersisted;
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
-      await vi.waitFor(async () => {
-        expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(
-          expect.objectContaining({
-            role: "user",
-            content: "external channel prompt",
-            idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
-          }),
-        );
-      });
-      await vi.waitFor(() => {
-        expect(onUserMessagePersisted).toHaveBeenCalledWith(
-          expect.objectContaining({
-            role: "user",
-            content: "external channel prompt",
-            idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
-          }),
-        );
-      });
+      const waitForProjectionReady = observeAttemptProjectionReady();
+      const { run, started } = startClockControlledAttempt(params);
+      await started;
+      await awaitGateBeforeSettlement(
+        userMessagePersisted.promise,
+        run,
+        "Codex attempt settled before persisting its user prompt",
+      );
+      await awaitGateBeforeSettlement(
+        waitForProjectionReady(),
+        run,
+        "Codex attempt settled before its transcript projection was ready",
+      );
       const messagesBeforeCompletion = await readTranscriptMessagesByIdentity(params);
+      const expectedUserMessage = expect.objectContaining({
+        role: "user",
+        content: "external channel prompt",
+        idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+      });
+      expect(messagesBeforeCompletion).toContainEqual(expectedUserMessage);
+      expect(onUserMessagePersisted).toHaveBeenCalledWith(expectedUserMessage);
       expect(messagesBeforeCompletion.some((message) => message.role === "assistant")).toBe(false);
       const commentary = {
         type: "agentMessage",
@@ -3717,10 +3678,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.terminal).toEqual({ kind: "ok" });
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult).toHaveBeenNthCalledWith(1, {
-      text: "📖 Read: `from README.md`",
+      text: "Read: `from README.md`",
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "📖 Read\n```txt\nfile contents\n```",
+      text: "Read\n```txt\nfile contents\n```",
     });
   });
 

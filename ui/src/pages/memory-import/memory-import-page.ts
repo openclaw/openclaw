@@ -337,19 +337,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     };
   }
 
-  private isCurrentBackfillRequest(
-    epoch: number,
-    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>,
-    agentId: string,
-  ): boolean {
-    return (
-      epoch === this.backfillEpoch &&
-      this.context.gateway.snapshot.phase === "connected" &&
-      this.context.gateway.snapshot.client === client &&
-      this.currentAgentId() === agentId
-    );
-  }
-
   private async runBackfill(operation: "preview" | "apply" | "rollback") {
     const client = this.context.gateway.snapshot.client;
     const agentId = this.currentAgentId();
@@ -364,7 +351,11 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       return;
     }
     const epoch = ++this.backfillEpoch;
-    const isCurrent = () => this.isCurrentBackfillRequest(epoch, client, agentId);
+    const isCurrent = () =>
+      epoch === this.backfillEpoch &&
+      this.context.gateway.snapshot.phase === "connected" &&
+      this.context.gateway.snapshot.client === client &&
+      this.currentAgentId() === agentId;
     this.backfillBusy = operation;
     this.backfillError = null;
     if (operation !== "rollback") {

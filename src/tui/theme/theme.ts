@@ -4,14 +4,16 @@ import type {
   SelectListTheme,
   SettingsListTheme,
 } from "@earendil-works/pi-tui";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import chalk from "chalk";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
 
 const DARK_TEXT = "#E8E3D5";
 const LIGHT_TEXT = "#1E1E1E";
-const XTERM_LEVELS = [0, 95, 135, 175, 215, 255] as const;
+
+function xtermCubeLevel(index: number): number {
+  return index === 0 ? 0 : 55 + index * 40;
+}
 
 function channelToSrgb(value: number): number {
   const normalized = value / 255;
@@ -25,24 +27,15 @@ function relativeLuminanceRgb(r: number, g: number, b: number): number {
   return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
 
-function relativeLuminanceHex(hex: string): number {
-  return relativeLuminanceRgb(
-    Number.parseInt(hex.slice(1, 3), 16),
-    Number.parseInt(hex.slice(3, 5), 16),
-    Number.parseInt(hex.slice(5, 7), 16),
-  );
-}
-
 function contrastRatio(background: number, foregroundHex: string): number {
-  const foreground = relativeLuminanceHex(foregroundHex);
+  const foreground = relativeLuminanceRgb(
+    Number.parseInt(foregroundHex.slice(1, 3), 16),
+    Number.parseInt(foregroundHex.slice(3, 5), 16),
+    Number.parseInt(foregroundHex.slice(5, 7), 16),
+  );
   const lighter = Math.max(background, foreground);
   const darker = Math.min(background, foreground);
   return (lighter + 0.05) / (darker + 0.05);
-}
-
-function pickHigherContrastText(r: number, g: number, b: number): boolean {
-  const background = relativeLuminanceRgb(r, g, b);
-  return contrastRatio(background, LIGHT_TEXT) >= contrastRatio(background, DARK_TEXT);
 }
 
 function isLightBackground(): boolean {
@@ -66,19 +59,12 @@ function isLightBackground(): boolean {
         return bg >= 244;
       }
       const cubeIndex = bg - 16;
-      const bVal = expectDefined(
-        XTERM_LEVELS[cubeIndex % 6],
-        "xterm levels entry at cube index % 6",
+      const background = relativeLuminanceRgb(
+        xtermCubeLevel(Math.floor(cubeIndex / 36)),
+        xtermCubeLevel(Math.floor(cubeIndex / 6) % 6),
+        xtermCubeLevel(cubeIndex % 6),
       );
-      const gVal = expectDefined(
-        XTERM_LEVELS[Math.floor(cubeIndex / 6) % 6],
-        "xterm levels entry at math.floor(cube index / 6) % 6",
-      );
-      const rVal = expectDefined(
-        XTERM_LEVELS[Math.floor(cubeIndex / 36)],
-        "xterm levels entry at math.floor(cube index / 36)",
-      );
-      return pickHigherContrastText(rVal, gVal, bVal);
+      return contrastRatio(background, LIGHT_TEXT) >= contrastRatio(background, DARK_TEXT);
     }
   }
   return false;

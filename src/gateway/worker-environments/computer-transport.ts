@@ -212,6 +212,8 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
         }),
       }).ok;
     };
+    const hasController = () =>
+      options.desktopRegistry?.hasController(environment.environmentId, environment.ownerEpoch);
 
     const parseRequest = (request: Parameters<ComputerToolTransport["invoke"]>[0]) => {
       if (request.nodeId !== node.nodeId) {
@@ -244,7 +246,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
         ),
       );
       if (input.operation === "capabilities") {
-        throw new Error("Session computer cannot request another capability probe");
+        throw new Error("Session computer cannot request another capability check");
       }
       return input;
     };
@@ -375,13 +377,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
           const assertInvocationCurrent = () => {
             assertCurrent();
             assertAuthorized?.();
-            if (
-              isInput &&
-              options.desktopRegistry?.hasController(
-                environment.environmentId,
-                environment.ownerEpoch,
-              )
-            ) {
+            if (isInput && hasController()) {
               throw new Error(
                 "Computer input paused while the operator has control; use take_control when asked to resume, or release control in the Desktop panel",
               );
@@ -562,12 +558,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               assertCurrent();
               assertAuthorized?.();
               request.signal?.throwIfAborted();
-              if (
-                options.desktopRegistry.hasController(
-                  environment.environmentId,
-                  environment.ownerEpoch,
-                )
-              ) {
+              if (hasController()) {
                 throw new Error(
                   "The operator took control again; observe before requesting another takeover",
                 );
@@ -599,10 +590,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               if (
                 input.operation === "snapshot" &&
                 controlGeneration === observedControlGeneration &&
-                !options.desktopRegistry?.hasController(
-                  environment.environmentId,
-                  environment.ownerEpoch,
-                )
+                !hasController()
               ) {
                 inputNeedsObservation = false;
               }

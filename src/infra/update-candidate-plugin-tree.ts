@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
@@ -24,7 +25,8 @@ import type {
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import {
   readRuntimeModulesManifest,
-  relocateRuntimeEntry,
+  relocateRuntimeSymlink,
+  resolveRuntimeFileRelocator,
   type RuntimeRelocation,
 } from "./update-runtime-relocation.js";
 import { isGitRuntimeStagingName } from "./update-runtime-staging.js";
@@ -162,7 +164,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
       invalidateRoots();
     }
   }
-  async function measureEntry(file: string): Promise<UpdateCandidatePluginEntry> {
+  async function readEntry(file: string): Promise<UpdateCandidatePluginEntry> {
     const stat = await fs.lstat(file, { bigint: true });
     const common = {
       path: file,
@@ -181,6 +183,9 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         birthtimeNs: stat.birthtimeNs.toString(),
         mtimeNs: stat.mtimeNs.toString(),
         ctimeNs: stat.ctimeNs.toString(),
+        uid: stat.uid.toString(),
+        gid: stat.gid.toString(),
+        sha256: hashFileMutationSnapshotSync(file, stat),
       };
     } else if (stat.isSymbolicLink()) {
       const target =
@@ -201,8 +206,15 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     } else {
       throw new Error(`Unsupported plugin snapshot entry: ${file}`);
     }
-    footprints.set(file, entry);
+    return entry;
+  }
+  async function recordEntry(entry: UpdateCandidatePluginEntry): Promise<void> {
+    footprints.set(entry.path, entry);
     await params.onProgress?.();
+  }
+  async function measureEntry(file: string): Promise<UpdateCandidatePluginEntry> {
+    const entry = await readEntry(file);
+    await recordEntry(entry);
     return entry;
   }
   async function discoverHoistedDependencies(directory: string): Promise<void> {
@@ -323,6 +335,35 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         }
       }
     }
+    const leaves = await runTasksWithConcurrency({
+      limit: 4,
+      errorMode: "stop",
+      tasks: entries
+        .filter((entry) => {
+          const file = path.join(directory, entry.name);
+          return !entry.isDirectory() && !isRecoveryArtifact(file) && !isOwnedHostEdge(file);
+        })
+        .map((entry) => async () => {
+          const file = path.join(directory, entry.name);
+          const measured = await readEntry(file);
+          if (measured.kind !== "symlink") {
+            return { measured };
+          }
+          const target = path.resolve(directory, measured.link);
+          const real = await fs.realpath(file).catch((error: unknown) => {
+            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
+              return target;
+            }
+            throw error;
+          });
+          return { measured, edge: { target, real } };
+        }),
+    });
+    if (leaves.hasError) {
+      throw leaves.firstError;
+    }
+    const observations = new Map(leaves.results.map((leaf) => [leaf.measured.path, leaf]));
+    // Reads can overlap; graph discovery and progress callbacks retain listing order.
     for (const entry of entries) {
       const file = path.join(directory, entry.name);
       if (isRecoveryArtifact(file)) {
@@ -340,18 +381,11 @@ export async function prepareUpdateCandidatePluginTrees(params: {
           await scan(file);
         }
       } else {
-        const measured = await measureEntry(file);
-        if (measured.kind !== "symlink") {
-          continue;
+        const leaf = observations.get(file)!;
+        await recordEntry(leaf.measured);
+        if (leaf.edge) {
+          edges.set(file, leaf.edge);
         }
-        const target = path.resolve(directory, measured.link);
-        const real = await fs.realpath(file).catch((error: unknown) => {
-          if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-            return target;
-          }
-          throw error;
-        });
-        edges.set(file, { target, real });
       }
     }
   }
@@ -587,10 +621,18 @@ export async function copyUpdateCandidatePluginTrees(
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
   };
+  const assertEntries = async () => {
+    const checked = await runTasksWithConcurrency({
+      limit: 4,
+      errorMode: "stop",
+      tasks: plan.entries.map((entry) => () => assertEntry(entry)),
+    });
+    if (checked.hasError) {
+      throw checked.firstError;
+    }
+  };
   await targets.assertBindings();
-  for (const entry of plan.entries) {
-    await assertEntry(entry);
-  }
+  await assertEntries();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
   const destinationRoot = await openRoot(privateRoot);
   const preparedDirectories = new Set([privateRoot]);
@@ -639,6 +681,10 @@ export async function copyUpdateCandidatePluginTrees(
             ),
         });
         await assertEntry(entry);
+        const copiedStat = await fs.lstat(destination, { bigint: true });
+        if (hashFileMutationSnapshotSync(destination, copiedStat) !== entry.sha256) {
+          throw new Error(`Copied plugin bytes differ from snapshot inventory: ${entry.path}`);
+        }
       }),
   });
   // A failed copy can already have published bytes. Drain every admitted copy
@@ -654,13 +700,15 @@ export async function copyUpdateCandidatePluginTrees(
     }
   }
   await targets.assertBindings();
-  for (const entry of plan.entries) {
-    await assertEntry(entry);
-  }
+  await assertEntries();
   for (const entry of plan.entries) {
     if (entry.kind !== "directory") {
       const target = destinationFor(entry.path);
-      await relocateRuntimeEntry(target, entry.path, target, entry.kind, relocations);
+      const relocate =
+        entry.kind === "symlink" ? relocateRuntimeSymlink : resolveRuntimeFileRelocator(target);
+      if (relocate) {
+        await relocate(target, entry.path, target, relocations);
+      }
     }
   }
   const privateAliases = await publishUpdateCandidatePluginTreeLinks({

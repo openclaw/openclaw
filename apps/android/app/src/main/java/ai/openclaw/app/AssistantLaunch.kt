@@ -54,11 +54,6 @@ data class SharedAttachment(
   val mimeType: String,
 )
 
-private data class SharedAttachmentSelection(
-  val attachments: List<SharedAttachment>,
-  val droppedCount: Int,
-)
-
 internal val SHARED_ATTACHMENT_MIME_ALLOWLIST =
   setOf(
     "image/*",
@@ -135,34 +130,11 @@ fun parseShareLaunchIntent(
       .distinct()
       .joinToString(separator = "\n\n")
       .ifEmpty { null }
-  val attachmentSelection = sharedAttachments(intent, action, resolveMimeType)
-
-  if (text == null && attachmentSelection.attachments.isEmpty() && attachmentSelection.droppedCount == 0) return null
-  return ShareLaunchRequest(
-    text = text,
-    attachments = attachmentSelection.attachments,
-    droppedAttachmentCount = attachmentSelection.droppedCount,
-  )
-}
-
-private fun sharedAttachments(
-  intent: Intent,
-  action: String,
-  resolveMimeType: (Uri) -> String?,
-): SharedAttachmentSelection {
   val streamUris =
-    when (action) {
-      Intent.ACTION_SEND -> {
-        listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
-      }
-
-      Intent.ACTION_SEND_MULTIPLE -> {
-        IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
-      }
-
-      else -> {
-        emptyList()
-      }
+    if (action == Intent.ACTION_SEND) {
+      listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
+    } else {
+      IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
     }
   val clipUris =
     intent.clipData
@@ -200,9 +172,11 @@ private fun sharedAttachments(
     }
     resolved += SharedAttachment(uri = uri, kind = kind, mimeType = requireNotNull(mimeType))
   }
-  return SharedAttachmentSelection(
+  if (text == null && resolved.isEmpty() && droppedCount == 0) return null
+  return ShareLaunchRequest(
+    text = text,
     attachments = resolved,
-    droppedCount = droppedCount,
+    droppedAttachmentCount = droppedCount,
   )
 }
 

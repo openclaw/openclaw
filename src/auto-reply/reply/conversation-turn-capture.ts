@@ -125,33 +125,27 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     if (!replyToId) {
       return false;
     }
-    // Delivery lookup can open a writable store, so acquisition belongs to admission too.
-    return await runConversationDatabaseWrite(scope, (writeScope) => {
-      const operation =
-        findConversationTurnDeliveryByReplyTarget(writeScope, {
-          conversationRef: conversation.conversationRef,
-          replyToId,
-        }) ??
-        (parentConversationRef && parentConversationRef !== conversation.conversationRef
-          ? findConversationTurnDeliveryByReplyTarget(writeScope, {
-              conversationRef: parentConversationRef,
-              replyToId,
-            })
-          : undefined);
-      if (operation?.status === "replied" && operation.reply?.messageId === messageId) {
-        // A transport retry of the already-captured message remains consumed;
-        // starting an ordinary turn would surface the same peer reply twice.
-        return true;
-      }
-      if (operation && operation.status !== "replied") {
-        // With no process-local waiter, ordinary inbound dispatch owns this
-        // reply. It proves the outbound send, but must not become replayable as
-        // an inline tool result on a later stable turn retry.
-        markConversationDeliverySent(writeScope, operation.operationId, replyToId);
-      }
-      return false;
-    });
+    const operation =
+      (await findConversationTurnDeliveryByReplyTarget(scope, {
+        conversationRef: conversation.conversationRef,
+        replyToId,
+      })) ??
+      (parentConversationRef && parentConversationRef !== conversation.conversationRef
+        ? await findConversationTurnDeliveryByReplyTarget(scope, {
+            conversationRef: parentConversationRef,
+            replyToId,
+          })
+        : undefined);
+    if (operation?.status === "replied" && operation.reply?.messageId === messageId) {
+      return true;
+    }
+    if (operation && operation.status !== "replied") {
+      // Ordinary inbound dispatch owns this reply when no process-local waiter remains.
+      await markConversationDeliverySent(scope, operation.operationId, replyToId);
+    }
+    return false;
   }
+  let replyCommitted = false;
   try {
     if (sessionEntry.sessionId !== claim.sessionId) {
       throw new Error(`session changed before captured reply persistence: ${sessionKey}`);
@@ -172,6 +166,27 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     if (!persistedReplyText) {
       throw new Error("captured conversation turn reply has no persistable text");
     }
+    // Commit the replayable reply before its optional transcript audit artifact.
+    await markConversationDeliveryReplied(
+      scope,
+      {
+        operationId: claim.turnId,
+        session: {
+          sessionKey,
+          sessionId: claim.sessionId,
+          lifecycleRevision: sessionEntry.lifecycleRevision,
+        },
+        reply: {
+          messageId,
+          ...(replyToId ? { replyToId } : {}),
+          ...(threadId ? { threadId } : {}),
+          text: persistedReplyText,
+          timestamp: timestamp ?? Date.now(),
+        },
+      },
+      claim.assertCurrent,
+    );
+    replyCommitted = true;
     return await runConversationDatabaseWrite(scope, (writeScope) => {
       claim.assertCurrent();
       const current = loadSessionEntryReadOnly({
@@ -186,18 +201,6 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
         throw new Error(`session changed before captured reply persistence: ${sessionKey}`);
       }
       const artifactId = `conversation-turn-reply-${claim.turnId}`;
-      // Commit the replayable owner state before its optional audit artifact. A
-      // crash after this point can lose audit metadata, but never the claimed reply.
-      markConversationDeliveryReplied(writeScope, {
-        operationId: claim.turnId,
-        reply: {
-          messageId,
-          ...(replyToId ? { replyToId } : {}),
-          ...(threadId ? { threadId } : {}),
-          text: persistedReplyText,
-          timestamp: timestamp ?? Date.now(),
-        },
-      });
       // The tool result owns model context. A side artifact keeps an audit trail
       // without inserting a user row between an active tool call and its result.
       let persisted = false;
@@ -238,7 +241,8 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
   } catch (error) {
     claim.release();
     logVerbose(`conversation turn reply capture failed: ${String(error)}`);
-    return false;
+    // A committed reply remains consumed if the waiter expires during audit admission.
+    return replyCommitted;
   }
 }
 

@@ -219,12 +219,8 @@ async function resolveOpenClawPackageRoot(entrypoint: string): Promise<string | 
   // Installed dist entrypoints can sit several levels below package root in
   // pnpm layouts; bound the walk to avoid scanning arbitrary filesystem depth.
   for (let depth = 0; depth < 8; depth += 1) {
-    const packageJson = path.join(current, "package.json");
-    if (await pathExists(packageJson)) {
-      const name = await readPackageName(current);
-      if (name === "openclaw") {
-        return current;
-      }
+    if ((await readPackageName(current)) === "openclaw") {
+      return current;
     }
     const next = path.dirname(current);
     if (next === current) {

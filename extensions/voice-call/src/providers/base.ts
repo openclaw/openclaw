@@ -58,6 +58,12 @@ export interface VoiceCallProvider {
    */
   playTts(input: PlayTtsInput): Promise<void>;
 
+  /** Play a message followed by carrier-owned hangup; acceptance is not completion. */
+  playMessageAndHangup?(input: PlayTtsInput): Promise<void>;
+
+  /**
+   * Send DTMF digits to an active call.
+   */
   sendDtmf?: (input: SendDtmfInput) => Promise<void>;
 
   startListening(input: StartListeningInput): Promise<void>;

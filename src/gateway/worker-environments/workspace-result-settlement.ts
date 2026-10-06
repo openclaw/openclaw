@@ -3,7 +3,7 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
-import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.worker-contract.js";
+import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import { sessionWorkspaceRoot, type WorkerSessionWorkspace } from "./session-workspace.js";
 import {
   projectWorkspaceResultConflict,
@@ -143,7 +143,7 @@ type StagedWorkspaceResultSettlement = {
   stagedResultRef: string | null | undefined;
   conflictRetained: boolean;
   beforeComplete: () => Promise<void>;
-  complete?: () => WorkerSessionPlacementRecord;
+  complete?: () => Promise<WorkerSessionPlacementRecord>;
   afterComplete?: (completed: WorkerSessionPlacementRecord) => Promise<void>;
   validateCompleted?: (completed: WorkerSessionPlacementRecord) => void;
 };
@@ -172,8 +172,11 @@ export async function settleStagedWorkspaceResult(
     params.assertCurrent();
   }
   const completed = params.complete
-    ? params.complete()
-    : params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
+    ? await params.complete()
+    : await params.placements.completeWorkspaceResultAndReleaseTurn(
+        params.turnClaim,
+        params.assertCurrent,
+      );
   params.validateCompleted?.(completed);
   await params.afterComplete?.(completed);
   if (cleanupRef) {

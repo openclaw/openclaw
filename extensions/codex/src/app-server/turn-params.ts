@@ -212,7 +212,11 @@ export function buildTurnStartParams(
           collaborationMode,
         }
       : {}),
-    ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
+    ...(params.requireWorkspaceOnly === true
+      ? { environments: [] }
+      : options.environmentSelection
+        ? { environments: options.environmentSelection }
+        : {}),
   };
 }
 

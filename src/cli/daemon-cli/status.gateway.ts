@@ -10,7 +10,7 @@ import {
   resolveBestEffortGatewayBindHostForDisplay,
 } from "../../infra/network-discovery-display.js";
 import { inspectPortUsage, inspectPortUsages } from "../../infra/ports-inspect.js";
-import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
+import type { PortUsage } from "../../infra/ports-types.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import type { WindowsGatewayFirewallDiagnostic } from "../../infra/windows-gateway-firewall-diagnostics.js";
 import { pickProbeHostForBind } from "./shared.js";
@@ -29,20 +29,7 @@ type GatewayStatusSummary = {
   windowsFirewall?: WindowsGatewayFirewallDiagnostic;
 };
 
-export type PortStatusSummary = {
-  port: number;
-  status: PortUsageStatus;
-  listeners: PortListener[];
-  hints: string[];
-};
-
-type ResolvedGatewayStatus = {
-  gateway: GatewayStatusSummary;
-  daemonPort: number;
-  cliPort: number;
-  probeUrl: string;
-  probeUrlOverride: string | null;
-};
+type PortStatusSummary = Pick<PortUsage, "port" | "status" | "listeners" | "hints">;
 
 function appendProbeNote(
   existing: string | undefined,
@@ -90,7 +77,7 @@ export async function resolveGatewayStatusSummary(params: {
   commandProgramArguments?: string[];
   rpcUrlOverride?: string;
   localPortOverride?: number;
-}): Promise<ResolvedGatewayStatus> {
+}) {
   const portFromArgs = parseTcpPortFromArgs(params.commandProgramArguments);
   const daemonPort =
     params.localPortOverride ??
@@ -129,25 +116,26 @@ export async function resolveGatewayStatusSummary(params: {
         });
   let probeNote =
     !probeUrlOverride && bindMode === "lan"
-      ? `bind=lan listens on 0.0.0.0 (all interfaces); probing via ${probeHost}.`
+      ? `bind=lan listens on 0.0.0.0 (all interfaces); checking via ${probeHost}.`
       : !probeUrlOverride && bindMode === "loopback"
         ? "Loopback-only gateway; only local clients can connect."
         : undefined;
   probeNote = appendProbeNote(probeNote, bindHostWarning);
   probeNote = appendProbeNote(probeNote, tailnetWarning);
 
+  const gateway: GatewayStatusSummary = {
+    bindMode,
+    bindHost,
+    customBindHost,
+    ...(tlsEnabled ? { tlsEnabled } : {}),
+    port: daemonPort,
+    portSource,
+    probeUrl: diagnosticProbeUrl,
+    ...(controlUiLinks ? { controlUiLinks } : {}),
+    ...(probeNote ? { probeNote } : {}),
+  };
   return {
-    gateway: {
-      bindMode,
-      bindHost,
-      customBindHost,
-      ...(tlsEnabled ? { tlsEnabled } : {}),
-      port: daemonPort,
-      portSource,
-      probeUrl: diagnosticProbeUrl,
-      ...(controlUiLinks ? { controlUiLinks } : {}),
-      ...(probeNote ? { probeNote } : {}),
-    },
+    gateway,
     daemonPort,
     cliPort: resolveGatewayPort(params.cliCfg, process.env),
     probeUrl,

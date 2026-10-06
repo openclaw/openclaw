@@ -3,8 +3,10 @@ import path from "node:path";
 import * as mediaMime from "@openclaw/media-core/mime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox/context.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
@@ -14,6 +16,66 @@ afterEach(resetAgentRunRegistryForTest);
 afterEach(() => vi.restoreAllMocks());
 
 describe("agent harness reply media", () => {
+  it("rejects Gateway sibling decoys while retaining managed media and HTTP references", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const outside = state.path("gateway-generated", `${"decoy-".repeat(30)}.txt`);
+      fs.mkdirSync(path.dirname(outside));
+      fs.writeFileSync(outside, "Gateway sibling must not be sent");
+      const managed = await saveMediaBuffer(
+        Buffer.from("managed attachment"),
+        "text/plain",
+        "inbound",
+      );
+      const managedUrl = `media://inbound/${managed.id}`;
+      const httpUrl = "https://example.com/attachment.pdf";
+      const host = await createAdmittedHostCapabilityTestFixture({
+        runId: "run-remote-reply-namespace",
+        agentId: "main",
+        sessionId: "remote-reply-namespace",
+        sessionKey: "agent:main:remote-reply-namespace",
+        workspaceDir: state.workspaceDir,
+        cwd: state.workspaceDir,
+        config: { tools: { allow: ["read"], fs: { workspaceOnly: false } } },
+      });
+      const readWorkspaceFile = vi.fn(async () => Buffer.from("unexpected remote read"));
+      try {
+        const result = await host.hostCapabilities.prepareReplyMedia!({
+          kind: "payload",
+          payload: {
+            mediaUrls: [
+              outside,
+              path.relative(state.workspaceDir, outside),
+              managedUrl,
+              managed.path,
+              httpUrl,
+            ],
+          },
+          workspaceRoot: "/remote-workspace",
+          readWorkspaceFile,
+        });
+        if (result.kind !== "payload") {
+          throw new Error("expected prepared reply payload");
+        }
+        const mediaUrls = result.payload.mediaUrls ?? [];
+        expect(mediaUrls).toHaveLength(2);
+        expect(mediaUrls[1]).toBe(httpUrl);
+        expect(fs.readFileSync(mediaUrls[0] ?? "", "utf8")).toBe("managed attachment");
+        expect(readWorkspaceFile).not.toHaveBeenCalled();
+        const failures = getReplyPayloadMetadata(result.payload)?.assistantMediaFailures;
+        expect(failures).toHaveLength(2);
+        expect(failures?.map((failure) => failure.label)).toEqual([
+          expect.stringMatching(/^Remote file: decoy-/),
+          expect.stringMatching(/^Remote file: decoy-/),
+        ]);
+        expect(failures?.[0]?.label.length).toBeLessThanOrEqual(180);
+        expect(failures?.[0]?.label).not.toContain(state.root);
+      } finally {
+        host.closeHost();
+        host.closeAdmission();
+      }
+    });
+  });
+
   it("reads reply attachments from the remote sandbox instead of a stale Gateway sandbox", async () => {
     const fixture = tempDirs.make("openclaw-reply-sandbox-");
     const workspaceDir = path.join(fixture, "workspace");
