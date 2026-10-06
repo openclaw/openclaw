@@ -13,7 +13,6 @@ import {
 
 export { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
 
-/** Return how many argv tokens a gateway-run option consumes, or 0 when not recognized. */
 export function consumeGatewayRunOptionToken(args: ReadonlyArray<string>, index: number): number {
   const arg = args[index];
   if (!arg || arg === "--" || !arg.startsWith("-")) {
@@ -53,7 +52,6 @@ function consumeGatewayRunPreBootstrapOptionToken(
   return 0;
 }
 
-/** Return how many root fast-path tokens are consumed before the `gateway` command. */
 export function consumeGatewayFastPathRootOptionToken(
   args: ReadonlyArray<string>,
   index: number,
@@ -74,7 +72,6 @@ export function consumeGatewayFastPathRootOptionToken(
   return 0;
 }
 
-/** Resolve the gateway command path from raw argv without full Commander registration. */
 export function resolveGatewayCommandPath(argv: string[], depth = 2): string[] | null {
   const positionals = getCommandPositionalsWithRootOptions(argv, {
     commandPath: ["gateway"],
@@ -87,7 +84,6 @@ export function resolveGatewayCommandPath(argv: string[], depth = 2): string[] |
   return positionals ? ["gateway", ...positionals] : null;
 }
 
-/** Resolve the gateway command path used by catalog and startup-policy lookups. */
 export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | null {
   return resolveGatewayCommandPath(argv, 2);
 }
@@ -100,7 +96,6 @@ export function isGatewayRunInvocationArgv(argv: string[]): boolean {
   );
 }
 
-/** Resolve destructive gateway-run flags before Commander registration. */
 export function resolveGatewayRunPreBootstrapOptions(
   argv: string[],
 ): { force: boolean; reset: boolean } | null {

@@ -1,4 +1,3 @@
-// CLI startup presentation and config-before-plugin bootstrap.
 import type { StartupConfigPreflightOptions } from "../commands/startup-config-preflight.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -34,11 +33,7 @@ export async function applyCliExecutionStartupPresentation(params: {
     return;
   }
   const { emitCliBanner } = await import("./banner.js");
-  if (params.argv) {
-    emitCliBanner(params.version, { argv: params.argv });
-    return;
-  }
-  emitCliBanner(params.version);
+  emitCliBanner(params.version, { argv: params.argv });
 }
 
 export async function ensureCliExecutionBootstrap(params: {
