@@ -25,6 +25,20 @@ timeout once, immediately after acquiring the write transaction, and carries an
 inherited lock deadline without rereading the connection's timeout. FIFO,
 lock-wait budgets, schemas, stored data, and update behavior are unchanged.
 
+The admitted catalog includes index names and trigger definitions alongside tables.
+Canonical session validation consumes these definitions without another catalog scan.
+First-use schema owners skip additive DDL only when all their tables and indexes
+are present in the current facts. Foreign schema changes, local DDL, rollback, and
+connection replacement invalidate those facts through the same connection owner;
+missing objects still use the existing installation transaction. Unadmitted and
+authorizer-controlled connections retain their native checks. Schemas, stored
+bytes, and update behavior are unchanged.
+
+Schema facts gathered within a managed read operation survive data-only transaction
+settlement. The next operation still checks foreign commits. Unmanaged transaction
+snapshots, and sibling schema publications observed inside an active transaction,
+discard their facts when that snapshot ends.
+
 Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent, so warm writes preserve schema facts for that handle and its local siblings. First use after rollback or a foreign schema change still creates missing storage through normal write admission. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
 
 Retaining an already-open agent handle holds its lifetime without querying SQLite. Its read or transaction owner refreshes schema facts when consuming data; canonical readiness owns the freshness check before reusing its clean-store decision.

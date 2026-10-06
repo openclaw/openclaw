@@ -74,6 +74,30 @@ so reactions from a previous reset instance remain inert.
 The table is not secret storage. See the
 [same-version contract](/reference/database-schemas/versioning#versioning-contract).
 
+### Session run outcomes and liveness
+
+The canonical session entry's optional `status` stores only `done`, `failed`,
+`killed`, `timeout`, or `interrupted`. Starting a run clears the previous outcome.
+`GatewaySessionRow.status` may also expose `running` or `queued`, derived from the
+run registry and queue owner rather than durable session metadata. Storage workers
+receive live session keys from their scheduling owner and revalidate protection
+before committing maintenance or cold-storage changes.
+
+Restart and crash recovery use the existing recovery claim, run-fence, reply-phase,
+and delivery fields. Eligible admissions arm their claim with the user-turn write,
+including turns without a channel route. An interrupted outcome alone does not
+authorize resumption or delivery. See [Restart recovery](/gateway/restart-recovery).
+
+Doctor and startup share a one-time normalization of legacy persisted `running`
+and `queued` entries to `interrupted`, before canonical session reads; verified legacy
+yields retain an unset outcome so their child continuation keeps ownership. Eligible
+legacy `running` entries acquire recovery custody if they lack a claim; existing
+claims, transcripts, and activity timestamps remain intact. This changes no table or schema
+version: the existing SQL status index still projects `interrupted` as `failed`;
+canonical entry JSON retains the distinct outcome. Older releases still infer
+activity from their persisted flag, so they cannot provide the new liveness or
+claim-only recovery behavior when reopened on these entries.
+
 ### Activity session recaps
 
 [Activity](/web/control-ui/settings#activity-tab) stores one optional `activitySummary` object in the existing `session_nodes.entry_json` session metadata. This is a reconstructible cache; the transcript remains canonical. The [approved persistence design](https://github.com/openclaw/openclaw/issues/147383) adds no SQL table, column, or database schema-version change. Current and `v2026.9.4` metadata serializers preserve unknown optional fields; unknown recap payload versions are treated as cache misses.

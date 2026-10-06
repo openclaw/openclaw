@@ -37,10 +37,6 @@ import { readSessionEntryReplacementState } from "./session-accessor.sqlite-repl
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import {
-  hasSessionEntriesByStatus,
-  readSessionEntriesByStatus,
-} from "./session-accessor.sqlite-status.js";
-import {
   readLatestAssistantTextFromDatabase,
   readTranscriptHeaderFromDatabase,
 } from "./session-accessor.sqlite-transcript-metadata-read.js";
@@ -383,26 +379,6 @@ export function readExactSessionEntriesWithLifecycle(
       source,
       entries: read.found ? read.value : [],
       lifecycleTimestamps: {},
-    };
-  }
-  if (request.statusSelection) {
-    const { statuses, presenceOnly } = request.statusSelection;
-    const read = withOpenClawAgentDatabaseReadOnly(
-      (database) => ({
-        entries: presenceOnly ? [] : readSessionEntriesByStatus(database, statuses),
-        statusFound: presenceOnly ? hasSessionEntriesByStatus(database, statuses) : false,
-      }),
-      { ...request.database, env: request.env },
-    );
-    if (!read.found && !presenceOnly && read.reason !== "database-missing") {
-      throw new SessionMetadataUnavailableError(read.reason);
-    }
-    return {
-      kind: "session-exact-entries",
-      lifecycleTimestamps: {},
-      ...(read.found
-        ? read.value
-        : { entries: [], statusFound: read.reason !== "database-missing" }),
     };
   }
   const result = withOpenClawAgentDatabaseReadOnly(

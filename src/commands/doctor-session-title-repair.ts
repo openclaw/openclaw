@@ -110,7 +110,6 @@ export async function repairLegacySessionTitles(params: {
               !recoveredFromProjections &&
               !entry.incognito &&
               !isIncognitoSessionKey(sessionKey) &&
-              entry.status !== "running" &&
               !hasExplicitSessionName(entry)
             ) {
               keys.push(sessionKey);
@@ -129,12 +128,7 @@ export async function repairLegacySessionTitles(params: {
       }
       try {
         const entry = loadSessionEntry({ ...scope, sessionKey });
-        if (
-          !entry ||
-          entry.incognito ||
-          entry.status === "running" ||
-          hasExplicitSessionName(entry)
-        ) {
+        if (!entry || entry.incognito || hasExplicitSessionName(entry)) {
           continue;
         }
         const session = { ...scope, sessionKey, sessionId: entry.sessionId, sessionEntry: entry };
@@ -154,7 +148,6 @@ export async function repairLegacySessionTitles(params: {
           (current) =>
             current.sessionId === entry.sessionId &&
             current.lifecycleRevision === entry.lifecycleRevision &&
-            current.status !== "running" &&
             !current.incognito &&
             !hasExplicitSessionName(current)
               ? { displayName: Buffer.from(title.displayName, "utf16le").toString("utf16le") }

@@ -390,7 +390,6 @@ describe("delivery-queue recovery", () => {
       { sessionKey, storePath, env: resolveDeliveryQueueStateEnv(tmpDir()) },
       {
         sessionId: completion.sessionId,
-        status: "running",
         updatedAt: Date.now(),
         ...(options.withWriterAuthority
           ? { activeWriterRunId: writerRunId, lifecycleRevision }

@@ -433,7 +433,7 @@ export function present(
     sessionId: record.entry.sessionId,
     index: context.projectedAgentRuns!,
   });
-  const active = options.active ?? (live !== undefined || record.entry.status === "running");
+  const active = options.active ?? live !== undefined;
   const row = rowProjection.presentSessionRow(record.materialized, {
     now,
     subagentRuns: options.subagentRuns ?? context.subagentRuns.atTime(now),

@@ -1,3 +1,8 @@
+import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-projection.js";
+import {
+  buildProjectedAgentRunIndex,
+  resolveProjectedAgentRunProgressState,
+} from "../../infra/agent-run-registry.js";
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -159,14 +164,17 @@ function collectCandidateAdditionalProtection(params: {
   return protectedSessionIds;
 }
 
-/** Session ids owned by in-flight work admissions, without live-reference protection. */
+/** Session ids owned by live runs or work admissions, without durable-reference protection. */
 export function collectAdmissionProtectedSessionIds(params: {
   database: Pick<OpenClawAgentDatabase, "db">;
   storePath: string;
 }): Set<string> {
   return collectSessionAdmissionReferences({
     database: params.database,
-    admissionIdentities: [...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? [])],
+    admissionIdentities: [
+      ...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? []),
+      ...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
+    ],
   });
 }
 
@@ -177,7 +185,10 @@ async function readHistoricalSessionIds(params: {
   storePath: string;
 }): Promise<string[]> {
   const input = {
-    admissionIdentities: [...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? [])],
+    admissionIdentities: [
+      ...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? []),
+      ...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
+    ],
     preserveRecentMs: params.preserveRecentMs,
   };
   if (
@@ -205,10 +216,14 @@ async function readHistoricalSessionIds(params: {
 
 async function readDiskEvictableArchivedSessionBatch({
   databaseOptions,
-  ...archived
-}: ArchivedSessionEvictionQuery & {
+  ...query
+}: Omit<ArchivedSessionEvictionQuery, "liveSessionKeys"> & {
   databaseOptions: OpenClawAgentDatabaseOptions;
 }): Promise<ArchivedSessionEvictionBatch> {
+  const archived = {
+    ...query,
+    liveSessionKeys: [...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex())],
+  };
   if (
     isIncognitoOpenClawAgentSqlitePath(
       resolveOpenClawAgentSqlitePath(databaseOptions),
@@ -236,6 +251,12 @@ async function readDiskEvictableArchivedSessionBatch({
 }
 
 const log = createSubsystemLogger("sessions/history-eviction");
+
+function assertSessionHistoryIdle(sessionKey: string | null): void {
+  if (sessionKey && resolveProjectedAgentRunProgressState({ sessionKeys: [sessionKey] })) {
+    throw new Error("Session became active; history eviction was canceled");
+  }
+}
 
 /** Fire-and-forget budget pass from the ordinary entry-write maintenance seam. */
 export function kickSessionHistoryDiskBudgetMaintenance(input: SessionHistoryBudgetKick): void {
@@ -535,6 +556,7 @@ async function enforceSessionHistoryMaintenanceForDatabase(
           }
           const reclaimed = await runSqliteSessionReclamation({
             diagnostics,
+            assertCommitAllowed: () => assertSessionHistoryIdle(plan.snapshot.sessionKey),
             forceInProcess: params.reclamationMode === "in-process",
             plan: reclamationPlan,
           });
@@ -625,6 +647,7 @@ async function enforceSessionHistoryMaintenanceForDatabase(
                 archiveTranscript: false,
                 deleteDeliveryArtifacts: true,
                 deleteTranscriptWithoutArchive: true,
+                commitGuard: () => assertSessionHistoryIdle(candidate.sessionKey),
                 expectedEntry: candidate.entry,
                 expectedSessionId: candidate.entry.sessionId,
                 storePath: params.storePath,

@@ -386,14 +386,14 @@ function hasAgentDatabasePathLease(
   );
 }
 
-/** Publish completed admission without turning deferred verification into durable proof. */
+/** Publish completed admission and, when checked, its durable verification. */
 export function recordOpenClawAgentDatabaseAdmission(
   leaseId: string,
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
   identity: string,
   integrityVerified: boolean,
-): void {
-  runOpenClawStateWriteTransaction(
+): boolean {
+  return runOpenClawStateWriteTransaction(
     (database) => {
       assertOpenClawAgentDatabaseLease(leaseId, params);
       executeSqliteQuerySync(
@@ -411,8 +411,13 @@ export function recordOpenClawAgentDatabaseAdmission(
           ownerStartTime: getFileLockProcessStartTime(process.pid),
         })
       ) {
-        recordOpenClawAgentIntegrityVerification(params.path, params.env ?? process.env, identity);
+        return recordOpenClawAgentIntegrityVerification(
+          params.path,
+          params.env ?? process.env,
+          identity,
+        );
       }
+      return false;
     },
     { env: params.env },
   );

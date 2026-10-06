@@ -65,12 +65,12 @@ it("counts caller-visible open ownership and direct running work across agents b
     });
     const remote = seed("remote", "work");
     const queued = seed("queued", "work");
-    seed("stale", "main", { status: "running" });
+    seed("stale", "main", { status: "interrupted" });
     seed("reassigned-to-ada", "main", { createdActor: actor(bob), owner: { actor: actor(ada) } });
     seed("reassigned-to-bob", "work", { owner: { actor: actor(bob) } });
     seed("own-draft", "main", { visibility: "draft" });
     seed("dashboard:visible-child", "work", { spawnedBy: idle });
-    seed("archive", "main", { archivedAt: 100, status: "running" });
+    seed("archive", "main", { archivedAt: 100, status: "done" });
     const privateKey = seed("private", "work", { createdActor: actor(bob), visibility: "draft" });
     seed("incognito", "main", { incognito: true });
     seed("subagent:hidden", "main", { spawnedBy: idle });
