@@ -1,9 +1,3 @@
-/**
- * Model-backed exec auto-reviewer.
- *
- * This wraps a small reviewer prompt around pending exec requests and converts
- * the model response into allow-once, deny, or ask decisions.
- */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -45,7 +39,6 @@ const execAutoReviewResponseSchema = z
   })
   .strict();
 
-/** Config for the optional model-backed exec reviewer. */
 export type ExecReviewerConfig = NonNullable<NonNullable<ToolsConfig["exec"]>["reviewer"]>;
 
 type ModelAutoReviewInput = ExecAutoReviewInput | BoardWidgetAutoReviewInput;
@@ -208,7 +201,6 @@ function hasDuplicateJsonObjectKeys(text: string): boolean {
   return false;
 }
 
-/** Parses and validates reviewer JSON into a conservative exec decision. */
 function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
   const objectText = extractJsonObject(text);
   if (!objectText) {
@@ -300,11 +292,6 @@ function extractCompletionFailure(
   return `model stopped without a complete response (${stopReason ?? "unknown"})`;
 }
 
-/**
- * Resolves a bounded completion budget for the exec auto-reviewer.
- * Uses the default 1,024 tokens while clamping downward to the provider model's
- * advertised maximum output token limit (floored to integer).
- */
 function resolveExecReviewerMaxTokens(modelMaxTokens?: number): number {
   if (typeof modelMaxTokens === "number" && Number.isFinite(modelMaxTokens) && modelMaxTokens > 0) {
     return Math.max(1, Math.floor(Math.min(EXEC_REVIEWER_MAX_TOKENS, modelMaxTokens)));
@@ -345,7 +332,6 @@ async function raceWithReviewerTimeout<T>(
   }
 }
 
-/** Creates an exec auto-reviewer that uses a configured model when available. */
 export function createModelExecAutoReviewer(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -479,7 +465,6 @@ export function createModelExecAutoReviewer(params: {
         {
           timeoutMs,
           signal: params.signal,
-          // Abort the provider request after the local timeout wins the race.
           onTimeout: () => completionController?.abort(),
         },
       );

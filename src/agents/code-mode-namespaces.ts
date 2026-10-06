@@ -76,7 +76,6 @@ export type SerializedCodeModeNamespaceValue =
   | { kind: "object"; entries: Array<[string, SerializedCodeModeNamespaceValue]> }
   | { kind: "value"; value: unknown };
 
-/** Descriptor sent to code mode for one visible namespace. */
 export type CodeModeNamespaceDescriptor = {
   id: string;
   globalName: string;
@@ -101,7 +100,6 @@ type CodeModeMcpCatalogBinding = {
   apiPath: string;
 };
 
-/** Runtime dispatcher for invoking callable namespace paths. */
 export type CodeModeNamespaceRuntime = {
   descriptors: CodeModeNamespaceDescriptor[];
   apiFiles: CodeModeApiVirtualFile[];
@@ -433,7 +431,6 @@ declare function log(message: string): void;
 // Schema: const fact = await agents.run<{ answer: string }>("Research", { schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } });
 `;
 
-/** Builds system-prompt text describing visible code-mode namespace globals. */
 export function describeCodeModeNamespacesForPrompt(
   catalog?: readonly CodeModeNamespaceCatalogEntry[],
 ): string {
@@ -488,7 +485,6 @@ function serializeMcpNamespaceScope(scope: McpNamespaceScope): SerializedCodeMod
   };
 }
 
-/** Creates the runtime descriptor/invocation layer for visible namespaces. */
 export function createCodeModeNamespaceRuntime(
   catalog: readonly CodeModeNamespaceCatalogEntry[] = [],
 ): CodeModeNamespaceRuntime {

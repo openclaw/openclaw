@@ -48,18 +48,11 @@ import {
   resolveSubagentRunEffectiveEndedAt,
 } from "./subagent-run-timeout.js";
 
-type BrowserCleanupModule = typeof import("../../../browser-lifecycle-cleanup.js");
-type BrowserCleanup = BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"];
-
 const MISSING_REQUIRED_FINAL_REPLY_ERROR = "subagent run ended before producing a final reply";
 
-const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
+const browserCleanupLoader = createLazyImportLoader(
   () => import("../../../browser-lifecycle-cleanup.js"),
 );
-
-async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserCleanup> {
-  return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
-}
 
 function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
   if (
@@ -356,7 +349,7 @@ export async function completeSubagentRunAttempt(
       assertCurrent,
       loadCleanupBrowserSessionsForLifecycleEnd:
         params.loadCleanupBrowserSessionsForLifecycleEnd ??
-        loadCleanupBrowserSessionsForLifecycleEnd,
+        (async () => (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd),
     });
   } finally {
     releaseCompletionLock?.();

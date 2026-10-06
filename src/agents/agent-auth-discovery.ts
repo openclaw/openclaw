@@ -1,4 +1,3 @@
-/** Discovers agent runtime credentials from auth profiles, env, and synthetic providers. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   prepareProviderSyntheticAuthWithPlugin,
@@ -153,7 +152,6 @@ export async function prepareAmbientAgentCredentialsForDiscovery(
   return credentials;
 }
 
-/** Resolves the effective auth store and provider credentials for one discovery generation. */
 export function resolveAgentDiscoveryAuthFacts(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
