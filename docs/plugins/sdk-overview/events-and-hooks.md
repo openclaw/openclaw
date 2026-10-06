@@ -21,6 +21,15 @@ each hook result. Part of the [Plugin SDK overview](/plugins/sdk-overview).
 See [Plugin hooks](/plugins/hooks) for examples, common hook names, and guard
 semantics.
 
+Channel providers can await credential revocation consumers through
+`dispatchChannelTokensRevoked` from
+`openclaw/plugin-sdk/channel-credential-events`. Consumers register with
+`api.on("channel_tokens_revoked", handler)`. The immutable event contains only
+provider event identity/time, app/workspace identity, and OAuth user IDs. This
+trusted-plugin dispatcher does not authenticate event provenance or establish
+current installation ownership. See the [credential revocation contract](/plugins/hooks/reference#channel-credential-revocation)
+for acceptance, timeout, retry, and missing-consumer limitations.
+
 ## Hook decision semantics
 
 `before_install` is a plugin-runtime lifecycle hook, not the operator install

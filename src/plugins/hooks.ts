@@ -43,6 +43,7 @@ import { withHookTimeout } from "./hook-timeout.js";
 import { isPluginHookReplyDispatchKind } from "./hook-types.js";
 import type {
   PluginAgentTurnPrepareResult,
+  PluginChannelTokensRevokedDispatchOptions,
   PluginHookAgentContext,
   PluginHookAgentTrigger,
   PluginHookBeforeAgentFinalizeResult,
@@ -92,6 +93,7 @@ export type { VoidHookRunOptions } from "./hook-runner-types.js";
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   agent_end: 30_000,
   channel_pairing_requested: 2_000,
+  channel_tokens_revoked: 10_000,
   // Compaction hooks run on the serialized notification queue. Allow memory
   // flushes the agent_end budget, then fail open so later notifications proceed.
   before_compaction: 30_000,
@@ -270,7 +272,9 @@ export function createHookRunner(
   let runtimeDecisionOrdinal = 0;
 
   const shouldCatchHookErrors = (hookName: PluginHookName): boolean =>
-    catchErrors && (failurePolicyByHook[hookName] ?? "fail-open") === "fail-open";
+    hookName !== "channel_tokens_revoked" &&
+    catchErrors &&
+    (failurePolicyByHook[hookName] ?? "fail-open") === "fail-open";
 
   const recordBeforeToolCallDecision = (params: {
     event: PluginHookBeforeToolCallEvent;
@@ -512,6 +516,11 @@ export function createHookRunner(
     pluginId: string;
     error: unknown;
   }): never | void => {
+    if (params.hookName === "channel_tokens_revoked") {
+      // Consumer errors can contain credentials or terminal provider/session
+      // codes. Preserve replay without exposing or reclassifying those details.
+      throw new Error("channel_tokens_revoked consumer acceptance failed");
+    }
     const msg = `[hooks] ${params.hookName} handler from ${params.pluginId} failed: ${formatHookErrorForLog(params.error)}`;
     if (shouldCatchHookErrors(params.hookName)) {
       logger?.error(msg);
@@ -613,8 +622,9 @@ export function createHookRunner(
     optionsValue: VoidHookRunOptions = {},
     matcherToolName?: string,
     projectContext?: VoidHookContextProjection<HookContext<K>, K>,
+    selectedHooks?: PluginHookRegistration<K>[],
   ): Promise<void> {
-    const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
+    const hooks = selectedHooks ?? getHooksForName(registry, hookName, undefined, matcherToolName);
     if (hooks.length === 0) {
       return;
     }
@@ -673,6 +683,80 @@ export function createHookRunner(
     <K extends PluginHookName>(hookName: K) =>
     (event: HookEvent<K>, ctx: HookContext<K>) =>
       runVoidHook(hookName, deepFreezeHookValue(structuredClone(event)), ctx);
+
+  function assertChannelTokensRevokedConsumersReady(
+    policy: PluginChannelTokensRevokedDispatchOptions = {},
+    hooks = getHooksForName(registry, "channel_tokens_revoked"),
+  ): void {
+    const ids = policy.requiredConsumerPluginIds ?? [];
+    if (
+      !Array.isArray(ids) ||
+      ids.length > 8 ||
+      ids.some(
+        (id) => typeof id !== "string" || id.length === 0 || id.length > 128 || id !== id.trim(),
+      )
+    ) {
+      throw new Error("channel_tokens_revoked required consumer policy is invalid");
+    }
+    if (ids.length === 0) {
+      return;
+    }
+    const loadedIds = new Set(
+      registry.plugins
+        .filter((plugin) => plugin.status === "loaded" && plugin.enabled !== false)
+        .map((plugin) => plugin.id),
+    );
+    for (const id of ids) {
+      const requiredHooks = hooks.filter((hook) => hook.pluginId === id);
+      if (
+        !loadedIds.has(id) ||
+        requiredHooks.length === 0 ||
+        requiredHooks.some((hook) => {
+          const instance = getPluginValueInstance(hook.handler);
+          return (
+            instance !== undefined &&
+            (!instance.acceptingCalls ||
+              instance.lifecycle.signal.aborted ||
+              instance.owner?.revoked === true ||
+              instance.owner?.record.enabled === false ||
+              (instance.owner !== undefined && instance.owner.record.status !== "loaded"))
+          );
+        })
+      ) {
+        throw new Error("channel_tokens_revoked required consumer is unavailable");
+      }
+    }
+  }
+
+  async function runChannelTokensRevoked(
+    event: HookEvent<"channel_tokens_revoked">,
+    ctx: HookContext<"channel_tokens_revoked">,
+    policy: PluginChannelTokensRevokedDispatchOptions = {},
+  ): Promise<void> {
+    // Readiness and dispatch share one current snapshot. A later replay resolves
+    // again, so replacement cannot silently turn required delivery into a no-op.
+    const hooks = getHooksForName(registry, "channel_tokens_revoked");
+    assertChannelTokensRevokedConsumersReady(policy, hooks);
+    // Fresh allowlist copies keep extra caller fields and mutation out of every
+    // consumer, including consumers sharing this dispatch.
+    const metadata = Object.freeze({
+      eventId: event.eventId,
+      eventTime: event.eventTime,
+      appId: event.appId,
+      workspaceId: event.workspaceId,
+      oauthUserIds: Object.freeze([...event.oauthUserIds]),
+    });
+    const context = Object.freeze({ channelId: ctx.channelId, accountId: ctx.accountId });
+    await runVoidHook(
+      "channel_tokens_revoked",
+      metadata,
+      context,
+      { unrefTimeout: false },
+      undefined,
+      undefined,
+      hooks,
+    );
+  }
 
   /**
    * Handlers are executed sequentially in priority order, and results are merged.
@@ -1158,6 +1242,7 @@ export function createHookRunner(
   }
 
   return {
+    assertChannelTokensRevokedConsumersReady,
     runBeforeModelResolve: bindModifyingHook("before_model_resolve", {
       mergeResults: mergeBeforeModelResolve,
     }),
@@ -1198,6 +1283,7 @@ export function createHookRunner(
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
     runChannelPairingRequested: bindVoidHook("channel_pairing_requested"),
+    runChannelTokensRevoked,
     runMessageReceived: bindVoidHook("message_received"),
     runBeforeDispatch,
     runReplyDispatch: bindClaimingHook("reply_dispatch"),

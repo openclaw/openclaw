@@ -145,6 +145,8 @@ export type SlackAccountConfig = Omit<
     userToken?: SecretInput;
     /** If true, restrict user token to read operations only. Default: true. */
     userTokenReadOnly?: boolean;
+    /** Exact plugin IDs whose revocation consumers must be ready (max eight). Native transport only; default: none. */
+    requiredTokenRevocationConsumers?: string[];
     /** Default mention requirement for channel messages (default: true). */
     requireMention?: boolean;
     /** Override mention gating in threads started by this bot; omitted preserves implicit mention policy. */

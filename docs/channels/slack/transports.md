@@ -60,6 +60,19 @@ The relay URL must use `wss://` unless it targets localhost. Treat the bearer to
 
 Relay WebSocket connections honor the Gateway host's proxy environment (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, lowercase variants, and `NO_PROXY`). A `wss://` relay uses an HTTP `CONNECT` tunnel when a proxy is configured. A matching `NO_PROXY` entry or a localhost `ws://` URL connects directly. Proxy errors are reported instead of silently falling back to a direct relay connection.
 
+## Required token revocation consumers
+
+Native socket and HTTP accounts may set `requiredTokenRevocationConsumers` to
+at most eight exact plugin IDs. Startup refuses receipt until those plugins are
+loaded, enabled, and have live `channel_tokens_revoked` handlers. Every durable
+OAuth-user revocation delivery rechecks the current registry; a missing, disabled,
+or retired consumer keeps that event retryable across reload. Account settings
+inherit the root list, while an explicit empty list opts the account out. The
+default empty policy preserves stock behavior. Relay mode does not carry native
+revocation envelopes and rejects a nonempty list. See the
+[hook contract](/plugins/hooks/reference#channel-credential-revocation) for bounds,
+timeouts, and the consumer's durable acceptance responsibilities.
+
 ## Socket Mode transport tuning
 
 OpenClaw sets the Slack SDK client pong timeout to 15 seconds for Socket Mode. This is a fixed internal default and is not operator-configurable.

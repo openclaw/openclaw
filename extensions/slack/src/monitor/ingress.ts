@@ -1,4 +1,5 @@
 import type { App, Receiver, ReceiverEvent } from "@slack/bolt";
+import { dispatchChannelTokensRevoked } from "openclaw/plugin-sdk/channel-credential-events";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
@@ -20,6 +21,7 @@ import { parseSlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 import { isTransientSlackThreadLookupError } from "./thread-resolution.js";
+import { projectSlackTokenRevocation } from "./token-revocations.js";
 
 const SLACK_INGRESS_PAYLOAD_VERSION = 1;
 const SLACK_INGRESS_POLL_INTERVAL_MS = 1_000;
@@ -80,6 +82,8 @@ function resolveSlackRelayIngressEventId(event: SlackRelayIngressEvent): string 
 
 type SlackDurableIngressOptions = {
   accountId: string;
+  requiredTokenRevocationConsumers?: readonly string[];
+  now?: () => number;
   queue?: ChannelIngressQueue<SlackIngressPayload>;
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
@@ -228,6 +232,7 @@ export function createSlackDurableIngress(
     SlackIngressBody,
     SlackIngressPayload
   >({
+    ...(options.now ? { now: options.now } : {}),
     queue:
       options.queue ??
       (() =>
@@ -396,6 +401,28 @@ export function createSlackDurableIngress(
         } else {
           if (!app) {
             throw new Error("Slack ingress receiver is not attached to a Bolt app.");
+          }
+          if (asOptionalRecord(event)?.type === "tokens_revoked") {
+            let metadata: ReturnType<typeof projectSlackTokenRevocation>;
+            try {
+              metadata = projectSlackTokenRevocation(raw.body);
+            } catch {
+              throw new SlackIngressPayloadError("Invalid Slack token revocation metadata.");
+            }
+            if (metadata && metadata.oauthUserIds.length > 0) {
+              try {
+                await dispatchChannelTokensRevoked(
+                  metadata,
+                  { channelId: "slack", accountId: options.accountId },
+                  { requiredConsumerPluginIds: options.requiredTokenRevocationConsumers },
+                );
+              } catch {
+                // Do not nest arbitrary consumer errors: the native/shared
+                // classifiers inspect causes for terminal payload/auth codes.
+                throw new Error("Slack token revocation consumer acceptance failed.");
+              }
+            }
+            return;
           }
           await app.processEvent({
             body: raw.body as ReceiverEvent["body"],

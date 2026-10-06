@@ -94,6 +94,7 @@ The standard runner applies these defaults **per handler**:
 | `before_agent_finalize`, `before_prompt_build`, `message_sending`, `reply_payload_sending`, `resolve_exec_env` | 15 seconds                          | Log and skip the failed handler; retain other successful results |
 | `agent_end`, `before_compaction`, `after_compaction`, `skill_changed`, `skill_proposal_changed`                | 30 seconds                          | Log and continue                                                 |
 | `channel_pairing_requested`                                                                                    | 2 seconds                           | Log and continue                                                 |
+| `channel_tokens_revoked`                                                                                       | 10 seconds                          | Reject delivery; emitter retains retryable work                  |
 | `gateway_stop`                                                                                                 | 5 seconds                           | Log and continue shutdown                                        |
 | `skill_proposal_evaluate`                                                                                      | 120 seconds                         | Record an attributed error outcome                               |
 | Other asynchronous hooks, including claim hooks                                                                | No runner timeout unless configured | Log and continue                                                 |
@@ -157,6 +158,7 @@ contracts above; a modifying hook is not an observation hook.
 | --------------------------- | ------------- | -------------------------------------------------------------------------- |
 | `inbound_claim`             | Claim         | Claim an inbound message for the plugin that owns its conversation binding |
 | `channel_pairing_requested` | Observe       | Observe newly created DM pairing requests                                  |
+| `channel_tokens_revoked`    | Accept        | Durably accept provider credential revocation metadata                     |
 | `message_received`          | Observe       | Observe inbound content, sender, thread, and metadata                      |
 | `message_sending`           | Modify / gate | Rewrite outbound content or cancel delivery                                |
 | `reply_payload_sending`     | Modify / gate | Mutate or cancel normalized reply payloads before delivery                 |
@@ -304,6 +306,68 @@ revise with that hash and a correlation id, then repeat. OpenClaw does not
 automatically revise proposals or run an unbounded evaluation loop.
 Event replay is byte-bounded and returns `nextSequence` when another page is
 available.
+
+### Channel credential revocation
+
+Register `api.on("channel_tokens_revoked", async (event, ctx) => { ... })` to
+accept provider-scoped revocation facts into a consumer-owned durable outbox.
+The readonly event contains `eventId`, original Unix-second `eventTime`,
+`appId`, `workspaceId` and `oauthUserIds`; context contains `channelId` and
+`accountId`. Fresh event/context copies and the user-ID array are frozen.
+No credential value, bot ID, message, private/DM content or raw envelope crosses
+this contract. The dispatch API is in `openclaw/plugin-sdk/channel-credential-events`.
+
+Native Slack emits only validated `tokens_revoked` control events from its
+existing authenticated, durable Events API queue. Slack `team_id` maps to
+`workspaceId`. OAuth-user IDs are deduplicated/sorted, bounded to 100 IDs and
+16 KiB of metadata; malformed metadata fails delivery without invoking a
+consumer. Bot-only/empty OAuth revocation is a no-op. Ordinary Slack message
+events retain their existing path. Socket ownership and provider ACK order are
+unchanged: authenticated admission, durable append, transport ACK, then delivery.
+Once native ingress is attached and running, this control path bypasses Bolt
+bot reauthorization. Provider startup, account shutdown and transport availability
+retain their existing lifecycle. The fact does not prove current app/workspace
+binding for a downstream action.
+
+All registered consumers settle before success. Consumer errors/timeouts reject
+even when generic hook error handling requests fail-open. Error details are not
+copied into provider error classification or logs. Timeout bounds the awaited
+outcome; it cannot cancel consumer work, so retries can overlap. Consumers must
+deduplicate durable acceptance by provider/account/app/workspace/event identity
+and preserve original time/expiry across replay. Delivery is at least once, not
+exactly once or ordered across different event lanes. Native retry/backoff and
+queue retention remain owned by ingress: the default dead-letter threshold is
+both eight attempts and 24 hours old, with backoff capped at three minutes.
+
+With no required consumer policy, absent consumers retain the compatible terminal
+no-op behavior. To require delivery, pass `requiredConsumerPluginIds` to
+`dispatchChannelTokensRevoked(event, ctx, options)`. Use
+`assertChannelTokensRevokedConsumersReady(options)` before starting a source.
+The bounded list accepts at most eight exact, nonempty plugin IDs, each at most
+128 characters without surrounding whitespace. Entry-scoped IDs such as
+`pack/one` are supported. The named plugins must have loaded, enabled records and registered,
+live handlers. Missing runners, missing handlers, disabled plugins, and retired
+callables reject with sanitized retryable errors. Delivery rechecks the current
+registry and invokes the same selected snapshot; startup readiness does not
+retain an allowlist or prove future consumer availability.
+
+Native Slack exposes this opt-in policy as
+`channels.slack.requiredTokenRevocationConsumers` and its per-account override.
+An omitted account value inherits the root list; `[]` opts that account out.
+Native socket and HTTP providers check readiness before beginning receipt and
+each durable OAuth-user revocation delivery rechecks it. Relay mode cannot carry
+native revocation envelopes and rejects nonempty required-consumer lists. This
+policy does not load or enable plugins, change credentials, or prove that a
+consumer's external destination is healthy. Its handler must await durable
+acceptance and fail explicitly if that acceptance is unavailable.
+
+`registerChannelTokensRevokedConsumer(api, handler)` is a typed registration
+helper on the same focused SDK subpath. It delegates only to the supplied
+lifecycle-bound `api.on`; it does not register a global handler or confer new
+authority. Pin a host/SDK release that includes this contract before enabling it.
+The public dispatch function is a trusted in-process plugin API, not independent evidence
+of Slack authentication. Consumers/relays must enforce their own authoritative
+agent/app/workspace binding, purpose, retention and backend authentication.
 
 ### Channel pairing requests
 

@@ -125,6 +125,7 @@ const PLUGIN_HOOK_NAMES = [
   "before_reset",
   "inbound_claim",
   "channel_pairing_requested",
+  "channel_tokens_revoked",
   "message_received",
   "message_sending",
   "reply_payload_sending",
@@ -173,6 +174,26 @@ type PluginHookChannelPairingContext = {
   channelId: string;
   accountId?: string;
   senderId: string;
+};
+
+/** Provider-scoped credential revocation facts; never credentials or messages. */
+export type PluginHookChannelTokensRevokedEvent = {
+  readonly eventId: string;
+  /** Provider event timestamp in Unix seconds, preserved across replay. */
+  readonly eventTime: number;
+  readonly appId: string;
+  readonly workspaceId: string;
+  readonly oauthUserIds: readonly string[];
+};
+
+export type PluginHookChannelTokensRevokedContext = {
+  readonly channelId: string;
+  readonly accountId: string;
+};
+
+/** Required consumer IDs are exact plugin IDs, bounded to eight entries of 128 characters. */
+export type PluginChannelTokensRevokedDispatchOptions = {
+  readonly requiredConsumerPluginIds?: readonly string[];
 };
 
 const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
@@ -890,6 +911,10 @@ export type PluginHookHandlerMap = {
   channel_pairing_requested: AsyncPluginHook<
     PluginHookChannelPairingRequestedEvent,
     PluginHookChannelPairingContext
+  >;
+  channel_tokens_revoked: AsyncPluginHook<
+    PluginHookChannelTokensRevokedEvent,
+    PluginHookChannelTokensRevokedContext
   >;
   before_dispatch: AsyncPluginHook<
     PluginHookBeforeDispatchEvent,

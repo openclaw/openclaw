@@ -1150,6 +1150,10 @@
     "./plugin-sdk/channel-mention-gating": {
       "default": "./dist/plugin-sdk/channel-mention-gating.js"
     },
+    "./plugin-sdk/channel-credential-events": {
+      "types": "./dist/plugin-sdk/channel-credential-events.d.ts",
+      "default": "./dist/plugin-sdk/channel-credential-events.js"
+    },
     "./plugin-sdk/channel-ingress-runtime": {
       "types": "./dist/plugin-sdk/channel-ingress-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-ingress-runtime.js"
