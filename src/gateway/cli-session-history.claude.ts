@@ -324,9 +324,41 @@ const INTERNAL_PROMPT_PREFIX = new RegExp(
   "u",
 );
 
-// Queued system events ride in front of the next human turn; they are not its text.
-function stripLeadingSystemEventLines(text: string): string {
-  return text.replace(LEADING_SYSTEM_EVENTS, "$1");
+/** Removes the resume note and queued system events OpenClaw put in front of a user turn. */
+export function stripClaudeCliGeneratedUserPrefixes(text: string): string {
+  return stripCliSessionDriftNote(text).replace(LEADING_SYSTEM_EVENTS, "$1");
+}
+
+/**
+ * Display copy of an imported user row that survived the history merge. The merge
+ * matches on the original text first, so this must not run before it.
+ */
+export function cleanClaudeCliImportedUserDisplay(message: unknown): unknown {
+  const meta = isRecord(message) ? message["__openclaw"] : undefined;
+  if (
+    !isRecord(message) ||
+    message.role !== "user" ||
+    message.display === false ||
+    !isRecord(meta) ||
+    meta.importedFrom !== CLAUDE_CLI_PROVIDER
+  ) {
+    return message;
+  }
+  const { content } = message;
+  if (typeof content === "string") {
+    return { ...message, content: stripClaudeCliGeneratedUserPrefixes(content) };
+  }
+  if (!Array.isArray(content) || content.some((block) => isToolResultBlock(block))) {
+    return message;
+  }
+  return {
+    ...message,
+    content: content.map((block) =>
+      isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? Object.assign({}, block, { text: stripClaudeCliGeneratedUserPrefixes(block.text) })
+        : block,
+    ),
+  };
 }
 
 function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
@@ -368,13 +400,18 @@ function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
   if (body.startsWith(HEARTBEAT_PROMPT) || body.startsWith(HEARTBEAT_RESPONSE_TOOL_PROMPT)) {
     return "heartbeat";
   }
-  // System turns carry the producer's tag, optionally behind the inbound timestamp envelope.
+  // Restart recovery only, by its full opening sentence behind the CLI timestamp envelope;
+  // the bare system-turn tag is too easy for a person to type.
   if (
     body
       .replace(/^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]\n]*\] /u, "")
-      .startsWith(formatSystemTurnPrompt(""))
+      .startsWith(
+        formatSystemTurnPrompt(
+          "Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. ",
+        ),
+      )
   ) {
-    return "system_turn";
+    return "restart_recovery";
   }
   if (
     /^<command-name>\/compact<\/command-name>\s*<command-message>compact<\/command-message>\s*<command-args>[\s\S]*<\/command-args>$/u.test(
@@ -485,22 +522,6 @@ export function parseClaudeCliHistoryEntry(
     const candidates = resolveClaudeCliPromptTextCandidates(entry, content);
     const internalSourceTool =
       candidates.length === 1 ? resolveClaudeCliInternalSourceTool(candidates[0]!.text) : undefined;
-    if (options.reseedMode === "recover" && !internalSourceTool) {
-      // Resume notes decorate real human turns too. Remove only the generated
-      // prefix, never hide the turn or discard sibling image/tool blocks.
-      if (typeof content === "string") {
-        content = stripLeadingSystemEventLines(stripCliSessionDriftNote(content));
-      } else {
-        for (const candidate of candidates) {
-          if (candidate.blockIndex !== undefined) {
-            const block = content[candidate.blockIndex];
-            if (isRecord(block)) {
-              block.text = stripLeadingSystemEventLines(stripCliSessionDriftNote(candidate.text));
-            }
-          }
-        }
-      }
-    }
     const cliImageTurnKey =
       typeof content === "string" ? readCliImageTurnContext(content) : undefined;
     if (cliImageTurnKey && typeof content === "string") {

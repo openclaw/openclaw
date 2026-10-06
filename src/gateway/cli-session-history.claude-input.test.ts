@@ -12,6 +12,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { classifyClaudeCliHistoryLine } from "./cli-session-history.claude-activity.js";
 import {
+  cleanClaudeCliImportedUserDisplay,
   parseClaudeCliHistoryEntry,
   readClaudeCliFallbackSeed,
 } from "./cli-session-history.claude.js";
@@ -82,19 +83,34 @@ const internalInputs = [
 ] as const;
 // The display projection already rewrites or hides these even on canonical rows,
 // so only the imported copy is asserted.
+const RESTART_RECOVERY_OPENING = formatSystemTurnPrompt(
+  "Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work.",
+);
 const internalWakeInputs = [
   ["heartbeat", `${HEARTBEAT_PROMPT}\nCurrent time: Saturday`],
-  ["system_turn", formatSystemTurnPrompt("Your previous turn was interrupted.")],
-  [
-    "system_turn",
-    `[Tue 2026-09-22 16:00 GMT+8] ${formatSystemTurnPrompt("Your previous turn was interrupted.")}`,
-  ],
+  ["restart_recovery", RESTART_RECOVERY_OPENING],
+  ["restart_recovery", `[Tue 2026-09-22 16:00 GMT+8] ${RESTART_RECOVERY_OPENING} Continue.`],
 ] as const;
 
 function parseImportedUser(content: string | unknown[]) {
   return parseClaudeCliHistoryEntry(claudeUser(content), "native-session", 1, new Map(), {
     reseedMode: "recover",
   });
+}
+
+/** Import one native row, merge it with no canonical match, then clean it as the reader does. */
+function importUnmatched(content: string | unknown[]) {
+  const imported = parseImportedUser(content);
+  // The importer and the merge must both carry the original text.
+  expect(imported?.content).toEqual(content);
+  const [merged] = mergeImportedChatHistoryMessages({
+    localMessages: [],
+    importedMessages: [imported],
+  });
+  expect(merged).toMatchObject({ content });
+  return cleanClaudeCliImportedUserDisplay(merged) as
+    | { content?: unknown; display?: unknown; provenance?: unknown }
+    | undefined;
 }
 
 // Native SDK rows do not retain the canonical input provenance. Exercise both
@@ -130,20 +146,40 @@ describe("Claude imported internal inputs", () => {
         type: "image",
         source: { type: "base64", media_type: "image/png", data: "aa" },
       };
-      const content = encoding === "string" ? text : [{ type: "text", text }, image];
-      const message = parseImportedUser(content);
+      const message = importUnmatched(
+        encoding === "string" ? text : [{ type: "text", text }, image],
+      );
       expect(message?.content).toEqual(
         encoding === "string" ? "real question" : [{ type: "text", text: "real question" }, image],
       );
       expect(message?.display).not.toBe(false);
       expect(message?.provenance).toBeUndefined();
       expect(
-        parseImportedUser(
+        importUnmatched(
           "OpenClaw resumed this CLI session after prompt content changed. This is a quote.",
         )?.content,
       ).toContain("This is a quote.");
     },
   );
+
+  it("matches a literal resume note against its canonical row before trying the stripped text", () => {
+    const literal = `${buildCliSessionDriftNote(["prompt-tools"])}\n\nhello`;
+    const localMessages = [
+      { role: "user", content: literal, timestamp: 1 },
+      { role: "user", content: "hello", timestamp: 2 },
+    ];
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages,
+      importedMessages: [
+        { ...parseImportedUser(literal), timestamp: 1 },
+        { ...parseImportedUser("hello"), timestamp: 2 },
+      ],
+    });
+    expect(merged.map((message) => (message as { content?: unknown }).content)).toEqual([
+      literal,
+      "hello",
+    ]);
+  });
 
   it.each(internalWakeInputs)("marks imported %s prompts internal", (sourceTool, text) => {
     const internal = { display: false, provenance: { kind: "internal_system", sourceTool } };
@@ -155,11 +191,13 @@ describe("Claude imported internal inputs", () => {
 
   it.each([
     "[foo] [System] Please explain this tag.",
+    "[System] Please explain this tag.",
+    "[Tue 2026-09-22 16:00 GMT+8] [System] Please explain this tag.",
     "System: Please preserve this log\n\nExplain it",
     "System: Please explain this log\n\n[System] This is the line I am asking about.",
     "Explain this log:\n```text\nlog\n```\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?",
   ])("leaves the look-alike human message %j untouched", (text) => {
-    const message = parseImportedUser(text);
+    const message = importUnmatched(text);
     expect(message).toMatchObject({ content: text });
     expect(message?.display).not.toBe(false);
     expect(message?.provenance).toBeUndefined();
@@ -170,12 +208,19 @@ describe("Claude imported internal inputs", () => {
     (context) => {
       for (const stamp of ["2026-10-04 13:15:44 GMT+8", "2026-10-04T05:15:44Z", "unknown-time"]) {
         const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
-        expect(parseImportedUser(`${context}${events}real question`)?.content).toBe(
-          `${context}real question`,
-        );
+        const text = `${context}${events}real question`;
+        expect(importUnmatched(text)?.content).toBe(`${context}real question`);
+        // The canonical row holds the turn without the queued events; the pair is one turn.
+        const canonical = { role: "user", content: `${context}real question`, timestamp: 1 };
+        expect(
+          mergeImportedChatHistoryMessages({
+            localMessages: [canonical],
+            importedMessages: [{ ...parseImportedUser(text), timestamp: 2 }],
+          }),
+        ).toMatchObject([canonical]);
       }
       const untouched = "real question\n\nSystem: quoted log line\n\nmore";
-      expect(parseImportedUser(untouched)).toMatchObject({ content: untouched });
+      expect(importUnmatched(untouched)).toMatchObject({ content: untouched });
     },
   );
 
