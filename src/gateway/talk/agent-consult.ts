@@ -36,6 +36,94 @@ function terminalTalkChatSendAckError(result: unknown): ErrorShape | undefined {
   return message ? errorShape(ErrorCodes.UNAVAILABLE, message) : undefined;
 }
 
+type TalkConsultStart =
+  | { ok: true; runId: string; idempotencyKey: string }
+  | { ok: false; error: ErrorShape };
+
+type InFlightTalkConsult = {
+  startedAt: number;
+  request: string;
+  start: Promise<TalkConsultStart>;
+};
+
+/** The gate owns confirmation; an agent that also asks makes the caller confirm twice. */
+export const VOICE_TURN_CONFIRMATION_NOTE =
+  "Voice turn: run the command the task needs; never ask for permission or confirmation, " +
+  "because the system asks by voice if needed.";
+
+const CONSULT_JOIN_WINDOW_MS = 120_000;
+const inFlightConsults = new Map<string, InFlightTalkConsult>();
+
+/** Identity of a consult request. Exact: letter case and spacing can name different things. */
+export function normalizeTalkConsultJoinRequest(args: {
+  question: string;
+  context?: string;
+  responseStyle?: string;
+}): string {
+  return JSON.stringify([args.question, args.context ?? "", args.responseStyle ?? ""]);
+}
+
+/**
+ * Start a consult, or join the one already in flight for the same request in this voice session.
+ *
+ * A realtime model that repeats the consult tool call would otherwise send one
+ * chat message per repeat into the busy session. Each returns at once with no
+ * text, the model calls again, and the session is left with a backlog of turns.
+ * A different request is never joined: it gets its own start, and chat admission
+ * answers it while the earlier run is still active.
+ */
+export async function joinOrStartTalkConsult(params: {
+  key: string;
+  request: string;
+  isRunLive: (runId: string) => boolean;
+  start: () => Promise<TalkConsultStart>;
+}): Promise<TalkConsultStart> {
+  let liveOther: InFlightTalkConsult | undefined;
+  for (;;) {
+    const prior = inFlightConsults.get(params.key);
+    // 120 s matches the client's consult wait and bounds a run whose completion
+    // was never observed.
+    if (!prior || Date.now() - prior.startedAt >= CONSULT_JOIN_WINDOW_MS) {
+      break;
+    }
+    const result = await prior.start;
+    if (result.ok && params.isRunLive(result.runId)) {
+      if (prior.request === params.request) {
+        return result;
+      }
+      liveOther = prior;
+      break;
+    }
+    if (inFlightConsults.get(params.key) === prior) {
+      inFlightConsults.delete(params.key);
+      break;
+    }
+  }
+  const entry = { startedAt: Date.now(), request: params.request, start: params.start() };
+  // Entries past the join window are never joined; drop them so the map stays bounded.
+  for (const [key, stale] of inFlightConsults) {
+    if (entry.startedAt - stale.startedAt >= CONSULT_JOIN_WINDOW_MS) {
+      inFlightConsults.delete(key);
+    }
+  }
+  if (liveOther) {
+    // The live run keeps its entry so its own repeats still join. This request
+    // replaces it only if it really started.
+    const result = await entry.start;
+    const current = inFlightConsults.get(params.key);
+    if (result.ok && (!current || current.startedAt <= entry.startedAt)) {
+      inFlightConsults.set(params.key, entry);
+    }
+    return result;
+  }
+  inFlightConsults.set(params.key, entry);
+  const result = await entry.start;
+  if (!result.ok && inFlightConsults.get(params.key) === entry) {
+    inFlightConsults.delete(params.key);
+  }
+  return result;
+}
+
 /** Starts the chat run that backs a realtime Talk tool call. */
 export async function startTalkRealtimeAgentConsult(
   request: GatewayRequestHandlerOptions,
@@ -50,7 +138,10 @@ export async function startTalkRealtimeAgentConsult(
 ): Promise<{ ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }> {
   let message: string;
   try {
-    message = buildRealtimeVoiceAgentConsultChatMessage(params.args);
+    message = [
+      buildRealtimeVoiceAgentConsultChatMessage(params.args),
+      VOICE_TURN_CONFIRMATION_NOTE,
+    ].join("\n\n");
   } catch (err) {
     return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)) };
   }

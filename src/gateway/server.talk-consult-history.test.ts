@@ -235,7 +235,7 @@ afterEach(async () => {
 function scope() {
   return { agentId, sessionKey: canonicalKey, sessionId, storePath };
 }
-async function rpc(method: string, params: Record<string, unknown>) {
+async function rpcResponse(method: string, params: Record<string, unknown>) {
   const respond = vi.fn<RespondFn>();
   await handleGatewayRequest({
     req: { type: "req", id: randomUUID(), method, params },
@@ -245,7 +245,10 @@ async function rpc(method: string, params: Record<string, unknown>) {
     isWebchatConnect: () => true,
   });
   expect(respond).toHaveBeenCalledOnce();
-  const [ok, result, error] = expectDefined(respond.mock.calls[0], "Gateway RPC response");
+  return expectDefined(respond.mock.calls[0], "Gateway RPC response");
+}
+async function rpc(method: string, params: Record<string, unknown>) {
+  const [ok, result, error] = await rpcResponse(method, params);
   expect({ ok, error }).toEqual({ ok: true, error: undefined });
   return expectDefined(asOptionalRecord(result), "Gateway RPC result");
 }
@@ -306,14 +309,17 @@ async function historyMessages() {
   return result.messages as unknown[];
 }
 
-async function consult(question: string, callId: string) {
-  return await rpc("talk.client.toolCall", {
+function consultParams(question: string, callId: string) {
+  return {
     sessionKey,
     voiceSessionId,
     callId,
     name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
     args: { question },
-  });
+  };
+}
+async function consult(question: string, callId: string) {
+  return await rpc("talk.client.toolCall", consultParams(question, callId));
 }
 
 async function startHeldConsult() {
@@ -413,18 +419,20 @@ describe("Browser Talk consult target handoff", () => {
 });
 
 describe("Browser Talk literal consult commands", () => {
-  it("does not turn a generated stop question into cancellation of the active consult", async () => {
+  it("refuses a generated stop question while a consult runs, without cancelling the consult", async () => {
     const first = await startHeldConsult();
-    const ack = await consult("/stop", "literal-stop-during-task");
-    expect(ack.runId).not.toBe(first.ack.runId);
+    const [ok, , error] = await rpcResponse(
+      "talk.client.toolCall",
+      consultParams("/stop", "literal-stop-during-task"),
+    );
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ message: expect.stringContaining("Still working") });
     expect
       .soft(first.abortSignal.aborted, "generated input cancelled the existing task")
       .toBe(false);
     releaseModel.resolve();
     await waitForDispatchEnd();
-    expect(runEmbeddedAgent.mock.calls.map(([run]) => run.prompt)).toEqual(
-      expect.arrayContaining([expect.stringContaining("/stop")]),
-    );
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
   it("preserves an actual human stop command", async () => {

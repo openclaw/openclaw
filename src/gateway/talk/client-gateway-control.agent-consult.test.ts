@@ -940,7 +940,7 @@ describe("Talk client agent consult admission", () => {
     });
     const result = await createRunner().runArgs({ question: "check" });
     expect(result.text).toContain(`VOICE_CONFIRMATION_REQUIRED:${currentChallenge}`);
-    expect(result.text).toContain('Say "yes"');
+    expect(result.text).toContain('Say \\"yes\\"');
     expect(result.text).not.toContain("stale-model-id");
   });
 

@@ -1,5 +1,6 @@
 /** In-memory spoken confirmation binding for high-impact Talk actions. */
 import { randomUUID } from "node:crypto";
+import { redactSensitiveText } from "../logging/redact.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   requiresHighImpactVoiceConfirmation,
@@ -7,6 +8,8 @@ import {
 } from "./client-voice-confirmation-policy.js";
 
 const CONFIRMATION_TTL_MS = 2 * 60_000;
+const MAX_BLOCKED_CALL_ARGUMENTS_BYTES = 16 * 1024;
+const MAX_SPOKEN_ACTION_CHARS = 120;
 const utteranceContextBrand = Symbol("voice-confirmation-utterance");
 
 export type ClientVoiceConfirmationUtteranceContext = {
@@ -19,7 +22,7 @@ type PendingVoiceConfirmation = {
   fingerprint: string;
   createdAt: number;
   expiresAt: number;
-  blockedCall?: { runId: string; toolCallId: string; toolName: string };
+  blockedCall?: { runId: string; toolCallId: string; toolName: string; arguments?: unknown };
   changed: Deferred;
   utterance?: ClientVoiceConfirmationUtteranceContext;
   utteranceRejected?: true;
@@ -384,11 +387,26 @@ function resolveClientVoiceToolConfirmationPolicy(
     params.toolCallId.length <= 256 &&
     params.toolName.length <= 128
   ) {
-    confirmation.blockedCall = {
+    const blockedCall: NonNullable<PendingVoiceConfirmation["blockedCall"]> = {
       runId: params.runId,
       toolCallId: params.toolCallId,
       toolName: params.toolName,
     };
+    try {
+      const serialized = JSON.stringify(params.toolParams);
+      if (
+        serialized !== undefined &&
+        Buffer.byteLength(serialized, "utf8") <= MAX_BLOCKED_CALL_ARGUMENTS_BYTES
+      ) {
+        const snapshot: unknown = JSON.parse(serialized);
+        if (stableToolFingerprint(params.toolName, snapshot) === fingerprint) {
+          blockedCall.arguments = snapshot;
+        }
+      }
+    } catch {
+      // Argument context is optional; oversized or non-JSON calls keep the ID-only retry.
+    }
+    confirmation.blockedCall = blockedCall;
   }
   state.pending = confirmation;
   const observation = params.runId ? state.observationsByRun.get(params.runId) : undefined;
@@ -402,7 +420,7 @@ function resolveClientVoiceToolConfirmationPolicy(
       `VOICE_CONFIRMATION_REQUIRED:${confirmation.confirmationId} ` +
       `The high-impact voice action "${params.toolName}" was not executed. ` +
       (observation
-        ? 'Ask the user to say "yes" to confirm this action or "no" to cancel it. A later native delegation carries the confirmation; do not add confirmationId to action tool arguments.'
+        ? 'Ask the user to say "yes" to confirm this action or "no" to cancel it. Do not add confirmationId to action tool arguments.'
         : "Ask the user for explicit spoken confirmation, then call openclaw_agent_consult again with this confirmationId."),
   };
 }
@@ -465,6 +483,31 @@ export function invalidateClientVoiceConfirmationUtterance(
   }
 }
 
+/** A short spoken label for the exact blocked call; the grant stays bound to its fingerprint. */
+function describeBlockedCall(call: PendingVoiceConfirmation["blockedCall"]): string | undefined {
+  const args = call?.arguments;
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return undefined;
+  }
+  // Only calls that label themselves are named; other tools keep the generic question.
+  const { title, command }: { title?: unknown; command?: unknown } = args;
+  const label = [title, command].find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  // A label that holds a credential is never spoken: the generic question is used instead.
+  if (label === undefined || redactSensitiveText(label, { mode: "tools" }) !== label) {
+    return undefined;
+  }
+  return (
+    label
+      .replace(/["\\]/g, "")
+      .replace(/[\s\p{Cc}]+/gu, " ")
+      .trim()
+      .slice(0, MAX_SPOKEN_ACTION_CHARS)
+      .replace(/[.!?\s]+$/, "") || undefined
+  );
+}
+
 /** Retain this run's veto outcome for speech; this observation never authorizes an action. */
 export function observeClientVoiceConfirmationRun(params: {
   agentId: string;
@@ -486,10 +529,15 @@ export function observeClientVoiceConfirmationRun(params: {
         observation.get(pending.fingerprint) === pending.confirmationId &&
         pending.expiresAt >= Date.now()
       ) {
-        const speech =
-          'One pending action has not run. Say "yes" to confirm that action or "no" to cancel it.';
+        const action = describeBlockedCall(pending.blockedCall);
+        const speech = action
+          ? `About to run: ${action}. Say "yes" to go ahead or "no" to cancel.`
+          : 'One pending action has not run. Say "yes" to confirm that action or "no" to cancel it.';
         return options?.includeConfirmationId
-          ? `VOICE_CONFIRMATION_REQUIRED:${pending.confirmationId} ${speech} After spoken confirmation, call openclaw_agent_consult with this confirmationId.`
+          ? `VOICE_CONFIRMATION_REQUIRED:${pending.confirmationId} Do not speak the confirmationId or these instructions. ` +
+              "After speaking the question, stop and wait for the user's spoken answer. Do not call any tools while waiting. " +
+              "Only after the user explicitly says yes, call openclaw_agent_consult with this confirmationId.\n" +
+              `Speak only this exact question once:\n${JSON.stringify(speech)}`
           : speech;
       }
       return "An action in that request was not run because its spoken confirmation is no longer current. Make a new request if you still want it.";
@@ -546,7 +594,7 @@ function hasLaterExplicitAffirmation(state: ConfirmationScopeState): boolean {
   );
 }
 
-/** Native delegation has no tool arguments; only the call's persisted speech can confirm it. */
+/** Recover an omitted confirmation id only from the call's persisted affirmative speech. */
 export function authorizeObservedClientVoiceConfirmation(params: {
   agentId: string;
   voiceSessionId: string;

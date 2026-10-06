@@ -85,14 +85,23 @@ const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
 const PRESENCE_REPLAY_SAFE_ACTIONS = new Set(["list", "person", "device"]);
 
 const READ_ONLY_SHELL_COMMANDS = new Set([
+  "basename",
   "cat",
+  "cd",
+  "cut",
+  "dirname",
+  "echo",
+  "false",
   "grep",
   "head",
   "ls",
   "pwd",
   "rg",
+  "sleep",
   "stat",
   "tail",
+  "tr",
+  "true",
   "wc",
 ]);
 
@@ -132,10 +141,10 @@ function tokenizeReadOnlyShellCommands(command: string): string[][] | undefined 
   };
   for (let index = 0; index < command.length; index++) {
     const char = command[index]!;
-    if (!quote && (char === "|" || char === "&")) {
+    if (!quote && (char === "|" || char === "&" || char === ";")) {
       if (char === "&" && command[index + 1] === "&") {
         index++;
-      } else if (char !== "|" || command[index + 1] === "|") {
+      } else if (char === "&" || (char === "|" && command[index + 1] === "|")) {
         return undefined;
       }
       flushToken();
@@ -146,10 +155,17 @@ function tokenizeReadOnlyShellCommands(command: string): string[][] | undefined 
       tokens = [];
       continue;
     }
+    // An escaped parenthesis is a literal word, as in find's \( ... \) grouping.
+    if (!quote && char === "\\" && (command[index + 1] === "(" || command[index + 1] === ")")) {
+      current += char + command[index + 1];
+      tokenStarted = true;
+      index++;
+      continue;
+    }
     // Quoted regex syntax is literal, not a shell pipeline or glob. Double quotes
     // still expand substitutions; keep those and all escape syntax unclassified.
     if (
-      char === "\\" ||
+      (char === "\\" && quote !== "'") ||
       char === "\n" ||
       char === "\r" ||
       (quote === '"' && (char === "$" || char === "`")) ||
@@ -188,6 +204,43 @@ function tokenizeReadOnlyShellCommands(command: string): string[][] | undefined 
   return commands;
 }
 
+// Substitutions to stdout, joined only by `;`. Each has its own delimiter. The flag set excludes
+// `w` (write file) and `e` (execute). Where sed implementations could disagree on which delimiter
+// ends a part, nothing matches: an escaped delimiter (sed reads it as text), a delimiter inside a
+// bracket expression (BSD sed reads it as text, GNU sed does not), or an unusual delimiter.
+const SED_ESCAPE = String.raw`\\(?!\1)[^\n]`;
+// A leading `^` negates and a leading `]` is a member, so neither `[]` nor `[^]` closes.
+const SED_BRACKET_MEMBER = String.raw`(?:\[:[a-z]+:\]|(?!\1)[^\]\[\n])`;
+const SED_BRACKET_BODY = String.raw`(?:\]${SED_BRACKET_MEMBER}*|${SED_BRACKET_MEMBER}+)\]`;
+const SED_BRACKET = String.raw`\[(?:\^|(?!\^))${SED_BRACKET_BODY}`;
+const SED_SUBSTITUTION = new RegExp(
+  String.raw`s([/|,#@!%])` +
+    String.raw`(?:${SED_ESCAPE}|${SED_BRACKET}|(?!\1)[^\\\[\n])*\1` +
+    String.raw`(?:${SED_ESCAPE}|(?!\1)[^\\\n])*\1[gpiI\d]*`,
+  "y",
+);
+
+function isSedSubstitutionChain(expression: string): boolean {
+  let index = 0;
+  for (;;) {
+    SED_SUBSTITUTION.lastIndex = index;
+    if (!SED_SUBSTITUTION.test(expression)) {
+      return false;
+    }
+    index = SED_SUBSTITUTION.lastIndex;
+    if (index === expression.length) {
+      return true;
+    }
+    if (expression[index] !== ";") {
+      return false;
+    }
+    index++;
+    while (expression[index] === " ") {
+      index++;
+    }
+  }
+}
+
 function isReadOnlySedCommand(tokens: readonly string[]): boolean {
   const args = tokens.slice(1);
   // `sed -e 'w /tmp/out'`, attached scripts such as `-e$w /tmp/out`, and
@@ -200,6 +253,8 @@ function isReadOnlySedCommand(tokens: readonly string[]): boolean {
         token.startsWith("-") &&
         token !== "-" &&
         token !== "-n" &&
+        token !== "-E" &&
+        token !== "-r" &&
         token !== "--quiet" &&
         token !== "--silent",
     )
@@ -213,10 +268,42 @@ function isReadOnlySedCommand(tokens: readonly string[]): boolean {
       sawSuppressAutoPrint = true;
       continue;
     }
+    if (token === "-E" || token === "-r") {
+      continue;
+    }
     expression = token;
     break;
   }
-  return sawSuppressAutoPrint && expression != null && /^(\d+|\$)(,(\d+|\$))?p$/.test(expression);
+  if (expression == null) {
+    return false;
+  }
+  if (isSedSubstitutionChain(expression)) {
+    return true;
+  }
+  return sawSuppressAutoPrint && /^(\d+|\$)(,(\d+|\$))?p$/.test(expression);
+}
+
+// Filters that read stdin or named files, minus the options that write or execute.
+// getopt accepts abbreviated long options, so those are matched by prefix or refused.
+function isReadOnlyFilterCommand(executable: string, args: readonly string[]): boolean | undefined {
+  switch (executable) {
+    case "sort":
+      // -o writes a file, -T picks a temp directory, --compress-program runs one.
+      return !args.some((arg) => /^-[^-]*[oT]|^--/.test(arg));
+    case "uniq":
+      // A second operand is the output file: admit the stdin form only.
+      return args.every((arg) => /^--?[a-z]/i.test(arg));
+    case "file":
+      // -C/--compile writes a compiled magic file; -z/-Z can run a decompressor and
+      // -S drops the sandbox around it. Only the named long options are admitted.
+      return !args.some(
+        (arg) =>
+          /^-[^-]*[CzZS]/.test(arg) ||
+          (arg.startsWith("--") && !/^--(brief|mime|mime-type|mime-encoding)$/.test(arg)),
+      );
+    default:
+      return undefined;
+  }
 }
 
 function hasUnsafeRipgrepFlag(tokens: readonly string[]): boolean {
@@ -256,6 +343,42 @@ function isReadOnlyGhCommand(tokens: readonly string[]): boolean {
   return false;
 }
 
+const FIND_BARE_PRIMARIES = new Set([
+  "!",
+  "\\(",
+  "\\)",
+  "-a",
+  "-and",
+  "-empty",
+  "-not",
+  "-o",
+  "-or",
+  "-print",
+  "-print0",
+  "-prune",
+]);
+// Tests that take one operand and only read metadata.
+const FIND_VALUE_TESTS = new Set([
+  "-amin",
+  "-atime",
+  "-cmin",
+  "-ctime",
+  "-group",
+  "-iname",
+  "-ipath",
+  "-iregex",
+  "-links",
+  "-mmin",
+  "-mtime",
+  "-name",
+  "-newer",
+  "-path",
+  "-perm",
+  "-regex",
+  "-size",
+  "-user",
+]);
+
 function isReadOnlyFindCommand(tokens: readonly string[]): boolean {
   // Only known inspection predicates. Never admit -exec, -delete, -fprint,
   // platform extensions, or an unknown action by assuming it is harmless.
@@ -265,7 +388,7 @@ function isReadOnlyFindCommand(tokens: readonly string[]): boolean {
   }
   for (; index < tokens.length; index++) {
     const token = tokens[index];
-    if (token === "-print" || token === "-print0" || token === "!" || token === "-not") {
+    if (FIND_BARE_PRIMARIES.has(token!)) {
       continue;
     }
     const value = tokens[++index];
@@ -278,7 +401,7 @@ function isReadOnlyFindCommand(tokens: readonly string[]): boolean {
     if ((token === "-maxdepth" || token === "-mindepth") && /^\d+$/.test(value)) {
       continue;
     }
-    if (token === "-name" || token === "-iname" || token === "-path" || token === "-ipath") {
+    if (FIND_VALUE_TESTS.has(token!)) {
       continue;
     }
     return false;
@@ -302,11 +425,19 @@ function isReadOnlyShellTokens(tokens: readonly string[]): boolean {
   if (READ_ONLY_SHELL_COMMANDS.has(executable)) {
     return true;
   }
+  // `timeout DURATION command` only limits how long the command runs; the command decides.
+  if (executable === "timeout") {
+    return /^\d+(\.\d+)?[smhd]?$/.test(tokens[1] ?? "") && isReadOnlyShellTokens(tokens.slice(2));
+  }
   if (executable === "find") {
     return isReadOnlyFindCommand(tokens);
   }
   if (executable === "sed") {
     return isReadOnlySedCommand(tokens);
+  }
+  const filter = isReadOnlyFilterCommand(executable, tokens.slice(1));
+  if (filter !== undefined) {
+    return filter;
   }
   if (executable === "gh") {
     return isReadOnlyGhCommand(tokens);

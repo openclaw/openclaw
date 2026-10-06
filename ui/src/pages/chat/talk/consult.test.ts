@@ -11,11 +11,32 @@ const consultRun = {
   agentSessionKey: "agent:main:main",
 };
 
-function createChatEvents() {
+function createChatEvents(expectedSubscribers = 1) {
   let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
+  let subscribers = 0;
+  const waiters: Array<{ count: number; resolve: () => void }> = [];
+  // Settles once `count` consult calls are waiting for their result, so a test can cancel from a known state.
+  const subscribed = (count: number) =>
+    new Promise<void>((resolve) => {
+      if (subscribers >= count) {
+        resolve();
+      } else {
+        waiters.push({ count, resolve });
+      }
+    });
   return {
+    subscribed,
+    get allSubscribed() {
+      return subscribed(expectedSubscribers);
+    },
     addEventListener: vi.fn((callback: typeof listener) => {
       listener = callback;
+      subscribers += 1;
+      for (const waiter of waiters) {
+        if (subscribers >= waiter.count) {
+          waiter.resolve();
+        }
+      }
       return () => {
         listener = undefined;
       };
@@ -100,6 +121,201 @@ describe("RealtimeTalkSession consult handoff", () => {
 
     expect(request).not.toHaveBeenCalled();
     expect(submit).toHaveBeenCalledOnce();
+  });
+
+  it("does not abort a run another consult call is still waiting on", async () => {
+    const events = createChatEvents(2);
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "shared-run", agentId: "main", agentSessionKey: "agent:main:main" };
+      }
+      return { ok: true };
+    });
+    const ctx = {
+      client: { request, addEventListener: events.addEventListener },
+      sessionKey: "main",
+      callbacks: {},
+    } as never;
+    const first = new AbortController();
+    const second = new AbortController();
+    const start = (callId: string, signal: AbortSignal) =>
+      submitRealtimeTalkConsult({
+        ctx,
+        callId,
+        args: { question: "Check" },
+        submit: vi.fn(),
+        signal,
+      });
+    const a = start("call-a", first.signal);
+    const b = start("call-b", second.signal);
+    const toolCalls = () => request.mock.calls.filter(([m]) => m === "talk.client.toolCall");
+    const aborts = () => request.mock.calls.filter(([m]) => m === "chat.abort");
+    await events.allSubscribed;
+    expect(toolCalls()).toHaveLength(2);
+
+    first.abort();
+    await a;
+    expect(aborts()).toHaveLength(0);
+
+    second.abort();
+    await b;
+    expect(aborts()).toHaveLength(1);
+  });
+
+  describe("a repeat that is still awaiting its acknowledgement", () => {
+    type Ack = { runId: string; agentId: string; agentSessionKey: string };
+    const ackFor = (runId: string): Ack => ({
+      runId,
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+    });
+    // Call 1 is acknowledged at once; call 2 stays unacknowledged until the test settles it.
+    function setup() {
+      const events = createChatEvents();
+      let resolveSecond!: (ack: Ack) => void;
+      let rejectSecond!: (error: Error) => void;
+      let toolCalls = 0;
+      let markSecondRequested!: () => void;
+      const secondRequested = new Promise<void>((resolve) => {
+        markSecondRequested = resolve;
+      });
+      const request = vi.fn(async (method: string) => {
+        if (method !== "talk.client.toolCall") {
+          return { ok: true };
+        }
+        toolCalls += 1;
+        if (toolCalls === 1) {
+          return ackFor("run-x");
+        }
+        markSecondRequested();
+        return await new Promise<Ack>((resolve, reject) => {
+          resolveSecond = resolve;
+          rejectSecond = reject;
+        });
+      });
+      const ctx = {
+        client: { request, addEventListener: events.addEventListener },
+        sessionKey: "main",
+        callbacks: {},
+      } as never;
+      const first = new AbortController();
+      const second = new AbortController();
+      const start = (callId: string, signal: AbortSignal, args: unknown = { question: "Check" }) =>
+        submitRealtimeTalkConsult({ ctx, callId, args, submit: vi.fn(), signal });
+      const aborts = () =>
+        request.mock.calls
+          .filter(([method]) => method === "chat.abort")
+          .map((call) => (call as unknown as [string, { runId: string }])[1]);
+      return {
+        events,
+        first,
+        second,
+        start,
+        aborts,
+        resolveSecond: (ack: Ack) => resolveSecond(ack),
+        rejectSecond: (error: Error) => rejectSecond(error),
+        secondRequested,
+      };
+    }
+
+    it("keeps the run when the repeat then joins it", async () => {
+      const t = setup();
+      const a = t.start("call-a", t.first.signal);
+      await t.events.subscribed(1);
+      const b = t.start("call-b", t.second.signal);
+      await t.secondRequested;
+      t.first.abort();
+      await a;
+      expect(t.aborts()).toEqual([]);
+      t.resolveSecond(ackFor("run-x"));
+      await t.events.subscribed(2);
+      expect(t.aborts()).toEqual([]);
+      t.second.abort();
+      await b;
+      expect(t.aborts()).toEqual([expect.objectContaining({ runId: "run-x" })]);
+    });
+
+    it("holds the abort for an equivalent repeat written with an alias and another field order", async () => {
+      const t = setup();
+      const a = t.start("call-a", t.first.signal, { question: "Check", context: "kitchen" });
+      await t.events.subscribed(1);
+      const b = t.start("call-b", t.second.signal, { context: "kitchen", prompt: "Check" });
+      await t.secondRequested;
+      t.first.abort();
+      await a;
+      expect(t.aborts()).toEqual([]);
+      t.resolveSecond(ackFor("run-x"));
+      await t.events.subscribed(2);
+      expect(t.aborts()).toEqual([]);
+      t.second.abort();
+      await b;
+      expect(t.aborts()).toEqual([expect.objectContaining({ runId: "run-x" })]);
+    });
+
+    it("aborts the held run when the repeat starts a different run", async () => {
+      const t = setup();
+      const a = t.start("call-a", t.first.signal);
+      await t.events.subscribed(1);
+      const b = t.start("call-b", t.second.signal);
+      await t.secondRequested;
+      t.first.abort();
+      await a;
+      expect(t.aborts()).toEqual([]);
+      t.resolveSecond(ackFor("run-y"));
+      await t.events.subscribed(2);
+      expect(t.aborts()).toEqual([expect.objectContaining({ runId: "run-x" })]);
+      t.second.abort();
+      await b;
+      expect(t.aborts().map((params) => params.runId)).toEqual(["run-x", "run-y"]);
+    });
+
+    it("aborts the held run when the repeat fails before it is acknowledged", async () => {
+      const t = setup();
+      const a = t.start("call-a", t.first.signal);
+      await t.events.subscribed(1);
+      const b = t.start("call-b", t.second.signal);
+      await t.secondRequested;
+      t.first.abort();
+      await a;
+      expect(t.aborts()).toEqual([]);
+      t.rejectSecond(new Error("gateway unavailable"));
+      await b;
+      expect(t.aborts()).toEqual([expect.objectContaining({ runId: "run-x" })]);
+    });
+  });
+
+  it("aborts a shared run once when every waiting consult call is cancelled in the same tick", async () => {
+    const events = createChatEvents(2);
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "shared-run-sync", agentId: "main", agentSessionKey: "agent:main:main" };
+      }
+      return { ok: true };
+    });
+    const ctx = {
+      client: { request, addEventListener: events.addEventListener },
+      sessionKey: "main",
+      callbacks: {},
+    } as never;
+    const controllers = [new AbortController(), new AbortController()];
+    const consults = controllers.map((controller, index) =>
+      submitRealtimeTalkConsult({
+        ctx,
+        callId: `call-${index}`,
+        args: { question: "Check" },
+        submit: vi.fn(),
+        signal: controller.signal,
+      }),
+    );
+    const count = (name: string) => request.mock.calls.filter(([m]) => m === name).length;
+    await events.allSubscribed;
+    expect(count("talk.client.toolCall")).toBe(2);
+
+    for (const controller of controllers) {
+      controller.abort();
+    }
+    await Promise.all(consults);
+    expect(count("chat.abort")).toBe(1);
   });
 
   it.each(["agent:voice:home", "global"])(

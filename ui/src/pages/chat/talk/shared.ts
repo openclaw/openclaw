@@ -1,7 +1,10 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TalkClientToolCallResult } from "../../../../../packages/gateway-protocol/src/schema/channels.js";
 import type { AgentWaitResult as GatewayAgentWaitResult } from "../../../../../src/agents/run-wait.types.js";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../../src/talk/agent-consult-tool.js";
+import {
+  buildRealtimeVoiceAgentConsultChatMessage,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+} from "../../../../../src/talk/agent-consult-tool.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentControlSpeechMessage,
@@ -499,6 +502,27 @@ function maybeSpeakRealtimeTalkControlResult(
   }
 }
 
+// The Gateway joins a repeated consult to the run already in flight, so several
+// tool calls can wait on one run. Cancelling one of them must not abort the rest.
+const consultWaitersByRunId = new Map<string, number>();
+// A repeat of a request joins the run in flight, but its run id is known only once its tool-call
+// acknowledgement arrives. While a call with the same request is still unacknowledged, an abort of
+// the acknowledged run is held back; it is sent if no repeat joins that run.
+const consultCallsAwaitingAck = new Map<string, number>();
+const deferredConsultAborts = new Map<string, { runId: string; send: () => void }>();
+
+// The Gateway joins on the parsed request (question, context, spoken style), so equivalent
+// arguments, such as reordered fields or a question alias, share one key.
+function consultRequestKey(ctx: RealtimeTalkTransportContext, args: unknown): string {
+  let request: string;
+  try {
+    request = buildRealtimeVoiceAgentConsultChatMessage(args);
+  } catch {
+    request = JSON.stringify(args);
+  }
+  return JSON.stringify([ctx.voiceSessionId ?? ctx.sessionKey, request]);
+}
+
 export async function submitRealtimeTalkConsult(params: {
   ctx: RealtimeTalkTransportContext;
   args: unknown;
@@ -528,14 +552,64 @@ export async function submitRealtimeTalkConsult(params: {
       await submitOnce(buildRealtimeVoiceAgentCancelProviderResult());
     }
   };
+  let waiting = false;
+  // Returns how many consult calls still wait on this run after this one leaves.
+  const releaseWaiter = (): number => {
+    if (!run) {
+      return 0;
+    }
+    const waiters = (consultWaitersByRunId.get(run.runId) ?? 0) - (waiting ? 1 : 0);
+    waiting = false;
+    if (waiters > 0) {
+      consultWaitersByRunId.set(run.runId, waiters);
+    } else {
+      consultWaitersByRunId.delete(run.runId);
+    }
+    return Math.max(waiters, 0);
+  };
+  let consultKey: string | undefined;
+  let requestKey: string | undefined;
+  // Leaves the "awaiting acknowledgement" count for this request and settles an abort held back for it.
+  const settleAck = (acknowledged?: TalkClientToolCallResult) => {
+    if (requestKey === undefined) {
+      return;
+    }
+    const key = requestKey;
+    requestKey = undefined;
+    const remaining = (consultCallsAwaitingAck.get(key) ?? 1) - 1;
+    if (remaining > 0) {
+      consultCallsAwaitingAck.set(key, remaining);
+    } else {
+      consultCallsAwaitingAck.delete(key);
+    }
+    const deferred = deferredConsultAborts.get(key);
+    if (!deferred) {
+      return;
+    }
+    if (acknowledged?.runId === deferred.runId) {
+      deferredConsultAborts.delete(key);
+    } else if (remaining === 0) {
+      deferredConsultAborts.delete(key);
+      deferred.send();
+    }
+  };
   const abortRun = () => {
     aborted = true;
-    if (run) {
-      void ctx.client.request("chat.abort", {
-        sessionKey: run.agentSessionKey,
-        agentId: run.agentId,
-        runId: run.runId,
-      });
+    // Release synchronously: joined calls cancelled in one tick must not each see the other.
+    if (run && releaseWaiter() === 0) {
+      const started = run;
+      const send = () =>
+        void ctx.client.request("chat.abort", {
+          sessionKey: started.agentSessionKey,
+          agentId: started.agentId,
+          runId: started.runId,
+        });
+      const key = consultKey ?? "";
+      if ((consultCallsAwaitingAck.get(key) ?? 0) > 0) {
+        deferredConsultAborts.set(key, { runId: started.runId, send });
+      } else {
+        send();
+      }
     }
   };
   if (params.signal?.aborted) {
@@ -553,6 +627,9 @@ export async function submitRealtimeTalkConsult(params: {
     }
     // Cancellation must not hide the acknowledgement that owns the Gateway run.
     // Once the run id arrives, abortRun() can cancel the exact started consult.
+    consultKey = consultRequestKey(ctx, args);
+    requestKey = consultKey;
+    consultCallsAwaitingAck.set(requestKey, (consultCallsAwaitingAck.get(requestKey) ?? 0) + 1);
     run = await ctx.client.request<TalkClientToolCallResult>("talk.client.toolCall", {
       sessionKey: ctx.sessionKey,
       ...(ctx.voiceSessionId ? { voiceSessionId: ctx.voiceSessionId } : {}),
@@ -561,6 +638,9 @@ export async function submitRealtimeTalkConsult(params: {
       args,
       ...(params.relaySessionId ? { relaySessionId: params.relaySessionId } : {}),
     });
+    consultWaitersByRunId.set(run.runId, (consultWaitersByRunId.get(run.runId) ?? 0) + 1);
+    waiting = true;
+    settleAck(run);
     if (params.signal?.aborted) {
       abortRun();
       await submitAbortResult();
@@ -587,6 +667,8 @@ export async function submitRealtimeTalkConsult(params: {
     });
   } finally {
     params.signal?.removeEventListener("abort", abortRun);
+    settleAck();
+    releaseWaiter();
     if (submissionCompleted && !aborted && !params.signal?.aborted) {
       ctx.callbacks.onStatus?.("listening");
     }

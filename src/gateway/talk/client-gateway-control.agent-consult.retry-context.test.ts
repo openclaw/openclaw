@@ -104,5 +104,8 @@ describe("Talk client agent consult retry context", () => {
     expect(mocks.runEmbeddedAgentCore.mock.calls[0]?.[0].extraSystemPrompt).toContain(
       "blocked-message-call",
     );
+    expect(mocks.runEmbeddedAgentCore.mock.calls[0]?.[0].extraSystemPrompt).toContain(
+      JSON.stringify({ arguments: toolParams }).slice(1, -1),
+    );
   });
 });
