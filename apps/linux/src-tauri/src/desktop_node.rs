@@ -517,12 +517,7 @@ fn node_state_dir(root: &Path, config_path: &Path, scope: &str) -> PathBuf {
     hash.update(config_path.to_string_lossy().as_bytes());
     hash.update([0]);
     hash.update(scope.as_bytes());
-    root.join(
-        hash.finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
-    )
+    root.join(format!("{:x}", hash.finalize()))
 }
 
 fn sanitize_diagnostic(line: &str, secrets: &[String]) -> String {

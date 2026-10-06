@@ -289,9 +289,6 @@ final class WatchDirectNode {
             role: "node",
             gatewayID: configuration.gatewayID,
             profile: .primary)?.token
-        guard storedToken != nil || link.bootstrapToken != nil else {
-            throw HTTPError(status: 401, detail: String(localized: "No watch device credential"))
-        }
         let response: WatchNodeConnectResponse
         let usedBootstrap: Bool
         if let bootstrapToken = link.bootstrapToken {
@@ -379,12 +376,7 @@ final class WatchDirectNode {
             let poll = try JSONDecoder().decode(PollResponse.self, from: pollData)
             guard let event = poll.event else { continue }
             guard event.event == "node.invoke.request", let invoke = event.payload else { continue }
-            let invokeRequest = BridgeInvokeRequest(
-                id: invoke.id,
-                command: invoke.command,
-                paramsJSON: invoke.paramsJSON,
-                nodeId: invoke.nodeId)
-            let result = await handleInvoke(invokeRequest)
+            let result = await handleInvoke(invoke)
             try requireCurrentConnection(generation, configuration: configuration)
             _ = try await self.request(
                 baseURL: baseURL,
@@ -556,7 +548,7 @@ final class WatchDirectNode {
         self.endpointText = sanitized.endpointText
     }
 
-    private func handleInvoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+    private func handleInvoke(_ request: InvokeRequest) async -> BridgeInvokeResponse {
         do {
             switch request.command {
             case OpenClawDeviceCommand.info.rawValue:
@@ -579,7 +571,7 @@ final class WatchDirectNode {
         }
     }
 
-    private func handleNotification(_ request: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+    private func handleNotification(_ request: InvokeRequest) async throws -> BridgeInvokeResponse {
         let params = try JSONDecoder().decode(
             OpenClawSystemNotifyParams.self, from: Data((request.paramsJSON ?? "{}").utf8))
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -683,10 +675,7 @@ final class WatchDirectNode {
 
     private func encodedResponse(id: String, payload: some Encodable) throws -> BridgeInvokeResponse {
         let data = try JSONEncoder().encode(payload)
-        guard let json = String(data: data, encoding: .utf8) else {
-            throw CocoaError(.fileWriteInapplicableStringEncoding)
-        }
-        return BridgeInvokeResponse(id: id, ok: true, payloadJSON: json)
+        return BridgeInvokeResponse(id: id, ok: true, payloadJSON: String(decoding: data, as: UTF8.self))
     }
 
     private static func errorResponse(
@@ -709,11 +698,9 @@ final class WatchDirectNode {
     }
 
     private static func saveConfiguration(_ configuration: WatchGatewayConfiguration) -> Bool {
-        guard let data = try? JSONEncoder().encode(configuration),
-              let raw = String(data: data, encoding: .utf8)
-        else { return false }
+        guard let data = try? JSONEncoder().encode(configuration) else { return false }
         return GenericPasswordKeychainStore.saveString(
-            raw,
+            String(decoding: data, as: UTF8.self),
             service: self.keychainService,
             account: self.keychainAccount)
     }

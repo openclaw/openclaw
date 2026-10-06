@@ -280,8 +280,7 @@ enum GatewaySettingsStore {
             ? GenericPasswordKeychainStore.loadString(service: service, account: legacyAccount)
             : nil
         guard let json = canonicalJSON ?? legacyJSON,
-              let data = json.data(using: .utf8),
-              let headers = try? JSONDecoder().decode([String: String].self, from: data)
+              let headers = try? JSONDecoder().decode([String: String].self, from: Data(json.utf8))
         else { return [:] }
         if canonicalJSON == nil,
            GenericPasswordKeychainStore.saveString(json, service: service, account: account)
@@ -304,9 +303,8 @@ enum GatewaySettingsStore {
             return self.clearGatewayCustomHeaders(gatewayStableID: stableID, service: service)
         }
         let account = self.customHeadersAccount(stableID: stableID)
-        guard let data = try? JSONEncoder().encode(sanitized),
-              let json = String(data: data, encoding: .utf8)
-        else { return false }
+        guard let data = try? JSONEncoder().encode(sanitized) else { return false }
+        let json = String(decoding: data, as: UTF8.self)
         guard GenericPasswordKeychainStore.saveString(json, service: service, account: account) else { return false }
         if self.canSafelyReadLegacyRawStorageKey(stableID) {
             _ = GenericPasswordKeychainStore.delete(
@@ -422,8 +420,7 @@ enum GatewaySettingsStore {
         guard let json = GenericPasswordKeychainStore.loadString(
             service: self.gatewayService,
             account: self.gatewayRegistryAccount),
-            let data = json.data(using: .utf8),
-            let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: data),
+            let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: Data(json.utf8)),
             (1...2).contains(registry.version)
         else { return .empty }
         return self.normalizedGatewayRegistry(registry)
@@ -505,8 +502,7 @@ enum GatewaySettingsStore {
             service: self.gatewayService,
             account: self.gatewayRegistryAccount)
         else { return true }
-        guard let data = json.data(using: .utf8),
-              let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: data)
+        guard let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: Data(json.utf8))
         else { return false }
         return (1...2).contains(registry.version)
     }
@@ -571,8 +567,7 @@ enum GatewaySettingsStore {
             service: self.gatewayService,
             account: self.gatewayRegistryAccount)
         {
-            guard let data = json.data(using: .utf8),
-                  let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: data),
+            guard let registry = try? JSONDecoder().decode(GatewayRegistry.self, from: Data(json.utf8)),
                   (1...2).contains(registry.version)
             else { return }
             _ = self.saveGatewayRegistry(registry)
@@ -597,10 +592,9 @@ enum GatewaySettingsStore {
     private static func loadLegacyLastGatewayConnection() -> LegacyLastGatewayConnectionData? {
         guard let json = GenericPasswordKeychainStore.loadString(
             service: self.gatewayService,
-            account: self.lastGatewayConnectionAccount),
-            let data = json.data(using: .utf8)
+            account: self.lastGatewayConnectionAccount)
         else { return nil }
-        return try? JSONDecoder().decode(LegacyLastGatewayConnectionData.self, from: data)
+        return try? JSONDecoder().decode(LegacyLastGatewayConnectionData.self, from: Data(json.utf8))
     }
 
     private static func gatewayRegistryEntry(
@@ -742,8 +736,7 @@ enum GatewaySettingsStore {
         guard let json = canonicalJSON ?? GenericPasswordKeychainStore.loadString(
             service: self.gatewayService,
             account: legacyAccount),
-            let data = json.data(using: .utf8),
-            let decoded = try? JSONDecoder().decode(GatewayCredentialBundle.self, from: data)
+            let decoded = try? JSONDecoder().decode(GatewayCredentialBundle.self, from: Data(json.utf8))
         else { return nil }
         guard let decodedStableID = GatewayStableIdentifier.exact(decoded.gatewayStableID),
               GatewayStableIdentifier.matches(decodedStableID, stableID)
@@ -756,8 +749,8 @@ enum GatewaySettingsStore {
             password: decoded.password?.trimmedNonEmpty)
         if canonicalJSON == nil,
            let migratedData = try? JSONEncoder().encode(bundle),
-           let migratedJSON = String(data: migratedData, encoding: .utf8),
-           GenericPasswordKeychainStore.saveString(migratedJSON, service: self.gatewayService, account: account)
+           GenericPasswordKeychainStore.saveString(
+               String(decoding: migratedData, as: UTF8.self), service: self.gatewayService, account: account)
         {
             _ = GenericPasswordKeychainStore.delete(service: self.gatewayService, account: legacyAccount)
         }
@@ -769,8 +762,7 @@ enum GatewaySettingsStore {
         guard !instanceID.isEmpty else { return }
         let legacyAccount = self.legacyGatewayCredentialBundleAccount(instanceId: instanceID)
         guard let json = GenericPasswordKeychainStore.loadString(service: self.gatewayService, account: legacyAccount),
-              let data = json.data(using: .utf8),
-              let legacy = try? JSONDecoder().decode(GatewayCredentialBundle.self, from: data)
+              let legacy = try? JSONDecoder().decode(GatewayCredentialBundle.self, from: Data(json.utf8))
         else { return }
         guard let stableID = GatewayStableIdentifier.exact(legacy.gatewayStableID) else { return }
         let scopedAccount = self.gatewayCredentialBundleAccount(instanceId: instanceID, stableID: stableID)
@@ -794,8 +786,7 @@ enum GatewaySettingsStore {
             instanceId: instanceId,
             stableID: stableID)
         guard let json = GenericPasswordKeychainStore.loadString(service: self.gatewayService, account: account),
-              let data = json.data(using: .utf8),
-              let bundle = try? JSONDecoder().decode(GatewayCredentialBundle.self, from: data),
+              let bundle = try? JSONDecoder().decode(GatewayCredentialBundle.self, from: Data(json.utf8)),
               GatewayStableIdentifier.matches(bundle.gatewayStableID, stableID)
         else { return }
         _ = GenericPasswordKeychainStore.delete(service: self.gatewayService, account: account)
@@ -881,9 +872,8 @@ extension GatewaySettingsStore {
         let normalized = self.normalizedGatewayRegistry(registry)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(normalized),
-              let json = String(data: data, encoding: .utf8)
-        else { return false }
+        guard let data = try? encoder.encode(normalized) else { return false }
+        let json = String(decoding: data, as: UTF8.self)
         guard GenericPasswordKeychainStore.saveString(
             json,
             service: self.gatewayService,
@@ -921,9 +911,6 @@ extension GatewaySettingsStore {
             bootstrapToken: nil,
             password: bundle.password)
         let trimmedInstanceID = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !stableID.isEmpty, !trimmedInstanceID.isEmpty else {
-            throw GatewayCredentialPersistenceError.invalidOwner
-        }
         let account = self.gatewayCredentialBundleAccount(
             instanceId: trimmedInstanceID,
             stableID: stableID)
@@ -998,11 +985,10 @@ extension GatewaySettingsStore {
         _ bundle: GatewayCredentialBundle,
         account: String) throws
     {
-        guard let data = try? JSONEncoder().encode(bundle),
-              let json = String(data: data, encoding: .utf8)
-        else {
+        guard let data = try? JSONEncoder().encode(bundle) else {
             throw GatewayCredentialPersistenceError.encodingFailed
         }
+        let json = String(decoding: data, as: UTF8.self)
         do {
             try GenericPasswordKeychainStore.saveStringResult(
                 json,
@@ -1131,10 +1117,8 @@ enum GatewayDiagnostics {
             self.truncateLogIfNeeded(url: url)
             let timestamp = self.isoTimestamp(date)
             let line = "[\(timestamp)] gateway diagnostics started\n"
-            if let data = line.data(using: .utf8) {
-                self.appendToLog(url: url, data: data)
-                self.applyFileProtection(url: url)
-            }
+            self.appendToLog(url: url, data: Data(line.utf8))
+            self.applyFileProtection(url: url)
         }
     }
 
@@ -1157,9 +1141,7 @@ enum GatewayDiagnostics {
                 self.truncateLogIfNeeded(url: url)
             }
             let entry = line + "\n"
-            if let data = entry.data(using: .utf8) {
-                self.appendToLog(url: url, data: data)
-            }
+            self.appendToLog(url: url, data: Data(entry.utf8))
         }
     }
 }

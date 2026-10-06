@@ -80,8 +80,7 @@ final class CloudflareAccessSessionStore {
         _ = self.revision
         if self.states[origin] == nil {
             if let encoded = self.persistence.load(origin),
-               let data = encoded.data(using: .utf8),
-               let session = try? JSONDecoder().decode(CloudflareAccessSession.self, from: data),
+               let session = try? JSONDecoder().decode(CloudflareAccessSession.self, from: Data(encoded.utf8)),
                session.origin == origin, (try? session.validate(now: now)) != nil
             {
                 self.revision &+= 1
@@ -129,7 +128,7 @@ final class CloudflareAccessSessionStore {
                 // must still be valid when persistence and publication happen.
                 try session.validate(now: self.now())
                 let encoded = try JSONEncoder().encode(session)
-                guard let value = String(data: encoded, encoding: .utf8), self.persistence.save(origin, value) else {
+                guard self.persistence.save(origin, String(decoding: encoded, as: UTF8.self)) else {
                     throw CloudflareAccessError.storageFailed
                 }
                 self.revision &+= 1

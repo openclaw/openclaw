@@ -29,9 +29,8 @@ enum SignificantLocationMonitor {
                 lon: location.coordinate.longitude,
                 accuracyMeters: location.horizontalAccuracy,
                 source: "ios-significant-location")
-            guard let data = try? JSONEncoder().encode(payload),
-                  let json = String(data: data, encoding: .utf8)
-            else { return }
+            guard let data = try? JSONEncoder().encode(payload) else { return }
+            let json = String(decoding: data, as: UTF8.self)
             Task { @MainActor in
                 if let beforeSend {
                     await beforeSend()

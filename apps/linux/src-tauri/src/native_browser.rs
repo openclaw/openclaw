@@ -459,72 +459,62 @@ impl NativeBrowserState {
                 opener_tab_id,
                 label,
             });
-            let observer_owner = self.clone();
-            let observer_app = app.clone();
-            let observer_label = view.label().to_string();
-            let refresh_clock = Arc::new(AtomicU64::new(0));
-            if let Err(error) = platform::observe_navigation(&view, move || {
-                let owner = observer_owner.clone();
-                let app = observer_app.clone();
-                let label = observer_label.clone();
-                let clock = refresh_clock.clone();
-                let event = clock.fetch_add(1, Ordering::SeqCst) + 1;
-                tauri::async_runtime::spawn(async move {
-                    owner.refresh(&app, &label, clock, event).await;
-                });
-            })
-            .await
-            {
-                host.tabs.retain(|tab| tab.id != id);
-                let _ = platform::release(&view).await;
-                let _ = view.close();
-                return Err(error);
-            }
-            let failure_owner = self.clone();
-            let failure_app = app.clone();
-            let failure_label = view.label().to_string();
-            if let Err(error) = platform::observe_navigation_events(&view, move |navigation| {
-                if navigation != platform::NavigationEvent::Failed {
-                    return;
-                }
-                let event = navigation_epoch.load(Ordering::SeqCst);
-                failed_epoch.store(event, Ordering::SeqCst);
-                let clock = navigation_epoch.clone();
-                let owner = failure_owner.clone();
-                let app = failure_app.clone();
-                let label = failure_label.clone();
-                tauri::async_runtime::spawn(async move {
-                    let mut host = owner.inner.lock().await;
-                    if clock.load(Ordering::SeqCst) != event {
+            let prepared = async {
+                let observer_owner = self.clone();
+                let observer_app = app.clone();
+                let observer_label = view.label().to_string();
+                let refresh_clock = Arc::new(AtomicU64::new(0));
+                platform::observe_navigation(&view, move || {
+                    let owner = observer_owner.clone();
+                    let app = observer_app.clone();
+                    let label = observer_label.clone();
+                    let clock = refresh_clock.clone();
+                    let event = clock.fetch_add(1, Ordering::SeqCst) + 1;
+                    tauri::async_runtime::spawn(async move {
+                        owner.refresh(&app, &label, clock, event).await;
+                    });
+                })
+                .await?;
+                let failure_owner = self.clone();
+                let failure_app = app.clone();
+                let failure_label = view.label().to_string();
+                platform::observe_navigation_events(&view, move |navigation| {
+                    if navigation != platform::NavigationEvent::Failed {
                         return;
                     }
-                    if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.label == label) {
-                        tab.navigation_failed();
-                        host.publish(&app);
-                    }
-                });
-            })
-            .await
-            {
+                    let event = navigation_epoch.load(Ordering::SeqCst);
+                    failed_epoch.store(event, Ordering::SeqCst);
+                    let clock = navigation_epoch.clone();
+                    let owner = failure_owner.clone();
+                    let app = failure_app.clone();
+                    let label = failure_label.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let mut host = owner.inner.lock().await;
+                        if clock.load(Ordering::SeqCst) != event {
+                            return;
+                        }
+                        if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.label == label) {
+                            tab.navigation_failed();
+                            host.publish(&app);
+                        }
+                    });
+                })
+                .await?;
+                if generation.is_some_and(|generation| {
+                    !crate::native_browser_bridge::request_is_current(app, generation)
+                }) {
+                    return Err("The native browser document changed.".to_string());
+                }
+                bootstrap.store(false, Ordering::SeqCst);
+                view.navigate(url)
+                    .map_err(|error| format!("Could not load the browser page: {error}"))
+            }
+            .await;
+            if let Err(error) = prepared {
                 host.tabs.retain(|tab| tab.id != id);
                 let _ = platform::release(&view).await;
                 let _ = view.close();
                 return Err(error);
-            }
-            if generation.is_some_and(|generation| {
-                !crate::native_browser_bridge::request_is_current(app, generation)
-            }) {
-                host.tabs.retain(|tab| tab.id != id);
-                let _ = platform::release(&view).await;
-                let _ = view.close();
-                return Err("The native browser document changed.".into());
-            }
-            bootstrap.store(false, Ordering::SeqCst);
-            if let Err(error) = view.navigate(url) {
-                host.tabs.retain(|tab| tab.id != id);
-                let _ = platform::release(&view).await;
-                let _ = view.close();
-                return Err(format!("Could not load the browser page: {error}"));
             }
             host.publish(app);
             Ok(id)

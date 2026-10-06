@@ -242,12 +242,8 @@ pub(crate) fn gateway_window_label(url: &Url) -> String {
         host,
         url.port_or_known_default().unwrap_or_default()
     );
-    let digest = Sha256::digest(route.as_bytes());
-    let suffix = digest[..12]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!("gateway-{suffix}")
+    let digest = format!("{:x}", Sha256::digest(route.as_bytes()));
+    format!("gateway-{}", &digest[..24])
 }
 
 fn apply_event(gateways: &GatewayMap, event: ServiceEvent) -> bool {
