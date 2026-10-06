@@ -153,7 +153,7 @@ async function probeCodexBwrapNamespaces(
       return {
         ok: false,
         kind: "unverified",
-        reason: "The selected Codex plugin does not provide a workspace-write sandbox probe.",
+        reason: "The selected Codex plugin does not provide a workspace-write sandbox check.",
       };
     }
     const probe = await selected.api.probeCodexWorkspaceWriteSandbox({ cfg, env: options.env });
@@ -217,9 +217,9 @@ export async function noteCodexBwrapNamespaceWarnings(
     note(
       [
         "Doctor could not verify the Codex bwrap network sandbox.",
-        ...(probe.command ? [`Probe command: ${probe.command}`] : []),
-        `Probe result: ${probe.reason}`,
-        `Resolve the probe result above, then rerun ${formatCliCommand("openclaw doctor")} to check Codex's host namespace policy.`,
+        ...(probe.command ? [`Check command: ${probe.command}`] : []),
+        `Check result: ${probe.reason}`,
+        `Resolve the check result above, then rerun ${formatCliCommand("openclaw doctor")} to check Codex's host namespace policy.`,
       ].join("\n"),
       "Sandbox",
     );
@@ -233,12 +233,12 @@ export async function noteCodexBwrapNamespaceWarnings(
     ? `With ${engineName} sandbox network egress disabled, it also needs an unprivileged network namespace.`
     : `${engineName} sandbox network egress is enabled, so doctor only checked the user namespace.`;
   const lines = [
-    `Codex bwrap ${probe.kind} namespace probe failed while ${engineName} sandbox mode is enabled.`,
+    `Codex bwrap ${probe.kind} namespace check failed while ${engineName} sandbox mode is enabled.`,
     `Codex app-server \`workspace-write\` shell execution needs unprivileged user namespaces. ${networkSentence}`,
     "On Ubuntu/AppArmor hosts this usually appears as:",
     symptom,
-    `Probe command: ${probe.command}`,
-    `Probe result: ${probe.reason}`,
+    `Check command: ${probe.command}`,
+    `Check result: ${probe.reason}`,
     "",
     "Fix the host namespace policy for the OpenClaw service user, then restart the gateway.",
     "Prefer an AppArmor profile that grants the required namespaces to the OpenClaw service process.",

@@ -214,7 +214,7 @@ fails closed.
 OpenClaw does not execute install policy during normal Gateway startup.
 Installs and updates fail closed when policy is enabled but unavailable.
 `openclaw doctor` performs static validation; `openclaw doctor --deep`
-executes a synthetic install probe against the configured command.
+executes a synthetic install check against the configured command.
 
 Bulk updates apply policy per target: a blocked skill or plugin update fails
 that target without disabling the policy or skipping later targets in the

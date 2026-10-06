@@ -94,7 +94,7 @@ function bundleMcpRequesterInspectionFinding(serverName: string): HealthFinding 
   return {
     checkId: "core/doctor/runtime-tool-schemas",
     severity: "info",
-    message: `Configured requester-scoped MCP server "${serverName}" was not probed without an authenticated requester.`,
+    message: `Configured requester-scoped MCP server "${serverName}" was not checked without an authenticated requester.`,
     path: `mcp.servers.${serverName}`,
     requirement: "authenticated requester context",
     fixHint: "Verify this server from an authenticated agent turn.",
@@ -361,7 +361,7 @@ export async function collectRuntimeToolSchemaFindings(
             findings.push({
               checkId: "core/doctor/runtime-tool-schemas",
               severity: "info",
-              message: `Configured MCP server "${serverName}" was not probed during read-only inspection because OAuth may rotate external credentials.`,
+              message: `Configured MCP server "${serverName}" was not checked during read-only inspection because OAuth may rotate external credentials.`,
               path: `mcp.servers.${serverName}`,
               fixHint:
                 "For configured servers, run `openclaw mcp probe <name>` against the serving configuration. Validate plugin-provided or agent-local MCP servers from an authenticated serving-agent turn so refreshed credentials persist with their owner.",

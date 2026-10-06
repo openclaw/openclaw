@@ -167,7 +167,7 @@ function execLoginShellEnvZeroAsync(params: LoginShellExecParams): Promise<Buffe
         // spawn clears its timeout on exit, but descendants can retain the output pipes.
         outputTimeout = setTimeout(
           () => {
-            reject(new Error("Login-shell environment probe timed out"));
+            reject(new Error("Login-shell environment check timed out"));
             discardOutput();
           },
           Math.max(0, deadline - performance.now()),
@@ -178,7 +178,7 @@ function execLoginShellEnvZeroAsync(params: LoginShellExecParams): Promise<Buffe
       clearTimeout(outputTimeout);
       // spawn owns the timeout; even a shell that exits zero after SIGTERM failed the probe.
       if (overflow || child.killed || signal || code !== 0) {
-        reject(new Error("Login-shell environment probe failed"));
+        reject(new Error("Login-shell environment check failed"));
       } else {
         resolve(Buffer.concat(stdout));
       }

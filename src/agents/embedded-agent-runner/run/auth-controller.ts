@@ -609,7 +609,7 @@ export function createEmbeddedRunAuthController(params: {
           if (canProbeCandidate) {
             didTransientCooldownProbe = true;
             params.log.warn(
-              `probing cooldowned auth profile for ${params.provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
+              `checking cooldowned auth profile for ${params.provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
             );
           } else {
             state.profileIndex += 1;

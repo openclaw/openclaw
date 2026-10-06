@@ -3,6 +3,7 @@ import {
   ErrorCodes,
   type EnvironmentsListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readDevicePairingNodeSnapshot } from "../../infra/device-pairing-store-readonly.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
@@ -20,6 +21,7 @@ import {
   workerRecord,
   workerService,
 } from "./environments.test-support.js";
+import { registerWorkerInferenceEnvironmentTests } from "./environments.worker-inference.suite.js";
 
 vi.mock("../../infra/device-pairing-store-readonly.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/device-pairing-store-readonly.js")>()),
@@ -36,6 +38,7 @@ vi.mock("../node-registry-private.js", async (importOriginal) => ({
   })),
 }));
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const NOW = 10_000;
 const workerId = { environmentId: "worker-1" };
 const createParams = { profileId: "development", idempotencyKey: "request-1" };
@@ -70,6 +73,8 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
+  registerWorkerInferenceEnvironmentTests((prefix) => tempDirs.make(prefix));
+
   it("probes disabled host setup only when requested without advertising or granting desktop access", async () => {
     const probe = vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({
       kind: "rfb",

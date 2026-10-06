@@ -2,6 +2,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { getOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   cacheSessionBranchSummaries,
   cloneSessionBranchSummaries,
@@ -52,7 +53,7 @@ export async function listSessionBranches(
     const controller = new AbortController();
     let unregister = () => {};
     try {
-      const selected = readSessionEntryRow(database, sourceKey)?.entry;
+      const selected = readSessionEntryRow(database, sourceKey, "list")?.entry;
       if (!selected?.sessionId) {
         return { status: "missing-session" };
       }
@@ -74,15 +75,16 @@ export async function listSessionBranches(
       const watermark = readSessionTranscriptHotWatermark(database, selected.sessionId);
       const cached = readCachedSessionBranchSummaries(database, selected.sessionId, watermark);
       let snapshot: SessionBranchSummaryReadResult;
-      if (cached) {
-        snapshot = { status: "ok", ...watermark, branches: cached.branches };
+      if (cached?.maxSeq === watermark.maxSeq) {
+        snapshot = { status: "ok", ...cached };
       } else if (typeof claim.identity === "symbol") {
         // Incognito transcripts live only in this process's in-memory database.
-        snapshot = readSessionBranchSnapshot(database, expected);
+        snapshot = readSessionBranchSnapshot(database, { ...expected, previous: cached });
       } else {
         const request = {
           database: { agentId: database.agentId, path: database.path },
           databaseIdentity: claim.identity,
+          validation: getOpenClawAgentDatabaseValidation(database),
           ...expected,
         };
         // New transcripts, lifecycles, or database claims must never join an older snapshot.
@@ -92,10 +94,13 @@ export async function listSessionBranches(
           key,
           async () => {
             const { runSessionBranchSummaryWorkerRequest } =
-              await import("./session-transcript-read-worker-runtime.js");
+              await import("./session-transcript-worker-runtime.js");
             const read = () => {
               assertCurrent();
-              return runSessionBranchSummaryWorkerRequest(request, controller.signal);
+              return runSessionBranchSummaryWorkerRequest(
+                { ...request, previous: cached },
+                controller.signal,
+              );
             };
             try {
               return await read();
@@ -115,7 +120,7 @@ export async function listSessionBranches(
         );
       }
       assertCurrent();
-      const current = readSessionEntryRow(database, sourceKey)?.entry;
+      const current = readSessionEntryRow(database, sourceKey, "list")?.entry;
       if (
         current?.sessionId !== expected.sessionId ||
         current.lifecycleRevision !== expected.lifecycleRevision

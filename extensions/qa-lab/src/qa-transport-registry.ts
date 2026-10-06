@@ -29,12 +29,7 @@ export type QaTransportFactoryContext = {
   state: QaBusState;
 };
 
-export type QaTransportAdapterFactoryResult = {
-  adapter: QaTransportAdapter;
-  cleanupBeforeGatewayStop: () => Promise<void>;
-  cleanupAfterGatewayStop: () => Promise<void>;
-  cleanupWithoutGateway: () => Promise<void>;
-};
+export type QaTransportAdapterFactoryResult = Awaited<ReturnType<typeof createQaTransportAdapter>>;
 
 const QA_CRABLINE_TRANSPORT_FACTORY_METADATA = createQaCrablineTransportAdapterFactory();
 
@@ -129,7 +124,7 @@ async function collectQaTransportCleanupErrors(
 export async function createQaTransportAdapter(
   context: QaTransportFactoryContext,
   factories: readonly QaTransportAdapterFactory[] = [],
-): Promise<QaTransportAdapterFactoryResult> {
+) {
   let adapter: QaTransportAdapter;
   try {
     if (context.driver === "qa-channel" && context.channelId === "qa-channel") {

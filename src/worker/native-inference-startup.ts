@@ -4,9 +4,9 @@ import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { NativeRuntimeConfigSchema } from "./native-runtime-config.js";
 
 /** Private node-to-worker startup carrier, never part of a Gateway turn envelope. */
-const WORKER_NATIVE_INFERENCE_STARTUP_ARG = "--internal-worker-native-inference";
-const WORKER_NATIVE_INFERENCE_STARTUP_FD = 3;
-const WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES = 2 * 1024 * 1024;
+export const WORKER_NATIVE_INFERENCE_STARTUP_ARG = "--internal-worker-native-inference";
+export const WORKER_NATIVE_INFERENCE_STARTUP_FD = 3;
+export const WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES = 2 * 1024 * 1024;
 const NativeInferenceStartupSchema = z.strictObject({
   config: NativeRuntimeConfigSchema,
   credentials: z.record(z.string(), z.string().min(1)),

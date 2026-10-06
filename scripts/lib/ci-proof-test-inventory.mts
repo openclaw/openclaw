@@ -112,6 +112,7 @@ export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
   "src/process/supervisor/adapters/child.service-lifecycle.test.ts",
   "src/snapshot/git-backup-streaming.test.ts",
   "src/state/openclaw-database-preflight.lifecycle.test.ts",
+  "src/worker/native-worker.integration.test.ts",
   "test/cron-message-read.integration.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/scripts/bench-sqlite-reliability.test.ts",

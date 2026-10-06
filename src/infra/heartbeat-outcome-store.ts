@@ -8,6 +8,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionCollaborationScope } from "../config/sessions/session-collaboration-scope.js";
+import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import {
@@ -149,9 +150,10 @@ export async function claimHeartbeatOutcomeForRun(params: {
   assertCurrent?: () => void;
   incognito?: SessionCollaborationScope["incognito"];
 }): Promise<PersistedHeartbeatOutcome | undefined> {
-  const { incognito, assertCurrent } = params;
+  const { assertCurrent } = params;
+  const incognito = params.incognito ?? captureIncognitoSessionOperation(params);
   const row = await runHeartbeatOutcomeOperation(
-    params,
+    { ...params, incognito },
     {
       type: "claim",
       input: { sessionKey: params.sessionKey, runId: params.runId },
@@ -177,8 +179,9 @@ async function runHeartbeatOutcomeOperation(
   const env = cloneEnvWithPlatformSemantics(resolved.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const options = { ...resolved, env, path: resolveOpenClawAgentSqlitePath({ ...resolved, env }) };
-  if (params.incognito) {
-    const { actor, authority } = params.incognito;
+  const incognito = params.incognito ?? captureIncognitoSessionOperation(params);
+  if (incognito) {
+    const { actor, authority } = incognito;
     if (actor.agentId !== options.agentId || actor.path !== options.path) {
       throw new Error("Heartbeat outcome target differs from its captured incognito actor");
     }
@@ -315,12 +318,17 @@ export async function claimHeartbeatContextForUserRun(
   if (params.trigger !== "user" || params.detached || !params.sessionKey) {
     return undefined;
   }
-  const { incognito, assertCurrent } = params;
+  const { assertCurrent } = params;
+  const incognito = params.incognito ?? captureIncognitoSessionOperation(params);
   if (!assertCurrent) {
     throw new Error("Heartbeat outcome context requires an active admitted run");
   }
   assertCurrent();
-  const outcome = await claimHeartbeatOutcomeForRun({ ...params, sessionKey: params.sessionKey });
+  const outcome = await claimHeartbeatOutcomeForRun({
+    ...params,
+    sessionKey: params.sessionKey,
+    incognito,
+  });
   assertCurrent();
   incognito?.authority.assertCurrent();
   incognito?.actor.assertReadable();

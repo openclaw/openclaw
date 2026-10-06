@@ -73,7 +73,6 @@ export function startSqliteReadOnlyLocationAsync(
     signal?: AbortSignal;
     expectedSourceIdentity?: DatabaseFileIdentity;
   } = {},
-  stagingOwner?: ReturnType<typeof captureSqliteSnapshotStagingOwner>,
 ): RetainedSqliteSnapshotPreparation {
   const signal = resolveSqliteInspectionSignal(options.signal);
   signal?.throwIfAborted();
@@ -90,9 +89,7 @@ export function startSqliteReadOnlyLocationAsync(
   const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
   const root = resolvePrivateSqliteSnapshotStagingRoot();
   const deadlineOwnedByCaller = isSqliteInspectionDeadlineOwnedByCaller();
-  const staging = stagingOwner ?? captureSqliteSnapshotStagingOwner();
-  // A prepared owner crossed an await; check it before joining an existing single flight.
-  stagingOwner?.prepareResources();
+  const staging = captureSqliteSnapshotStagingOwner();
   const runInContext = AsyncLocalStorage.snapshot();
   return startSingleFlightSqliteSnapshot(
     pathname,

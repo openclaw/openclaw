@@ -8,6 +8,7 @@ import type {
   BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { releaseSessionSourceAuthorities } from "../config/sessions/session-source-authority.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
@@ -29,7 +30,6 @@ import {
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import {
   openOpenClawAgentSqliteWorkerStore,
@@ -105,7 +105,7 @@ type SqliteBoardStoreOptions = {
     /** Captured logical routing authority; worker grants must not repeat database discovery. */
     assertCurrent?: () => void;
     /** Captured by the future activation owner; ordinary production routing remains native. */
-    incognito?: { actor: IncognitoAgentDatabaseExecution; authority: IncognitoSessionAuthority };
+    incognito?: { actor: IncognitoSessionActor; authority: IncognitoSessionAuthority };
   };
   env?: NodeJS.ProcessEnv;
 };
@@ -164,7 +164,7 @@ export class SqliteBoardStore implements BoardStore {
       sessionKey: string,
     ) => Promise<BoardWriteOutcome<T>>,
     actorWrite: (
-      actor: IncognitoAgentDatabaseExecution,
+      actor: IncognitoSessionActor,
       authority: IncognitoSessionAuthority,
       sessionKey: string,
     ) => Promise<BoardWriteOutcome<T>>,
@@ -433,7 +433,7 @@ export class SqliteBoardStore implements BoardStore {
       sessionKey: string,
     ) => Promise<Value | undefined>,
     actorRead: (
-      actor: IncognitoAgentDatabaseExecution,
+      actor: IncognitoSessionActor,
       authority: IncognitoSessionAuthority,
       sessionKey: string,
     ) => Promise<Value | undefined>,

@@ -154,7 +154,7 @@ function makeSkillWorkshopPolicyProbe(): AnyAgentTool {
   return {
     name: SKILL_WORKSHOP_TOOL_NAME,
     label: SKILL_WORKSHOP_TOOL_NAME,
-    description: "Skill Workshop policy availability probe.",
+    description: "Skill Workshop policy availability check.",
     parameters: { type: "object", properties: {} },
     execute: async () => ({ content: [], details: {} }),
   } as AnyAgentTool;

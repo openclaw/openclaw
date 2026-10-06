@@ -31,6 +31,7 @@ import {
 } from "../node-command-policy.js";
 import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
+import { workerInferenceMetadata } from "../worker-environments/inference-placement.js";
 import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import { formatForLog } from "../ws-log.js";
@@ -195,7 +196,15 @@ export function listWorkerProfiles(context: GatewayRequestContext) {
   return Object.entries(profiles)
     .flatMap(([id, profile]) => {
       const providerId = typeof profile.provider === "string" ? profile.provider.trim() : "";
-      return id.trim() && providerId ? [{ id: id.trim(), providerId }] : [];
+      return id.trim() && providerId
+        ? [
+            {
+              id: id.trim(),
+              providerId,
+              ...workerInferenceMetadata({ providerId, profileSnapshot: profile }),
+            },
+          ]
+        : [];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }

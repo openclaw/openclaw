@@ -23,7 +23,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/model-catalog/remote-refresh.test.ts",
   "src/model-catalog/remote-store.test.ts",
   "src/agents/subagents/spawn/acp-parent-stream-store.sqlite.test.ts",
-  "src/state/agent-database-admission.test.ts",
   "src/state/openclaw-agent-execution-incognito.compute.test.ts",
   "src/state/openclaw-agent-execution-incognito.lifecycle.test.ts",
   "src/state/openclaw-agent-execution-incognito.history.test.ts",
@@ -1051,6 +1050,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/auth-profiles.markauthprofilefailure.test.ts",
 
   "src/node-host/node-worker-launch-store.test.ts",
+  "src/node-host/node-worker-native-inference.test.ts",
   "src/node-host/node-worker-turn-store.test.ts",
   "src/node-host/node-worker-supervisor.test.ts",
   "src/node-host/node-worker-supervisor.container.test.ts",

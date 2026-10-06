@@ -125,7 +125,7 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
       - **Generate/store plaintext secret** (default)
       - **Use SecretRef** (opt-in)
       - Classic QuickStart reuses an existing `gateway.auth.token` SecretRef from an
-        `env`, `file`, `exec`, or `store` provider for its probe and dashboard
+        `env`, `file`, `exec`, or `store` provider for its check and dashboard
         handoff. An unresolved configured ref stops onboarding with remediation
         guidance instead of silently weakening Gateway auth.
     - Explicit or existing password mode also supports plaintext or SecretRef storage.
@@ -187,7 +187,7 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
   </Step>
   <Step title="Health check">
     - Starts gateway (if needed) and runs `openclaw health`.
-    - `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported.
+    - `openclaw status --deep` adds the live gateway health check to status output, including channel checks when supported.
 
   </Step>
   <Step title="Finish">

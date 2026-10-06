@@ -274,9 +274,11 @@ describe("Bun SQLite process selection and worker inheritance", () => {
           );
           break;
         }
-        case "branch-summaries":
+        case "branch-summaries": {
+          const { runSessionBranchSummaryWorkerRequest } =
+            await import("../config/sessions/session-transcript-worker-runtime.js");
           expect(
-            await reader.runSessionBranchSummaryWorkerRequest(
+            await runSessionBranchSummaryWorkerRequest(
               {
                 database: { agentId: target.agentId, path: storePath },
                 databaseIdentity: "absent-database",
@@ -287,6 +289,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
             ),
           ).toEqual({ status: "missing-session" });
           break;
+        }
       }
       expect(runtime.launches).toBeGreaterThan(0);
       expect(runtime.selectedPath).toBe("/fixture/sqlite.dylib");

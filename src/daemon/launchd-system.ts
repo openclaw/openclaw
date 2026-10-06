@@ -78,7 +78,7 @@ if [ -z "$openclaw_system_launchd_conflict" ]; then
       if /usr/bin/find "$openclaw_system_launchd_dir" -mindepth 1 -maxdepth 1 -name '*.plist' -print0 >"$openclaw_system_launchd_entries"; then
         while IFS= read -r -d '' openclaw_system_launchd_plist; do
           # Unreadable plists are treated as foreign: loaded same-label daemons are caught by the
-          # bracketing launchctl probes; an unloaded unreadable same-label plist is an accepted operator-created edge (#120481).
+          # bracketing launchctl checks; an unloaded unreadable same-label plist is an accepted operator-created edge (#120481).
           if [ ! -r "$openclaw_system_launchd_plist" ]; then
             continue
           fi

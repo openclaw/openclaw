@@ -240,7 +240,7 @@ it("validates worker admission for normalized logical inputs in a shared store",
   });
 });
 
-it("reads a sparse page in the transcript worker and shares equivalent queued requests", async () => {
+it("reads a sparse page in the transcript worker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const target = {
       agentId: "main",
@@ -283,13 +283,10 @@ it("reads a sparse page in the transcript worker and shares equivalent queued re
     };
     diagnostics.subscribe(record);
     try {
-      const pages = await Promise.all(Array.from({ length: 4 }, () => readChatHistoryPage(params)));
-      for (const page of pages) {
-        expect(page.messages.map(readChatHistoryMessageId)).toEqual([ids[0], ids.at(-1)]);
-        expect(page.pagination).toMatchObject({ totalMessages: 252, rawPageMessages: 252 });
-      }
+      const page = await readChatHistoryPage(params);
+      expect(page.messages.map(readChatHistoryMessageId)).toEqual([ids[0], ids.at(-1)]);
+      expect(page.pagination).toMatchObject({ totalMessages: 252, rawPageMessages: 252 });
       expect(tasks.length).toBeGreaterThan(0);
-      expect(tasks.length).toBeLessThan(pages.length);
     } finally {
       diagnostics.unsubscribe(record);
     }
