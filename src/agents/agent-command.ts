@@ -175,10 +175,7 @@ async function agentCommandInternal(
             cfg,
             agentId: sessionAgentId,
             sessionKey,
-            assertSourceCurrent: () => {
-              opts.abortSignal?.throwIfAborted();
-              opts.assertSourceCurrent?.();
-            },
+            currentSource: () => opts,
           })
         : undefined;
     if (

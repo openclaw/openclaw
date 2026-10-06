@@ -32,6 +32,7 @@ import {
 import { onAgentEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { handleChatSend } from "./server-methods/chat-send-handler.js";
 import { prepareAndAdmitChatSend } from "./server-methods/chat-send-setup.js";
@@ -464,7 +465,9 @@ describe("queued collector session projection", () => {
     expect(await exactChild()).toMatchObject({ status: "queued", hasActiveSubagentRun: true });
     expect((await exactParent())?.hasActiveSubagentRun).toBe(true);
     const compact = expectDefined(
-      loadSubagentSessionListRunsFromSqlite().get(entry.runId),
+      loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).get(
+        entry.runId,
+      ),
       "compact queued record",
     );
     expect(compact.execution).toEqual({ status: "queued" });

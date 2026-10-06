@@ -116,7 +116,7 @@ function completedRun(childSessionKey: string) {
       outcome: { status: "ok" as const },
     },
   };
-  getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(run);
+  getLatestSubagentRunByChildSessionKeyMock.mockResolvedValue(run);
   getLatestLiveSubagentRunByChildSessionKeyMock.mockReturnValue(run);
   return run;
 }

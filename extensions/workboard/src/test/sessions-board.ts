@@ -19,9 +19,9 @@ export async function startEmptySessionsBoardService(store: WorkboardStore) {
   const service = createWorkboardSessionsBoardService({
     store,
     gateway: {
-      request: vi.fn().mockResolvedValue({ sessions: [] }),
       readSessionFacts: vi.fn().mockResolvedValue({ sessions: [] }),
-      withSessionReadScope: async (run) => run(undefined),
+      withSessionFacts: async (_selection, run) =>
+        run({ scope: "empty", revision: "empty", redactionRevision: "empty", sessions: [] }),
       subscribeSessionChanges: () => () => {},
     },
   });

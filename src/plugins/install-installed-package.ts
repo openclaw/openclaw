@@ -31,12 +31,10 @@ import {
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { linkOpenClawPeerDependencies, resolveOpenClawHostDependency } from "./plugin-peer-link.js";
 
-type ValidatedPackagePlugin = {
-  pluginId: string;
-  manifestName?: string;
-  version?: string;
-  extensions: string[];
-  setup?: import("./manifest.js").PluginManifestSetup;
+type ValidatedPackagePlugin = Omit<
+  Parameters<typeof buildDirectoryInstallResult>[0],
+  "targetDir"
+> & {
   hasRuntimeDependencies: boolean;
   peerDependencies: Record<string, string>;
 };

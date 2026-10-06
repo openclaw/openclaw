@@ -8,7 +8,7 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "./diagnostic-events.js";
-import { WorkerTaskPool } from "./worker-task-pool.js";
+import { createOwnedWorkerTaskPool, WorkerTaskPool } from "./worker-task-pool.js";
 
 type PostedTask = { input: string; taskId: number };
 type FakeWorker = EventEmitter & {
@@ -67,6 +67,46 @@ afterEach(async () => {
 });
 
 describe("public worker task preparation custody", () => {
+  it("attributes owned tasks before input preparation without exporting private operation suffixes", async () => {
+    const events: Extract<DiagnosticEventPayload, { type: "worker.request" }>[] = [];
+    const unsubscribe = onTrustedInternalDiagnosticEvent(
+      (event) => {
+        if (event.type === "worker.request") {
+          events.push(event);
+        }
+      },
+      { include: ["worker.request"] },
+    );
+    const pool = createOwnedWorkerTaskPool<string, string>({
+      workerUrl: new URL("file:///fixture/openclaw-state-read.worker.js"),
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+    });
+    const gate = createDeferredCore<string>();
+    try {
+      const task = pool.runTask(() => gate.promise, {
+        diagnosticOperation: "cron.synthetic-private-suffix",
+      });
+      await waitForDiagnosticEventsDrained();
+      expect(events[0]).toMatchObject({ phase: "queued", requestClass: "cron" });
+      gate.resolve("synthetic-private-input");
+      await expect(task.result).resolves.toBe("synthetic-private-input");
+      await task.close();
+      await waitForDiagnosticEventsDrained();
+      expect(events.map((event) => [event.phase, event.requestClass])).toEqual([
+        ["queued", "cron"],
+        ["started", "cron"],
+        ["completed", "cron"],
+      ]);
+      expect(JSON.stringify(events)).not.toContain("synthetic-private");
+    } finally {
+      gate.resolve("cleanup");
+      await pool.close();
+      await waitForDiagnosticEventsDrained();
+      unsubscribe();
+    }
+  });
+
   it("reports shared queue wait and cancellation without labeling task inputs", async () => {
     const events: Extract<DiagnosticEventPayload, { type: "worker.request" }>[] = [];
     const unsubscribe = onTrustedInternalDiagnosticEvent(

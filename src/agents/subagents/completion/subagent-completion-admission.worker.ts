@@ -33,14 +33,17 @@ import {
   writeSubagentRunValuesInDatabase,
   type SubagentRegistryWrite,
 } from "../registry/subagent-registry.store.kernel.js";
-import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.row.js";
 import { readSubagentRunRow } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
-import { mutateSubagentCompletionInDatabase } from "./subagent-completion-mutation.kernel.js";
+import {
+  decodeSubagentCompletionRecord,
+  mutateSubagentCompletionInDatabase,
+} from "./subagent-completion-mutation.kernel.js";
 import type {
   SubagentCompletionMutation,
   SubagentCompletionMutationResult,
+  SubagentCompletionRecord,
 } from "./subagent-completion-mutation.types.js";
 
 type SubagentCompletionVersionConflict = { writeId: string; conflictRunIds: string[] };
@@ -62,7 +65,7 @@ export function admitSubagentCompletionInWorker(
       writeId: string;
       claimed: boolean;
       status: DeliveryQueueStoredStatus;
-      row: SubagentRunSqliteRow;
+      record: SubagentCompletionRecord;
     } {
   const { expected, subagent, queueEntry, writeId } = input;
   const owner = queueEntry.kind === "agentTurn" ? queueEntry.owner : undefined;
@@ -156,7 +159,7 @@ export function admitSubagentCompletionInWorker(
       if (!row) {
         throw new Error("subagent completion owner disappeared during admission");
       }
-      const receipt = { writeId, claimed, status, row };
+      const receipt = { writeId, claimed, status, record: decodeSubagentCompletionRecord(row) };
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
       deferSqliteWorkerCommitReceipt(database.db, receipt);
       return receipt;

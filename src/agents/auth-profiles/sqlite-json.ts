@@ -13,6 +13,7 @@ import {
   closeAuthProfileReadDatabase,
   closeAuthProfileReadPool,
 } from "./sqlite-read-pool.js";
+import { recordAuthProfileNativeCommit } from "./store-update-commit.js";
 import type { AuthProfileRowRead, PersistedAuthProfileStoreInspection } from "./types.js";
 
 type AgentAuthProfileDatabase = Pick<
@@ -199,6 +200,7 @@ export function writeAuthProfileJsonCell(
   kind: "agent" | "shared-state",
   payload: unknown,
 ): void {
+  recordAuthProfileNativeCommit(database);
   const value = JSON.stringify(payload);
   const now = Date.now();
   if (kind === "shared-state") {
@@ -243,6 +245,7 @@ export function deleteAuthProfileJsonCell(
   target: "store" | "state",
   kind: "agent" | "shared-state",
 ): void {
+  recordAuthProfileNativeCommit(database);
   if (kind === "shared-state") {
     executeSqliteQuerySync(
       database,

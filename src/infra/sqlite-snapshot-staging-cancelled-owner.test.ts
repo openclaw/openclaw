@@ -4,7 +4,10 @@ import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error
 import { mapRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as spawnBroker from "../process/spawn-broker/host.js";
+import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { withRuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import {
   cleanupSnapshotOperations,
   retainSnapshotTempDirectory,
@@ -12,6 +15,7 @@ import {
 } from "./sqlite-readonly-location-cleanup.js";
 import { startSqliteReadOnlyLocationAsync } from "./sqlite-snapshot-source.js";
 import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
+import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -21,6 +25,53 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+it("joins a prepared broker after cancellation before any snapshot task", async () => {
+  const root = tempDirs.make("snapshot-cancelled-bootstrap-");
+  const creation = vi.spyOn(spawnBroker, "createSpawnBrokerHost");
+  const controller = new AbortController();
+  const cancellation = new Error("snapshot cancelled before admission");
+  let owner: ReturnType<typeof captureSqliteSnapshotStagingOwner> | undefined;
+  let brokerPid: number | undefined;
+  let generationReleased = false;
+  await withRuntimeWorkerGeneration(
+    async (bind) => {
+      bind((url) => {
+        const retained = new URL(url);
+        retained.searchParams.set("snapshot-test-generation", "cancelled-bootstrap");
+        return retained;
+      });
+      owner = captureSqliteSnapshotStagingOwner();
+      const source = captureRetainedNativeWorkerSource();
+      owner.prepareResources();
+      const constructed = creation.mock.results.at(-1);
+      if (constructed?.type !== "return" || !constructed.value.pid) {
+        throw new Error("Snapshot preparation did not start its native broker");
+      }
+      brokerPid = constructed.value.pid;
+      expect(isPidDefinitelyDead(brokerPid)).toBe(false);
+      expect(source.hasActiveWorkers).toBe(false);
+      controller.abort(cancellation);
+      expect(() =>
+        startSqliteReadOnlyLocationAsync(
+          path.join(root, "never-opened.sqlite"),
+          { signal: controller.signal },
+          owner,
+        ),
+      ).toThrow(cancellation);
+      expect(source.hasActiveWorkers).toBe(false);
+    },
+    async () => {
+      generationReleased = true;
+    },
+  );
+  expect(generationReleased).toBe(true);
+  expect(brokerPid).toBeDefined();
+  expect(isPidDefinitelyDead(brokerPid!)).toBe(true);
+  expect(() =>
+    startSqliteReadOnlyLocationAsync(path.join(root, "never-opened.sqlite"), {}, owner),
+  ).toThrow("SQLite snapshot staging owner is closing");
+});
 
 it.each([true, false])(
   "preserves unpublished allocation cleanup or caller cancellation (retirementFails=%s)",

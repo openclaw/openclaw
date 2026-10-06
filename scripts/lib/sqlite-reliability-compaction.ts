@@ -8,7 +8,6 @@ import {
   assertSameReliabilityState,
   formatReliabilityStderr,
   type CompactionPayloadProof,
-  type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
 import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
@@ -78,7 +77,7 @@ export async function runVacuumInterruptionProof(params: {
   readPayload: () => CompactionPayloadProof;
   recoverAndVerifyDatabase: () => ReliabilityStateProof;
   target: CompactionTarget;
-}): Promise<ReliabilityReport["maintenanceProof"]["vacuumInterruption"]> {
+}) {
   const worker = startReliabilityCrashWorker(COMPACTION_WORKER_PATH, workerArgs(params.target), {
     label: "SQLite compaction worker",
     env: params.env,
