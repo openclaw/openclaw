@@ -345,9 +345,19 @@ export async function runNodeStreamTransport(params: {
   } finally {
     params.signal.removeEventListener("abort", onAbort);
     socket.destroy();
-    if (ws && (ws.readyState === WEBSOCKET_OPEN || ws.readyState === WEBSOCKET_CONNECTING)) {
+    if (
+      ws &&
+      (ws.readyState === WEBSOCKET_CONNECTING ||
+        ws.readyState === WEBSOCKET_OPEN ||
+        ws.readyState === WEBSOCKET_CLOSING)
+    ) {
       const closing = ws;
-      closing.close();
+      // A protocol error can close the socket before the error event. That
+      // leaves it CLOSING under the long handshake budget unless this path
+      // still arms the flush timer.
+      if (closing.readyState !== WEBSOCKET_CLOSING) {
+        closing.close();
+      }
       // The long handshake budget is only for a forwarded stream that is
       // waiting on the gateway. A failed command must not keep the socket
       // for that whole budget when the peer never answers the close.

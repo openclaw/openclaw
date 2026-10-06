@@ -673,4 +673,73 @@ describe("node stream close acknowledgement", () => {
       });
     }
   });
+
+  it("bounds cleanup when a protocol error has already started the close", async () => {
+    const gateway = net.createServer((socket) => {
+      let buffer = Buffer.alloc(0);
+      let upgraded = false;
+      socket.on("data", (chunk: Buffer) => {
+        if (!upgraded) {
+          buffer = Buffer.concat([buffer, chunk]);
+          const headerEnd = buffer.indexOf("\r\n\r\n");
+          if (headerEnd === -1) {
+            return;
+          }
+          const header = buffer.subarray(0, headerEnd).toString("latin1");
+          const key = /^Sec-WebSocket-Key: ([^\r\n]+)/m.exec(header)?.[1]?.trim();
+          if (!key) {
+            socket.destroy();
+            return;
+          }
+          const accept = createHash("sha1")
+            .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+            .digest("base64");
+          socket.write(
+            "HTTP/1.1 101 Switching Protocols\r\n" +
+              "Upgrade: websocket\r\n" +
+              "Connection: Upgrade\r\n" +
+              `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+          );
+          upgraded = true;
+          return;
+        }
+        socket.write(Buffer.from([0xc1, 0x00]));
+      });
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const target = new Duplex({
+      read() {},
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    const delays: number[] = [];
+    const controller = new AbortController();
+    try {
+      await expect(
+        runNodeStreamTransport({
+          gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+          attachPath: "/node-desktop/attach",
+          expectedAttachPath: "/node-desktop/attach",
+          target: { stream: target },
+          metadata: { ok: true },
+          streamName: "desktop",
+          signal: controller.signal,
+          scheduleCloseAck: (_callback, delayMs) => {
+            delays.push(delayMs);
+            return () => undefined;
+          },
+        }),
+      ).rejects.toThrow();
+      expect(delays).toContain(30_000);
+    } finally {
+      controller.abort();
+      target.destroy();
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+    }
+  });
 });
