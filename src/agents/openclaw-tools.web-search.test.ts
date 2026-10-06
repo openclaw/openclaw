@@ -1,5 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  createOAuthAuthProfileStore,
+  createWebSearchTestProvider,
+} from "../test-utils/web-provider-runtime.test-helpers.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "./auth-profiles/runtime-snapshots.js";
+import * as authSource from "./auth-profiles/source-check.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
@@ -10,13 +20,23 @@ import {
 
 // mock-isolation: Exercise real assembly without loading external plugins or credentials.
 vi.mock("./openclaw-plugin-tools.js", () => ({ resolveOpenClawPluginToolsForOptions: () => [] }));
-// mock-isolation: Empty provider inventory represents a fresh installation with no search setup.
+const { resolveProviders } = vi.hoisted(() => ({
+  resolveProviders: vi.fn<() => ReturnType<typeof createWebSearchTestProvider>[]>(() => []),
+}));
+// mock-isolation: Only fixture providers participate in tool availability, not host credentials.
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: () => [],
-  resolveRuntimeWebSearchProviders: () => [],
+  resolvePluginWebSearchProviders: resolveProviders,
+  resolveRuntimeWebSearchProviders: resolveProviders,
 }));
 
-afterEach(() => vi.restoreAllMocks());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => {
+  resolveProviders.mockReset().mockReturnValue([]);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeAuthProfileStoreSnapshots();
+});
 
 describe("unconfigured web search tool surface", () => {
   it.each([
@@ -55,6 +75,61 @@ describe("unconfigured web search tool surface", () => {
       expect(onWebSearchConfiguration).toHaveBeenCalledExactlyOnceWith(fact);
     }
   });
+
+  it.each([
+    { source: false, provider: "test-search-auth", configured: false },
+    { source: true, provider: "unrelated-provider", configured: false },
+    { source: true, provider: "test-search-auth", configured: true },
+    { source: undefined, provider: "test-search-auth", configured: false },
+  ])(
+    "uses source=$source for $provider during async construction",
+    async ({ source: authProfileStoreSource, provider, configured }) => {
+      const agentDir = tempDirs.make("openclaw-search-source-");
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: createOAuthAuthProfileStore({
+            provider,
+            profileId: `${provider}:test`,
+            access: "test-access",
+            refresh: "test-refresh",
+          }),
+        },
+      ]);
+      resolveProviders.mockReturnValue([
+        {
+          ...createWebSearchTestProvider({
+            pluginId: "test-search",
+            id: "test-search",
+            authProviderId: "test-search-auth",
+            credentialPath: "plugins.entries.test-search.config.webSearch.apiKey",
+          }),
+          envVars: [],
+        },
+      ]);
+      using sourceProbe = vi
+        .spyOn(authSource, "hasAnyAuthProfileStoreSourceAsync")
+        .mockResolvedValue(false);
+      const onWebSearchConfiguration = vi.fn();
+      const tools = await createOpenClawToolsAsync({
+        config: {},
+        agentDir,
+        authProfileStoreSource,
+        disableMessageTool: true,
+        disablePluginTools: true,
+        wrapBeforeToolCallHook: false,
+        onWebSearchConfiguration,
+      });
+      // Source presence still requires a matching provider credential.
+      expect(tools.some((tool) => tool.name === "web_search")).toBe(configured);
+      expect(onWebSearchConfiguration).toHaveBeenCalledExactlyOnceWith(configured);
+      if (authProfileStoreSource === undefined) {
+        expect(sourceProbe).toHaveBeenCalledExactlyOnceWith(agentDir);
+      } else {
+        expect(sourceProbe).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each(["full", "minimal"] as const)(
     "gives concise missing-setup context in %s prompts without a callable",

@@ -455,9 +455,9 @@ export function hasConfiguredWebSearchProvider(
 
 /** Prepare agent-scoped source facts without synchronous store discovery in tool assembly. */
 export async function prepareWebSearchConfiguration(
-  options: Omit<WebSearchConfigurationParams, "resolveAuthProfileStoreSource"> = {},
+  options: WebSearchConfigurationParams = {},
 ): Promise<boolean> {
-  if (options.authStore) {
+  if (options.authStore || options.resolveAuthProfileStoreSource) {
     return hasConfiguredWebSearchProvider(options);
   }
   let needsAuthSource = false;
