@@ -37,6 +37,7 @@ export async function prepareAndAdmitChatSend(
   onAdmissionOwned?: () => Promise<boolean>,
   options?: {
     trustedSystemInput?: boolean;
+    isDirectExternalUser?: boolean;
     goalResume?: SessionGoalOperation & { action: "resume" };
     providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   },
@@ -80,6 +81,7 @@ export async function prepareAndAdmitChatSend(
     request: normalizedRequest.value,
     context,
     client,
+    isDirectExternalUser: options?.isDirectExternalUser,
   });
   if (!loadedSession.ok) {
     respond(

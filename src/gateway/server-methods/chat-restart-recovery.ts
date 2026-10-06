@@ -7,7 +7,6 @@ import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   resolveChannelResetConfig,
   resolveSessionResetType,
-  resolveSessionWorkStartError,
   type SessionEntry,
 } from "../../config/sessions.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
@@ -31,6 +30,7 @@ import { isAcpSessionKey, resolveSessionDispatchKind } from "../../sessions/sess
 import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import { resolveAgentSessionWorkStartError } from "../agent-turn/agent-handler-helpers.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-state.js";
@@ -179,7 +179,10 @@ export async function resolveDurableChatClaim(params: {
     entry.status === "running" &&
     entry.abortedLastRun === true
   ) {
-    const recoverySessionError = resolveSessionWorkStartError(params.canonicalSessionKey, entry);
+    const recoverySessionError = resolveAgentSessionWorkStartError(
+      params.canonicalSessionKey,
+      entry,
+    );
     if (recoverySessionError) {
       return { kind: "rejected", message: recoverySessionError };
     }
@@ -387,6 +390,7 @@ export function buildRestartSafeChatTranscriptState(params: {
   admission: RestartSafeChatAdmission;
   clientRunId: string;
   startedAt: number;
+  sourceIngress: "control-ui" | "internal";
 }): {
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch: SessionTranscriptTurnLifecyclePatch;
@@ -413,7 +417,7 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryRequesterAccountId: undefined,
       restartRecoveryRequesterSenderId: undefined,
       restartRecoverySameChannelThreadRequired: undefined,
-      restartRecoverySourceIngress: "control-ui",
+      restartRecoverySourceIngress: params.sourceIngress,
       restartRecoverySourceReplyDeliveryMode: undefined,
       ...(params.admission.priorTerminalSourceRunId
         ? { restartRecoveryTerminalRunIds: [params.admission.priorTerminalSourceRunId] }
