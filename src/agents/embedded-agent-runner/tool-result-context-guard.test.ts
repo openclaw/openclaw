@@ -399,8 +399,7 @@ describe("installContextEngineLoopHook", () => {
     });
     await run([makeUser("first"), ...pending]);
     expect(engine.assemble).toHaveBeenCalledOnce();
-    const call = engine.assemble.mock.calls[0]?.[0];
-    expectDefined(call);
+    const call = expectDefined(engine.assemble.mock.calls[0]?.[0], "assemble call");
     const pendingTokens = pending.reduce((sum, message) => sum + estimateTokens(message), 0);
     const loopWindow =
       Math.max(1, 100_000 - 20_000) -
