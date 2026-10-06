@@ -222,6 +222,78 @@ describe("agent command restart recovery ownership", () => {
     );
   });
 
+  it("resumes requester settle from a persisted healthy empty recovery aggregate", async () => {
+    const target = createTarget();
+    await write(target, {
+      status: "done",
+      abortedLastRun: false,
+      restartRecoveryRuns: undefined,
+      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+    });
+
+    const requesterResult = "The completed subagent result reached the requester.";
+    const run = vi.fn(async () => requesterResult);
+    await expect(
+      execute(target, {
+        opts: {
+          runId: "settle-turn",
+          inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        } as AgentCommandOpts,
+        run,
+      }),
+    ).resolves.toBe(requesterResult);
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(read(target)).toMatchObject({ status: "done", abortedLastRun: false });
+    expect(read(target)?.mainRestartRecovery).toBeUndefined();
+  });
+
+  it("preserves persisted interrupted recovery custody during requester settle", async () => {
+    const base = createTarget();
+    const interruptedEntry: SessionEntry = {
+      sessionId: base.sessionId,
+      updatedAt: 100,
+      status: "interrupted",
+      abortedLastRun: true,
+      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+    };
+    const target = { ...base, sessionEntry: { ...interruptedEntry } };
+    await write(target, interruptedEntry);
+
+    const run = vi.fn(async (prepared: typeof target) => {
+      expect(prepared.sessionEntry.mainRestartRecovery?.foregroundClaims?.tokens).toEqual([
+        expect.any(String),
+      ]);
+      expect(prepared.sessionEntry.abortedLastRun).toBe(true);
+      return "The requester settled while recovery custody remained.";
+    });
+    await expect(
+      execute(target, {
+        opts: {
+          runId: "settle-turn",
+          inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        } as AgentCommandOpts,
+        prepare: async () => ({ ...target, sessionEntry: read(target) ?? target.sessionEntry }),
+        run,
+      }),
+    ).resolves.toBe("The requester settled while recovery custody remained.");
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(read(target)).toMatchObject({
+      status: "interrupted",
+      abortedLastRun: true,
+      mainRestartRecovery: { cycleId: "cycle-1", chargedAttempts: 0 },
+    });
+    expect(read(target)?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+    expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionId: target.sessionId,
+        sessionKey,
+        storePath: target.storePath,
+      }),
+    );
+  });
+
   it.each([
     { mode: "claim", status: "failed", cleared: true },
     { mode: "reject_uncoordinated", status: "done", cleared: false },

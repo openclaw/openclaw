@@ -19,6 +19,7 @@ import {
   buildMainSessionRecoverySettlementPatch,
   removeMainSessionRecoveryForegroundClaim,
 } from "./main-session-recovery-clear.js";
+import { isMainRestartRecoveryAggregateEmptyAndUnowned } from "./main-session-recovery-empty-aggregate.js";
 import type {
   MainSessionRecoveryCommand,
   MainSessionRecoveryConflict,
@@ -587,9 +588,12 @@ export function transitionMainSessionRecovery(
     }
     case "claim_foreground": {
       if (
-        entry.sessionId === command.sessionId &&
-        isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
-        isMainRestartRecoveryTerminalOnly(entry)
+        (entry.sessionId === command.sessionId &&
+          isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
+          isMainRestartRecoveryTerminalOnly(entry)) ||
+        (entry.sessionId === command.sessionId &&
+          isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
+          isMainRestartRecoveryAggregateEmptyAndUnowned(entry))
       ) {
         Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
         return { kind: "applied" };
