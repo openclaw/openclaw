@@ -21,7 +21,6 @@ import { formatCommandExecResult, formatCommandExecText } from "./command-exec-r
 import { commandReply, rejectNonOwnerCommand } from "./command-gates.js";
 import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
-  buildPrivateCommandApprovalRequest,
   deliverPrivateCommandReply,
   resolveCommandExecApprovalRoute,
   resolvePrivateCommandRouteTargets,
@@ -120,18 +119,6 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
   return reply ? { shouldContinue: false, reply } : { shouldContinue: false };
 };
 
-async function buildDiagnosticsReply(
-  params: HandleCommandsParams,
-  args: string,
-  options: {
-    diagnosticsPrivateRouted?: boolean;
-    privateApprovalTarget?: PrivateCommandRouteTarget;
-  } = {},
-): Promise<ReplyPayload | undefined> {
-  const codexDiagnostics = await buildCodexDiagnosticsApprovalIntegration(params, args, options);
-  return await requestGatewayDiagnosticsExportApproval(params, options, codexDiagnostics);
-}
-
 async function deliverGroupDiagnosticsReplyPrivately(
   params: HandleCommandsParams,
   reply: ReplyPayload,
@@ -181,22 +168,10 @@ function buildDiagnosticsApprovalWarning(codexApprovalText?: string): string {
 async function resolvePrivateDiagnosticsTargetsForCommand(
   params: HandleCommandsParams,
 ): Promise<PrivateCommandRouteTarget[]> {
-  const now = Date.now();
-  const agentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
   return await resolvePrivateCommandRouteTargets({
     commandParams: params,
-    request: buildPrivateCommandApprovalRequest({
-      commandParams: params,
-      id: "diagnostics-private-route",
-      command: buildGatewayDiagnosticsExportJsonRequest().command,
-      agentId,
-      createdAtMs: now,
-    }),
+    id: "diagnostics-private-route",
+    command: buildGatewayDiagnosticsExportJsonRequest().command,
   });
 }
 
@@ -204,11 +179,16 @@ function buildGatewayDiagnosticsExportJsonRequest() {
   return buildCurrentOpenClawCliExecRequest(["gateway", "diagnostics", "export", "--json"]);
 }
 
-async function requestGatewayDiagnosticsExportApproval(
+async function buildDiagnosticsReply(
   params: HandleCommandsParams,
-  options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
-  codexDiagnostics: CodexDiagnosticsApprovalIntegration = {},
+  args: string,
+  options: {
+    diagnosticsPrivateRouted?: boolean;
+    privateApprovalTarget?: PrivateCommandRouteTarget;
+  } = {},
 ): Promise<ReplyPayload | undefined> {
+  const codexDiagnostics =
+    (await buildCodexDiagnosticsApprovalIntegration(params, args, options)) ?? {};
   const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??

@@ -246,7 +246,10 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         : null;
     return html`
       <div class="session-diff__summary">
-        <span class="session-diff__branch" title=${result.root ?? ""}>
+        <span
+          class="session-diff__branch"
+          title=${[branchLabel, result.root].filter(Boolean).join("\n")}
+        >
           ${icons.gitBranch}
           <span class="session-diff__branch-label">${branchLabel}</span>
         </span>

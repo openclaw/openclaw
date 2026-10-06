@@ -15,6 +15,8 @@ type ForwardedAttributionOptions = Parameters<typeof renderForwardedAvatar>[1] &
   mainKey?: string;
   basePath?: string;
   linkSource?: boolean;
+  updateCount?: number;
+  showAvatar?: boolean;
 };
 
 /**
@@ -35,7 +37,10 @@ export function renderForwardedAttribution(
   const cronRunSessionId = sourceCronRun?.[2];
   const sourceIsSubagent = isSubagentSessionKey(sourceSessionKey);
   const sourceIsOtherAgent =
-    !sourceIsSubagent && sourceParsed && sourceParsed.agentId !== opts.agentId;
+    !sourceIsSubagent &&
+    sourceParsed &&
+    Boolean(opts.agentId) &&
+    sourceParsed.agentId !== opts.agentId;
   // Only agent-prefixed keys are navigable: the titler, hovercard, and click
   // handlers all reject other shapes, so a legacy key must stay plain text
   // instead of becoming a focusable link that goes nowhere.
@@ -57,9 +62,10 @@ export function renderForwardedAttribution(
         : undefined);
   const sourceAgentPrefix =
     !sourceIsMainSession && sourceIsOtherAgent ? sourceAgentDisplayName : undefined;
-  const sourceAvatar = sourceIsOtherAgent
-    ? renderForwardedAvatar(sourceParsed.agentId, opts)
-    : nothing;
+  const sourceAvatar =
+    sourceIsOtherAgent && opts.updateCount === undefined && opts.showAvatar !== false
+      ? renderForwardedAvatar(sourceParsed.agentId, opts)
+      : nothing;
   const sourceLink =
     cronJobId && cronRunSessionId
       ? html`<a
@@ -80,8 +86,17 @@ export function renderForwardedAttribution(
           data-session-key=${linkableSourceKey}
           ><span class="session-label" .textContent=${sourceLabel ?? linkableSourceKey}></span
         ></a>`;
+  const from =
+    opts.updateCount === undefined
+      ? t("chat.messages.forwardedFrom")
+      : t(
+          opts.updateCount === 1
+            ? "chat.messages.interSessionUpdateFrom"
+            : "chat.messages.interSessionUpdatesFrom",
+          { count: String(opts.updateCount) },
+        );
   return html`
-    <div class="chat-reply-attribution chat-reply-attribution--forwarded">
+    <span class="chat-reply-attribution chat-reply-attribution--forwarded">
       <span class="chat-reply-attribution__icon" aria-hidden="true">${icons.forward}</span>
       ${
         linkableSourceKey
@@ -90,7 +105,7 @@ export function renderForwardedAttribution(
             // immutable and grouping splits on senderSession, so no keyed
             // remount is needed. Session sources use the titler for their href;
             // completed cron runs belong to automation history instead.
-            html`<span>${t("chat.messages.forwardedFrom")}</span>
+            html`<span>${from}</span>
               ${
                 sourceIsOtherAgent
                   ? html`<span class="chat-reply-attribution__agent">
@@ -113,10 +128,20 @@ export function renderForwardedAttribution(
                   : sourceLink
               } `
           : sourceSessionKey
-            ? html`<span>${t("chat.messages.forwardedFrom")}</span>
-                <span>${sourceLabel ?? sourceSessionKey}</span>`
+            ? html`<span>${from}</span>
+                ${sourceAgentPrefix ? html`<span>${sourceAgentPrefix} ·</span>` : nothing}
+                <span
+                  ?data-session-title-only=${Boolean(sourceParsed)}
+                  data-session-key=${sourceParsed ? sourceSessionKey : nothing}
+                  class=${sourceLabel ? "markdown-session-link--titled" : nothing}
+                  ><span
+                    class="session-label"
+                    .textContent=${sourceLabel ?? sourceSessionKey}
+                  ></span
+                ></span>`
             : html`<span
-                >${
+                >${opts.updateCount === undefined ? nothing : t(opts.updateCount === 1 ? "chat.messages.interSessionUpdate" : "chat.messages.interSessionUpdates", { count: String(opts.updateCount) })}
+                ${opts.updateCount === undefined ? nothing : " · "}${
                   group.senderSession?.agentId
                     ? t("chat.messages.forwardedFromAgent", {
                         agentId: group.senderSession.agentId,
@@ -125,6 +150,6 @@ export function renderForwardedAttribution(
                 }</span
               >`
       }
-    </div>
+    </span>
   `;
 }

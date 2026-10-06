@@ -15,47 +15,23 @@ import {
   listChatCommandsForConfig,
   type ChatCommandDefinition,
 } from "./commands-registry.js";
-import type { CommandCategory } from "./commands-registry.types.js";
 
-type DisplayCategory = Exclude<CommandCategory, "docks">;
-
-const CATEGORY_LABELS: Record<DisplayCategory, string> = {
-  session: "Session",
-  options: "Options",
-  status: "Status",
-  management: "Management",
-  media: "Media",
-  tools: "Tools",
-};
-
-const CATEGORY_ORDER: DisplayCategory[] = [
-  "session",
-  "options",
-  "status",
-  "management",
-  "media",
-  "tools",
-];
-
-function groupCommandsByCategory(
-  commands: ChatCommandDefinition[],
-): Map<DisplayCategory, ChatCommandDefinition[]> {
-  const grouped = new Map<DisplayCategory, ChatCommandDefinition[]>();
-  for (const command of commands) {
-    const category = command.category === "docks" ? "tools" : (command.category ?? "tools");
-    const list = grouped.get(category) ?? [];
-    list.push(command);
-    grouped.set(category, list);
-  }
-  return grouped;
-}
+const COMMAND_CATEGORIES = [
+  ["session", "Session"],
+  ["options", "Options"],
+  ["status", "Status"],
+  ["management", "Management"],
+  ["media", "Media"],
+  ["tools", "Tools"],
+] as const;
+type DisplayCategory = (typeof COMMAND_CATEGORIES)[number][0];
 
 /** Builds the compact slash-command help text shown by `/help`. */
 export function buildHelpMessage(cfg?: OpenClawConfig): string {
   const optionParts = [
     "/think <level|default>",
     "/model <id>",
-    "/fast status|auto|on|off|default",
+    "/fast status|auto|on|off|ultrafast|default",
     "/verbose on|off|full",
     "/trace on|off|raw",
   ];
@@ -130,20 +106,28 @@ function buildCommandItems(
   commands: ChatCommandDefinition[],
   pluginCommands: ReturnType<typeof listPluginCommands>,
 ): CommandsListItem[] {
-  const grouped = groupCommandsByCategory(commands);
+  const grouped = new Map<DisplayCategory, ChatCommandDefinition[]>();
+  for (const command of commands) {
+    const category = command.category === "docks" ? "tools" : (command.category ?? "tools");
+    const list = grouped.get(category) ?? [];
+    list.push(command);
+    grouped.set(category, list);
+  }
   const items: CommandsListItem[] = [];
 
-  for (const category of CATEGORY_ORDER) {
+  for (const [category, label] of COMMAND_CATEGORIES) {
     for (const command of grouped.get(category) ?? []) {
-      items.push({ label: CATEGORY_LABELS[category], text: formatCommandEntry(command) });
+      items.push({ label, text: formatCommandEntry(command) });
     }
   }
 
   for (const command of pluginCommands) {
     const pluginLabel = command.pluginId ? ` (${command.pluginId})` : "";
+    // Preserve the canonical spelling without auto-linking only its prefix or guessing an alias.
+    const commandName = command.name.includes("-") ? `\`/${command.name}\`` : `/${command.name}`;
     items.push({
       label: "Plugins",
-      text: `/${command.name}${pluginLabel} - ${command.description}`,
+      text: `${commandName}${pluginLabel} - ${command.description}`,
     });
   }
 
@@ -196,28 +180,22 @@ export function buildCommandsMessagePaginated(
   const pluginCommands = listPluginCommands();
   const items = buildCommandItems(commands, pluginCommands);
 
-  if (!prefersPaginatedList) {
-    const lines = ["ℹ️ Slash commands", ""];
-    lines.push(formatCommandList(items));
-    lines.push("", "More: /tools for available capabilities");
-    return {
-      text: lines.join("\n").trim(),
-      totalPages: 1,
-      currentPage: 1,
-      hasNext: false,
-      hasPrev: false,
-    };
-  }
-
-  const totalCommands = items.length;
-  const totalPages = Math.max(1, Math.ceil(totalCommands / COMMANDS_PER_PAGE));
-  const currentPage = Math.min(page, totalPages);
+  const totalPages = prefersPaginatedList
+    ? Math.max(1, Math.ceil(items.length / COMMANDS_PER_PAGE))
+    : 1;
+  const currentPage = prefersPaginatedList ? Math.min(page, totalPages) : 1;
   const startIndex = (currentPage - 1) * COMMANDS_PER_PAGE;
-  const endIndex = startIndex + COMMANDS_PER_PAGE;
-  const pageItems = items.slice(startIndex, endIndex);
-
-  const lines = [`ℹ️ Commands (${currentPage}/${totalPages})`, ""];
-  lines.push(formatCommandList(pageItems));
+  const pageItems = prefersPaginatedList
+    ? items.slice(startIndex, startIndex + COMMANDS_PER_PAGE)
+    : items;
+  const lines = [
+    prefersPaginatedList ? `ℹ️ Commands (${currentPage}/${totalPages})` : "ℹ️ Slash commands",
+    "",
+    formatCommandList(pageItems),
+  ];
+  if (!prefersPaginatedList) {
+    lines.push("", "More: /tools for available capabilities");
+  }
 
   return {
     text: lines.join("\n").trim(),

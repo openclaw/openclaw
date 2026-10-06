@@ -273,8 +273,10 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 ### Choose the same model with different runtimes
 
 Set `pickerRuntimes` on an exact model entry to offer additional runtime choices
-in the Control UI. The entries share the model name and differ by their harness
-label. The configured `agentRuntime` remains the default:
+in the Control UI. Each entry shows its harness label. When both OpenClaw and
+Codex are configured for the same model, the Codex choice appends `codex` to its
+name. A model with only one configured harness keeps its plain name. The
+configured `agentRuntime` remains the default:
 
 ```json5
 {
@@ -333,7 +335,7 @@ If an existing session's harness becomes unavailable, the failed turn reports
 the owner plugin when known and its activation or loading blocker. Follow the error's
 `openclaw doctor --fix` or `openclaw plugins inspect <id> --runtime --json`
 guidance, fix the plugin, and restart the Gateway before retrying. Gateway
-health probes remain independent of model execution. Use [Models status](/cli/models)
+health checks remain independent of model execution. Use [Models status](/cli/models)
 and [Doctor](/gateway/doctor) to diagnose the configured route.
 
 Choose the model when you create a session whenever possible. The Control UI's
@@ -396,8 +398,10 @@ Without a scope flag, selections change only the current session. `agents.defaul
 - **Follow compatible runtime selections:** Model-only changes preserve a session runtime pin when it supports the selected provider. Otherwise, the pin is cleared and the selected model follows its configured runtime automatically. An explicitly requested incompatible runtime is still rejected without changing either selection. Use `/model <provider/model> --runtime <runtime> -s` to switch runtimes, or `--runtime default` to follow configured routing. Explicit runtime rows and **Default** in the Control UI still select or reset the runtime.
 - If the agent is idle, a model change applies to the next run immediately. If a run is already active, the switch is queued for the next clean retry point. It can be queued for a later point, if tool activity or reply output already started.
 - A user-selected `/model` ref is strict for that session: if it becomes unreachable, the reply fails visibly instead of silently falling back through `agents.defaults.model.fallbacks`. Configured defaults and cron job primaries still use fallback chains.
+- If you select another model while a live switch is queued, the newer selection stays pending for the next safe retry opportunity.
 - `/model status` is the detailed view: auth candidates per provider, and (when configured) the provider endpoint `baseUrl` plus `api` mode.
 - Model refs are parsed by splitting on the first `/`. Type `provider/model`. If the model ID itself contains `/` (OpenRouter-style), include the provider prefix, for example `/model openrouter/moonshotai/kimi-k2`. If you omit the provider, OpenClaw tries an alias match first. It then tries a unique configured-provider match for that exact unprefixed model id. It then tries the configured default provider, which is a deprecated fallback. If that provider no longer exposes the configured default model, OpenClaw uses the first configured provider and model instead. This avoids surfacing a stale removed-provider default.
+- An alias cannot redirect an explicit registered or configured provider ref to another provider, including when the ref has an auth-profile suffix. A colliding alias remains usable with its own provider prefix. Slash-form aliases whose leading segment is a model namespace still work.
 - When inferring a provider, exact model ID case takes precedence over case-insensitive matches within the same configuration scope. A case-insensitive match is used only when it identifies one provider. Per-agent model entries take precedence over global entries and configured provider catalogs.
 - Provider IDs are normalized to lowercase. Model IDs follow the provider's normalization rules. Use the spelling advertised by the plugin.
 - Configured primary models also accept `provider/alias`. The alias resolves within that provider before inference, while an exact model ID configured for that provider keeps its literal identity. An optional auth-profile suffix such as `@work` stays separate from the model identity.
@@ -422,9 +426,9 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 
 <AccordionGroup>
   <Accordion title="Scanning (OpenRouter free models)">
-    `openclaw models scan` inspects OpenRouter's public free-model catalog and can probe candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live probing and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they fail closed to metadata-only output.
+    `openclaw models scan` inspects OpenRouter's public free-model catalog and can check candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live checking and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they fail closed to metadata-only output.
 
-    Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, probed results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
+    Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, checked results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
 
   </Accordion>
 </AccordionGroup>
@@ -439,16 +443,30 @@ JSON `GET` at startup and then checks at most every six hours. The request sends
 no prompts, credentials, model usage, or configuration payload beyond the
 normal HTTP user agent and conditional cache headers.
 
-The downloaded bundle is stored in the shared SQLite state database and becomes
-visible after the next Gateway restart. Remote data can update or add models
-only for providers declared by installed plugin manifests. It cannot supply API
-base URLs or request headers, and a catalog older than the installed release's
-build stamp is ignored.
+The downloaded bundle is stored in the shared SQLite state database. The Gateway
+prepares a new catalog generation in the background, then publishes its model
+rows and prices together without restarting. Picker reads keep using the current
+generation during preparation; a failed or superseded preparation leaves it in
+place. Admitted runs retain their captured generation, and each usage-estimation
+operation uses one pricing context.
 
-The Gateway reports when a checked catalog needs a restart to become active,
-including a bundle downloaded by another process. Repeated checks of the same
-source and generation do not repeat the notice. Checking for an update does not
-activate the downloaded rows or prices.
+Catalog reads and refresh writes run through the shared-state worker. If a
+background refresh fails, the Gateway records the error and keeps serving its
+accepted catalog. The next scheduled check runs six hours later; run
+`openclaw models refresh` to retry the download immediately.
+
+Remote data can update or add models only for providers declared by installed
+plugin manifests. It cannot supply API base URLs or request headers, and a
+catalog older than the installed release's build stamp is ignored. Hosted
+metadata does not override a provider's account-discovery or model-admission
+rules.
+
+The background check also notices bundles downloaded by another process.
+An explicit Gateway model-list refresh triggers adoption after returning the
+current rows; it does not wait for adoption or another agent's discovery.
+A corrupt saved bundle leaves the accepted generation serving.
+`openclaw models refresh` reports the download result, not whether a running
+Gateway has finished publishing it.
 
 The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
@@ -464,9 +482,8 @@ or retired are skipped. If models.dev itself is unreachable or malformed,
 publication fails and the last published artifact stays in place. A single
 missing or renamed upstream provider only skips that provider's hydration; its
 manifest rows still publish, so one provider cannot block catalog updates for
-the rest. This is a
-publication-time contract: it adds no Gateway fetches or hot reload, and updated
-metadata still becomes visible after a Gateway restart.
+the rest. Hydration runs at publication time, not in the Gateway. Downloaded
+metadata follows the shared catalog generation publication described above.
 Its scheduled workflow checks OpenClaw's default-branch plugin manifests and
 public pricing sources every four hours. Every catalog content change is
 preserved as a public commit. Provider-owned policies select complete price

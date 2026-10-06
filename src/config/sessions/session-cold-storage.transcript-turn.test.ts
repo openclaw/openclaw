@@ -77,12 +77,13 @@ describe("selected transcript turn cold restoration", () => {
     ]);
   });
 
-  it.each(["before restoration", "at worker commit"])(
+  it.each(["before restoration", "at worker admission"])(
     "keeps the archive cold when the captured revision changes %s",
     async (timing) => {
       const fixture = await createFixture();
+      let admitted = false;
       let commitRequested = false;
-      if (timing === "at worker commit") {
+      if (timing === "at worker admission") {
         const original = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
         vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
           (params) => {
@@ -94,6 +95,7 @@ describe("selected transcript turn cold restoration", () => {
               withWriteAdmission: (run, diagnostics) =>
                 params.withWriteAdmission((refusal) => {
                   if (!refusal) {
+                    admitted = true;
                     fixture.replaceRevision();
                   }
                   return run(refusal);
@@ -114,7 +116,8 @@ describe("selected transcript turn cold restoration", () => {
         rejectedReason: "session-rebound",
         appendedCount: 0,
       });
-      expect(commitRequested).toBe(timing === "at worker commit");
+      expect(admitted).toBe(timing === "at worker admission");
+      expect(commitRequested).toBe(false);
       expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(
         fixture.descriptor,
       );

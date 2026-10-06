@@ -235,19 +235,13 @@ async function postFirecrawlJson<T>(
             ? response.statusText.trim()
             : "request failed";
 
-        const readJsonPayload = async (): Promise<Record<string, unknown> | null> => {
-          const candidate = response as Response & { clone?: () => Response };
-          const jsonResponse = typeof candidate.clone === "function" ? candidate.clone() : response;
-          try {
-            const body = await readResponseText(jsonResponse, { maxBytes: 64_000 });
-            const payload = JSON.parse(body.text) as unknown;
-            return asOptionalRecord(payload) ?? null;
-          } catch {
-            return null;
-          }
-        };
-
-        const payload = await readJsonPayload();
+        const errorBody = await readResponseText(response, { maxBytes: 64_000 });
+        let payload: Record<string, unknown> | undefined;
+        try {
+          payload = asOptionalRecord(JSON.parse(errorBody.text));
+        } catch {
+          // Non-JSON errors keep their bounded text body.
+        }
         if (payload) {
           detail =
             typeof payload.error === "string"
@@ -255,11 +249,8 @@ async function postFirecrawlJson<T>(
               : typeof payload.message === "string"
                 ? payload.message
                 : detail;
-        } else {
-          const errorBody = await readResponseText(response, { maxBytes: 64_000 });
-          if (errorBody.text) {
-            detail = errorBody.text;
-          }
+        } else if (errorBody.text) {
+          detail = errorBody.text;
         }
         const safeDetail = wrapWebContent(
           truncateSanitizedExternalContent(detail, 1_000).text,
@@ -310,15 +301,18 @@ function resolveSearchItems(
   count: number,
 ): FirecrawlSearchItem[] {
   const nestedData = asOptionalRecord(payload.data);
-  const candidates = [
-    payload.data,
-    payload.results,
-    nestedData?.results,
-    nestedData?.data,
-    nestedData?.web,
-    asOptionalRecord(payload.web)?.results,
-  ];
-  const rawItems = candidates.find((candidate): candidate is unknown[] => Array.isArray(candidate));
+  const envelopeCandidates = [payload.data, payload.results, nestedData?.results, nestedData?.data];
+  const sourceCandidates = [nestedData?.web, nestedData?.news, nestedData?.images];
+  const legacyWebResults = asOptionalRecord(payload.web)?.results;
+  const isArray = (candidate: unknown): candidate is unknown[] => Array.isArray(candidate);
+  const sourceItems = sourceCandidates.flatMap((candidate) =>
+    isArray(candidate) ? candidate : [],
+  );
+  const rawItems =
+    envelopeCandidates.find(isArray) ??
+    (sourceItems.length > 0 ? sourceItems : undefined) ??
+    sourceCandidates.find(isArray) ??
+    (isArray(legacyWebResults) ? legacyWebResults : undefined);
   if (!rawItems) {
     return [];
   }
@@ -374,47 +368,6 @@ function resolveSearchItems(
     });
   }
   return items;
-}
-
-function buildSearchPayload(params: {
-  query: string;
-  provider: "firecrawl" | "firecrawl-free";
-  items: FirecrawlSearchItem[];
-  tookMs: number;
-  scrapeResults: boolean;
-}): Record<string, unknown> {
-  let remainingContentChars = FIRECRAWL_SEARCH_MAX_CONTENT_CHARS;
-  let truncated = false;
-  const wrapBoundedContent = (value: string): string => {
-    const bounded = truncateSanitizedExternalContent(value, remainingContentChars);
-    truncated ||= bounded.truncated;
-    remainingContentChars -= bounded.text.length;
-    return wrapWebContent(bounded.text, "web_search");
-  };
-  const results = params.items.map((entry) => ({
-    title: entry.title ? wrapBoundedContent(entry.title) : "",
-    url: entry.url,
-    description: entry.description ? wrapBoundedContent(entry.description) : "",
-    ...(entry.published ? { published: entry.published } : {}),
-    ...(entry.siteName ? { siteName: entry.siteName } : {}),
-    ...(params.scrapeResults && entry.content
-      ? { content: wrapBoundedContent(entry.content) }
-      : {}),
-  }));
-  return {
-    query: params.query,
-    provider: params.provider,
-    count: params.items.length,
-    tookMs: params.tookMs,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: params.provider,
-      wrapped: true,
-    },
-    results,
-    ...(truncated ? { truncated: true } : {}),
-  };
 }
 
 export async function runFirecrawlSearch(
@@ -519,13 +472,38 @@ export async function runFirecrawlSearch(
       return payloadValue;
     },
   );
-  const result = buildSearchPayload({
+  const items = resolveSearchItems(payload, count);
+  const tookMs = Date.now() - start;
+  let remainingContentChars = FIRECRAWL_SEARCH_MAX_CONTENT_CHARS;
+  let truncated = false;
+  const wrapBoundedContent = (value: string): string => {
+    const bounded = truncateSanitizedExternalContent(value, remainingContentChars);
+    truncated ||= bounded.truncated;
+    remainingContentChars -= bounded.text.length;
+    return wrapWebContent(bounded.text, "web_search");
+  };
+  const results = items.map((entry) => ({
+    title: entry.title ? wrapBoundedContent(entry.title) : "",
+    url: entry.url,
+    description: entry.description ? wrapBoundedContent(entry.description) : "",
+    ...(entry.published ? { published: entry.published } : {}),
+    ...(entry.siteName ? { siteName: entry.siteName } : {}),
+    ...(scrapeResults && entry.content ? { content: wrapBoundedContent(entry.content) } : {}),
+  }));
+  const result = {
     query: params.query,
     provider: providerId,
-    items: resolveSearchItems(payload, count),
-    tookMs: Date.now() - start,
-    scrapeResults,
-  });
+    count: items.length,
+    tookMs,
+    externalContent: {
+      untrusted: true,
+      source: "web_search",
+      provider: providerId,
+      wrapped: true,
+    },
+    results,
+    ...(truncated ? { truncated: true } : {}),
+  };
   writeCache(SEARCH_CACHE, cacheKey, result, cacheTtlMs);
   return result;
 }

@@ -75,10 +75,6 @@ export function getLogbookState(host: object): LogbookControllerState {
   return state;
 }
 
-function notify(state: LogbookUiState): void {
-  state.requestUpdate?.();
-}
-
 function ownsClient(
   state: LogbookControllerState,
   client: GatewayBrowserClient,
@@ -142,7 +138,7 @@ export async function loadLogbook(
     state.loadingGeneration = generation;
     state.loading = true;
     state.error = null;
-    notify(state);
+    state.requestUpdate?.();
   }
   try {
     const [status, days, timeline] = await Promise.all([
@@ -192,7 +188,7 @@ export async function loadLogbook(
       shouldNotify = true;
     }
     if (shouldNotify) {
-      notify(state);
+      state.requestUpdate?.();
     }
     drainQueuedLogbookRefresh(state);
   }
@@ -253,9 +249,8 @@ export function stopLogbookPolling(host: object): void {
 export function configureLogbookPolling(
   state: LogbookControllerState,
   client: GatewayBrowserClient | null,
-  active: boolean,
 ): void {
-  if (!active || !client) {
+  if (!client) {
     if (state.pollTimer) {
       clearInterval(state.pollTimer);
       state.pollTimer = null;
@@ -321,7 +316,7 @@ export async function loadLogbookFramePreview(
   } finally {
     if (ownsClient(state, client, clientGeneration)) {
       state.frameLoads.delete(frameId);
-      notify(state);
+      state.requestUpdate?.();
     }
   }
 }
@@ -348,7 +343,7 @@ async function runLogbookAction(
   } finally {
     if (isCurrent()) {
       state[pending] = false;
-      notify(state);
+      state.requestUpdate?.();
       settled?.(client);
     }
   }
@@ -360,7 +355,7 @@ export function setLogbookCapturePaused(
   paused: boolean,
 ): Promise<void> {
   return runLogbookAction(state, client, "actionPending", async (current, isCurrent) => {
-    notify(state);
+    state.requestUpdate?.();
     const status = await current.request<LogbookStatusPayload>("logbook.capture.set", { paused });
     if (isCurrent()) {
       state.status = status;
@@ -377,7 +372,7 @@ export function runLogbookAnalysisNow(
     client,
     "actionPending",
     async (current, isCurrent) => {
-      notify(state);
+      state.requestUpdate?.();
       const result = await current.request<{ started: boolean; reason?: string }>(
         "logbook.analyze.now",
         {},
@@ -396,7 +391,7 @@ export function loadLogbookStandup(
   refresh: boolean,
 ): Promise<void> {
   return runLogbookAction(state, client, "standupLoading", async (current, isCurrent) => {
-    notify(state);
+    state.requestUpdate?.();
     const requestedDay = state.day;
     const standup = await current.request<{ day: string; text: string; updatedMs: number }>(
       "logbook.standup",
@@ -418,7 +413,7 @@ export async function askLogbook(
   }
   return runLogbookAction(state, client, "askLoading", async (current, isCurrent) => {
     state.askAnswer = null;
-    notify(state);
+    state.requestUpdate?.();
     const requestedDay = state.day;
     const payload = await current.request<{ answer: string }>("logbook.ask", {
       day: requestedDay,

@@ -12,16 +12,11 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 
 type Params = Pick<FinishUpdateParams, "opts" | "ownedManagedUpdateEnv">;
-type Run = NonNullable<Params["opts"]["run"]>;
 
 /** Process-local publication data, never serialized or accepted as an update grant. */
-export type UpdateCommandTerminalRecord = {
-  run: Run;
-  executor: NonNullable<Run["executorFence"]>;
-  path: string;
-  identity: string;
-  record: UpdateRunRecord;
-};
+export type UpdateCommandTerminalRecord = NonNullable<
+  Awaited<ReturnType<typeof captureUpdateCommandTerminalRecord>>
+>;
 
 function matchesResult(record: UpdateRunRecord, result: UpdateRunResult): boolean {
   if (result.status !== "ok" || (result.runId && result.runId !== record.runId)) {
@@ -66,7 +61,7 @@ export async function captureUpdateCommandTerminalRecord(
   params: Params,
   result: UpdateRunResult,
   assertCurrent: () => void,
-): Promise<UpdateCommandTerminalRecord | undefined> {
+) {
   const run = params.opts.run;
   const executor = run?.executorFence;
   if (!run || !executor || result.status !== "ok") {

@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -278,21 +277,13 @@ private fun SkillWorkshopActionConfirmDialog(
         nativeString("This will quarantine \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
       }
     }
-  AppAlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text(dialogTitle) },
+  AppConfirmationDialog(
+    title = dialogTitle,
+    confirmLabel = nativeString(action.action.label),
+    onConfirm = onConfirm,
+    onDismiss = onDismiss,
     text = {
       Text(text = dialogBody)
-    },
-    confirmButton = {
-      TextButton(onClick = onConfirm) {
-        Text(nativeString(action.action.label))
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss) {
-        Text(nativeString("Cancel"))
-      }
     },
   )
 }

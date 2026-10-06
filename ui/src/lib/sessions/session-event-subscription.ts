@@ -4,6 +4,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { formatUiError } from "../format-error.ts";
+import { isAgentDatabaseInspectionPendingError } from "../gateway-availability.ts";
 import type { SessionConnectionScope } from "./session-capability.ts";
 
 type SessionEventSubscriptionOwner = {
@@ -73,7 +74,10 @@ export function createSessionEventSubscriptionOwner(params: {
                 retryable: true,
               })
             : error;
-        params.onError(scope, formatUiError(failure));
+        params.onError(
+          scope,
+          isAgentDatabaseInspectionPendingError(failure) ? null : formatUiError(failure),
+        );
         const delayMs = params.retryDelayMs(failure);
         if (delayMs === null || !isCurrent(scope, expectedGeneration)) {
           return;

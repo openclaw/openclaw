@@ -6,7 +6,6 @@ import {
   type postJsonRequest,
   type ProviderOperationRetryStage,
   type ProviderOperationTimeoutMs,
-  type TransientProviderRetryConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asOptionalRecord,
@@ -31,11 +30,7 @@ export function resolveMinimaxMediaBaseUrl(
   providerId: string,
 ): string {
   const configured = normalizeOptionalString(cfg?.models?.providers?.[providerId]?.baseUrl);
-  try {
-    return configured ? new URL(configured).origin : DEFAULT_MINIMAX_MEDIA_BASE_URL;
-  } catch {
-    return DEFAULT_MINIMAX_MEDIA_BASE_URL;
-  }
+  return URL.parse(configured ?? "")?.origin ?? DEFAULT_MINIMAX_MEDIA_BASE_URL;
 }
 
 export function assertMinimaxBaseResp(value: unknown, context: string): void {
@@ -74,12 +69,10 @@ export async function fetchMinimaxResponse(params: {
   fetchFn: typeof fetch;
   requestFailedMessage: string;
   policy: MinimaxRequestPolicy;
-  retry?: TransientProviderRetryConfig;
 }) {
   return await executeProviderOperationWithRetry({
     provider: "minimax",
     stage: params.stage,
-    retry: params.retry,
     operation: async () => {
       const timeoutMs =
         typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs;

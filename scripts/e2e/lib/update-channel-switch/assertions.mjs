@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { readJson } from "../fixtures/common.mjs";
 
 const [command, ...args] = process.argv.slice(2);
 const controlUiHtml = "<!doctype html><title>fixture</title>\n";
@@ -12,10 +13,6 @@ function usage() {
     "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
   );
   process.exit(2);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 // Runs inside the bare Docker E2E image, before package dependencies are installed.
@@ -227,14 +224,9 @@ function assertConfigChannel(channel) {
   );
 }
 
-function assertDryRun(kind, channel, selection) {
+function assertDryRun(kind, channel) {
   const preview = JSON.parse(process.env.UPDATE_JSON ?? "");
-  const reportedKind =
-    kind === "git" &&
-    selection === "stored" &&
-    process.env.OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT === "1"
-      ? "package"
-      : kind;
+  const reportedKind = kind;
   assert.equal(preview.dryRun, true);
   assert.equal(preview.installKind, "package");
   assert.equal(preview.storedChannel, "dev");
@@ -261,15 +253,12 @@ function assertInstalledVersion(root, expectedVersion) {
   }
 }
 
-function assertDirtyExit(statusRaw, frozenCompat) {
+function assertDirtyExit(statusRaw) {
   const status = Number(statusRaw);
-  const acceptsZero = frozenCompat === "1";
-  if (status === 1 || (status === 0 && acceptsZero)) {
+  if (status === 1) {
     return;
   }
-  throw new Error(
-    `unexpected dirty-worktree update exit ${statusRaw}; expected ${acceptsZero ? "0 or 1" : "1"}`,
-  );
+  throw new Error(`unexpected dirty-worktree update exit ${statusRaw}; expected 1`);
 }
 
 switch (command) {

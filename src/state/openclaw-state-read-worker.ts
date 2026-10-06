@@ -1,6 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
-import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
+import {
+  createRetainedOperation,
+  flatMapRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
+import {
+  ensureSqliteLibrarySelected,
+  getSqliteRuntimeCapabilities,
+} from "../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -28,6 +35,7 @@ import type {
   OpenClawStateReadCommand,
   OpenClawStateReadLocation,
   OpenClawStateReadOutcome,
+  OpenClawStateReadOptions,
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
@@ -53,7 +61,12 @@ type ReadRuntime = {
 };
 
 function closeReadResources(pool: ReadPool | undefined, key?: string) {
-  return process.versions.bun ? pool?.rotate() : pool?.closeResources(key);
+  if (!pool) {
+    return undefined;
+  }
+  return getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
+    ? pool.closeResources(key)
+    : pool.rotate();
 }
 
 async function closeReadPool(state: ReadRuntime): Promise<void> {
@@ -113,13 +126,28 @@ function readRuntimes() {
   });
 }
 
+/** Retire cached workers only after every independently admitted reader has joined. */
+export async function retireIdleOpenClawStateReadWorkers(
+  nativeSource: RetainedNativeWorkerSource,
+): Promise<boolean> {
+  const state = readRuntimes().get(nativeSource);
+  if (!state) {
+    return true;
+  }
+  if (state.operations.size > 0) {
+    return false;
+  }
+  await closeReadPool(state);
+  return true;
+}
+
 function readPool(state: ReadRuntime, admitted: boolean): ReadPool {
   // Accepted owners may still need a final read while generation admission is sealed.
   if ((state.sealed && !admitted) || state.closing) {
     throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
   }
   if (!state.pool) {
-    // Publish Bun's process-wide selection before any worker can load SQLite.
+    // Library selection precedes worker creation; each worker inherits its current close fact.
     ensureSqliteLibrarySelected();
     state.pool = createOwnedWorkerTaskPool(
       {
@@ -181,8 +209,10 @@ export function captureOpenClawStateReadSource() {
   const state = runtime;
   const admitted = new Set<ReadOperation>();
   return {
-    createTransport: (command: OpenClawStateReadCommand) =>
-      createReadTransport(command, state, () => admitted.size > 0),
+    createTransport: (
+      command: OpenClawStateReadCommand,
+      onChunk?: OpenClawStateReadOptions["onChunk"],
+    ) => createReadTransport(command, state, () => admitted.size > 0, onChunk),
     own(service: () => void, close: () => Promise<void>): () => void {
       if (state.sealed || state.closing) {
         throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
@@ -242,6 +272,7 @@ function createReadTransport(
   command: OpenClawStateReadCommand,
   state: ReadRuntime,
   ownsAdmission: () => boolean,
+  onChunk?: OpenClawStateReadOptions["onChunk"],
 ) {
   // Capture nested input before the read owner can yield during snapshot preparation.
   const capturedCommand = captureCommand(command);
@@ -346,6 +377,7 @@ function createReadTransport(
         context: {
           environment: { ...context.environment },
           existingSchemaPath: context.existingSchemaPath,
+          stateIntegrity: context.stateIntegrity,
         },
         databasePath: context.admission.databasePath,
         location,
@@ -359,7 +391,20 @@ function createReadTransport(
           authority.assertCurrent();
           return request;
         },
-        { signal: authority.signal, inputBytes: requestBytes(request) },
+        {
+          signal: authority.signal,
+          inputBytes: requestBytes(request),
+          diagnosticOperation: readCommand.type,
+          ...(onChunk
+            ? {
+                onRequestSync(value: unknown) {
+                  authority.assertCurrent();
+                  onChunk(value);
+                  return { input: null, timeoutMs: 300_000 };
+                },
+              }
+            : {}),
+        },
       );
       tasks.set(task, cleanup);
       void task.result.then(
@@ -377,7 +422,6 @@ function createReadTransport(
     context: OpenClawStateWorkerContext,
     authority: OpenClawStateReadAuthority,
   ): RetainedOperation<void> => {
-    const inContext = AsyncLocalStorage.snapshot();
     const run = startRun(
       context,
       context.admission.databasePath,
@@ -385,53 +429,16 @@ function createReadTransport(
       { type: "admit" },
       authority,
     );
-    let release: RetainedOperation<void> | undefined;
-    const completion = createRetainedOperation<void>(() => inContext(service));
-    function service() {
-      if (completion.operation.read().status !== "pending") {
-        return;
+    return flatMapRetainedOperation(run.operation, (read) => {
+      if ("error" in read) {
+        throw read.error;
       }
-      try {
-        if (!release) {
-          run.operation.service();
-          const read = run.operation.read();
-          if (read.status === "pending") {
-            return;
-          }
-          if (read.status === "rejected") {
-            throw read.error;
-          }
-          if ("error" in read.value) {
-            throw read.value.error;
-          }
-          authority.assertCurrent();
-          if (!run.task) {
-            throw new Error("Shared-state admission completed without its retained task");
-          }
-          release = startCloseTask(run.task);
-          void release.result.then(
-            () => completion.operation.service(),
-            () => completion.operation.service(),
-          );
-        }
-        release.service();
-        const outcome = release.read();
-        if (outcome.status === "rejected") {
-          throw outcome.error;
-        }
-        if (outcome.status === "fulfilled") {
-          completion.resolve(undefined);
-        }
-      } catch (error) {
-        completion.reject(error);
+      authority.assertCurrent();
+      if (!run.task) {
+        throw new Error("Shared-state admission completed without its retained task");
       }
-    }
-    void run.operation.result.then(
-      () => completion.operation.service(),
-      () => completion.operation.service(),
-    );
-    completion.operation.service();
-    return completion.operation;
+      return startCloseTask(run.task);
+    });
   };
   const startRead = (source: OpenClawStateReadLocation, authority: OpenClawStateReadAuthority) =>
     startRun(

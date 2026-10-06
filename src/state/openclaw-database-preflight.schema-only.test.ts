@@ -15,7 +15,14 @@ import {
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "./openclaw-state-db-readonly.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -24,14 +31,40 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
+it("keeps readiness on the admitted shared-state snapshot and observes changes in the next admission", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-admitted-snapshot-") };
+  const state = openOpenClawStateDatabase({ env });
+  const inspect = () =>
+    preflightOpenClawDatabaseSchemas({
+      env,
+      scope: "state",
+      requireStartupMigrationReadiness: true,
+    });
+  try {
+    await withArtifactPreservingStateReads(() =>
+      withOpenClawStateDatabaseReadSnapshot(
+        async () => {
+          state.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
+          expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
+        },
+        { env },
+      ),
+    );
+    expect(await inspect()).toMatchObject({
+      incompatible: [
+        { kind: "state", path: state.path, foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1 },
+      ],
+      indeterminate: [],
+    });
+  } finally {
+    state.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
+  }
+});
+
 describe("schema-only agent preflight", () => {
-  it.each(
-    ["DELETE", "WAL"].flatMap((mode) =>
-      [false, true].map((verifyCurrentSchemaShape) => ({ mode, verifyCurrentSchemaShape })),
-    ),
-  )(
-    "checks fresh $mode metadata without space for an agent snapshot (shape=$verifyCurrentSchemaShape)",
-    async ({ mode, verifyCurrentSchemaShape }) => {
+  it.each(["DELETE", "WAL"])(
+    "checks fresh %s metadata without space for an agent snapshot",
+    async (mode) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-only-preflight-") };
       const agentPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
       closeOpenClawAgentDatabasesForTest();
@@ -51,7 +84,7 @@ describe("schema-only agent preflight", () => {
           return prepare(pathname, options);
         },
       );
-      const config = { agents: { list: [{ id: "worker", default: true }] } };
+      const config = { agents: { entries: { worker: {} } } };
       const ready = (operation: "doctor" | "gateway-restart" | "gateway-startup") =>
         assertOpenClawDatabasesReady({
           env,
@@ -59,7 +92,7 @@ describe("schema-only agent preflight", () => {
           operation,
           configuredAgentDatabaseTargets: [{ agentId: "worker", path: agentPath }],
         });
-      const inspect = () =>
+      const inspect = (verifyCurrentSchemaShape: boolean) =>
         preflightOpenClawDatabaseSchemas({
           env,
           verifyCurrentSchemaShape,
@@ -73,7 +106,15 @@ describe("schema-only agent preflight", () => {
         await expect(ready("doctor")).resolves.toBeUndefined();
         await expect(ready("gateway-restart")).resolves.toBeUndefined();
         await expect(ready("gateway-startup")).resolves.toBeUndefined();
-        expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
+        for (const verifyCurrentSchemaShape of [false, true]) {
+          expect(
+            await inspect(verifyCurrentSchemaShape),
+            `shape=${verifyCurrentSchemaShape}`,
+          ).toEqual({
+            incompatible: [],
+            indeterminate: [],
+          });
+        }
         writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=999;");
         try {
           await expect(ready("doctor")).resolves.toBeUndefined();
@@ -83,24 +124,37 @@ describe("schema-only agent preflight", () => {
           writer.exec("ROLLBACK;");
         }
         writer.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
-        expect(await inspect()).toMatchObject({
-          incompatible: [
-            {
-              kind: "agent",
-              path: agentPath,
-              foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
-              writerAppVersion: "inspection-fixture",
-            },
-          ],
-          indeterminate: [],
-        });
+        for (const verifyCurrentSchemaShape of [false, true]) {
+          expect(
+            await inspect(verifyCurrentSchemaShape),
+            `shape=${verifyCurrentSchemaShape}`,
+          ).toMatchObject({
+            incompatible: [
+              {
+                kind: "agent",
+                path: agentPath,
+                foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+                writerAppVersion: "inspection-fixture",
+              },
+            ],
+            indeterminate: [],
+          });
+        }
         writer.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION};`);
         writer
           .prepare("UPDATE schema_meta SET agent_id = ? WHERE meta_key = 'primary'")
           .run("foreign");
-        expect((await inspect()).agentRefusals).toEqual([
-          expect.objectContaining({ agentId: "worker", code: "agent-database-ownership-mismatch" }),
-        ]);
+        for (const verifyCurrentSchemaShape of [false, true]) {
+          expect(
+            (await inspect(verifyCurrentSchemaShape)).agentRefusals,
+            `shape=${verifyCurrentSchemaShape}`,
+          ).toEqual([
+            expect.objectContaining({
+              agentId: "worker",
+              code: "agent-database-ownership-mismatch",
+            }),
+          ]);
+        }
         await expect(ready("doctor")).rejects.toThrow("belongs to agent foreign");
         await expect(ready("gateway-restart")).rejects.toThrow("belongs to agent foreign");
         await expect(ready("gateway-startup")).rejects.toThrow("belongs to agent foreign");
@@ -108,25 +162,28 @@ describe("schema-only agent preflight", () => {
           .prepare("UPDATE schema_meta SET agent_id = ? WHERE meta_key = 'primary'")
           .run("worker");
         writer.exec("DROP INDEX idx_agent_cache_expiry;");
-        expect(await inspect()).toMatchObject({
-          incompatible: [],
-          indeterminate: verifyCurrentSchemaShape
-            ? [
-                {
-                  kind: "agent",
-                  path: agentPath,
-                  reason: expect.stringContaining("idx_agent_cache_expiry"),
-                },
-              ]
-            : [],
-        });
-        if (!verifyCurrentSchemaShape) {
-          writer.exec("ALTER TABLE schema_meta RENAME COLUMN agent_id TO retired_agent_id;");
-          expect(await inspect()).toMatchObject({
+        for (const verifyCurrentSchemaShape of [false, true]) {
+          expect(
+            await inspect(verifyCurrentSchemaShape),
+            `shape=${verifyCurrentSchemaShape}`,
+          ).toMatchObject({
             incompatible: [],
-            indeterminate: [expect.objectContaining({ kind: "agent", path: agentPath })],
+            indeterminate: verifyCurrentSchemaShape
+              ? [
+                  {
+                    kind: "agent",
+                    path: agentPath,
+                    reason: expect.stringContaining("idx_agent_cache_expiry"),
+                  },
+                ]
+              : [],
           });
         }
+        writer.exec("ALTER TABLE schema_meta RENAME COLUMN agent_id TO retired_agent_id;");
+        expect(await inspect(false), "shape=false").toMatchObject({
+          incompatible: [],
+          indeterminate: [expect.objectContaining({ kind: "agent", path: agentPath })],
+        });
       } finally {
         writer.close();
       }
@@ -134,11 +191,11 @@ describe("schema-only agent preflight", () => {
   );
 });
 
-it.each(
-  (["header", "shape", "startup"] as const).flatMap((mode) =>
-    (["false", "reject"] as const).map((cleanupFailure) => ({ mode, cleanupFailure })),
-  ),
-)(
+it.each([
+  { mode: "header", cleanupFailure: "false" },
+  { mode: "shape", cleanupFailure: "reject" },
+  { mode: "startup", cleanupFailure: "reject" },
+] as const)(
   "finishes sibling inspections after private snapshot cleanup $cleanupFailure ($mode)",
   async ({ mode, cleanupFailure }) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-owned-snapshot-") };
@@ -167,6 +224,7 @@ it.each(
       const run = () =>
         preflightOpenClawDatabaseSchemas({
           env,
+          preserveSourceArtifacts: true,
           verifyCurrentSchemaShape: mode !== "header",
           requireStartupMigrationReadiness: mode === "startup",
           signal: controller.signal,

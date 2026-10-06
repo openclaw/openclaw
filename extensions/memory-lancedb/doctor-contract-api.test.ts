@@ -2,17 +2,27 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as lancedb from "@lancedb/lancedb";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   createMemoryLanceDbStateMigrations,
   resolveMemoryLanceDbPluginRoot,
   stateMigrations,
 } from "./doctor-contract-api.js";
 import { installTmpDirHarness } from "./test-helpers.js";
+
+type AuthoredAgents = NonNullable<OpenClawConfig["agents"]>;
+type AuthoredEntry = NonNullable<AuthoredAgents["entries"]>[string];
+type RawLegacyDoctorConfig = Omit<OpenClawConfig, "agents"> & {
+  agents?: Omit<AuthoredAgents, "entries"> & {
+    entries?: Record<string, AuthoredEntry & { default?: boolean }>;
+    list?: unknown[];
+  };
+};
 
 const unusedDoctorContext = {
   openPluginStateKeyedStore() {
@@ -28,7 +38,7 @@ describe("memory-lancedb doctor migration", () => {
   type MigrationParams = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
 
   function migrationParams(
-    agents: MigrationParams["config"]["agents"] = { list: [{ id: "main", default: true }] },
+    agents: RawLegacyDoctorConfig["agents"] = { list: [{ id: "main", default: true }] },
     dbPath = getDbPath(),
     home = getTmpDir(),
   ): MigrationParams {
@@ -59,6 +69,26 @@ describe("memory-lancedb doctor migration", () => {
       connection.close();
     }
   }
+
+  test.each(["tableNames", "openTable"] as const)(
+    "closes the connection when %s fails before migration starts",
+    async (operation) => {
+      await createLegacyTable();
+      const connection = await lancedb.connect(getDbPath());
+      const failure = new Error(`${operation} failed`);
+      const failedOperation = vi.spyOn(connection, operation).mockRejectedValueOnce(failure);
+      const connect = vi.spyOn(lancedb, "connect").mockResolvedValueOnce(connection);
+      try {
+        const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
+        await expect(migration.migrateLegacyState(migrationParams())).rejects.toBe(failure);
+        expect(connection.isOpen()).toBe(false);
+      } finally {
+        connect.mockRestore();
+        failedOperation.mockRestore();
+        connection.close();
+      }
+    },
+  );
 
   test("assigns legacy shared rows to the configured default agent once", async () => {
     await createLegacyTable();

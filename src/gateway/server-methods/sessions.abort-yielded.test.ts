@@ -19,8 +19,10 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { clearSessionQueues, enqueueFollowupRun } from "../../auto-reply/reply/queue.js";
+import { enqueueFollowupRun } from "../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
+import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
+import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionEntry,
@@ -109,7 +111,7 @@ async function seedYieldedParent() {
     endedAt: startedAt + 50,
     abortedLastRun: false,
   });
-  expect(getSubagentRunByChildSessionKey(childKey)?.requesterSettleWake).toMatchObject({
+  expect((await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake).toMatchObject({
     requesterYieldBatch: true,
   });
 }
@@ -245,7 +247,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
         lastRunId: parentRunId,
       });
       await fixture.settle();
-      expect(getSubagentRunByChildSessionKey(childKey)?.killReconciliation).toMatchObject({
+      expect((await getSubagentRunByChildSessionKey(childKey))?.killReconciliation).toMatchObject({
         suppressTaskDelivery: true,
       });
       expect(
@@ -328,6 +330,9 @@ it("does not cancel a yielded parent when Stop only clears a queued follow-up", 
     ]);
     expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(before);
   } finally {
-    clearSessionQueues([parentKey, parentId]);
+    for (const key of [parentKey, parentId]) {
+      clearFollowupQueue(key);
+      clearFollowupDrainCallback(key);
+    }
   }
 });

@@ -1,12 +1,11 @@
 /** Session MCP runtime manager: acquisition and requester-scoped install orchestration. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createSessionMcpRuntimeManagerInstall } from "./agent-bundle-mcp-manager-install.js";
 import {
   createSessionMcpRuntimeManagerLifecycle,
-  createSessionMcpRuntimeManagerStore,
   type SessionMcpRuntimeManagerOpts,
   type SessionMcpConfigPublication,
 } from "./agent-bundle-mcp-manager-lifecycle.js";
@@ -44,8 +43,8 @@ const createSessionMcpRuntimeLazy: CreateSessionMcpRuntime = async (params) => {
 };
 
 export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpts) {
-  const store = createSessionMcpRuntimeManagerStore(opts, createSessionMcpRuntimeLazy);
-  const lifecycle = createSessionMcpRuntimeManagerLifecycle(store);
+  const lifecycle = createSessionMcpRuntimeManagerLifecycle(opts, createSessionMcpRuntimeLazy);
+  const { store } = lifecycle;
   const install = createSessionMcpRuntimeManagerInstall(lifecycle);
   const leaseRuntime = (
     runtime: SessionMcpRuntime,
@@ -304,9 +303,6 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
     }),
     rememberAdvertisedScopedCatalog: lifecycle.rememberAdvertisedScopedCatalog,
     getAdvertisedScopedCatalog: lifecycle.getAdvertisedScopedCatalog,
-    bindSessionKey(sessionKey, sessionId) {
-      store.sessionIdBySessionKey.set(sessionKey, sessionId);
-    },
     resolveSessionId(sessionKey) {
       return store.sessionIdBySessionKey.get(sessionKey);
     },
@@ -418,9 +414,7 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
     listRuntimeKeys() {
       return Array.from(store.runtimesBySessionId.keys()).toSorted((a, b) => a.localeCompare(b));
     },
-    totalActiveLeasesForSession(sessionId) {
-      return lifecycle.totalActiveLeasesForSessionId(sessionId);
-    },
+    totalActiveLeasesForSession: lifecycle.totalActiveLeasesForSessionId,
   };
   // Test-only bookkeeping snapshot for drain assertions.
   Object.assign(manager, {

@@ -18,7 +18,6 @@ const DAY_MS = 86_400_000;
 
 type UsageCostWindowSummary = {
   days: number;
-  startDate: string;
   endDate: string;
   totals: UsageTotals;
 };
@@ -518,10 +517,6 @@ function parseIsoDayIndex(dateStr: string): number | null {
   return date ? date.getTime() / DAY_MS : null;
 }
 
-function formatIsoDayIndex(dayIndex: number): string {
-  return new Date(dayIndex * DAY_MS).toISOString().slice(0, 10);
-}
-
 function formatDayLabel(dateStr: string): string {
   const date = parseYmdDate(dateStr);
   if (!date) {
@@ -538,38 +533,10 @@ function formatFullDate(dateStr: string): string {
   return date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
 }
 
-function buildUsageCostWindowSummary(
-  daily: Array<UsageTotals & { date: string }>,
-  startDate: string,
-  endDate: string,
-): UsageCostWindowSummary | null {
-  const startDay = parseIsoDayIndex(startDate);
-  const endDay = parseIsoDayIndex(endDate);
-  if (startDay === null || endDay === null || startDay > endDay) {
-    return null;
-  }
-
-  const totals = createEmptyCostUsageTotals();
-  for (const entry of daily) {
-    const day = parseIsoDayIndex(entry.date);
-    if (day !== null && day >= startDay && day <= endDay) {
-      addCostUsageTotals(totals, entry);
-    }
-  }
-
-  return {
-    days: endDay - startDay + 1,
-    startDate,
-    endDate,
-    totals,
-  };
-}
-
 function buildUsageCostWindows(
   daily: Array<UsageTotals & { date: string }>,
   rangeStartDate: string,
   rangeEndDate: string,
-  periods: number[] = [1, 7, 30, 90],
 ): UsageCostWindowSummary[] {
   const rangeStartDay = parseIsoDayIndex(rangeStartDate);
   const rangeEndDay = parseIsoDayIndex(rangeEndDate);
@@ -578,14 +545,17 @@ function buildUsageCostWindows(
   }
 
   const rangeDays = rangeEndDay - rangeStartDay + 1;
-  return Array.from(new Set(periods.map((days) => Math.max(1, Math.trunc(days)))))
-    .filter((days) => days < rangeDays)
-    .toSorted((left, right) => left - right)
-    .map((days) => {
-      const startDate = formatIsoDayIndex(rangeEndDay - days + 1);
-      return buildUsageCostWindowSummary(daily, startDate, rangeEndDate);
-    })
-    .filter((summary): summary is UsageCostWindowSummary => summary !== null);
+  return [rangeDays, ...[1, 7, 30, 90].filter((days) => days < rangeDays)].map((days) => {
+    const startDay = rangeEndDay - days + 1;
+    const totals = createEmptyCostUsageTotals();
+    for (const entry of daily) {
+      const day = parseIsoDayIndex(entry.date);
+      if (day !== null && day >= startDay && day <= rangeEndDay) {
+        addCostUsageTotals(totals, entry);
+      }
+    }
+    return { days, endDate: rangeEndDate, totals };
+  });
 }
 
 const buildAggregatesFromSessions = (
@@ -658,7 +628,6 @@ const buildUsageInsightStats = (
 export type { UsageInsightStats };
 export {
   buildAggregatesFromSessions,
-  buildUsageCostWindowSummary,
   buildUsageCostWindows,
   buildPeakErrorHours,
   buildUsageInsightStats,

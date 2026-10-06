@@ -1,10 +1,7 @@
 import crypto from "node:crypto";
 import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
-  type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import {
   resolveAgentConfig,
@@ -19,9 +16,10 @@ import {
   type HookContext,
 } from "../agents/agent-tools.before-tool-call.js";
 import {
-  createOpenClawCodingTools,
+  createOpenClawCodingToolsInternalAsync,
   resolveToolLoopDetectionConfig,
 } from "../agents/agent-tools.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
 import { createHeadlessDeadlineScope } from "../agents/code-mode-headless.js";
 import type {
   CodeModeNamespaceDescriptor,
@@ -69,10 +67,7 @@ import { logWarn } from "../logger.js";
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import {
-  bindGatewayContextResolver,
-  withPluginRuntimeRegistryScope,
-} from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -80,6 +75,7 @@ import {
   resolveCronAgentConfig,
 } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import { prepareCronRunAdmission } from "./run-admission.js";
 import { resolveCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
 import {
   DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS,
@@ -88,6 +84,7 @@ import {
   MAX_CRON_SCRIPT_TOOL_BUDGET,
 } from "./script-payload.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { resolveCronAuthenticatedChannelRequester } from "./tools-allow-provenance.js";
 import { acquireCronScriptMcpTools, type CronScriptMcpTools } from "./trigger-script-mcp.js";
 import {
   parseScriptPayloadResult,
@@ -122,7 +119,11 @@ const assertTriggerCodesCoverHeadless: AssertTriggerCodesCoverHeadless = true;
 void assertTriggerCodesCoverHeadless;
 
 type PreparedTriggerRuntime = {
-  createTools: (admitted: AdmittedRunContext, signal: AbortSignal) => AnyAgentTool[];
+  createTools: (
+    admitted: AdmittedRunContext,
+    signal: AbortSignal,
+    messageActionTurnCapability: string | undefined,
+  ) => Promise<AnyAgentTool[]>;
   /** Starts this evaluation's own MCP runtime for servers its toolsAllow names by prefix. */
   acquireMcpTools?: (
     admitted: AdmittedRunContext,
@@ -178,7 +179,8 @@ async function prepareTriggerRuntime(
   params: Parameters<PrepareTriggerRuntime>[0],
   loadPluginRegistry: LoadTriggerPluginRegistry = loadAgentRuntimePluginRegistryHandle,
 ): Promise<PreparedTriggerRuntime> {
-  params.signal?.throwIfAborted();
+  const { signal: preparationSignal } = params;
+  preparationSignal?.throwIfAborted();
   const agentId = resolveTriggerAgentId(params.runtimeConfig, params.agentId);
   const selectedAgentConfig = resolveAgentConfig(params.runtimeConfig, agentId);
   const agentConfigOverride = params.agentId?.trim() ? selectedAgentConfig : undefined;
@@ -200,8 +202,9 @@ async function prepareTriggerRuntime(
     ensureBootstrapFiles: !agentDefaults.skipBootstrap,
     skipOptionalBootstrapFiles: agentDefaults.skipOptionalBootstrapFiles,
     provisioning: workspaceProvisioning,
+    guard: { assertHost: () => preparationSignal?.throwIfAborted() },
   });
-  params.signal?.throwIfAborted();
+  preparationSignal?.throwIfAborted();
   const workspaceDir = workspace.dir;
   const pluginRegistry = loadPluginRegistry({
     config,
@@ -222,13 +225,16 @@ async function prepareTriggerRuntime(
       sessionKey,
       workspaceDir,
     });
-    params.signal?.throwIfAborted();
+    preparationSignal?.throwIfAborted();
     const effectiveWorkspace =
       sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : workspaceDir;
     const toolPlan = resolveEmbeddedAttemptToolConstructionPlan({
       toolsEnabled: true,
       toolsAllow: params.toolsAllow,
     });
+    const authProfileStoreSource =
+      toolPlan.constructTools && (await hasAnyAuthProfileStoreSourceAsync(agentDir));
+    preparationSignal?.throwIfAborted();
     const scheduledToolPolicy = resolveScheduledToolPolicyContext({
       toolsAllow: params.toolsAllow,
       scheduledToolPolicy: params.scheduledToolPolicy,
@@ -247,7 +253,6 @@ async function prepareTriggerRuntime(
           sessionKey,
           runId: admitted.operationalRunInstance.runId,
           agentId,
-          agentDir,
           workspaceDir: effectiveWorkspace,
           cwd: effectiveWorkspace,
           spawnWorkspaceDir: workspaceDir,
@@ -261,12 +266,17 @@ async function prepareTriggerRuntime(
       return profile;
     };
     // LSP runtimes are session-scoped and intentionally outside trigger v1.
-    const createTools: PreparedTriggerRuntime["createTools"] = (admitted, signal) => {
+    const createTools: PreparedTriggerRuntime["createTools"] = async (
+      admitted,
+      signal,
+      messageActionTurnCapability,
+    ) => {
       const allTools = toolPlan.constructTools
-        ? createOpenClawCodingTools({
+        ? await createOpenClawCodingToolsInternalAsync({
             agentId,
             runId: admitted.operationalRunInstance.runId,
             operationalRunInstance: admitted.operationalRunInstance,
+            messageActionTurnCapability,
             abortSignal: signal,
             exec: { config },
             sandbox,
@@ -274,6 +284,7 @@ async function prepareTriggerRuntime(
             trigger: "cron",
             jobId: params.jobId,
             agentDir,
+            authProfileStoreSource,
             cwd: effectiveWorkspace,
             workspaceDir: effectiveWorkspace,
             spawnWorkspaceDir: workspaceDir,
@@ -437,7 +448,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     );
     const catalogRef = createToolSearchCatalogRef();
     const runId = `cron-trigger:${params.job.id}:${crypto.randomUUID()}`;
-    let admission: PreparedAgentRunAdmission | undefined;
+    let admission: ReturnType<typeof prepareCronRunAdmission> | undefined;
     let mcp: CronScriptMcpTools | undefined;
     try {
       const request = {
@@ -474,25 +485,21 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
             throw new PluginInstanceUnavailableError();
           }
           if (!admitted) {
-            admission = prepareAgentRunAdmission({
+            admission = prepareCronRunAdmission({
               cfg: runtime.context.config,
-              operationalRunInstance: createOperationalRunInstanceRef(runId),
-              facts: {
-                runId,
-                agentId: runtime.context.agentId,
-                ingress: params.executionIdentity?.ingress ?? {
-                  kind: "schedule",
-                  boundary: "cron.script",
-                  state: "present",
-                },
-                ...(params.executionIdentity?.invoker
-                  ? { invoker: params.executionIdentity.invoker }
-                  : {}),
-              },
+              runId,
+              agentId: runtime.context.agentId,
+              sessionKey: runtime.context.sessionKey,
+              jobId: params.job.id,
+              deliveryAttemptFence: params.deliveryAttemptFence,
+              toolsAllow: request.toolsAllow,
+              scheduledToolPolicy: request.scheduledToolPolicy,
+              channelRequester: resolveCronAuthenticatedChannelRequester(params.job),
+              executionIdentity: params.executionIdentity,
+              ingressBoundary: "cron.script",
+              resolveGatewayContext: deps.resolveGatewayContext,
             });
-            admitted = await admission.admit("gateway");
-            bindGatewayContextResolver(admitted, deps.resolveGatewayContext);
-            await params.executionIdentity?.onPostAdmission?.(admitted);
+            admitted = await admission.preparedRunAdmission.admit("gateway");
             assertAdmitted = resolveAdmittedRunActiveAssertion(admitted, evaluationScope.signal);
             caller = createAdmittedGatewayToolCallerIdentity({
               admittedRunContext: admitted,
@@ -508,9 +515,14 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           }
           const selected = runtime;
           const authority = admitted;
-          tools = withPluginRuntimeRegistryScope(selected.pluginRegistry, () =>
-            selected.createTools(authority, evaluationScope.signal),
+          tools = await withPluginRuntimeRegistryScope(selected.pluginRegistry, () =>
+            selected.createTools(
+              authority,
+              evaluationScope.signal,
+              admission?.messageActionTurnCapability,
+            ),
           );
+          assertActive();
           if (!runtime.isCurrent()) {
             throw new PluginInstanceUnavailableError();
           }

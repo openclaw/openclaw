@@ -74,7 +74,7 @@ function addLogTapeMetaFields(
     const value = meta[sourceKey];
     if (typeof value === "string") {
       if (sourceKey === "name") {
-        const record = parseJsonRecord(value);
+        const record = safeParseJsonRecord(value.trim());
         if (record) {
           addLogObjectFields(sanitized, record, redaction);
           continue;
@@ -96,7 +96,8 @@ function addLogTapeArgFields(
 
   // LogTape stores message args as numeric keys; only structured safe fields survive.
   for (const [, value] of args) {
-    const record = typeof value === "string" ? parseJsonRecord(value) : asOptionalRecord(value);
+    const record =
+      typeof value === "string" ? safeParseJsonRecord(value.trim()) : asOptionalRecord(value);
     if (record) {
       addLogObjectFields(sanitized, record, redaction);
       continue;
@@ -132,48 +133,31 @@ function numericLogMetadata(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-    return undefined;
-  }
-  return safeParseJsonRecord(trimmed);
-}
-
 function addLogObjectFields(
   sanitized: Record<string, unknown>,
   source: Record<string, unknown>,
   redaction: SupportRedactionContext,
 ): void {
   for (const [key, value] of Object.entries(source)) {
-    addSafeLogField(sanitized, key, value, redaction);
-  }
-}
-
-function addSafeLogField(
-  sanitized: Record<string, unknown>,
-  key: string,
-  value: unknown,
-  redaction: SupportRedactionContext,
-): void {
-  if (OMITTED_LOG_FIELD_RE.test(key)) {
-    return;
-  }
-  if (isBlockedObjectKey(key)) {
-    return;
-  }
-  if (!isSafeLogField(key, value)) {
-    return;
-  }
-  if (typeof value === "string") {
-    const message = sanitizeLogString(value, redaction);
-    if (key === "msg" && (!message || UNSAFE_LOG_MESSAGE_RE.test(message))) {
-      addOmittedLogMessageMetadata(sanitized, value);
-      return;
+    if (OMITTED_LOG_FIELD_RE.test(key) || isBlockedObjectKey(key)) {
+      continue;
     }
-    sanitized[key] = message;
-  } else if (typeof value === "number" || typeof value === "boolean" || value === null) {
-    sanitized[key] = value;
+    if (typeof value === "string") {
+      if (!LOG_STRING_FIELD_RE.test(key)) {
+        continue;
+      }
+      const message = sanitizeLogString(value, redaction);
+      if (key === "msg" && (!message || UNSAFE_LOG_MESSAGE_RE.test(message))) {
+        addOmittedLogMessageMetadata(sanitized, value);
+        continue;
+      }
+      sanitized[key] = message;
+    } else if (
+      (LOG_STRING_FIELD_RE.test(key) || LOG_SCALAR_FIELD_RE.test(key)) &&
+      (typeof value === "number" || typeof value === "boolean" || value === null)
+    ) {
+      sanitized[key] = value;
+    }
   }
 }
 
@@ -182,11 +166,4 @@ function sanitizeLogString(value: string, redaction: SupportRedactionContext): s
     maxLength: MAX_LOG_STRING_LENGTH,
     truncationSuffix: "",
   });
-}
-
-function isSafeLogField(key: string, value: unknown): boolean {
-  if (typeof value === "string") {
-    return LOG_STRING_FIELD_RE.test(key);
-  }
-  return LOG_STRING_FIELD_RE.test(key) || LOG_SCALAR_FIELD_RE.test(key);
 }

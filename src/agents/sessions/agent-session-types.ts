@@ -1,18 +1,12 @@
-import type { ImageContent } from "../../llm/types.js";
-import type {
-  Agent,
-  AgentEvent,
-  AgentMessage,
-  AgentTool,
-  ThinkingLevel,
-} from "../runtime/index.js";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ImageContent, Model } from "../../llm/types.js";
+import type { Agent, AgentEvent, AgentMessage, ThinkingLevel } from "../runtime/index.js";
 import type {
   ExtensionCommandContextActions,
   ExtensionErrorListener,
   ExtensionRunner,
   ExtensionUIContext,
   InputSource,
-  SessionStartEvent,
   ShutdownHandler,
   ToolDefinition,
 } from "./extensions/index.js";
@@ -63,31 +57,30 @@ export type AgentSessionWriteSettlementRunner = <T>(run: () => Promise<T> | T) =
 
 export interface AgentSessionConfig {
   agent: Agent;
+  /** Exact system prompt prepared by the runtime owner. */
+  systemPrompt: string;
   sessionManager: SessionManager;
   settingsManager: SettingsManager;
   cwd: string;
-  /** Resource loader for skills, prompts, themes, context files, and system prompt. */
+  /** Resource loader for extensions, skills, prompts, and themes. */
   resourceLoader: ResourceLoader;
   /** SDK custom tools registered outside extensions. */
   customTools?: ToolDefinition[];
   /** Model registry for API key resolution and model discovery. */
   modelRegistry: ModelRegistry;
-  /** Initial active built-in tool names. Defaults to read, bash, edit, and write. */
-  initialActiveToolNames?: string[];
-  /** Optional tool allowlist. */
-  allowedToolNames?: string[];
-  /** Exclude built-in shell and filesystem tools from the registry. */
-  disableBuiltInTools?: boolean;
-  /** Override base tools for custom runtimes. */
-  baseToolsOverride?: Record<string, AgentTool>;
+  /** Runtime-owned tool allowlist, also used for initial activation. */
+  allowedToolNames: string[];
   /** Mutable reference used by Agent to access the current extension runner. */
   extensionRunnerRef?: { current?: ExtensionRunner };
-  /** Session start metadata emitted when extensions bind to this runtime. */
-  sessionStartEvent?: SessionStartEvent;
   /** Settlement boundary for session writes and write-capable hooks. */
   withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
   /** Owner of reactive context-overflow recovery. Defaults to the session. */
   contextOverflowRecoveryOwner?: "session" | "caller";
+  /** Resolve the admitted compaction policy from the active model, including provider defaults. */
+  resolveCompactionThinkingLevel?: (
+    model: Model & { compactionThinkingDefault?: ThinkLevel },
+    inheritedLevel: ThinkingLevel,
+  ) => ThinkingLevel;
   /** Whether disposing this object ends the durable provider session. Defaults to true. */
   cleanupProviderSessionResourcesOnDispose?: boolean;
 }

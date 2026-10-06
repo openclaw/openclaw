@@ -430,20 +430,6 @@ export class ProfilePage extends OpenClawLightDomElement {
     </div>`;
   }
 
-  private renderModelAccounts() {
-    return html`<openclaw-model-accounts
-      .identityId=${this.selfUser?.id ?? null}
-      .profileId=${this.ownProfile?.id ?? null}
-      .personLabel=${
-        this.ownProfile
-          ? this.ownProfile.displayName?.trim() ||
-            this.ownProfile.emails[0] ||
-            t("profilePage.modelAccounts.currentPerson")
-          : null
-      }
-    ></openclaw-model-accounts>`;
-  }
-
   private refreshManually() {
     if (this.connected && !this.identityBusy && !this.identityLoading) {
       if (this.client) {
@@ -489,7 +475,17 @@ export class ProfilePage extends OpenClawLightDomElement {
       ${
         connected
           ? html`
-              ${this.renderModelAccounts()}
+              <openclaw-model-accounts
+                .identityId=${this.selfUser?.id ?? null}
+                .profileId=${this.ownProfile?.id ?? null}
+                .personLabel=${
+                  this.ownProfile
+                    ? this.ownProfile.displayName?.trim() ||
+                      this.ownProfile.emails[0] ||
+                      t("profilePage.modelAccounts.currentPerson")
+                    : null
+                }
+              ></openclaw-model-accounts>
               <openclaw-github-connections></openclaw-github-connections>
               ${renderSettingsGroup(
                 renderSettingsNavRow({

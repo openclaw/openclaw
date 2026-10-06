@@ -60,7 +60,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ Bash",
+      text: "Bash",
     });
   });
 
@@ -104,7 +104,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       arguments: { command: "cat /private/operator-file" },
     });
 
-    expect(onToolResult).toHaveBeenCalledWith({ text: "🧩 Server.exec" });
+    expect(onToolResult).toHaveBeenCalledWith({ text: "Server.exec" });
     expect(JSON.stringify(onToolResult.mock.calls)).not.toContain("private/operator-file");
   });
 
@@ -130,10 +130,10 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
 
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult).toHaveBeenNthCalledWith(1, {
-      text: "📖 Read: `from README.md`",
+      text: "Read: `from README.md`",
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "📖 Read\n```txt\nfile contents\n```",
+      text: "Read\n```txt\nfile contents\n```",
     });
   });
 

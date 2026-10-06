@@ -8,9 +8,13 @@ import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteWorkerRuntime from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ensureMemorySessionTombstones } from "../memory-session-tombstones.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
-import { memoryPublicationBatches } from "./manager-publication-transfer.js";
+import {
+  memoryEmbeddingCacheBatches,
+  memoryPublicationBatches,
+} from "./manager-publication-transfer.js";
 import { openExistingSqliteWorkerBackend } from "./manager-publication.worker.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import type {
@@ -355,6 +359,103 @@ describe("bounded memory publication transfer", () => {
         )
         .all(),
     ).toEqual([{ path: input.entry.path }]);
+  });
+
+  it("roundtrips an over-message cache vector while enforcing revision, tombstone, and capacity fences", async () => {
+    const owner = createOwner();
+    ensureMemoryIndexSchema({ db: owner.db, cacheEnabled: true, ftsEnabled: true });
+    ensureMemorySessionTombstones(owner.db);
+    const header = {
+      agentId: "main",
+      provider: { id: "transfer-provider", model: "transfer-model" },
+      providerKey: "transfer-key",
+      maxEntries: 2,
+    };
+    const insert = owner.db.prepare(`INSERT INTO memory_embedding_cache
+      (provider, model, provider_key, hash, embedding, dims, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, 1)`);
+    for (const hash of ["old-a", "old-b"]) {
+      insert.run(
+        header.provider.id,
+        header.provider.model,
+        header.providerKey,
+        hash,
+        encodeMemoryEmbedding([1]),
+      );
+    }
+    const readRows = () =>
+      owner.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
+    const before = readRows();
+    const staleRevision = readMemoryDatabaseRevision(owner.db);
+    owner.db.exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1");
+    const outcomes: Array<boolean | undefined> = [];
+    const assertCurrent = () => undefined;
+    outcomes.push(
+      await owner.mutateEmbeddingCache(
+        {
+          kind: "clear",
+          identities: [
+            {
+              provider: header.provider.id,
+              model: header.provider.model,
+              providerKey: header.providerKey,
+            },
+          ],
+        },
+        assertCurrent,
+        () => staleRevision,
+        () => undefined,
+      ),
+    );
+    expect(outcomes).toEqual([false]);
+    expect(readRows()).toEqual(before);
+
+    owner.db
+      .prepare(`INSERT INTO memory_session_tombstones
+      (session_id, agent_id, reason, created_at) VALUES ('forgotten', 'main', 'forgotten', 1)`)
+      .run();
+    const vector = Array.from({ length: 4 * 1024 * 1024 + 1 }, () => 0.125);
+    vector.splice(0, 4, -0, Number.MIN_VALUE, Number.MAX_VALUE, 1 + Number.EPSILON);
+    const entries = [
+      { hash: "large", embedding: vector },
+      { hash: "survivor", embedding: [0.25, -0] },
+      { hash: "forgotten", embedding: [9], sessionId: "forgotten" },
+    ];
+    expect(serialize(entries).byteLength).toBeGreaterThan(32 * 1024 * 1024);
+    let batches = 0;
+    for (const batch of memoryEmbeddingCacheBatches(entries)) {
+      batches++;
+      expect(serialize(batch).byteLength).toBeLessThanOrEqual(512 * 1024);
+    }
+    expect(batches).toBeGreaterThan(1);
+    outcomes.push(
+      await owner.mutateEmbeddingCache(
+        { kind: "upsert", header, entries },
+        assertCurrent,
+        () => readMemoryDatabaseRevision(owner.db),
+        () => undefined,
+      ),
+    );
+    expect(outcomes).toEqual([false, true]);
+    const rows = readRows();
+    expect(rows.map((row) => row.hash)).toEqual(["large", "survivor"]);
+    expect(rows.map((row) => [row.provider, row.model, row.provider_key, row.dims])).toEqual([
+      [header.provider.id, header.provider.model, header.providerKey, vector.length],
+      [header.provider.id, header.provider.model, header.providerKey, 2],
+    ]);
+    const bytes = rows[0]?.embedding;
+    if (!(bytes instanceof Uint8Array)) {
+      throw new Error("Expected the native cache BLOB");
+    }
+    expect(Buffer.from(bytes).equals(encodeMemoryEmbedding(vector))).toBe(true);
+    expect(
+      Object.is(
+        new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getFloat64(0, true),
+        -0,
+      ),
+    ).toBe(true);
+    expect(rows[1]?.embedding).toEqual(encodeMemoryEmbedding([0.25, -0]));
+    expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
   });
 
   it("bounds each serialized batch and preserves every row when provider vectors share an array", () => {

@@ -48,7 +48,6 @@ export function createDiscordProviderInteractionSurface(params: {
   nativeEnabled: boolean;
   voiceEnabled: boolean;
   groupPolicy: "open" | "disabled" | "allowlist";
-  useAccessGroups: boolean;
   sessionPrefix: string;
   ephemeralDefault: boolean;
   threadBindings: ThreadBindingManager;
@@ -60,11 +59,7 @@ export function createDiscordProviderInteractionSurface(params: {
   channelRuntime?: PluginRuntime["channel"];
   abortSignal?: AbortSignal;
   createNativeCommand?: typeof createDiscordNativeCommand;
-}): {
-  commands: DiscordCommand[];
-  components: BaseMessageInteractiveComponent[];
-  modals: Modal[];
-} {
+}) {
   const createNativeCommand = params.createNativeCommand ?? createDiscordNativeCommand;
   const commandContext: DiscordCommandArgContext = {
     readPolicy: params.readPolicy,
@@ -88,7 +83,6 @@ export function createDiscordProviderInteractionSurface(params: {
         discordConfig: params.discordConfig,
         accountId: params.accountId,
         groupPolicy: params.groupPolicy,
-        useAccessGroups: params.useAccessGroups,
         getManager: () => params.voiceManagerRef.current,
         ephemeralDefault: params.ephemeralDefault,
       });

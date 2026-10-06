@@ -1,20 +1,13 @@
 // Implements text-to-speech commands and persisted voice preferences.
 import crypto from "node:crypto";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
 import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   isUnscopedSessionKeySentinel,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import {
-  canonicalizeSpeechProviderId,
-  getSpeechProvider,
-  listSpeechProviders,
-} from "../../tts/provider-registry.js";
+import { getSpeechProvider, listSpeechProviders } from "../../tts/provider-registry.js";
 import {
   getResolvedSpeechProviderConfig,
   getLastTtsAttempt,
@@ -48,6 +41,8 @@ import {
 } from "./commands-session-store.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
+const log = createSubsystemLogger("auto-reply/commands-tts");
+
 type ParsedTtsCommand = {
   action: string;
   args: string;
@@ -64,10 +59,10 @@ function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
   if (rest === null) {
     return null;
   }
-  const [action, ...tail] = (rest || "status").split(/\s+/);
+  const [action = "", ...tail] = (rest || "status").split(/\s+/);
   return {
-    action: normalizeOptionalLowercaseString(action) ?? "",
-    args: normalizeOptionalString(tail.join(" ")) ?? "",
+    action: action.toLowerCase(),
+    args: tail.join(" "),
   };
 }
 
@@ -88,10 +83,9 @@ function formatAttemptDetails(attempts: TtsAttemptDetail[] | undefined): string 
     .join(", ");
 }
 
-function ttsUsage(): ReplyPayload {
-  return {
-    text:
-      `🔊 **TTS (Text-to-Speech) Help**\n\n` +
+function ttsUsage(): CommandHandlerResult {
+  return stopWithText(
+    `🔊 **TTS (Text-to-Speech) Help**\n\n` +
       `**Commands:**\n` +
       `• /tts on — Enable automatic TTS for replies\n` +
       `• /tts off — Disable TTS\n` +
@@ -115,11 +109,7 @@ function ttsUsage(): ReplyPayload {
       `/tts limit 2000\n` +
       `/tts latest\n` +
       `/tts audio Hello, this is a test!`,
-  };
-}
-
-function hashTtsReadLatestText(text: string): string {
-  return crypto.createHash("sha256").update(text).digest("hex");
+  );
 }
 
 async function buildTtsAudioReply(params: {
@@ -186,7 +176,7 @@ async function handleTtsChatAction(
     delete params.sessionEntry.ttsAuto;
     replyText = "🔊 TTS chat override cleared.";
   } else {
-    return { shouldContinue: false, reply: ttsUsage() };
+    return ttsUsage();
   }
 
   if (!(await persistCommandSession({ ...params, touchedFields: ["ttsAuto"] }))) {
@@ -221,7 +211,7 @@ async function handleTtsLatestAction(
   if (!latestText || isSilentReplyPayloadText(latestText)) {
     return stopWithText("🎤 No readable assistant reply was found in this chat yet.");
   }
-  const hash = hashTtsReadLatestText(latestText);
+  const hash = crypto.createHash("sha256").update(latestText).digest("hex");
   if (params.sessionEntry.lastTtsReadLatestHash === hash) {
     return stopWithText("🔊 Latest assistant reply was already sent as audio.");
   }
@@ -235,7 +225,10 @@ async function handleTtsLatestAction(
     agentId: targetAgentId,
   });
   if ("error" in audio) {
-    return stopWithText(`❌ Error generating audio: ${audio.error}`);
+    log.warn(`Audio generation failed: ${audio.error}`);
+    return stopWithText(
+      "⚠️ Couldn't create the audio. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+    );
   }
 
   params.sessionEntry.lastTtsReadLatestHash = hash;
@@ -318,7 +311,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
     const args = parsed.args;
 
     if (action === "help") {
-      return { shouldContinue: false, reply: ttsUsage() };
+      return ttsUsage();
     }
 
     if (action === "on" || action === "off") {
@@ -355,7 +348,10 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       if (!("error" in audio)) {
         return { shouldContinue: false, reply: audio.reply };
       }
-      return stopWithText(`❌ Error generating audio: ${audio.error}`);
+      log.warn(`Audio generation failed: ${audio.error}`);
+      return stopWithText(
+        "⚠️ Couldn't create the audio. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      );
     }
 
     if (action === "provider") {
@@ -390,11 +386,10 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       const requested = args.toLowerCase();
       const resolvedProvider = getSpeechProvider(requested, params.cfg);
       if (!resolvedProvider) {
-        return { shouldContinue: false, reply: ttsUsage() };
+        return ttsUsage();
       }
 
-      const nextProvider =
-        canonicalizeSpeechProviderId(requested, params.cfg) ?? resolvedProvider.id;
+      const nextProvider = resolvedProvider.id;
       setTtsProvider(prefsPath, nextProvider);
       return stopWithText(`✅ TTS provider set to ${nextProvider}.`);
     }
@@ -469,7 +464,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       }
       const requested = args.toLowerCase();
       if (requested !== "on" && requested !== "off") {
-        return { shouldContinue: false, reply: ttsUsage() };
+        return ttsUsage();
       }
       setSummarizationEnabled(prefsPath, requested === "on");
       return stopWithText(
@@ -481,6 +476,6 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       return handleTtsStatusAction(params, config, prefsPath);
     }
 
-    return { shouldContinue: false, reply: ttsUsage() };
+    return ttsUsage();
   },
 );

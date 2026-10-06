@@ -69,6 +69,8 @@ const EXCLUDED_SCHEMA_EXPORTS = [
   "ModelCatalogProviderOutcomeSchema",
   "PersonalGitHubAccountSchema",
   "PersonalGitHubGenerationSchema",
+  "PlacedSessionsSendSchema",
+  "PlacedSessionsSpawnSchema",
   "PluginDiscoveryDetailSchema",
   "PluginInstalledComponentsSchema",
   "PluginJsonValueSchema",

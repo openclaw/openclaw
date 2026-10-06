@@ -10,6 +10,10 @@ export const CHAT_WORK_CONTEXT_LIMITS = {
   selection: 640,
 } as const;
 
-export type ChatWorkContext = { page: string } & Partial<
-  Record<Exclude<keyof typeof CHAT_WORK_CONTEXT_LIMITS, "page">, string>
->;
+/** Keep plugin reference fields small even when their JSON needs escaping. */
+export const CHAT_WORK_CONTEXT_DETAIL_LIMITS = { fields: 4, key: 32, value: 128 } as const;
+
+export type ChatWorkContext = {
+  page: string;
+  detail?: Readonly<Record<string, string>>;
+} & Partial<Record<Exclude<keyof typeof CHAT_WORK_CONTEXT_LIMITS, "page">, string>>;

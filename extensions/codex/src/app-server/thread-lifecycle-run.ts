@@ -59,8 +59,9 @@ export async function startOrResumeThread(
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const incognito = isIncognitoSessionKey(input.params.sessionKey);
   const clientId = resolveCodexAppServerClientInstanceId(input.client);
-  return await withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, assert) => {
-    const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert };
+  return await withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, authority) => {
+    const assert = authority.assertCurrent;
+    const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert, authority };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
     let binding = saved;
     let selectionBinding = binding;
@@ -72,6 +73,7 @@ export async function startOrResumeThread(
         binding,
         appServer: params.appServer,
         agentDir: resolveCodexThreadAgentDir(params),
+        authority,
         assertCurrent: () => {
           params.signal?.throwIfAborted();
           assert();
@@ -121,8 +123,10 @@ export async function startOrResumeThread(
         throwIfAborted,
       });
       // Managed requests own a parent-local carrier. Only uncovered connections
-      // put the catalog in native thread state; recompute after route changes.
-      params.skillsInstructions = params.inferenceRoute ? undefined : input.skillsInstructions;
+      // put refreshable instructions in native thread state; recompute after route changes.
+      params.refreshableInstructions = params.inferenceRoute
+        ? undefined
+        : input.refreshableInstructions;
       return context;
     };
     const releaseRetainedThread = (
@@ -138,6 +142,7 @@ export async function startOrResumeThread(
         lifecycleTiming,
         threadId,
         assertCurrent,
+        withCurrent: authority.withCurrent,
       });
     if (binding?.pendingSupervisionBranch) {
       const requestContext = await prepareRequestContext();
@@ -173,13 +178,14 @@ export async function startOrResumeThread(
             params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)),
           bindingStore: params.bindingStore,
           bindingIdentity,
+          authority,
           binding: pendingBinding,
           attempt: params.params,
           cwd: params.cwd,
           dynamicTools: params.dynamicTools,
           appServer: params.appServer,
           developerInstructions: params.developerInstructions,
-          skillsInstructions: params.skillsInstructions,
+          refreshableInstructions: params.refreshableInstructions,
           config,
           nativeCodeModeEnabled: params.nativeCodeModeEnabled,
           nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,

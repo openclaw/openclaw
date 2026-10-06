@@ -38,7 +38,7 @@ import { writeSchema, WriteToolOutputSchema } from "./tool-schemas.js";
  * Pluggable operations for the write tool.
  * Override these to delegate file writing to remote systems (for example SSH).
  */
-export interface WriteOperations {
+interface WriteOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Write content to a file */
@@ -363,31 +363,7 @@ function successfulWriteResult(path: string, content: string, details: WriteTool
   );
 }
 
-async function recoverSuccessfulWrite(params: {
-  absolutePath: string;
-  content: string;
-  error: unknown;
-  ops: WriteOperations;
-  path: string;
-  precheck: WriteToolPrecheck;
-  details: WriteToolDetails;
-  signal?: AbortSignal;
-}) {
-  if (!isWriteRecoveryCandidate(params.error, params.signal)) {
-    return null;
-  }
-  const verified = await verifyPersistedUtf8File(params.absolutePath, params.content, params.ops);
-  const changed =
-    params.precheck.state === "different" ||
-    (params.precheck.state === "unknown" &&
-      (await didWriteMetadataChange(params.absolutePath, params.precheck.beforeStat, params.ops)));
-  if (!verified || !changed) {
-    return null;
-  }
-  return successfulWriteResult(params.path, params.content, params.details);
-}
-
-export function createWriteToolDefinition(
+function createWriteToolDefinition(
   cwd: string,
   options?: WriteToolOptions,
 ): ToolDefinition<typeof writeSchema, WriteToolDetails> {
@@ -452,19 +428,16 @@ export function createWriteToolDefinition(
           return successfulWriteResult(path, content, details);
         } catch (error: unknown) {
           assertCurrent();
-          const recovered = await recoverSuccessfulWrite({
-            absolutePath,
-            content,
-            error,
-            ops,
-            path,
-            precheck,
-            details,
-            signal,
-          });
-          if (recovered) {
-            assertCurrent();
-            return recovered;
+          if (isWriteRecoveryCandidate(error, signal)) {
+            const verified = await verifyPersistedUtf8File(absolutePath, content, ops);
+            const changed =
+              precheck.state === "different" ||
+              (precheck.state === "unknown" &&
+                (await didWriteMetadataChange(absolutePath, precheck.beforeStat, ops)));
+            if (verified && changed) {
+              assertCurrent();
+              return successfulWriteResult(path, content, details);
+            }
           }
           throw error;
         }

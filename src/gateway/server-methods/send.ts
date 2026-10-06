@@ -40,7 +40,7 @@ import {
   cancelTerminalSourceReplyDelivery,
   reconcileTerminalSourceReplyDelivery,
 } from "../../infra/outbound/source-reply-mirror.js";
-import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
+import { maybeResolvePluginMessagingTarget } from "../../infra/outbound/target-normalization.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -58,11 +58,9 @@ import { withChannelReadAuthority } from "../../shared/channel-read-authority.js
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { readInProcessSessionDeliveryGeneration } from "../in-process-session-delivery.js";
 import { selectMessageActionRequesterIdentity } from "../message-action-turn-capability.js";
-import {
-  authorizeGatewaySessionCreation,
-  resolveSandboxedSessionCreation,
-} from "../operator-role-policy.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { resolveSandboxedSessionCreation } from "../operator-session-run.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
@@ -127,9 +125,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       assertClientUploadAllowed,
     });
     const assertDirectAdapterHandoff = messageAuthority.assertDirectAdapterHandoff;
-    const onPlatformSendDispatch = assertDirectAdapterHandoff
-      ? async () => assertDirectAdapterHandoff()
-      : undefined;
+    const onPlatformSendDispatch = messageAuthority.onPlatformSendDispatch;
     const downstreamToolContext = trustedContext.toolContext
       ? { ...trustedContext.toolContext, skipCrossContextDecoration: true as const }
       : undefined;
@@ -151,7 +147,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         binding?.reservedRoute?.accountId,
       ],
       conflictMessage: "message.action accountId does not match params.accountId",
-      authorize: messageAuthority.agentRuntimeAuthority.hasActive,
+      authority: messageAuthority,
       assertNewInputAllowed: assertClientUploadAllowed,
       replayResults: messageAuthority.assertReadCurrent === undefined,
       resolveChannel: async (requestChannel) => {
@@ -196,7 +192,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               ? assertDirectAdapterHandoff
               : undefined,
             async () => {
-              const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
+              const sessionKey = normalizeOptionalString(request.sessionKey);
               const requestedAgentId =
                 normalizeOptionalString(request.agentId) ?? trustedContext.runtimeAgentId;
               const sessionOwner = sessionKey
@@ -346,7 +342,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   : false,
                 conversationReadOrigin,
                 sessionKey,
-                sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
+                sessionId: normalizeOptionalString(request.sessionId),
                 inboundEventKind,
                 agentId,
                 mediaAccess,
@@ -422,6 +418,8 @@ export const sendHandlers: GatewayRequestHandlers = {
                   });
                   payload = result.payload;
                 } else {
+                  await messageAuthority.beforeDeliveryAttempt();
+                  assertDirectAdapterHandoff?.();
                   const handled = await dispatchChannelMessageAction(actionContext);
                   if (handled) {
                     payload = extractToolPayload(handled);
@@ -516,9 +514,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     const agentRuntimeAuthority = messageAuthority.agentRuntimeAuthority;
     const hasAgentRuntimeAuthority = client?.internal?.agentRuntimeIdentity !== undefined;
     const commitAgentRuntimeAuthority = messageAuthority.assertDirectAdapterHandoff;
-    const onPlatformSendDispatch = commitAgentRuntimeAuthority
-      ? async () => commitAgentRuntimeAuthority()
-      : undefined;
+    const onPlatformSendDispatch = messageAuthority.onPlatformSendDispatch;
     await withMessageOperationRoute({
       context,
       prefix: "send",
@@ -528,7 +524,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [requestedAccountId, binding?.reservedRoute?.accountId],
       conflictMessage: "send account selections do not match",
-      authorize: agentRuntimeAuthority.hasActive,
+      authority: messageAuthority,
       assertNewInputAllowed: assertClientUploadAllowed,
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
@@ -572,11 +568,12 @@ export const sendHandlers: GatewayRequestHandlers = {
           const idLikeTarget = await withChannelReadAuthority(
             messageActionAuthorization?.scheduled ? commitAgentRuntimeAuthority : undefined,
             () =>
-              maybeResolveIdLikeTarget({
+              maybeResolvePluginMessagingTarget({
                 cfg,
                 channel,
                 input: resolvedTarget.to,
                 accountId,
+                requireIdLike: true,
               }),
           );
           const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
@@ -592,29 +589,20 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (sessionOwner && !sessionOwner.ok) {
             return { ok: false, error: sessionOwner.error, meta: { channel } };
           }
-          const sessionAgentId = sessionOwner?.agentId;
-          const implicitAgent =
-            !explicitAgentId && !sessionAgentId
-              ? resolveRequestedSessionAgentId(cfg, "main")
-              : undefined;
-          if (implicitAgent && !implicitAgent.ok) {
-            return { ok: false, error: implicitAgent.error, meta: { channel } };
-          }
-          const effectiveAgentId =
-            explicitAgentId ?? sessionAgentId ?? (implicitAgent?.ok ? implicitAgent.agentId : null);
+          let effectiveAgentId = explicitAgentId ?? sessionOwner?.agentId;
           if (!effectiveAgentId) {
-            return {
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, "agent selection is required"),
-              meta: { channel },
-            };
+            const implicitAgent = resolveRequestedSessionAgentId(cfg, "main");
+            if (!implicitAgent.ok) {
+              return { ok: false, error: implicitAgent.error, meta: { channel } };
+            }
+            effectiveAgentId = implicitAgent.agentId;
           }
           const sendArgs: Record<string, unknown> = {
             mediaUrl,
             mediaUrls,
             buffer,
-            filename: normalizeOptionalString(request.filename) ?? undefined,
-            contentType: normalizeOptionalString(request.contentType) ?? undefined,
+            filename: normalizeOptionalString(request.filename),
+            contentType: normalizeOptionalString(request.contentType),
           };
           await hydrateAttachmentParamsForAction({
             cfg,
@@ -731,6 +719,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (!authorize()) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
+          await messageAuthority.beforeDeliveryAttempt();
+          commitAgentRuntimeAuthority?.();
           const send = await sendDurableMessageBatchCore(
             {
               cfg,
@@ -830,10 +820,8 @@ export const sendHandlers: GatewayRequestHandlers = {
     const messageActionConfig = resolveAgentRuntimeMessageActionConfig(client);
     const agentRuntimeAuthority = messageAuthority.agentRuntimeAuthority;
     const hasAgentRuntimeAuthority = client?.internal?.agentRuntimeIdentity !== undefined;
-    const commitAgentRuntimeAuthority = agentRuntimeAuthority.commitGuard;
-    const onPlatformSendDispatch = commitAgentRuntimeAuthority
-      ? async () => commitAgentRuntimeAuthority()
-      : undefined;
+    const commitAgentRuntimeAuthority = messageAuthority.assertDirectAdapterHandoff;
+    const onPlatformSendDispatch = messageAuthority.onPlatformSendDispatch;
     await withMessageOperationRoute({
       context,
       prefix: "poll",
@@ -843,7 +831,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [request.accountId, binding?.reservedRoute?.accountId],
       conflictMessage: "poll account selections do not match",
-      authorize: agentRuntimeAuthority.hasActive,
+      authority: messageAuthority,
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
           requestChannel,
@@ -859,7 +847,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         const outbound = plugin?.outbound;
         if (
-          typeof request.durationSeconds === "number" &&
+          request.durationSeconds !== undefined &&
           outbound?.supportsPollDurationSeconds !== true
         ) {
           // Duration support is channel-specific; reject before normalizing to avoid silent truncation.
@@ -873,7 +861,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           );
           return undefined;
         }
-        if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
+        if (request.isAnonymous !== undefined && outbound?.supportsAnonymousPolls !== true) {
           respond(
             false,
             undefined,
@@ -919,6 +907,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (!authorize()) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
+          await messageAuthority.beforeDeliveryAttempt();
+          commitAgentRuntimeAuthority?.();
           const result = await sendPoll({
             cfg,
             to: resolvedTarget.to,

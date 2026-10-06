@@ -72,7 +72,7 @@ describe("security audit filesystem Windows findings", () => {
         const configPath = path.join(stateDir, "openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf-8");
         const findings = await collectSecurityAuditFindings(
-          { agents: { list: [{ id: "main", default: true }] } },
+          { agents: { entries: { main: {} } } },
           {
             stateDir,
             configPath,
@@ -105,7 +105,7 @@ describe("security audit filesystem Windows findings", () => {
         const configPath = path.join(stateDir, "openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf-8");
         const findings = await collectSecurityAuditFindings(
-          { agents: { list: [{ id: "main", default: true }] } },
+          { agents: { entries: { main: {} } } },
           {
             stateDir,
             configPath,
@@ -131,7 +131,7 @@ describe("security audit filesystem Windows findings", () => {
         const configPath = path.join(stateDir, "openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf-8");
         const findings = await collectSecurityAuditFindings(
-          { agents: { list: [{ id: "main", default: true }] } },
+          { agents: { entries: { main: {} } } },
           {
             stateDir,
             configPath,

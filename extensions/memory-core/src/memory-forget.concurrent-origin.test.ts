@@ -87,7 +87,7 @@ describe("Forget with origins committed by another workspace", () => {
             }),
           ]);
           await publishOrigin();
-          expect(listMemoryEntryOrigins({ agentId: "main" })).toMatchObject([
+          expect(await listMemoryEntryOrigins({ agentId: "main" })).toMatchObject([
             { entryKey: "late-lineage", sessionId: "target" },
           ]);
           resume.resolve();
@@ -97,8 +97,8 @@ describe("Forget with origins committed by another workspace", () => {
           entryKeys: report.entryKeys,
           memory: await fs.readFile(memoryPath, "utf8"),
           index: db.prepare("SELECT id FROM memory_index_chunks").all(),
-          origins: listMemoryEntryOrigins({ agentId: "main" }),
-          targetTombstoned: listMemorySessionTombstones({ agentId: "main" }).some(
+          origins: await listMemoryEntryOrigins({ agentId: "main" }),
+          targetTombstoned: (await listMemorySessionTombstones({ agentId: "main" })).some(
             ({ sessionId }) => sessionId === "target",
           ),
         };

@@ -1,10 +1,12 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
+  normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
+import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -117,29 +119,6 @@ function getAgentIdentity(
   agentId: string,
 ): AgentIdentityResult | null {
   return Object.hasOwn(agentIdentityById, agentId) ? (agentIdentityById[agentId] ?? null) : null;
-}
-
-function resolveThinkLevelOptions(
-  row: GatewaySessionRow,
-  defaults?: SessionsListResult["defaults"],
-): readonly { value: string; label: string }[] {
-  const state = resolveChatThinkingSelectState({
-    catalog: [],
-    session: row,
-    defaults,
-    sessionKey: row.key,
-    sessionsResult: null,
-  });
-  return [{ value: "", label: state.inherited.displayLabel }, ...state.options];
-}
-
-function withCurrentLabeledOption(
-  options: readonly { value: string; label: string }[],
-  current: string,
-): Array<{ value: string; label: string }> {
-  return !current || options.some((option) => option.value === current)
-    ? [...options]
-    : [...options, { value: current, label: formatThinkingOverrideLabel(current) }];
 }
 
 function buildSessionLevelOptions(
@@ -481,34 +460,6 @@ function isRowControlTarget(target: EventTarget | null): boolean {
     target instanceof Element &&
     Boolean(target.closest("a, button, input, label, select, textarea"))
   );
-}
-
-function renderOverrideSelect(params: {
-  label: string;
-  disabled: boolean;
-  disabledReason?: string;
-  options: readonly { value: string; label: string }[];
-  current: string;
-  onChange: (value: string) => void;
-}) {
-  return html`
-    <label class="session-override-field">
-      <span class="session-override-field__label">${params.label}</span>
-      <select
-        class="settings-select"
-        ?disabled=${params.disabled}
-        title=${params.disabledReason ?? nothing}
-        @change=${(e: Event) => params.onChange((e.target as HTMLSelectElement).value)}
-      >
-        ${params.options.map(
-          (option) =>
-            html`<option value=${option.value} ?selected=${params.current === option.value}>
-              ${option.label}
-            </option>`,
-        )}
-      </select>
-    </label>
-  `;
 }
 
 export function renderSessions(props: SessionsProps) {
@@ -964,10 +915,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                           if (!shouldHandleNavigationClick(e)) {
                             return;
                           }
-                          if (props.onNavigateToChat) {
-                            e.preventDefault();
-                            props.onNavigateToChat(row.key);
-                          }
+                          e.preventDefault();
+                          props.onNavigateToChat(row.key);
                         }}
                         >${friendlyKeyLabel ?? row.key}</a
                       >`
@@ -1048,43 +997,44 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     const labelDisabledReason = props.labelDisabledReason?.(row);
     const rawThinking = row.thinkingLevel ?? "";
     const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
-    const fastMode =
-      row.fastMode === "auto"
-        ? "auto"
-        : row.fastMode === true
-          ? "on"
-          : row.fastMode === false
-            ? "off"
-            : "";
-    const overrides: Array<
-      Omit<Parameters<typeof renderOverrideSelect>[0], "disabled" | "disabledReason">
-    > = [
+    const fastMode = row.fastMode === undefined ? "" : formatFastModeValue(row.fastMode);
+    const thinkingState = resolveChatThinkingSelectState({
+      catalog: [],
+      session: row,
+      defaults: props.result?.defaults,
+      sessionKey: row.key,
+      sessionsResult: null,
+    });
+    const overrides = [
       {
         label: t("sessionsView.thinking"),
         current: thinking,
-        options: resolveThinkLevelOptions(row, props.result?.defaults),
-        onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
+        options: [
+          { value: "", label: thinkingState.inherited.displayLabel },
+          ...thinkingState.options,
+        ],
+        onChange: (value: string) => props.onPatch(row.key, { thinkingLevel: value || null }),
       },
       {
         label: t("sessionsView.fast"),
         current: fastMode,
         options: buildSessionLevelOptions(FAST_LEVEL_VALUES),
-        onChange: (value) =>
+        onChange: (value: string) =>
           props.onPatch(row.key, {
-            fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
+            fastMode: normalizeFastMode(value) ?? null,
           }),
       },
       {
         label: t("sessionsView.verbose"),
         current: row.verboseLevel ?? "",
         options: buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
-        onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
+        onChange: (value: string) => props.onPatch(row.key, { verboseLevel: value || null }),
       },
       {
         label: t("sessionsView.reasoning"),
         current: row.reasoningLevel ?? "",
         options: buildSessionLevelOptions(REASONING_LEVELS),
-        onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
+        onChange: (value: string) => props.onPatch(row.key, { reasoningLevel: value || null }),
       },
     ];
 
@@ -1125,14 +1075,31 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                   }}
                 />
               </label>
-              ${overrides.map((override) =>
-                renderOverrideSelect({
-                  ...override,
-                  options: withCurrentLabeledOption(override.options, override.current),
-                  disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-                  disabledReason: props.patchAdminDisabledReason,
-                }),
-              )}
+              ${overrides.map(({ label, current, options, onChange }) => {
+                const choices =
+                  !current || options.some((option) => option.value === current)
+                    ? options
+                    : [...options, { value: current, label: formatThinkingOverrideLabel(current) }];
+                return html`
+                  <label class="session-override-field">
+                    <span class="session-override-field__label">${label}</span>
+                    <select
+                      class="settings-select"
+                      ?disabled=${props.loading || Boolean(props.patchAdminDisabledReason)}
+                      title=${props.patchAdminDisabledReason ?? nothing}
+                      @change=${(event: Event) => onChange((event.target as HTMLSelectElement).value)}
+                    >
+                      ${choices.map(
+                        (option) => html`
+                          <option value=${option.value} ?selected=${current === option.value}>
+                            ${option.label}
+                          </option>
+                        `,
+                      )}
+                    </select>
+                  </label>
+                `;
+              })}
             </div>
           </div>
 

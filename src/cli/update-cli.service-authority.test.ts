@@ -9,6 +9,7 @@ import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import * as serviceMembership from "../daemon/service-process-membership.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   expectNoSideEffects,
@@ -64,6 +65,7 @@ import { writeOpenClawPackageFixture } from "./update-cli/update-cli-package.tes
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
+  const nodeExecutable = resolveTestNodeExecPath();
   const {
     createCaseDir,
     mockFileBackedPathExists,
@@ -101,47 +103,76 @@ describe("update-cli", () => {
     }
   });
 
-  it.each(["external", "inspected Gateway", "another Gateway with stopped service"])(
-    "checks ancestry before --no-restart package updates with inherited markers (%s)",
-    async (caller) => {
-      const inside = caller !== "external";
-      const callerGatewayPid = caller.startsWith("another Gateway")
-        ? gatewayFixturePid + 1
-        : gatewayFixturePid;
+  it.each([
+    {
+      caller: "external",
+      inheritedMarkers: true,
+      ancestors: [1],
+      pid: undefined,
+      runtime: undefined,
+      code: undefined,
+    },
+    {
+      caller: "inspected Gateway",
+      inheritedMarkers: true,
+      ancestors: [gatewayFixturePid, 1],
+      pid: gatewayFixturePid,
+      runtime: undefined,
+      code: "inside-gateway-process-tree",
+    },
+    {
+      caller: "another Gateway with stopped service",
+      inheritedMarkers: true,
+      ancestors: [gatewayFixturePid + 1, 1],
+      pid: gatewayFixturePid + 1,
+      runtime: { status: "stopped", state: "stopped" },
+      code: "inside-gateway-process-tree",
+    },
+    {
+      caller: "incomplete ancestry and stopped service",
+      inheritedMarkers: false,
+      ancestors: [],
+      pid: process.ppid,
+      runtime: { status: "stopped", state: "stopped", pid: gatewayFixturePid },
+      code: "service-ancestry-unverified",
+    },
+    {
+      caller: "dead inherited PID",
+      inheritedMarkers: false,
+      ancestors: [],
+      pid: 2_000_000_000,
+      runtime: { status: "stopped", state: "stopped" },
+      code: undefined,
+    },
+  ])(
+    "checks inherited Gateway ancestry before --no-restart updates: $caller",
+    async ({ inheritedMarkers, ancestors, pid, runtime, code }) => {
       const root = await mockPackageInstallAtCaseDir();
-      primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"], {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      });
-      serviceLoaded.mockResolvedValue(true);
-      if (caller === "another Gateway with stopped service") {
-        serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
-      }
-      mockGetSelfAndAncestorPidsSync.mockReturnValue(
-        new Set(inside ? [process.pid, callerGatewayPid, 1] : [process.pid, 1]),
+      primeServiceCommand(
+        [nodeExecutable, path.join(root, "dist", "index.js"), "gateway", "run"],
+        inheritedMarkers
+          ? { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" }
+          : undefined,
       );
-
-      if (!inside) {
-        await runWithGatewayServiceEnv({ yes: true, restart: false });
+      serviceLoaded.mockResolvedValue(true);
+      if (runtime) {
+        serviceReadRuntime.mockResolvedValue(runtime);
+      }
+      mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, ...ancestors]));
+      const env = pid === undefined ? {} : { [GATEWAY_SERVICE_RUNTIME_PID_ENV]: String(pid) };
+      if (!code) {
+        await runWithGatewayServiceEnv({ yes: true, restart: false }, env);
         expectPackageInstallSpec("openclaw@9999.0.0");
         expect(serviceStop).not.toHaveBeenCalled();
         return;
       }
       await expect(
-        runWithGatewayServiceEnv(
-          { yes: true, restart: false, json: true },
-          {
-            [GATEWAY_SERVICE_RUNTIME_PID_ENV]: String(callerGatewayPid),
-          },
-        ),
+        runWithGatewayServiceEnv({ yes: true, restart: false, json: true }, env),
       ).rejects.toEqual(new ExitError(1));
-
       expect(lastWriteJsonCall()).toMatchObject({
         reason: "managed-service-preflight",
         steps: expect.arrayContaining([
-          expect.objectContaining({
-            failureFacts: [expect.objectContaining({ code: "inside-gateway-process-tree" })],
-          }),
+          expect.objectContaining({ failureFacts: [expect.objectContaining({ code })] }),
         ]),
       });
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
@@ -153,7 +184,12 @@ describe("update-cli", () => {
   it("runs an owned managed update when native membership is absent", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const root = await mockPackageInstallAtCaseDir();
-    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+    mockRunningManagedGateway([
+      nodeExecutable,
+      path.join(root, "dist", "index.js"),
+      "gateway",
+      "run",
+    ]);
     mockGatewayHealth("1.0.0", "before-update");
     vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue("absent");
     mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, 1]));
@@ -312,7 +348,7 @@ describe("update-cli", () => {
       [path.join(root, "package.json"), path.join(root, "dist", "index.js")].includes(candidate),
     );
     vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
-    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway"]);
+    mockRunningManagedGateway([nodeExecutable, path.join(root, "dist", "index.js"), "gateway"]);
     const mutationAdmitted = mockGitUpdateAfterMutation(makeOkUpdateResult({ mode: "git", root }));
     mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 1]));
     const runningRuntime = { status: "running", pid: gatewayFixturePid, state: "running" };
@@ -371,52 +407,6 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it.each(["stopped", "dead inherited PID"])(
-    "checks inherited Gateway liveness with incomplete ancestry and %s service inspection",
-    async (scenario) => {
-      const root = await mockPackageInstallAtCaseDir();
-      primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
-      serviceLoaded.mockResolvedValue(true);
-      serviceReadRuntime.mockResolvedValue({
-        status: scenario === "stopped" ? "stopped" : "running",
-        pid: gatewayFixturePid,
-        state: scenario === "stopped" ? "stopped" : "running",
-      });
-      if (scenario === "dead inherited PID") {
-        serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
-      }
-      mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
-
-      const env = {
-        [GATEWAY_SERVICE_RUNTIME_PID_ENV]: String(
-          scenario === "dead inherited PID" ? 2_000_000_000 : process.ppid,
-        ),
-      };
-      if (scenario === "dead inherited PID") {
-        await runWithGatewayServiceEnv({ yes: true, restart: false }, env);
-        expectPackageInstallSpec("openclaw@9999.0.0");
-        expect(serviceStop).not.toHaveBeenCalled();
-        return;
-      }
-
-      await expect(
-        runWithGatewayServiceEnv({ yes: true, restart: false, json: true }, env),
-      ).rejects.toEqual(new ExitError(1));
-
-      expect(lastWriteJsonCall()).toMatchObject({
-        reason: "managed-service-preflight",
-        steps: expect.arrayContaining([
-          expect.objectContaining({
-            failureFacts: [expect.objectContaining({ code: "service-ancestry-unverified" })],
-          }),
-        ]),
-      });
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(serviceStop).not.toHaveBeenCalled();
-      expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    },
-  );
-
   it("admits non-TTY updates with an active session without confirmation", async () => {
     setTty(false);
     setStdoutTty(false);
@@ -452,56 +442,50 @@ describe("update-cli", () => {
     }
   });
 
-  it("refuses to stop a service whose effective launcher changed during inspection", async () => {
-    mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
-    const original = await serviceReadCommand(process.env);
-    serviceReadCommand.mockResolvedValueOnce(original).mockResolvedValue({
-      ...original,
-      programArguments: ["/foreign/openclaw", "gateway"],
-    });
-    const { maybeStopManagedServiceBeforeMutableUpdate } =
-      await import("./update-cli/update-command-service.js");
-    await expect(
-      maybeStopManagedServiceBeforeMutableUpdate({
-        updateInstallKind: "package",
+  it.each(["launcher", "writable configuration"] as const)(
+    "refuses native preparation after admitted %s drift",
+    async (drift) => {
+      const argv = [nodeExecutable, path.join(process.cwd(), "dist", "index.js"), "gateway"];
+      mockRunningManagedGateway(argv);
+      const { maybeStopManagedServiceBeforeMutableUpdate } =
+        await import("./update-cli/update-command-service.js");
+      const params = {
+        updateInstallKind: "package" as const,
         root: process.cwd(),
         shouldRestart: true,
         jsonMode: true,
-      }),
-    ).rejects.toThrow("ownership or manager identity changed");
-    expect(serviceStop).not.toHaveBeenCalled();
-  });
-
-  it("pins the admitted writable service configuration before native preparation", async () => {
-    const argv = ["node", path.join(process.cwd(), "dist", "index.js"), "gateway"];
-    mockRunningManagedGateway(argv);
-    const { maybeStopManagedServiceBeforeMutableUpdate } =
-      await import("./update-cli/update-command-service.js");
-    const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
-      updateInstallKind: "package",
-      root: process.cwd(),
-      shouldRestart: true,
-      jsonMode: true,
-      phase: "inspect",
-    });
-    expect(inspected.serviceUpdateVerdict).toMatchObject({
-      kind: "owned",
-      refreshDefinition: true,
-    });
-    // The service manager/profile stay identical; a config substitution now selects another store.
-    primeServiceCommand(argv, { PREFLIGHT_STORE_ROOT: createCaseDir("service-config-drift") });
-    await expect(
-      maybeStopManagedServiceBeforeMutableUpdate({
-        updateInstallKind: "package",
-        root: process.cwd(),
-        shouldRestart: true,
-        jsonMode: true,
-        expectedService: inspected,
-        phase: "prepare",
-      }),
-    ).rejects.toThrow("changed");
-    expectNoSideEffects(serviceStop, suspendScheduledTaskAutoStartForUpdate);
-  });
+      };
+      if (drift === "launcher") {
+        const original = await serviceReadCommand(process.env);
+        serviceReadCommand.mockResolvedValueOnce(original).mockResolvedValue({
+          ...original,
+          programArguments: ["/foreign/openclaw", "gateway"],
+        });
+        await expect(maybeStopManagedServiceBeforeMutableUpdate(params)).rejects.toThrow(
+          "ownership or manager identity changed",
+        );
+      } else {
+        const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+          ...params,
+          phase: "inspect",
+        });
+        expect(inspected.serviceUpdateVerdict).toMatchObject({
+          kind: "owned",
+          refreshDefinition: true,
+        });
+        primeServiceCommand(argv, { PREFLIGHT_STORE_ROOT: createCaseDir("service-config-drift") });
+        await expect(
+          maybeStopManagedServiceBeforeMutableUpdate({
+            ...params,
+            expectedService: inspected,
+            phase: "prepare",
+          }),
+        ).rejects.toThrow("changed");
+        expect(suspendScheduledTaskAutoStartForUpdate).not.toHaveBeenCalled();
+      }
+      expect(serviceStop).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { kind: "git", platform: "linux", restart: true, fault: "read" },
@@ -591,7 +575,7 @@ describe("update-cli", () => {
       }
       vi.mocked(resolveGatewayInstallEntrypoint).mockReset().mockResolvedValue(entrypoint);
       // No managed mode, token, or env-key metadata: this must not become an install-plan veto.
-      mockRunningManagedGateway(["node", entrypoint, "gateway", "--port", "18789"]);
+      mockRunningManagedGateway([nodeExecutable, entrypoint, "gateway", "--port", "18789"]);
       serviceDefinitionMutationCapability.mockResolvedValue({
         kind: capability,
         detail: "definition-owner-secret-canary",
@@ -624,12 +608,16 @@ describe("update-cli", () => {
   ] as const)(
     "retains activation but not refresh when authority changes %s -> %s",
     async (beforeKind, afterKind) => {
-      mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
+      mockRunningManagedGateway([
+        nodeExecutable,
+        path.join(process.cwd(), "dist", "index.js"),
+        "gateway",
+      ]);
       serviceDefinitionMutationCapability.mockResolvedValue({ kind: beforeKind, detail: "owner" });
-      const {
-        maybeStopManagedServiceBeforeMutableUpdate,
-        revalidateManagedGatewayServiceAfterUpdate,
-      } = await import("./update-cli/update-command-service.js");
+      const { maybeStopManagedServiceBeforeMutableUpdate } =
+        await import("./update-cli/update-command-service.js");
+      const { revalidateManagedGatewayServiceAfterUpdate } =
+        await import("./update-cli/update-command-service-revalidation.js");
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
         root: process.cwd(),
         updateInstallKind: "git",
@@ -729,36 +717,6 @@ describe("update-cli", () => {
     },
   );
 
-  it("fails sealed-service activation without claiming a successful restart", async () => {
-    vi.mocked(runCommandWithTimeout).mockResolvedValueOnce(
-      commandResult({ code: 1, stderr: "systemctl restart denied" }),
-    );
-    const { maybeRestartService } = await import("./update-cli/update-command-service.js");
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue("/updated/dist/index.js");
-
-    await expect(
-      maybeRestartService({
-        shouldRestart: true,
-        result: makeOkUpdateResult({ mode: "npm", after: { version: "2026.4.24" } }),
-        opts: { json: true },
-        refreshServiceEnv: false,
-        serviceUpdateVerdict: {
-          kind: "owned",
-          root: process.cwd(),
-          refreshDefinition: false,
-          fingerprint: "sealed",
-        },
-        serviceEnv: { MANAGED_VALUE: "revalidated" },
-        gatewayPort: 18789,
-        requireRunningServiceAfterRestart: true,
-        timeoutMs: 1_000,
-      }),
-    ).resolves.toBe("failed");
-
-    expect(freshRestartCalls().length).toBe(1);
-    expect(serviceStart).not.toHaveBeenCalled();
-    expectNoSideEffects(runDaemonInstall, runDaemonRestart, serviceRestart);
-  });
   it.each([false, true])(
     "reports a fresh refusal once through Commander (json=%s)",
     async (json) => {

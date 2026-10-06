@@ -6,17 +6,18 @@ import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { logWarn } from "../logger.js";
-import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import { resolveHttpMcpServerLaunchConfig, type HttpMcpTransportType } from "./mcp-http.js";
 import type { McpOAuthConfig } from "./mcp-oauth-provider.js";
 import {
   describeStdioMcpServerLaunchConfig,
   resolveStdioMcpServerLaunchConfig,
+  type StdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 
 // Resolves raw MCP server config into the transport shape used by bundle MCP
@@ -29,14 +30,8 @@ type ResolvedBaseMcpTransportConfig = {
   supportsParallelToolCalls: boolean;
 };
 
-type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
-  kind: "stdio";
-  transportType: "stdio";
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  cwd?: string;
-};
+type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig &
+  StdioMcpServerLaunchConfig & { kind: "stdio"; transportType: "stdio" };
 
 type ResolvedMcpOAuthConfig = McpOAuthConfig & {
   identity?: "shared" | "per-requester";
@@ -78,13 +73,6 @@ function warnDroppedStdioEnvOnce(serverName: string, key: string): void {
   );
 }
 
-function getConnectionTimeoutMs(rawServer: unknown): number {
-  return resolvePositiveTimerTimeoutMs(
-    asOptionalObjectRecord(rawServer)?.connectionTimeoutMs,
-    DEFAULT_CONNECTION_TIMEOUT_MS,
-  );
-}
-
 export function resolveMcpRequestTimeoutMs(
   rawServer: unknown,
   fallbackMs = DEFAULT_REQUEST_TIMEOUT_MS,
@@ -95,22 +83,59 @@ export function resolveMcpRequestTimeoutMs(
   );
 }
 
-function getBooleanField(rawServer: unknown, key: string): boolean | undefined {
-  const value = asOptionalObjectRecord(rawServer)?.[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function getStringField(rawServer: unknown, keys: readonly string[]): string | undefined {
-  const record = asOptionalObjectRecord(rawServer);
-  return record ? readTrimmedStringAlias(record, keys) : undefined;
-}
-
-function resolveHttpTransportConfig(
+/** Resolve one MCP server's launch transport config, or null when unsupported. */
+export function resolveMcpTransportConfig(
   serverName: string,
   rawServer: unknown,
-  transportType: HttpMcpTransportType,
-  logWarnings: boolean,
-): ResolvedHttpMcpTransportConfig | null {
+  options?: { logWarnings?: boolean },
+): ResolvedMcpTransportConfig | null {
+  const record = asOptionalObjectRecord(rawServer);
+  const common = () => ({
+    connectionTimeoutMs: resolvePositiveTimerTimeoutMs(
+      record?.connectionTimeoutMs,
+      DEFAULT_CONNECTION_TIMEOUT_MS,
+    ),
+    requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
+    supportsParallelToolCalls: record?.supportsParallelToolCalls === true,
+  });
+  const logWarnings = options?.logWarnings !== false;
+  const effectiveTransport = resolveConfiguredMcpTransport(rawServer);
+  const stdioLaunch = resolveStdioMcpServerLaunchConfig(
+    rawServer,
+    logWarnings
+      ? {
+          onDroppedEnv: (key: string) => {
+            warnDroppedStdioEnvOnce(serverName, key);
+          },
+        }
+      : undefined,
+  );
+  if (stdioLaunch.ok) {
+    // A command-bearing server is always treated as stdio even when HTTP-ish
+    // aliases are present, matching existing MCP config precedence.
+    return {
+      kind: "stdio",
+      transportType: "stdio",
+      ...stdioLaunch.config,
+      description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
+      ...common(),
+    };
+  }
+
+  if (
+    effectiveTransport &&
+    effectiveTransport !== "sse" &&
+    effectiveTransport !== "streamable-http"
+  ) {
+    if (logWarnings) {
+      logWarn(
+        `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because transport "${sanitizeForLog(effectiveTransport)}" is not supported.`,
+      );
+    }
+    return null;
+  }
+
+  const transportType = effectiveTransport === "streamable-http" ? "streamable-http" : "sse";
   const launch = resolveHttpMcpServerLaunchConfig(
     rawServer,
     logWarnings
@@ -130,105 +155,27 @@ function resolveHttpTransportConfig(
       : { transportType },
   );
   if (!launch.ok) {
+    if (logWarnings) {
+      logWarn(
+        `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because ${stdioLaunch.reason} and ${launch.reason}.`,
+      );
+    }
     return null;
   }
+  const oauth = record?.oauth;
+  const clientCert = normalizeOptionalString(record?.clientCert);
+  const clientKey = normalizeOptionalString(record?.clientKey);
   return {
     kind: "http",
     transportType: launch.config.transportType,
     url: launch.config.url,
     headers: launch.config.headers,
-    ...(rawServer &&
-    typeof rawServer === "object" &&
-    (rawServer as { auth?: unknown }).auth === "oauth"
-      ? { auth: "oauth" as const }
-      : {}),
-    ...(rawServer &&
-    typeof rawServer === "object" &&
-    (rawServer as { oauth?: unknown }).oauth &&
-    typeof (rawServer as { oauth?: unknown }).oauth === "object" &&
-    !Array.isArray((rawServer as { oauth?: unknown }).oauth)
-      ? { oauth: (rawServer as { oauth: ResolvedMcpOAuthConfig }).oauth }
-      : {}),
-    ...(getBooleanField(rawServer, "sslVerify") !== undefined
-      ? { sslVerify: getBooleanField(rawServer, "sslVerify") }
-      : {}),
-    ...(getStringField(rawServer, ["clientCert"])
-      ? { clientCert: getStringField(rawServer, ["clientCert"]) }
-      : {}),
-    ...(getStringField(rawServer, ["clientKey"])
-      ? { clientKey: getStringField(rawServer, ["clientKey"]) }
-      : {}),
+    ...(record?.auth === "oauth" ? { auth: "oauth" as const } : {}),
+    ...(isRecord(oauth) ? { oauth: oauth as ResolvedMcpOAuthConfig } : {}),
+    ...(typeof record?.sslVerify === "boolean" ? { sslVerify: record.sslVerify } : {}),
+    ...(clientCert ? { clientCert } : {}),
+    ...(clientKey ? { clientKey } : {}),
     description: redactSensitiveUrl(launch.config.url),
-    connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
-    requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-    supportsParallelToolCalls: getBooleanField(rawServer, "supportsParallelToolCalls") ?? false,
+    ...common(),
   };
-}
-
-/** Resolve one MCP server's launch transport config, or null when unsupported. */
-export function resolveMcpTransportConfig(
-  serverName: string,
-  rawServer: unknown,
-  options?: { logWarnings?: boolean },
-): ResolvedMcpTransportConfig | null {
-  const logWarnings = options?.logWarnings !== false;
-  const effectiveTransport = resolveConfiguredMcpTransport(rawServer);
-  const stdioLaunch = resolveStdioMcpServerLaunchConfig(
-    rawServer,
-    logWarnings
-      ? {
-          onDroppedEnv: (key: string) => {
-            warnDroppedStdioEnvOnce(serverName, key);
-          },
-        }
-      : undefined,
-  );
-  if (stdioLaunch.ok) {
-    // A command-bearing server is always treated as stdio even when HTTP-ish
-    // aliases are present, matching existing MCP config precedence.
-    return {
-      kind: "stdio",
-      transportType: "stdio",
-      command: stdioLaunch.config.command,
-      args: stdioLaunch.config.args,
-      env: stdioLaunch.config.env,
-      cwd: stdioLaunch.config.cwd,
-      description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
-      connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
-      requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-      supportsParallelToolCalls: getBooleanField(rawServer, "supportsParallelToolCalls") ?? false,
-    };
-  }
-
-  if (
-    effectiveTransport &&
-    effectiveTransport !== "sse" &&
-    effectiveTransport !== "streamable-http"
-  ) {
-    if (logWarnings) {
-      logWarn(
-        `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because transport "${sanitizeForLog(effectiveTransport)}" is not supported.`,
-      );
-    }
-    return null;
-  }
-
-  const httpTransport = resolveHttpTransportConfig(
-    serverName,
-    rawServer,
-    effectiveTransport === "streamable-http" ? "streamable-http" : "sse",
-    logWarnings,
-  );
-  if (httpTransport) {
-    return httpTransport;
-  }
-
-  const httpLaunch = resolveHttpMcpServerLaunchConfig(rawServer);
-  const httpReason = httpLaunch.ok ? "not an HTTP MCP server" : httpLaunch.reason;
-  if (logWarnings) {
-    logWarn(
-      `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because ${stdioLaunch.reason} and ${httpReason}.`,
-    );
-  }
-  return null;
 }

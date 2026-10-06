@@ -5,7 +5,6 @@ import {
   legacyAcpMigrationBindingMatches,
   recordLegacyAcpMigrationCompletion,
 } from "../../infra/legacy-acp-migration-source.js";
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -15,6 +14,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import type { AcpSessionControlConstraint } from "./session-meta-control.types.js";
 import { assertAcpSessionMutationEntry } from "./session-meta-entry.kernel.js";
 import {
@@ -33,17 +33,16 @@ import type {
   AcpSessionMutationCommit,
   AcpSessionMutationDecision,
   AcpSessionMutationPreparation,
-  AcpSessionWriteOperations,
+  AcpSessionMutationPrepareInput,
+  AcpSessionMutationSource,
 } from "./session-meta-write.types.js";
 
-export function executeAcpSessionMutationInWorker(
-  database: OpenClawStateDatabase,
-  command: SqliteWorkerCommand<AcpSessionWriteOperations>,
-) {
-  return command.type === "acp.prepareMutation"
-    ? prepareAcpSessionMutationInWorker(database, command.input)
-    : commitAcpSessionMutationInWorker(database, command.input);
-}
+export const acpSessionOperations = {
+  "acp.prepareMutation": (input: AcpSessionMutationPrepareInput, { open }) =>
+    prepareAcpSessionMutationInWorker(open(), input),
+  "acp.commitMutation": (input: AcpSessionMutationCommit & { nonce: string }, { open }) =>
+    commitAcpSessionMutationInWorker(open(), input),
+} satisfies WorkerOperationHandlers;
 
 function readControlledAcpSessionMutation(
   database: OpenClawStateDatabase,
@@ -65,16 +64,36 @@ function readControlledAcpSessionMutation(
   return { entry, row };
 }
 
+function readMutationSource(
+  input: Omit<Parameters<typeof readAcpSessionSourceInWorker>[0], "source"> & {
+    source: AcpSessionMutationSource;
+  },
+  phase: "metadata preparation" | "legacy source consumption",
+) {
+  if ("kind" in input.source) {
+    // The host grant revalidates this exact actor snapshot; never reopen its sentinel.
+    const current = input.source.snapshot;
+    assertAcpSessionMutationEntry(
+      current.entry,
+      input.entry ?? null,
+      input.expectedControlBinding,
+      phase,
+    );
+    return current;
+  }
+  return readAcpSessionSourceInWorker({ ...input, source: input.source }, phase);
+}
+
 function prepareAcpSessionMutationInWorker(
   database: OpenClawStateDatabase,
-  input: AcpSessionWriteOperations["acp.prepareMutation"]["input"],
+  input: AcpSessionMutationPrepareInput,
 ): AcpSessionMutationPreparation {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const controlled = input.control
         ? readControlledAcpSessionMutation(database, input.control)
         : undefined;
-      const { entry } = controlled ?? readAcpSessionSourceInWorker(input, "metadata preparation");
+      const { entry } = controlled ?? readMutationSource(input, "metadata preparation");
       if (controlled) {
         assertAcpSessionMutationEntry(
           entry,
@@ -123,7 +142,7 @@ function prepareAcpSessionMutationInWorker(
 }
 
 function consumeSources(database: OpenClawStateDatabase, input: AcpSessionMutationCommit) {
-  const current = readAcpSessionSourceInWorker(input, "legacy source consumption");
+  const current = readMutationSource(input, "legacy source consumption");
   for (const source of current.sources) {
     if (legacyAcpMigrationBindingMatches(source, current.entry)) {
       recordLegacyAcpMigrationCompletion(database.db, source, input.updatedAt);
@@ -133,7 +152,7 @@ function consumeSources(database: OpenClawStateDatabase, input: AcpSessionMutati
 
 function commitAcpSessionMutationInWorker(
   database: OpenClawStateDatabase,
-  input: AcpSessionWriteOperations["acp.commitMutation"]["input"],
+  input: AcpSessionMutationCommit & { nonce: string },
 ) {
   return runOpenClawStateWriteTransaction(
     (current) => {

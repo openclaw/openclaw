@@ -21,7 +21,6 @@ export type ProviderFastModePolicyContext = {
 };
 
 export type {
-  BedrockDiscoveryConfig,
   ModelApi,
   ModelCompatConfig,
   ModelDefinitionConfig,

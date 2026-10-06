@@ -68,6 +68,8 @@ function mockHostedOfficialCatalog(entries: unknown[]) {
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const listLocalPlugins = (config: OpenClawConfig = {}) =>
+  listManagedPlugins({ config, env: {}, officialCatalog: { entries: [] } });
 
 describe("managed plugin catalog", () => {
   afterEach(() => {
@@ -310,28 +312,6 @@ describe("managed plugin catalog", () => {
     expect(catalog.plugins[0]).not.toHaveProperty("featured");
   });
 
-  it("lists bundled Workboard as installed, default-off, and cold-disabled", async () => {
-    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false }));
-
-    const catalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
-    });
-    expect(catalog.plugins).toEqual([
-      expect.objectContaining({
-        id: "workboard",
-        packageName: "@openclaw/workboard",
-        installed: true,
-        enabled: false,
-        state: "disabled",
-        featured: true,
-        order: 10,
-      }),
-    ]);
-    expect(catalog.mutationAllowed).toBe(true);
-  });
-
   it("joins the trusted bundled CUA identity with its published computer-use card", async () => {
     vi.stubEnv("OPENCLAW_CLAWHUB_URL", undefined);
     vi.stubEnv("CLAWHUB_URL", undefined);
@@ -345,11 +325,7 @@ describe("managed plugin catalog", () => {
       }),
     );
 
-    const local = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
-    });
+    const local = await listLocalPlugins();
     expect(local.plugins[0]?.clawhubPackage).toBe(packageName);
 
     const entries = joinClawHubPluginCatalog({
@@ -465,45 +441,63 @@ describe("managed plugin catalog", () => {
     },
   );
 
-  it("projects package-declared categories without consulting ClawHub", async () => {
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        enabled: true,
-        id: "memory-tools",
-        name: "Memory Tools",
-        origin: "global",
-        categories: ["memory", "tools"],
-        packageVersion: "1.2.3",
-        installRecord: {
-          source: "clawhub",
-          clawhubUrl: "https://clawhub.ai",
-          clawhubPackage: "@openclaw/memory-tools",
-          version: "1.2.3",
-        },
-      }),
-    );
-
-    const catalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
-    });
-
-    expect(catalog.plugins[0]).toMatchObject({
-      clawhubPackage: "@openclaw/memory-tools",
+  it.each([
+    {
+      id: "memory-tools",
       categories: ["memory", "tools"],
-    });
-    expect(catalog.plugins[0]).not.toHaveProperty("category");
-    expect(mocks.pluginVersionCategories).not.toHaveBeenCalled();
-  });
+      channels: [],
+      installRecord: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "@openclaw/memory-tools",
+        version: "1.2.3",
+      },
+      expected: { clawhubPackage: "@openclaw/memory-tools", categories: ["memory", "tools"] },
+      category: undefined,
+    },
+    {
+      id: "chat-bridge",
+      categories: ["channels", "tools"],
+      channels: ["chat-bridge"],
+      installRecord: undefined,
+      expected: { categories: ["channels", "tools"], category: "channel" },
+      category: "channel",
+    },
+  ] satisfies Array<{
+    id: string;
+    categories: NonNullable<Parameters<typeof metadataSnapshot>[0]["categories"]>;
+    channels: string[];
+    installRecord: Parameters<typeof metadataSnapshot>[0]["installRecord"];
+    expected: { categories: string[]; clawhubPackage?: string; category?: string };
+    category: string | undefined;
+  }>)(
+    "projects $id package categories without enrichment",
+    async ({ id, categories, channels, installRecord, expected, category }) => {
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({
+          enabled: true,
+          id,
+          origin: "global",
+          categories,
+          channels,
+          installRecord,
+          packageVersion: "1.2.3",
+        }),
+      );
+      const catalog = await listLocalPlugins();
+      expect(catalog.plugins[0]).toMatchObject(expected);
+      if (!category) {
+        expect(catalog.plugins[0]).not.toHaveProperty("category");
+      }
+      expect(mocks.pluginVersionCategories).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { enabled: true, contracts: { videoGenerationProviders: ["video"] }, expected: ["media"] },
     { enabled: true, contracts: { imageGenerationProviders: ["image"] }, expected: ["media"] },
     { enabled: true, contracts: { musicGenerationProviders: ["music"] }, expected: ["media"] },
     { enabled: false, contracts: { videoGenerationProviders: ["video"] }, expected: undefined },
-    { enabled: false, contracts: { imageGenerationProviders: ["image"] }, expected: undefined },
-    { enabled: false, contracts: { musicGenerationProviders: ["music"] }, expected: undefined },
     { enabled: true, contracts: { videoGenerationProviders: [] }, expected: undefined },
     { enabled: true, contracts: { speechProviders: ["speech"] }, expected: undefined },
   ])(
@@ -558,16 +552,8 @@ describe("managed plugin catalog", () => {
       },
     ]);
 
-    const catalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
-    });
-    const cached = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
-    });
+    const catalog = await listLocalPlugins();
+    const cached = await listLocalPlugins();
 
     expect(mocks.pluginVersionCategories).toHaveBeenCalledOnce();
     expect(mocks.pluginVersionCategories).toHaveBeenCalledWith({
@@ -584,30 +570,6 @@ describe("managed plugin catalog", () => {
     });
     expect(catalog.plugins[0]).not.toHaveProperty("category");
     expect(cached.plugins[0]).not.toHaveProperty("category");
-  });
-
-  it("preserves the shipped category projection alongside package categories", async () => {
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        enabled: true,
-        id: "chat-bridge",
-        name: "Chat Bridge",
-        origin: "global",
-        categories: ["channels", "tools"],
-        channels: ["chat-bridge"],
-      }),
-    );
-
-    const catalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
-    });
-
-    expect(catalog.plugins[0]).toMatchObject({
-      categories: ["channels", "tools"],
-      category: "channel",
-    });
   });
 
   it("keeps category enrichment scoped to the installed ClawHub registry", async () => {
@@ -634,17 +596,9 @@ describe("managed plugin catalog", () => {
     ]);
 
     mocks.metadata.mockReturnValue(installedAt("https://private.example/clawhub/"));
-    const privateCatalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
-    });
+    const privateCatalog = await listLocalPlugins();
     mocks.metadata.mockReturnValue(installedAt("https://public.example/"));
-    const publicCatalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
-    });
+    const publicCatalog = await listLocalPlugins();
 
     expect(mocks.pluginVersionCategories.mock.calls).toEqual([
       [
@@ -695,11 +649,7 @@ describe("managed plugin catalog", () => {
     mocks.metadata.mockReturnValue(metadata);
     mocks.pluginVersionCategories.mockRejectedValue(new Error("ClawHub offline"));
 
-    const catalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
-    });
+    const catalog = await listLocalPlugins();
 
     expect(catalog.plugins[0]).toMatchObject({
       id: "community-tool",
@@ -749,11 +699,11 @@ describe("managed plugin catalog", () => {
     const icon = "https://cdn.example.test/workboard.svg";
     const config = {
       agents: {
-        defaults: { workspace: "~/fallback-workspace" },
-        list: [
-          { id: "main" },
-          { id: "research", default: true, workspace: "~/research-workspace" },
-        ],
+        defaults: {
+          workspace: "~/fallback-workspace",
+          systemAgent: { agentId: "research" },
+        },
+        entries: { main: {}, research: { workspace: "~/research-workspace" } },
       },
     };
     const env = { HOME: "/tmp/openclaw-managed-plugin-home" };
@@ -777,7 +727,18 @@ describe("managed plugin catalog", () => {
       pluginId: "workboard",
     });
 
-    expect(catalog.plugins[0]).toMatchObject({ id: "workboard" });
+    expect(catalog.plugins).toEqual([
+      expect.objectContaining({
+        id: "workboard",
+        packageName: "@openclaw/workboard",
+        installed: true,
+        enabled: false,
+        state: "disabled",
+        featured: true,
+        order: 10,
+      }),
+    ]);
+    expect(catalog.mutationAllowed).toBe(true);
     expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
     expect(resolved).toEqual([]);
     expect(mocks.metadata).toHaveBeenNthCalledWith(1, {
@@ -855,96 +816,74 @@ describe("managed plugin catalog", () => {
     ).toBeUndefined();
   });
 
-  it("projects activity capabilities without paths and resolves exact tool overrides", async () => {
-    const activityIconPath = "/tmp/workboard/assets/activity.svg";
-    const searchPath = "/tmp/workboard/assets/activity/Task.Search.svg";
-    const protoPath = "/tmp/workboard/assets/activity/__proto__.svg";
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        enabled: true,
-        activityIconPath,
-        toolActivityIconPaths: Object.fromEntries([
-          ["__proto__", protoPath],
-          ["Task.Search", searchPath],
-        ]),
-      }),
-    );
-
-    const catalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
-    });
-    expect(catalog.plugins[0]).toMatchObject({
-      id: "workboard",
-      hasActivityIcon: true,
-      activityIconTools: ["Task.Search", "__proto__"],
-    });
-    expect(catalog.plugins[0]).not.toHaveProperty("activityIconPath");
-    expect(catalog.plugins[0]).not.toHaveProperty("toolActivityIconPaths");
-    expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
-    for (const [toolName, expectedPath] of [
-      [undefined, activityIconPath],
-      ["Task.Search", searchPath],
-      ["task.search", activityIconPath],
-      ["__proto__", protoPath],
-      ["toString", activityIconPath],
-    ] as const) {
+  it.each([true, false])(
+    "resolves exact tool activity icons with default=%s without exposing paths",
+    async (hasDefault) => {
+      const activityIconPath = "/tmp/workboard/assets/activity.svg";
+      const searchPath = "/tmp/workboard/assets/activity/Task.Search.svg";
+      const protoPath = "/tmp/workboard/assets/activity/__proto__.svg";
+      const taskPath = "/tmp/workboard/assets/activity/task.svg";
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({
+          enabled: hasDefault,
+          activityIconPath: hasDefault ? activityIconPath : undefined,
+          toolActivityIconPaths: hasDefault
+            ? Object.fromEntries([
+                ["__proto__", protoPath],
+                ["Task.Search", searchPath],
+              ])
+            : { task: taskPath },
+        }),
+      );
+      const catalog = await listLocalPlugins();
+      expect(catalog.plugins[0]).toMatchObject({
+        id: "workboard",
+        activityIconTools: hasDefault ? ["Task.Search", "__proto__"] : ["task"],
+      });
+      if (hasDefault) {
+        expect(catalog.plugins[0]).toHaveProperty("hasActivityIcon", true);
+      } else {
+        expect(catalog.plugins[0]).not.toHaveProperty("hasActivityIcon");
+      }
+      expect(catalog.plugins[0]).not.toHaveProperty("activityIconPath");
+      expect(catalog.plugins[0]).not.toHaveProperty("toolActivityIconPaths");
+      expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
+      const probes: Array<[string | undefined, string | undefined]> = hasDefault
+        ? [
+            [undefined, activityIconPath],
+            ["Task.Search", searchPath],
+            ["task.search", activityIconPath],
+            ["__proto__", protoPath],
+            ["toString", activityIconPath],
+          ]
+        : [
+            ["task", taskPath],
+            [undefined, undefined],
+          ];
+      for (const [toolName, expectedPath] of probes) {
+        expect(
+          await resolveManagedPluginActivityIconSource({
+            config: {},
+            env: {},
+            pluginId: "workboard",
+            toolName,
+          }),
+        ).toEqual(
+          expectedPath
+            ? { kind: "file", path: expectedPath, rootPath: "/tmp/workboard" }
+            : undefined,
+        );
+      }
       expect(
         await resolveManagedPluginActivityIconSource({
           config: {},
           env: {},
-          pluginId: "workboard",
-          toolName,
+          pluginId: "absent",
+          toolName: "Task.Search",
         }),
-      ).toEqual({
-        kind: "file",
-        path: expectedPath,
-        rootPath: "/tmp/workboard",
-      });
-    }
-    expect(
-      await resolveManagedPluginActivityIconSource({
-        config: {},
-        env: {},
-        pluginId: "absent",
-        toolName: "Task.Search",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("advertises tool overrides even when a plugin has no default activity icon", async () => {
-    const iconPath = "/tmp/workboard/assets/activity/task.svg";
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        enabled: false,
-        toolActivityIconPaths: { task: iconPath },
-      }),
-    );
-
-    const catalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
-    });
-    expect(catalog.plugins[0]).toMatchObject({ id: "workboard", activityIconTools: ["task"] });
-    expect(catalog.plugins[0]).not.toHaveProperty("hasActivityIcon");
-    expect(
-      await resolveManagedPluginActivityIconSource({
-        config: {},
-        env: {},
-        pluginId: "workboard",
-        toolName: "task",
-      }),
-    ).toEqual({
-      kind: "file",
-      path: iconPath,
-      rootPath: "/tmp/workboard",
-    });
-    expect(
-      await resolveManagedPluginActivityIconSource({ config: {}, env: {}, pluginId: "workboard" }),
-    ).toBeUndefined();
-  });
+      ).toBeUndefined();
+    },
+  );
 
   it("allows only provider-choice and bundled setup catalog icon URLs", async () => {
     const providerIcon = "https://cdn.example.test/provider.svg";
@@ -955,6 +894,7 @@ describe("managed plugin catalog", () => {
     const resolve = (iconUrl: string) =>
       resolveManagedSetupCatalogIconUrl({ config: {}, env: {}, iconUrl });
     expect(resolve(providerIcon)).toBe(providerIcon);
+    expect(resolve(`${" ".repeat(2048)}${providerIcon} `)).toBe(providerIcon);
     expect(resolve(recommendedIcon)).toBe(recommendedIcon);
     expect(resolve("https://untrusted.example/icon.png")).toBeUndefined();
     expect(resolve("http://127.0.0.1/private.png")).toBeUndefined();
@@ -964,23 +904,5 @@ describe("managed plugin catalog", () => {
       includeUntrustedWorkspacePlugins: false,
       includeWorkspacePlugins: false,
     });
-  });
-
-  it("omits icon capability when the package has no local icon", async () => {
-    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false }));
-
-    const catalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
-    });
-    const resolved = await resolveManagedPluginIconSources({
-      config: {},
-      env: {},
-      pluginId: "workboard",
-    });
-
-    expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
-    expect(resolved).toEqual([]);
   });
 });

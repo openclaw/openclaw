@@ -1,17 +1,12 @@
 import os from "node:os";
 import type { SessionEntry } from "../config/sessions.js";
-import {
-  resolveSessionFilePathCore,
-  resolveSessionFilePathOptions,
-} from "../config/sessions/paths.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { preparePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { withTimeout } from "../infra/fs-safe.js";
 import { formatMissingCostEntries } from "../infra/session-cost-usage-totals.js";
-import {
-  loadSessionCostSummariesFromCache,
-  resolveExistingUsageSessionFile,
-} from "../infra/session-cost-usage.js";
+import { loadSessionCostSummariesFromCache } from "../infra/session-cost-usage.js";
 import { formatTokenCount, formatUsd } from "../utils/usage-format.js";
 
 export function buildStatusUptimeValue(): string {
@@ -21,33 +16,29 @@ export function buildStatusUptimeValue(): string {
   return `gateway ${format(gatewayMs)} · system ${format(systemMs)}`;
 }
 
-async function resolveSessionCostLine(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionEntry?: SessionEntry;
-  storePath?: string;
-}): Promise<string | undefined> {
-  const sessionId = params.sessionEntry?.sessionId?.trim();
+export async function appendSessionCostLine(
+  usageLine: string | null,
+  cfg: OpenClawConfig,
+  agentId: string,
+  sessionEntry?: SessionEntry,
+  storePath?: string,
+): Promise<string | null> {
+  const sessionId = sessionEntry?.sessionId?.trim();
   if (!sessionId) {
-    return undefined;
+    return usageLine;
   }
-  let sessionFile: string | undefined;
+  let sessionFile: string;
   try {
-    const pathOpts = resolveSessionFilePathOptions({
-      storePath: params.storePath,
-      agentId: params.agentId,
-    });
-    sessionFile = resolveExistingUsageSessionFile({
+    sessionFile = formatSqliteSessionFileMarker({
       sessionId,
-      sessionEntry: params.sessionEntry,
-      sessionFile: resolveSessionFilePathCore(sessionId, params.sessionEntry, pathOpts),
-      agentId: params.agentId,
+      agentId,
+      storePath: await preparePhysicalSessionStorePath(
+        { agentId, ...(storePath ? { storePath } : {}) },
+        cfg,
+      ),
     });
   } catch {
-    return undefined;
-  }
-  if (!sessionFile) {
-    return undefined;
+    return usageLine;
   }
   const now = Date.now();
   const date = new Date(now);
@@ -56,8 +47,8 @@ async function resolveSessionCostLine(params: {
     const loaded = await withTimeout(
       loadSessionCostSummariesFromCache({
         sessions: [{ sessionId, sessionFile }],
-        config: params.cfg,
-        agentId: params.agentId,
+        config: cfg,
+        agentId,
         startMs,
         endMs: now,
         dayBucket: { mode: "utc-offset", utcOffsetMinutes: -date.getTimezoneOffset() },
@@ -68,30 +59,15 @@ async function resolveSessionCostLine(params: {
     );
     const summary = loaded.cacheStatus.status === "fresh" ? loaded.summaries[0] : null;
     if (!summary) {
-      return undefined;
+      return usageLine;
     }
     const cost =
       summary.missingCostEntries > 0
         ? `missing cost: ${formatMissingCostEntries(summary)}`
         : formatUsd(summary.totalCost);
-    return `💵 ${cost ? `${cost} · ` : ""}${formatTokenCount(summary.totalTokens)} tok (today)`;
+    const line = `💵 ${cost ? `${cost} · ` : ""}${formatTokenCount(summary.totalTokens)} tok (today)`;
+    return [usageLine, line].filter(Boolean).join("\n");
   } catch {
-    return undefined;
+    return usageLine;
   }
-}
-
-export async function appendSessionCostLine(
-  usageLine: string | null,
-  cfg: OpenClawConfig,
-  agentId: string,
-  sessionEntry?: SessionEntry,
-  storePath?: string,
-): Promise<string | null> {
-  const line = await resolveSessionCostLine({
-    cfg,
-    agentId,
-    ...(sessionEntry ? { sessionEntry } : {}),
-    ...(storePath ? { storePath } : {}),
-  });
-  return line ? [usageLine, line].filter(Boolean).join("\n") : usageLine;
 }

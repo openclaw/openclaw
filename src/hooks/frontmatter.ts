@@ -1,11 +1,8 @@
-// Hook frontmatter helpers parse metadata blocks from hook files.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   applyOpenClawManifestInstallCommonFields,
-  getFrontmatterString,
   parseOpenClawManifestInstallBase,
-  parseFrontmatterBool,
   resolveOpenClawManifestBlock,
   resolveOpenClawManifestInstall,
   resolveOpenClawManifestOs,
@@ -15,7 +12,6 @@ import type {
   OpenClawHookMetadata,
   HookEntry,
   HookInstallSpec,
-  HookInvocationPolicy,
   ParsedHookFrontmatter,
 } from "./types.js";
 
@@ -64,15 +60,6 @@ export function resolveHookManifestMetadata(
     events: normalizeCsvOrLooseStringList(metadataObj.events),
     requires,
     install: install.length > 0 ? install : undefined,
-  };
-}
-
-/** Resolve invocation policy from top-level hook frontmatter flags. */
-export function resolveHookInvocationPolicy(
-  frontmatter: ParsedHookFrontmatter,
-): HookInvocationPolicy {
-  return {
-    enabled: parseFrontmatterBool(getFrontmatterString(frontmatter, "enabled"), true),
   };
 }
 

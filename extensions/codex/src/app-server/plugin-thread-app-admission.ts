@@ -137,7 +137,6 @@ export async function readCodexThreadAdmissibleAccountApps(
   appCache: CodexAppInventoryCache,
 ): Promise<{
   apps: CodexAppInventorySnapshot["apps"];
-  installedApps: CodexAppInventorySnapshot["installedApps"];
   diagnostic?: CodexPluginThreadAppAdmissionDiagnostic;
 }> {
   // Account-wide policy must use a complete snapshot; a targeted plugin read
@@ -160,7 +159,6 @@ export async function readCodexThreadAdmissibleAccountApps(
   if (!snapshot) {
     return {
       apps: [],
-      installedApps: [],
       diagnostic: {
         code: "account_app_inventory_unavailable",
         message: "Codex account app inventory was unavailable; account apps were not exposed.",
@@ -172,7 +170,6 @@ export async function readCodexThreadAdmissibleAccountApps(
     apps: snapshot.apps
       .filter((app) => isCodexInstalledAppThreadAdmissible(installedAppsById.get(app.id)))
       .toSorted((left, right) => left.id.localeCompare(right.id)),
-    installedApps: snapshot.installedApps,
   };
 }
 
@@ -181,7 +178,7 @@ export function isCodexPluginAppThreadAdmissible(
   inventory: CodexPluginInventory,
 ): boolean {
   const snapshot = inventory.appInventory?.snapshot;
-  if (!app.accessible || app.needsAuth || !snapshot) {
+  if (!app.accessible || !snapshot) {
     return false;
   }
   return isCodexInstalledAppThreadAdmissible(

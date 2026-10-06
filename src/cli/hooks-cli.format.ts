@@ -11,21 +11,14 @@ import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { formatCliRequirements } from "./skills-hooks-cli.format.js";
 
-export type HooksListOptions = {
+export type HooksReportOptions = {
   agent?: string;
   json?: boolean;
+};
+
+export type HooksListOptions = HooksReportOptions & {
   eligible?: boolean;
   verbose?: boolean;
-};
-
-export type HookInfoOptions = {
-  agent?: string;
-  json?: boolean;
-};
-
-export type HooksCheckOptions = {
-  agent?: string;
-  json?: boolean;
 };
 
 function formatHookStatus(hook: HookStatusEntry, detailed = false): string {
@@ -44,19 +37,6 @@ function formatHookStatus(hook: HookStatusEntry, detailed = false): string {
   return theme.error(
     `✗ ${detailed ? `${reason.charAt(0).toUpperCase()}${reason.slice(1)}` : reason}`,
   );
-}
-
-function formatHookName(hook: HookStatusEntry): string {
-  const emoji = hook.emoji ?? decorativeEmoji("🔗");
-  const name = theme.command(hook.name);
-  return emoji ? `${emoji} ${name}` : name;
-}
-
-function formatHookSource(hook: HookStatusEntry): string {
-  if (!hook.managedByPlugin) {
-    return hook.source;
-  }
-  return `plugin:${hook.pluginId ?? "unknown"}`;
 }
 
 const HOOK_REQUIREMENT_GROUPS = [
@@ -115,21 +95,24 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
   }
 
   if (hooks.length === 0) {
-    const message = opts.eligible
+    return opts.eligible
       ? `No eligible hooks found. Run \`${formatCliCommand("openclaw hooks list")}\` to see all hooks.`
       : "No hooks found.";
-    return message;
   }
 
   const eligible = hooks.filter((h) => h.loadable);
   const tableWidth = getTerminalTableWidth();
-  const rows = hooks.map((hook) => ({
-    Status: formatHookStatus(hook),
-    Hook: formatHookName(hook),
-    Description: theme.muted(hook.description),
-    Source: formatHookSource(hook),
-    Missing: opts.verbose ? theme.warn(formatHookMissingSummary(hook)) : "",
-  }));
+  const rows = hooks.map((hook) => {
+    const emoji = hook.emoji ?? decorativeEmoji("🔗");
+    const name = theme.command(hook.name);
+    return {
+      Status: formatHookStatus(hook),
+      Hook: emoji ? `${emoji} ${name}` : name,
+      Description: theme.muted(hook.description),
+      Source: hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source,
+      Missing: opts.verbose ? theme.warn(formatHookMissingSummary(hook)) : "",
+    };
+  });
 
   const columns = [
     { key: "Status", header: "Status", minWidth: 10 },
@@ -141,24 +124,20 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
     columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
   }
 
-  const lines: string[] = [];
-  lines.push(
+  return [
     `${theme.heading("Hooks")} ${theme.muted(`(${eligible.length}/${hooks.length} ready)`)}`,
-  );
-  lines.push(
     renderTable({
       width: tableWidth,
       columns,
       rows,
     }).trimEnd(),
-  );
-  return lines.join("\n");
+  ].join("\n");
 }
 
 export function formatHookInfo(
   hook: HookStatusEntry | undefined,
   hookName: string,
-  opts: HookInfoOptions,
+  opts: HooksReportOptions,
 ): string {
   if (!hook) {
     if (opts.json) {
@@ -180,23 +159,17 @@ export function formatHookInfo(
     );
   }
 
-  const lines: string[] = [];
   const emoji = hook.emoji ?? decorativeEmoji("🔗");
-  const status = formatHookStatus(hook, true);
-
-  lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${status}`);
-  lines.push("");
-  lines.push(hook.description);
-  lines.push("");
-
-  lines.push(theme.heading("Details:"));
-  if (hook.managedByPlugin) {
-    lines.push(`${theme.muted("  Source:")} ${hook.source} (${hook.pluginId ?? "unknown"})`);
-  } else {
-    lines.push(`${theme.muted("  Source:")} ${hook.source}`);
-  }
-  lines.push(`${theme.muted("  Path:")} ${shortenHomePath(hook.filePath)}`);
-  lines.push(`${theme.muted("  Handler:")} ${shortenHomePath(hook.handlerPath)}`);
+  const lines = [
+    `${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${formatHookStatus(hook, true)}`,
+    "",
+    hook.description,
+    "",
+    theme.heading("Details:"),
+    `${theme.muted("  Source:")} ${hook.source}${hook.managedByPlugin ? ` (${hook.pluginId ?? "unknown"})` : ""}`,
+    `${theme.muted("  Path:")} ${shortenHomePath(hook.filePath)}`,
+    `${theme.muted("  Handler:")} ${shortenHomePath(hook.handlerPath)}`,
+  ];
   if (hook.homepage) {
     lines.push(`${theme.muted("  Homepage:")} ${hook.homepage}`);
   }
@@ -222,7 +195,7 @@ export function formatHookInfo(
   return lines.join("\n");
 }
 
-export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptions): string {
+export function formatHooksCheck(report: HookStatusReport, opts: HooksReportOptions): string {
   const eligible = report.hooks.filter((h) => h.loadable);
   const notEligible = report.hooks.filter((h) => !h.loadable);
   if (opts.json) {
@@ -245,12 +218,13 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
     );
   }
 
-  const lines: string[] = [];
-  lines.push(theme.heading("Hooks Status"));
-  lines.push("");
-  lines.push(`${theme.muted("Total hooks:")} ${report.hooks.length}`);
-  lines.push(`${theme.success("Ready:")} ${eligible.length}`);
-  lines.push(`${theme.warn("Not ready:")} ${notEligible.length}`);
+  const lines = [
+    theme.heading("Hooks Status"),
+    "",
+    `${theme.muted("Total hooks:")} ${report.hooks.length}`,
+    `${theme.success("Ready:")} ${eligible.length}`,
+    `${theme.warn("Not ready:")} ${notEligible.length}`,
+  ];
 
   if (notEligible.length > 0) {
     lines.push("");

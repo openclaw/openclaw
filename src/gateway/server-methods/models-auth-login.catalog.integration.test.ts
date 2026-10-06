@@ -6,15 +6,17 @@ import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { WizardNextResult } from "../../../packages/gateway-protocol/src/schema/wizard.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
-import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.publication-events.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
-import { observeCatalogWorkerTasks } from "./models-auth-catalog.test-support.js";
+import {
+  observeCatalogWorkerTasks,
+  waitForCatalogPublication,
+} from "./models-auth-catalog.test-support.js";
 
-it.for([0, 7_000])(
-  "models.authLogin publishes account rows to passive models.list (endpoint delay %i ms)",
+it(
+  "models.authLogin publishes delayed account rows to passive models.list",
   { timeout: 120_000 },
-  async (catalogDelay, { signal }) => {
+  async ({ signal }) => {
     const state = await createOpenClawTestState({
       label: "login-discovery",
       layout: "state-only",
@@ -29,20 +31,15 @@ it.for([0, 7_000])(
     });
     const provider = "login-discovery-fixture";
     const catalogWork = observeCatalogWorkerTasks();
-    const trace: Array<{ path: string; time: number; method: string; authenticated: boolean }> = [];
-    let responseDelay = catalogDelay;
+    const requests: string[] = [];
+    let responseDelay = 7_000;
     let holdNextCatalogResponse = false;
     const automaticRequestStarted = createDeferred();
     const releaseEarlyResponse = createDeferred();
     const refreshRequestStarted = createDeferred<ServerResponse>();
     const releaseRefreshResponse = createDeferred();
     const endpoint = createServer((request, response) => {
-      trace.push({
-        path: request.url ?? "",
-        time: performance.now(),
-        method: request.method ?? "",
-        authenticated: request.headers.authorization === "Bearer fixture-access",
-      });
+      requests.push(request.url ?? "");
       response.setHeader("Content-Type", "application/json");
       if (request.url === "/token" && request.method === "POST") {
         response.end(
@@ -125,7 +122,7 @@ it.for([0, 7_000])(
       const cfg = {
         agents: {
           defaults: { modelPolicy: { allow: [`${provider}/*`] } },
-          list: [{ id: "main", workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
         },
         plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
         gateway: { mode: "local", auth: { mode: "token", token } },
@@ -173,15 +170,13 @@ it.for([0, 7_000])(
           });
         }
         expect(wizard.status, wizard.error).toBe("done");
-        const loginCompleted = performance.now();
         const observePassiveReads = async (stage: "early" | "final") => {
-          const before = trace.filter((row) => row.path === "/models").length;
+          const before = requests.filter((url) => url === "/models").length;
           const reads = await Promise.all([list(), list()]);
           return {
             stage,
-            observedAtMs: performance.now() - loginCompleted,
             before,
-            after: trace.filter((row) => row.path === "/models").length,
+            after: requests.filter((url) => url === "/models").length,
             reads,
           };
         };
@@ -191,36 +186,17 @@ it.for([0, 7_000])(
           "Login did not start automatic catalog discovery",
         );
         const observations = [await observePassiveReads("early")];
-        const accountPublished = createDeferred();
-        const abortPublication = () => accountPublished.reject(signal.reason);
-        signal.throwIfAborted();
-        signal.addEventListener("abort", abortPublication, { once: true });
-        const unregisterPublication = registerPreparedModelRuntimePublicationListener((event) => {
-          if (event.phase === "catalog-published") {
-            void list().then(({ ids }) => {
-              if (ids.includes("account-exclusive")) {
-                accountPublished.resolve();
-              }
-            }, accountPublished.reject);
-          } else if (event.phase === "catalog-failed" || event.phase === "failed") {
-            accountPublished.reject(event.error);
-          }
+        await waitForCatalogPublication({
+          signal,
+          start: () => {
+            releaseEarlyResponse.resolve();
+            return list();
+          },
+          read: list,
+          ready: ({ ids }) => ids.includes("account-exclusive"),
         });
-        try {
-          releaseEarlyResponse.resolve();
-          await accountPublished.promise;
-        } finally {
-          unregisterPublication();
-          signal.removeEventListener("abort", abortPublication);
-        }
         observations.push(await observePassiveReads("final"));
-        const automaticTrace = trace.map((row) => ({ ...row, time: row.time - loginCompleted }));
-        console.log("LOGIN_POOL_PROOF", {
-          beforeLoginWork,
-          after: catalogWork.read(),
-          automaticTrace,
-        });
-        expect(automaticTrace.filter((row) => row.path === "/models")).toHaveLength(1);
+        expect(requests.filter((url) => url === "/models")).toHaveLength(1);
         expect(catalogWork.read()).toMatchObject({
           maxWorkers: 1,
           workersCreated: 1,
@@ -229,50 +205,38 @@ it.for([0, 7_000])(
         });
         responseDelay = 0;
         const manualRefresh = await list(true);
-        if (catalogDelay === 7_000) {
-          const session = await client.request<{ key: string }>("sessions.create", {
-            agentId: "main",
+        const session = await client.request<{ key: string }>("sessions.create", {
+          agentId: "main",
+        });
+        await client.request("sessions.patch", {
+          key: session.key,
+          model: `${provider}/account-exclusive@${provider}:owner`,
+        });
+        holdNextCatalogResponse = true;
+        const refresh = client.request("models.list", {
+          agentId: "main",
+          provider,
+          refresh: true,
+        });
+        void refresh.catch((error: unknown) => {
+          refreshRequestStarted.reject(error);
+        });
+        try {
+          const heldResponse = await refreshRequestStarted.promise;
+          const selectedAccount = await client.request<ModelsListResult>("models.list", {
+            sessionKey: session.key,
+            view: "configured",
           });
-          await client.request("sessions.patch", {
-            key: session.key,
-            model: `${provider}/account-exclusive@${provider}:owner`,
-          });
-          holdNextCatalogResponse = true;
-          const refresh = client.request("models.list", {
-            agentId: "main",
-            provider,
-            refresh: true,
-          });
-          void refresh.catch((error: unknown) => {
-            refreshRequestStarted.reject(error);
-          });
-          try {
-            const heldResponse = await refreshRequestStarted.promise;
-            const selectedAccount = await client.request<ModelsListResult>("models.list", {
-              sessionKey: session.key,
-              view: "configured",
-            });
-            expect(selectedAccount.pendingProviders ?? []).not.toContain(provider);
-            expect(heldResponse.writableEnded).toBe(false);
-            expect(heldResponse.destroyed).toBe(false);
-          } finally {
-            holdNextCatalogResponse = false;
-            releaseRefreshResponse.resolve();
-            await refresh;
-          }
+          expect(selectedAccount.pendingProviders ?? []).not.toContain(provider);
+          expect(heldResponse.writableEnded).toBe(false);
+          expect(heldResponse.destroyed).toBe(false);
+        } finally {
+          holdNextCatalogResponse = false;
+          releaseRefreshResponse.resolve();
+          await refresh;
         }
-        console.log(
-          "LOGIN_DISCOVERY_PROOF",
-          JSON.stringify({
-            catalogDelay,
-            observations,
-            automaticTrace,
-            manualRefresh,
-            finalTrace: trace.map((row) => ({ ...row, time: row.time - loginCompleted })),
-          }),
-        );
         expect(manualRefresh.ids).toContain("account-exclusive");
-        expect(trace.filter((row) => row.path === "/token")).toHaveLength(1);
+        expect(requests.filter((url) => url === "/token")).toHaveLength(1);
         for (const observation of observations) {
           expect.soft(observation.after).toBe(observation.before);
           for (const read of observation.reads) {

@@ -21,13 +21,15 @@ import {
   type CodexDynamicToolSpec,
   type JsonObject,
 } from "./src/app-server/protocol.js";
+import { buildDeveloperInstructions } from "./src/app-server/thread-prompt.js";
 import {
-  buildDeveloperInstructions,
   buildThreadResumeParams,
   buildThreadStartParams,
+} from "./src/app-server/thread-requests.js";
+import {
+  buildCodexParentLocalInstructions,
   buildTurnStartParams,
-} from "./src/app-server/thread-lifecycle.js";
-import { buildCodexParentLocalInstructions } from "./src/app-server/turn-params.js";
+} from "./src/app-server/turn-params.js";
 
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 export { createCodexDynamicToolBridge };
@@ -82,7 +84,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
   config?: JsonObject;
   promptText?: string;
   developerInstructionAdditions?: string;
-  turnScopedDeveloperInstructions?: string;
+  personaInstructions?: string;
 }): CodexHarnessPromptSnapshot {
   const developerInstructions = joinPresentSections(
     buildDeveloperInstructions(params.attempt, {
@@ -93,7 +95,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
   return {
     developerInstructions,
     parentLocalInstructions: buildCodexParentLocalInstructions(params.attempt, {
-      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
+      personaInstructions: params.personaInstructions,
     }),
     threadStartParams: buildThreadStartParams(params.attempt, {
       cwd: params.cwd,
@@ -113,7 +115,6 @@ export function buildCodexHarnessPromptSnapshot(params: {
       cwd: params.cwd,
       appServer: params.appServer,
       promptText: params.promptText,
-      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
       parentLocalEgress: true,
       messageToolAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
         (tool) => tool.name === "message",

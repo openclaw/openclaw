@@ -1,7 +1,4 @@
-import {
-  parseStrictFiniteNumber,
-  parseStrictPositiveInteger,
-} from "@openclaw/normalization-core/number-coercion";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import {
   resolveAgentOperationAgentId,
@@ -20,6 +17,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
+import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
@@ -28,22 +26,15 @@ import type { CapabilityTransport } from "./metadata.js";
 export function resolveTransport(opts: {
   local?: boolean;
   gateway?: boolean;
-  supported: Array<CapabilityTransport>;
   defaultTransport: CapabilityTransport;
 }): CapabilityTransport {
   if (opts.local && opts.gateway) {
     throw new Error("Pass only one of --local or --gateway.");
   }
   if (opts.local) {
-    if (!opts.supported.includes("local")) {
-      throw new Error("This command does not support --local.");
-    }
     return "local";
   }
   if (opts.gateway) {
-    if (!opts.supported.includes("gateway")) {
-      throw new Error("This command does not support --gateway.");
-    }
     return "gateway";
   }
   return opts.defaultTransport;
@@ -51,12 +42,6 @@ export function resolveTransport(opts: {
 
 function hasOwnKeys(value: unknown): boolean {
   return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
-}
-
-export function resolveSelectedProviderFromModelRef(
-  modelRef: string | undefined,
-): string | undefined {
-  return resolveModelRefOverride(modelRef).provider;
 }
 
 export function resolveCapabilityProviderAgentId(
@@ -114,24 +99,6 @@ export function providerHasGenericConfig(params: {
   );
 }
 
-export function resolveModelRefOverride(raw: string | undefined): {
-  provider?: string;
-  model?: string;
-} {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash === trimmed.length - 1) {
-    return { model: trimmed };
-  }
-  return {
-    provider: trimmed.slice(0, slash),
-    model: trimmed.slice(slash + 1),
-  };
-}
-
 export function requireProviderModelOverride(
   raw: string | undefined,
 ): { provider: string; model: string } | undefined {
@@ -148,20 +115,6 @@ export function requireProviderModelOverride(
   };
 }
 
-export function parseOptionalFiniteNumber(
-  raw: string | number | undefined,
-  label: string,
-): number | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const value = parseStrictFiniteNumber(raw);
-  if (value === undefined) {
-    throw new Error(`${label} must be a finite number`);
-  }
-  return value;
-}
-
 export function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
   if (raw === undefined) {
     return undefined;
@@ -173,14 +126,11 @@ export function parseOptionalPositiveInteger(raw: unknown, label: string): numbe
   return value;
 }
 
-export function parseOptionalTimeoutMs(
-  raw: string | number | undefined,
-  flagName = "--timeout-ms",
-): number | undefined {
+export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
-  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error", flagName });
+  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error", flagName: "--timeout-ms" });
 }
 
 export async function resolveLocalCapabilityRuntimeConfig(params: {
@@ -224,10 +174,5 @@ export async function resolveLocalCapabilityAgent(params: {
 }
 
 export function pinRuntimeConfigSnapshot(config: OpenClawConfig): void {
-  const sourceConfig = getRuntimeConfigSourceSnapshot();
-  if (sourceConfig) {
-    setRuntimeConfigSnapshot(config, sourceConfig);
-  } else {
-    setRuntimeConfigSnapshot(config);
-  }
+  setRuntimeConfigSnapshot(config, getRuntimeConfigSourceSnapshot() ?? undefined);
 }

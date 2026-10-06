@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync-cache-state.js";
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
 import { onSqliteWalCheckpoint } from "../../infra/sqlite-wal-checkpoint.js";
@@ -73,9 +74,7 @@ async function settleReclamationDatabase(
       break;
     }
     if (attempt + 1 < WORKER_CLOSE_MAX_ATTEMPTS) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 25 * 2 ** attempt);
-      });
+      await sleepWithAbort(25 * 2 ** attempt);
     }
   }
   return { cleanupWarnings: [...warnings], settled: outcome.settled };
@@ -293,17 +292,6 @@ export async function runReclamationWorkerPort(
                 prepared = opened.value;
               }
             }
-            const maintenanceOwner =
-              request.type === "reclaim" && request.plan.kind === "maintenance-plan"
-                ? await import("./session-accessor.sqlite-maintenance-transaction.js")
-                : undefined;
-            const maintenance =
-              request.type === "reclaim" && request.plan.kind === "maintenance-plan"
-                ? maintenanceOwner?.prepareSessionMaintenanceInWorker({
-                    ...request.plan,
-                    databaseOptions: options,
-                  })
-                : undefined;
             const assertExpectedSource =
               request.type === "prepare"
                 ? () =>
@@ -412,23 +400,14 @@ export async function runReclamationWorkerPort(
                           options,
                           { operationLabel: "session.canonical-validation.certify" },
                         )
-                      : request.plan.kind === "maintenance-plan" && maintenanceOwner
-                        ? maintenanceOwner.reclaimSessionMaintenanceInTransaction(
-                            { ...request.plan, databaseOptions: options },
-                            {
-                              beforeMutation: currentClaim.assertCurrent,
-                              onCommit: authorizeCommit,
-                            },
-                            maintenance,
-                          )
-                        : reclaimSqliteSessionInTransaction(
-                            { ...request.plan, databaseOptions: options },
-                            {
-                              beforeMutation: currentClaim.assertCurrent,
-                              onCommit: authorizeCommit,
-                              afterCommit: () => markSqliteReclamationSettled(request.commitGate),
-                            },
-                          );
+                      : reclaimSqliteSessionInTransaction(
+                          { ...request.plan, databaseOptions: options },
+                          {
+                            beforeMutation: currentClaim.assertCurrent,
+                            onCommit: authorizeCommit,
+                            afterCommit: () => markSqliteReclamationSettled(request.commitGate),
+                          },
+                        );
                   // Warm results must not revive proof invalidated by the parent between requests.
                   if (openedForRequest) {
                     validation = getOpenClawAgentDatabaseValidation(database);
@@ -442,15 +421,8 @@ export async function runReclamationWorkerPort(
                   clearNodeSqliteKyselyCacheForDatabase(database.db);
                 }
               },
-              request.type === "reclaim" && request.plan.kind === "maintenance-plan"
-                ? (protection) => {
-                    if (request.plan.kind === "maintenance-plan") {
-                      Object.assign(request.plan.input, protection);
-                    }
-                  }
-                : undefined,
               assertExpectedSource,
-            ).finally(() => maintenance?.release());
+            );
             return {
               type: "reclaimed",
               operationId,

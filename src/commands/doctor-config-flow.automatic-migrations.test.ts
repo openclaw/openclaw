@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { findLegacyConfigIssues } from "../config/legacy.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
@@ -29,6 +30,54 @@ function withMigrationHome(run: (home: string) => Promise<void>) {
     ),
   );
 }
+
+it("backs up and persists inherited Talk SecretRefs for an unmarked published updater", async () => {
+  await withMigrationHome(async (home) => {
+    const apiKey = { source: "env", provider: "default", id: "TALK_MIGRATION_TEST_KEY" } as const;
+    const raw = {
+      gateway: { mode: "local" as const },
+      talk: { realtime: { speakerVoice: "marin" } },
+      plugins: {
+        enabled: false,
+        entries: {
+          "voice-call": {
+            config: {
+              realtime: { provider: "openai", providers: { openai: { apiKey } } },
+              streaming: { provider: "openai-realtime" },
+            },
+          },
+        },
+      },
+    };
+    const configPath = await writeOpenClawConfig(home, raw);
+    const original = await fs.readFile(configPath, "utf8");
+    const before = await readConfigFileSnapshot();
+    expect(before.valid).toBe(true);
+    expect(before.raw).toBe(original);
+    expect(before.sourceConfig.talk).toEqual(raw.talk);
+    expect(findLegacyConfigIssues(before.sourceConfig, before.parsed)).toContainEqual({
+      path: "plugins.entries.voice-call.config.realtime",
+      message: expect.stringContaining("talk.realtime"),
+    });
+
+    await prepareDoctorContext(configPath, { options: { nonInteractive: true } });
+
+    const saved = await readConfigFileSnapshot();
+    expect(saved.valid).toBe(true);
+    expect(saved.sourceConfig.talk?.realtime).toEqual({
+      provider: "openai",
+      providers: { openai: { apiKey } },
+      speakerVoice: "marin",
+    });
+    expect(saved.sourceConfig.plugins?.entries?.["voice-call"]?.config).toEqual(
+      raw.plugins.entries["voice-call"].config,
+    );
+    expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
+    await prepareDoctorContext(configPath, { options: { nonInteractive: true } });
+    expect((await readConfigFileSnapshot()).raw).toBe(saved.raw);
+    expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
+  });
+});
 
 it.each([
   { extra: "session_status", repaired: true },
@@ -142,54 +191,24 @@ it("normalizes retired metadata and Code Mode config for an unmarked npm updater
 });
 
 it.each([
-  { updating: "1", repair: false },
-  { updating: " off ", repair: false },
-  { updating: "legacy", repair: true },
-])(
-  "preserves the legacy parent's config and ledger with $updating, repair=$repair",
-  async ({ updating, repair }) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_IN_PROGRESS: updating,
-          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: undefined,
-          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
-        async () => {
-          const canonical = { source: "path" as const, installPath: path.join(home, "canonical") };
-          await seedInstalledPluginIndex(
-            { existing: canonical },
-            {
-              config: { plugins: { enabled: false } },
-            },
-          );
-          const configPath = await writeOpenClawConfig(home, {
-            meta: { lastTouchedVersion: "2026.2.15", lastTouchedAt: "2026-02-15T00:00:00.000Z" },
-            agents: { list: [{ id: "main", name: "Operator" }, { id: "helper" }] },
-            gateway: { mode: "local" },
-            plugins: {
-              enabled: false,
-              installs: {
-                existing: { source: "path", installPath: path.join(home, "old") },
-                imported: { source: "path", installPath: path.join(home, "legacy") },
-              },
-            },
-          });
-          const original = await fs.readFile(configPath, "utf8");
-          await prepareDoctorContext(configPath, { options: { nonInteractive: true, repair } });
-          expect(await fs.readFile(configPath, "utf8")).toBe(original);
-          await expect(fs.access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual({
-            existing: canonical,
-          });
-        },
-      );
-    });
+  {
+    name: "a legacy parent (1)",
+    legacy: true,
+    repair: false,
+    env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
   },
-);
-
-it.each([
+  {
+    name: "a legacy parent (off)",
+    legacy: true,
+    repair: false,
+    env: { OPENCLAW_UPDATE_IN_PROGRESS: " off " },
+  },
+  {
+    name: "a legacy parent (legacy)",
+    legacy: true,
+    repair: true,
+    env: { OPENCLAW_UPDATE_IN_PROGRESS: "legacy" },
+  },
   { name: "an include", include: true },
   { name: "a remaining invalid key", invalid: true },
   { name: "a future writer", future: true },
@@ -222,10 +241,24 @@ it.each([
         ...fixture.env,
       },
       async () => {
+        const canonical = { source: "path" as const, installPath: path.join(home, "canonical") };
+        if (fixture.legacy) {
+          await seedInstalledPluginIndex(
+            { existing: canonical },
+            { config: { plugins: { enabled: false } } },
+          );
+        }
         const configPath = await writeOpenClawConfig(home, {
+          ...(fixture.legacy
+            ? { agents: { list: [{ id: "main", name: "Operator" }, { id: "helper" }] } }
+            : {}),
           meta: {
-            lastTouchedAt: "2026-03-31T00:00:00.000Z",
-            lastTouchedVersion: fixture.future ? "9999.1.1" : "2026.3.31",
+            lastTouchedAt: fixture.legacy ? "2026-02-15T00:00:00.000Z" : "2026-03-31T00:00:00.000Z",
+            lastTouchedVersion: fixture.legacy
+              ? "2026.2.15"
+              : fixture.future
+                ? "9999.1.1"
+                : "2026.3.31",
             ...(fixture.invalid ? { unknownSetting: true } : {}),
           },
           gateway: fixture.include ? { $include: "gateway.json" } : { mode: "local" },
@@ -241,10 +274,17 @@ it.each([
         }
         const original = await fs.readFile(configPath, "utf8");
 
-        await prepareDoctorContext(configPath, { options: { nonInteractive: true } });
+        await prepareDoctorContext(configPath, {
+          options: { nonInteractive: true, repair: fixture.repair },
+        });
 
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await expect(fs.access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
+        if (fixture.legacy) {
+          expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual({
+            existing: canonical,
+          });
+        }
       },
     );
   });

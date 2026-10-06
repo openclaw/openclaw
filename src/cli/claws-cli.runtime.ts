@@ -47,7 +47,6 @@ import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
 } from "../claws/types.js";
-// Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
@@ -499,8 +498,6 @@ export async function runClawsStatusCommand(
     runtime.exit(1);
   }
 }
-
-export { runClawsUpdateCommand } from "./claws-update-cli.runtime.js";
 
 export async function runClawsRemoveCommand(
   target: string,

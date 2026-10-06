@@ -36,7 +36,7 @@ export class NewSessionDraftController {
         this.submission.message ||
         this.submission.mentions.length ||
         this.submission.attachmentDraft.attachments.length ||
-        this.submission.attachmentDraft.pendingReads,
+        this.submission.attachmentDraft.reads.pendingReads,
       );
     const showBlocked = (changed = false) =>
       showToast({
@@ -55,7 +55,7 @@ export class NewSessionDraftController {
       const message = this.submission.message;
       const mentions = this.submission.mentions;
       const attachments = [...this.submission.attachmentDraft.attachments];
-      const pendingReads = this.submission.attachmentDraft.pendingReads;
+      const pendingReads = this.submission.attachmentDraft.reads.pendingReads;
       const currentOwner = () =>
         !controller.signal.aborted &&
         this.read().isConnected &&
@@ -67,7 +67,7 @@ export class NewSessionDraftController {
         this.submission.visibility === "incognito" &&
         this.submission.message === message &&
         this.submission.mentions === mentions &&
-        this.submission.attachmentDraft.pendingReads === pendingReads &&
+        this.submission.attachmentDraft.reads.pendingReads === pendingReads &&
         this.submission.attachmentDraft.attachments.length === attachments.length &&
         attachments.every(
           (attachment, index) => this.submission.attachmentDraft.attachments[index] === attachment,
@@ -274,7 +274,6 @@ export class NewSessionDraftController {
       this.gateway.client &&
       agents?.connected &&
       agents.client === this.gateway.client &&
-      !agents.agentsListCached &&
       this.place.agents().length > 0,
     );
   }
@@ -306,7 +305,7 @@ export class NewSessionDraftController {
 
   private invalidate(resetHostSelection: boolean, outcome: SubmissionOutcomeReason) {
     this.place.invalidateGatewayDiscovery(resetHostSelection);
-    this.submission.attachmentDraft.abortReads();
+    this.submission.attachmentDraft.reads.abortReads();
     this.submission.invalidate(outcome);
     if (resetHostSelection && this.submission.pendingPlacement.sessionKey) {
       this.submission.markPendingPlacementUnavailable(outcome);

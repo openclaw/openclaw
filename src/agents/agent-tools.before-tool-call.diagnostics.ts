@@ -41,7 +41,12 @@ import {
   resolveSkillTelemetrySource,
   resolveSkillTelemetrySourceValue,
 } from "../skills/loading/source.js";
+import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
+import {
+  isWorkspaceSkillReadPath,
+  resolveSkillReadPath,
+} from "../skills/workspace-skill-read-path.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
 import type {
@@ -339,7 +344,7 @@ function resolveRelativeToolPath(candidate: string, ctx?: HookContext): string |
   if (!trimmed) {
     return undefined;
   }
-  if (trimmed.startsWith("node://")) {
+  if (trimmed.startsWith("node://") || isWorkspaceSkillReadPath(trimmed)) {
     return trimmed;
   }
   if (trimmed === "~") {
@@ -371,6 +376,12 @@ function findSkillInstructionMatch(
     }
     const filePath = typeof entry.filePath === "string" ? entry.filePath.trim() : "";
     const baseDir = typeof entry.baseDir === "string" ? entry.baseDir.trim() : "";
+    if (filePath && resolveSkillReadPath(entry) === candidate) {
+      return true;
+    }
+    if (resolveSkillFileHost(entry) === "workspace") {
+      return false;
+    }
     return (
       (filePath &&
         (filePath.startsWith("node://")
@@ -408,6 +419,30 @@ export function findSkillUsageMatch(params: {
     }
   }
 
+  if (params.toolName === "skills_read") {
+    const name = isPlainObject(params.toolParams) ? params.toolParams.name : undefined;
+    if (typeof name !== "string") {
+      return undefined;
+    }
+    const snapshot = params.ctx?.skillsSnapshot;
+    const skill = (snapshot?.discoverySkills ?? snapshot?.resolvedSkills)?.find(
+      (entry) => entry.name === name.trim() && !entry.disableModelInvocation,
+    );
+    if (!skill) {
+      return undefined;
+    }
+    const usage = params.ctx?.skillUsagePaths?.find(
+      (entry) => entry.skillName === skill.name && entry.readPath === skill.filePath,
+    );
+    return usage
+      ? {
+          skillFile: usage.skillFile,
+          skillName: usage.skillName,
+          skillSource: usage.skillSource,
+          activation: "read",
+        }
+      : resolvedSkillUsageMatch({ activation: "read", skill });
+  }
   if (params.toolName !== "read") {
     return undefined;
   }
@@ -656,7 +691,6 @@ export async function recordLoopOutcome(args: {
       toolCallId: args.toolCallId,
       result: args.result,
       error: args.error,
-      config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
     });
     const churnContinues =

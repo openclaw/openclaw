@@ -6,7 +6,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type {
-  SessionTranscriptContextVersion,
+  TranscriptWriteSnapshot,
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
 } from "./session-accessor.sqlite-contract.js";
@@ -17,25 +17,12 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
-
-export class SqliteTranscriptMutationConflictError extends Error {
-  constructor(sessionId: string) {
-    super(`SQLite transcript changed while preparing rewrite for ${sessionId}`);
-    this.name = "SqliteTranscriptMutationConflictError";
-  }
-}
-
-export type TranscriptWriteSnapshot<T> = {
-  result: T;
-  lifecycleRevision?: string;
-  before: SessionTranscriptContextVersion;
-  after: SessionTranscriptContextVersion;
-};
 
 export type TranscriptWriteViewGuard = {
   assertCurrent: () => void;
@@ -51,6 +38,7 @@ export function runTranscriptWriteSnapshotSync<T>(
   beforeCommitInTransaction?: () => void,
   expectedMutationAt?: number | null,
   view?: TranscriptWriteViewGuard,
+  diagnosticContext?: { eventType: string; messageRole?: string },
 ): Result<TranscriptWriteSnapshot<T>, TranscriptAppendRefusal> {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
@@ -84,7 +72,14 @@ export function runTranscriptWriteSnapshotSync<T>(
       });
     },
     toDatabaseOptions(resolved),
-    { operationLabel: "session.transcript.write-snapshot" },
+    {
+      operationLabel: "session.transcript.write-snapshot",
+      diagnosticContext: {
+        sessionId: resolved.sessionId,
+        requestedEvents: 1,
+        ...diagnosticContext,
+      },
+    },
   );
   // A savepoint can return while its enclosing transaction still owns rollback.
   if (result.ok && connection && hasSqlitePostCommitScope(connection)) {

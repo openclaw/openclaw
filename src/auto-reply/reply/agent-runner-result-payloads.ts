@@ -1,3 +1,4 @@
+import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
@@ -132,13 +133,15 @@ export async function prepareReplyAgentPayloads(state: {
     runResult.didSendDeterministicApprovalPrompt === true;
   const replyOperationRunState = resolveReplyOperationRunState(opts);
   const implicitContinuation = runResult.meta?.continuationPending === true;
-  const continuationOwner = implicitContinuation
-    ? {
-        stateContext: captureOpenClawStateWorkerContext(),
-        operationKey: replyOperation.key,
-        operationSessionId: replyOperation.sessionId,
-      }
-    : undefined;
+  // A media-run continuation has no completion child to take over delivery; its status is the reply.
+  const continuationOwner =
+    implicitContinuation && hasCompletionMessageSessionSpawn(runResult.acceptedSessionSpawns)
+      ? {
+          stateContext: captureOpenClawStateWorkerContext(),
+          operationKey: replyOperation.key,
+          operationSessionId: replyOperation.sessionId,
+        }
+      : undefined;
   const pendingContinuation =
     runResult.meta?.yielded === true ||
     implicitContinuation ||
@@ -440,6 +443,46 @@ export async function prepareReplyAgentPayloads(state: {
       ]
     : [];
 
+  const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
+  if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {
+    const contextUsedTokens = deriveContextPromptTokens({
+      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+      promptTokens,
+      usage,
+    });
+    const costUsd = estimateAggregateUsageCost({
+      usage: diagnosticUsage,
+      provider: providerUsed,
+      model: modelUsed,
+      config: cfg,
+      agentDir: followupRun.run.agentDir,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      ...(runResult.diagnosticTrace
+        ? {
+            trace: freezeDiagnosticTraceContext(
+              createChildDiagnosticTraceContext(runResult.diagnosticTrace),
+            ),
+          }
+        : {}),
+      sessionKey,
+      sessionId: followupRun.run.sessionId,
+      channel: replyToChannel,
+      agentId: followupRun.run.agentId,
+      provider: providerUsed,
+      model: modelUsed,
+      usage: toDiagnosticUsage(diagnosticUsage),
+      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+      context: {
+        limit: contextTokensUsed,
+        ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
+      },
+      costUsd,
+      durationMs: Date.now() - runStartedAt,
+    });
+  }
+
   // Drain any late tool/block deliveries before deciding there's "nothing to send".
   // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
   // keep the typing indicator stuck.
@@ -551,10 +594,7 @@ export async function prepareReplyAgentPayloads(state: {
   // turn) already covers the commitment — avoids false positives (#32228).
   const coveredByExistingCron =
     hasReminderCommitment && successfulCronAdds === 0
-      ? await hasSessionRelatedCronJobs({
-          cronStorePath: undefined,
-          sessionKey,
-        })
+      ? await hasSessionRelatedCronJobs(sessionKey)
       : false;
   const guardedReplyPayloads =
     hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
@@ -625,46 +665,6 @@ export async function prepareReplyAgentPayloads(state: {
   }
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
-  const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
-  if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {
-    const contextUsedTokens = deriveContextPromptTokens({
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      promptTokens,
-      usage,
-    });
-    const costUsd = estimateAggregateUsageCost({
-      usage: diagnosticUsage,
-      provider: providerUsed,
-      model: modelUsed,
-      config: cfg,
-      agentDir: followupRun.run.agentDir,
-    });
-    emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      ...(runResult.diagnosticTrace
-        ? {
-            trace: freezeDiagnosticTraceContext(
-              createChildDiagnosticTraceContext(runResult.diagnosticTrace),
-            ),
-          }
-        : {}),
-      sessionKey,
-      sessionId: followupRun.run.sessionId,
-      channel: replyToChannel,
-      agentId: followupRun.run.agentId,
-      provider: providerUsed,
-      model: modelUsed,
-      usage: toDiagnosticUsage(diagnosticUsage),
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      context: {
-        limit: contextTokensUsed,
-        ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
-      },
-      costUsd,
-      durationMs: Date.now() - runStartedAt,
-    });
-  }
-
   const responseUsageSessionRaw =
     activeSessionEntry?.responseUsage ??
     (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
@@ -683,7 +683,7 @@ export async function prepareReplyAgentPayloads(state: {
   // Refresh inherited verbosity even when it started off: session preferences
   // and plugin diagnostics may change while the model runs.
   if (followupRun.run.verboseLevelOverride !== "off" || followupRun.run.traceAuthorized === true) {
-    activeSessionEntry = refreshSessionEntryFromStore({
+    activeSessionEntry = await refreshSessionEntryFromStore({
       storePath,
       sessionKey,
       fallbackEntry: activeSessionEntry,

@@ -1,5 +1,6 @@
 @preconcurrency import ActivityKit
 import Foundation
+import OpenClawKit
 import os
 
 /// Owns the single ActivityKit presentation for connection, attention, tool,
@@ -387,10 +388,7 @@ final class LiveActivityManager {
         self.currentStaleDate = staleDate
         self.pendingActivityUpdate = PendingActivityUpdate(state: state, staleDate: staleDate)
         guard self.activityUpdateTask == nil else { return }
-        self.startUpdateWorker(activity: activity, generation: self.activityGeneration)
-    }
-
-    private func startUpdateWorker(activity: Activity<OpenClawActivityAttributes>, generation: UInt64) {
+        let generation = self.activityGeneration
         self.activityUpdateTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self,
@@ -404,11 +402,6 @@ final class LiveActivityManager {
 
             guard let self, generation == self.activityGeneration else { return }
             self.activityUpdateTask = nil
-            if self.pendingActivityUpdate != nil,
-               self.currentActivity?.id == activity.id
-            {
-                self.startUpdateWorker(activity: activity, generation: generation)
-            }
         }
     }
 
@@ -552,7 +545,7 @@ final class LiveActivityManager {
         if statusText == String(localized: "Reconnecting...") || statusText == "Reconnecting..." {
             return StatusPresentation(status: .reconnecting, verbatimDetail: nil)
         }
-        return StatusPresentation(status: .connecting, verbatimDetail: self.normalizedDetail(statusText))
+        return StatusPresentation(status: .connecting, verbatimDetail: statusText.trimmedNonEmpty)
     }
 
     private static func attentionPresentation(statusText: String) -> StatusPresentation {
@@ -562,12 +555,7 @@ final class LiveActivityManager {
         if statusText == String(localized: "Action required") || statusText == "Action required" {
             return StatusPresentation(status: .actionRequired, verbatimDetail: nil)
         }
-        return StatusPresentation(status: .attention, verbatimDetail: self.normalizedDetail(statusText))
-    }
-
-    private static func normalizedDetail(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        return StatusPresentation(status: .attention, verbatimDetail: statusText.trimmedNonEmpty)
     }
 
     private static func voiceDetail(
@@ -595,6 +583,6 @@ final class LiveActivityManager {
         if knownLabels.contains(value) {
             return nil
         }
-        return self.normalizedDetail(value)
+        return value.trimmedNonEmpty
     }
 }

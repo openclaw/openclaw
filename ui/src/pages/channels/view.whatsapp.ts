@@ -13,7 +13,7 @@ import {
   renderChannelActionRow,
   renderChannelErrorRow,
   renderChannelFacts,
-  resolveChannelConfigured,
+  resolveChannelDisplayState,
 } from "./view.shared.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
@@ -23,7 +23,7 @@ export function renderWhatsAppCard(params: {
   accountCount?: number;
 }) {
   const { props, whatsapp, accountCount } = params;
-  const configured = resolveChannelConfigured("whatsapp", props);
+  const { configured } = resolveChannelDisplayState("whatsapp", props);
   const linked = whatsapp?.linked === true;
   const hasQr = props.channels.whatsappLoginQrDataUrl != null;
   const rawPhoneNumber = whatsapp?.self?.e164;

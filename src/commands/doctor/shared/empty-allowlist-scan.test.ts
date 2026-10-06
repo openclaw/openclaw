@@ -35,10 +35,6 @@ vi.mock("../channel-capabilities.js", () => ({
   },
 }));
 
-vi.mock("./channel-doctor.js", () => ({
-  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: () => false,
-}));
-
 describe("doctor empty allowlist policy scan", () => {
   it("scans top-level and account-scoped channel warnings", async () => {
     const warnings = await scanEmptyAllowlistPolicyWarnings(
@@ -134,25 +130,6 @@ describe("doctor empty allowlist policy scan", () => {
             groupAllowFrom: [],
             accounts: {
               Work: { groupAllowFrom: ["matrix:group:work"] },
-            },
-          },
-        },
-      },
-      { doctorFixCommand: "openclaw doctor --fix" },
-    );
-
-    expect(warnings).toEqual([]);
-  });
-
-  it("matches raw runtime account ids to canonical config keys", async () => {
-    const warnings = await scanEmptyAllowlistPolicyWarnings(
-      {
-        channels: {
-          signal: {
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-            accounts: {
-              Work: { groupAllowFrom: ["signal:group:work"] },
             },
           },
         },

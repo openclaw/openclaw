@@ -7,6 +7,7 @@ import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
+import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
 import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js";
@@ -209,6 +210,7 @@ export async function resolveSubagentSpawnRequest(
       : undefined;
     return resolveSpawnAdmission({
       cfg,
+      inheritedToolPolicySource: ctx.inheritedToolPolicySource,
       collector: collectorRuns
         ? {
             liveChildren: collectorRuns.filter((entry) => !entry.collectorCompletion).length,
@@ -226,6 +228,8 @@ export async function resolveSubagentSpawnRequest(
     });
   };
   try {
+    ctx.assertActive?.();
+    await prepareSubagentSessionListReadCache();
     ctx.assertActive?.();
   } catch (error) {
     return rejectSubagentSpawnRequest(

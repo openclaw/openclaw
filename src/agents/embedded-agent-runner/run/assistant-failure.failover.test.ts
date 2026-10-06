@@ -277,7 +277,9 @@ describe("assistant failure recovery", () => {
         if (reason === "auth") {
           expect(failure.message).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
         } else if (reason === "rate_limit") {
-          expect(failure.message).toBe("⚠️ API rate limit reached. Please try again later.");
+          expect(failure.message).toBe(
+            "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+          );
         }
         expect(input.traceAttempts[0]?.status).toBe(status);
       }

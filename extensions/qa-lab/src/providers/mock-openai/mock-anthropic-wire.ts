@@ -33,19 +33,11 @@ function stringifyToolResultContent(
   return "";
 }
 
-export function convertAnthropicMessagesToResponsesInput(params: {
-  system?: AnthropicMessagesRequest["system"];
-  messages: AnthropicMessage[];
-}): ResponsesInputItem[] {
+export function convertAnthropicMessagesToResponsesInput(
+  messages: AnthropicMessage[],
+): ResponsesInputItem[] {
   const items: ResponsesInputItem[] = [];
-  const systemText = normalizeAnthropicSystemToString(params.system);
-  if (systemText) {
-    items.push({
-      role: "system",
-      content: [{ type: "input_text", text: systemText }],
-    });
-  }
-  for (const message of params.messages) {
+  for (const message of messages) {
     const content = message.content;
     if (typeof content === "string") {
       items.push({
@@ -105,9 +97,7 @@ export function convertAnthropicMessagesToResponsesInput(params: {
       items.push({ role: message.role, content: [...textPieces, ...imagePieces] });
     }
     // A tool-result-only turn has no user message: it continues the active turn.
-    for (const item of [...toolUseItems, ...toolResultItems]) {
-      items.push(item);
-    }
+    items.push(...toolUseItems, ...toolResultItems);
   }
   return items;
 }
@@ -120,24 +110,11 @@ type ExtractedAssistantOutput = {
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
 const ANTHROPIC_TOOL_USE_ID_MAX_LENGTH = 64;
 
-function isNativeAnthropicToolUseId(id: string): boolean {
-  return id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id);
-}
-
 export function adaptAnthropicToolCallIds(events: StreamEvent[]): StreamEvent[] {
-  const adaptedIds = new Map<string, string>();
-  const adaptId = (id: string) => {
-    if (isNativeAnthropicToolUseId(id)) {
-      return id;
-    }
-    const existing = adaptedIds.get(id);
-    if (existing) {
-      return existing;
-    }
-    const adapted = `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
-    adaptedIds.set(id, adapted);
-    return adapted;
-  };
+  const adaptId = (id: string) =>
+    id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id)
+      ? id
+      : `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
   const adaptItem = (item: Record<string, unknown>) => {
     if (
       (item.type === "function_call" || item.type === "custom_tool_call") &&

@@ -305,7 +305,8 @@ export async function prepareGitRuntimePromotion(
         recursive: true,
         preserveTimestamps: true,
         verbatimSymlinks: true,
-        filter: (source) => !disposableCaches.has(source),
+        // An unused filter prevents Node from using its native directory-copy path.
+        filter: disposableCaches.size > 0 ? (source) => !disposableCaches.has(source) : undefined,
       });
       assertDestination?.(destination);
       await relocateRuntimeTree(candidate, sourceRoot, destination, relocations);

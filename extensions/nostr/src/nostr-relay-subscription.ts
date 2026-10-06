@@ -13,7 +13,6 @@ export function createNostrRelaySubscriptionGroup(options: {
   onEvent: (event: Event) => void;
   onBackfillComplete: (relays: string[]) => void;
   onClose: (relay: string, reasons: string[]) => void;
-  eoseConfirmDeadlineMs?: number;
 }) {
   const relays = [...new Set(options.relays)];
   const subscriptions: Array<ReturnType<SimplePool["subscribeMany"]>> = [];
@@ -22,7 +21,7 @@ export function createNostrRelaySubscriptionGroup(options: {
   const backfillStatus = new Map<string, BackfillStatus>(
     relays.map((relay): [string, BackfillStatus] => [relay, "pending"]),
   );
-  const confirmDeadlineMs = options.eoseConfirmDeadlineMs ?? DEFAULT_EOSE_CONFIRM_DEADLINE_MS;
+  const confirmDeadlineMs = DEFAULT_EOSE_CONFIRM_DEADLINE_MS;
 
   const settleBackfill = (relay: string, status: "confirmed" | "incomplete"): void => {
     if (backfillStatus.get(relay) !== "pending") {

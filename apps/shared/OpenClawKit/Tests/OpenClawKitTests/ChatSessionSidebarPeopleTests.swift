@@ -317,6 +317,17 @@ struct ChatSessionSidebarPeopleTests {
         """#)
         let card = try people.cardSessions(for: #require(people.people.first), sessions: page.sessions)
         #expect(card.viewing.map(\.key) == ["agent:main:main"])
+
+        try people.receivePresence(self.live(#"""
+        [{"connectionId":"mac","ts":2,"user":{"id":"alice"},
+          "watchedSessions":["agent:main:main","agent:bulk:main"]}]
+        """#))
+        let scoped = try self.response(#"""
+        {"sessions":[{"key":"global","agentId":"main"},{"key":"global","agentId":"bulk"}]}
+        """#)
+        let both = try people.cardSessions(for: #require(people.people.first), sessions: scoped.sessions)
+        #expect(both.viewing.count == 2)
+        #expect(Set(both.viewingKeys).count == 2)
     }
 
     @Test(arguments: [
@@ -372,6 +383,122 @@ struct ChatSessionSidebarPeopleTests {
         """#)
         let person = try #require(people.people.first { $0.id == "profile:alice" })
         #expect(people.cardSessions(for: person, sessions: page.sessions).recent.map(\.key) == ["apple", "zebra"])
+    }
+
+    @Test func `person cards describe reported environments once without inventing device facts`() throws {
+        let people = OpenClawChatSidebarPeople()
+        try people.receive(self.hello(#"""
+        [{"connectionId":"mac","ts":1,"deviceFamily":" Mac ","platform":"MacIntel","clientId":"openclaw-macos",
+          "timeZone":" America/Los_Angeles ","user":{"id":"alice","identity":{"type":"profile","id":"alice"}}},
+         {"connectionId":"duplicate","ts":1,"deviceFamily":"Mac","platform":"darwin","mode":"ui",
+          "timeZone":"America/Los_Angeles","user":{"id":"alice","identity":{"type":"profile","id":"alice"}}},
+         {"connectionId":"arm","ts":1,"deviceFamily":"Mac","platform":"macarm64","mode":"ui",
+          "timeZone":"Europe/Zurich","user":{"id":"alice","identity":{"type":"profile","id":"alice"}}},
+         {"connectionId":"ipad","ts":1,"deviceFamily":"iPad","platform":"MacIntel","clientId":"cli","mode":"webchat",
+          "timeZone":" ","user":{"id":"alice","identity":{"type":"profile","id":"alice"}}},
+         {"connectionId":"terminal","ts":1,"deviceFamily":"Linux","platform":"linux x86_64","clientId":"openclaw-tui",
+          "mode":"webchat","user":{"id":"alice","identity":{"type":"profile","id":"alice"}}},
+         {"connectionId":"cli","ts":1,"platform":"win32","clientId":"cli","mode":"ui",
+          "user":{"id":"alice","identity":{"type":"profile","id":"alice"}}},
+         {"connectionId":"unknown","ts":1,"user":{"id":"alice","identity":{"type":"profile","id":"alice"}}}]
+        """#))
+        let person = try #require(people.people.first)
+        #expect(person.connections == [
+            "Linux · x64 · Terminal", "Mac · ARM · App", "Mac · App", "Windows · Command line", "iPad · Web",
+        ])
+        #expect(person.reportedTimeZones == ["America/Los_Angeles", "Europe/Zurich"])
+    }
+
+    @Test(arguments: [
+        (-5000.0, true, false, "1m"),
+        (59999.0, true, false, "1m"),
+        (119_999.0, true, false, "1m"),
+        (120_000.0, true, false, "2m"),
+        (3_659_999.0, true, false, "1h"),
+        (3_660_000.0, true, false, "1h 1m"),
+        (59999.0, false, false, "1m"),
+        (89999.0, false, true, "1m"),
+        (90000.0, false, true, "2m"),
+        (3_569_999.0, false, true, "59m"),
+        (3_570_000.0, false, true, "1h"),
+        (84_599_999.0, false, true, "23h"),
+        (84_600_000.0, false, true, "1d"),
+    ])
+    func `person card elapsed labels match web minute floors and single unit rounding`(
+        sample: (Double, Bool, Bool, String))
+    {
+        #expect(ChatSidebarPersonPresentation.elapsed(
+            milliseconds: sample.0, minimumMinute: sample.1, singleUnit: sample.2) == sample.3)
+    }
+
+    @Test(arguments: ["removed", "watched", "foreign owner"])
+    func `an open person card keeps recent identities stable and permanently retires ineligible links`(
+        retirement: String) throws
+    {
+        let people = OpenClawChatSidebarPeople()
+        try people.receive(self.hello(self.presence))
+        let alice = try #require(people.people.first { $0.id == "profile:alice" })
+        let initial = try self.response(#"""
+        {"sessions":[
+          {"key":"a","updatedAt":400,"createdActor":{"type":"human","identity":{"type":"profile","id":"alice"}}},
+          {"key":"b","updatedAt":300,"owner":{"actor":{"type":"human","identity":{"type":"profile","id":"alice"}}}},
+          {"key":"c","updatedAt":200,"createdActor":{"type":"human","identity":{"type":"profile","id":"alice"}}},
+          {"key":"waiting","updatedAt":100,"createdActor":{"type":"human","identity":{"type":"profile","id":"alice"}}}
+        ]}
+        """#)
+        let opening = people.cardSessions(for: alice, sessions: initial.sessions)
+        #expect(opening.recent.map(\.key) == ["a", "b", "c"])
+
+        let refreshed = try self.response(#"""
+        {"sessions":[
+          {"key":"waiting","updatedAt":900,"createdActor":{"type":"human","identity":{"type":"profile","id":"alice"}}},
+          {"key":"agent:main:c","updatedAt":800,"createdActor":{"type":"human","identity":{"type":"profile","id":"alice"}}},
+          {"key":"agent:main:b","updatedAt":700,"owner":{"actor":{"type":"human","identity":{"type":"profile","id":"alice"}}}},
+          {"key":"agent:main:a","label":"A updated","updatedAt":600,
+           "createdActor":{"type":"human","identity":{"type":"profile","id":"alice"}}}
+        ]}
+        """#)
+        let reranked = people.cardSessions(for: alice, sessions: refreshed.sessions, recentKeys: opening.recentKeys)
+        #expect(reranked.recentKeys == opening.recentKeys)
+        #expect(reranked.recent.map(\.key) == ["agent:main:a", "agent:main:b", "agent:main:c"])
+        #expect(reranked.recent.first?.label == "A updated")
+        #expect(reranked.recent.first?.updatedAt == 600)
+
+        var currentRows = refreshed.sessions.filter { $0.key != "agent:main:b" }
+        if retirement != "removed" {
+            let owner = retirement == "foreign owner" ? "bea" : "alice"
+            currentRows += try self.response("""
+            {"sessions":[{"key":"agent:main:b","updatedAt":1000,
+              "owner":{"actor":{"type":"human","identity":{"type":"profile","id":"\(owner)"}}}}]}
+            """).sessions
+        }
+        if retirement == "watched" {
+            try people.receivePresence(self.live(#"""
+            [{"connectionId":"mac","ts":2,"user":{"id":"alice","identity":{"type":"profile","id":"alice"}},
+              "watchedSessions":["agent:main:b"]}]
+            """#))
+        }
+        let currentPerson = try #require(people.people.first { $0.id == "profile:alice" })
+        let retired = people.cardSessions(for: currentPerson, sessions: currentRows, recentKeys: reranked.recentKeys)
+        #expect(retired.recent.map(\.key) == ["agent:main:a", "agent:main:c"])
+        #expect(retired.viewing.map(\.key) == (retirement == "watched" ? ["agent:main:b"] : []))
+
+        try people.receivePresence(self.live(self.presence))
+        let restoredPerson = try #require(people.people.first { $0.id == "profile:alice" })
+        let restored = people.cardSessions(
+            for: restoredPerson,
+            sessions: refreshed.sessions,
+            recentKeys: retired.recentKeys)
+        #expect(restored.recent.map(\.key) == ["agent:main:a", "agent:main:c"])
+        let emptied = people.cardSessions(
+            for: restoredPerson, sessions: refreshed.sessions.filter { $0.key == "waiting" },
+            recentKeys: restored.recentKeys)
+        #expect(emptied.recent.isEmpty)
+        #expect(people.cardSessions(
+            for: restoredPerson, sessions: refreshed.sessions, recentKeys: emptied.recentKeys).recent.isEmpty)
+        #expect(people.cardSessions(for: restoredPerson, sessions: refreshed.sessions).recent.map(\.key) == [
+            "waiting", "agent:main:c", "agent:main:b",
+        ])
     }
 }
 #endif

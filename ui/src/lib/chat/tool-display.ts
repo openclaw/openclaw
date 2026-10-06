@@ -1,6 +1,7 @@
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import SHARED_TOOL_DISPLAY_JSON from "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import {
   defaultTitle,
   normalizeToolDisplayName,
@@ -15,23 +16,17 @@ const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 const CANVAS_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
 
-type SharedToolDisplaySpec = ToolDisplaySpec & {
-  emoji?: string;
-};
-
 type ToolDisplay = {
   name: string;
   icon: ReturnType<typeof resolveToolDisplayIcon>;
-  title: string;
   label: string;
-  verb?: string;
   detail?: string;
 };
 
 export type EmbedSandboxMode = ControlUiEmbedSandboxMode;
 
 const FALLBACK = SHARED_TOOL_DISPLAY_JSON.fallback;
-const TOOL_MAP: Record<string, SharedToolDisplaySpec> = SHARED_TOOL_DISPLAY_JSON.tools;
+const TOOL_MAP: Record<string, ToolDisplaySpec> = SHARED_TOOL_DISPLAY_JSON.tools;
 
 function shortenHomeInString(input: string): string {
   // Browser-safe home shortening: avoid importing Node-only helpers (keeps Vite builds working in Docker/CI).
@@ -43,27 +38,23 @@ function shortenHomeInString(input: string): string {
 export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
-  meta?: string;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
-  const name = normalizeToolDisplayName(params.name);
+  const call = unwrapToolCallForDisplay({ name: params.name, args: params.args });
+  const name = normalizeToolDisplayName(call.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const icon = resolveToolDisplayIcon(name);
-  const title = spec?.title ?? defaultTitle(name);
-  const label = spec?.label ?? title;
-  const toolDisplayParts = resolveToolVerbAndDetailForArgs({
+  const label = spec?.label ?? spec?.title ?? defaultTitle(name);
+  let { detail } = resolveToolVerbAndDetailForArgs({
     toolKey: key,
-    args: params.args,
-    meta: params.meta,
+    args: call.args,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "first",
     toolDetailMode: params.detailMode,
     detailCoerce: { includeFalsy: true },
   });
-  const { verb } = toolDisplayParts;
-  let { detail } = toolDisplayParts;
 
   if (detail) {
     detail = shortenHomeInString(detail);
@@ -72,9 +63,7 @@ export function resolveToolDisplay(params: {
   return {
     name,
     icon,
-    title,
     label,
-    verb,
     detail,
   };
 }
@@ -96,21 +85,16 @@ function sanitizeCanvasEntryUrl(
   rawEntryUrl: string,
   allowExternalEmbedUrls = false,
 ): string | undefined {
-  try {
-    const entry = new URL(rawEntryUrl, "http://localhost");
-    if (entry.origin !== "http://localhost") {
-      if (!allowExternalEmbedUrls || !isHttpUrl(entry)) {
-        return undefined;
-      }
-      return entry.toString();
-    }
-    if (!isCanvasHttpPath(entry.pathname)) {
-      return undefined;
-    }
-    return `${entry.pathname}${entry.search}${entry.hash}`;
-  } catch {
+  const entry = URL.parse(rawEntryUrl, "http://localhost");
+  if (!entry) {
     return undefined;
   }
+  if (entry.origin !== "http://localhost") {
+    return allowExternalEmbedUrls && isHttpUrl(entry) ? entry.toString() : undefined;
+  }
+  return isCanvasHttpPath(entry.pathname)
+    ? `${entry.pathname}${entry.search}${entry.hash}`
+    : undefined;
 }
 
 /**

@@ -1,11 +1,11 @@
 // Channels page shared view helpers.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
-import type { ChannelAccountSnapshot } from "../../api/types.ts";
+import type { ChannelAccountSnapshot, ChannelStatus } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
-import { renderSettingsStatus } from "../../components/settings-ui.ts";
+import { renderSettingsRow, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
@@ -78,14 +78,6 @@ export function resolveChannelDisplayState(
   };
 }
 
-export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
-  return channelSnapshotEntryIsActive(props.channels.channelsSnapshot, key);
-}
-
-export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps): boolean | null {
-  return resolveChannelDisplayState(key, props).configured;
-}
-
 export function formatNullableBoolean(value: boolean | null): string {
   if (value == null) {
     return t("common.na");
@@ -118,42 +110,24 @@ export function renderChannelFacts(rows: readonly ChannelStatusRow[]) {
   `;
 }
 
-/** Error row: danger dot + label, message as description. */
 export function renderChannelErrorRow(message: unknown) {
-  return html`
-    <div class="settings-row">
-      <div class="settings-row__text">
-        <span class="settings-row__title"
-          >${renderSettingsStatus({ kind: "danger", label: t("channels.lastError") })}</span
-        >
-        <span class="settings-row__desc">${formatUiError(message)}</span>
-      </div>
-    </div>
-  `;
+  return renderSettingsRow({
+    title: renderSettingsStatus({ kind: "danger", label: t("channels.lastError") }),
+    description: html`${formatUiError(message)}`,
+  });
 }
 
-/** Probe outcome row: ok/danger dot with the raw status/error detail. */
-export function renderChannelProbeRow(probe: {
-  ok?: boolean;
-  status?: number | string | null;
-  error?: string | null;
-}) {
+export function renderChannelProbeRow(probe: NonNullable<ChannelStatus["probe"]>) {
   const detail = formatUiExternalText(
     [probe.status ?? "", probe.error ?? ""].filter(Boolean).join(" "),
   );
-  return html`
-    <div class="settings-row">
-      <div class="settings-row__text">
-        <span class="settings-row__title"
-          >${renderSettingsStatus({
-            kind: probe.ok ? "ok" : "danger",
-            label: probe.ok ? t("common.probeOk") : t("common.probeFailed"),
-          })}</span
-        >
-        ${detail ? html`<span class="settings-row__desc">${detail}</span>` : nothing}
-      </div>
-    </div>
-  `;
+  return renderSettingsRow({
+    title: renderSettingsStatus({
+      kind: probe.ok ? "ok" : "danger",
+      label: probe.ok ? t("common.probeOk") : t("common.probeFailed"),
+    }),
+    description: detail,
+  });
 }
 
 /** Trailing action row carrying a button cluster in the control slot. */

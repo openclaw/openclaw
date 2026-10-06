@@ -56,11 +56,9 @@ function createNarrationRetry(): NarrationRetry {
   return { retryWindowMs: SIDEBAR_NARRATION_RETRY_INITIAL_MS, retryAt: 0, timer: null };
 }
 
-type NarrationActivity = { text: string };
-
 type ThrottledLine = {
   lastPublishedAt: number;
-  pending: NarrationActivity | null;
+  pending: string | null;
   timer: ReturnType<typeof globalThis.setTimeout> | null;
 };
 
@@ -77,12 +75,12 @@ export type SidebarNarrationSyncInput = {
   connected: boolean;
   connectionIdentity: object | null;
   source: NarrationSource | null;
-  rows: readonly SidebarRecentSession[];
+  rows: readonly Pick<SidebarRecentSession, "key" | "hasActiveRun" | "startedAt" | "updatedAt">[];
   openSessionKey: string;
   agentId: string;
 };
 
-function rowRecency(row: SidebarRecentSession): number {
+function rowRecency(row: Pick<SidebarRecentSession, "startedAt" | "updatedAt">): number {
   return row.startedAt ?? row.updatedAt ?? 0;
 }
 
@@ -106,6 +104,7 @@ export class SidebarSessionNarrationController {
   };
   private connectionIdentity: object | null = null;
   private connected = false;
+  private disposed = false;
   private enabled = false;
   private agentId = "main";
   private desiredKeys = new Set<string>();
@@ -130,6 +129,9 @@ export class SidebarSessionNarrationController {
   ) {}
 
   sync(input: SidebarNarrationSyncInput): void {
+    if (this.disposed) {
+      return;
+    }
     if (!this.input) {
       this.visibilityDocument = globalThis.document ?? null;
       this.visibilityDocument?.addEventListener("visibilitychange", this.handleVisibilityChange);
@@ -238,6 +240,15 @@ export class SidebarSessionNarrationController {
     this.syncReleases();
   }
 
+  /** Final teardown retains cleanup custody; no later sync will resume it. */
+  dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.disconnect();
+  }
+
   private async subscribeKey(key: string): Promise<void> {
     const source = this.source;
     const connectionIdentity = this.connectionIdentity;
@@ -305,6 +316,8 @@ export class SidebarSessionNarrationController {
       retry.retryAt = 0;
       if (this.input) {
         this.sync(this.input);
+      } else {
+        this.syncReleases();
       }
     }, delay);
   }
@@ -368,7 +381,12 @@ export class SidebarSessionNarrationController {
 
   private syncReleases(): void {
     for (const [owned, retry] of this.pendingReleases) {
-      if (!this.connected || owned.connectionIdentity !== this.connectionIdentity) {
+      // Final cleanup uses the original handles even after presentation ends.
+      // Their coordinator owns connection retirement and shared-viewer safety.
+      if (
+        !this.disposed &&
+        (!this.connected || owned.connectionIdentity !== this.connectionIdentity)
+      ) {
         this.cancelRetry(retry);
         retry.retryAt = 0;
         // DOM detachment pauses cleanup without retiring the socket's leases.
@@ -482,7 +500,7 @@ export class SidebarSessionNarrationController {
       });
     } else if (immediate) {
       const pending = this.throttles.get(key)?.pending;
-      if (pending) {
+      if (pending != null) {
         this.publishImmediate(key, pending);
       }
     }
@@ -503,7 +521,7 @@ export class SidebarSessionNarrationController {
     // The Gateway bounds already-sanitized text and owns digest pacing. Retire
     // any full-owner stream and pending tool line before publishing its snapshot.
     this.streams.delete(key);
-    this.publishImmediate(key, { text: payload.text });
+    this.publishImmediate(key, payload.text);
   }
 
   private publishText(
@@ -549,11 +567,10 @@ export class SidebarSessionNarrationController {
       nextVisibleText.length > SIDEBAR_NARRATION_BUFFER_CHARS
         ? sliceUtf16Safe(nextVisibleText, -SIDEBAR_NARRATION_BUFFER_CHARS)
         : nextVisibleText;
-    const activity: NarrationActivity = { text: stream.visibleText };
     if (update.immediate) {
-      this.publishImmediate(key, activity);
+      this.publishImmediate(key, stream.visibleText);
     } else {
-      this.publishThrottled(key, activity);
+      this.publishThrottled(key, stream.visibleText);
     }
   }
 
@@ -636,14 +653,14 @@ export class SidebarSessionNarrationController {
     this.runIds.set(key, runId);
   }
 
-  private publishThrottled(key: string, activity: NarrationActivity): void {
+  private publishThrottled(key: string, text: string): void {
     const now = Date.now();
     const throttle = this.throttles.get(key);
     if (!throttle || now - throttle.lastPublishedAt >= SIDEBAR_NARRATION_THROTTLE_MS) {
-      this.publishImmediate(key, activity);
+      this.publishImmediate(key, text);
       return;
     }
-    throttle.pending = activity;
+    throttle.pending = text;
     if (throttle.timer) {
       return;
     }
@@ -652,7 +669,7 @@ export class SidebarSessionNarrationController {
         throttle.timer = null;
         const pending = throttle.pending;
         throttle.pending = null;
-        if (!pending || !this.desiredKeys.has(key)) {
+        if (pending === null || !this.desiredKeys.has(key)) {
           return;
         }
         throttle.lastPublishedAt = Date.now();
@@ -662,17 +679,17 @@ export class SidebarSessionNarrationController {
     );
   }
 
-  private publishImmediate(key: string, activity: NarrationActivity): void {
+  private publishImmediate(key: string, text: string): void {
     const timer = this.throttles.get(key)?.timer;
     if (timer) {
       globalThis.clearTimeout(timer);
     }
     this.throttles.set(key, { lastPublishedAt: Date.now(), pending: null, timer: null });
-    this.publishActivity(key, activity);
+    this.publishActivity(key, text);
   }
 
-  private publishActivity(key: string, activity: NarrationActivity): void {
-    const line = deriveSidebarNarrationLine(activity.text);
+  private publishActivity(key: string, text: string): void {
+    const line = deriveSidebarNarrationLine(text);
     if (line) {
       if (this.lines.get(key) !== line) {
         this.lines.set(key, line);
@@ -682,7 +699,7 @@ export class SidebarSessionNarrationController {
     }
     // The activity text is the full visible buffer: normalizing it to nothing
     // means only suppressed content remains (e.g. a replacement that reduced
-    // to REPLY_SKIP or a heartbeat), so retract any previously shown line.
+    // to a historical control reply or a heartbeat), so retract any previously shown line.
     if (this.lines.delete(key)) {
       this.onLinesChanged(new Map(this.lines));
     }

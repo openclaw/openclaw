@@ -28,7 +28,7 @@ function createHarness(config?: Record<string, unknown>) {
       ? config
       : {
           agents: {
-            entries: { main: { default: true, workspace: "/tmp/main-workspace" } },
+            entries: { main: { workspace: "/tmp/main-workspace" } },
           },
         };
   const api = {
@@ -171,7 +171,7 @@ describe("session backfill gateway methods", () => {
     const { methods } = createHarness({
       agents: {
         entries: {
-          main: { default: true },
+          main: {},
           tester: {},
         },
       },

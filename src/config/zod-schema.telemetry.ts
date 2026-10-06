@@ -13,7 +13,7 @@ const TelemetryConfigShape = {
   }),
 };
 
-export const TelemetryConfigSchema = z.object(TelemetryConfigShape).strict().optional();
+export const TelemetryConfigSchema = z.strictObject(TelemetryConfigShape).optional();
 
 export const { labels: TELEMETRY_FIELD_LABELS, help: TELEMETRY_FIELD_HELP } =
   projectConfigFieldMetadata(TelemetryConfigSchema, "telemetry");

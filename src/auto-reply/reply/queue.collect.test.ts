@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadTranscriptEvents,
@@ -9,6 +8,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createQueueCase } from "./queue.case.test-support.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
@@ -24,7 +24,7 @@ import {
   createQueueSettings,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { resolveFollowupDeliveryContextKey } from "./queue/delivery-context.js";
+import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 type InternalFollowupRun = FollowupRun & {
@@ -34,6 +34,7 @@ type InternalFollowupRun = FollowupRun & {
     suppressedFactIndexes: number[];
   };
 };
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-overflow-session-");
 installQueueRuntimeErrorSilencer();
 describe("followup queue collect routing", () => {
   it("carries queued local cron-authority unavailability through a collect batch", async () => {
@@ -694,7 +695,7 @@ describe("followup queue collect routing", () => {
   });
 
   it("persists overflow summaries to the session selected after queue admission", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-overflow-session-"));
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const oldTranscriptPath = path.join(tempDir, "old-session.jsonl");
     const q = createQueueCase({ mode: "followup", cap: 1 });
@@ -739,7 +740,6 @@ describe("followup queue collect routing", () => {
       await expect(fs.stat(oldTranscriptPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       clearFollowupQueue(q.key);
-      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -1153,7 +1153,7 @@ describe("followup authorization delivery context", () => {
   it("changes when the approval reviewer device changes", () => {
     const run = createRun({ prompt: "one" });
     const keyFor = (approvalReviewerDeviceId: string) =>
-      resolveFollowupDeliveryContextKey({
+      resolveFollowupDeliveryStorageKey({
         ...run,
         run: { ...run.run, approvalReviewerDeviceId },
       });

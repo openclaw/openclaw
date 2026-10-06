@@ -66,7 +66,7 @@ export type RunPreparedReplyParams = {
   sessionEntry?: SessionEntry;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
-  sessionKey: string;
+  sessionKey?: string;
   sessionId?: string;
   storePath?: string;
   workspaceDir: string;

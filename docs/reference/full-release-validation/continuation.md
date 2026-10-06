@@ -113,7 +113,7 @@ controller never reconstructs old state or dispatches a replacement parent.
 
 For new dispatches, including dry runs, the helper first proves GitHub serves the
 exact Validation SHA by bare-SHA fetch in a fresh temporary repository. It pushes
-one immutable `release-ci/*` workflow ref pinned to the Tooling SHA,
+one immutable `release-ci/*` workflow ref pinned to Q=C after independent P admission,
 passes the exact Validation SHA as both `ref` and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
 verification. The helper reads Release Decision artifacts while the parent is
@@ -135,64 +135,34 @@ Validation SHA is the exact commit being qualified: the Code SHA, which can
 also be the Release SHA, or a later changelog-only Release SHA. It is not a
 third release identity. The workflow
 rejects malformed or mismatched expected SHAs before child dispatch. Every
-child must report the same Tooling SHA. Pass
-`-f reuse_evidence=false` to force a fresh run. Regular release-branch runs
-require `--workflow-sha` with the recorded full SHA, which must remain reachable
-from current `origin/main`. The helper rejects a pinned Tooling SHA that does
-not declare the current release-isolation contract or the `expected_sha`
-dispatch input; it never silently substitutes newer tooling. The workflow never
-creates or updates repository refs itself.
-
-### Record a flake
-
-Decide explicitly whether each failed test blocks release or is a flake. Rerun
-a flake on the same Release SHA at most twice with `frv rerun --job`, and file an
-issue or PR tracking its fix on `main`. Do not re-cut the release, change tooling,
-or start a new Full Release Validation for it. A flake never blocks publication
-once its eligible failure is recorded.
-
-For a still-failing `normalCi` job, dispatch the classification workflow from
-trusted `main`, using the exact job URL from its accepted attempt:
-
-```bash
-gh workflow run full-release-flake-classification.yml --repo openclaw/openclaw --ref main \
-  -f job_url='https://github.com/openclaw/openclaw/actions/runs/<child-run-id>/job/<job-id>' \
-  -f tracking_url='https://github.com/openclaw/openclaw/issues/<issue-number>' \
-  -f reason='Describe the observed flake and why the release can proceed.'
-```
-
-Wait for that classification run to succeed. Its receipt binds the FRV parent,
-CI child, Release SHA, accepted job ID/attempt, actor, reason, and tracking issue
-or PR. Then run `pnpm frv continue --failed --run <parent-run-id>`: when all
-remaining failures are advisory, it reruns only the parent collector and verifies
-the sealed manifest. It does not rerun the classified child. Inspect `frv status`
-first if other blockers remain, because `continue --failed` retries them.
-
-The `recorded-flake` class is limited to `normalCi` in v1. CI coverage gates,
-seal/evidence jobs, Build Artifacts, install smoke, survivor, first-hop, pack/npm
-qualification, Package Acceptance, and package integrity cannot be classified.
-Other children remain strict; extending the scope is follow-up work. A failed
-`openclaw/ci-gate` is accepted only when every other failed job is advisory,
-at least one has a recorded classification, and its log proves every non-passing
-entry is `selected=true` with result `failure`. Matrix job display names may
-differ from gate keys. Skipped, cancelled, missing, or unrecognized entries block.
-A later rerun creates a different job ID and invalidates the old classification
-for that job.
+child must report the same Q. Pass `-f reuse_evidence=false` to force a fresh run.
+New publication requests retain Q=C and select P with the admission-workflow
+arguments. Only P requires independent trusted-main or protected-tag authority;
+Q requires its reviewed candidate context and frozen qualification contracts.
+Missing contracts require deliberate candidate backports, never newer-tooling
+substitution. Existing historical requests retain their original identities.
+The workflow never creates or updates repository refs itself.
 
 ### Automatic retries for declared flakes
 
-Automatic test retries are disabled. Unclassified failed or timed out jobs
-outside `windows-node-ci` remain blockers; `known_flaky_jobs_json` is rejected
+Automatic test retries are disabled. Failed or timed out jobs remain blockers;
+`known_flaky_jobs_json` is rejected
 on new dispatches. Inspect the original failure before requesting another execution. The
 explicit `frv rerun` and `frv continue --failed` commands remain operator recovery
 operations and never run as an automatic response to a test outcome.
 
 Published artifacts may contain empty `knownFlakyJobs` and `automaticRetries`
 fields. Readers retain their original plan digest and reject nonempty allowances
-or retry records. Current qualification requires successful selected results
-or validated `windows-node-ci`/`recorded-flake` evidence. Retired waivers and
-pre-declared advisory failure allowances remain rejected and must
-be replaced with a fresh qualifying run; it cannot authorize publication.
+or retry records. Current qualification requires successful selected results. A
+campaign already dispatched with an
+older pinned Tooling SHA remains owned by that immutable tooling and must not be
+retargeted mid-run. Current strict tooling rejects retained `windows-node-ci`
+advisory evidence; start a fresh campaign that satisfies the restored blocking
+gate. Candidate-owned qualification still uses Q=C: if the frozen harness needs
+the policy repair, deliberately backport it and freeze a new candidate instead
+of substituting newer main tooling. Retired waivers and pre-declared advisory failure
+allowances remain rejected and must be replaced with a fresh qualifying run; they
+cannot authorize publication.
 
 ### Read publication observations
 

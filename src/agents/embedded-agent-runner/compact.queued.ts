@@ -1,9 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  loadSessionEntryReadOnly,
-  type SessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -35,7 +33,7 @@ import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { beginForegroundSessionMaintenance } from "../session-maintenance/coordinator.js";
-import { resolveSessionPlacementSandbox } from "../session-placement-admission.js";
+import { prepareSessionPlacementSandbox } from "../session-placement-admission.js";
 import { deferOwningContextEngineBudgetCompaction } from "./compact.deferred-context-engine.js";
 import { runForegroundCompactionWork } from "./compact.foreground-work.js";
 import { compactNativeCliSession } from "./compact.js";
@@ -162,7 +160,11 @@ export async function compactEmbeddedAgentSession(
         : undefined;
     try {
       // Resolve the storage address first, then freeze its owner before runtime/plugin awaits.
-      const entry = loadSessionEntryReadOnly({ ...runtimeTarget, readConsistency: "latest" });
+      const entry = await readSessionEntryReadOnlyInWorker(
+        { ...runtimeTarget, readConsistency: "latest" },
+        () => assertQueuedCompactionPreparationActive(params, host),
+      );
+      assertQueuedCompactionPreparationActive(params, host);
       const expectedEntry = {
         sessionId: runtimeTarget.sessionId,
         lifecycleRevision: entry?.lifecycleRevision,
@@ -250,14 +252,14 @@ export async function compactEmbeddedAgentSession(
 async function compactEmbeddedAgentSessionImpl(
   params: QueuedCompactionParams,
   expectedEntry: Parameters<typeof acceptCompactionSuccessor>[0]["expectedEntry"],
-  host: QueuedCompactionHostOptions,
+  sourceHost: QueuedCompactionHostOptions,
   contextEngineSessionKey?: string,
 ): Promise<EmbeddedAgentCompactResult> {
   return await runForegroundCompactionWork(async (owner) => {
     if (params.abortSignal?.aborted) {
       return createQueuedCompactionAbortedResult();
     }
-    host.assertActive?.();
+    sourceHost.assertActive?.();
     const runtimeTarget = params.sessionTarget;
     const agentIds = resolveSessionAgentIds({
       sessionKey: runtimeTarget.sessionKey,
@@ -267,9 +269,9 @@ async function compactEmbeddedAgentSessionImpl(
     const agentDir =
       params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
     const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
-    const placementSandbox =
+    using placement =
       params.sandbox === undefined
-        ? await resolveSessionPlacementSandbox({
+        ? await prepareSessionPlacementSandbox({
             agentId: runtimeTarget.agentId,
             config: params.config,
             sessionId: runtimeTarget.sessionId,
@@ -277,6 +279,22 @@ async function compactEmbeddedAgentSessionImpl(
             workspaceDir: resolvedWorkspaceDir,
           })
         : null;
+    const assertActive = () => {
+      sourceHost.assertActive?.();
+      placement?.assertCurrent();
+    };
+    const host = {
+      ...sourceHost,
+      assertActive,
+      sourceAuthority: {
+        ...sourceHost.sourceAuthority,
+        assertActive: () => {
+          sourceHost.sourceAuthority.assertActive();
+          assertActive();
+        },
+      },
+    };
+    const placementSandbox = placement?.sandbox;
     assertQueuedCompactionPreparationActive(params, host);
     const requestedSelection = {
       ...params,
@@ -343,6 +361,7 @@ async function compactEmbeddedAgentSessionImpl(
     const preparedParams = {
       ...params,
       ...(placementSandbox ? { sandbox: placementSandbox } : {}),
+      memorySandboxed: (placementSandbox ?? params.sandbox)?.enabled === true,
       config: projectCodexHostTranscriptBytePreflightConfig(
         lease.snapshot.config,
         Boolean(host.transcriptBytePreflightHarness),
@@ -351,7 +370,7 @@ async function compactEmbeddedAgentSessionImpl(
     };
     const run = async () => {
       owner.captureContext();
-      ensureContextEnginesInitialized();
+      await ensureContextEnginesInitialized();
       const contextEngine = await owner.resolveEngine(() =>
         resolveContextEngine(preparedParams.config, {
           agentDir: preparedParams.agentDir,
@@ -534,14 +553,27 @@ async function compactResolvedContextEngine(
     model: effectiveRuntimeModel,
     requestedTokenBudget: params.contextTokenBudget,
   });
-  const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({
-    params: preparedParams,
-    agentDir,
-    harnessRuntime: preparedHarnessRuntime,
-    contextEngineSessionKey,
-    contextTokenBudget,
-    contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
-  });
+  const { sessionFile: _sessionFile, contextEngineAgentId, ...runtimeParams } = preparedParams;
+  const contextEngineRuntimeContext: ContextEngineRuntimeContext = {
+    ...runtimeParams,
+    sessionTarget: projectQueuedCompactionSessionTarget(preparedParams),
+    ...buildEmbeddedCompactionRuntimeContext({
+      ...preparedParams,
+      agentDir,
+      modelId: preparedParams.model,
+      harnessRuntime: preparedHarnessRuntime,
+    }),
+    ...resolveContextEngineCapabilities({
+      config: preparedParams.config,
+      sessionKey: contextEngineSessionKey ?? preparedParams.sessionKey,
+      explicitAgentId: contextEngineAgentId,
+      authProfileId: preparedParams.authProfileId,
+      contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
+      purpose: "context-engine.compaction",
+    }),
+    tokenBudget: contextTokenBudget,
+    currentTokenCount: preparedParams.currentTokenCount,
+  };
   const contextEngineRuntimeSettings = buildContextEngineRuntimeSettings({
     contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
     provider: ceProvider,
@@ -646,35 +678,4 @@ async function compactResolvedContextEngine(
     attemptNativeHarnessCompaction,
     transcriptBytePreflightAuthority,
   });
-}
-
-function buildCompactionContextEngineRuntimeContext(params: {
-  params: CompactEmbeddedAgentSessionParams;
-  agentDir: string;
-  contextEngineSessionKey?: string;
-  harnessRuntime?: string;
-  contextEnginePluginId?: string;
-  contextTokenBudget?: number;
-}): ContextEngineRuntimeContext {
-  const { sessionFile: _sessionFile, contextEngineAgentId, ...runtimeParams } = params.params;
-  return {
-    ...runtimeParams,
-    sessionTarget: projectQueuedCompactionSessionTarget(params.params),
-    ...buildEmbeddedCompactionRuntimeContext({
-      ...params.params,
-      agentDir: params.agentDir,
-      modelId: params.params.model,
-      harnessRuntime: params.harnessRuntime,
-    }),
-    ...resolveContextEngineCapabilities({
-      config: params.params.config,
-      sessionKey: params.contextEngineSessionKey ?? params.params.sessionKey,
-      explicitAgentId: contextEngineAgentId,
-      authProfileId: params.params.authProfileId,
-      contextEnginePluginId: params.contextEnginePluginId,
-      purpose: "context-engine.compaction",
-    }),
-    tokenBudget: params.contextTokenBudget,
-    currentTokenCount: params.params.currentTokenCount,
-  };
 }

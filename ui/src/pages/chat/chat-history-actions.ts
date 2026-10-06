@@ -91,10 +91,8 @@ function clearPostResetBranchPrecondition(
     !history ||
     !Object.hasOwn(history.sessionInfo ?? {}, "activeLeafEntryId") ||
     history.sessionInfo?.activeLeafEntryId !== null ||
-    state.client !== target.client ||
-    state.connectionEpoch !== target.connectionEpoch ||
     !state.connected ||
-    !visibleSessionMatches(state, target.sessionKey, target.agentId)
+    !ownsClearChatView(state, target)
   ) {
     return;
   }

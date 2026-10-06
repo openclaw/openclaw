@@ -1,6 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { MediaUnderstandingCapability } from "../../packages/media-understanding-common/src/types.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -60,40 +61,13 @@ export type MediaUnderstandingDecision = {
   attachments: MediaUnderstandingAttachmentDecision[];
   // Optional on the shipped SDK contract: plugins pass FinalizedMsgContext into
   // inbound-reply dispatch and may hold legacy decision literals. Core producers
-  // (runner, apply-capability, runtime) always populate it; absence renders no
+  // (runner, apply, runtime) always populate it; absence renders no
   // markers rather than breaking plugin compilation.
   attachmentDispositions?: Record<number, MediaAttachmentDisposition>;
   // CLI/provider completion is independent of usable output or a rendered marker.
   // Optional for shipped SDK decision literals; absence means unknown processing.
   attachmentProcessing?: Record<number, MediaAttachmentProcessing>;
   nativeVisionActive?: boolean;
-};
-
-type MediaUnderstandingProviderRequestAuthOverride =
-  | { mode: "provider-default" }
-  | { mode: "authorization-bearer"; token: string }
-  | { mode: "header"; headerName: string; value: string; prefix?: string };
-
-type MediaUnderstandingProviderRequestTlsOverride = {
-  ca?: string;
-  cert?: string;
-  key?: string;
-  passphrase?: string;
-  serverName?: string;
-  insecureSkipVerify?: boolean;
-};
-
-type MediaUnderstandingProviderRequestProxyOverride =
-  | { mode: "env-proxy"; tls?: MediaUnderstandingProviderRequestTlsOverride }
-  | { mode: "explicit-proxy"; url: string; tls?: MediaUnderstandingProviderRequestTlsOverride };
-
-type MediaUnderstandingProviderRequestTransportOverrides = {
-  headers?: Record<string, string>;
-  auth?: MediaUnderstandingProviderRequestAuthOverride;
-  proxy?: MediaUnderstandingProviderRequestProxyOverride;
-  tls?: MediaUnderstandingProviderRequestTlsOverride;
-  /** Runtime-only flag from trusted model-provider config; media config rejects it. */
-  allowPrivateNetwork?: boolean;
 };
 
 export type MediaUnderstandingProviderRequestAuth =
@@ -114,7 +88,7 @@ type MediaUnderstandingProviderRequest = {
   auth?: MediaUnderstandingProviderRequestAuth;
   baseUrl?: string;
   headers?: Record<string, string>;
-  request?: MediaUnderstandingProviderRequestTransportOverrides;
+  request?: ModelProviderRequestTransportOverrides;
   model?: string;
   prompt?: string;
   timeoutMs: number;
@@ -122,10 +96,12 @@ type MediaUnderstandingProviderRequest = {
   fetchFn?: typeof fetch;
 };
 
-export type AudioTranscriptionResult = {
+type MediaUnderstandingTextResult = {
   text: string;
   model?: string;
 };
+
+export type AudioTranscriptionResult = MediaUnderstandingTextResult;
 
 type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "auth"> & {
   cfg: OpenClawConfig;
@@ -137,10 +113,7 @@ type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "aut
 
 export type VideoDescriptionRequest = MediaUnderstandingProviderRequest;
 
-export type VideoDescriptionResult = {
-  text: string;
-  model?: string;
-};
+export type VideoDescriptionResult = MediaUnderstandingTextResult;
 
 export type ImageDescriptionRequest = ImagesDescriptionInput &
   Omit<ImagesDescriptionRequest, "images">;
@@ -169,10 +142,7 @@ export type ImagesDescriptionRequest = {
   cfg: OpenClawConfig;
 };
 
-export type ImageDescriptionResult = {
-  text: string;
-  model?: string;
-};
+export type ImageDescriptionResult = MediaUnderstandingTextResult;
 
 export type ImagesDescriptionResult = ImageDescriptionResult;
 

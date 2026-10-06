@@ -1,4 +1,3 @@
-// Doctor scanner and repair for subagent allowlists that reference missing agents.
 import { listAgentEntries, listAgentIds } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId, normalizeOptionalAgentId } from "../../../routing/session-key.js";
@@ -141,7 +140,10 @@ export function maybeRepairStaleSubagentAllowlists(cfg: OpenClawConfig): {
       continue;
     }
     const staleTargetIds = new Set(pathHits.map((hit) => hit.normalizedAgentId));
-    subagents.allowAgents = subagents.allowAgents.filter((entry: string) => {
+    subagents.allowAgents = subagents.allowAgents.filter((entry: unknown) => {
+      if (typeof entry !== "string") {
+        return true;
+      }
       const trimmed = entry.trim();
       return !trimmed || trimmed === "*" || !staleTargetIds.has(normalizeAgentId(trimmed));
     });

@@ -73,7 +73,7 @@ export function createWorkerWorkspaceReconcileRequest(params: {
             // checkpoint acceptance and recording its pending-result pointer.
             await stagedResult.record(prepared.checkpointRef);
             params.assertCurrent();
-            journal.commit(payload.currentManifestRef);
+            await journal.commit(payload.currentManifestRef);
             return accepted;
           },
         };
@@ -86,7 +86,7 @@ export async function recoverSessionWorkspaceCheckpoint(params: {
   workspace: Extract<WorkerSessionWorkspace, { kind: "repository" }>;
   checkpointRef: string;
   assertCurrent: () => void;
-  onAccepted: (manifestRef: string) => void;
+  onAccepted: (manifestRef: string) => Promise<void>;
 }): Promise<void> {
   const accepted = await recoverSessionRepositoryCheckpoint({
     workspaceId: params.workspace.repository.workspaceId,
@@ -97,5 +97,5 @@ export async function recoverSessionWorkspaceCheckpoint(params: {
   if (!accepted.manifestHash) {
     throw new Error("Repository checkpoint has no accepted manifest");
   }
-  params.onAccepted(accepted.manifestHash);
+  await params.onAccepted(accepted.manifestHash);
 }

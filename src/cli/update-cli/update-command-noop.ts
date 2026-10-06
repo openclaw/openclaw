@@ -1,12 +1,17 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import { withConfigWriteLock } from "../../config/write-lock.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { readPackageVersion, UpdatePreMutationError } from "./shared.js";
-import { maybeRepairLegacyConfigForUpdateChannel } from "./update-command-config.js";
+import {
+  maybeRepairLegacyConfigForUpdateChannel,
+  readUpdateChannelConfig,
+} from "./update-command-config.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import {
   captureOwnedManagedUpdateContext,
@@ -16,12 +21,10 @@ import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import type { RefuseUpdate } from "./update-command-result.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
-import {
-  GatewayServiceUpdateOwnershipError,
-  resolvePackageRuntimePreflight,
-} from "./update-command-service-plan.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   mutableUpdateGatewayServiceBlock,
@@ -49,11 +52,12 @@ export async function finishAlreadyCurrentUpdate(
     managedServiceRoot?: string;
     legacyConfigPlan?: LegacyConfigUpdatePlan;
     callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
-    runtimeTarget?: { version: string; nodeEngine: string | null };
+    runtimeTarget?: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
     stop: () => void;
     refuseUpdate: RefuseUpdate;
   },
 ): Promise<void> {
+  const { assertCurrent } = createUpdateCommandExecutionGuards(params.opts, params.root);
   await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () => {
     const result = {
       ...params.result,
@@ -72,6 +76,8 @@ export async function finishAlreadyCurrentUpdate(
       jsonMode: Boolean(params.opts.json),
       timeoutMs: params.updateStepTimeoutMs,
       expectedForeground: params.opts.run?.completionOwner === "gateway-restart" || undefined,
+      candidateAdmissionChecks:
+        params.result.mode === "git" ? undefined : params.opts.run?.candidateAdmissionChecks,
     };
     const admission = await inspectUpdateDatabaseContexts(inspection);
     const service = admission.service;
@@ -186,29 +192,43 @@ export async function finishAlreadyCurrentUpdate(
     });
     const env = owned?.env ?? context.env;
     let configSnapshot = owned?.configSnapshot ?? context.configSnapshot;
-    const plan =
+    let plan =
       context.legacyConfigPlan?.snapshot.path === configSnapshot.path
         ? context.legacyConfigPlan
         : undefined;
+    if (!configSnapshot.valid && !plan && context.configValidation === "candidate") {
+      // An identical artifact skips rehearsal, but its admitted config repairs still belong
+      // to the installed Doctor. Refresh its source-bound plan before converging plugins.
+      ({ configSnapshot, legacyConfigPlan: plan } = await withOwnedManagedUpdateEnv(env, () =>
+        readUpdateChannelConfig(true),
+      ));
+    }
     const storedChannel = normalizeUpdateChannel(
       (plan?.config ?? configSnapshot.config).update?.channel,
     );
     const beforeRepair = configSnapshot;
-    if (params.opts.channel && plan) {
+    if (plan) {
       configSnapshot = await withOwnedManagedUpdateEnv(env, () =>
-        withPluginLifecycleLease({}, () =>
-          maybeRepairLegacyConfigForUpdateChannel({
-            configSnapshot,
-            plan,
-            jsonMode: Boolean(params.opts.json),
-          }),
+        withPluginLifecycleLease({ assertCurrent }, () =>
+          withConfigWriteLock(
+            configSnapshot.path,
+            () =>
+              maybeRepairLegacyConfigForUpdateChannel({
+                configSnapshot,
+                plan,
+                jsonMode: Boolean(params.opts.json),
+              }),
+            env,
+            assertCurrent,
+          ),
         ),
       );
     }
     if (!configSnapshot.valid) {
       throw new Error("Update refused: the selected configuration is still invalid.");
     }
-    result.status = beforeRepair.raw !== configSnapshot.raw ? "ok" : "skipped";
+    result.status =
+      beforeRepair.raw !== configSnapshot.raw || plan?.changes.length ? "ok" : "skipped";
     if (result.status === "ok") {
       delete result.reason;
     } else {

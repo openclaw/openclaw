@@ -48,7 +48,7 @@ import {
 import { buildPromotionMarker, hashMemoryContent } from "./short-term-promotion-memory-write.js";
 import {
   readShortTermRecallEntries,
-  recordGroundedShortTermCandidates,
+  recordShortTermRecalls,
   removeGroundedShortTermCandidates,
 } from "./short-term-promotion.js";
 
@@ -97,7 +97,9 @@ async function listSessionBackfillSources(params: {
     includeRetainedSqlite: true,
   });
   const forgottenSessionIds = new Set(
-    listMemorySessionTombstones({ agentId: params.agentId }).map((entry) => entry.sessionId),
+    (await listMemorySessionTombstones({ agentId: params.agentId })).map(
+      (entry) => entry.sessionId,
+    ),
   );
   const sources = corpus
     .map(sessionIngestionSourceFromCorpus)
@@ -349,10 +351,12 @@ async function applySessionBackfillDays(params: {
     if (grounded.length === 0) {
       continue;
     }
-    await recordGroundedShortTermCandidates({
+    await recordShortTermRecalls({
       workspaceDir: params.workspaceDir,
       query: `${SESSION_BACKFILL_QUERY_PREFIX}:${day.day}`,
-      items: grounded.map((result) => ({
+      signalType: "grounded",
+      results: grounded.map((result) => ({
+        source: "memory",
         path: result.path,
         startLine: result.startLine,
         endLine: result.endLine,

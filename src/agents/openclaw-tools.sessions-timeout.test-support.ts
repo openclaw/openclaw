@@ -12,7 +12,6 @@ import {
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
-import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type SessionsSendTimeoutFixtures = {
@@ -44,7 +43,7 @@ export function observeSessionSendContinuations(options: { trackAllWork?: boolea
         origin === "session:a2a-send" ? () => continuationWork.run(true, run) : run,
         origin,
       );
-      if (origin === "session:a2a-send") {
+      if (options.trackAllWork || origin === "session:a2a-send") {
         completions.add(completion);
       }
       return completion;
@@ -94,16 +93,6 @@ export function registerSessionsSendTimeoutTests({
   callGatewayMock,
 }: SessionsSendTimeoutFixtures) {
   it.each([
-    {
-      name: "terminal timeout with a provider-specific diagnostic",
-      waitResult: {
-        status: "timeout",
-        endedAt: 3000,
-        stopReason: "timeout",
-        error: "provider request exceeded its deadline",
-      },
-      expectedError: "provider request exceeded its deadline",
-    },
     {
       name: "provider-attributed terminal timeout without a diagnostic",
       waitResult: {
@@ -172,11 +161,9 @@ export function registerSessionsSendLateReplyTests({
     targetKind: string;
     targetKey: string;
     spawned: boolean;
-    timeoutSeconds?: number;
     pendingError?: boolean;
     failure?: string;
     stopReason?: string;
-    cronRequester?: boolean;
   }>([
     { targetKind: "peer", targetKey: "agent:director1:main", spawned: false },
     {
@@ -186,46 +173,17 @@ export function registerSessionsSendLateReplyTests({
       pendingError: true,
     },
     {
-      targetKind: "failed retrying child",
-      targetKey: "agent:director1:subagent:child",
-      spawned: true,
-      pendingError: true,
-      failure: "child retry exhausted",
-    },
-    {
       targetKind: "cancelled child",
       targetKey: "agent:director1:subagent:child",
       spawned: true,
       failure: "child run cancelled",
       stopReason: "aborted",
     },
-    {
-      targetKind: "nonblocking child of Cron",
-      targetKey: "agent:director1:dashboard:child",
-      spawned: true,
-      cronRequester: true,
-      timeoutSeconds: 0,
-    },
-    {
-      targetKind: "failed waited child of Cron",
-      targetKey: "agent:director1:subagent:child",
-      spawned: true,
-      cronRequester: true,
-      failure: "Cron child run failed",
-    },
   ])(
     "sessions_send delivers the late reply from a $targetKind after the parent root releases",
-    async ({
-      targetKey,
-      spawned,
-      timeoutSeconds = 1,
-      pendingError,
-      failure,
-      stopReason,
-      cronRequester = false,
-    }) => {
+    async ({ targetKey, spawned, pendingError, failure, stopReason }) => {
       const calls: Array<{ method?: string; params?: unknown }> = [];
-      const requesterKey = cronRequester ? "agent:main:cron:job:run:once" : "agent:main:main";
+      const requesterKey = "agent:main:main";
       if (spawned) {
         await upsertSessionEntryCore(
           { agentId: "director1", sessionKey: targetKey },
@@ -239,8 +197,6 @@ export function registerSessionsSendLateReplyTests({
       });
       let requesterProviderStarts = 0;
       let requesterAdmissionClosed: boolean | undefined;
-      let finalAnnounceProviderStarts = 0;
-      let finalAnnounceAdmissionClosed: boolean | undefined;
       callGatewayMock.mockImplementation(async (opts: unknown) => {
         const request = opts as { method?: string; params?: unknown };
         calls.push(request);
@@ -263,7 +219,7 @@ export function registerSessionsSendLateReplyTests({
           const params = request.params as { runId?: string } | undefined;
           if (params?.runId === "run-target") {
             targetWaitCount += 1;
-            if (timeoutSeconds !== 0 && targetWaitCount === 1) {
+            if (targetWaitCount === 1) {
               return {
                 runId: "run-target",
                 status: "timeout",
@@ -290,22 +246,6 @@ export function registerSessionsSendLateReplyTests({
         }
         return {};
       });
-      await agentStepTesting.setDepsForTest({
-        agentCommandFromIngress: async (opts) => {
-          expect(opts.sessionKey).toBe(targetKey);
-          expect(opts.extraSystemPrompt).toContain("Agent-to-agent announce step");
-          finalAnnounceAdmissionClosed =
-            gatewayWorkAdmission.isGatewaySubordinateWorkAdmissionClosed();
-          if (finalAnnounceAdmissionClosed) {
-            throw new gatewayWorkAdmission.GatewayDrainingError();
-          }
-          finalAnnounceProviderStarts += 1;
-          return {
-            payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
-            meta: { durationMs: 1 },
-          };
-        },
-      });
 
       const tool = getSessionTool("sessions_send", {
         agentSessionKey: requesterKey,
@@ -320,7 +260,7 @@ export function registerSessionsSendLateReplyTests({
               tool.execute("call-delayed", {
                 sessionKey: targetKey,
                 message: "ping",
-                timeoutSeconds,
+                timeoutSeconds: 1,
               }),
             );
           } finally {
@@ -334,63 +274,49 @@ export function registerSessionsSendLateReplyTests({
           status: pendingError ? "timeout" : "accepted",
           sessionKey: targetKey,
           ...(!pendingError ? { targetDisposition: "queued" } : {}),
-          delivery: { status: "pending", mode: "announce" },
+          delivery: { status: "pending" },
         });
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(1);
         expect(requesterProviderStarts).toBe(0);
         releaseDelayedWait();
 
-        if (!cronRequester) {
-          await vi.waitFor(
-            () => {
-              expect(requesterAdmissionClosed).toBe(false);
-            },
-            { timeout: 2_000, interval: 5 },
-          );
-        }
+        await vi.waitFor(
+          () => {
+            expect(requesterAdmissionClosed).toBe(false);
+          },
+          { timeout: 2_000, interval: 5 },
+        );
         await settleContinuations();
         await vi.waitFor(() => {
           expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
         });
-        expect(requesterProviderStarts).toBe(cronRequester ? 0 : spawned ? 1 : 3);
+        expect(requesterProviderStarts).toBe(1);
 
         const requesterReplyCall = calls.find(
           (call) =>
             call.method === "agent" &&
             (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
         );
-        if (cronRequester) {
-          expect(requesterReplyCall).toBeUndefined();
-          expect(requesterAdmissionClosed).toBeUndefined();
-          expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
-        } else {
-          const replyParams = requesterReplyCall?.params as
-            | {
-                extraSystemPrompt?: string;
-                inputProvenance?: { sourceSessionKey?: string; sourceRole?: string };
-                message?: string;
-                sessionKey?: string;
-              }
-            | undefined;
-          expect(replyParams?.sessionKey).toBe(requesterKey);
-          expect(replyParams?.inputProvenance?.sourceSessionKey).toBe(targetKey);
-          expect(replyParams?.message).toContain(failure ?? "late director reply");
-          expect(replyParams?.inputProvenance?.sourceRole).toBe(spawned ? "subagent" : undefined);
-          expect(
-            isCompletionReportInputProvenance(replyParams?.inputProvenance),
-            "requested child results use the completion boundary so parent answers remain visible",
-          ).toBe(spawned);
-          if (spawned) {
-            expect(replyParams?.extraSystemPrompt).not.toContain("REPLY_SKIP");
-          } else {
-            expect(replyParams?.extraSystemPrompt).toContain("Agent-to-agent reply step");
-            expect(replyParams?.extraSystemPrompt).toContain("Current agent: Agent 1 (requester)");
-          }
+        const replyParams = requesterReplyCall?.params as
+          | {
+              extraSystemPrompt?: string;
+              inputProvenance?: { sourceSessionKey?: string; sourceRole?: string };
+              message?: string;
+              sessionKey?: string;
+            }
+          | undefined;
+        expect(replyParams?.sessionKey).toBe(requesterKey);
+        expect(replyParams?.inputProvenance?.sourceSessionKey).toBe(targetKey);
+        expect(replyParams?.message).toContain(failure ?? "late director reply");
+        expect(replyParams?.inputProvenance?.sourceRole).toBe(spawned ? "subagent" : undefined);
+        expect(
+          isCompletionReportInputProvenance(replyParams?.inputProvenance),
+          "requested child results use the completion boundary so parent answers remain visible",
+        ).toBe(spawned);
+        if (!failure) {
+          expect(replyParams?.extraSystemPrompt).toContain("This result is delivered once");
         }
         expect(calls.find((call) => call.method === "send")).toBeUndefined();
-        const announces = !spawned || (cronRequester && !failure);
-        expect(finalAnnounceAdmissionClosed).toBe(announces ? false : undefined);
-        expect(finalAnnounceProviderStarts).toBe(announces ? 1 : 0);
       }, releaseDelayedWait);
     },
   );

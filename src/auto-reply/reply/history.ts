@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 
 export const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
@@ -15,17 +16,7 @@ export function evictOldHistoryKeys<T>(
   historyMap: Map<string, T[]>,
   maxKeys: number = MAX_HISTORY_KEYS,
 ): void {
-  if (historyMap.size <= maxKeys) {
-    return;
-  }
-  const keysToDelete = historyMap.size - maxKeys;
-  const iterator = historyMap.keys();
-  for (let i = 0; i < keysToDelete; i++) {
-    const key = iterator.next().value;
-    if (key !== undefined) {
-      historyMap.delete(key);
-    }
-  }
+  pruneMapToMaxSize(historyMap, maxKeys);
 }
 
 export type { HistoryEntry } from "./history.types.js";
@@ -157,49 +148,30 @@ export async function recordChannelHistoryEntryWithMedia<T extends HistoryEntry>
   if (params.shouldRecord && !params.shouldRecord()) {
     return [];
   }
-  if (typeof params.media === "function") {
-    const recordedEntry = params.entry;
-    const history = recordChannelHistoryEntryIfEnabled({
-      historyMap: params.historyMap,
-      historyKey: params.historyKey,
-      entry: recordedEntry,
-      limit: params.limit,
-    });
-    const resolvedMedia = await params.media();
-    // The turn can be cancelled while media resolves; keep text but avoid late media attachment.
-    if (params.shouldRecord && !params.shouldRecord()) {
-      return history;
-    }
-    const media = normalizeHistoryMediaEntries({
-      media: resolvedMedia,
-      limit: params.mediaLimit,
-      messageId: params.messageId ?? params.entry.messageId,
-    });
-    if (media.length === 0) {
-      return history;
-    }
-    const currentHistory = params.historyMap.get(params.historyKey);
-    const entryIndex = currentHistory?.indexOf(recordedEntry) ?? -1;
-    if (currentHistory && entryIndex >= 0) {
-      currentHistory[entryIndex] = { ...recordedEntry, media };
-    }
-    return history;
-  }
-  const resolvedMedia = params.media ?? undefined;
+  const recordedEntry = params.entry;
+  // Publish text before deferred media resolves; cancellation keeps the text.
+  const history =
+    typeof params.media === "function" ? recordChannelHistoryEntryIfEnabled(params) : undefined;
+  const resolvedMedia = typeof params.media === "function" ? await params.media() : params.media;
   if (params.shouldRecord && !params.shouldRecord()) {
-    return [];
+    return history ?? [];
   }
   const media = normalizeHistoryMediaEntries({
     media: resolvedMedia,
     limit: params.mediaLimit,
     messageId: params.messageId ?? params.entry.messageId,
   });
-  const entry = media.length > 0 ? { ...params.entry, media } : params.entry;
+  if (history) {
+    const currentHistory = params.historyMap.get(params.historyKey);
+    const entryIndex = currentHistory?.indexOf(recordedEntry) ?? -1;
+    if (media.length > 0 && currentHistory && entryIndex >= 0) {
+      currentHistory[entryIndex] = { ...recordedEntry, media };
+    }
+    return history;
+  }
   return recordChannelHistoryEntryIfEnabled({
-    historyMap: params.historyMap,
-    historyKey: params.historyKey,
-    entry,
-    limit: params.limit,
+    ...params,
+    entry: media.length > 0 ? { ...params.entry, media } : params.entry,
   });
 }
 
@@ -261,9 +233,6 @@ export function buildInboundHistoryFromEntries(params: {
   if (params.limit <= 0) {
     return undefined;
   }
-  if (params.entries.length === 0) {
-    return [];
-  }
   return params.entries.slice(-params.limit).map((entry) => {
     const historyEntry: HistoryEntry = {
       sender: entry.sender,
@@ -273,7 +242,7 @@ export function buildInboundHistoryFromEntries(params: {
     if (entry.messageId) {
       historyEntry.messageId = entry.messageId;
     }
-    if (entry.media && entry.media.length > 0) {
+    if (entry.media?.length) {
       historyEntry.media = entry.media;
     }
     return historyEntry;

@@ -28,7 +28,7 @@ Diagnostics flags turn on extra logging for one subsystem without raising
 | `profiler`            | Reply-stage profiler and Codex app-server profiler (both) |
 | `reply.profiler`      | Reply-stage profiler only                                 |
 | `codex.profiler`      | Codex app-server profiler only                            |
-| `health`              | Gateway health probe/account/binding debug details        |
+| `health`              | Gateway health check/account/binding debug details        |
 | `ingress.timing`      | Session load, model selection, and model catalog timings  |
 | `plugin.load-profile` | Synchronous plugin module-load timings                    |
 | `timeline`            | Structured JSONL timeline artifact (see below)            |

@@ -28,8 +28,10 @@ Parameters:
 Behavior:
 
 - Foreground runs return retained output directly and disclose when earlier output exceeded the aggregate cap.
+- Set `awaitResults: true` when a command result is needed to finish the task. It stays an owned tool call through process settlement and terminal collection instead of returning an uncollected background handle. This works with `notifyOnExit=false`; no completion notification is enabled. `awaitResults: true` cannot be combined with `background: true`, which explicitly selects an independently running service. Run, tool, and process deadlines still apply. In OpenClaw Code Mode, the cell retains required calls and resumes on their settlement without model polling.
 - When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail.
 - Launch failures return the operating-system error and release worker cleanup even when no process starts.
+- Managed sandbox workspace finalization bounds each container inspection, pause, and resume command to 30 seconds. A failed or timed-out operation preserves its recovery receipt rather than treating an uncertain pause or resume as successful.
 - Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`.
 - With the [secret egress proxy](/gateway/secrets#secret-egress-proxy) enabled, each Gateway-hosted command retains its own proxy access across turns. Process exit, cancellation, timeout, or Gateway shutdown revokes that access and closes its connections. Use `process kill` to stop a background command and its proxy access together.
 - Returning a background session ID does not stop the process timeout. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Host and worker lifecycle limits still apply.
@@ -38,10 +40,14 @@ Behavior:
 - If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
 - For long-running work that starts now: start it once and rely on automatic completion wake (when enabled) once the command emits output or fails.
+- A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. This is a model instruction, not a deterministic notification filter, and it does not disable the completion turn.
+- A command started in a chat conversation completes in that conversation: the completion turn runs in its session with its history, and any reply goes back to that chat or topic. Heartbeat `isolatedSession`, `lightContext`, `target`, `to`, and `directPolicy` settings apply to periodic heartbeats, not to this continuation. See [Heartbeat delivery](/gateway/heartbeat#delivery-behavior).
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
+- Timeouts also wake the session when the command produced no output. The completion includes retry-safety guidance: verify any external side effects before retrying.
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures still notify.
 - If automatic completion wake is unavailable, or you need quiet-success confirmation for a command that exits cleanly with no output, poll with `process`.
 - Background exec does not automatically wake subagent sessions. A subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
+- A quiet foreground command with an unexpired execution allowance is reported as long-running. Once that allowance expires, stalled-session recovery can abort the owning run. Repeated `process poll` or `process log` calls with unchanged output count toward loop detection; elapsed idle time alone is not progress.
 - Don't emulate reminders or delayed follow-ups with `sleep` loops or repeated polling — use cron for future work.
 
 ### Env overrides
@@ -107,6 +113,20 @@ Worker completion does not currently wake the Gateway session automatically;
 use `process poll` in a later turn to inspect the result. Closing a portal closes
 its proxy, not the development server: stop the server with `process kill`.
 
+## Control UI
+
+The chat side panel offers a separate **Processes** tab through its **+** menu
+and the chat header's **Panels** menu. **Subagents** remains its own tab.
+Processes shows the current conversation's background exec commands and retained
+finished records, including status, duration, exit information, and recent output.
+Reading the output does not drain pending agent output or acknowledge completion
+notifications. **Stop** requests termination of the exact observed process instance.
+
+The list is bounded, prioritizes running processes, and follows the existing
+in-memory retention limits. It refreshes while visible; disconnected or
+unavailable workers show an error rather than an empty list. It does not provide
+an interactive terminal or enumerate unrelated operating-system processes.
+
 ## Child process bridging
 
 After a host exec command finishes, OpenClaw releases its retained process
@@ -168,7 +188,7 @@ physical reservation; restarting is not proof that old descendants stopped.
 Older builds do not reinterpret the new certificate as lineage completion.
 
 macOS and retained Bun process-group owners still require kernel group
-disappearance. Permission-denied probes never prove absence. A completed command
+disappearance. Permission-denied checks never prove absence. A completed command
 or closed output pipe alone does not establish that its descendants stopped.
 Local TUI shell shutdown uses the same cleanup owner for its own commands.
 If the host was busy, cleanup processes queued native completion events before

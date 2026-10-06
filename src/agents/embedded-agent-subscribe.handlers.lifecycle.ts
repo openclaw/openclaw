@@ -282,11 +282,13 @@ export function handleAgentEnd(
   const runBeforeTerminalDelivery = ():
     | BeforeTerminalDeliveryDecision
     | Promise<BeforeTerminalDeliveryDecision> => {
+    // The acceptance hook inspects the answer this turn delivers, including a kept answer.
+    const answerAssistant = ctx.state.keptAnswer?.assistant ?? lastAssistant;
     return ctx.params.onBeforeTerminalDelivery?.({
       messages: evt?.messages ?? [],
       willRetry: evt?.willRetry === true,
       ...(evt?.assistantEntryId ? { assistantEntryId: evt.assistantEntryId } : {}),
-      ...(lastAssistant ? { lastAssistant } : {}),
+      ...(answerAssistant ? { lastAssistant: answerAssistant } : {}),
       assistantTexts: ctx.state.assistantTexts,
       hasAssistantVisibleText,
       isError,
@@ -316,12 +318,12 @@ export function handleAgentEnd(
     const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });
     finalizeAgentEnd();
     const flushPendingMediaAndChannelResult = isPromiseLike<void>(flushBlockReplyBufferResult)
-      ? Promise.resolve(flushBlockReplyBufferResult).then(() => flushPendingMediaAndChannel())
+      ? Promise.resolve(flushBlockReplyBufferResult).then(flushPendingMediaAndChannel)
       : flushPendingMediaAndChannel();
 
     if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
       return Promise.resolve(flushPendingMediaAndChannelResult).then(
-        () => emitLifecycleTerminalOnce(),
+        emitLifecycleTerminalOnce,
         rethrowAfterLifecycleTerminal,
       );
     }
@@ -367,11 +369,20 @@ export function handleAgentEnd(
         .catch((err: unknown) => {
           ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`);
         })
-        .then(() => {
-          emitLifecycleTerminal();
-        });
+        .then(emitLifecycleTerminal);
     }
     emitLifecycleTerminal();
+  };
+
+  const applyBeforeTerminalDecision = (decision: BeforeTerminalDeliveryDecision) => {
+    if (decision?.suppressTerminalDelivery === true) {
+      suppressTerminalDelivery();
+      return undefined;
+    }
+    if (decision?.continueCurrentTurn === true) {
+      return continueCurrentTurn();
+    }
+    return deliverTerminalWithLifecycleErrorFallback();
   };
 
   let beforeTerminalDelivery:
@@ -390,23 +401,7 @@ export function handleAgentEnd(
         ctx.log.warn(`before terminal delivery failed: ${String(error)}`);
         return undefined;
       })
-      .then((decision) => {
-        if (decision?.suppressTerminalDelivery === true) {
-          suppressTerminalDelivery();
-          return undefined;
-        }
-        if (decision?.continueCurrentTurn === true) {
-          return continueCurrentTurn();
-        }
-        return deliverTerminalWithLifecycleErrorFallback();
-      });
+      .then(applyBeforeTerminalDecision);
   }
-  if (beforeTerminalDelivery?.suppressTerminalDelivery === true) {
-    suppressTerminalDelivery();
-    return undefined;
-  }
-  if (beforeTerminalDelivery?.continueCurrentTurn === true) {
-    return continueCurrentTurn();
-  }
-  return deliverTerminalWithLifecycleErrorFallback();
+  return applyBeforeTerminalDecision(beforeTerminalDelivery);
 }

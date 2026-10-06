@@ -11,6 +11,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import {
   isSystemAgentNavigationOperation,
   type SystemAgentNavigationOperation,
+  type SystemAgentOperation,
 } from "../../system-agent/operation-types.js";
 import {
   executeSystemAgentOperation,
@@ -18,7 +19,6 @@ import {
   SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF,
   SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
   secretStoreNameForConfigPath,
-  type SystemAgentOperation,
 } from "../../system-agent/operations.js";
 import {
   hashSystemAgentOperation,
@@ -248,18 +248,6 @@ const SystemAgentToolSchema = Type.Object({
     }),
   ),
 });
-
-function createCaptureRuntime(): RuntimeEnv & { read: () => string } {
-  const lines: string[] = [];
-  return {
-    log: (...args) => lines.push(args.join(" ")),
-    error: (...args) => lines.push(args.join(" ")),
-    exit: (code) => {
-      throw new Error(`openclaw operation exited with code ${String(code)}`);
-    },
-    read: () => lines.join("\n").trim(),
-  };
-}
 
 function requireParam(params: Record<string, unknown>, name: string): string {
   const value = readToolStringParam(params, name);
@@ -594,7 +582,14 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
           {},
         );
       }
-      const capture = createCaptureRuntime();
+      const lines: string[] = [];
+      const capture: RuntimeEnv = {
+        log: (...values) => lines.push(values.join(" ")),
+        error: (...values) => lines.push(values.join(" ")),
+        exit: (code) => {
+          throw new Error(`openclaw operation exited with code ${String(code)}`);
+        },
+      };
       try {
         await executeSystemAgentOperation(operation, capture, {
           approved: false,
@@ -608,11 +603,14 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return textResult([capture.read(), `error: ${message}`].filter(Boolean).join("\n"), {
-          error: true,
-        });
+        return textResult(
+          [lines.join("\n").trim(), `error: ${message}`].filter(Boolean).join("\n"),
+          {
+            error: true,
+          },
+        );
       }
-      return textResult(capture.read() || "done", {});
+      return textResult(lines.join("\n").trim() || "done", {});
     },
   };
 }

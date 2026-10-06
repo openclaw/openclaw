@@ -54,9 +54,9 @@ describe("configured model runtime refresh inputs", () => {
     });
   });
 
-  it.each(["entries", "list"] as const)(
+  it.each(["entries"] as const)(
     "resolves a %s fleet with bounded roster work and fresh configuration",
-    async (representation) => {
+    async () => {
       await withOpenClawTestState({ label: "model-refresh-roster" }, async (state) => {
         const count = 64;
         const entries = Array.from({ length: count }, (_, index) => ({
@@ -77,14 +77,9 @@ describe("configured model runtime refresh inputs", () => {
           });
         const config: OpenClawConfig = {
           plugins: { enabled: false },
-          agents:
-            representation === "list"
-              ? { list: observe(entries) }
-              : {
-                  entries: observe(
-                    Object.fromEntries(entries.map(({ id, ...entry }) => [id, entry])),
-                  ),
-                },
+          agents: {
+            entries: observe(Object.fromEntries(entries.map(({ id, ...entry }) => [id, entry]))),
+          },
         };
         const preservedWorkspace = state.path("startup-selected-workspace");
         const owners = new Map([
@@ -129,8 +124,7 @@ describe("configured model runtime refresh inputs", () => {
         ).toEqual(entries.map((_, index) => [{ provider: "fixture", modelId: `model-${index}` }]));
         expect(resolutionReads).toBeLessThanOrEqual(count * 32);
 
-        const changed =
-          representation === "list" ? entries[1]! : config.agents!.entries![entries[1]!.id]!;
+        const changed = config.agents!.entries![entries[1]!.id]!;
         changed.workspace = state.path("replacement-workspace");
         changed.model = "fixture/replacement-model";
         const refreshed = listConfiguredRefreshInputs(config, options, owners);

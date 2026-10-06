@@ -1,9 +1,13 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
+import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveManifestCommandAliasOwnerInRegistry,
   resolveManifestToolOwnerInRegistry,
   type PluginManifestCommandAliasRegistry,
 } from "../plugins/manifest-command-aliases.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   resolveGatewayCatalogCommandPath,
   resolveGatewayRunPreBootstrapOptions,
@@ -12,20 +16,33 @@ import {
   isGatewayRunFastPathArgv,
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
-  shouldHandleBareRoot,
   shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
-  shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 import { runCli } from "./run-main.js";
 
 const cliArgs = (...args: string[]) => ["node", "openclaw", ...args];
+vi.mock("node:process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:process")>()),
+  // Stock Bun cannot clear its nonconfigurable native exitCode accessor after help sets zero.
+  default: Object.create(globalThis.process, {
+    exitCode: { value: undefined, writable: true, enumerable: true, configurable: true },
+  }),
+}));
 const runGatewayCommand = vi.hoisted(() => vi.fn());
+const sqliteAdmission = vi.hoisted(() => ({
+  initialize: vi.fn<() => Promise<void>>().mockResolvedValue(),
+  selectGatewayEnvironment: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
+}));
+vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
+  initializeSqliteRuntimeCapabilities: sqliteAdmission.initialize,
+}));
 vi.mock("./gateway-cli/run.js", () => ({ runGatewayCommand }));
 // Keep Commander parsing independent of native startup; run-main.exit and
 // command-execution-startup tests own bootstrap and admission behavior.
 vi.mock("./gateway-cli/pre-bootstrap.js", () => ({
-  selectGatewayRunEnvironment: async () => true,
+  selectGatewayRunEnvironment: sqliteAdmission.selectGatewayEnvironment,
   prepareGatewayRunBootstrap: async () => false,
   recheckGatewayRunBootstrap: async () => {
     throw new Error("Commander parsing fixture unexpectedly rechecked Gateway bootstrap");
@@ -47,16 +64,66 @@ vi.mock("../logging/console.js", async (importOriginal) => ({
   enableConsoleCapture: vi.fn(),
 }));
 
-describe("Gateway fast-path Commander parsing", () => {
+describe("CLI host admission and Gateway fast-path parsing", () => {
   const previousExitCode = process.exitCode;
+  const pathEnv = captureEnv(["PATH", "OPENCLAW_PATH_BOOTSTRAPPED"]);
   beforeEach(() => {
     process.exitCode = undefined;
     runGatewayCommand.mockClear();
+    sqliteAdmission.initialize.mockReset().mockResolvedValue();
+    sqliteAdmission.selectGatewayEnvironment.mockClear();
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   });
   afterEach(() => {
+    pathEnv.restore();
     process.exitCode = previousExitCode;
     vi.restoreAllMocks();
+  });
+
+  it("awaits SQLite admission before Gateway environment selection can read state", async () => {
+    const entered = createDeferredCore();
+    const decided = createDeferredCore();
+    sqliteAdmission.initialize.mockImplementationOnce(() => {
+      entered.resolve();
+      return decided.promise;
+    });
+    const starting = runCli(cliArgs("gateway", "run"));
+    try {
+      await Promise.race([entered.promise, starting]);
+      expect(sqliteAdmission.initialize).toHaveBeenCalledOnce();
+      expect(sqliteAdmission.selectGatewayEnvironment).not.toHaveBeenCalled();
+      expect(runGatewayCommand).not.toHaveBeenCalled();
+    } finally {
+      decided.resolve();
+      await starting;
+    }
+    expect(sqliteAdmission.selectGatewayEnvironment).toHaveBeenCalledOnce();
+    expect(runGatewayCommand).toHaveBeenCalledOnce();
+  });
+
+  it.each([["node", "run"], ["node", "worker"], ["worker"]])(
+    "admits the long-lived host before CLI bootstrap: %j",
+    async (...args) => {
+      const stopped = new Error("SQLite admission reached before host bootstrap");
+      sqliteAdmission.initialize.mockRejectedValueOnce(stopped);
+      await expect(runCli(cliArgs(...args))).rejects.toBe(stopped);
+      expect(sqliteAdmission.initialize).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([["gateway"], ["gateway", "status"], ["node", "run"], ["worker"], ["config", "get"]])(
+    "keeps help paths free of SQLite capability admission: %j",
+    async (...args) => {
+      vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      await runCli(cliArgs(...args, "--help"));
+      expect(sqliteAdmission.initialize).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps version output free of SQLite capability admission", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    await runCli(cliArgs("--version"));
+    expect(sqliteAdmission.initialize).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -127,15 +194,6 @@ describe("root startup policy", () => {
     expect(rewriteUpdateFlagArgv(cliArgs(...args))).toEqual(cliArgs(...expected));
   });
 
-  it.each([["--profile", "work", "--", "config", "get", "gateway.mode"]])(
-    "does not launch bare-root flows for literal commands: %j",
-    (...args) => {
-      const argv = cliArgs(...args);
-      expect(shouldHandleBareRoot(argv)).toBe(false);
-      expect(shouldUseRootHelpFastPath(argv)).toBe(false);
-    },
-  );
-
   it("skips proxy startup before SQLite maintenance", () => {
     expect(shouldStartProxyForCli(cliArgs("doctor", "--state-sqlite", "compact", "--json"))).toBe(
       false,
@@ -153,16 +211,6 @@ describe("root startup policy", () => {
     expect(shouldUseRootHelpFastPath(cliArgs("status", "--help"))).toBe(false);
     expect(shouldUseRootHelpFastPath(cliArgs("--help", "status"))).toBe(false);
     expect(shouldUseRootHelpFastPath(cliArgs("help", "gateway"))).toBe(false);
-  });
-
-  it("keeps setup help behind unambiguous argument parsing", () => {
-    expect(shouldUseSetupOnboardConfigureHelpFastPath(cliArgs("setup", "--help"))).toBe(true);
-    expect(shouldUseSetupOnboardConfigureHelpFastPath(cliArgs("onboard", "status", "--help"))).toBe(
-      false,
-    );
-    expect(
-      shouldUseSetupOnboardConfigureHelpFastPath(cliArgs("onboard", "--gateway-port", "--help")),
-    ).toBe(false);
   });
 });
 

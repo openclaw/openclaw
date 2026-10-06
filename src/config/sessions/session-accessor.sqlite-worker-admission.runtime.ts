@@ -6,7 +6,6 @@ import {
   type OpenClawAgentDatabaseOptions,
   type OpenClawAgentDatabaseWriteAdmission,
 } from "../../state/openclaw-agent-db.js";
-import type { SessionMaintenanceLiveProtection } from "./session-accessor.sqlite-lifecycle-types.js";
 import { SqliteReclamationRequestRefusedError } from "./session-accessor.sqlite-reclamation-commit.js";
 
 export function withWorkerWriteAdmission<T>(
@@ -14,7 +13,6 @@ export function withWorkerWriteAdmission<T>(
   operationId: number,
   databaseOptions: OpenClawAgentDatabaseOptions,
   operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
-  refreshMaintenanceProtection?: (protection: SessionMaintenanceLiveProtection) => void,
   assertSourceCurrent?: () => void,
 ): Promise<T> {
   let admissionId = 0;
@@ -24,7 +22,6 @@ export function withWorkerWriteAdmission<T>(
     const admission = await new Promise<{
       allowed: boolean;
       validation?: OpenClawAgentDatabaseValidation;
-      maintenanceProtection?: SessionMaintenanceLiveProtection;
     }>((resolve, reject) => {
       const receive = (admissionMessage: {
         type: string;
@@ -32,7 +29,6 @@ export function withWorkerWriteAdmission<T>(
         admissionId: number;
         allowed: boolean;
         validation?: OpenClawAgentDatabaseValidation;
-        maintenanceProtection?: SessionMaintenanceLiveProtection;
       }) => {
         cleanup();
         if (
@@ -61,9 +57,6 @@ export function withWorkerWriteAdmission<T>(
         admissionId: requestedId,
       });
     });
-    if (admission.allowed && admission.maintenanceProtection) {
-      refreshMaintenanceProtection?.(admission.maintenanceProtection);
-    }
     const value = await run(() => {
       if (!admission.allowed) {
         throw new SqliteReclamationRequestRefusedError(

@@ -1,4 +1,4 @@
-import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { BeamStoredSession, BeamUpload } from "./types.js";
 import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS } from "./types.js";
@@ -8,7 +8,7 @@ type BeamSessionSummary = Readonly<
 >;
 
 export type BeamStore = {
-  catalogService: OpenClawPluginService;
+  catalogService: OpenClawPluginServiceV2;
   upload: (
     upload: BeamUpload,
     receipt: {
@@ -62,21 +62,20 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
   let revision = 0;
   let inventory: Array<{ value: BeamSessionSummary; expiresAt?: number }> | undefined;
   let refreshing: Promise<void> | undefined;
-  let interval: ReturnType<typeof setInterval> | undefined;
-  let stopped = false;
+  let lifetime: AbortSignal | undefined;
   const invalidate = () => {
     revision++;
     inventory = undefined;
   };
   const refresh = (): Promise<void> => {
-    if (stopped) {
+    if (lifetime?.aborted) {
       return Promise.reject(new Error("Beam catalog inventory is stopped"));
     }
     refreshing ??= (async () => {
       for (;;) {
         const observedRevision = revision;
         const entries = await store.entries();
-        if (stopped) {
+        if (lifetime?.aborted) {
           return;
         }
         if (observedRevision !== revision) {
@@ -103,24 +102,19 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
   return {
     catalogService: {
       id: "beam-catalog",
+      apiVersion: 2,
       async start(ctx) {
-        stopped = false;
+        lifetime = ctx.scheduler.signal;
         const update = () =>
           refresh().catch((error: unknown) => {
             invalidate();
             ctx.logger.warn(`beam catalog inventory refresh failed: ${String(error)}`);
           });
         // Other processes can update SQLite without this instance's mutation revision.
-        interval = setInterval(() => void update(), 30_000);
-        interval.unref?.();
+        ctx.scheduler.schedule({ id: "inventory", delayMs: 30_000, everyMs: 30_000, run: update });
         await update();
       },
       async stop() {
-        stopped = true;
-        if (interval) {
-          clearInterval(interval);
-          interval = undefined;
-        }
         invalidate();
         await refreshing?.catch(() => {});
       },

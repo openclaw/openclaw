@@ -58,8 +58,6 @@ export function renderConfig(props: ConfigProps) {
   const analysis = getConfigSchemaAnalysis(
     viewState,
     asConfigSchema(props.schema),
-    props.includeSections,
-    props.excludeSections,
     include,
     exclude,
   );
@@ -191,9 +189,7 @@ export function renderConfig(props: ConfigProps) {
     ...(showRootTab
       ? [{ key: null as string | null, label: props.navRootLabel ?? t("nav.settings") }]
       : []),
-    ...allCategories.flatMap((category) =>
-      category.sections.map((section) => ({ key: section.key, label: section.label })),
-    ),
+    ...allCategories.flatMap((category) => category.sections),
   ];
   const settingsLayout = props.settingsLayout ?? "tabs";
 
@@ -496,6 +492,7 @@ export function renderConfig(props: ConfigProps) {
                             sectionPrelude: props.sectionPrelude,
                             revealSensitive:
                               props.activeSection === "env" ? envSensitiveVisible : false,
+                            maskSensitive: true,
                             isSensitivePathRevealed: (path) =>
                               isSensitivePathRevealed(viewState, path),
                             onToggleSensitivePath: (path) => {

@@ -1,4 +1,5 @@
 /** Type contracts for plugin-owned CLI backend integrations. */
+import type { NormalizedUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
 
@@ -272,17 +273,14 @@ export type CliBackendExecute = (
   context: CliBackendExecuteContext,
 ) => AsyncIterable<Record<string, unknown>>;
 
-export type CliBackendResolveExecutionArgsContext = {
-  config?: OpenClawConfig;
-  workspaceDir: string;
-  provider: string;
-  modelId: string;
-  authProfileId?: string;
-  thinkingLevel?: CliBackendThinkingLevel;
+export type CliBackendResolveExecutionArgsContext = Omit<
+  CliBackendPrepareExecutionContext,
+  "agentDir" | "contextWindow" | "contextTokenBudget" | "env"
+> & {
   /** Effective fast mode at spawn, after queue admission and backend preparation. */
   fastMode?: boolean;
-  executionMode?: CliBackendExecutionMode;
-  toolAvailability?: CliBackendToolAvailability;
+  /** Canonical tools routed through OpenClaw; disable equivalent native tools. */
+  hostOwnedTools?: readonly string[];
   useResume: boolean;
   baseArgs: readonly string[];
 };
@@ -296,13 +294,10 @@ type CliBackendResolveModelIdContext = {
   contextWindow?: string;
 };
 
-export type CliBackendJsonlUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
+export type CliBackendJsonlUsage = Pick<
+  NormalizedUsage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "total"
+>;
 
 export type CliBackendParsedJsonlEvent =
   | { kind: "text"; text: string }
@@ -561,6 +556,11 @@ type CliBackendPluginBase = {
    * `toolAvailabilityEnforcement`; `always-on` backends fail closed.
    */
   nativeToolMode?: CliBackendNativeToolMode;
+  /** Default local coding tools owned by OpenClaw instead of the native CLI.
+   * Applies only with bundled loopback MCP, outside exact or node runs.
+   * The execution-args adapter must disable the equivalent native tools.
+   */
+  hostOwnedTools?: readonly string[];
   /**
    * Side-question native tool behavior.
    *

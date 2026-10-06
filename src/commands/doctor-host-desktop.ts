@@ -38,12 +38,10 @@ export async function collectHostDesktopHealthFindings(
 export async function noteHostDesktopHealth(
   cfg: OpenClawConfig,
   deps: {
-    platform?: NodeJS.Platform;
     prompter?: Pick<DoctorPrompter, "shouldRepair" | "confirmRuntimeRepair">;
-    runCommand?: typeof runCommandWithTimeout;
   } = {},
 ): Promise<void> {
-  const platform = deps.platform ?? process.platform;
+  const platform = process.platform;
   const inspection = await inspectHostDesktop({ config: cfg.desktop?.host, platform });
   note(inspection.detail, "Host desktop");
   if (
@@ -75,12 +73,11 @@ export async function noteHostDesktopHealth(
     return;
   }
 
-  const runCommand = deps.runCommand ?? runCommandWithTimeout;
   for (const argv of [
     ["sudo", "launchctl", "enable", "system/com.apple.screensharing"],
     ["sudo", "launchctl", "kickstart", "-k", "system/com.apple.screensharing"],
   ]) {
-    const result = await runCommand(argv, { timeoutMs: 120_000 });
+    const result = await runCommandWithTimeout(argv, { timeoutMs: 120_000 });
     if (result.code !== 0) {
       note(
         `Screen Sharing repair failed. Run ${SCREEN_SHARING_COMMAND}, or enable it in ${SCREEN_SHARING_SETTINGS}.`,

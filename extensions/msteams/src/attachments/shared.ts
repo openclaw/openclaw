@@ -4,7 +4,6 @@ import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
   isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed,
-  isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
 } from "openclaw/plugin-sdk/ssrf-policy";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -116,10 +115,8 @@ const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
 ] as const;
 
 function isGraphSharedLinkUrl(url: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     return false;
   }
   const host = normalizeLowercaseStringOrEmpty(parsed.hostname);
@@ -255,13 +252,7 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
 }
 
 function fileHintFromUrl(src: string): string | undefined {
-  try {
-    const url = new URL(src);
-    const name = url.pathname.split("/").pop();
-    return name || undefined;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(src)?.pathname.split("/").pop() || undefined;
 }
 
 export function extractInlineImageReferences(
@@ -309,11 +300,8 @@ export function extractInlineImageReferences(
 }
 
 export function safeHostForUrl(url: string): string {
-  try {
-    return normalizeLowercaseStringOrEmpty(new URL(url).hostname);
-  } catch {
-    return "invalid-url";
-  }
+  const parsed = URL.parse(url);
+  return parsed ? normalizeLowercaseStringOrEmpty(parsed.hostname) : "invalid-url";
 }
 
 export type MSTeamsAttachmentFetchPolicy = {
@@ -332,20 +320,12 @@ function isMockFetchFn(fetchFn: typeof fetch): boolean {
   return Boolean(candidate.mock || Object.hasOwn(candidate, "_isMockFunction"));
 }
 
-function resolveGuardedFetchImpl(params: {
-  fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
-}): typeof fetch | undefined {
-  if (!params.fetchFn) {
+function resolveGuardedFetchImpl(fetchFn?: typeof fetch): typeof fetch | undefined {
+  if (!fetchFn) {
     return undefined;
   }
-  if (
-    params.fetchFnSupportsDispatcher === true ||
-    params.fetchFn === fetch ||
-    params.fetchFn === globalThis.fetch ||
-    isMockFetchFn(params.fetchFn)
-  ) {
-    return params.fetchFn;
+  if (fetchFn === fetch || fetchFn === globalThis.fetch || isMockFetchFn(fetchFn)) {
+    return fetchFn;
   }
   throw new Error(
     "MSTeams attachment fetchFn must set fetchFnSupportsDispatcher to use guarded DNS pinning",
@@ -390,22 +370,6 @@ export function applyAuthorizationHeaderForUrl(params: {
   }
 }
 
-async function resolveAndValidateIP(
-  hostname: string,
-  resolveFn?: MSTeamsAttachmentResolveFn,
-): Promise<void> {
-  const resolve = resolveFn ?? lookup;
-  let resolved: { address: string };
-  try {
-    resolved = await resolve(hostname);
-  } catch {
-    throw new Error(`DNS resolution failed for "${hostname}"`);
-  }
-  if (isPrivateIpAddress(resolved.address)) {
-    throw new Error(`Hostname "${hostname}" resolves to private/reserved IP (${resolved.address})`);
-  }
-}
-
 const MAX_SAFE_REDIRECTS = 5;
 export function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
@@ -423,14 +387,12 @@ export async function safeFetchWithPolicy(params: {
   url: string;
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
   timeoutMs?: number;
 }): Promise<Response> {
   const { allowHosts, authAllowHosts } = params.policy;
   const resolveFn = params.resolveFn ?? lookup;
-  const hasDispatcher = params.requestInit && "dispatcher" in params.requestInit;
   const currentHeaders = new Headers(params.requestInit?.headers);
   const currentUrl = params.url;
 
@@ -439,78 +401,30 @@ export async function safeFetchWithPolicy(params: {
   }
 
   // Authorization is only allowed on explicitly auth-allowlisted hosts, including
-  // the first hop. Redirect hops apply the same rule below or in fetchWithSsrFGuard.
+  // the first hop. Redirect hops apply the same rule in fetchWithSsrFGuard.
   if (currentHeaders.has("authorization") && !isUrlAllowed(currentUrl, authAllowHosts)) {
     currentHeaders.delete("authorization");
   }
 
-  if (!hasDispatcher) {
-    const lookupFn: LookupFn = async (hostname) => {
-      const resolved = await resolveFn(hostname);
-      return [{ ...resolved, family: resolved.address.includes(":") ? 6 : 4 }];
-    };
-    const guarded = await fetchWithSsrFGuard({
-      url: currentUrl,
-      fetchImpl: resolveGuardedFetchImpl({
-        fetchFn: params.fetchFn,
-        fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
-      }),
-      init: {
-        ...params.requestInit,
-        headers: currentHeaders,
-      },
-      maxRedirects: MAX_SAFE_REDIRECTS,
-      requireHttps: true,
-      policy: resolveMediaSsrfPolicy(allowHosts),
-      lookupFn,
-      retainAuthorizationRedirectHostnameAllowlist:
-        resolveRetainedAuthorizationRedirectHostnameAllowlist(authAllowHosts),
-      auditContext: "msteams.attachment",
-      timeoutMs: params.timeoutMs ?? MSTEAMS_REQUEST_TIMEOUT_MS,
-    });
-    return responseWithRelease(guarded.response, guarded.release);
-  }
-
-  try {
-    const initialHost = new URL(currentUrl).hostname;
-    await resolveAndValidateIP(initialHost, resolveFn);
-  } catch {
-    throw new Error(`Initial download URL blocked: ${currentUrl}`);
-  }
-
-  const res = await (params.fetchFn ?? fetch)(currentUrl, {
-    ...params.requestInit,
-    headers: currentHeaders,
-    redirect: "manual",
+  const lookupFn: LookupFn = async (hostname) => {
+    const resolved = await resolveFn(hostname);
+    return [{ ...resolved, family: resolved.address.includes(":") ? 6 : 4 }];
+  };
+  const guarded = await fetchWithSsrFGuard({
+    url: currentUrl,
+    fetchImpl: resolveGuardedFetchImpl(params.fetchFn),
+    init: {
+      ...params.requestInit,
+      headers: currentHeaders,
+    },
+    maxRedirects: MAX_SAFE_REDIRECTS,
+    requireHttps: true,
+    policy: resolveMediaSsrfPolicy(allowHosts),
+    lookupFn,
+    retainAuthorizationRedirectHostnameAllowlist:
+      resolveRetainedAuthorizationRedirectHostnameAllowlist(authAllowHosts),
+    auditContext: "msteams.attachment",
+    timeoutMs: params.timeoutMs ?? MSTEAMS_REQUEST_TIMEOUT_MS,
   });
-
-  if (!isRedirectStatus(res.status)) {
-    return res;
-  }
-
-  const location = res.headers.get("location");
-  if (!location) {
-    return res;
-  }
-
-  let redirectUrl: string;
-  try {
-    redirectUrl = new URL(location, currentUrl).toString();
-  } catch {
-    throw new Error(`Invalid redirect URL: ${location}`);
-  }
-
-  if (!isUrlAllowed(redirectUrl, allowHosts)) {
-    throw new Error(`Media redirect target blocked by allowlist: ${redirectUrl}`);
-  }
-
-  // Prevent credential bleed: only keep Authorization on redirect hops that
-  // are explicitly auth-allowlisted.
-  if (currentHeaders.has("authorization") && !isUrlAllowed(redirectUrl, authAllowHosts)) {
-    currentHeaders.delete("authorization");
-  }
-
-  // A pinned dispatcher is already injected by an upstream guard; let it own
-  // redirect handling after this allowlist validation step.
-  return res;
+  return responseWithRelease(guarded.response, guarded.release);
 }

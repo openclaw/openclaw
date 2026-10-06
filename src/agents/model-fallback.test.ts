@@ -84,7 +84,7 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
 }));
 
 const authSourceCheckMock = vi.hoisted(() => ({
-  hasAnyAuthProfileStoreSource: vi.fn(() => false),
+  hasAnyAuthProfileStoreSourceAsync: vi.fn(() => false),
 }));
 
 vi.mock("./auth-profiles/source-check.js", () => authSourceCheckMock);
@@ -191,7 +191,7 @@ function resetModelFallbackTestState(): void {
   authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
   authRuntimeMock.runtime.resolveAuthProfileOrder.mockClear();
   authRuntimeMock.runtime.maybeReprobeWhamBlockedProfiles.mockReset();
-  authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReset().mockReturnValue(false);
+  authSourceCheckMock.hasAnyAuthProfileStoreSourceAsync.mockReset().mockReturnValue(false);
   resetDiagnosticEventsForTest();
 }
 
@@ -272,7 +272,7 @@ async function runWithStoredAuth(params: {
 }
 
 function setAuthRuntimeStore(agentDir: string | undefined, store: AuthProfileStore): void {
-  authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+  authSourceCheckMock.hasAnyAuthProfileStoreSourceAsync.mockReturnValue(true);
   authRuntimeMock.setStore(agentDir, store);
 }
 
@@ -760,15 +760,14 @@ describe("runWithModelFallback", () => {
   it("uses agent runtime context before auth cooldown skips", async () => {
     const cfg = makeCfg({
       agents: {
-        list: [
-          { id: "main", default: true },
-          {
-            id: "worker",
+        entries: {
+          main: {},
+          worker: {
             models: {
               "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
             },
           },
-        ],
+        },
         defaults: {
           model: {
             primary: "openai/gpt-5.5",
@@ -1234,15 +1233,14 @@ describe("runWithModelFallback", () => {
   it("executes fallback aliases in the selected agent scope", async () => {
     const cfg = makeCfg({
       agents: {
-        list: [
-          { id: "main", default: true },
-          {
-            id: "worker",
+        entries: {
+          main: {},
+          worker: {
             models: {
               "anthropic/worker-fallback": { alias: "fast" },
             },
           },
-        ],
+        },
         defaults: {
           model: {
             primary: "openai/primary",

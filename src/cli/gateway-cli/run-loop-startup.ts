@@ -2,13 +2,48 @@ import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayServerOptions, GatewayStartupOperation } from "../../gateway/server-public.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.js";
+import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.types.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { SqliteIntegrityWorkerInterruptedError } from "../../infra/sqlite-integrity-worker-error.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
+import { measureGatewayBootstrapStep } from "../startup-trace.js";
+
+const lifecycleRuntimeLoader = createLazyImportLoader(() => import("./lifecycle.runtime.js"));
+
+/** Prime lifecycle code and acquire initial custody before installing signal handlers. */
+export async function prepareGatewayRunLoop(params: {
+  lockPort?: number;
+  lifecycleLockDeadlineMs?: number;
+}) {
+  // Updates rotate dist chunks; signal handling must retain this exact runtime.
+  const lifecycleRuntime = await measureGatewayBootstrapStep(
+    "cli.bootstrap.lifecycle-runtime",
+    () => lifecycleRuntimeLoader.load(),
+  );
+  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity(
+    process.env,
+    process.platform,
+    { includeLinuxOpenClawGatewayServiceMarker: true },
+  );
+  const supervisorMode = supervisor?.kind ?? null;
+  const restartDecision = lifecycleRuntime.resolveGatewayRestartDecision();
+  const lock = await measureGatewayBootstrapStep("cli.bootstrap.gateway-lock", () =>
+    acquireGatewayLock({
+      port: params.lockPort,
+      listenerMode: supervisorMode ? "supervised" : "foreground",
+      supervisor,
+      ...(params.lifecycleLockDeadlineMs !== undefined
+        ? { lifecycleDeadlineMs: params.lifecycleLockDeadlineMs }
+        : {}),
+    }),
+  );
+  return { lifecycleRuntime, supervisor, supervisorMode, restartDecision, lock };
+}
 
 export type GatewayRunLoopStartOptions = Pick<
   GatewayServerOptions,

@@ -25,23 +25,6 @@ type RateWindow = {
   timestamps: number[];
 };
 
-type PublicSessionAdmissionResult =
-  | { kind: "ok"; value: string | null }
-  | { kind: "rate-limited"; retryAfterSeconds: number }
-  | { kind: "unavailable" };
-
-type ControlUiPublicSessionRequestGate = {
-  admitClient(
-    clientKey: string,
-  ): { kind: "ok" } | { kind: "rate-limited"; retryAfterSeconds: number };
-  run(params: {
-    publicationKey: string;
-    requestKey: string;
-    config: OpenClawConfig;
-    work: () => Promise<string | null>;
-  }): Promise<PublicSessionAdmissionResult>;
-};
-
 function admitRateWindow(
   windows: Map<string, RateWindow>,
   key: string,
@@ -77,8 +60,17 @@ function admitRateWindow(
   return undefined;
 }
 
-/** Creates the fixed, process-local abuse boundary for anonymous transcript reads. */
-function createControlUiPublicSessionRequestGate(): ControlUiPublicSessionRequestGate {
+function isControlUiPublicSessionPath(pathname: string, basePath: string): boolean {
+  return pathname === `${basePath}/share/session`;
+}
+
+function hasSingleHttpsForwardedProto(req: IncomingMessage): boolean {
+  const value = req.headers["x-forwarded-proto"];
+  return typeof value === "string" && value.trim().toLowerCase() === "https";
+}
+
+/** Owns HTTP delivery and its fixed process-local anonymous read budgets. */
+export function createControlUiPublicSessionRoute() {
   const clientWindows = new Map<string, RateWindow>();
   const publicationWindows = new Map<string, RateWindow>();
   const activeByPublication = new Map<string, number>();
@@ -98,207 +90,6 @@ function createControlUiPublicSessionRequestGate(): ControlUiPublicSessionReques
   };
 
   return {
-    admitClient(clientKey) {
-      const retryMs = admitRateWindow(
-        clientWindows,
-        clientKey,
-        PUBLIC_SESSION_CLIENT_REQUEST_LIMIT,
-        PUBLIC_SESSION_MAX_CLIENTS,
-        Date.now(),
-      );
-      return retryMs === undefined
-        ? { kind: "ok" }
-        : { kind: "rate-limited", retryAfterSeconds: Math.ceil(retryMs / 1_000) };
-    },
-    async run(params) {
-      const now = Date.now();
-      const publicationRetryMs = admitRateWindow(
-        publicationWindows,
-        params.publicationKey,
-        PUBLIC_SESSION_PUBLICATION_REQUEST_LIMIT,
-        PUBLIC_SESSION_MAX_PUBLICATIONS,
-        now,
-      );
-      if (publicationRetryMs !== undefined) {
-        return {
-          kind: "rate-limited",
-          retryAfterSeconds: Math.ceil(publicationRetryMs / 1_000),
-        };
-      }
-
-      const inFlightKey = `${configId(params.config)}:${params.requestKey}`;
-      const existing = inFlight.get(inFlightKey);
-      if (existing) {
-        return { kind: "ok", value: await existing };
-      }
-      const publicationActive = activeByPublication.get(params.publicationKey) ?? 0;
-      if (
-        activeReads >= PUBLIC_SESSION_MAX_CONCURRENT_READS ||
-        publicationActive >= PUBLIC_SESSION_MAX_CONCURRENT_READS_PER_PUBLICATION
-      ) {
-        return { kind: "unavailable" };
-      }
-
-      activeReads += 1;
-      activeByPublication.set(params.publicationKey, publicationActive + 1);
-      const pending = Promise.resolve().then(params.work);
-      inFlight.set(inFlightKey, pending);
-      try {
-        return { kind: "ok", value: await pending };
-      } finally {
-        inFlight.delete(inFlightKey);
-        activeReads -= 1;
-        const remaining = (activeByPublication.get(params.publicationKey) ?? 1) - 1;
-        if (remaining > 0) {
-          activeByPublication.set(params.publicationKey, remaining);
-        } else {
-          activeByPublication.delete(params.publicationKey);
-        }
-      }
-    },
-  };
-}
-
-function isControlUiPublicSessionPath(pathname: string, basePath: string): boolean {
-  return pathname === `${basePath}/share/session`;
-}
-
-function hasSingleHttpsForwardedProto(req: IncomingMessage): boolean {
-  const value = req.headers["x-forwarded-proto"];
-  return typeof value === "string" && value.trim().toLowerCase() === "https";
-}
-
-async function serveControlUiPublicSession(
-  req: IncomingMessage,
-  res: ServerResponse,
-  url: URL,
-  basePath: string,
-  cfg: OpenClawConfig | undefined,
-  requestGate: ControlUiPublicSessionRequestGate,
-  clientKey: string,
-  secureIngress: boolean,
-  publicOrigin?: string,
-): Promise<void> {
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("X-Robots-Tag", "noindex, nofollow");
-  res.setHeader(
-    "Content-Security-Policy",
-    "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
-  );
-  const unavailable = (status: 404 | 429 | 503, retryAfterSeconds = 1) => {
-    const body =
-      status === 404
-        ? "This public session is unavailable."
-        : status === 429
-          ? "Too many public session requests. Please retry later."
-          : "This public session is temporarily unavailable. Please retry.";
-    res.statusCode = status;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Content-Length", Buffer.byteLength(body));
-    if (status === 429 || status === 503) {
-      res.setHeader("Retry-After", String(retryAfterSeconds));
-    }
-    res.end(req.method === "HEAD" ? undefined : body);
-  };
-  const publicShare = parseControlUiPublicSessionShareUrl(url, basePath);
-  const origin = resolveControlUiShareOrigin(req, publicOrigin);
-  const offsetText = url.searchParams.get("offset") ?? "0";
-  const offset = Number(offsetText);
-  if (
-    (req.method !== "GET" && req.method !== "HEAD") ||
-    !publicShare ||
-    !origin ||
-    !cfg ||
-    url.searchParams.getAll("offset").length > 1 ||
-    !/^(?:0|[1-9][0-9]{0,9})$/u.test(offsetText)
-  ) {
-    unavailable(404);
-    return;
-  }
-  if (!secureIngress) {
-    unavailable(404);
-    return;
-  }
-  // A truthful HEAD would still need authorization, transcript I/O, redaction, and
-  // rendering to compute the GET status and length. Refuse it instead of doing that work.
-  if (req.method === "HEAD") {
-    res.statusCode = 405;
-    res.setHeader("Allow", "GET");
-    res.setHeader("Content-Length", "0");
-    res.end();
-    return;
-  }
-  const clientAdmission = requestGate.admitClient(clientKey);
-  if (clientAdmission.kind === "rate-limited") {
-    unavailable(429, clientAdmission.retryAfterSeconds);
-    return;
-  }
-  try {
-    const { resolvePublicSessionShareToken } = await import("./control-ui-public-session-token.js");
-    const locator = resolvePublicSessionShareToken(publicShare.token);
-    if (!locator) {
-      unavailable(404);
-      return;
-    }
-    const { isPublicSessionShareActive, readPublicSessionShare } =
-      await import("./control-ui-public-session-read.js");
-    const { renderPublicSessionDocument } = await import("./control-ui-public-session-render.js");
-    const admitted = await requestGate.run({
-      publicationKey: locator.shareId,
-      requestKey: JSON.stringify([
-        createHash("sha256").update(publicShare.token).digest("base64url"),
-        offset,
-        origin,
-      ]),
-      config: cfg,
-      work: async () => {
-        const session = await readPublicSessionShare(cfg, locator, { offset });
-        if (!session) {
-          return null;
-        }
-        const latestUrl = buildControlUiPublicSessionSharePath({
-          basePath,
-          token: publicShare.token,
-        });
-        const canonicalUrl =
-          publicOrigin || req.socket instanceof TLSSocket ? `${origin}${latestUrl}` : undefined;
-        return renderPublicSessionDocument({
-          ...session,
-          latestUrl,
-          ...(canonicalUrl ? { canonicalUrl } : {}),
-          isLatest: offset === 0,
-          ...(session.olderOffset !== undefined
-            ? { olderUrl: `${latestUrl}&offset=${session.olderOffset}` }
-            : {}),
-          cardUrl: `${origin}${basePath}/share/card.png`,
-        });
-      },
-    });
-    if (admitted.kind === "rate-limited") {
-      unavailable(429, admitted.retryAfterSeconds);
-      return;
-    }
-    if (admitted.kind === "unavailable") {
-      unavailable(503);
-      return;
-    }
-    const body = admitted.value;
-    if (!body || !isPublicSessionShareActive(cfg, locator)) {
-      unavailable(404);
-      return;
-    }
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Content-Length", Buffer.byteLength(body));
-    res.end(body);
-  } catch {
-    unavailable(503);
-  }
-}
-
-export function createControlUiPublicSessionRoute() {
-  const requestGate = createControlUiPublicSessionRequestGate();
-  return {
     matches: isControlUiPublicSessionPath,
     reject(res: ServerResponse): true {
       respondNotFound(res);
@@ -311,37 +102,174 @@ export function createControlUiPublicSessionRoute() {
       config: OpenClawConfig;
       ingress: GatewayAttributedIngress;
     }): Promise<true> {
-      const url = params.req.url ? new URL(params.req.url, "http://localhost") : undefined;
+      const { req, res, basePath, config: cfg, ingress } = params;
+      const url = req.url ? new URL(req.url, "http://localhost") : undefined;
       if (!url) {
-        respondNotFound(params.res);
+        respondNotFound(res);
         return true;
       }
-      const publicOrigin = resolveGatewayPublicOrigin(params.config);
+      const publicOrigin = resolveGatewayPublicOrigin(cfg);
       const advertisedHttps = publicOrigin?.startsWith("https://") === true;
       const trustedProxyHttps =
-        params.ingress.kind === "trusted-proxy" &&
-        advertisedHttps &&
-        hasSingleHttpsForwardedProto(params.req);
+        ingress.kind === "trusted-proxy" && advertisedHttps && hasSingleHttpsForwardedProto(req);
       const managedHttps =
-        (params.ingress.kind === "tailscale-serve" || params.ingress.kind === "tailscale-funnel") &&
+        (ingress.kind === "tailscale-serve" || ingress.kind === "tailscale-funnel") &&
         advertisedHttps;
       const secureIngress =
-        params.req.socket instanceof TLSSocket ||
-        (params.ingress.kind === "direct-local" &&
-          isLoopbackHost(resolveHostName(params.req.headers.host))) ||
+        req.socket instanceof TLSSocket ||
+        (ingress.kind === "direct-local" && isLoopbackHost(resolveHostName(req.headers.host))) ||
         trustedProxyHttps ||
         managedHttps;
-      await serveControlUiPublicSession(
-        params.req,
-        params.res,
-        url,
-        params.basePath,
-        params.config,
-        requestGate,
-        params.ingress.rateLimit.subject.key,
-        secureIngress,
-        publicOrigin,
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Robots-Tag", "noindex, nofollow");
+      res.setHeader(
+        "Content-Security-Policy",
+        "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
       );
+      const unavailable = (status: 404 | 429 | 503, retryAfterSeconds = 1) => {
+        const body =
+          status === 404
+            ? "This public session is unavailable."
+            : status === 429
+              ? "Too many public session requests. Please retry later."
+              : "This public session is temporarily unavailable. Please retry.";
+        res.statusCode = status;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Content-Length", Buffer.byteLength(body));
+        if (status === 429 || status === 503) {
+          res.setHeader("Retry-After", String(retryAfterSeconds));
+        }
+        res.end(req.method === "HEAD" ? undefined : body);
+      };
+      const publicShare = parseControlUiPublicSessionShareUrl(url, basePath);
+      const origin = resolveControlUiShareOrigin(req, publicOrigin);
+      const offsetText = url.searchParams.get("offset") ?? "0";
+      const offset = Number(offsetText);
+      if (
+        (req.method !== "GET" && req.method !== "HEAD") ||
+        !publicShare ||
+        !origin ||
+        !cfg ||
+        url.searchParams.getAll("offset").length > 1 ||
+        !/^(?:0|[1-9][0-9]{0,9})$/u.test(offsetText)
+      ) {
+        unavailable(404);
+        return true;
+      }
+      if (!secureIngress) {
+        unavailable(404);
+        return true;
+      }
+      // A truthful HEAD would still need authorization, transcript I/O, redaction, and
+      // rendering to compute the GET status and length. Refuse it instead of doing that work.
+      if (req.method === "HEAD") {
+        res.statusCode = 405;
+        res.setHeader("Allow", "GET");
+        res.setHeader("Content-Length", "0");
+        res.end();
+        return true;
+      }
+      const clientRetryMs = admitRateWindow(
+        clientWindows,
+        ingress.rateLimit.subject.key,
+        PUBLIC_SESSION_CLIENT_REQUEST_LIMIT,
+        PUBLIC_SESSION_MAX_CLIENTS,
+        Date.now(),
+      );
+      if (clientRetryMs !== undefined) {
+        unavailable(429, Math.ceil(clientRetryMs / 1_000));
+        return true;
+      }
+      try {
+        const { resolvePublicSessionShareToken } =
+          await import("./control-ui-public-session-token.js");
+        const locator = resolvePublicSessionShareToken(publicShare.token);
+        if (!locator) {
+          unavailable(404);
+          return true;
+        }
+        const { isPublicSessionShareActive, readPublicSessionShare } =
+          await import("./control-ui-public-session-read.js");
+        const { renderPublicSessionDocument } =
+          await import("./control-ui-public-session-render.js");
+        const publicationRetryMs = admitRateWindow(
+          publicationWindows,
+          locator.shareId,
+          PUBLIC_SESSION_PUBLICATION_REQUEST_LIMIT,
+          PUBLIC_SESSION_MAX_PUBLICATIONS,
+          Date.now(),
+        );
+        if (publicationRetryMs !== undefined) {
+          unavailable(429, Math.ceil(publicationRetryMs / 1_000));
+          return true;
+        }
+        const inFlightKey = `${configId(cfg)}:${JSON.stringify([
+          createHash("sha256").update(publicShare.token).digest("base64url"),
+          offset,
+          origin,
+        ])}`;
+        const existing = inFlight.get(inFlightKey);
+        let body: string | null;
+        if (existing) {
+          body = await existing;
+        } else {
+          const publicationActive = activeByPublication.get(locator.shareId) ?? 0;
+          if (
+            activeReads >= PUBLIC_SESSION_MAX_CONCURRENT_READS ||
+            publicationActive >= PUBLIC_SESSION_MAX_CONCURRENT_READS_PER_PUBLICATION
+          ) {
+            unavailable(503);
+            return true;
+          }
+          activeReads += 1;
+          activeByPublication.set(locator.shareId, publicationActive + 1);
+          const pending = Promise.resolve().then(async () => {
+            const session = await readPublicSessionShare(cfg, locator, { offset });
+            if (!session) {
+              return null;
+            }
+            const latestUrl = buildControlUiPublicSessionSharePath({
+              basePath,
+              token: publicShare.token,
+            });
+            const canonicalUrl =
+              publicOrigin || req.socket instanceof TLSSocket ? `${origin}${latestUrl}` : undefined;
+            return renderPublicSessionDocument({
+              ...session,
+              latestUrl,
+              ...(canonicalUrl ? { canonicalUrl } : {}),
+              isLatest: offset === 0,
+              ...(session.olderOffset !== undefined
+                ? { olderUrl: `${latestUrl}&offset=${session.olderOffset}` }
+                : {}),
+              cardUrl: `${origin}${basePath}/share/card.png`,
+            });
+          });
+          inFlight.set(inFlightKey, pending);
+          try {
+            body = await pending;
+          } finally {
+            inFlight.delete(inFlightKey);
+            activeReads -= 1;
+            const remaining = (activeByPublication.get(locator.shareId) ?? 1) - 1;
+            if (remaining > 0) {
+              activeByPublication.set(locator.shareId, remaining);
+            } else {
+              activeByPublication.delete(locator.shareId);
+            }
+          }
+        }
+        if (!body || !isPublicSessionShareActive(cfg, locator)) {
+          unavailable(404);
+          return true;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("Content-Length", Buffer.byteLength(body));
+        res.end(body);
+      } catch {
+        unavailable(503);
+      }
       return true;
     },
   };

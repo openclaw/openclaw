@@ -10,49 +10,9 @@ import { resolveAgentDeliveryPlanWithSessionRoute } from "../../infra/outbound/a
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
-import { performGatewaySessionReset } from "../session-reset-service.js";
 import { loadSessionEntry } from "../session-utils.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
-import type { TrustedSessionCreation } from "./session-creation-provenance.js";
-import type { GatewayOperatorRoleActor } from "./shared-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-export async function runSessionResetFromAgent(params: {
-  key: string;
-  agentId?: string;
-  reason: "new" | "reset";
-  creation: TrustedSessionCreation;
-  requestingOperatorProfileId?: string;
-  operatorRoleActor?: GatewayOperatorRoleActor;
-  assertCurrent?: () => void;
-  onCommitted?: (commit: { key: string; sessionId: string }) => void;
-}) {
-  const result = await performGatewaySessionReset({
-    key: params.key,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    reason: params.reason,
-    commandSource: "gateway:agent",
-    creation: params.creation,
-    ...(params.requestingOperatorProfileId
-      ? { requestingOperatorProfileId: params.requestingOperatorProfileId }
-      : {}),
-    ...(params.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
-    armSessionDiffBaselineCapture: true,
-    assertCurrent: params.assertCurrent,
-    onCommitted: params.onCommitted,
-  });
-  if (!result.ok) {
-    return result;
-  }
-  if ("incognitoDeleted" in result) {
-    return { ok: true as const, key: result.key };
-  }
-  return {
-    ok: true as const,
-    key: result.key,
-    sessionId: result.entry.sessionId,
-  };
-}
 
 export function sessionResetAckText(reason: "new" | "reset"): string {
   return reason === "new" ? "✅ New session started." : "✅ Session reset.";
@@ -213,7 +173,6 @@ export async function resolveBareSessionResetResult(params: {
 }
 
 export function loadBareSessionResetDeliverySession(params: {
-  cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
 }): {
@@ -225,10 +184,9 @@ export function loadBareSessionResetDeliverySession(params: {
     clone: false,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  const loadedCfg = loaded?.cfg ?? params.cfg;
   return {
-    cfg: loadedCfg,
-    entry: loaded?.entry,
+    cfg: loaded.cfg,
+    entry: loaded.entry,
     agentId: resolveAgentIdFromSessionKey(params.sessionKey, params.agentId),
   };
 }

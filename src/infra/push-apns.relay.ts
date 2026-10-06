@@ -1,4 +1,3 @@
-// Sends APNs notifications through the configured relay endpoint.
 import { URL } from "node:url";
 import {
   parseStrictPositiveInteger,
@@ -95,11 +94,8 @@ function isLoopbackRelayHostname(hostname: string): boolean {
 }
 
 function parseRelayEnvironment(value: unknown): ApnsRelayEnvironment | undefined {
-  const normalized = typeof value === "string" ? normalizeLowercaseStringOrEmpty(value) : "";
-  if (normalized === "sandbox" || normalized === "production") {
-    return normalized;
-  }
-  return undefined;
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  return normalized === "sandbox" || normalized === "production" ? normalized : undefined;
 }
 
 function normalizeApnsRelayBaseUrlWithPolicy(
@@ -321,18 +317,15 @@ async function sendApnsRelayRequest(
 }
 
 /** Sign and send an APNs relay push using the gateway device identity. */
-export async function sendApnsRelayPush(params: {
-  relayConfig: ApnsRelayConfig;
-  sendGrant: string;
-  relayHandle: string;
-  pushType: ApnsRelayPushType;
-  priority: "10" | "5";
-  payload: object;
-  gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
-  requestSender?: ApnsRelayRequestSender;
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}): Promise<ApnsRelayPushResponse> {
+export async function sendApnsRelayPush(
+  params: Omit<
+    Parameters<ApnsRelayRequestSender>[0],
+    "gatewayDeviceId" | "signature" | "signedAtMs" | "bodyJson"
+  > & {
+    gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
+    requestSender?: ApnsRelayRequestSender;
+  },
+): Promise<ApnsRelayPushResponse> {
   await requireCurrentApnsSend(params);
   const sender = params.requestSender ?? sendApnsRelayRequest;
   const gatewayIdentity = params.gatewayIdentity ?? loadOrCreateProcessDeviceIdentity();

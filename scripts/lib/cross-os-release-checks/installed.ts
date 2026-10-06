@@ -174,20 +174,14 @@ export async function runInstallerSmoke(params: {
   });
 }
 
-export function buildWindowsPathBootstrapScript(
-  options: { includeCurrentProcessPath?: boolean } = {},
-) {
-  const includeCurrentProcessPath = options.includeCurrentProcessPath !== false;
+function buildWindowsPathBootstrapScript() {
   // setup-node provisions the supported runtime in the current process PATH. Keep it ahead of
   // stale runner image entries while still merging newly persisted user and machine paths.
-  const pathCandidates = includeCurrentProcessPath
-    ? "@($env:Path, $userPath, $machinePath)"
-    : "@($userPath, $machinePath)";
   return `
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $segments = New-Object System.Collections.Generic.List[string]
-foreach ($candidate in ${pathCandidates}) {
+foreach ($candidate in @($env:Path, $userPath, $machinePath)) {
   foreach ($segment in ($candidate -split ';')) {
     if ([string]::IsNullOrWhiteSpace($segment)) {
       continue

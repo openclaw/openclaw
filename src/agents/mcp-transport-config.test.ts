@@ -248,7 +248,7 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
-  it("treats CLI-native http type as streamable HTTP for compatibility", () => {
+  it("does not interpret CLI-native type fields after config admission", () => {
     const resolved = resolveMcpTransportConfig("probe", {
       url: "https://mcp.example.com/http",
       type: "http",
@@ -256,7 +256,6 @@ describe("resolveMcpTransportConfig", () => {
 
     expect(resolved).toEqual({
       ...httpDefaults,
-      transportType: "streamable-http",
       url: "https://mcp.example.com/http",
       description: "https://mcp.example.com/http",
     });

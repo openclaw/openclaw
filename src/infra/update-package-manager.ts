@@ -1,4 +1,3 @@
-// Resolves package managers for update build steps.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,7 +39,6 @@ type ResolvedBuildManager =
   | {
       kind: "resolved";
       manager: BuildManager;
-      preferred: BuildManager;
       fallback: boolean;
       env?: NodeJS.ProcessEnv;
       cleanup?: () => Promise<void>;
@@ -167,7 +165,7 @@ export async function resolveUpdateBuildManager(
   const pnpmVersion = parsePnpmPackageManagerVersion(pin);
   if (preferred === "pnpm") {
     if (await isManagerAvailable(runCommand, "pnpm", timeoutMs, baseEnv, pnpmVersion)) {
-      return { kind: "resolved", manager: "pnpm", preferred, fallback: false };
+      return { kind: "resolved", manager: "pnpm", fallback: false };
     }
 
     const corepackStatus = await enablePnpmViaCorepack(
@@ -178,7 +176,7 @@ export async function resolveUpdateBuildManager(
       work,
     );
     if (corepackStatus === "enabled") {
-      return { kind: "resolved", manager: "pnpm", preferred, fallback: false };
+      return { kind: "resolved", manager: "pnpm", fallback: false };
     }
 
     const npmAvailable = await isManagerAvailable(runCommand, "npm", timeoutMs, baseEnv);
@@ -194,7 +192,6 @@ export async function resolveUpdateBuildManager(
         return {
           kind: "resolved",
           manager: "pnpm",
-          preferred,
           fallback: false,
           env: pnpmBootstrap.env,
           cleanup: pnpmBootstrap.cleanup,
@@ -221,7 +218,7 @@ export async function resolveUpdateBuildManager(
         manager === "pnpm" ? pnpmVersion : undefined,
       )
     ) {
-      return { kind: "resolved", manager, preferred, fallback: manager !== preferred };
+      return { kind: "resolved", manager, fallback: manager !== preferred };
     }
   }
 
@@ -229,15 +226,12 @@ export async function resolveUpdateBuildManager(
 }
 
 /** Build argv for running a package-manager script. */
-export function managerScriptArgs(manager: BuildManager, script: string, args: string[] = []) {
+export function managerScriptArgs(manager: BuildManager, script: string) {
   if (manager === "pnpm") {
-    return ["pnpm", script, ...args];
+    return ["pnpm", script];
   }
   if (manager === "bun") {
-    return ["bun", "run", script, ...args];
-  }
-  if (args.length > 0) {
-    return ["npm", "run", script, "--", ...args];
+    return ["bun", "run", script];
   }
   return ["npm", "run", script];
 }

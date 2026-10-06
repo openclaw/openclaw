@@ -218,6 +218,12 @@ export function parseCardsJson(params: { raw: string; day: string }): CardParseR
       };
     }
     if (overlapMs > 0) {
+      if (current.endMs <= previous.endMs) {
+        return {
+          ok: false,
+          error: `Card ${normalized.length}: endTime must be after the previous card's endTime.`,
+        };
+      }
       // Trim sub-minute overlaps instead of round-tripping to the model again.
       normalized.push({ ...current, startMs: previous.endMs });
     } else {
@@ -247,14 +253,12 @@ export function validateCardCoverage(params: {
   requiredSpans: Array<{ startMs: number; endMs: number }>;
   windowStartMs: number;
   windowEndMs: number;
-  toleranceMs?: number;
 }): { ok: true } | { ok: false; error: string } {
-  const tolerance = params.toleranceMs ?? COVERAGE_TOLERANCE_MS;
   const problems: string[] = [];
   for (const draft of params.drafts) {
     if (
-      draft.startMs < params.windowStartMs - tolerance ||
-      draft.endMs > params.windowEndMs + tolerance
+      draft.startMs < params.windowStartMs - COVERAGE_TOLERANCE_MS ||
+      draft.endMs > params.windowEndMs + COVERAGE_TOLERANCE_MS
     ) {
       problems.push(
         `Card ${formatClockForError(draft.startMs)}-${formatClockForError(draft.endMs)} lies outside the revision window ${formatClockForError(params.windowStartMs)}-${formatClockForError(params.windowEndMs)}.`,
@@ -268,15 +272,15 @@ export function validateCardCoverage(params: {
       if (interval.endMs <= cursor) {
         continue;
       }
-      if (interval.startMs > cursor + tolerance) {
+      if (interval.startMs > cursor + COVERAGE_TOLERANCE_MS) {
         break;
       }
       cursor = Math.max(cursor, interval.endMs);
-      if (cursor >= span.endMs - tolerance) {
+      if (cursor >= span.endMs - COVERAGE_TOLERANCE_MS) {
         break;
       }
     }
-    if (cursor < span.endMs - tolerance) {
+    if (cursor < span.endMs - COVERAGE_TOLERANCE_MS) {
       problems.push(
         `Time ${formatClockForError(Math.max(cursor, span.startMs))}-${formatClockForError(span.endMs)} from the previous timeline is not covered; do not drop existing cards or observed time.`,
       );

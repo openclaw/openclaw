@@ -54,6 +54,7 @@ import {
   type AssistantMediaSession,
   type AssistantMediaReader,
 } from "./assistant-media-policy.js";
+import { isControlUiPrecompressedAssetExtension } from "./control-ui-asset-manifest.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
   buildControlUiRootAssetPath,
@@ -75,7 +76,6 @@ import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "./control-ui-csp.js";
-import type { ControlUiRootAsset } from "./control-ui-file.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
@@ -88,7 +88,6 @@ import { isControlUiSharePath, serveControlUiShareDocument } from "./control-ui-
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
   isControlUiFileUnmodified,
-  isControlUiPrecompressedAssetExtension,
   isControlUiStaticAssetExtension,
   resolveControlUiHtmlEncoding,
   resolveControlUiRepresentation,
@@ -832,18 +831,11 @@ const CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH = `${CONTROL_UI_NAMESPA
   "",
 )}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
 
-// v2026.6.1 clients use this pre-#66946 bootstrap suffix, including under a base path.
-const LEGACY_CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw";
-const LEGACY_BOOTSTRAP_CONFIG_PATH = `${LEGACY_CONTROL_UI_NAMESPACE_PREFIX}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
-
 function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
-  if (
+  return (
     pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}` ||
-    pathname === `${basePath}${LEGACY_BOOTSTRAP_CONFIG_PATH}`
-  ) {
-    return true;
-  }
-  return basePath === "" && pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH;
+    (basePath === "" && pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH)
+  );
 }
 
 export async function handleControlUiHttpRequest(
@@ -1067,58 +1059,54 @@ export async function handleControlUiHttpRequest(
     }
   }
 
-  const serve = async (prepared: ControlUiRootAsset | null): Promise<void> => {
-    if (!prepared) {
-      respondControlUiNotFound(res);
-      return;
-    }
+  while (asset) {
     // Both requested and physical index aliases retain document preparation.
     if (
       path.basename(fileRel) === "index.html" ||
-      path.basename(prepared.file.path) === "index.html"
+      path.basename(asset.file.path) === "index.html"
     ) {
       if (req.method === "HEAD") {
         const encoding = resolveControlUiHtmlEncoding(req);
         if (encoding === "not-acceptable") {
           respondControlUiNotAcceptable(res);
-          return;
+          return true;
         }
         respondHeadForControlUiFile(res, "index.html", {
           encoding: encoding === "identity" ? undefined : encoding,
         });
-        return;
+        return true;
       }
-      if (!prepared.file.body) {
-        return await serve(await readControlUiRootAsset(rootState, fileRel, true));
+      if (!asset.file.body) {
+        asset = await readControlUiRootAsset(rootState, fileRel, true);
+        continue;
       }
       await serveResolvedIndexHtml(
         req,
         res,
-        prepared.file.body.toString("utf8"),
+        asset.file.body.toString("utf8"),
         uiPath,
         basePath,
         terminalEnabled,
         opts?.config?.gateway?.controlUi?.environment,
         publicAssetBuildId,
       );
-      return;
+      return true;
     }
     const originatedAtMs = Date.now();
-    const lastModifiedMs =
-      Math.floor(Math.min(prepared.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
+    const lastModifiedMs = Math.floor(Math.min(asset.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
     const representation = resolveControlUiRepresentation({
       req,
-      asset: prepared,
+      asset,
       contentPath: fileRel,
       precompressed: fingerprintedAsset,
     });
     if (!representation) {
       respondControlUiNotAcceptable(res);
-      return;
+      return true;
     }
     if (isControlUiFileUnmodified(req, lastModifiedMs, originatedAtMs)) {
       respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
-      return;
+      return true;
     }
     const headers = {
       immutable: immutableAsset,
@@ -1133,10 +1121,12 @@ export async function handleControlUiHttpRequest(
     } else if (representation.file.body) {
       serveControlUiAsset(res, fileRel, representation.file.body, headers);
     } else {
-      await serve(await readControlUiRootAsset(rootState, fileRel, true));
+      asset = await readControlUiRootAsset(rootState, fileRel, true);
+      continue;
     }
-  };
-  await serve(asset);
+    return true;
+  }
+  respondControlUiNotFound(res);
   return true;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -413,30 +413,26 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
         });
         const videoUrl = normalizeOptionalString(completed.video_url);
         const fileId = normalizeOptionalString(completed.file_id);
-        const maxVideoBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
+        const downloadOptions = {
+          timeoutMs: createProviderOperationTimeoutResolver({
+            deadline,
+            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          }),
+          fetchFn,
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+          policy: requestPolicy,
+        };
         const video = videoUrl
           ? await downloadVideoFromUrl({
+              ...downloadOptions,
               url: videoUrl,
-              timeoutMs: createProviderOperationTimeoutResolver({
-                deadline,
-                defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-              }),
-              fetchFn,
-              maxBytes: maxVideoBytes,
-              policy: requestPolicy,
             })
           : fileId
             ? await downloadVideoFromFileId({
+                ...downloadOptions,
                 fileId,
                 headers,
-                timeoutMs: createProviderOperationTimeoutResolver({
-                  deadline,
-                  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-                }),
                 baseUrl,
-                fetchFn,
-                maxBytes: maxVideoBytes,
-                policy: requestPolicy,
               })
             : (() => {
                 throw new Error(

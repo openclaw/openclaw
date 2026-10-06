@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { OwnedWorkerTask } from "@openclaw/worker-runtime";
+import {
+  createRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
-import type {
-  OwnedWorkerTask,
-  WorkerTaskInput,
-  WorkerTaskOptions,
-} from "../infra/worker-task-pool.types.js";
+import { createOwnedWorkerTaskPoolMock } from "../infra/worker-task-pool.mock.test-support.js";
+import type { OwnedWorkerTaskOptions, WorkerTaskInput } from "../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
   OpenClawStateReadReply,
@@ -19,7 +20,7 @@ type ReadTask = RetainedOperation<OpenClawStateReadReply> & {
 };
 type RunTask = (
   input: WorkerTaskInput<OpenClawStateReadRequest>,
-  options: WorkerTaskOptions<OpenClawStateReadRequest>,
+  options: OwnedWorkerTaskOptions<OpenClawStateReadRequest>,
 ) => ReadTask;
 const mock = vi.hoisted(() => ({
   create: vi.fn(),
@@ -29,9 +30,12 @@ const mock = vi.hoisted(() => ({
   rotate: vi.fn<() => Promise<void>>(),
   selectSqlite:
     vi.fn<typeof import("../infra/bun-sqlite-library.js").ensureSqliteLibrarySelected>(),
+  capabilities:
+    vi.fn<typeof import("../infra/bun-sqlite-library.js").getSqliteRuntimeCapabilities>(),
 }));
 vi.mock("../infra/bun-sqlite-library.js", () => ({
   ensureSqliteLibrarySelected: mock.selectSqlite,
+  getSqliteRuntimeCapabilities: mock.capabilities,
 }));
 vi.mock("../infra/worker-task-pool.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/worker-task-pool.js")>()),
@@ -61,16 +65,23 @@ export const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 beforeEach(() => {
   mock.selectSqlite.mockReset().mockReturnValue({ source: "runtime" });
+  mock.capabilities.mockReset().mockReturnValue({
+    explicitSqliteCloseReleasesNativeResources: true,
+    decided: true,
+    reason: "test policy",
+  });
   mock.runTask.mockReset();
   mock.closePool.mockReset().mockResolvedValue();
   mock.closeResources.mockReset().mockResolvedValue();
   mock.rotate.mockReset().mockResolvedValue();
-  mock.create.mockReset().mockImplementation(() => ({
-    startTask: mock.runTask,
-    close: mock.closePool,
-    closeResources: mock.closeResources,
-    rotate: mock.rotate,
-  }));
+  mock.create.mockReset().mockImplementation(() =>
+    createOwnedWorkerTaskPoolMock<OpenClawStateReadRequest, OpenClawStateReadReply>({
+      startTask: mock.runTask,
+      close: mock.closePool,
+      closeResources: mock.closeResources,
+      rotate: mock.rotate,
+    }),
+  );
 });
 
 export function source(name = "source.sqlite") {
@@ -88,7 +99,7 @@ export function queueTask(dispatchReady: Promise<void> = Promise.resolve()) {
     resolve: completion.resolve,
     reject: completion.reject,
   };
-  const submitted = createDeferredCore<WorkerTaskOptions<OpenClawStateReadRequest>>();
+  const submitted = createDeferredCore<OwnedWorkerTaskOptions<OpenClawStateReadRequest>>();
   const captured = createDeferredCore<OpenClawStateReadRequest>();
   const close = vi.fn<OwnedWorkerTask<OpenClawStateReadReply>["close"]>().mockResolvedValue();
   const handle: ReadTask = {

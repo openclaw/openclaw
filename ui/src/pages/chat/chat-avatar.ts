@@ -36,6 +36,7 @@ import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
   parseAgentSessionKey,
+  readSessionDefaults,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { renderChatAuthorAvatar, renderUserAvatarSlot } from "./components/chat-author-avatar.ts";
@@ -186,9 +187,7 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
 type ChatAvatarHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; agents?: AgentsListResult["agents"] } | null;
-  resourceBasePath: string;
   chatAvatarReason?: string | null;
-  chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarUrl: string | null;
   senderAgentAvatars?: ReadonlyMap<string, string | null>;
@@ -196,9 +195,7 @@ type ChatAvatarHost = {
   connected: boolean;
   connectionEpoch?: number;
   hello: GatewayHelloOk | null;
-  password?: string | null;
   sessionKey: string;
-  settings?: { token?: string | null } | null;
   requestUpdate?: () => void;
 };
 
@@ -209,7 +206,6 @@ const senderAvatarInputs = new WeakMap<object, unknown[]>();
 
 type ChatAvatarSnapshot = {
   reason: string | null;
-  source: string | null;
   status: "none" | "local" | "remote" | "data" | null;
   url: string | null;
   release: () => void;
@@ -222,13 +218,6 @@ const chatAvatarReferences = new WeakMap<
   Map<string | typeof currentAvatarReference, () => void>
 >();
 
-function readHelloDefaultAgentId(host: Pick<ChatAvatarHost, "hello">): string | undefined {
-  const snapshot = host.hello?.snapshot as
-    | { sessionDefaults?: { defaultAgentId?: string } }
-    | undefined;
-  return snapshot?.sessionDefaults?.defaultAgentId?.trim() || undefined;
-}
-
 export function resolveAgentIdForSession(
   host: Pick<ChatAvatarHost, "sessionKey" | "assistantAgentId" | "agentsList" | "hello">,
 ): string {
@@ -239,7 +228,7 @@ export function resolveAgentIdForSession(
   if (isUiGlobalSessionKey(host.sessionKey)) {
     return resolveUiSelectedGlobalAgentId(host) || DEFAULT_AGENT_ID;
   }
-  return readHelloDefaultAgentId(host) || DEFAULT_AGENT_ID;
+  return readSessionDefaults(host)?.defaultAgentId?.trim() || DEFAULT_AGENT_ID;
 }
 
 function beginChatAvatarRequest(host: ChatAvatarHost): number {
@@ -253,7 +242,6 @@ function clearChatAvatarState(host: ChatAvatarHost) {
   references?.get(currentAvatarReference)?.();
   references?.delete(currentAvatarReference);
   host.chatAvatarUrl = null;
-  host.chatAvatarSource = null;
   host.chatAvatarStatus = null;
   host.chatAvatarReason = null;
 }
@@ -322,7 +310,6 @@ async function loadChatAvatarSnapshot(
     }
     return {
       release,
-      source: identity.avatarSource ?? null,
       status: identity.avatarStatus ?? null,
       reason: identity.avatarReason ?? null,
       url,
@@ -452,7 +439,6 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
   }
   if (snapshot) {
     rememberChatAvatarReference(host, currentAvatarReference, snapshot.release);
-    host.chatAvatarSource = snapshot.source;
     host.chatAvatarStatus = snapshot.status;
     host.chatAvatarReason = snapshot.reason;
     host.chatAvatarUrl = snapshot.url;

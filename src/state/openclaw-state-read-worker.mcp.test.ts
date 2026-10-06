@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { emptyReply, queueTask, source } from "./openclaw-state-read-worker.test-harness.js";
 import { expect, it } from "vitest";
-import type { AcpSessionReadInput } from "../acp/runtime/session-meta-keys.js";
+import type { AcpSessionReadInput } from "../acp/runtime/session-meta-read.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
@@ -19,7 +19,7 @@ it.each(["mcpOAuth.statuses", "userPreferences.values", "acpSessions.metadata"] 
       sessionId: "session-根🦞",
       sessionStartedAt: 0,
     };
-    const metadata = { keys, legacyKey: "legacy-根🦞", entry };
+    const metadata = { keys, entry };
     const entries: AcpSessionReadInput[] = [metadata, { keys: ["entry-without-optionals"] }];
     const expectedEntries: AcpSessionReadInput[] = [
       { ...metadata, keys: [...keys], entry: { ...entry } },
@@ -58,7 +58,6 @@ it.each(["mcpOAuth.statuses", "userPreferences.values", "acpSessions.metadata"] 
               (bytes, input) =>
                 bytes +
                 input.keys.reduce((total, sessionKey) => total + Buffer.byteLength(sessionKey), 0) +
-                Buffer.byteLength(input.legacyKey ?? "") +
                 Buffer.byteLength(input.entry?.lifecycleRevision ?? "") +
                 Buffer.byteLength(input.entry?.sessionId ?? "") +
                 (input.entry?.sessionStartedAt === undefined ? 0 : 8),
@@ -69,7 +68,6 @@ it.each(["mcpOAuth.statuses", "userPreferences.values", "acpSessions.metadata"] 
       expect(batchOptions.inputBytes).toBe(Number(baselineOptions.inputBytes) + additionalBytes);
       keys[0] = "changed-principal";
       keys.push("added-after-admission");
-      metadata.legacyKey = "changed-legacy";
       entry.lifecycleRevision = "changed-revision";
       entry.sessionId = "changed-session";
       entry.sessionStartedAt = 99;

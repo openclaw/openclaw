@@ -14,12 +14,13 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { SpawnInitiation } from "../spawn-initiation.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
 import { BrokerChild } from "./child.js";
 import { terminateBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
 import { createBrokerReceiver, createBrokerSender } from "./ipc.js";
-import { holdPipe, restorePipePrefix, restoreStdinPipe } from "./pipe.js";
+import { holdPipe, restoreStdinPipe } from "./pipe.js";
 import {
   SpawnBrokerError,
   type BrokerRequest,
@@ -34,6 +35,7 @@ import {
 } from "./resource-host.js";
 import {
   SPAWN_BROKER_STARTUP_TIMEOUT_MS,
+  spawnBrokerStartupNowMs,
   type BrokerBootstrap,
   type BrokerResourceRequest,
   type BrokerResourceResponse,
@@ -61,6 +63,8 @@ function createNativeResourceDirectory(): string {
 
 type Request = {
   child: BrokerChild;
+  initiateSpawn?: SpawnInitiation;
+  nativeInitiated?: ReturnType<typeof createDeferredCore<void>>;
   pid?: number;
   detached: boolean;
   result?: ReturnType<typeof createDeferredCore<BrokerExecaResult>>;
@@ -239,29 +243,33 @@ export class SpawnBrokerHost {
     }
     if (this.closing || this.resourceClaims.hasOpenClaims || this.requests.size > 0) {
       this.process.ref();
-      // Bun's ChildProcess owns the reference; its channel is only an EventEmitter.
-      if (!process.versions.bun) {
-        this.process.channel?.ref();
-      }
+      // Newer Bun releases, like Node, reference IPC independently of the child.
+      this.process.channel?.ref?.();
     } else {
       this.process.unref();
-      if (!process.versions.bun) {
-        this.process.channel?.unref();
-      }
+      this.process.channel?.unref?.();
     }
   }
 
-  spawn(command: string, args: string[], options: SpawnOptions): BrokerChild {
+  spawn(
+    command: string,
+    args: string[],
+    options: SpawnOptions,
+    initiateSpawn?: SpawnInitiation,
+  ): BrokerChild {
     const prepared = brokerSpawnOptions(options);
     if (!prepared) {
       throw new Error("Unsupported spawn broker stdio or process options");
     }
-    return this.admit({
-      type: "spawn",
-      id: ++this.sequence,
-      argv: [command, ...args],
-      options: prepared,
-    }).child;
+    return this.admit(
+      {
+        type: initiateSpawn ? "prepare-spawn" : "spawn",
+        id: ++this.sequence,
+        argv: [command, ...args],
+        options: prepared,
+      },
+      initiateSpawn,
+    ).child;
   }
 
   spawnExeca(argv: string[], options: BrokerExecaOptions) {
@@ -278,17 +286,21 @@ export class SpawnBrokerHost {
     };
   }
 
-  private admit(message: Extract<BrokerRequest, { type: "spawn" | "spawn-execa" }>): Request {
-    const child = new BrokerChild(message.id, message.argv, (value, handle) =>
-      this.transmit(value, handle),
+  private admit(
+    message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
+    initiateSpawn?: SpawnInitiation,
+  ): Request {
+    const child = new BrokerChild(message.id, message.argv, (value, handle, initiate) =>
+      this.transmit(value, handle, initiate),
     );
     const result =
       message.type === "spawn-execa" ? createDeferredCore<BrokerExecaResult>() : undefined;
     if (result) {
       void result.promise.catch(() => {});
     }
-    const request = {
+    const request: Request = {
       child,
+      initiateSpawn,
       result,
       childClosed: false,
       resultSettled: !result,
@@ -316,15 +328,20 @@ export class SpawnBrokerHost {
       this.retire(message.id, request);
     });
     void this.transmit(message).catch((error: unknown) => {
-      this.requests.delete(message.id);
-      this.refreshNativeReference();
+      if (!request.nativeInitiated) {
+        if (message.type === "prepare-spawn") {
+          child.markNotStarted();
+        }
+        this.requests.delete(message.id);
+        this.refreshNativeReference();
+      }
       fail(new SpawnBrokerError("Spawn broker request delivery failed", { cause: error }));
     });
     return request;
   }
 
   private retire(id: number, request: Request): void {
-    if (request.childClosed && request.resultSettled) {
+    if (request.childClosed && request.resultSettled && !request.nativeInitiated) {
       this.requests.delete(id);
       this.refreshNativeReference();
     }
@@ -344,11 +361,12 @@ export class SpawnBrokerHost {
   private transmit(
     message: BrokerRequest | Exclude<BrokerResourceRequest, { type: "resource-attach" }>,
     handle?: SendHandle,
+    initiateSpawn?: SpawnInitiation,
   ): Promise<void> {
     if (!this.available || !this.sendMessage) {
       return Promise.reject(new SpawnBrokerError("Spawn broker is unavailable"));
     }
-    return this.sendMessage(message, handle);
+    return this.sendMessage(message, handle, initiateSpawn);
   }
 
   private start(): void {
@@ -378,9 +396,9 @@ export class SpawnBrokerHost {
     const brokerExited = createDeferredCore();
     let ended = false;
     let ready = false;
-    this.startupDeadline = Date.now() + SPAWN_BROKER_STARTUP_TIMEOUT_MS;
+    this.startupDeadline = spawnBrokerStartupNowMs() + SPAWN_BROKER_STARTUP_TIMEOUT_MS;
     const checkStartup = () => {
-      if (!ended && !ready && Date.now() >= this.startupDeadline) {
+      if (!ended && !ready && spawnBrokerStartupNowMs() >= this.startupDeadline) {
         fail(new Error("readiness deadline exceeded after 15000ms"));
         child.kill("SIGKILL");
       }
@@ -514,11 +532,48 @@ export class SpawnBrokerHost {
         }
         if (message.type === "pipe") {
           void this.transmit({ type: "pipe-received", id: message.id, fd: message.fd }).catch(fail);
+        } else if (message.type === "prepared") {
+          void this.transmit({ type: "launch", id: message.id, allowed: false }).catch(
+            abortTransport,
+          );
         }
         return;
       }
-      if (message.type === "owned") {
+      if (message.type === "owned" || message.type === "error") {
+        request.nativeInitiated?.resolve();
+        request.nativeInitiated = undefined;
+      }
+      if (message.type === "prepared") {
+        const initiate = request.initiateSpawn;
+        request.initiateSpawn = undefined;
+        const brokerClosed = this.brokerClosed;
+        const nativeInitiated = initiate
+          ? (request.nativeInitiated ??= createDeferredCore())
+          : undefined;
+        // Local proxy failure is not native settlement; only this peer's receipt or exit is proof.
+        const settlement =
+          brokerClosed && nativeInitiated
+            ? Promise.race([nativeInitiated.promise, brokerClosed])
+            : Promise.reject(new Error("Spawn broker retirement is unavailable"));
+        void settlement.catch(() => {});
+        void this.transmit(
+          { type: "launch", id: message.id, allowed: true },
+          undefined,
+          (launch) => {
+            if (!initiate || !nativeInitiated || request.childClosed) {
+              throw new SpawnBrokerError("Spawn broker launch grant is unavailable");
+            }
+            return initiate(launch, settlement);
+          },
+        ).catch(() => {
+          void this.transmit({ type: "launch", id: message.id, allowed: false }).catch(fail);
+        });
+      } else if (message.type === "owned") {
         request.pid = message.pid;
+        if (request.childClosed) {
+          this.retainCleanup(terminateLostBrokerChild(message.pid, request.detached));
+          this.retire(message.id, request);
+        }
       } else if (message.type === "pipe") {
         try {
           if (message.closed && message.fd === 0) {
@@ -546,8 +601,8 @@ export class SpawnBrokerHost {
         void this.transmit({ type: "pipe-received", id: message.id, fd: message.fd }).catch(fail);
       } else if (message.type === "pipe-prefix") {
         const pipe = request.child.stdio[message.fd];
-        if (pipe instanceof Socket) {
-          restorePipePrefix(pipe, message.bytes);
+        if (pipe instanceof Socket && message.bytes.length > 0) {
+          pipe.unshift(message.bytes);
         }
       } else if (message.type === "execa-result") {
         // Started commands publish their owned PID first on this ordered channel.

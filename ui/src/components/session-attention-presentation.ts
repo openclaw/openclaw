@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { DirectiveResult } from "lit/directive.js";
 import { t } from "../i18n/index.ts";
 import {
   summarizeSidebarSessionAttention,
@@ -20,14 +21,11 @@ function revealAttentionWithoutNavigation(event: MouseEvent) {
   event.stopPropagation();
 }
 
-export function renderSessionAttentionIcon(
-  attention: SidebarSessionAttention,
-  showTooltip = false,
-) {
+export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
   if (attention.kind === "none") {
     return nothing;
   }
-  const label = showTooltip ? sessionAttentionTooltipLabel(attention) : undefined;
+  const label = sessionAttentionTooltipLabel(attention);
   const icon =
     attention.kind === "question"
       ? icons.hand
@@ -47,7 +45,7 @@ export function renderSessionAttentionIcon(
     @click=${label ? revealAttentionWithoutNavigation : nothing}
     >${icon}</span
   >`;
-  return showTooltip && label ? renderSessionAttentionTooltip(attention, content) : content;
+  return label ? renderSessionAttentionTooltip(attention, content) : content;
 }
 
 export function sessionAttentionSubtitle(attention: SidebarSessionAttention): string | undefined {
@@ -166,6 +164,7 @@ export function renderTeamSessionSlots(
   includeChildren: boolean,
   childCount: number,
   groupConflicts = 0,
+  runVisibility?: DirectiveResult,
 ) {
   const attention = summarizeSidebarSessionAttention(
     rows.flatMap((row) =>
@@ -192,7 +191,7 @@ export function renderTeamSessionSlots(
   }
   const state =
     attention && attention.kind !== "none"
-      ? renderSessionAttentionIcon(attention, true)
+      ? renderSessionAttentionIcon(attention)
       : failed
         ? html`<span
             class="sidebar-child-session__status--failed"
@@ -207,7 +206,12 @@ export function renderTeamSessionSlots(
               >${icons.globe}</span
             >`
           : active
-            ? renderSessionGlyph({ content: nothing, running: true, queued: active === queued })
+            ? renderSessionGlyph({
+                content: nothing,
+                running: true,
+                queued: active === queued,
+                runVisibility,
+              })
             : rows.length === 1 && rows[0]?.isChild
               ? renderSessionIdleState(rows[0])
               : nothing;

@@ -1,4 +1,3 @@
-// Handles native slash commands before full get-reply pipeline execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
@@ -51,44 +50,33 @@ const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
 );
 const statusCommandRuntimeLoader = createLazyImportLoader(() => import("./commands-status.js"));
 
-function resolveNativeSlashCommandName(ctx: MsgContext): string | undefined {
+function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
   const commandTurn = resolveCommandTurnContext(ctx);
   if (!isNativeCommandTurn(commandTurn) && !isAuthorizedTextSlashCommandTurn(commandTurn)) {
-    return undefined;
+    return false;
   }
   const commandText = stripStructuralPrefixes(ctx.commandText ?? "").trim();
   const match = commandText.match(/^\/([^\s:]+)(?::|\s|$)/);
-  return normalizeOptionalString(match?.[1])?.toLowerCase();
-}
-
-function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
-  const commandTurn = resolveCommandTurnContext(ctx);
-  const commandName = resolveNativeSlashCommandName(ctx);
-  return Boolean(
-    commandName &&
-    commandName !== "new" &&
-    commandName !== "reset" &&
+  const commandName = normalizeOptionalString(match?.[1])?.toLowerCase();
+  if (
+    !commandName ||
+    commandName === "new" ||
+    commandName === "reset" ||
     // Dashboard creates an agent prompt with exact skill selections. The full
     // reply pipeline must consume that command once, without re-resolving its text.
-    commandName !== "dashboard" &&
-    (isNativeCommandTurn(commandTurn) ||
-      shouldRunInternalTextSlashCommandFastPath(ctx, commandTurn, commandName)),
-  );
-}
-
-function shouldRunInternalTextSlashCommandFastPath(
-  ctx: MsgContext,
-  commandTurn: ReturnType<typeof resolveCommandTurnContext>,
-  commandName: string,
-): boolean {
+    commandName === "dashboard"
+  ) {
+    return false;
+  }
   return (
-    isAuthorizedTextSlashCommandTurn(commandTurn) &&
-    (commandName === "export-trajectory" || commandName === "trajectory") &&
-    ctx.ChatType !== "group" &&
-    isInternalMessageChannel(normalizeOptionalString(ctx.Provider)) &&
-    (ctx.Surface === undefined || isInternalMessageChannel(normalizeOptionalString(ctx.Surface))) &&
-    (ctx.OriginatingChannel === undefined ||
-      isInternalMessageChannel(normalizeOptionalString(ctx.OriginatingChannel)))
+    isNativeCommandTurn(commandTurn) ||
+    ((commandName === "export-trajectory" || commandName === "trajectory") &&
+      ctx.ChatType !== "group" &&
+      isInternalMessageChannel(normalizeOptionalString(ctx.Provider)) &&
+      (ctx.Surface === undefined ||
+        isInternalMessageChannel(normalizeOptionalString(ctx.Surface))) &&
+      (ctx.OriginatingChannel === undefined ||
+        isInternalMessageChannel(normalizeOptionalString(ctx.OriginatingChannel))))
   );
 }
 
@@ -117,7 +105,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return { handled: false };
   }
 
-  const sessionState = initFastReplySessionState({
+  const sessionState = await initFastReplySessionState({
     ctx: params.ctx,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -146,7 +134,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     }
     const persistedInitialEntry = persistence.entry;
     if (creatingSession) {
-      recordSessionCreated(params.cfg, {
+      await recordSessionCreated(params.cfg, {
         sessionKey: sessionState.sessionKey,
         agentId: params.agentId,
         entry: persistedInitialEntry,
@@ -379,38 +367,16 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   const continuationTriggerBodyNormalized = command.rawBodyNormalized;
 
   const directiveResult = await resolveReplyDirectives({
-    ctx: params.ctx,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    agentCfg: params.agentCfg,
-    sessionCtx: sessionState.sessionCtx,
-    sessionEntry: sessionState.sessionEntry,
-    sessionStore: sessionState.sessionStore,
-    sessionKey: sessionState.sessionKey,
-    storePath: sessionState.storePath,
-    sessionScope: sessionState.sessionScope,
+    ...params,
+    ...sessionState,
     conversation: prepareReplyConversation({
       ctx: sessionState.sessionCtx,
       sessionEntry: sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry,
       groupResolution: sessionState.groupResolution,
     }),
-    isGroup: sessionState.isGroup,
     triggerBodyNormalized: continuationTriggerBodyNormalized,
     resetTriggered: false,
-    commandAuthorized: params.commandAuthorized,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    aliasIndex: params.aliasIndex,
-    provider: params.provider,
-    model: params.model,
     hasResolvedHeartbeatModelOverride: false,
-    // Native selections reuse the admitted catalog just like ordinary turns.
-    preparedModelCatalog: params.preparedModelCatalog,
-    typing: params.typing,
-    opts: params.opts,
-    skillFilter: params.skillFilter,
   });
   if (directiveResult.kind === "reply") {
     // The canonical directive owner already finalizes typing for every terminal reply.
@@ -459,13 +425,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       reply: markCommandReplyForDelivery(inlineActionResult.reply),
     };
   }
-  return {
-    handled: false,
-    ...((inlineActionResult.queueModeOverride ?? commandResult.queueModeOverride)
-      ? {
-          queueModeOverride:
-            inlineActionResult.queueModeOverride ?? commandResult.queueModeOverride,
-        }
-      : {}),
-  };
+  const queueModeOverride = inlineActionResult.queueModeOverride ?? commandResult.queueModeOverride;
+  return { handled: false, ...(queueModeOverride ? { queueModeOverride } : {}) };
 }

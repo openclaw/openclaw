@@ -199,17 +199,17 @@ export async function pruneLegacyPluginSourceCaptures(
 /** Durable native payload is reclaimed only against current receipts under maintenance. */
 export async function pruneUnreferencedPluginNativeCaptures(
   stateDir: string,
-  assertCurrent: () => void,
+  assertCurrent: () => void | Promise<void>,
   env?: NodeJS.ProcessEnv,
   options: { startup?: boolean } = {},
 ) {
   try {
-    assertCurrent();
+    await assertCurrent();
     const row = await readPluginMetadataStateRow(
       "installed-index",
       resolveInstalledPluginIndexStateDatabaseOptions({ stateDir, env }),
     );
-    assertCurrent();
+    await assertCurrent();
     const retainedPaths = new Set<string>();
     if (row) {
       const payload: unknown = JSON.parse(row.value_json);

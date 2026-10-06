@@ -1,4 +1,3 @@
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyModelCompatPatch } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,14 +17,6 @@ const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = [
   "minContains",
   "maxContains",
 ] as const;
-
-function applyXaiModelCompat(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  return applyModelCompatPatch(model, {
-    toolSchemaProfile: "xai",
-    unsupportedToolSchemaKeywords: [...XAI_UNSUPPORTED_SCHEMA_KEYWORDS],
-    toolCallArgumentsEncoding: "html-entities",
-  });
-}
 
 function isXaiBackedVeniceModel(modelId: string): boolean {
   return normalizeLowercaseStringOrEmpty(modelId).includes("grok");
@@ -54,7 +45,13 @@ export default defineSingleProviderPluginEntry({
       liveModelDiscovery: VENICE_MODEL_DISCOVERY_OPTIONS,
     },
     normalizeResolvedModel: ({ modelId, model }) =>
-      isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
+      isXaiBackedVeniceModel(modelId)
+        ? applyModelCompatPatch(model, {
+            toolSchemaProfile: "xai",
+            unsupportedToolSchemaKeywords: [...XAI_UNSUPPORTED_SCHEMA_KEYWORDS],
+            toolCallArgumentsEncoding: "html-entities",
+          })
+        : undefined,
     wrapStreamFn: (ctx) => createVeniceStreamWrapper(ctx.streamFn),
     resolveUsageAuth: async (ctx) => {
       const apiKey = ctx.resolveApiKeyFromConfigAndStore({

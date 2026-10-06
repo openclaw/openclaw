@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readLiveModelCatalogString } from "../../packages/normalization-core/src/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
@@ -6,7 +7,6 @@ import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-h
 import {
   isUpstreamProviderCatalogModel,
   readLiveModelCatalogId,
-  readLiveModelCatalogRecord,
   readLiveModelCatalogStringField,
   type UpstreamProviderCatalog,
   type UpstreamProviderCatalogModel,
@@ -67,13 +67,7 @@ export type LiveModelRowProjection<T extends ModelDefinitionConfig = ModelDefini
   fallback: ModelProviderConfig,
 ) => readonly T[];
 
-// Live model catalogs are fetched at runtime from provider-controlled endpoints,
-// so the success body is untrusted just like the error body. A faulty or hostile
-// provider can stream an unbounded JSON document; reading it without a ceiling
-// lets a single discovery call exhaust process memory. The cap is sized well
-// above the largest known catalog (OpenRouter's live catalog is already >100KB
-// and grows) while still bounding memory, matching the existing bounded reads
-// for provider error bodies.
+// Bound untrusted catalogs above known provider sizes without allowing unbounded JSON reads.
 const LIVE_MODEL_CATALOG_BODY_MAX_BYTES = 4 * 1024 * 1024;
 // Shared upstream feeds cover many providers and already exceed the ordinary
 // single-provider ceiling; bound this explicitly without weakening that limit.
@@ -177,7 +171,7 @@ export async function getCachedUpstreamProviderCatalog(
           await cancelUnreadResponseBody(response);
           throw new LiveModelCatalogHttpError("upstream-provider-catalog", response.status);
         }
-        const catalog = readLiveModelCatalogRecord(
+        const catalog = asOptionalRecord(
           await readLiveModelCatalogJson(response, {
             label: "upstream-provider-catalog",
             timeoutMs,
@@ -194,8 +188,8 @@ export async function getCachedUpstreamProviderCatalog(
     },
   });
 
-  const provider = readLiveModelCatalogRecord(body[params.providerId]);
-  const models = readLiveModelCatalogRecord(provider?.models);
+  const provider = asOptionalRecord(body[params.providerId]);
+  const models = asOptionalRecord(provider?.models);
   if (
     !provider ||
     !models ||
@@ -219,82 +213,50 @@ export async function getCachedUpstreamProviderCatalog(
   };
 }
 
-function readLiveModelCatalogNextUrl(body: unknown): string | undefined {
-  const record = readLiveModelCatalogRecord(body);
-  if (!record) {
-    return undefined;
-  }
-  const links = readLiveModelCatalogRecord(record.links);
-  return readLiveModelCatalogString(record.next) ?? readLiveModelCatalogString(links?.next);
-}
-
-function readLiveModelCatalogCursor(
-  body: unknown,
-): { name: "after" | "after_id" | "pageToken" | "page_token"; value: string } | undefined {
-  const record = readLiveModelCatalogRecord(body);
-  if (!record || record.has_more === false) {
-    return undefined;
-  }
-  const nextCursor = readLiveModelCatalogString(record.next_cursor);
-  if (nextCursor) {
-    return { name: "after", value: nextCursor };
-  }
-  const lastId =
-    readLiveModelCatalogString(record.last_id) ?? readLiveModelCatalogString(record.lastId);
-  if (lastId) {
-    return { name: "after_id", value: lastId };
-  }
-  const nextPageToken = readLiveModelCatalogString(record.nextPageToken);
-  if (nextPageToken) {
-    return { name: "pageToken", value: nextPageToken };
-  }
-  const nextPageTokenSnakeCase = readLiveModelCatalogString(record.next_page_token);
-  return nextPageTokenSnakeCase ? { name: "page_token", value: nextPageTokenSnakeCase } : undefined;
-}
-
 type LiveModelCatalogNextPageResolution =
   | { status: "complete" }
   | { status: "incomplete" }
   | { status: "next"; url: string };
 
-function bodyAdvertisesMoreLiveModelCatalogPages(body: unknown): boolean {
-  const record = readLiveModelCatalogRecord(body);
-  if (!record || record.has_more === false) {
-    return false;
-  }
-  return Boolean(
-    record.has_more === true ||
-    readLiveModelCatalogNextUrl(body) ||
-    readLiveModelCatalogString(record.next_cursor) ||
-    readLiveModelCatalogString(record.nextPageToken) ||
-    readLiveModelCatalogString(record.next_page_token),
-  );
-}
-
 function resolveLiveModelCatalogNextPage(
   currentUrl: string,
   body: unknown,
 ): LiveModelCatalogNextPageResolution {
-  const rawNextUrl = readLiveModelCatalogNextUrl(body);
+  const record = asOptionalRecord(body);
+  const rawNextUrl =
+    readLiveModelCatalogString(record?.next) ??
+    readLiveModelCatalogString(asOptionalRecord(record?.links)?.next);
+  const currentParsed = URL.parse(currentUrl);
   if (rawNextUrl) {
-    const currentParsed = URL.parse(currentUrl);
     const nextUrl = URL.parse(rawNextUrl, currentUrl);
     if (nextUrl && currentParsed && nextUrl.origin === currentParsed.origin) {
       return { status: "next", url: nextUrl.toString() };
     }
   }
   // Malformed or cross-origin next URLs may still have a usable same-origin cursor.
-  const cursor = readLiveModelCatalogCursor(body);
-  if (cursor) {
-    const nextUrl = URL.parse(currentUrl);
-    if (nextUrl) {
-      nextUrl.searchParams.set(cursor.name, cursor.value);
-      return { status: "next", url: nextUrl.toString() };
+  let hasMore = false;
+  if (record && record.has_more !== false) {
+    const nextCursor = readLiveModelCatalogString(record.next_cursor);
+    const lastId = readLiveModelCatalogStringField(record, ["last_id", "lastId"]);
+    const nextPageToken = readLiveModelCatalogString(record.nextPageToken);
+    const nextPageTokenSnakeCase = readLiveModelCatalogString(record.next_page_token);
+    const cursor = (
+      [
+        ["after", nextCursor],
+        ["after_id", lastId],
+        ["pageToken", nextPageToken],
+        ["page_token", nextPageTokenSnakeCase],
+      ] as const
+    ).find(([, value]) => value);
+    if (cursor?.[1] && currentParsed) {
+      currentParsed.searchParams.set(cursor[0], cursor[1]);
+      return { status: "next", url: currentParsed.toString() };
     }
+    hasMore = Boolean(
+      record.has_more === true || nextCursor || nextPageToken || nextPageTokenSnakeCase,
+    );
   }
-  return rawNextUrl || bodyAdvertisesMoreLiveModelCatalogPages(body)
-    ? { status: "incomplete" }
-    : { status: "complete" };
+  return rawNextUrl || hasMore ? { status: "incomplete" } : { status: "complete" };
 }
 
 async function fetchLiveProviderModelCatalogPage(

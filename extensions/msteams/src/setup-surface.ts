@@ -278,8 +278,6 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
         try {
           tokens = await oauthModule.loginMSTeamsDelegated(
             {
-              isRemote: true,
-              openUrl: openDelegatedOAuthUrl,
               log: (msg) => {
                 void params.prompter.note(msg);
               },

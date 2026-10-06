@@ -87,10 +87,6 @@ export function createQaSmokeCiPart(
       cause: error,
     });
   }
-  if (scenarios.length === 0) {
-    throw new Error(`${QA_SMOKE_PROFILE} taxonomy profile did not resolve any CI scenarios.`);
-  }
-
   const supportedChannels = new Set<string>(QA_SMOKE_CI_CHANNELS);
   const unsupportedChannels = new Set(
     scenarios.flatMap((scenario) => {
@@ -168,14 +164,9 @@ export function createQaSmokeCiPart(
     cost: index === matrixPartIndex ? QA_SMOKE_CI_MATRIX_RUN_COST : 0,
     scenarios: [] as typeof scenarios,
   }));
-  const firstPartition = partitions[0];
-  if (!firstPartition) {
-    throw new Error(`${QA_SMOKE_PROFILE} declares no CI profile parts.`);
-  }
   for (const scenario of primaryScenarios) {
-    const partition = partitions.reduce(
-      (lightest, candidate) => (candidate.cost < lightest.cost ? candidate : lightest),
-      firstPartition,
+    const partition = partitions.reduce((lightest, candidate) =>
+      candidate.cost < lightest.cost ? candidate : lightest,
     );
     partition.scenarios.push(scenario);
     partition.cost += estimateScenarioCost(scenario);
@@ -183,10 +174,7 @@ export function createQaSmokeCiPart(
 
   // The Matrix run stays on the last part, whose reserved cost above reduces
   // its primary share without mixing run-level channel drivers.
-  const selectedPartition = partitions[partIndex];
-  if (!selectedPartition) {
-    throw new Error(`unknown QA smoke CI profile part: ${partId}`);
-  }
+  const selectedPartition = partitions[partIndex]!;
   const runs: QaSmokeCiRun[] = [
     {
       slug: "primary",

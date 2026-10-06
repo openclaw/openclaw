@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { listUpdateRuns } from "../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import {
   installDeferredCompletionFixture,
   readPackageVersion,
@@ -16,7 +15,6 @@ import {
   updateNpmInstalledPlugins,
   runPostCorePluginConvergenceSpy,
   loadInstalledPluginIndexInstallRecords,
-  pathExists,
   resolveGatewayInstallEntrypoint,
   replaceConfigFile,
   mutateConfigFileWithRetry,
@@ -29,12 +27,8 @@ import {
 describe("update-cli child-owned deferred completion", () => {
   const {
     runPostCoreCommand,
-    lastNpmPluginUpdateCall,
     postCoreConvergenceResult,
     syncPluginCall,
-    lastWriteJsonCall,
-    mockNpmPluginOutcomes,
-    getErrorOutput,
     getLogOutput,
     mockNoopPostUpdatePluginConvergence,
     createCaseDir,
@@ -87,115 +81,47 @@ describe("update-cli child-owned deferred completion", () => {
     expect(ledger.listUpdateRuns({ limit: 100 })).toEqual(history);
   });
 
-  it("keeps Doctor diagnostics outside JSON during legacy post-core resume", async () => {
-    mockNpmPluginOutcomes([], true);
-    vi.mocked(runExec).mockResolvedValueOnce({ stdout: "Migration Doctor output\n", stderr: "" });
-
-    await runPostCoreCommand({ json: true, restart: false });
-
-    // Without a parent ownership declaration, the child runs Doctor and final validation.
-    expect(
-      vi
-        .mocked(runExec)
-        .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? ""))
-        .map(([, args]) => args[1]),
-    ).toEqual(["doctor", "doctor", "config"]);
-    expect(getErrorOutput()).toContain("Migration Doctor output");
-    expect(JSON.parse(getLogOutput())).toEqual(lastWriteJsonCall());
-    expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: "ok",
-        postUpdate: expect.objectContaining({
-          plugins: expect.objectContaining({ changed: true }),
-        }),
-      }),
-    );
-  });
-
-  it("post-core resume mode uses the parent install records snapshot for missing payload warnings", async () => {
-    mockNoopPostUpdatePluginConvergence();
-    const resultDir = createCaseDir("openclaw-post-core-records");
-    const recordsPath = path.join(resultDir, "plugin-install-records.json");
-    const installPath = path.join(resultDir, "demo-plugin");
-    await fs.mkdir(installPath, { recursive: true });
-    await writeJsonFixture(recordsPath, {
-      demo: { source: "npm", spec: "@openclaw/demo@1.0.0", installPath },
-    });
-    pathExists.mockImplementation(async (candidate: string) => candidate === installPath);
-    // Child-owned completion needs the installed candidate's Doctor entrypoint.
-    vi.mocked(resolveGatewayInstallEntrypoint).mockImplementation(async (root) => {
-      expect(root).toBe(process.cwd());
-      return FRESH_POST_UPDATE_ENTRYPOINT;
-    });
-
-    await runPostCoreCommand(
-      { json: true, restart: false },
-      { OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH: recordsPath },
-    );
-
-    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
-    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
-    expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]?.reason).toContain(
-      "package.json is missing",
-    );
-    const updateCall = lastNpmPluginUpdateCall() as { skipIds?: Set<string> } | undefined;
-    expect(updateCall?.skipIds?.has("demo")).toBe(true);
-  });
-
   it.each([
-    { touchedVersion: "9999.1.1", valid: true, writes: true, mode: "resume" },
     { touchedVersion: "9999.1.1", valid: false, writes: false, mode: "finalize" },
     { touchedVersion: "9999.1.1", valid: true, writes: true, mode: "finalize" },
   ])(
     "$mode commits a validated downgrade without changing channels ($touchedVersion, valid=$valid)",
-    async ({ touchedVersion, valid, writes, mode }) => {
+    async ({ touchedVersion, valid, writes }) => {
       const config = stableConfig({ meta: { lastTouchedVersion: touchedVersion } });
       vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config, { valid }));
 
-      if (mode === "resume") {
-        await runPostCoreCommand({ restart: false, json: true });
-        // Legacy child completion does not change which downgrade configs may be written.
-        expect(
-          vi
-            .mocked(runExec)
-            .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? ""))
-            .map(([, args]) => args[1]),
-        ).toEqual(valid ? ["doctor", "config"] : ["doctor"]);
+      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
+      if (valid) {
+        await updateFinalizeCommand({ json: true, yes: true });
       } else {
-        vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
-        if (valid) {
-          await updateFinalizeCommand({ json: true, yes: true });
-        } else {
-          await expect(updateFinalizeCommand({ json: true, yes: true })).rejects.toEqual(
-            new ExitError(1),
-          );
-          expect(observeUpdateGatewayReadiness).toHaveBeenCalledOnce();
-          const recorded = listUpdateRuns({ limit: 1 })[0];
-          expect(recorded?.status).toBe("failed");
-          expect(recorded?.verification).toEqual({
-            serviceRunning: false,
-            port: 18789,
-            pluginErrors: [],
-            channelsReady: false,
-            settled: false,
-            readyz: false,
-            recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-          });
-          expect(
-            recorded?.steps.filter((step) => step.step === "gateway recovery verification"),
-          ).toEqual([
-            {
-              step: "gateway recovery verification",
-              status: "failed",
-              exitCode: 1,
-              detail: "Exit code: 1; Gateway did not settle.",
-              failureFacts: [
-                { check: "settled", code: "stopped-free", message: "Gateway did not settle." },
-              ],
-            },
-          ]);
-        }
+        await expect(updateFinalizeCommand({ json: true, yes: true })).rejects.toEqual(
+          new ExitError(1),
+        );
+        expect(observeUpdateGatewayReadiness).toHaveBeenCalledOnce();
+        const recorded = listUpdateRuns({ limit: 1 })[0];
+        expect(recorded?.status).toBe("failed");
+        expect(recorded?.verification).toEqual({
+          serviceRunning: false,
+          port: 18789,
+          pluginErrors: [],
+          channelsReady: false,
+          settled: false,
+          readyz: false,
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        });
+        expect(
+          recorded?.steps.filter((step) => step.step === "gateway recovery verification"),
+        ).toEqual([
+          {
+            step: "gateway recovery verification",
+            status: "failed",
+            exitCode: 1,
+            detail: "Exit code: 1; Gateway did not settle.",
+            failureFacts: [
+              { check: "settled", code: "stopped-free", message: "Gateway did not settle." },
+            ],
+          },
+        ]);
       }
 
       if (writes) {
@@ -208,14 +134,13 @@ describe("update-cli child-owned deferred completion", () => {
             observe: false,
           },
         });
-        if (mode === "finalize") {
-          expect(
-            vi.mocked(mutateConfigFileWithRetry).mock.calls[0]?.[0].writeOptions?.assertCurrent,
-          ).toThrow("Update operation ownership has closed.");
-          expect(
-            vi.mocked(mutateConfigFileWithRetry).mock.calls[0]?.[0].writeOptions?.beforeCommit,
-          ).toThrow("Update operation ownership has closed.");
-        }
+
+        expect(
+          vi.mocked(mutateConfigFileWithRetry).mock.calls[0]?.[0].writeOptions?.assertCurrent,
+        ).toThrow("Update operation ownership has closed.");
+        expect(
+          vi.mocked(mutateConfigFileWithRetry).mock.calls[0]?.[0].writeOptions?.beforeCommit,
+        ).toThrow("Update operation ownership has closed.");
       } else {
         expect(replaceConfigFile).not.toHaveBeenCalled();
       }
@@ -310,15 +235,6 @@ describe("update-cli child-owned deferred completion", () => {
           await fs.utimes(snapshotPath, staleTime, staleTime);
         }
         return { OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: String(updateStartedAtMs) };
-      },
-    },
-    {
-      name: "ignores disk fallback snapshots when the update attempt start is unknown",
-      prepare: async (configPath: string, preUpdateConfig: OpenClawConfig) => {
-        for (const suffix of [".pre-update", ".bak"]) {
-          await writeJsonFixture(`${configPath}${suffix}`, preUpdateConfig);
-        }
-        return {};
       },
     },
     {

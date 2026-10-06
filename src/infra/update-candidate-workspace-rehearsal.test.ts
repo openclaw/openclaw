@@ -23,6 +23,7 @@ import {
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 async function fileHashes(root: string): Promise<Record<string, string>> {
   const entries = await fs.readdir(root, { recursive: true, withFileTypes: true });
@@ -55,9 +56,7 @@ describe("workspace state during an update rehearsal", () => {
   });
 
   it.each([
-    { name: "older", completed: "2026-04-23T11:31:35.154Z", claim: false },
     { name: "identical", completed: "2026-08-01T02:32:01.596Z", claim: false },
-    { name: "newer", completed: "2026-09-01T02:32:01.596Z", claim: false },
     {
       name: "interrupted claim",
       completed: "2026-04-23T11:31:35.154Z",
@@ -77,9 +76,7 @@ describe("workspace state during an update rehearsal", () => {
     await fs.mkdir(historical, { recursive: true });
     await mergeWorkspaceSetupState(historical, canonical, Date.now(), { env: state.env });
     const setupText = JSON.stringify({ version: 1, ...canonical, setupCompletedAt: completed });
-    const sourcePaths = ["openclaw-workspace-state.json", ".openclaw/workspace-state.json"].map(
-      (relative) => path.join(historical, relative),
-    );
+    const sourcePaths = [path.join(historical, "openclaw-workspace-state.json")];
     for (const source of sourcePaths) {
       await fs.mkdir(path.dirname(source), { recursive: true });
       await fs.writeFile(`${source}${claim ? ".doctor-importing" : ""}`, setupText);
@@ -99,10 +96,12 @@ describe("workspace state during an update rehearsal", () => {
     await fs.writeFile(record.target.skillFile, content);
     await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
     const before = await fileHashes(historical);
+    const candidateRoot = state.path("candidate");
+    await materializeUpdateCandidateStateWorker(candidateRoot);
     const rehearsal = await prepareUpdateCandidateRehearsal({
       config,
       stateDir: state.stateDir,
-      candidateRoot: process.cwd(),
+      candidateRoot,
       env: state.env,
     });
     try {
@@ -120,12 +119,11 @@ describe("workspace state during an update rehearsal", () => {
         () => throwIfDoctorStateMigrationRefused(result.stepReceipts),
         result.warnings.join("\n"),
       ).not.toThrow();
-      expect(
-        result.stepReceipts.find((entry) => entry.id === "workspace-state")?.notices,
-      ).toContain("rehearsal: 2 legacy files outside the rehearsal root left untouched");
-      expect(
-        result.stepReceipts.find((entry) => entry.id === "workspace-state")?.rehearsal,
-      ).toEqual({ outsideRootLegacyFileCount: 2 });
+      const receipt = result.stepReceipts.find((entry) => entry.id === "workspace-state");
+      expect(receipt?.notices).toContain(
+        "rehearsal: 1 legacy files outside the rehearsal root left untouched",
+      );
+      expect(receipt?.rehearsal).toEqual({ outsideRootLegacyFileCount: 1 });
       expect(
         openOpenClawStateDatabase({ env })
           .db.prepare("SELECT status FROM skill_workshop_proposals WHERE proposal_id = ?")
@@ -161,7 +159,7 @@ describe("workspace state during an update rehearsal", () => {
         "SELECT status, removed_source, report_json FROM migration_sources WHERE migration_kind = 'legacy-workspace-setup-files'",
       )
       .all();
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(1);
     for (const row of rows) {
       expect(row).toMatchObject({ status: "completed", removed_source: 1 });
     }

@@ -19,11 +19,6 @@ import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentio
 export type { BuildMentionRegexesOptions } from "./mentions.types.js";
 export { CURRENT_MESSAGE_MARKER } from "./history.js";
 
-type ResolvedMentionPatterns = {
-  patterns: string[];
-  unicode: boolean;
-};
-
 const NAME_IDENTITY_CHARS = String.raw`\p{L}\p{N}\p{Pc}`;
 const NAME_TOKEN_CHARS = String.raw`${NAME_IDENTITY_CHARS}\p{M}`;
 const JOINER_CHARS = String.raw`\u200C\u200D`;
@@ -41,13 +36,7 @@ const EMOJI_PRESENTATION_BASE = /\p{Emoji}/u;
 const NAME_IDENTITY_GRAPHEME = new RegExp(`[${NAME_IDENTITY_CHARS}]`, "u");
 const NAME_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-type DerivedNameParts = {
-  leading: string;
-  core: string;
-  trailing: string;
-};
-
-function wrapDerivedMentionPattern(parts: DerivedNameParts): string {
+function wrapDerivedMentionPattern(parts: ReturnType<typeof deriveNameParts>): string {
   // Boundaries reach across optional edge decoration. Each branch owns its
   // spacing seam because overlapping repetitions make raw stripping quadratic.
   const leading = parts.leading ? `(?:${parts.leading}${DECORATION_SPACING}|)` : "";
@@ -170,11 +159,7 @@ function encodeEdgeDecorationLiteral(unit: NameUnit | undefined): string {
   if (!spelled) {
     // A markless edge is spelled with joiners and spacing alone. The joiners
     // are taken at the core's seam, and the whitespace is the member's own.
-    return encodeOptionalJoiners(
-      Array.from(unit.literal)
-        .filter((character) => JOINER_ONLY.test(character))
-        .join(""),
-    );
+    return encodeOptionalJoiners(unit.literal.replace(/[^\u200C\u200D]/gu, ""));
   }
   return spelled;
 }
@@ -185,11 +170,7 @@ function encodeInteriorDecoration(unit: DecorationUnit): string {
   if (!spelled) {
     // Joiners vanish during matching; whitespace survives and remains required
     // only when the original gap carried it.
-    const joiners = encodeOptionalJoiners(
-      Array.from(unit.literal)
-        .filter((character) => JOINER_ONLY.test(character))
-        .join(""),
-    );
+    const joiners = encodeOptionalJoiners(unit.literal.replace(/[^\u200C\u200D]/gu, ""));
     return unit.spaced ? String.raw`${joiners}\s${DECORATION_SPACING}` : joiners;
   }
   // A gap carrying whitespace keeps a one-separator floor so the bare
@@ -197,7 +178,7 @@ function encodeInteriorDecoration(unit: DecorationUnit): string {
   return `(?:${DECORATION_SPACING}${spelled}${DECORATION_SPACING}|\\s${unit.spaced ? "+" : "*"})`;
 }
 
-function deriveNameParts(name: string): DerivedNameParts {
+function deriveNameParts(name: string) {
   const units = parseNameUnits(name);
   if (!units.some((unit) => unit.kind === "token")) {
     // No word run at all (e.g. a bare emoji or a punctuation string): match
@@ -300,10 +281,7 @@ function compileMentionPatternsCached(params: {
   return [...compiled.regexes];
 }
 
-function resolveMentionPatterns(
-  cfg: OpenClawConfig | undefined,
-  agentId?: string,
-): ResolvedMentionPatterns {
+function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: string) {
   if (!cfg) {
     return { patterns: [], unicode: false };
   }

@@ -15,13 +15,12 @@ import {
 } from "../cli-auth-epoch.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { shouldClearInterruptedCliSessionBinding } from "../cli-session.js";
-import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "../command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../embedded-agent-runner/delivery-evidence.js";
 import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/auth-profile-failure-policy.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { mergeAttemptToolMediaPayloads } from "../embedded-agent-runner/run/tool-media-payloads.js";
-import { coerceToFailoverError, isFailoverError } from "../failover-error.js";
+import { isFailoverError } from "../failover-error.js";
 import { resolveReplyExpectation } from "../reply-completion.js";
 import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
@@ -38,18 +37,6 @@ const log = createSubsystemLogger("agents/cli-runner");
 export function formatCliTerminalInterruption(interruption: CliTerminalInterruption): string {
   return `CLI turn ${interruption.reason} after partial output`;
 }
-
-export const cliRunSettlementDeps = {
-  claudeCliSessionTranscriptHasContent: claudeCliSessionTranscriptHasContentImpl,
-  delay: async (delayMs: number) => {
-    await new Promise((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
-  },
-  loadAuthProfileStoreForRuntime,
-  markAuthProfileFailure,
-  markAuthProfileSuccess,
-};
 
 async function settleCliAuthProfile(params: {
   store: AuthProfileStore;
@@ -68,7 +55,7 @@ async function settleCliAuthProfile(params: {
 }): Promise<void> {
   try {
     if (params.terminal.outcome === "success") {
-      await cliRunSettlementDeps.markAuthProfileSuccess({
+      await markAuthProfileSuccess({
         store: params.store,
         profileId: params.profileId,
         provider: params.provider,
@@ -85,7 +72,7 @@ async function settleCliAuthProfile(params: {
           : undefined,
     });
     if (reason) {
-      await cliRunSettlementDeps.markAuthProfileFailure({
+      await markAuthProfileFailure({
         store: params.store,
         profileId: params.profileId,
         reason,
@@ -146,7 +133,7 @@ export async function settleCliPreparationError(
     if (!(error instanceof CliAuthProfilePreparationError)) {
       return;
     }
-    const store = cliRunSettlementDeps.loadAuthProfileStoreForRuntime(error.agentDir, {
+    const store = loadAuthProfileStoreForRuntime(error.agentDir, {
       externalCli: externalCliDiscoveryForProviderAuth({
         cfg: params.config,
         provider: error.provider,
@@ -206,18 +193,16 @@ export async function settlePreparedCliRun(params: {
 }): Promise<EmbeddedAgentRunResult> {
   const { context, diagnosticLifecycle, run } = params;
   const runParams = context.params;
-  let result: EmbeddedAgentRunResult | undefined;
-  let runError: unknown;
+  let outcome: { result: EmbeddedAgentRunResult } | { error: unknown };
   try {
-    result = await run();
+    outcome = { result: await run() };
   } catch (error) {
-    runError = error;
+    outcome = { error };
   }
-  const terminalRunError = runError;
-  let cleanupError: unknown;
+  let cleanupError: Error | undefined;
   const recordCleanupError = (error: unknown) => {
     recordAgentCleanupFailure();
-    cleanupError ??= error;
+    cleanupError ??= error instanceof Error ? error : new Error(formatErrorMessage(error));
   };
   if (runParams.cleanupCliLiveSessionOnRunEnd === true) {
     try {
@@ -233,12 +218,10 @@ export async function settlePreparedCliRun(params: {
     recordCleanupError(error);
   }
   if (cleanupError) {
-    if (runError || result?.didSendViaMessagingTool === true) {
+    if ("error" in outcome || outcome.result.didSendViaMessagingTool === true) {
       log.warn(`cli run cleanup failed after completion: ${formatErrorMessage(cleanupError)}`);
     } else {
       diagnosticLifecycle?.setPhase("cleanup");
-      runError =
-        cleanupError instanceof Error ? cleanupError : new Error(formatErrorMessage(cleanupError));
     }
   }
   // Retiring a caller is not a provider failure and must not quarantine its credential.
@@ -249,15 +232,15 @@ export async function settlePreparedCliRun(params: {
     const profileId = context.effectiveAuthProfileId;
     const authProfileStore = context.authProfileStore;
     const terminal: Parameters<typeof settleCliAuthProfile>[0]["terminal"] | undefined =
-      terminalRunError
+      "error" in outcome
         ? {
             outcome: "failure",
-            error: terminalRunError,
+            error: outcome.error,
             config: runParams.config,
             runId: runParams.runId,
             modelId: context.modelId,
           }
-        : result?.meta.executionTrace?.attempts?.at(-1)?.result === "success"
+        : outcome.result.meta.executionTrace?.attempts?.at(-1)?.result === "success"
           ? { outcome: "success" }
           : undefined;
     if (terminal) {
@@ -270,10 +253,15 @@ export async function settlePreparedCliRun(params: {
       });
     }
   }
-  if (runError) {
-    throw runError instanceof Error ? runError : new Error(formatErrorMessage(runError));
+  if ("error" in outcome) {
+    throw outcome.error instanceof Error
+      ? outcome.error
+      : new Error(formatErrorMessage(outcome.error));
   }
-  return result as EmbeddedAgentRunResult;
+  if (cleanupError && outcome.result.didSendViaMessagingTool !== true) {
+    throw cleanupError;
+  }
+  return outcome.result;
 }
 
 export function resolveCliSourceReplyMirror(params: {
@@ -646,44 +634,4 @@ export function buildCliRunResult(params: {
       ? { acceptedSessionSpawns: output.acceptedSessionSpawns }
       : {}),
   };
-}
-
-export function settleCliBackendOutcome(params: {
-  runResult: EmbeddedAgentRunResult | undefined;
-  runError: unknown;
-  runFailed: boolean;
-  cleanupError: Error | undefined;
-  deliveredMessagingSideEffect: boolean;
-  diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle;
-  failoverContext: { provider: string; model: string; sessionId: string; lane?: string };
-}): EmbeddedAgentRunResult {
-  const {
-    cleanupError,
-    deliveredMessagingSideEffect,
-    diagnosticLifecycle,
-    failoverContext,
-    runError,
-    runFailed,
-    runResult,
-  } = params;
-  if (cleanupError) {
-    recordAgentCleanupFailure();
-    if (!deliveredMessagingSideEffect) {
-      if (runFailed) {
-        log.warn(`CLI run also failed before backend cleanup: ${formatErrorMessage(runError)}`);
-      }
-      diagnosticLifecycle?.setPhase("cleanup");
-      throw cleanupError;
-    }
-    log.warn(
-      `CLI backend cleanup failed after confirmed message delivery: ${formatErrorMessage(cleanupError)}`,
-    );
-  }
-  if (runFailed) {
-    throw coerceToFailoverError(runError, failoverContext) ?? runError;
-  }
-  if (!runResult) {
-    throw new Error("CLI run completed without a result");
-  }
-  return runResult;
 }

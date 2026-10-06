@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,7 +8,7 @@ import { isMainThread, Worker, workerData } from "node:worker_threads";
 const MAX_BYTES = 512 * 1024 * 1024;
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
-const BUILD_MARKER_RE = /^(?:\d+-\d+|no-package-json|build-[A-Za-z0-9._-]+)$/;
+const BUILD_MARKER_RE = /^(?:[a-f0-9]{16}|\d+-\d+|no-package-json|build-[A-Za-z0-9._-]+)$/;
 const sanitize = (value) => {
   const segment = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return segment && segment !== "." && segment !== ".." ? segment : "unknown";
@@ -30,7 +31,7 @@ export function resolveOpenClawCompileCacheDirectory({ installRoot, env = proces
       readFileSync(path.join(installRoot, "dist", "build-info.json"), "utf8"),
     );
     if (typeof build.buildId === "string" && build.buildId.trim()) {
-      marker = `build-${sanitize(build.buildId).slice(0, 96)}`;
+      marker = createHash("sha256").update(build.buildId).digest("hex").slice(0, 16);
     }
   } catch {
     // Older packages use the installation metadata above.
@@ -44,7 +45,19 @@ export function resolveOpenClawCompileCacheDirectory({ installRoot, env = proces
   ) {
     base = path.dirname(path.dirname(path.dirname(base)));
   }
-  return path.join(base, "openclaw", version, marker);
+  return resolveSafeNodeCompileCacheDirectory(path.join(base, "openclaw", version, marker));
+}
+
+export function resolveSafeNodeCompileCacheDirectory(directory) {
+  // Node can hang at 240/245 characters (and 283 for other path structures):
+  // https://github.com/nodejs/node/issues/66438. Leave room for Node's cache leaf.
+  if (process.platform === "win32" && path.resolve(directory).length > 200) {
+    process.stderr.write(
+      "[openclaw] Compile cache disabled: Windows cache path exceeds 200 characters.\n",
+    );
+    return undefined;
+  }
+  return directory;
 }
 
 export async function maintainOpenClawCompileCache(directory) {

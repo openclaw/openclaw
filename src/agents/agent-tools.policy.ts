@@ -286,12 +286,9 @@ export function resolveTrustedGroupId(params: {
   });
 }
 
-/** True when a server-derived session key names a group/channel conversation. */
-export function sessionKeyNamesGroupConversation(sessionKey?: string | null): boolean {
-  return (resolveGroupContextFromSessionKey(sessionKey).groupIds?.length ?? 0) > 0;
-}
-
-function resolveExplicitProfileAlsoAllow(tools?: OpenClawConfig["tools"]): string[] | undefined {
+function resolveExplicitProfileAlsoAllow(
+  tools?: Pick<AgentToolsConfig, "alsoAllow">,
+): string[] | undefined {
   return Array.isArray(tools?.alsoAllow) ? tools.alsoAllow : undefined;
 }
 

@@ -4,9 +4,11 @@ import type {
   GatewayClientMode,
   GatewayClientName,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
+import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
@@ -99,12 +101,10 @@ export type ChannelMessageToolDiscovery = {
   mediaSourceParams?: ChannelMessageToolMediaSourceParams | null;
 };
 
-export type ChannelStatusIssue = {
+export type ChannelStatusIssue = SchemaContract<
+  Omit<NonNullable<ChannelsStatusResult["statusIssues"]>[number], "channel">
+> & {
   channel: ChannelId;
-  accountId: string;
-  kind: "intent" | "permissions" | "config" | "auth" | "runtime";
-  message: string;
-  fix?: string;
 };
 
 export type ChannelAccountState =
@@ -144,18 +144,14 @@ export type ChannelMeta = {
 };
 
 /** Snapshot row returned by channel status and lifecycle surfaces. */
-export type ChannelAccountSnapshot = {
-  accountId: string;
-  name?: string;
-  enabled?: boolean;
-  configured?: boolean;
+export type ChannelAccountSnapshot = SchemaContract<
+  Omit<
+    ChannelsStatusResult["channelAccounts"][string][number],
+    "healthState" | "credentialSource" | "audienceType" | "audience" | "webhookPath" | "webhookUrl"
+  >
+> & {
   statusState?: string;
-  linked?: boolean;
-  running?: boolean;
-  connected?: boolean;
   restartPending?: boolean;
-  reconnectAttempts?: number;
-  lastConnectedAt?: number | null;
   lastDisconnect?:
     | string
     | {
@@ -167,9 +163,7 @@ export type ChannelAccountSnapshot = {
     | null;
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
-  lastTransportActivityAt?: number | null;
   stateReason?: string;
-  lastError?: string | null;
   /**
    * Legacy channel-authored health label; channel plugins should publish `lifecycle` instead.
    * Core-derived policy writes remain supported. There is no removal date; removal awaits
@@ -188,20 +182,6 @@ export type ChannelAccountSnapshot = {
    */
   ingressUnavailable?: true;
   terminalDisconnect?: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastInboundAt?: number | null;
-  lastOutboundAt?: number | null;
-  busy?: boolean;
-  activeRuns?: number;
-  lastRunActivityAt?: number | null;
-  activeRunStartedAt?: number | null;
-  mode?: string;
-  dmPolicy?: string;
-  allowFrom?: string[];
-  tokenSource?: string;
-  botTokenSource?: string;
-  appTokenSource?: string;
   userTokenSource?: string;
   signingSecretSource?: string;
   tokenStatus?: string;
@@ -217,15 +197,6 @@ export type ChannelAccountSnapshot = {
   audience?: string;
   webhookPath?: string;
   webhookUrl?: string;
-  baseUrl?: string;
-  allowUnmentionedGroups?: boolean;
-  cliPath?: string | null;
-  dbPath?: string | null;
-  port?: number | null;
-  probe?: unknown;
-  lastProbeAt?: number | null;
-  audit?: unknown;
-  application?: unknown;
   bot?: unknown;
   publicKey?: string | null;
   profile?: unknown;
@@ -275,6 +246,8 @@ export type ChannelCapabilities = {
   chatTypes: Array<ChatType | "thread">;
   polls?: boolean;
   reactions?: boolean;
+  /** Bot reactions per message; omitted means multiple independent emoji. */
+  reactionSlots?: "single" | "multiple";
   edit?: boolean;
   unsend?: boolean;
   reply?: boolean;
@@ -360,7 +333,7 @@ export type ChannelOutboundSessionRoute = {
     kind: ChatType;
     id: string;
   };
-  chatType: "direct" | "group" | "channel";
+  chatType: ChatType;
   from: string;
   to: string;
   threadId?: string | number;
@@ -384,7 +357,7 @@ export type ChannelThreadingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
     chatType?: string | null;
-  }) => "off" | "first" | "all" | "batched";
+  }) => ReplyToMode;
   /**
    * When replyToMode is "off", allow explicit reply tags/directives to keep replyToId.
    *
@@ -462,7 +435,7 @@ export type ChannelThreadingToolContext = {
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
   hasRepliedRef?: { value: boolean };
   /** True when posting at the parent conversation root would leak a thread-originated reply. */
   sameChannelThreadRequired?: boolean;
@@ -487,7 +460,7 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId: string;
     conversation: {
-      kind: "direct" | "group" | "channel";
+      kind: ChatType;
       peerId: string;
       /** Canonical delivery target when it differs from the routing peer. */
       target?: string;
@@ -520,7 +493,7 @@ export type ChannelMessagingAdapter = {
     sessionKey: string;
     ctx: MsgContext;
   }) => string | undefined;
-  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
+  deriveLegacySessionChatType?: (sessionKey: string) => ChatType | undefined;
   isLegacyGroupSessionKey?: (key: string) => boolean;
   canonicalizeLegacySessionKey?: (params: {
     key: string;

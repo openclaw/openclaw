@@ -2,6 +2,7 @@ package ai.openclaw.app.voice
 
 import ai.openclaw.app.asJsonStringOrNull
 import ai.openclaw.app.gateway.ChatSendAck
+import ai.openclaw.app.hasPermission
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
@@ -9,9 +10,7 @@ import ai.openclaw.app.node.parseJsonParamsObject
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.pm.PackageManager
 import android.util.Log
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +38,17 @@ data class VoiceConversationEntry(
   val isStreaming: Boolean = false,
   val localizedSource: String? = null,
 )
+
+internal inline fun MutableStateFlow<List<VoiceConversationEntry>>.updateVoiceEntry(
+  id: String,
+  transform: (VoiceConversationEntry) -> VoiceConversationEntry,
+) {
+  val entries = value
+  val index = if (entries.lastOrNull()?.id == id) entries.lastIndex else entries.indexOfFirst { it.id == id }
+  if (index < 0) return
+  val updated = transform(entries[index])
+  if (updated != entries[index]) value = entries.toMutableList().also { it[index] = updated }
+}
 
 internal data class GatewayTranscriptionSession(
   val id: String,
@@ -126,25 +136,9 @@ internal class MicCaptureManager(
   private var ttsPauseDepth = 0
   private var resumeMicAfterTts = false
 
-  private fun enqueueMessage(message: String) {
-    synchronized(messageQueueLock) {
-      messageQueue.addLast(message)
-    }
-  }
-
   private fun hasQueuedMessages(): Boolean =
     synchronized(messageQueueLock) {
       messageQueue.isNotEmpty()
-    }
-
-  private fun firstQueuedMessage(): String? =
-    synchronized(messageQueueLock) {
-      messageQueue.firstOrNull()
-    }
-
-  private fun removeFirstQueuedMessage(): String? =
-    synchronized(messageQueueLock) {
-      if (messageQueue.isEmpty()) null else messageQueue.removeFirst()
     }
 
   private fun queuedMessageCount(): Int =
@@ -381,7 +375,7 @@ internal class MicCaptureManager(
 
   private fun start() {
     stopRequested = false
-    if (!hasMicPermission()) {
+    if (!context.hasPermission(Manifest.permission.RECORD_AUDIO)) {
       _statusText.value = nativeText("Microphone permission required")
       _micEnabled.value = false
       return
@@ -498,7 +492,7 @@ internal class MicCaptureManager(
       role = VoiceConversationRole.User,
       text = message,
     )
-    enqueueMessage(message)
+    synchronized(messageQueueLock) { messageQueue.addLast(message) }
   }
 
   private fun scheduleTranscriptFlush(expectedText: String) {
@@ -530,7 +524,7 @@ internal class MicCaptureManager(
       return
     }
 
-    val next = firstQueuedMessage() ?: return
+    val next = synchronized(messageQueueLock) { messageQueue.firstOrNull() } ?: return
     _isSending.value = true
     pendingRunTimeoutJob?.cancel()
     pendingRunTimeoutJob = null
@@ -616,7 +610,7 @@ internal class MicCaptureManager(
   private fun completePendingTurn() {
     pendingRunTimeoutJob?.cancel()
     pendingRunTimeoutJob = null
-    removeFirstQueuedMessage()
+    synchronized(messageQueueLock) { messageQueue.removeFirstOrNull() }
     pendingRunId = null
     pendingAssistantEntryId = null
     _isSending.value = false
@@ -652,28 +646,13 @@ internal class MicCaptureManager(
     isStreaming: Boolean,
     localizedSource: String? = null,
   ) {
-    val current = _conversation.value
-    if (current.isEmpty()) return
-
-    val targetIndex =
-      when {
-        current[current.lastIndex].id == id -> current.lastIndex
-        else -> current.indexOfFirst { it.id == id }
-      }
-    if (targetIndex < 0) return
-
-    val entry = current[targetIndex]
-    val updatedText = text ?: entry.text
-    val updatedLocalizedSource =
-      if (text == null && localizedSource == null) {
-        entry.localizedSource
-      } else {
-        localizedSource
-      }
-    if (updatedText == entry.text && entry.isStreaming == isStreaming && entry.localizedSource == updatedLocalizedSource) return
-    val updated = current.toMutableList()
-    updated[targetIndex] = entry.copy(text = updatedText, isStreaming = isStreaming, localizedSource = updatedLocalizedSource)
-    _conversation.value = updated
+    _conversation.updateVoiceEntry(id) { entry ->
+      entry.copy(
+        text = text ?: entry.text,
+        isStreaming = isStreaming,
+        localizedSource = if (text == null && localizedSource == null) entry.localizedSource else localizedSource,
+      )
+    }
   }
 
   private fun upsertPendingAssistant(
@@ -868,22 +847,16 @@ internal class MicCaptureManager(
       else -> nativeText("Listening")
     }
 
-  private fun pcm16ToPcmu(pcm16: ByteArray): ByteArray {
-    val output = ByteArray(pcm16.size / 2)
-    var inputIndex = 0
-    var outputIndex = 0
-    while (inputIndex + 1 < pcm16.size) {
+  private fun pcm16ToPcmu(pcm16: ByteArray): ByteArray =
+    ByteArray(pcm16.size / 2) { index ->
+      val inputIndex = index * 2
       val sample =
         (
           (pcm16[inputIndex].toInt() and 0xff) or
             (pcm16[inputIndex + 1].toInt() shl 8)
         ).toShort().toInt()
-      output[outputIndex] = linear16ToPcmu(sample)
-      inputIndex += 2
-      outputIndex += 1
+      linear16ToPcmu(sample)
     }
-    return output
-  }
 
   private fun linear16ToPcmu(sample: Int): Byte {
     var sign = 0
@@ -906,12 +879,6 @@ internal class MicCaptureManager(
     val mantissa = (magnitude shr (exponent + 3)) and 0x0f
     return (sign or (exponent shl 4) or mantissa).inv().toByte()
   }
-
-  private fun hasMicPermission(): Boolean =
-    (
-      ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-        PackageManager.PERMISSION_GRANTED
-    )
 }
 
 private fun String.hasTranscriptContent(): Boolean = any { it.isLetterOrDigit() }

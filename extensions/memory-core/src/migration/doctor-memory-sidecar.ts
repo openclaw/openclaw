@@ -34,14 +34,16 @@ function formatLegacyVectorRows(count: number | undefined): string {
 type MemoryFtsTokenizer = "unicode61" | "trigram";
 
 function resolveConfiguredAgentIds(config: unknown): string[] {
-  const cfg = config as { agents?: { entries?: unknown; list?: unknown } };
-  const entries = readLegacyObjectRecord(cfg.agents?.entries);
-  const listedIds = Array.isArray(cfg.agents?.list)
-    ? cfg.agents.list.flatMap((entry) => {
-        const id = readLegacyObjectRecord(entry)?.id;
-        return typeof id === "string" ? [id] : [];
-      })
-    : [];
+  const agents = readLegacyObjectRecord(readLegacyObjectRecord(config)?.agents);
+  const entries = readLegacyObjectRecord(agents?.entries);
+  const listedEntries: unknown[] =
+    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
+      ? agents.list
+      : [];
+  const listedIds = listedEntries.flatMap((entry) => {
+    const id = readLegacyObjectRecord(entry)?.id;
+    return typeof id === "string" ? [id] : [];
+  });
   const ids = new Set([...Object.keys(entries ?? {}), ...listedIds].map(normalizeAgentId));
   return ids.size > 0 ? [...ids] : [normalizeAgentId(undefined)];
 }
@@ -61,7 +63,10 @@ function readAgentMemorySearch(
   if (keyedSearch) {
     return keyedSearch;
   }
-  const entries = Array.isArray(agents?.list) ? agents.list : [];
+  const entries: unknown[] =
+    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
+      ? agents.list
+      : [];
   const entry = entries
     .map(readLegacyObjectRecord)
     .find(
@@ -81,8 +86,8 @@ function readMemorySearchLayers(config: unknown, agentId: string): Record<string
   ].filter((value): value is Record<string, unknown> => value !== undefined);
 }
 
-function readStoreLayers(config: unknown, agentId: string): Record<string, unknown>[] {
-  return readMemorySearchLayers(config, agentId).flatMap((search) => {
+function readStoreLayers(searchLayers: Record<string, unknown>[]): Record<string, unknown>[] {
+  return searchLayers.flatMap((search) => {
     const store = readLegacyObjectRecord(search.store);
     return store ? [store] : [];
   });
@@ -92,51 +97,42 @@ function firstDefined(layers: Record<string, unknown>[], key: string): unknown {
   return layers.find((layer) => layer[key] !== undefined)?.[key];
 }
 
-function readNestedStoreLayers(
+function readMemorySearchMigrationOptions(
   config: unknown,
   agentId: string,
-  key: string,
-): Record<string, unknown>[] {
-  return readStoreLayers(config, agentId).flatMap((store) => {
-    const nested = readLegacyObjectRecord(store[key]);
-    return nested ? [nested] : [];
-  });
-}
-
-function readMemorySearchVectorExtensionPath(config: unknown, agentId: string): string | undefined {
-  const raw = firstDefined(readNestedStoreLayers(config, agentId, "vector"), "extensionPath");
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
-}
-
-function readMemorySearchVectorEnabled(config: unknown, agentId: string): boolean {
-  if (readMemorySearchProvider(config, agentId) === "none") {
-    return false;
-  }
-  const raw = firstDefined(readNestedStoreLayers(config, agentId, "vector"), "enabled");
-  return typeof raw === "boolean" ? raw : true;
-}
-
-function readMemorySearchProvider(config: unknown, agentId: string): string | undefined {
-  const raw = firstDefined(readMemorySearchLayers(config, agentId), "provider");
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+): {
+  ftsTokenizer: MemoryFtsTokenizer | undefined;
+  vectorEnabled: boolean;
+  vectorExtensionPath: string | undefined;
+} {
+  const searchLayers = readMemorySearchLayers(config, agentId);
+  const stores = readStoreLayers(searchLayers);
+  const nestedOption = (section: string, key: string) =>
+    stores
+      .map((store) => readLegacyObjectRecord(store[section])?.[key])
+      .find((value) => value !== undefined);
+  const tokenizer = nestedOption("fts", "tokenizer");
+  const provider = firstDefined(searchLayers, "provider");
+  const enabled = nestedOption("vector", "enabled");
+  const extensionPath = nestedOption("vector", "extensionPath");
+  return {
+    ftsTokenizer: tokenizer === "unicode61" || tokenizer === "trigram" ? tokenizer : undefined,
+    vectorEnabled:
+      !(typeof provider === "string" && provider.trim() === "none") &&
+      (typeof enabled === "boolean" ? enabled : true),
+    vectorExtensionPath:
+      typeof extensionPath === "string" && extensionPath.trim() ? extensionPath.trim() : undefined,
+  };
 }
 
 function readLegacyMemorySearchStorePaths(config: unknown, agentId: string): string[] {
   return [
     ...new Set(
-      readStoreLayers(config, agentId).flatMap((store) =>
+      readStoreLayers(readMemorySearchLayers(config, agentId)).flatMap((store) =>
         typeof store.path === "string" && store.path.trim() ? [store.path.trim()] : [],
       ),
     ),
   ];
-}
-
-function readMemorySearchFtsTokenizer(
-  config: unknown,
-  agentId: string,
-): MemoryFtsTokenizer | undefined {
-  const raw = firstDefined(readNestedStoreLayers(config, agentId, "fts"), "tokenizer");
-  return raw === "unicode61" || raw === "trigram" ? raw : undefined;
 }
 
 async function isCanonicalAgentDatabaseSymlink(params: {
@@ -442,12 +438,11 @@ async function migrateLegacyMemorySidecarSource(params: {
       path: params.source.agentDatabasePath,
       register: true,
     });
-    const ftsTokenizer = readMemorySearchFtsTokenizer(params.config, params.source.agentId);
+    const { ftsTokenizer, vectorEnabled, vectorExtensionPath } = readMemorySearchMigrationOptions(
+      params.config,
+      params.source.agentId,
+    );
     ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true, ftsTokenizer });
-    const vectorEnabled = readMemorySearchVectorEnabled(params.config, params.source.agentId);
-    const vectorExtensionPath = vectorEnabled
-      ? readMemorySearchVectorExtensionPath(params.config, params.source.agentId)
-      : undefined;
     const loadedVector = vectorEnabled
       ? await loadSqliteVecExtension({
           db,
@@ -514,11 +509,7 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
   label: "Memory Core legacy memory index sidecar",
   async detectLegacyState(params) {
-    const sources = await collectLegacyMemorySidecarSources({
-      config: params.config,
-      env: params.env,
-      stateDir: params.stateDir,
-    });
+    const sources = await collectLegacyMemorySidecarSources(params);
     if (sources.length === 0) {
       return null;
     }
@@ -533,11 +524,7 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
     const changes: string[] = [];
     const warnings: string[] = [];
     const groups = new Map<string, LegacyMemorySidecarSource[]>();
-    for (const source of await collectLegacyMemorySidecarSources({
-      config: params.config,
-      env: params.env,
-      stateDir: params.stateDir,
-    })) {
+    for (const source of await collectLegacyMemorySidecarSources(params)) {
       const group = groups.get(source.legacyPath) ?? [];
       group.push(source);
       groups.set(source.legacyPath, group);

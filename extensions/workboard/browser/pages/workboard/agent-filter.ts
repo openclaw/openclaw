@@ -123,9 +123,10 @@ export function buildAgentFilterOptions(
   return options;
 }
 
-function buildAssignableAgentOptions(
+export function buildAssignableAgentPickerOptions(
   agentsList: WorkboardAgentsList | null,
   currentAgentId: string,
+  defaultAgentId = agentsList?.defaultId ?? "",
 ) {
   const selectableList = agentsList
     ? { ...agentsList, agents: listSelectableAgents(agentsList.agents) }
@@ -154,22 +155,7 @@ function buildAssignableAgentOptions(
     ...(hasCurrent
       ? []
       : [{ id: currentId, label: t("workboard.agentCurrentUnconfigured", { agent: currentId }) }]),
-  ];
-}
-
-export function normalizeActiveAgentFilter(
-  options: readonly WorkboardAgentFilterOption[],
-  filter: WorkboardUiState["agentFilter"],
-): WorkboardUiState["agentFilter"] {
-  return options.some((option) => option.id === filter) ? filter : "all";
-}
-
-export function buildAssignableAgentPickerOptions(
-  agentsList: WorkboardAgentsList | null,
-  currentAgentId: string,
-  defaultAgentId = agentsList?.defaultId ?? "",
-) {
-  return buildAssignableAgentOptions(agentsList, currentAgentId).map((option) => {
+  ].map((option) => {
     const effectiveId = option.id || defaultAgentId;
     const agent = agentsList?.agents.find((entry) => entry.id === effectiveId);
     return {
@@ -180,4 +166,11 @@ export function buildAssignableAgentPickerOptions(
       icon: effectiveId ? undefined : ("bot" as const),
     };
   });
+}
+
+export function normalizeActiveAgentFilter(
+  options: readonly WorkboardAgentFilterOption[],
+  filter: WorkboardUiState["agentFilter"],
+): WorkboardUiState["agentFilter"] {
+  return options.some((option) => option.id === filter) ? filter : "all";
 }

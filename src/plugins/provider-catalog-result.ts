@@ -71,6 +71,48 @@ export function copyProviderCatalogResultProjection(
   return providers.length > 0 ? { kind: "providers", providers } : { kind: "empty" };
 }
 
+function copyModelServiceTiers(
+  value: unknown,
+): NonNullable<ProviderCatalogOutcome["modelServiceTiers"]> {
+  return copyArrayEntries(value).flatMap((entry) => {
+    const modelId = readRecordValue(entry, "modelId");
+    const runtimeId = readRecordValue(entry, "runtimeId");
+    const api = readRecordValue(entry, "api");
+    const baseUrl = readRecordValue(entry, "baseUrl");
+    const tiers = readRecordValue(entry, "serviceTiers");
+    if (
+      typeof modelId !== "string" ||
+      !modelId.trim() ||
+      typeof runtimeId !== "string" ||
+      !runtimeId.trim() ||
+      typeof api !== "string" ||
+      !api.trim() ||
+      typeof baseUrl !== "string" ||
+      !baseUrl.trim() ||
+      !Array.isArray(tiers)
+    ) {
+      return [];
+    }
+    const serviceTiers = copyArrayEntries(tiers);
+    if (
+      !serviceTiers.every(
+        (tier): tier is string => typeof tier === "string" && Boolean(tier.trim()),
+      )
+    ) {
+      return [];
+    }
+    return [
+      {
+        modelId: modelId.trim(),
+        runtimeId: runtimeId.trim(),
+        api: api.trim(),
+        baseUrl: baseUrl.trim(),
+        serviceTiers: [...new Set(serviceTiers.map((tier) => tier.trim()))],
+      },
+    ];
+  });
+}
+
 /** Copies valid, secret-free provider outcomes out of a catalog hook result. */
 export function copyProviderCatalogOutcomes(
   result: { outcomes?: readonly ProviderCatalogOutcome[] } | null | undefined,
@@ -111,6 +153,11 @@ export function copyProviderCatalogOutcomes(
         ...(typeof profileId === "string" ? { profileId: profileId.trim() } : {}),
         ...(rejectionScope === "catalog" ? { rejectionScope } : {}),
         status: status as ProviderCatalogOutcome["status"],
+        ...(status === "ready" && readRecordValue(entry, "modelServiceTiers") !== undefined
+          ? {
+              modelServiceTiers: copyModelServiceTiers(readRecordValue(entry, "modelServiceTiers")),
+            }
+          : {}),
         ...(modelOrder.length > 0 ? { modelOrder } : {}),
       },
     ];

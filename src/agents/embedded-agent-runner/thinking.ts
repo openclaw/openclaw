@@ -23,7 +23,7 @@ type RecoverySessionMeta = {
 };
 
 const THINKING_BLOCK_ERROR_PATTERN =
-  /(?:thinking|redacted_thinking).*?(?:cannot be modified|signature|invalid|missing|empty|blank)|(?:signature|invalid|missing|empty|blank).*?(?:thinking|redacted_thinking)/i;
+  /(?:thinking|redacted_thinking).*?\b(?:cannot be modified|signature|invalid|missing|empty|blank)\b|\b(?:signature|invalid|missing|empty|blank)\b.*?(?:thinking|redacted_thinking)/i;
 const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 function isToolCallBlock(block: AssistantContentBlock): boolean {
@@ -35,9 +35,6 @@ function isToolCallBlock(block: AssistantContentBlock): boolean {
 }
 
 function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
-  if (!isThinkingBlock(block)) {
-    return false;
-  }
   const record = block as {
     type?: unknown;
     signature?: unknown;
@@ -82,9 +79,6 @@ function filterAssistantContent(
 }
 
 function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
-  if (!isThinkingBlock(block)) {
-    return false;
-  }
   const record = block as {
     data?: unknown;
     signature?: unknown;

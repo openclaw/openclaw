@@ -41,6 +41,7 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import { shippedNativeSessionCatalogs } from "./native-session-catalog-config.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
+import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -396,7 +397,7 @@ export function preparePluginLoadRecord(params: {
   record.configJsonSchema = manifestRecord.configSchema;
   // Manifest ownership survives rollback of executable registrations.
   record.commandAliases = manifestRecord.commandAliases;
-  return { pluginId, policyId, isDreamingSidecar, activationState, enableState, entry, record };
+  return { pluginId, isDreamingSidecar, activationState, enableState, entry, record };
 }
 
 export function maybeThrowOnPluginLoadError(
@@ -434,6 +435,7 @@ export function activatePluginRegistry(
   runtimeSubagentMode: PluginRuntimeSubagentMode,
   workspaceDir?: string,
   previousRegistry?: PluginRegistry,
+  trackActivationCleanup?: (completion: Promise<void>) => void,
 ): void {
   const activeSnapshot = captureActivePluginRegistrySnapshot();
   const retainedRegistry = previousRegistry ?? activeSnapshot.activeRegistry;
@@ -454,14 +456,33 @@ export function activatePluginRegistry(
     if (!isCurrentStage()) {
       throw new Error("Plugin registry activation was superseded");
     }
+    const activationAuthority = trackActivationCleanup
+      ? capturePluginLifecycleAuthority(registry)
+      : undefined;
     initializeGlobalHookRunner(registry);
-    activateContextEngineRegistrations(registry);
+    activateContextEngineRegistrations(
+      registry,
+      trackActivationCleanup
+        ? {
+            trackCleanup: trackActivationCleanup,
+            assertCurrent: () => {
+              // A peer Gateway can change the process projection while this owner stays live.
+              if (stagedVersion === undefined || !activationAuthority?.()) {
+                throw new Error("Plugin registry activation was superseded");
+              }
+            },
+          }
+        : undefined,
+    );
     commitStagedPluginRegistry(retainedRegistry, registry);
     if (!isCurrentStage()) {
       throw new Error("Plugin registry activation was superseded");
     }
   } catch (error) {
-    if (isCurrentStage()) {
+    const rollbackCurrentStage = isCurrentStage();
+    // Cached registry rollback can keep its epoch; this failed attempt still loses authority.
+    stagedVersion = undefined;
+    if (rollbackCurrentStage) {
       const rollbackVersion = rollbackStagedPluginRegistry(activeSnapshot, retainedRegistry);
       if (
         getActivePluginRegistry() === activeSnapshot.activeRegistry &&

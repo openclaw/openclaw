@@ -1,8 +1,14 @@
 import path from "node:path";
-import type { EnvironmentParam } from "openai/resources/beta/agents/agents";
+import type { AgentToolParam, EnvironmentParam } from "openai/resources/beta/agents/agents";
 import { z } from "zod";
 
+export const DEFAULT_NATIVE_TOOLS = [
+  { type: "web_search", mode: "live" },
+  { type: "programmatic_tool_calling", enabled: true },
+] satisfies AgentToolParam[];
+
 export const agentsApiConfigSchema = z.strictObject({
+  nativeTools: z.array(z.looseObject({ type: z.string().min(1) })).default(DEFAULT_NATIVE_TOOLS),
   plugins: z
     .strictObject({
       enabled: z.boolean().optional(),
@@ -23,6 +29,7 @@ export const agentsApiConfigSchema = z.strictObject({
     })
     .optional(),
   environment: z.enum(["openai_hosted", "self_hosted"]).default("openai_hosted"),
+  executorController: z.string().trim().min(1).optional(),
   openai_host: z
     .strictObject({
       network: z
@@ -55,15 +62,16 @@ export const agentsApiConfigSchema = z.strictObject({
     .optional(),
 });
 
+export type AgentsApiConfig = z.infer<typeof agentsApiConfigSchema>;
+
 export type AgentsApiEnvironment =
   | EnvironmentParam.EnvironmentParamOpenAIHosted
   | EnvironmentParam.EnvironmentParamSelfHosted;
 
 export function resolveAgentsApiEnvironment(
-  pluginConfig: unknown,
+  parsed: AgentsApiConfig,
   workspaceDir: string,
 ): AgentsApiEnvironment {
-  const parsed = agentsApiConfigSchema.parse(pluginConfig ?? {});
   return parsed.environment === "self_hosted"
     ? {
         type: "self_hosted",

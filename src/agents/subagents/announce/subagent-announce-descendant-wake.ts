@@ -22,7 +22,7 @@ type DescendantWakeDeps = {
   callGateway: typeof callSubagentLifecycleGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
-  replaceSubagentRunAfterSteer: typeof import("../registry/subagent-registry-runtime.js").replaceSubagentRunAfterSteer;
+  replaceSubagentRunAfterSteer: typeof import("../registry/subagent-registry.js").replaceSubagentRunAfterSteerCore;
 };
 
 type UsableSessionEntryGuard = (entry: unknown) => entry is Record<string, unknown>;
@@ -52,7 +52,7 @@ export async function runDescendantWake(params: {
   taskLabel: string;
   findings: string;
   announceId: string;
-  prepareCurrent?: () => Promise<boolean>;
+  prepareCurrent: () => Promise<boolean>;
   isChildSessionEffectsAllowed: () => boolean;
   hasUsableSessionEntry: UsableSessionEntryGuard;
   deps: DescendantWakeDeps;
@@ -67,7 +67,7 @@ export async function runDescendantWake(params: {
     return false;
   }
 
-  if (params.prepareCurrent && !(await params.prepareCurrent())) {
+  if (!(await params.prepareCurrent())) {
     return false;
   }
   if (params.signal?.aborted || !params.isChildSessionEffectsAllowed()) {
@@ -116,10 +116,7 @@ export async function runDescendantWake(params: {
             timeoutMs: announceTimeoutMs,
             resolveGatewayContext: params.resolveGatewayContext,
             prepareDispatchCurrent: async () => {
-              if (
-                (await params.prepareCurrent?.()) === false ||
-                !params.isChildSessionEffectsAllowed()
-              ) {
+              if (!(await params.prepareCurrent()) || !params.isChildSessionEffectsAllowed()) {
                 throw new SourceOwnerChangedError();
               }
             },
@@ -151,7 +148,7 @@ export async function runDescendantWake(params: {
 
   let prepared: boolean;
   try {
-    prepared = (await params.prepareCurrent?.()) !== false;
+    prepared = await params.prepareCurrent();
   } catch {
     prepared = false;
   }
@@ -159,7 +156,7 @@ export async function runDescendantWake(params: {
     await terminateUnownedWake();
     return false;
   }
-  const replaced = params.deps.replaceSubagentRunAfterSteer({
+  const replaced = await params.deps.replaceSubagentRunAfterSteer({
     previousRunId: params.runId,
     nextRunId: wakeRunId,
     lifecycleGeneration: wakeLifecycleGeneration,

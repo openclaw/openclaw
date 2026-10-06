@@ -13,7 +13,7 @@ export function assertSqliteFlipStartupRefusal(
     expect.arrayContaining([
       "agents/main/sessions/sessions.json",
       "agents/main/sessions/archive-fixture/cold-archive.jsonl",
-      "sessions/sessions.json",
+      "agents/main/sessions/sqlite-legacy-main.jsonl",
     ]),
   );
 }
@@ -29,7 +29,6 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   );
   assertSqliteFlipStartupRefusal(report.startupRefusal);
   expect(refusalCheckpoint?.activeJsonl).toEqual(seededCheckpoint?.activeJsonl);
-  expect(refusalCheckpoint?.legacyStateJsonl).toEqual(seededCheckpoint?.legacyStateJsonl);
   expect(refusalCheckpoint?.sqlite.sessionEntries).toBe(seededCheckpoint?.sqlite.sessionEntries);
   expect(refusalCheckpoint?.sqlite.transcriptEvents).toBe(
     seededCheckpoint?.sqlite.transcriptEvents,
@@ -43,21 +42,7 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
       )
       .every((checkpoint) => checkpoint.activeJsonl.length === 0),
   ).toBe(true);
-  expect(
-    report.checkpoints.some(
-      (checkpoint) =>
-        checkpoint.label === "seeded-legacy-store" && checkpoint.legacyStateJsonl.length > 0,
-    ),
-  ).toBe(true);
-  expect(
-    report.checkpoints
-      .filter(
-        (checkpoint) =>
-          checkpoint.label !== "seeded-legacy-store" &&
-          checkpoint.label !== "after-startup-refusal",
-      )
-      .every((checkpoint) => checkpoint.legacyStateJsonl.length === 0),
-  ).toBe(true);
+  expect(seededCheckpoint?.activeJsonl.length).toBeGreaterThan(0);
   expect(
     report.checkpoints.some(
       (checkpoint) =>

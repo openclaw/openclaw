@@ -4,7 +4,6 @@ import {
   asSafeIntegerInRange,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
-import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
 import type {
@@ -20,6 +19,7 @@ import { ToolAuthorizationError, ToolInputError } from "../tool-input-error.js";
 import { textResult } from "./tool-results.js";
 
 export { ToolAuthorizationError, ToolInputError };
+export { asNonArrayRecord as asToolParamsRecord } from "@openclaw/normalization-core/record-coerce";
 export { jsonResult, textResult } from "./tool-results.js";
 
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
@@ -31,6 +31,12 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   catalogMode?: "direct-only";
   /** Gateway client capabilities required before this tool can be assembled. */
   requiredClientCaps?: string[];
+  /**
+   * Allow a result's `details.sourceReply` to be delivered to the current source as the
+   * user-visible reply, without another model turn. Only the tool author can declare this;
+   * tool results alone never grant it.
+   */
+  canDeliverSourceReply?: boolean;
   /** Tool-owned execution and transport wait budget, before any harness completion grace. */
   getExecutionTimeoutMs?: (args: unknown) => number | undefined;
   prepareBeforeToolCallParams?: (
@@ -52,10 +58,6 @@ type ErasedAgentToolExecute = {
 
 export type AnyAgentTool = Omit<AgentToolWithMeta<TSchema, unknown>, "execute"> &
   ErasedAgentToolExecute;
-
-export function asToolParamsRecord(params: unknown): Record<string, unknown> {
-  return asNonArrayRecord(params);
-}
 
 type StringParamOptions = {
   required?: boolean;

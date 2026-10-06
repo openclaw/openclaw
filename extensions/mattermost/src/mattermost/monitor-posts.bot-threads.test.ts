@@ -19,7 +19,7 @@ vi.mock("./thread-participation.js", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
-  resolveInboundSessionEnvelopeContext: () => ({ envelopeOptions: {} }),
+  resolveInboundSessionEnvelopeContextAsync: async () => ({ envelopeOptions: {} }),
 }));
 
 describe("Mattermost bot-owned thread mention policy", () => {

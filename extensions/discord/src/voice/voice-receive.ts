@@ -80,7 +80,7 @@ export class DiscordVoiceReceive {
     },
   ) {}
 
-  scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string, _reason: string): void {
+  scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string): void {
     // Before admission there is no worker subscription. Main expires only its
     // reservation; subscribed stream deadlines are driven by the worker receiver.
     if (entry.capture.get(userId)?.stream) {

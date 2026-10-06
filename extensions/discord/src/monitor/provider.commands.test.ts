@@ -47,7 +47,6 @@ function createInteractionHarness(params: {
     nativeEnabled: true,
     voiceEnabled: params.voiceEnabled,
     groupPolicy: "open",
-    useAccessGroups: false,
     sessionPrefix: "discord:slash",
     ephemeralDefault: true,
     threadBindings: createNoopThreadBindingManager("default"),

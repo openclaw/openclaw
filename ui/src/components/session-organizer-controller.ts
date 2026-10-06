@@ -52,20 +52,15 @@ export class SessionOrganizerController {
     position: "before" | "after";
   } | null = null;
   sessionListRemovalDrop = false;
-  private operationsLoad: Promise<SessionOrganizerOperations> | null = null;
 
   constructor(private readonly host: SessionOrganizerControllerHost) {}
 
   private async loadOperations(
     scope: SidebarSessionMutationScope,
   ): Promise<SessionOrganizerOperations | null> {
-    const load = (this.operationsLoad ??= import("./session-organizer-operations.runtime.ts"));
     try {
-      return await load;
+      return await import("./session-organizer-operations.runtime.ts");
     } catch (error) {
-      if (this.operationsLoad === load) {
-        this.operationsLoad = null;
-      }
       this.host.sessionData.publishSessionMutationError(scope, error);
       return null;
     }
@@ -101,6 +96,12 @@ export class SessionOrganizerController {
     }
     return operations.patchSession(this.host, session, patch, scope, options);
   };
+
+  async snoozeSessionWithUndo(session: SidebarRecentSession, snoozedUntil: number): Promise<void> {
+    await this.runOperation((operations, scope) =>
+      operations.snoozeSessionWithUndo(this.host, session, snoozedUntil, scope),
+    );
+  }
 
   async archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
     await this.runOperation((operations, scope) =>

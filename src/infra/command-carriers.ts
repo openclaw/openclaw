@@ -1,4 +1,3 @@
-// Identifies wrapper commands that can carry hidden command payloads.
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
@@ -115,19 +114,11 @@ function parseCarrierOptionToken(
   if (token.startsWith("--")) {
     const option = parseInlineOptionToken(token);
     const name = option.name;
-    if (
-      standaloneOptions.has(name) ||
-      optionsWithValue.has(name) ||
-      nonExecutingOptions.has(name)
-    ) {
-      const parsedOption: ParsedCarrierOption = {
-        name,
-        hasInlineValue: option.hasInlineValue,
-      };
-      if (option.hasInlineValue) {
-        parsedOption.inlineValue = option.inlineValue;
-      }
-      return [parsedOption];
+    if (nonExecutingOptions.has(name)) {
+      return null;
+    }
+    if (standaloneOptions.has(name) || optionsWithValue.has(name)) {
+      return [option];
     }
     return null;
   }
@@ -139,6 +130,9 @@ function parseCarrierOptionToken(
   const options: ParsedCarrierOption[] = [];
   for (let index = 1; index < token.length; index += 1) {
     const name = `-${token[index] ?? ""}`;
+    if (nonExecutingOptions.has(name)) {
+      return null;
+    }
     if (optionsWithValue.has(name)) {
       options.push({
         name,
@@ -147,30 +141,13 @@ function parseCarrierOptionToken(
       });
       return options;
     }
-    if (standaloneOptions.has(name) || nonExecutingOptions.has(name)) {
+    if (standaloneOptions.has(name)) {
       options.push({ name, hasInlineValue: false });
       continue;
     }
     return null;
   }
   return options.length > 0 ? options : null;
-}
-
-function knownCarrierOptionConsumesNextValue(
-  options: readonly ParsedCarrierOption[],
-  optionsWithValue: ReadonlySet<string>,
-  nonExecutingOptions: ReadonlySet<string> = new Set(),
-): boolean | null {
-  let consumesNextValue = false;
-  for (const option of options) {
-    if (nonExecutingOptions.has(option.name)) {
-      return null;
-    }
-    if (optionsWithValue.has(option.name)) {
-      consumesNextValue = !option.hasInlineValue;
-    }
-  }
-  return consumesNextValue;
 }
 
 function stripSudoEnvAssignmentsFromCommandArgv(
@@ -226,10 +203,7 @@ export function parseEnvInvocationPrelude(
     }
     if (isEnvAssignmentToken(token)) {
       usesModifiers = true;
-      const delimiter = token.indexOf("=");
-      if (delimiter > 0) {
-        assignmentKeys.push(token.slice(0, delimiter));
-      }
+      assignmentKeys.push(token.slice(0, token.indexOf("=")));
       continue;
     }
     if (token === "--" || token === "-") {
@@ -261,8 +235,7 @@ export function parseEnvInvocationPrelude(
             }
           : null;
       }
-      const consumeNextValue = knownCarrierOptionConsumesNextValue(option, ENV_OPTIONS_WITH_VALUE);
-      if (consumeNextValue) {
+      if (option.some((entry) => ENV_OPTIONS_WITH_VALUE.has(entry.name) && !entry.hasInlineValue)) {
         index += 1;
       }
       continue;
@@ -289,10 +262,6 @@ function resolveEnvCarriedArgv(argv: string[], depth = 0): string[] | null {
 }
 
 function resolveCommandBuiltinCarriedArgv(argv: string[]): string[] | null {
-  const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (executable !== "command" && executable !== "builtin") {
-    return null;
-  }
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index] ?? "";
     if (token === "--") {
@@ -350,15 +319,7 @@ function resolveOptionCarrierArgv(argv: string[]): string[] | null {
     if (!option) {
       return null;
     }
-    const consumeNextValue = knownCarrierOptionConsumesNextValue(
-      option,
-      optionsWithValue,
-      executable === "sudo" ? SUDO_NON_EXEC_OPTIONS : undefined,
-    );
-    if (consumeNextValue === null) {
-      return null;
-    }
-    if (consumeNextValue) {
+    if (option.some((entry) => optionsWithValue.has(entry.name) && !entry.hasInlineValue)) {
       index += 1;
     }
   }

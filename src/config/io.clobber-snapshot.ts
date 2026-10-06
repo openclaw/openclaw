@@ -141,20 +141,6 @@ function compareClobberedSiblings(
   );
 }
 
-function createClobberedSiblingSnapshot(params: {
-  dir: string;
-  entry: string;
-  prefix: string;
-  mtimeMs: number;
-}): ClobberedSiblingSnapshot {
-  return {
-    name: params.entry,
-    path: path.join(params.dir, params.entry),
-    timestampKey: params.entry.slice(params.prefix.length).replace(/-\d{2}$/, ""),
-    mtimeMs: params.mtimeMs,
-  };
-}
-
 function* listClobberedSiblings(
   deps: ConfigClobberSnapshotDeps,
   dir: string,
@@ -175,27 +161,17 @@ function* listClobberedSiblings(
         sync: () => deps.fs.statSync(pathname, { throwIfNoEntry: false }),
         async: () => deps.fs.promises.stat(pathname).catch(() => null),
       });
-      snapshots.push(
-        createClobberedSiblingSnapshot({ dir, entry, prefix, mtimeMs: stat?.mtimeMs ?? 0 }),
-      );
+      snapshots.push({
+        name: entry,
+        path: pathname,
+        timestampKey: entry.slice(prefix.length).replace(/-\d{2}$/, ""),
+        mtimeMs: stat?.mtimeMs ?? 0,
+      });
     }
     return snapshots.toSorted(compareClobberedSiblings);
   } catch {
     return [];
   }
-}
-
-function warnClobberCapReached(
-  deps: ConfigClobberSnapshotDeps,
-  configPath: string,
-  existing: number,
-): void {
-  if (clobberCapWarnedPaths.check(configPath)) {
-    return;
-  }
-  deps.logger.warn(
-    `Config clobber snapshot cap reached for ${configPath}: ${existing} existing .clobbered.* files; rotating oldest snapshots to preserve the latest forensic copy.`,
-  );
 }
 
 function buildClobberedTargetPath(configPath: string, observedAt: string, attempt: number): string {
@@ -217,7 +193,11 @@ function* persistClobberedConfigSnapshot(
   const { deps } = params;
   const existing = yield* listClobberedSiblings(deps, paths.dir, paths.prefix);
   if (existing.length >= CONFIG_CLOBBER_SNAPSHOT_LIMIT) {
-    warnClobberCapReached(deps, params.configPath, existing.length);
+    if (!clobberCapWarnedPaths.check(params.configPath)) {
+      deps.logger.warn(
+        `Config clobber snapshot cap reached for ${params.configPath}: ${existing.length} existing .clobbered.* files; rotating oldest snapshots to preserve the latest forensic copy.`,
+      );
+    }
     const deleteCount = existing.length - CONFIG_CLOBBER_SNAPSHOT_LIMIT + 1;
     for (const snapshot of existing.slice(0, deleteCount)) {
       try {

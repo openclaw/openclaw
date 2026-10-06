@@ -1,8 +1,9 @@
 ---
-summary: "CLI reference for listing, archiving, deleting, and maintaining stored sessions"
+summary: "CLI reference for listing, importing, archiving, deleting, and maintaining stored sessions"
 read_when:
   - You want to list stored sessions and see recent activity
   - You want to archive or delete sessions from a headless Gateway
+  - You want to preserve native tool transcripts in OpenClaw
 title: "Sessions"
 ---
 
@@ -103,6 +104,60 @@ skipped.
   ]
 }
 ```
+
+## Import transcripts
+
+Preserve native session catalog transcripts in the running Gateway's durable
+session store:
+
+```bash
+openclaw sessions import claude <thread-id>
+openclaw sessions import codex <thread-id> --source-home <home-id>
+openclaw sessions import claude <thread-id> --host <host-id> --agent work
+openclaw sessions import --all --json
+openclaw sessions import --all --catalog claude --limit 20 --dry-run
+openclaw sessions import --all --host <host-id>
+```
+
+The catalog IDs for Claude Code and Codex are `claude` and `codex`. Other
+catalogs with transcript reads use the same command. For one transcript without
+`--host`, the CLI discovers Gateway hosts in that catalog: it prefers
+`gateway:local` when present, otherwise uses the only Gateway host. If no
+unambiguous Gateway host exists, pass `--host <host-id>` explicitly. Use the
+catalog row's host and `sourceHomeId` to select another machine or native tool
+home. `--agent` chooses
+the destination agent. Imports support Gateway-local, paired-node, macOS app,
+and Linux app sources that the caller may read.
+
+Import creates an ordinary OpenClaw session containing untrusted reference
+material. Imported copies start as [drafts](/concepts/multi-user#drafts), visible
+only to their creator and Gateway admins. Publish the copy through the session
+sharing controls to share it; re-importing preserves its current visibility.
+When drafts are disabled, imported copies follow the Gateway's default visibility.
+It preserves the catalog's projected messages independently of native
+tool cleanup; it does not resume the native session or bind the copy to its
+model or machine. Repeating the same import reuses the copy and appends only new
+items. Each import reads up to 50,000 items and 64 MiB, keeping the newest history
+when the bound is reached. Existing per-item text limits still apply. An
+incomplete result warns that older history was omitted. See
+[Session catalogs](/nodes/session-catalogs#import-transcripts).
+
+`--all` pages through visible catalog rows and imports them sequentially.
+New copies use the catalog row name as their title; re-importing preserves an
+existing copy's title. Names are trimmed and limited to 500 UTF-16 code units.
+`--catalog` and `--host` filter sources; `--limit <n>` caps the total number of
+sessions attempted. `--dry-run` lists selected sources without importing them
+and does not predict item counts or run write authorization checks. A failure
+for one source does not stop the remaining sources. The command exits non-zero
+if any import or catalog page fails.
+
+Connection overrides are `--url`, `--token`, `--password`, and `--timeout <ms>`
+(default five minutes per request). Human output reports imported, updated, or
+unchanged sessions with item counts and a final summary. `--json` emits one
+envelope with `ok`, `operation: "import"`, `dryRun`, `results`, and `summary`.
+Successful results include the source locator, `status`, `sessionKey`,
+`importedItems`, `totalItems`, `complete`, and `created`; dry-run results have
+`status: "would_import"`. Failed results include `status: "failed"` and `error`.
 
 ## Archive sessions
 
@@ -285,10 +340,10 @@ openclaw sessions cleanup --json
   `session.maintenance.pruneAfter`; artifacts still referenced by SQLite
   session rows are preserved. Eligible empty files count as removed artifacts
   in both dry-run and applied summaries, even though they free zero bytes.
-- Cleanup reports short-lived Gateway model-run probe cleanup separately as
+- Cleanup reports short-lived Gateway model-run check cleanup separately as
   `modelRunPruned`. This only matches strict explicit keys shaped like
   `agent:*:explicit:model-run-<uuid>`. Retention is a fixed `24h` and is
-  pressure-gated: it only removes stale probe rows when session-entry
+  pressure-gated: it only removes stale check rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
 - `pruneAfter` archives eligible durable sessions in place, preserving their IDs

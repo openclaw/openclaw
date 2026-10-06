@@ -353,11 +353,11 @@ describe("resolveSlackSystemEventRoute", () => {
     });
   });
 
-  it("uses the configured default agent for fallback system-event sessions", () => {
+  it("uses the sole configured agent for fallback system-event sessions", () => {
     const ctx = createSlackMonitorContext({
       ...baseParams(),
       cfg: {
-        agents: { list: [{ id: "ops", default: true }] },
+        agents: { entries: { ops: {} } },
       },
     });
     expect(ctx.resolveSlackSystemEventRoute({ channelId: "C123" })).toEqual({

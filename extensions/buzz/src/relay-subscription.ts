@@ -13,7 +13,7 @@ type BuzzRelaySnapshotParams<TResult> = {
   timeoutMs?: number;
   timeoutMessage: string;
   abortMessage: string;
-  failureMessage: string;
+  failureMessage?: string;
   closeReason: string;
   closeMessage: (reason: string) => string;
   onEvent: (event: Event) => void;
@@ -85,9 +85,7 @@ export async function queryBuzzRelaySnapshot<TResult>(
         queries.waiting.splice(index, 1);
         params.signal?.removeEventListener("abort", onAbort);
         const reason: unknown = params.signal?.reason ?? new Error(params.abortMessage);
-        reject(
-          reason instanceof Error ? reason : new Error(params.failureMessage, { cause: reason }),
-        );
+        reject(reason instanceof Error ? reason : snapshotFailure(params.failureMessage, reason));
       };
       queries.waiting.push(grant);
       params.signal?.addEventListener("abort", onAbort, { once: true });
@@ -147,7 +145,7 @@ async function queryBuzzRelaySnapshotNow<TResult>(
       if (error === undefined) {
         resolve(params.result());
       } else {
-        reject(error instanceof Error ? error : new Error(params.failureMessage, { cause: error }));
+        reject(error instanceof Error ? error : snapshotFailure(params.failureMessage, error));
       }
     };
     const onAbort = () => finish(params.signal?.reason ?? new Error(params.abortMessage));
@@ -178,4 +176,8 @@ async function queryBuzzRelaySnapshotNow<TResult>(
       onAbort();
     }
   });
+}
+
+function snapshotFailure(message: string | undefined, error: unknown): Error {
+  return message === undefined ? new Error(String(error)) : new Error(message, { cause: error });
 }

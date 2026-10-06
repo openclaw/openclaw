@@ -1,7 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
@@ -14,6 +11,7 @@ import { SESSION_TRANSCRIPT_ARCHIVES_TABLE } from "../state/openclaw-agent-sessi
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
+  clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -22,17 +20,35 @@ import {
   formatMigrationWarningSummary,
   MIGRATION_WARNING_EXAMPLE_LIMIT,
 } from "./migration-warning-summary.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
+import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import type { PreparedAgentDatabaseMigrationDiscovery } from "./state-migrations.media-persistence-targets.js";
+import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
+import {
+  clearTranscriptArchiveRecoveryJournal,
+  readTranscriptArchiveRecoveryJournal,
+  recoverTranscriptArchivePublication,
+  repairPublishedTranscriptArchive,
+  TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE,
+  transcriptArchiveFingerprint,
+  transcriptArchivePathFor,
+  transcriptArchiveRecoveryRowKey,
+  writeTranscriptArchiveRecoveryJournal,
+} from "./state-migrations.transcript-archive-publication.js";
 import {
   parseDirectiveMigrationTranscriptEvent,
   transformHistoricalTranscriptEvent,
 } from "./state-migrations.transcript-directives-transform.js";
 
-export const TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE = 32;
+export const TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE = TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE;
+export const MEDIA_ARCHIVE_VERIFICATION_KEY = "media-transcript-archive-verification-v1";
+export { recoverPendingTranscriptArchivePublication } from "./state-migrations.transcript-archive-publication.js";
 
 type TranscriptArchiveMigrationDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "session_transcript_archives"
+  "schema_meta" | "session_transcript_archives"
 >;
 
 type ArchiveCursor = { generation: string; sessionId: string };
@@ -47,7 +63,10 @@ type ArchiveMigrationOptions = {
   database: DatabaseSync;
   pathname: string;
   start: ArchiveCursor;
-  writeCursor: (cursor: ArchiveCursor | { phase: "complete" }) => void;
+  signal?: AbortSignal;
+  verification?: { key: string; prepared?: ReadonlySet<string>; collect?: Set<string> };
+  verifyOnly?: boolean;
+  writeCursor?: (cursor: ArchiveCursor | { phase: "complete" }) => void;
 };
 
 type ArchiveMigrationResult = {
@@ -66,6 +85,7 @@ type ArchiveRowPlan = {
   nextSha256: string;
   publishedAt: number | null;
   sessionId: string;
+  fingerprint?: string;
 };
 
 function transformArchiveContent(
@@ -118,18 +138,25 @@ function readArchiveEncoding(value: string, owner: string): "identity" | "zstd" 
   throw new Error(`${owner} has unsupported transcript archive encoding ${value}`);
 }
 
+function hasArchiveTable(database: DatabaseSync): boolean {
+  // The archive table was added lazily at agent schema v17, so valid v17 databases may omit it.
+  return Boolean(
+    database
+      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+      .get(SESSION_TRANSCRIPT_ARCHIVES_TABLE),
+  );
+}
+
 function listArchiveBatch(
   database: DatabaseSync,
   cursor: ArchiveCursor,
   transformContent: ArchiveContentTransform = transformArchiveContent,
+  options?: {
+    archiveDirectory: string;
+    signal?: AbortSignal;
+    verified?: ReadonlySet<string>;
+  },
 ): ArchiveRowPlan[] {
-  // The archive table was added lazily at agent schema v17, so valid v17 databases may omit it.
-  const hasArchiveTable = database
-    .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-    .get(SESSION_TRANSCRIPT_ARCHIVES_TABLE);
-  if (!hasArchiveTable) {
-    return [];
-  }
   const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
   let query = db
     .selectFrom("session_transcript_archives")
@@ -157,28 +184,47 @@ function listArchiveBatch(
   }
   return executeSqliteQuerySync(database, query).rows.map((row) => {
     const owner = `${row.session_id}:${row.generation}`;
-    const encoding = readArchiveEncoding(row.encoding, owner);
-    const bytes = Buffer.from(row.archive_blob);
-    if (sha256Hex(bytes) !== row.archive_sha256) {
-      throw new Error(`Canonical SQLite transcript archive is corrupt for ${row.session_id}`);
+    const archivePath = options
+      ? transcriptArchivePathFor(options.archiveDirectory, row.archive_name)
+      : row.archive_name;
+    try {
+      options?.signal?.throwIfAborted();
+      const encoding = readArchiveEncoding(row.encoding, owner);
+      const bytes = Buffer.from(row.archive_blob);
+      if (sha256Hex(bytes) !== row.archive_sha256) {
+        throw new Error("Canonical SQLite transcript archive is corrupt");
+      }
+      const fingerprint = options
+        ? transcriptArchiveFingerprint(archivePath, row.archive_sha256, encoding)
+        : undefined;
+      const verified = fingerprint !== undefined && options?.verified?.has(fingerprint) === true;
+      const transformed = verified
+        ? undefined
+        : transformContent(decodeSessionArchiveBytes(bytes, encoding === "zstd"), owner);
+      options?.signal?.throwIfAborted();
+      const nextBytes = transformed?.changed
+        ? encodeArchiveContent(transformed.content, encoding, owner)
+        : bytes;
+      return {
+        archiveName: row.archive_name,
+        archiveSha256: row.archive_sha256,
+        bytes,
+        changed: transformed?.changed === true,
+        encoding,
+        generation: row.generation,
+        nextBytes,
+        nextSha256: sha256Hex(nextBytes),
+        publishedAt: row.published_at,
+        sessionId: row.session_id,
+        fingerprint: verified ? fingerprint : undefined,
+      };
+    } catch (error) {
+      options?.signal?.throwIfAborted();
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed migrating transcript archive ${archivePath} (${owner}): ${detail}`, {
+        cause: error,
+      });
     }
-    const content = decodeSessionArchiveBytes(bytes, encoding === "zstd");
-    const transformed = transformContent(content, owner);
-    const nextBytes = transformed.changed
-      ? encodeArchiveContent(transformed.content, encoding, owner)
-      : bytes;
-    return {
-      archiveName: row.archive_name,
-      archiveSha256: row.archive_sha256,
-      bytes,
-      changed: transformed.changed,
-      encoding,
-      generation: row.generation,
-      nextBytes,
-      nextSha256: sha256Hex(nextBytes),
-      publishedAt: row.published_at,
-      sessionId: row.session_id,
-    };
   });
 }
 
@@ -186,6 +232,12 @@ export function transcriptDirectiveArchivesNeedMigration(
   database: DatabaseSync,
   start: ArchiveCursor,
 ): boolean {
+  if (!hasArchiveTable(database)) {
+    return false;
+  }
+  if (readTranscriptArchiveRecoveryJournal(database)) {
+    return true;
+  }
   let cursor = start;
   while (true) {
     const batch = listArchiveBatch(database, cursor);
@@ -198,6 +250,10 @@ export function transcriptDirectiveArchivesNeedMigration(
     }
     cursor = { generation: last.generation, sessionId: last.sessionId };
   }
+}
+
+export function transcriptDirectiveArchiveRecoveryPending(database: DatabaseSync): boolean {
+  return readTranscriptArchiveRecoveryJournal(database) !== undefined;
 }
 
 function assertArchiveSourceUnchanged(database: DatabaseSync, planned: ArchiveRowPlan): boolean {
@@ -253,53 +309,12 @@ function rewriteArchiveRow(database: DatabaseSync, planned: ArchiveRowPlan): boo
   return true;
 }
 
-function repairPublishedArchiveFile(params: {
-  archiveDirectory: string;
-  planned: ArchiveRowPlan;
-}): boolean {
-  const archiveDirectory = path.resolve(params.archiveDirectory);
-  const archivePath = path.resolve(archiveDirectory, params.planned.archiveName);
-  if (
-    path.dirname(archivePath) !== archiveDirectory ||
-    path.basename(archivePath) !== params.planned.archiveName
-  ) {
-    throw new Error(`Cannot migrate transcript archive outside ${archiveDirectory}`);
-  }
-  if (!fs.existsSync(archivePath)) {
-    return false;
-  }
-  if (sha256Hex(fs.readFileSync(archivePath)) === params.planned.nextSha256) {
-    return true;
-  }
-  assertAgentDatabaseMaintenanceAuthority();
-  replaceFileAtomicSync({
-    beforeRename: ({ tempPath }) => {
-      const stagedHash = sha256Hex(fs.readFileSync(tempPath));
-      if (stagedHash !== params.planned.nextSha256) {
-        throw new Error(`Transcript archive staging verification failed for ${archivePath}`);
-      }
-      // Staging and fsync can outlive the timer-driven lease heartbeat. Recheck
-      // at the atomic publication boundary so an expired owner cannot rename.
-      assertAgentDatabaseMaintenanceAuthority();
-    },
-    content: params.planned.nextBytes,
-    filePath: archivePath,
-    preserveExistingMode: true,
-    syncParentDir: true,
-    syncTempFile: true,
-    tempPrefix: `${path.basename(archivePath)}.directive-migration`,
-  });
-  if (sha256Hex(fs.readFileSync(archivePath)) !== params.planned.nextSha256) {
-    throw new Error(`Transcript archive verification failed for ${archivePath}`);
-  }
-  return true;
-}
-
 function finalizeArchiveCursor(params: {
   database: DatabaseSync;
   fileCurrent: boolean;
   planned: ArchiveRowPlan;
-  writeCursor: (cursor: ArchiveCursor | { phase: "complete" }) => void;
+  recoveredPublishedAt?: number;
+  writeCursor?: (cursor: ArchiveCursor | { phase: "complete" }) => void;
 }): void {
   const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(params.database);
   const current = executeSqliteQueryTakeFirstSync(
@@ -319,19 +334,24 @@ function finalizeArchiveCursor(params: {
         `Transcript archive changed before migration commit for ${params.planned.sessionId}`,
       );
     }
-    if (params.planned.changed && params.planned.publishedAt !== null && params.fileCurrent) {
+    const publishedAt = params.planned.publishedAt ?? params.recoveredPublishedAt;
+    if (
+      (params.planned.changed || params.recoveredPublishedAt !== undefined) &&
+      publishedAt !== undefined &&
+      params.fileCurrent
+    ) {
       executeSqliteQuerySync(
         params.database,
         db
           .updateTable("session_transcript_archives")
-          .set({ published_at: params.planned.publishedAt })
+          .set({ published_at: publishedAt })
           .where("session_id", "=", params.planned.sessionId)
           .where("generation", "=", params.planned.generation)
           .where("archive_sha256", "=", params.planned.nextSha256),
       );
     }
   }
-  params.writeCursor({
+  params.writeCursor?.({
     generation: params.planned.generation,
     sessionId: params.planned.sessionId,
   });
@@ -345,95 +365,271 @@ export async function migrateCanonicalTranscriptArchives(
   },
 ): Promise<ArchiveMigrationResult> {
   let rewrittenArchives = 0;
-  let missingCopies = 0;
-  const missingCopyExamples: string[] = [];
   let cursor = params.start;
+  const archivesPresent = hasArchiveTable(params.database);
+  const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(params.database);
+  const verificationKey = params.verification?.key;
+  const previousVerification = verificationKey
+    ? (executeSqliteQueryTakeFirstSync(
+        params.database,
+        db.selectFrom("schema_meta").select("app_version").where("meta_key", "=", verificationKey),
+      )?.app_version ?? "")
+    : "";
+  const verified = new Set([
+    ...previousVerification.split("\n"),
+    ...(params.verification?.prepared ?? []),
+  ]);
+  const observed = new Set<string>();
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
     agentId: params.agentId,
     path: params.pathname,
   });
+  const recoveryWarnings = params.verifyOnly
+    ? []
+    : await recoverTranscriptArchivePublication({
+        agentId: params.agentId,
+        archiveDirectory,
+        database: params.database,
+        onArchive: params.onArchive,
+        pathname: params.pathname,
+        signal: params.signal,
+      });
+  const write = <T>(operationLabel: string, operation: () => T): T =>
+    runSqliteImmediateTransactionSync(
+      params.database,
+      () => {
+        params.signal?.throwIfAborted();
+        assertAgentDatabaseMaintenanceAuthority();
+        const result = operation();
+        params.signal?.throwIfAborted();
+        assertAgentDatabaseMaintenanceAuthority();
+        return result;
+      },
+      {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: params.pathname,
+        operationLabel,
+      },
+    );
+  const checkpoint = params.verifyOnly ? undefined : params.writeCursor;
+  let missingCopies = 0;
+  const missingCopyExamples: string[] = [];
   while (true) {
-    const batch = listArchiveBatch(params.database, cursor, params.transformContent);
+    params.signal?.throwIfAborted();
+    const batch = archivesPresent
+      ? listArchiveBatch(params.database, cursor, params.transformContent, {
+          archiveDirectory,
+          signal: params.signal,
+          verified,
+        })
+      : [];
     if (batch.length === 0) {
-      runSqliteImmediateTransactionSync(
-        params.database,
-        () => {
-          assertAgentDatabaseMaintenanceAuthority();
-          params.writeCursor({ phase: "complete" });
-          assertAgentDatabaseMaintenanceAuthority();
-        },
-        {
-          databaseLabel: params.pathname,
-          operationLabel: "historical-transcript-archive.complete",
-        },
-      );
+      if (checkpoint) {
+        write("historical-transcript-archive.complete", () => checkpoint({ phase: "complete" }));
+      }
+      const verificationReceipt = [...observed].toSorted().join("\n");
+      if (verificationKey && !params.verifyOnly && verificationReceipt !== previousVerification) {
+        write("transcript-archive-verification.record", () => {
+          const now = Date.now();
+          executeSqliteQuerySync(
+            params.database,
+            db
+              .insertInto("schema_meta")
+              .values({
+                meta_key: verificationKey,
+                role: "agent",
+                agent_id: params.agentId,
+                schema_version: 1,
+                app_version: verificationReceipt,
+                created_at: now,
+                updated_at: now,
+              })
+              .onConflict((conflict) =>
+                conflict
+                  .column("meta_key")
+                  .doUpdateSet({ app_version: verificationReceipt, updated_at: now }),
+              ),
+          );
+        });
+      }
       return {
         rewrittenArchives,
-        warnings:
-          missingCopies > 0
-            ? [
-                formatMigrationWarningSummary({
-                  summary: `${params.pathname}: Missing ${missingCopies} canonical transcript archive file(s)`,
-                  count: missingCopies,
-                  detail:
-                    "Canonical SQLite archive blobs remain retained. Migration completed without recreating the missing copies.",
-                }),
-                ...missingCopyExamples,
-              ]
-            : [],
+        warnings: [
+          ...new Set([
+            ...recoveryWarnings,
+            ...(missingCopies > 0
+              ? [
+                  formatMigrationWarningSummary({
+                    summary: `${params.pathname}: Missing ${missingCopies} canonical transcript archive file(s)`,
+                    count: missingCopies,
+                    detail:
+                      "Canonical SQLite archive blobs remain retained. Migration completed without recreating the missing copies.",
+                  }),
+                  ...missingCopyExamples,
+                ]
+              : []),
+          ]),
+        ],
       };
     }
     for (const planned of batch) {
-      const archivePath = path.resolve(archiveDirectory, planned.archiveName);
-      params.onArchive?.(archivePath);
-      const rowPresent = runSqliteImmediateTransactionSync(
-        params.database,
-        () => {
-          assertAgentDatabaseMaintenanceAuthority();
-          const currentRowPresent = rewriteArchiveRow(params.database, planned);
-          assertAgentDatabaseMaintenanceAuthority();
-          return currentRowPresent;
-        },
-        {
-          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-          databaseLabel: params.pathname,
-          operationLabel: "historical-transcript-archive-directives",
-        },
-      );
-      const fileCurrent = rowPresent
-        ? repairPublishedArchiveFile({ archiveDirectory, planned })
-        : false;
-      if (rowPresent && !fileCurrent) {
+      params.onArchive?.(transcriptArchivePathFor(archiveDirectory, planned.archiveName));
+    }
+    params.signal?.throwIfAborted();
+    // Persist the original publication timestamps with the rewritten blobs.
+    // Until file repair and cursor commit finish, changed rows remain pending.
+    const needsRewrite = batch.some((planned) => planned.changed);
+    const rowsPresent =
+      params.verifyOnly || !needsRewrite
+        ? batch.map(
+            (planned) => !planned.changed && assertArchiveSourceUnchanged(params.database, planned),
+          )
+        : write("historical-transcript-archive-directives", () => {
+            const pending = new Map(
+              (readTranscriptArchiveRecoveryJournal(params.database)?.rows ?? []).map((row) => [
+                transcriptArchiveRecoveryRowKey(row),
+                row,
+              ]),
+            );
+            const result = batch.map((planned) => rewriteArchiveRow(params.database, planned));
+            let receiptsChanged = false;
+            for (const [index, planned] of batch.entries()) {
+              if (!result[index] || !planned.changed) {
+                continue;
+              }
+              const key = transcriptArchiveRecoveryRowKey(planned);
+              const prior = pending.get(key);
+              const publishedAt =
+                planned.publishedAt ??
+                (prior?.nextSha256 === planned.archiveSha256 ? prior.publishedAt : null);
+              if (publishedAt === null) {
+                continue;
+              }
+              pending.set(key, {
+                generation: planned.generation,
+                nextSha256: planned.nextSha256,
+                publishedAt,
+                sessionId: planned.sessionId,
+              });
+              receiptsChanged = true;
+            }
+            if (receiptsChanged) {
+              writeTranscriptArchiveRecoveryJournal(params.database, params.agentId, [
+                ...pending.values(),
+              ]);
+            }
+            return result;
+          });
+    // Published files never point at rolled-back blobs: rewritten rows are
+    // committed as pending before an atomic replacement can touch a file.
+    const filesCurrent = batch.map((planned, index) => {
+      const archivePath = transcriptArchivePathFor(archiveDirectory, planned.archiveName);
+      let fileCurrent: boolean;
+      try {
+        fileCurrent = rowsPresent[index]
+          ? repairPublishedTranscriptArchive({
+              archiveDirectory,
+              planned,
+              signal: params.signal,
+              verifyOnly: params.verifyOnly,
+            })
+          : false;
+      } catch (error) {
+        params.signal?.throwIfAborted();
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed publishing transcript archive ${archivePath}: ${detail}`, {
+          cause: error,
+        });
+      }
+      if (rowsPresent[index] && !planned.changed) {
+        assertArchiveSourceUnchanged(params.database, planned);
+      }
+      if (rowsPresent[index] && !fileCurrent) {
         missingCopies += 1;
         if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
           missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
         }
       }
-      runSqliteImmediateTransactionSync(
-        params.database,
-        () => {
-          assertAgentDatabaseMaintenanceAuthority();
+      if (rowsPresent[index] && planned.fingerprint) {
+        observed.add(planned.fingerprint);
+        params.verification?.collect?.add(planned.fingerprint);
+      }
+      return fileCurrent;
+    });
+    // Cursor progress and verified timestamp restoration are atomic with
+    // removal of only the settled receipts. Missing files keep their receipts.
+    if (!params.verifyOnly && (needsRewrite || checkpoint)) {
+      write("historical-transcript-archive-cursor", () => {
+        const journal = readTranscriptArchiveRecoveryJournal(params.database);
+        const pending = new Map(
+          (journal?.rows ?? []).map((row) => [transcriptArchiveRecoveryRowKey(row), row]),
+        );
+        for (const [index, planned] of batch.entries()) {
+          const key = transcriptArchiveRecoveryRowKey(planned);
+          const recorded = pending.get(key);
+          const fileCurrent = filesCurrent[index] === true;
           finalizeArchiveCursor({
             database: params.database,
             fileCurrent,
             planned,
-            writeCursor: params.writeCursor,
+            recoveredPublishedAt:
+              recorded?.nextSha256 === planned.nextSha256 ? recorded.publishedAt : undefined,
+            writeCursor: checkpoint,
           });
-          assertAgentDatabaseMaintenanceAuthority();
-        },
-        {
-          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-          databaseLabel: params.pathname,
-          operationLabel: "historical-transcript-archive-cursor",
-        },
-      );
-      rewrittenArchives += planned.changed && rowPresent ? 1 : 0;
-      cursor = { generation: planned.generation, sessionId: planned.sessionId };
+          if (!rowsPresent[index] || (fileCurrent && recorded?.nextSha256 === planned.nextSha256)) {
+            pending.delete(key);
+          }
+        }
+        if (pending.size > 0) {
+          writeTranscriptArchiveRecoveryJournal(params.database, params.agentId, [
+            ...pending.values(),
+          ]);
+        } else if (journal) {
+          clearTranscriptArchiveRecoveryJournal(params.database);
+        }
+      });
     }
+    rewrittenArchives += batch.filter(
+      (planned, index) => planned.changed && rowsPresent[index],
+    ).length;
+    const last = batch.at(-1)!;
+    cursor = { generation: last.generation, sessionId: last.sessionId };
     // Archive planning and file publication are synchronous. Give the lease
     // heartbeat a scheduling point before the next bounded batch begins.
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
+    });
+    params.signal?.throwIfAborted();
+  }
+}
+
+/** Read and transform retained archives before Doctor stops the managed writer. */
+export async function prepareCanonicalTranscriptArchiveMigrations(
+  discovery: PreparedAgentDatabaseMigrationDiscovery,
+): Promise<void> {
+  const prepared = new Set<string>();
+  discovery.preparedTranscriptArchives = prepared;
+  for (const target of discovery.discovery.targets) {
+    const snapshot = await prepareSqliteReadOnlyLocation(target.realPath, {
+      preserveSourceArtifacts: true,
+      allowLiveOwner: true,
+    });
+    await withPreparedSqliteSnapshot(snapshot, async (location) => {
+      const database = openNodeSqliteDatabase(location, { readOnly: true });
+      try {
+        await migrateCanonicalTranscriptArchives({
+          agentId: target.agentId,
+          pathname: target.path,
+          database,
+          start: { generation: "", sessionId: "" },
+          verifyOnly: true,
+          verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, collect: prepared },
+          transformContent: transformMediaArchiveContent,
+        });
+      } finally {
+        clearNodeSqliteKyselyCacheForDatabase(database);
+        database.close();
+      }
     });
   }
 }

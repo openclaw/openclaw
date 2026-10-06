@@ -30,11 +30,7 @@ export class AttachmentDownloadController {
     this.host.requestUpdate();
   }
 
-  readonly onDownload = (): void => {
-    void this.run();
-  };
-
-  private async run(): Promise<void> {
+  readonly onDownload = async (): Promise<void> => {
     const content = this.content();
     if (content?.kind !== "attachment" || !content.download || this.request) {
       return;
@@ -75,5 +71,5 @@ export class AttachmentDownloadController {
         this.host.requestUpdate();
       }
     }
-  }
+  };
 }

@@ -36,14 +36,6 @@ type RetiredArmState = {
   removedFromDeny?: unknown;
 };
 
-type RetiredPhoneControlCleanupPlan = {
-  config: OpenClawConfig;
-  configChanges: string[];
-  cleanupPending: boolean;
-  cleanupSafe: boolean;
-  warnings: string[];
-};
-
 function resolveLegacyArmStatePath(env: NodeJS.ProcessEnv): string {
   return path.join(resolveStateDir(env), "plugins", PHONE_CONTROL_PLUGIN_ID, "armed.json");
 }
@@ -131,12 +123,7 @@ function openRetiredArmStateStore(env: NodeJS.ProcessEnv) {
   });
 }
 
-async function readRetiredArmStates(env: NodeJS.ProcessEnv): Promise<{
-  states: unknown[];
-  cleanupPending: boolean;
-  cleanupSafe: boolean;
-  warnings: string[];
-}> {
+async function readRetiredArmStates(env: NodeJS.ProcessEnv) {
   const legacyPath = resolveLegacyArmStatePath(env);
   const databasePath = resolveOpenClawStateSqlitePath(env);
   const [legacyInspection, databaseInspection] = await Promise.all([
@@ -251,12 +238,13 @@ function withCommandLists(
 export async function prepareRetiredPhoneControlCleanup(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): Promise<RetiredPhoneControlCleanupPlan> {
+}) {
   const env = params.env ?? process.env;
   const residue = await readRetiredArmStates(env);
-  const unchanged: RetiredPhoneControlCleanupPlan = {
+  const configChanges: string[] = [];
+  const unchanged = {
     config: params.cfg,
-    configChanges: [],
+    configChanges,
     cleanupPending: residue.cleanupPending,
     cleanupSafe: residue.cleanupSafe,
     warnings: residue.warnings,
@@ -296,7 +284,6 @@ export async function prepareRetiredPhoneControlCleanup(params: {
     return unchanged;
   }
 
-  const configChanges: string[] = [];
   if (allowChanged) {
     configChanges.push("Removed stale Phone Control lease-only command allow entries.");
   }
@@ -312,7 +299,6 @@ export async function prepareRetiredPhoneControlCleanup(params: {
       allow: nextAllow,
       deny: nextDeny,
     }),
-    configChanges,
   };
 }
 

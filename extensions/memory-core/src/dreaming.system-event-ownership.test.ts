@@ -7,10 +7,8 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  enqueueSystemEvent,
-  resetSystemEventsForTest,
-} from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
 
@@ -38,7 +36,7 @@ it.each(
   "checks $sessionKey against its heartbeat owner, with an event for $queuedAgentId",
   async ({ sessionKey, queuedAgentId }) => {
     const config: OpenClawConfig = {
-      agents: { entries: { main: { default: true }, research: {} } },
+      agents: { entries: { main: {}, research: {} } },
       session: { scope: "global" },
       plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
     };

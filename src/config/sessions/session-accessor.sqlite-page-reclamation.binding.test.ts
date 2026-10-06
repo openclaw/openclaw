@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -5,7 +6,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal-reclamation.js";
+import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -15,11 +19,15 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveRegisteredSqliteTranscriptArchiveName } from "./session-accessor.sqlite-archive-artifact.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import * as pageReclamation from "./session-accessor.sqlite-page-reclamation.js";
+import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import {
   getSessionKysely,
   runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
-import { pruneAllSessionTranscriptArchivesToHighWater } from "./session-history-archive-pruning.js";
+import {
+  hasCanonicalSessionTranscriptArchives,
+  pruneAllSessionTranscriptArchivesToHighWater,
+} from "./session-history-archive-pruning.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -67,6 +75,54 @@ function readArchives(database: OpenClawAgentDatabase) {
       .select(["archive_name", "archive_sha256", "generation", "published_at", "session_id"]),
   ).rows;
 }
+
+it.each([
+  { operation: "prune", retirement: "path" },
+  { operation: "prune", retirement: "root" },
+  { operation: "preview", retirement: "path" },
+])(
+  "retires archive pruning owners by the symlinked $retirement its requester used ($operation)",
+  async ({ operation, retirement }) => {
+    await withOpenClawTestState(
+      { prefix: "page-reclamation-alias-", scenario: "minimal", layout: "state-only" },
+      async (state) => {
+        const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+        const archiveDirectory = state.sessionsDir();
+        seedArchive(database, archiveDirectory);
+        await closeOpenClawAgentDatabaseByPathAsync(database.path);
+        const link = path.join(state.root, "state-link");
+        assert.ok(state.env.OPENCLAW_STATE_DIR);
+        fs.symlinkSync(
+          state.env.OPENCLAW_STATE_DIR,
+          link,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        const linkOptions = resolveSessionReclamationDatabaseOptions({
+          agentId: "main",
+          env: { ...state.env, OPENCLAW_STATE_DIR: link },
+        });
+        if (operation === "prune") {
+          const result = await pruneAllSessionTranscriptArchivesToHighWater({
+            archiveDirectory,
+            databaseOptions: linkOptions,
+            highWaterBytes: 0,
+            storePath: linkOptions.path,
+          });
+          expect(result.removedFiles).toBe(1);
+        } else {
+          expect(await hasCanonicalSessionTranscriptArchives(linkOptions)).toBe(true);
+        }
+        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(true);
+        if (retirement === "path") {
+          await closeOpenClawAgentDatabaseByPathAsync(linkOptions.path, "main");
+        } else {
+          await closeOpenClawAgentDatabasesAsync(link);
+        }
+        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+      },
+    );
+  },
+);
 
 it.runIf(process.platform !== "win32").each([false, true])(
   "keeps archive pruning on its captured database (retargeted alias: %s)",
@@ -178,7 +234,7 @@ it.runIf(process.platform !== "win32").each([false, true])(
         vi.spyOn(writeAdmission, "runOpenClawAgentWorkerWrite").mockImplementation(
           <T>(...args: Parameters<typeof write<T>>) => {
             const result = write(...args);
-            if (observing && args[0].path === preparedPath) {
+            if (observing && !("target" in args[0]) && args[0].path === preparedPath) {
               requested.resolve();
             }
             return result;

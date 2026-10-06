@@ -322,7 +322,7 @@ describe("memory source changes during indexing", () => {
         db.prepare("SELECT id FROM memory_index_chunks_fts WHERE path = ?").all(stalePath),
       ).toEqual([]);
       expect(sibling()).toEqual(siblingBefore);
-      const recorded = memoryOrigins.listMemoryEntryOrigins({
+      const recorded = await memoryOrigins.listMemoryEntryOrigins({
         agentId: "main",
         sessionIds: [sessionId],
       });

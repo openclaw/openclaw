@@ -58,6 +58,12 @@ export type ReplyBackendQueueMessageOptions = {
 };
 
 export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
+  /** Host admission after policy preparation; false leaves the input for follow-up. */
+  canAdmit?: () => boolean;
+  toolAuthorityPreparation?: ReplyToolAuthorityPreparation & {
+    /** Host policy preparation alone does not add a caller-lifetime binding. */
+    authorityKind?: "run" | "source-bound";
+  };
   /** Host-observed audio fact; an owner must preserve its dynamic tool context before accepting. */
   inboundAudio?: boolean;
   /** User-authorized controls retain sender authority but are not answers to pending questions. */
@@ -117,8 +123,15 @@ export type ReplyToolAuthoritySnapshot = Readonly<{
   personalToolOwner?: ReplyTurnParticipantInput;
   /** Selection admitted before runtime fallback or hooks choose a concrete model. */
   requestedRoute?: ReplyToolAuthorityRoute;
+  /** @deprecated Use fingerprintAsync for worker-backed preparation. */
   fingerprint(route?: ReplyToolAuthorityRoute): string;
+  /** @deprecated Use projectAsync for worker-backed preparation. */
   project: (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => string;
+  fingerprintAsync?(route?: ReplyToolAuthorityRoute): Promise<string>;
+  projectAsync?(
+    overlay: ReplyToolAuthorityOverlay,
+    route: ReplyToolAuthorityRoute,
+  ): Promise<string>;
 }>;
 
 export type ReplyTurnParticipant = Readonly<{
@@ -157,13 +170,27 @@ export type ReplyBackendMessageInjection = {
 };
 
 /** V2 sinks invoke the host-owned, per-injection assertion at their final effect. */
+export type ReplyToolAuthorityPreparation = {
+  assertCurrent(this: void): void;
+  prepareCurrent(this: void): Promise<void>;
+  /** Pending-question compatibility still checks mutable policy synchronously. */
+  compatAssertCurrent(this: void): void;
+};
+
 export type ReplyBackendMessageInjectionV2 = {
   readonly version: 2;
   isAvailable(): boolean;
+  /** @deprecated Use queueMessageAsync with fresh policy preparation. */
   queueMessage(
     text: string,
     options: ReplyBackendQueueMessageOptions | undefined,
     assertCurrent: () => void,
+    authorityKind: "run" | "source-bound",
+  ): Promise<void | ReplyBackendQueueMessageResult>;
+  queueMessageAsync?(
+    text: string,
+    options: ReplyBackendQueueMessageOptions | undefined,
+    preparation: ReplyToolAuthorityPreparation,
     authorityKind: "run" | "source-bound",
   ): Promise<void | ReplyBackendQueueMessageResult>;
   claimPendingUserInputAnswer?(
@@ -205,10 +232,7 @@ export type ReplyBackendHandle = {
   isStopped?: () => boolean;
   isAbortable?: () => boolean;
   /** @deprecated Compatibility for shipped embedded handles. Use messageInjection. */
-  queueMessage?: (
-    text: string,
-    options?: ReplyBackendQueueMessageOptions,
-  ) => Promise<void | ReplyBackendQueueMessageResult>;
+  queueMessage?: ReplyBackendMessageInjection["queueMessage"];
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
    * find embedded runs that are compacting during the main run phase.
@@ -226,13 +250,20 @@ export type ReplyMessageInjectionResolution =
   | {
       backend: ReplyBackendHandle;
       injection: ReplyBackendMessageInjection;
+      /** Internal FIFO preflight for a released synchronous sink. */
+      prepareQueueMessage?: () => Promise<void>;
     };
 
 /** An adapter over one existing execution owner; it never acquires another run slot. */
 type ReplyMessageInjectionOwner = {
+  readonly backendIdentity: object;
   acceptParticipant?(participant: ReplyTurnParticipantInput): void;
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
+  projectToolAuthorityFingerprintAsync(
+    overlay: ReplyToolAuthorityOverlay,
+  ): Promise<string | undefined>;
   resolve(params: {
+    preparation?: ReplyToolAuthorityPreparation;
     options?: ReplyBackendQueueMessageOptions;
     personalToolParticipant?: ReplyTurnParticipantInput;
     inboundAudio?: boolean;
@@ -344,6 +375,8 @@ export type ReplyOperation = {
    * Final delivery reads it because the original dispatch context cannot change.
    */
   readonly acceptedSteeredInboundAudio: boolean;
+  /** Sticky fact: a final message-tool send already answered this turn's source. */
+  readonly sourceReplyDelivered: boolean;
   /** Immutable tool authority accepted by the active backend for steered user turns. */
   readonly toolAuthorityFingerprint?: string;
   /** Initial selected model; a concrete attempt must not replace user intent. */
@@ -361,15 +394,7 @@ export type ReplyOperation = {
   /** Capture lineage before a pending barrier outlives this operation's lane. */
   captureOwnedSessionIds(): Set<string>;
   recordActivity(): void;
-  setPhase(
-    next:
-      | "queued"
-      | "waiting_for_deferred_maintenance"
-      | "waiting_for_global_lane"
-      | "preflight_compacting"
-      | "memory_flushing"
-      | "running",
-  ): void;
+  setPhase(next: Exclude<ReplyOperationPhase, "completed" | "failed" | "aborted">): void;
   markWaitingForDeferredMaintenance(): void;
   /** Return a maintenance-waiting operation to queued if the run has not started. */
   markDeferredMaintenanceWaitEnded(): void;
@@ -377,14 +402,24 @@ export type ReplyOperation = {
   /** Return a global-lane-waiting operation to queued once capacity is granted. */
   markGlobalLaneWaitEnded(): void;
   markTerminalRecovery(): void;
-  markAcceptedSteeredInboundAudio(): void;
+  /** A steered input joined this operation; any earlier source answer predates it. */
+  markSteeredInputAccepted(params: { inboundAudio: boolean }): void;
+  markSourceReplyDelivered(): void;
   /** Freeze the complete caller policy before a concrete backend attempt attaches. */
+  /** @deprecated Use bindToolAuthoritySnapshotAsync. */
   bindToolAuthoritySnapshot(snapshot: ReplyToolAuthoritySnapshot): void;
+  bindToolAuthoritySnapshotAsync(snapshot: ReplyToolAuthoritySnapshot): Promise<void>;
   setAutomaticFallbackRoute(route: ReplyToolAuthorityRoute | undefined): void;
   /** Project an inbound turn through the current concrete route; settled owners fail closed. */
+  /** @deprecated Use projectToolAuthorityFingerprintAsync. */
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
+  projectToolAuthorityFingerprintAsync(
+    overlay: ReplyToolAuthorityOverlay,
+  ): Promise<string | undefined>;
   /** Prepare fingerprint and projection together for the final concrete attempt route. */
+  /** @deprecated Use bindToolAuthorityRouteAsync. */
   bindToolAuthorityRoute(route: ReplyToolAuthorityRoute): string;
+  bindToolAuthorityRouteAsync(route: ReplyToolAuthorityRoute): Promise<string>;
   updateSessionId(nextSessionId: string): void;
   /**
    * Native commands transfer their queued source reservation to the target session.

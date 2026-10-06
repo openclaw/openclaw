@@ -135,7 +135,7 @@ type FirstRunActivation = {
   kind: string;
   deadlineMs: number;
   receipt: FirstRunActivationReceipt | null;
-  outcome: "pending" | "verified" | "rejected";
+  outcome: "pending" | "verified" | "rejected" | "missing";
 };
 
 type FirstRunSetupHost = {
@@ -238,6 +238,9 @@ export class FirstRunSetup {
     if (this.host.actionsDisabled()) {
       return false;
     }
+    if (this.pending?.outcome === "missing") {
+      return true;
+    }
     if (this.pending && Date.now() < this.pending.deadlineMs) {
       this.host.setRefreshWarning(
         t("modelSetup.recovery.wait", { time: formatDateTimeMs(this.pending.deadlineMs) }),
@@ -258,6 +261,24 @@ export class FirstRunSetup {
       this.started = Boolean(retryingConfigured);
     }
     return true;
+  }
+
+  wizardMissing(): void {
+    if (this.pending && this.ownsActivation()) {
+      this.pending.outcome = "missing";
+    }
+  }
+
+  reconcileMissingWizard(detection: SystemAgentSetupDetectResult): void {
+    const activation = this.pending;
+    if (activation?.outcome !== "missing" || !this.ownsActivation(activation)) {
+      return;
+    }
+    this.host.setRefreshWarning(null);
+    if (!this.configuredActivationModel(detection)) {
+      this.pending = null;
+      clearFirstRunActivationReceipt(activation.receipt);
+    }
   }
 
   dispose(): void {
@@ -328,12 +349,12 @@ export class FirstRunSetup {
       this.host.resumeWizard(receipt.wizard, this.observeActivation(this.pending));
       return;
     }
-    if (this.pending && (!configured || !this.pending.modelRef)) {
+    if (!configured || !this.pending.modelRef) {
       this.started = true;
       this.showUnresolved();
       return;
     }
-    if (configured && !this.host.canVerify(snapshot.client)) {
+    if (!this.host.canVerify(snapshot.client)) {
       this.started = true;
       this.host.setVerifyState({
         phase: "failed",
@@ -486,11 +507,6 @@ export class FirstRunSetup {
     };
   }
 
-  private clearPending(): void {
-    this.pending = null;
-    clearFirstRunActivationReceipt();
-  }
-
   ownsActivation(activation: FirstRunActivation | null = this.pending): boolean {
     if (!activation) {
       return !this.host.routeData()?.firstRun;
@@ -560,7 +576,8 @@ export class FirstRunSetup {
   }
 
   private completeNavigation(): void {
-    this.clearPending();
+    this.pending = null;
+    clearFirstRunActivationReceipt();
     this.host.setRefreshWarning(null);
     this.host.context().navigate("custodian", { search: "?onboarding=1" });
   }

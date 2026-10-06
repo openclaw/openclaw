@@ -1,10 +1,11 @@
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
   collectEntriesForBranchSummaryFromBranches,
   generateBranchSummary,
 } from "../runtime/index.js";
 import { AgentSessionExecution } from "./agent-session-execution.js";
-import { extractTextContent, normalizeBranchSummaryResult } from "./agent-session-utils.js";
+import { extractTextContent } from "./agent-session-utils.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
 import type { ExtensionRunner, TreePreparation } from "./extensions/index.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
@@ -98,7 +99,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
           fromExtension = true;
         }
 
-        // Allow extensions to override instructions and label
         if (result?.customInstructions !== undefined) {
           customInstructions = result.customInstructions;
         }
@@ -116,31 +116,29 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         const model = this.model!;
         const { apiKey, headers } = await this.getRequiredRequestAuth(model);
         const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
-        const result = normalizeBranchSummaryResult(
-          await generateBranchSummary(entriesToSummarize, {
-            model,
-            apiKey,
-            headers,
-            signal: abortController.signal,
-            customInstructions,
-            replaceInstructions,
-            reserveTokens: branchSummarySettings.reserveTokens,
-            streamFn: this.agent.streamFn,
-            runtime: createCompactionRuntime((usage) =>
-              recordSessionModelUsage(this.sessionManager, usage),
-            ),
-          }),
-        );
-        if (result.aborted) {
-          return { cancelled: true, aborted: true };
+        const result = await generateBranchSummary(entriesToSummarize, {
+          model,
+          apiKey,
+          headers,
+          signal: abortController.signal,
+          customInstructions,
+          replaceInstructions,
+          reserveTokens: branchSummarySettings.reserveTokens,
+          streamFn: this.agent.streamFn,
+          runtime: createCompactionRuntime((usage) =>
+            recordSessionModelUsage(this.sessionManager, usage),
+          ),
+        });
+        if (!result.ok) {
+          if (result.error.code === "aborted") {
+            return { cancelled: true, aborted: true };
+          }
+          throw new Error(result.error.message);
         }
-        if (result.error) {
-          throw new Error(result.error);
-        }
-        summaryText = result.summary;
+        summaryText = result.value.summary;
         summaryDetails = {
-          readFiles: result.readFiles || [],
-          modifiedFiles: result.modifiedFiles || [],
+          readFiles: result.value.readFiles,
+          modifiedFiles: result.value.modifiedFiles,
         };
       } else if (extensionSummary) {
         summaryText = extensionSummary.summary;
@@ -163,7 +161,7 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         newLeafId = targetId;
       }
 
-      const navigation = await withSessionManagerWrite(this.sessionManager, () => {
+      const navigation = await withSessionManagerWrite(this.sessionManager, async () => {
         if (
           abortController.signal.aborted ||
           this.branchSummaryAbortController !== abortController
@@ -171,30 +169,45 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
           return { cancelled: true, aborted: true } as const;
         }
         // Summary and labels belong to the navigation target, not the old branch.
-        // Keep leaf publication synchronous with its admitted persistence.
-        let summaryEntry: BranchSummaryEntry | undefined;
-        if (summaryText) {
-          const summaryId = this.sessionManager.branchWithSummary(
-            newLeafId,
-            summaryText,
-            summaryDetails,
-            fromExtension,
-          );
-          summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
-          if (label) {
-            this.sessionManager.appendLabelChange(summaryId, label);
+        // Publish the selected context only after its persistence has settled.
+        const mutate = async () => {
+          let summaryEntry: BranchSummaryEntry | undefined;
+          if (summaryText) {
+            const summaryId = await this.sessionManager.branchWithSummaryAsync(
+              newLeafId,
+              summaryText,
+              summaryDetails,
+              fromExtension,
+            );
+            summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
+            if (label) {
+              await this.sessionManager.appendLabelChangeAsync(summaryId, label);
+            }
+          } else if (newLeafId === null) {
+            await this.sessionManager.resetLeafAsync();
+          } else {
+            await this.sessionManager.branchAsync(newLeafId);
           }
-        } else if (newLeafId === null) {
-          this.sessionManager.resetLeaf();
-        } else {
-          this.sessionManager.branch(newLeafId);
-        }
-        if (label && !summaryText) {
-          this.sessionManager.appendLabelChange(targetId, label);
-        }
-        const sessionContext = this.sessionManager.buildSessionContext();
-        this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
-        return { cancelled: false, summaryEntry } as const;
+          if (label && !summaryText) {
+            await this.sessionManager.appendLabelChangeAsync(targetId, label);
+          }
+          const sessionContext = this.sessionManager.buildSessionContext();
+          this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
+          return { cancelled: false, summaryEntry } as const;
+        };
+        const target = this.sessionManager.getSessionTarget();
+        return target
+          ? await withSessionTranscriptWriteAssertion(
+              target,
+              () => {
+                abortController.signal.throwIfAborted();
+                if (this.branchSummaryAbortController !== abortController) {
+                  throw new Error("Session tree navigation changed before transcript commit");
+                }
+              },
+              mutate,
+            )
+          : await mutate();
       });
       if (navigation.cancelled) {
         return navigation;

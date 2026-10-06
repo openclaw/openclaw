@@ -84,19 +84,16 @@ export function setCliSessionBinding(
       ? normalizeCliSessionReseedReceipt(previousBinding?.reseedReceipt)
       : undefined;
   const reseedReceipt = normalizeCliSessionReseedReceipt(binding.reseedReceipt) ?? previousReceipt;
+  const resumeCheckpointId = normalizeOptionalString(binding.resumeCheckpointId);
+  const authProfileId = normalizeOptionalString(binding.authProfileId);
+  const authEpoch = normalizeOptionalString(binding.authEpoch);
   const nextBinding: CliSessionBinding = {
     sessionId: trimmed,
-    ...(normalizeOptionalString(binding.resumeCheckpointId)
-      ? { resumeCheckpointId: normalizeOptionalString(binding.resumeCheckpointId) }
-      : {}),
+    ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
     ...(binding.forceReuse === true ? { forceReuse: true } : {}),
     ...(binding.forkNextResume === true ? { forkNextResume: true } : {}),
-    ...(normalizeOptionalString(binding.authProfileId)
-      ? { authProfileId: normalizeOptionalString(binding.authProfileId) }
-      : {}),
-    ...(normalizeOptionalString(binding.authEpoch)
-      ? { authEpoch: normalizeOptionalString(binding.authEpoch) }
-      : {}),
+    ...(authProfileId ? { authProfileId } : {}),
+    ...(authEpoch ? { authEpoch } : {}),
     ...(typeof binding.authEpochVersion === "number" && Number.isFinite(binding.authEpochVersion)
       ? { authEpochVersion: binding.authEpochVersion }
       : {}),
@@ -216,6 +213,22 @@ export function stripCliSessionDriftNote(text: string): string {
   return text;
 }
 
+const DEFAULT_MESSAGE_TOOL_POLICY_HASH = hashCliSessionText(
+  JSON.stringify({ sourceReplyDeliveryMode: "automatic", requireExplicitMessageTarget: false }),
+);
+const LEGACY_EXPLICIT_FALSE_MESSAGE_TOOL_POLICY_HASH = hashCliSessionText(
+  JSON.stringify({ requireExplicitMessageTarget: false }),
+);
+
+function normalizeCliMessageToolPolicyHash(value: string | undefined): string | undefined {
+  const hash = normalizeOptionalString(value);
+  // v2026.9.8 used these two encodings for automatic replies with implicit targets.
+  // Ordinary turn settlement upgrades them to the current fingerprint on the same binding.
+  return hash === undefined || hash === LEGACY_EXPLICIT_FALSE_MESSAGE_TOOL_POLICY_HASH
+    ? DEFAULT_MESSAGE_TOOL_POLICY_HASH
+    : hash;
+}
+
 /** Decide whether a stored CLI session can be reused for the current auth/prompt/cwd/MCP state. */
 export function resolveCliSessionReuse(params: {
   binding?: CliSessionBinding;
@@ -240,7 +253,9 @@ export function resolveCliSessionReuse(params: {
   const currentAuthProfileId = normalizeOptionalString(params.authProfileId);
   const currentAuthEpoch = normalizeOptionalString(params.authEpoch);
   const currentExtraSystemPromptHash = normalizeOptionalString(params.extraSystemPromptHash);
-  const currentMessageToolPolicyHash = normalizeOptionalString(params.messageToolPolicyHash);
+  const currentMessageToolPolicyHash = normalizeCliMessageToolPolicyHash(
+    params.messageToolPolicyHash,
+  );
   const currentPromptToolNamesHash = normalizeOptionalString(params.promptToolNamesHash);
   const currentCwdHash = normalizeOptionalString(params.cwdHash);
   const currentMcpConfigHash = normalizeOptionalString(params.mcpConfigHash);
@@ -263,7 +278,9 @@ export function resolveCliSessionReuse(params: {
   ) {
     return { mode: "invalidate", invalidatedReason: "auth-epoch" };
   }
-  const storedMessageToolPolicyHash = normalizeOptionalString(binding?.messageToolPolicyHash);
+  const storedMessageToolPolicyHash = normalizeCliMessageToolPolicyHash(
+    binding?.messageToolPolicyHash,
+  );
   if (storedMessageToolPolicyHash !== currentMessageToolPolicyHash) {
     return { mode: "invalidate", invalidatedReason: "message-policy" };
   }

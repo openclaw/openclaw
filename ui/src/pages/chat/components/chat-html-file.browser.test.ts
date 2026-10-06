@@ -6,7 +6,7 @@ import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import "./chat-sidebar.ts";
+import "./chat-detail-panel.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];

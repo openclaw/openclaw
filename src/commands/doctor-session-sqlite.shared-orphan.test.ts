@@ -12,6 +12,7 @@ import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import {
@@ -27,6 +28,7 @@ it.each([false, true])(
   async (interrupt) => {
     await withOpenClawTestState({ label: "shared-orphan-settlement" }, async (state) => {
       const { cfg, storePath } = await seedDeferredPluginSessionSource(state, "legacy-root");
+      cfg.session = { store: storePath };
       cfg.agents = { ...cfg.agents, entries: { ...cfg.agents?.entries, ops: {} } };
       const entries: Record<string, unknown> = JSON.parse(fs.readFileSync(storePath, "utf8"));
       entries["agent:ops:kept"] = {
@@ -96,7 +98,7 @@ it.each([false, true])(
           const targets = listSessionSqliteMigrationManifestPaths(state.env).flatMap(
             (file) => readSessionSqliteMigrationManifest(file)?.targets ?? [],
           );
-          const moves = receipts.map(({ target, receipt }) => {
+          const moves = receipts.map(({ target }) => {
             expect(
               readDeferredPluginSessionImport({
                 cfg,
@@ -104,7 +106,7 @@ it.each([false, true])(
                 target,
                 sqlitePath: target.sqlitePath,
               }),
-            ).toEqual(receipt);
+            ).toBeUndefined();
             const archived = targets
               .filter((entry) => entry.agentId === target.agentId && entry.storePath === storePath)
               .flatMap((entry) => entry.completedMoves)
@@ -231,6 +233,14 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
     expect((await inspect()).targets.flatMap((entry) => entry.issues)).toEqual([]);
 
     // Earlier releases archived the transcript but left its verified pointer live.
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        db.prepare(
+          "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
+        ).run();
+      },
+      { env: state.env },
+    );
     fs.writeFileSync(pointer, pointerBytes);
     expect((await inspect()).targets.flatMap((entry) => entry.issues)).toContainEqual(
       expect.objectContaining({ code: "plugin_migration_source_retained" }),

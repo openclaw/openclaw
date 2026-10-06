@@ -858,13 +858,13 @@ def release_signing_check!
   sync_app_store_signing!(readonly: true)
 end
 
-def render_ios_release_notes(short_version:, build_number:)
+def render_ios_release_notes(short_version:, build_number:, source_root: repo_root)
   stdout, stderr, status = Open3.capture3(
     "node", "--import", File.join(repo_root, "scripts", "tsx.mjs"),
     File.join(repo_root, "scripts", "mobile-release-notes.ts"), "render",
     "--platform", "ios", "--version", short_version.to_s,
     "--build", build_number.to_s, "--audience", "ios",
-    chdir: repo_root
+    chdir: source_root
   )
   return stdout.delete_suffix("\n") if status.success?
 
@@ -945,11 +945,7 @@ def app_store_version_state(version)
 end
 
 def preflight_app_store_version!(short_version:)
-  app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
-  app_id = ENV["APP_STORE_CONNECT_APP_ID"]
-  app_identifier = nil unless env_present?(app_identifier)
-  app_id = nil unless env_present?(app_id)
-  app = resolve_app_store_connect_app(app_identifier: app_identifier, app_id: app_id)
+  app = app_store_connect_target_app
   versions = app.get_app_store_versions(
     filter: { platform: Spaceship::ConnectAPI::Platform::IOS },
     includes: nil
@@ -1072,11 +1068,7 @@ def app_store_screenshot_processing_timeout_seconds
 end
 
 def app_store_screenshot_state_counts(screenshots)
-  screenshots.each_with_object({}) do |screenshot, counts|
-    state = (screenshot.asset_delivery_state || {})["state"] || "UNKNOWN"
-    counts[state] ||= 0
-    counts[state] += 1
-  end
+  screenshots.map { |screenshot| (screenshot.asset_delivery_state || {})["state"] || "UNKNOWN" }.tally
 end
 
 def wait_for_app_store_screenshots_processing!(screenshot_ids:, locale:, display_type:)
@@ -1491,8 +1483,8 @@ def mobile_release_ref_script
   File.join(repo_root, "scripts", "mobile-release-ref.ts")
 end
 
-def release_git_sha
-  stdout, stderr, status = Open3.capture3("git", "rev-parse", "HEAD", chdir: repo_root)
+def release_git_sha(root: repo_root)
+  stdout, stderr, status = Open3.capture3("git", "rev-parse", "HEAD", chdir: root)
   UI.user_error!("Unable to resolve release Git SHA: #{stderr.strip}") unless status.success?
   stdout.strip
 end
@@ -1520,13 +1512,13 @@ def normalize_release_build_timestamp(value)
   normalized
 end
 
-def verify_apple_release_source!(expected_commit)
+def verify_apple_release_source!(expected_commit, root: repo_root)
   script_path = File.join(repo_root, "scripts", "apple-release-source-check.sh")
   sh(shell_join([
     "bash",
     script_path,
     "--root",
-    repo_root,
+    root,
     "--expected-commit",
     expected_commit
   ]))
@@ -1587,7 +1579,7 @@ def record_mobile_release_ref!(platform:, version:, build: nil, version_code: ni
   )
 end
 
-def assert_ios_uploaded_release_source!(short_version:, build_number:)
+def assert_ios_uploaded_release_source!(short_version:, build_number:, source_root: repo_root)
   stdout, stderr, status = Open3.capture3(
     "node", "--import", File.join(repo_root, "scripts", "tsx.mjs"), mobile_release_ref_script,
     "resolve", "--platform", "ios", "--version", short_version,
@@ -1596,10 +1588,10 @@ def assert_ios_uploaded_release_source!(short_version:, build_number:)
   )
   UI.user_error!("Cannot verify uploaded iOS build source: #{stderr.strip}") unless status.success?
   recorded_sha = stdout.split.first
-  unless recorded_sha == release_git_sha
-    UI.user_error!("Uploaded iOS build source #{recorded_sha} does not match this checkout; recover the original release source before staging.")
+  unless recorded_sha == release_git_sha(root: source_root)
+    UI.user_error!("Uploaded iOS build source #{recorded_sha} does not match the release source checkout; recover the original release source before staging.")
   end
-  verify_apple_release_source!(recorded_sha)
+  verify_apple_release_source!(recorded_sha, root: source_root)
 end
 
 def stage_ios_app_store_release!(short_version:, build_number:, notes:)
@@ -1910,6 +1902,18 @@ def build_app_store_release(context)
   }
 end
 
+def prepare_screenshot_project(options)
+  version_args = { release_version: "--version", app_store_revision: "--revision", build_number: "--build-number" }
+    .flat_map do |key, flag|
+      value = options[key].to_s.strip
+      value.empty? ? [] : [flag, value]
+    end
+  sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
+  sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
+  sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
+  sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
+end
+
 def app_store_connect_api_key_config
   load_env_file(File.join(__dir__, ".env"))
   clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
@@ -2187,11 +2191,15 @@ platform :ios do
       UI.user_error!("Staging requires the saved gateway version, App Store revision, and build number.")
     end
     version = read_ios_version_metadata(release_version: release_version, app_store_revision: app_store_revision)
-    notes = render_ios_release_notes(short_version: version[:short_version], build_number: build_number)
-    assert_ios_uploaded_release_source!(short_version: version[:short_version], build_number: build_number)
+    source_root = ENV.fetch("OPENCLAW_IOS_RELEASE_SOURCE_ROOT", repo_root)
+    notes = render_ios_release_notes(short_version: version[:short_version], build_number: build_number, source_root: source_root)
+    assert_ios_uploaded_release_source!(short_version: version[:short_version], build_number: build_number, source_root: source_root)
     api_key = app_store_connect_api_key_config
     if ios_release_destination(options[:destination]) == "testflight"
-      stage_ios_testflight_release!(api_key: api_key, short_version: version[:short_version], build_number: build_number, notes: notes)
+      stage_ios_testflight_release!(
+        api_key: api_key, short_version: version[:short_version], build_number: build_number,
+        notes: notes, processing_timeout: APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS
+      )
     else
       notes_staged = stage_ios_app_store_release!(short_version: version[:short_version], build_number: build_number, notes: notes)
       notes_result = notes_staged ? "saved notes staged" : "first-version notes retained in the artifact"
@@ -2276,18 +2284,7 @@ platform :ios do
 
   desc "Generate deterministic iOS screenshots for App Store metadata"
   lane :screenshots do |options|
-    version_args = []
-    release_version = options[:release_version].to_s.strip
-    app_store_revision = options[:app_store_revision].to_s.strip
-    build_number = options[:build_number].to_s.strip
-    version_args += ["--version", release_version] unless release_version.empty?
-    version_args += ["--revision", app_store_revision] unless app_store_revision.empty?
-    version_args += ["--build-number", build_number] unless build_number.empty?
-
-    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
-    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
-    sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
-    sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
+    prepare_screenshot_project(options)
 
     output_directory = File.join(ios_root, "fastlane", "screenshots")
     result_bundle_path = File.join(output_directory, "test_output", "en-US", "OpenClawUITests.xcresult")
@@ -2387,18 +2384,7 @@ platform :ios do
 
   desc "Generate deterministic Apple Watch screenshot for App Store metadata"
   lane :watch_screenshot do |options|
-    version_args = []
-    release_version = options[:release_version].to_s.strip
-    app_store_revision = options[:app_store_revision].to_s.strip
-    build_number = options[:build_number].to_s.strip
-    version_args += ["--version", release_version] unless release_version.empty?
-    version_args += ["--revision", app_store_revision] unless app_store_revision.empty?
-    version_args += ["--build-number", build_number] unless build_number.empty?
-
-    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
-    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
-    sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
-    sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
+    prepare_screenshot_project(options)
     capture_watch_screenshot { build_watch_screenshot_app }
   end
 

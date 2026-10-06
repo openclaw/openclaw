@@ -71,17 +71,13 @@ if [ -n "$author_name" ]; then git config user.name "$author_name"; fi
 if [ -n "$author_email" ]; then git config user.email "$author_email"; fi
 `;
 
-export function createWorkspaceManifestProgram(
-  maxHashMemoBytes = MAX_WORKSPACE_HASH_MEMO_BYTES,
-): string {
-  return String.raw`const crypto = require("node:crypto");
+export const WORKSPACE_MANIFEST_PROGRAM = String.raw`const crypto = require("node:crypto");
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 ${WORKSPACE_PATH_EXCLUSIONS_JS}
 ${WORKSPACE_HASH_MEMO_JS}
 const MAX_WORKSPACE_HASH_MEMO_ENTRIES = ${MAX_WORKSPACE_HASH_MEMO_ENTRIES};
-const MAX_WORKSPACE_HASH_MEMO_BYTES = ${maxHashMemoBytes};
 const root = fs.realpathSync(process.argv[1]);
 ${WORKSPACE_STAGED_INPUT_OWNERSHIP_JS}
 const requestedBaseCommit = process.argv[2] || null;
@@ -458,9 +454,7 @@ async function main() {
     if (crypto.createHash("sha256").update(manifest).digest("hex") !== publishedManifestDigest) {
       fail("published workspace manifest digest mismatch");
     }
-    if (publishManifest(manifestRoot, manifest) !== publishedManifestDigest) {
-      fail("published workspace manifest reference mismatch");
-    }
+    publishManifest(manifestRoot, manifest);
     process.stdout.write("sha256:" + publishedManifestDigest + "\n");
     return;
   }
@@ -498,12 +492,12 @@ async function main() {
   }
 }
 `;
-}
 
 export function createRemoteWorkspaceManifestScript(
   maxHashMemoBytes = MAX_WORKSPACE_HASH_MEMO_BYTES,
 ): string {
-  return String.raw`${createWorkspaceManifestProgram(maxHashMemoBytes)}
+  return String.raw`const MAX_WORKSPACE_HASH_MEMO_BYTES = ${maxHashMemoBytes};
+${WORKSPACE_MANIFEST_PROGRAM}
 function readManifestInput() { return fs.readFileSync(0, "utf8"); }
 function assertManifestCurrent() {}
 function readManifestGit(root, args, maxBuffer) {

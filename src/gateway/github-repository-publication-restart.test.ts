@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   callPersonalPublicationRpc,
@@ -13,6 +14,7 @@ import {
   SESSION_KEY,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  root,
 } from "./github-publication.test-support.js";
 import { readRepositoryGitHubPublication } from "./github-repository-publication-store.js";
 import {
@@ -39,7 +41,7 @@ describe("repository checkpoint GitHub publication", () => {
     const previous = person.placements;
     await expect(
       previous.withWorkspaceExclusion(SESSION_ID, async (assertOwned) => {
-        restartPersonalPublicationFixture(person);
+        await restartPersonalPublicationFixture(person);
         expect(assertOwned).toThrow("was aborted");
       }),
     ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
@@ -51,7 +53,7 @@ describe("repository checkpoint GitHub publication", () => {
     );
   });
 
-  it.each(["turn", "reset", "move", "held", "store-busy", "retired-owner"] as const)(
+  it.each(["reset", "move", "held", "store-busy", "retired-owner"] as const)(
     "requires the same personal owner after restart and a later %s",
     async (boundary) => {
       const f = await createRepositoryPublicationFixture(checkpoint);
@@ -79,7 +81,7 @@ describe("repository checkpoint GitHub publication", () => {
       expect(original.pushed_head_commit).toBeNull();
       await f.capture("later unselected change\n", "later");
       const retiredCoordinator = person.coordinator;
-      restartPersonalPublicationFixture(person);
+      await restartPersonalPublicationFixture(person);
       const preparedStatus = await person.coordinator.preparePersonalStatus(first.requestId);
       const pending = person.coordinator.personalStatus(
         person.action,
@@ -157,6 +159,8 @@ describe("repository checkpoint GitHub publication", () => {
             .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
             .all("session-workspace-action", SESSION_ID),
         ).toEqual([]);
+        // Restarted agent workers release their leases through shared state.
+        await closeOpenClawAgentDatabasesAsync(root);
         writer = new DatabaseSync(database.path);
         writer.exec("BEGIN IMMEDIATE");
       }

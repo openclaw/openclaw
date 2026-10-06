@@ -69,7 +69,7 @@ import {
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
-} from "./app-server/thread-lifecycle.js";
+} from "./app-server/thread-model-selection.js";
 import {
   isSameCodexAppServerThreadOwner,
   releaseCodexAppServerBindingSubscription,

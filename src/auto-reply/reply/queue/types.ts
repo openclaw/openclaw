@@ -3,12 +3,13 @@ import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema
 import type { AdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
-import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
+import type { CliSessionBindingFacts } from "../../../agents/cli-runner/session-binding.types.js";
 import type {
   CurrentInboundPromptContext,
   RunEmbeddedAgentParams,
 } from "../../../agents/embedded-agent-runner/run/params.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
+import type { ReplyDeliveryObserver } from "../../../agents/reply-completion.js";
 import type { ScheduledToolPolicyContext } from "../../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
@@ -16,8 +17,10 @@ import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { ChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
 import type { SessionEntry, SessionToolOverrides } from "../../../config/sessions.js";
+import type { PrepareAssistantTranscriptMessage } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { QueueDropPolicy } from "../../../config/types.queue.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { GatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
 import type { GatewayUiCommandTarget } from "../../../gateway/ui-command-target.types.js";
@@ -30,6 +33,7 @@ import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-tra
 import type { ExplicitSkillSelection, SkillSnapshot } from "../../../skills/types.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../../skills/workshop/types.js";
 import type {
+  GetReplyOptions,
   QueuedReplyDeliveryCorrelation,
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -47,7 +51,7 @@ import type {
 } from "../directives.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
 
-export type QueueDropPolicy = "old" | "new" | "summarize";
+export type { QueueDropPolicy } from "../../../config/types.queue.js";
 
 export type QueueSettings = {
   mode: QueueMode;
@@ -106,6 +110,15 @@ export class FollowupRunDeferredError extends Error {
   }
 }
 
+// Leaf contracts only: get-reply.types.ts imports this module.
+type FollowupRunObservers = Pick<
+  GetReplyOptions,
+  "onAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
+> & {
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+  resolveReplyDelivery?: ReplyDeliveryObserver;
+};
+
 export type FollowupRun = {
   /** External-turn eligibility; queued execution refreshes the session-selected profile. */
   personalBootstrapEligible?: boolean;
@@ -114,6 +127,11 @@ export type FollowupRun = {
   sourceTurnId?: string;
   /** Original operator capability retained by this turn's queue/run lifecycle. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /**
+   * Source turn's trusted owner status for memory audience resolution only. System-owned
+   * maintenance copies keep `run.senderIsOwner: false`, so they never gain owner tool authority.
+   */
+  memoryAudienceSenderIsOwner?: boolean;
   /** Latest session to claim without rewriting the queued run before store refresh. */
   admissionSessionId?: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
@@ -144,6 +162,8 @@ export type FollowupRun = {
   onQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Keep delivery bound to the source that owned admission, not later runner defaults. */
   queuedFollowupReplyDisposition?: QueuedFollowupReplyDisposition;
+  /** Run-lifecycle observers bound to the source request; the drain's runner may belong to another turn. */
+  runObservers?: FollowupRunObservers;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
@@ -160,6 +180,8 @@ export type FollowupRun = {
   };
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
+  /** This continuation owes last-resort feedback if it also stalls, including claimed input. */
+  stalledTurnRecovery?: boolean;
   /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
   protectFromQueueOverflow?: boolean;
   enqueuedAt: number;
