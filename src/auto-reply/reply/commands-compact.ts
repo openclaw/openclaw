@@ -260,19 +260,26 @@ export async function handleCompactCommand(
     return failure;
   }
   assertOwnerBeforeAcceptance();
+  let abortedInFlightRun = false;
   if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
-    runtime.abortEmbeddedAgentRun(sessionId);
-    const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
-    failure = authorityFailure();
-    if (failure) {
-      return failure;
-    }
-    assertOwnerBeforeAcceptance();
-    if (!drained) {
-      return compactionUnavailable(
-        "the previous run is still stopping",
-        "⚙️ Compaction unavailable: the previous run is still stopping.",
-      );
+    // Let the active run settle naturally before resorting to abort:
+    // aborting drops the in-flight request silently (#166038).
+    const settled = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 60_000);
+    if (!settled) {
+      runtime.abortEmbeddedAgentRun(sessionId);
+      const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+      abortedInFlightRun = true;
+      failure = authorityFailure();
+      if (failure) {
+        return failure;
+      }
+      assertOwnerBeforeAcceptance();
+      if (!drained) {
+        return compactionUnavailable(
+          "the previous run is still stopping",
+          "⚙️ Compaction unavailable: the previous run is still stopping.",
+        );
+      }
     }
   }
   const thinkLevel = params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel());
@@ -453,7 +460,9 @@ export async function handleCompactCommand(
       tokensAfter: tokensAfterCompaction,
     },
     reply: {
-      text: `⚙️ ${line}`,
+      text: abortedInFlightRun
+        ? `⚙️ ${line}\n⚠️ Your in-flight request was aborted by compaction — please resend it.`
+        : `⚙️ ${line}`,
       isStatusNotice: true,
     },
   };
