@@ -137,143 +137,95 @@ describe("restart recovery terminal delivery receipt", () => {
 });
 
 describe("restart recovery steering block reasons", () => {
-  function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-    return { sessionId: "session-1", updatedAt: 1, ...overrides } as SessionEntry;
-  }
+  const claim: Partial<SessionEntry> = {
+    status: "running",
+    restartRecoveryDeliveryRunId: "recovery-1",
+    restartRecoveryDeliverySourceRunId: "source-1",
+  };
 
-  it("is fail-closed for a terminal-pending receipt", () => {
-    expect(
-      resolveRestartRecoverySteeringBlockReason(
-        entry({
-          status: "running",
-          restartRecoveryDeliveryRunId: "recovery-1",
-          restartRecoveryDeliverySourceRunId: "source-1",
-          restartRecoveryDeliveryReceiptState: "terminal-pending",
-          restartRecoveryDeliveryToolCallId: "message-call-1",
-        }),
-        "session-1",
-        "source-1",
-      ),
-    ).toBe("terminal-pending");
-  });
-
-  it("is fail-closed for a delivered-terminal receipt", () => {
-    expect(
-      resolveRestartRecoverySteeringBlockReason(
-        entry({
-          status: "running",
-          restartRecoveryDeliveryRunId: "recovery-1",
-          restartRecoveryDeliverySourceRunId: "source-1",
-          restartRecoveryDeliveryReceiptState: "delivered-terminal",
-          restartRecoveryDeliveryToolCallId: "message-call-1",
-        }),
-        "session-1",
-        "source-1",
-      ),
-    ).toBe("delivered-terminal");
-  });
-
-  it("is fail-closed for an unresolved terminal tool-call id without a receipt state", () => {
-    expect(
-      resolveRestartRecoverySteeringBlockReason(
-        entry({
-          status: "running",
-          restartRecoveryDeliveryRunId: "recovery-1",
-          restartRecoveryDeliverySourceRunId: "source-1",
-          restartRecoveryDeliveryToolCallId: "message-call-2",
-        }),
-        "session-1",
-        "source-1",
-      ),
-    ).toBe("unresolved-terminal-tool");
-  });
-
-  it("is fail-closed for a terminal-source tombstone on the active source turn", () => {
-    expect(
-      resolveRestartRecoverySteeringBlockReason(
-        entry({ status: "running", restartRecoveryTerminalRunIds: ["source-1"] }),
-        "session-1",
-        "source-1",
-      ),
-    ).toBe("already-delivered");
-  });
-
-  it("is not fail-closed for a claimless entry whose tombstone belongs to a different source turn", () => {
-    // Terminal run ids are accumulated session history; an unrelated prior
-    // source must not fence a safe active source into follow-up mode.
-    expect(
-      resolveRestartRecoverySteeringBlockReason(
-        entry({ status: "running", restartRecoveryTerminalRunIds: ["source-old"] }),
-        "session-1",
-        "source-1",
-      ),
-    ).toBeUndefined();
-  });
-
-  it("is fail-closed for a claimless entry with historical tombstones when the active source is unknown", () => {
-    // Unknown active source ("") is ambiguous: the live run's real
-    // tool-context source may still be tombstoned, so any retained tombstone
-    // fail-closes to queue rather than risk a refused terminal send.
-    expect(
-      resolveRestartRecoverySteeringBlockReason(
-        entry({ status: "running", restartRecoveryTerminalRunIds: ["source-old"] }),
-        "session-1",
-        "",
-      ),
-    ).toBe("unknown-source-with-terminal-history");
-  });
-
-  it("is fail-closed for a stale claim", () => {
-    expect(
-      resolveRestartRecoverySteeringBlockReason(
-        entry({
-          status: "done",
-          restartRecoveryDeliveryRunId: "recovery-1",
-          restartRecoveryDeliverySourceRunId: "source-1",
-        }),
-        "session-1",
-        "source-1",
-      ),
-    ).toBe("stale-claim");
-  });
-
-  it("is fail-closed when the entry names a replaced session", () => {
-    expect(
-      resolveRestartRecoverySteeringBlockReason(
-        entry({
-          status: "running",
-          sessionId: "session-2",
-          restartRecoveryTerminalRunIds: ["source-1"],
-        }),
-        "session-1",
-        "source-1",
-      ),
-    ).toBe("stale-claim");
-  });
-
-  it("is not fail-closed for a claimless fresh entry", () => {
-    expect(
-      resolveRestartRecoverySteeringBlockReason(entry({ status: "running" }), "session-1", ""),
-    ).toBeUndefined();
-  });
-
-  it("is not fail-closed for a startable live claim", () => {
-    expect(
-      resolveRestartRecoverySteeringBlockReason(
-        entry({
-          status: "running",
-          restartRecoveryDeliveryRunId: "recovery-1",
-          restartRecoveryDeliverySourceRunId: "source-1",
-        }),
-        "session-1",
-        "source-1",
-      ),
-    ).toBeUndefined();
-  });
-
-  it("is not fail-closed without a session entry", () => {
-    expect(
-      resolveRestartRecoverySteeringBlockReason(undefined, "session-1", "source-1"),
-    ).toBeUndefined();
+  it.each<{
+    name: string;
+    fields?: Partial<SessionEntry>;
+    sourceTurnId: string;
+    reason: ReturnType<typeof resolveRestartRecoverySteeringBlockReason>;
+  }>([
+    {
+      name: "terminal-pending receipt",
+      fields: {
+        ...claim,
+        restartRecoveryDeliveryReceiptState: "terminal-pending",
+        restartRecoveryDeliveryToolCallId: "message-call-1",
+      },
+      sourceTurnId: "source-1",
+      reason: "terminal-pending",
+    },
+    {
+      name: "delivered-terminal receipt",
+      fields: {
+        ...claim,
+        restartRecoveryDeliveryReceiptState: "delivered-terminal",
+        restartRecoveryDeliveryToolCallId: "message-call-1",
+      },
+      sourceTurnId: "source-1",
+      reason: "delivered-terminal",
+    },
+    {
+      name: "unresolved terminal tool-call id",
+      fields: { ...claim, restartRecoveryDeliveryToolCallId: "message-call-2" },
+      sourceTurnId: "source-1",
+      reason: "unresolved-terminal-tool",
+    },
+    {
+      name: "terminal-source tombstone on the active source",
+      fields: { status: "running", restartRecoveryTerminalRunIds: ["source-1"] },
+      sourceTurnId: "source-1",
+      reason: "already-delivered",
+    },
+    {
+      name: "claimless entry with an unrelated tombstone",
+      fields: { status: "running", restartRecoveryTerminalRunIds: ["source-old"] },
+      sourceTurnId: "source-1",
+      reason: undefined,
+    },
+    {
+      name: "claimless entry with tombstones and an unknown active source",
+      fields: { status: "running", restartRecoveryTerminalRunIds: ["source-old"] },
+      sourceTurnId: "",
+      reason: "unknown-source-with-terminal-history",
+    },
+    {
+      name: "stale claim",
+      fields: { ...claim, status: "done" },
+      sourceTurnId: "source-1",
+      reason: "stale-claim",
+    },
+    {
+      name: "replaced session",
+      fields: {
+        status: "running",
+        sessionId: "session-2",
+        restartRecoveryTerminalRunIds: ["source-1"],
+      },
+      sourceTurnId: "source-1",
+      reason: "stale-claim",
+    },
+    {
+      name: "claimless fresh entry",
+      fields: { status: "running" },
+      sourceTurnId: "",
+      reason: undefined,
+    },
+    {
+      name: "startable live claim",
+      fields: claim,
+      sourceTurnId: "source-1",
+      reason: undefined,
+    },
+    { name: "missing entry", sourceTurnId: "source-1", reason: undefined },
+  ])("classifies $name", ({ fields, sourceTurnId, reason }) => {
+    const entry = fields ? { sessionId: "session-1", updatedAt: 1, ...fields } : undefined;
+    expect(resolveRestartRecoverySteeringBlockReason(entry, "session-1", sourceTurnId)).toBe(
+      reason,
+    );
   });
 });

@@ -43,18 +43,6 @@ type AcquiredRecoveryOwner = {
   sessionKey: string;
 };
 
-function cloneRecoveryOwnerEntry(entry: InternalSessionEntry): InternalSessionEntry {
-  return {
-    ...entry,
-    ...(entry.restartRecoveryRuns
-      ? { restartRecoveryRuns: entry.restartRecoveryRuns.map((run) => ({ ...run })) }
-      : {}),
-    ...(entry.mainRestartRecovery
-      ? { mainRestartRecovery: structuredClone(entry.mainRestartRecovery) }
-      : {}),
-  };
-}
-
 function refreshPreparedRecoveryOwnerTarget(
   prepared: PreparedRecoveryOwnerTarget,
   acquired: AcquiredRecoveryOwner | undefined,
@@ -62,7 +50,16 @@ function refreshPreparedRecoveryOwnerTarget(
   if (!acquired || acquired.entry.sessionId !== prepared.sessionId) {
     return;
   }
-  const entry = cloneRecoveryOwnerEntry(acquired.entry);
+  const current = acquired.entry;
+  const entry = {
+    ...current,
+    ...(current.restartRecoveryRuns
+      ? { restartRecoveryRuns: current.restartRecoveryRuns.map((run) => ({ ...run })) }
+      : {}),
+    ...(current.mainRestartRecovery
+      ? { mainRestartRecovery: structuredClone(current.mainRestartRecovery) }
+      : {}),
+  };
   prepared.sessionEntry = entry;
   if (prepared.sessionStore && prepared.sessionKey) {
     prepared.sessionStore[prepared.sessionKey] = entry;

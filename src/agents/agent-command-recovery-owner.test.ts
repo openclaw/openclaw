@@ -49,23 +49,80 @@ describe("agent command restart recovery ownership", () => {
     await replaceSessionEntry({ sessionKey, storePath: target.storePath }, entry);
   }
 
-  it("rejects standalone work when interruption appears during preparation", async () => {
-    const target = createTarget();
-    await write(target, { sessionId: target.sessionId, updatedAt: 100 });
+  it.each<{
+    name: string;
+    target?: Partial<ReturnType<typeof createTarget>> & { previousSessionId?: string };
+    before?: Partial<SessionEntry>;
+    duringPreparation?: Partial<SessionEntry>;
+    explicitSession?: boolean;
+  }>([
+    {
+      name: "interruption appears during preparation",
+      before: {},
+      duringPreparation: { status: "running", abortedLastRun: true },
+    },
+    {
+      name: "an admitted recovery is still running",
+      before: {
+        status: "running",
+        abortedLastRun: false,
+        restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration: "gateway-generation" }],
+        mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 1 },
+      },
+    },
+    {
+      name: "freshness rollover still has an interrupted predecessor",
+      target: { isNewSession: true, previousSessionId: "session-1", sessionId: "session-2" },
+      before: { status: "running", abortedLastRun: true },
+    },
+    {
+      name: "an explicit replacement still has an interrupted predecessor",
+      target: { isNewSession: true, previousSessionId: "session-1", sessionId: "fresh-session" },
+      before: { status: "running", abortedLastRun: true },
+      explicitSession: true,
+    },
+    {
+      name: "an explicit session is tombstoned",
+      before: {
+        status: "failed",
+        abortedLastRun: false,
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: { reason: "automatic recovery exhausted" },
+        },
+      },
+      explicitSession: true,
+    },
+    {
+      name: "a fresh key acquires an interruption during preparation",
+      target: { isNewSession: true, sessionId: "fresh-session" },
+      duringPreparation: { status: "running", abortedLastRun: true },
+    },
+  ])("rejects standalone work when $name", async (scenario) => {
+    const target = { ...createTarget(), ...scenario.target };
+    if (scenario.before) {
+      await write(target, {
+        sessionId: target.previousSessionId ?? target.sessionId,
+        updatedAt: 100,
+        ...scenario.before,
+      });
+    }
     const run = vi.fn();
-
     await expect(
       runWithAgentCommandRecoveryOwner({
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
         mode: "reject_uncoordinated",
-        opts: {} as AgentCommandOpts,
+        opts: (scenario.explicitSession ? { sessionId: target.sessionId } : {}) as AgentCommandOpts,
         prepare: async () => {
-          await write(target, {
-            sessionId: target.sessionId,
-            updatedAt: 200,
-            status: "running",
-            abortedLastRun: true,
-          });
+          if (scenario.duringPreparation) {
+            await write(target, {
+              sessionId: target.sessionId,
+              updatedAt: 200,
+              ...scenario.duringPreparation,
+            });
+          }
           return target;
         },
         run,
@@ -73,8 +130,8 @@ describe("agent command restart recovery ownership", () => {
     ).rejects.toThrow("interrupted work pending restart recovery");
     expect(run).not.toHaveBeenCalled();
     expect(
-      (loadSessionEntry({ sessionKey, storePath: target.storePath }) as SessionEntry | undefined)
-        ?.mainRestartRecovery?.foregroundClaims,
+      loadSessionEntry({ sessionKey, storePath: target.storePath })?.mainRestartRecovery
+        ?.foregroundClaims,
     ).toBeUndefined();
   });
 
@@ -592,63 +649,6 @@ describe("agent command restart recovery ownership", () => {
     }
   });
 
-  it("rejects ordinary work while an admitted recovery is still running", async () => {
-    const target = createTarget();
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    await write(target, {
-      sessionId: target.sessionId,
-      updatedAt: 200,
-      status: "running",
-      abortedLastRun: false,
-      restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration: "gateway-generation" }],
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 3,
-        chargedAttempts: 1,
-      },
-    });
-    const run = vi.fn();
-
-    await expect(
-      runWithAgentCommandRecoveryOwner({
-        lifecycleGeneration,
-        mode: "reject_uncoordinated",
-        opts: {} as AgentCommandOpts,
-        prepare: async () => target,
-        run,
-      }),
-    ).rejects.toThrow("interrupted work pending restart recovery");
-    expect(run).not.toHaveBeenCalled();
-  });
-
-  it("fences the durable predecessor during an automatic freshness rollover", async () => {
-    const base = createTarget();
-    const target = {
-      ...base,
-      isNewSession: true,
-      previousSessionId: "session-1",
-      sessionId: "session-2",
-    };
-    await write(base, {
-      sessionId: target.previousSessionId,
-      updatedAt: 100,
-      status: "running",
-      abortedLastRun: true,
-    });
-    const run = vi.fn();
-
-    await expect(
-      runWithAgentCommandRecoveryOwner({
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        mode: "reject_uncoordinated",
-        opts: {} as AgentCommandOpts,
-        prepare: async () => target,
-        run,
-      }),
-    ).rejects.toThrow("interrupted work pending restart recovery");
-    expect(run).not.toHaveBeenCalled();
-  });
-
   it("allows a freshness successor after its clean replacement commits", async () => {
     const base = createTarget();
     const target = {
@@ -786,87 +786,6 @@ describe("agent command restart recovery ownership", () => {
         run,
       }),
     ).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-    expect(run).not.toHaveBeenCalled();
-  });
-
-  it("rejects a synthetic explicit replacement from a standalone process", async () => {
-    const base = createTarget();
-    const target = {
-      ...base,
-      isNewSession: true,
-      previousSessionId: base.sessionId,
-      sessionId: "fresh-session",
-    };
-    await write(base, {
-      sessionId: base.sessionId,
-      updatedAt: 100,
-      status: "running",
-      abortedLastRun: true,
-    });
-    const run = vi.fn(async () => "fresh");
-
-    await expect(
-      runWithAgentCommandRecoveryOwner({
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        mode: "reject_uncoordinated",
-        opts: { sessionId: target.sessionId } as AgentCommandOpts,
-        prepare: async () => target,
-        run,
-      }),
-    ).rejects.toThrow("interrupted work pending restart recovery");
-    expect(run).not.toHaveBeenCalled();
-  });
-
-  it("rejects standalone reuse of a tombstoned session", async () => {
-    const target = createTarget();
-    await write(target, {
-      sessionId: target.sessionId,
-      updatedAt: 100,
-      status: "failed",
-      abortedLastRun: false,
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
-    });
-    const run = vi.fn(async () => "reused");
-
-    await expect(
-      runWithAgentCommandRecoveryOwner({
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        mode: "reject_uncoordinated",
-        opts: { sessionId: target.sessionId } as AgentCommandOpts,
-        prepare: async () => target,
-        run,
-      }),
-    ).rejects.toThrow("interrupted work pending restart recovery");
-    expect(run).not.toHaveBeenCalled();
-  });
-
-  it("revalidates a fresh key when interruption appears during preparation", async () => {
-    const base = createTarget();
-    const target = { ...base, isNewSession: true, sessionId: "fresh-session" };
-    const run = vi.fn();
-
-    await expect(
-      runWithAgentCommandRecoveryOwner({
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        mode: "reject_uncoordinated",
-        opts: {} as AgentCommandOpts,
-        prepare: async () => {
-          await write(base, {
-            sessionId: target.sessionId,
-            updatedAt: 200,
-            status: "running",
-            abortedLastRun: true,
-          });
-          return target;
-        },
-        run,
-      }),
-    ).rejects.toThrow("interrupted work pending restart recovery");
     expect(run).not.toHaveBeenCalled();
   });
 });
