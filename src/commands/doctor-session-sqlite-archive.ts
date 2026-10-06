@@ -190,11 +190,7 @@ export async function archiveImportedLegacySessionStores(
         move.sourcePath,
         move.archivePath,
         expected,
-        assertCurrent
-          ? () => {
-              assertCurrent();
-            }
-          : undefined,
+        assertCurrent ? () => void assertCurrent() : undefined,
         publishSourceRemoval,
       );
       assertCurrent?.();

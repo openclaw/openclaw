@@ -19,7 +19,10 @@ type NodePairGatewayOptions = ReturnType<typeof resolveNodePairGatewayPayload>;
 
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 
-function gatewayConfigFromUrl(url: string, tlsFingerprint?: string) {
+function gatewayConfigFromUrl(
+  url: string,
+  tlsFingerprint?: string,
+): NodeHostGatewayConfig & Required<Pick<NodeHostGatewayConfig, "host" | "port" | "tls">> {
   const parsed = new URL(url);
   const tls = parsed.protocol === "wss:";
   return {
@@ -28,7 +31,7 @@ function gatewayConfigFromUrl(url: string, tlsFingerprint?: string) {
     ...(parsed.pathname !== "/" ? { contextPath: parsed.pathname } : {}),
     tls,
     ...(tlsFingerprint ? { tlsFingerprint } : {}),
-  } satisfies NodeHostGatewayConfig;
+  };
 }
 
 export function resolveNodePairGatewayOptions(

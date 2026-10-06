@@ -456,11 +456,20 @@ export async function checkGatewayHealth(params: {
   return { healthOk, authenticated: false, status };
 }
 
+/** Doctor callers also create skipped probes without diagnostic fields. */
+type GatewayMemoryProbe = {
+  checked: boolean;
+  ready: boolean;
+  error?: string;
+  runtimeFacts?: DoctorMemoryStatusPayload["embeddingRuntime"];
+  skipped: boolean;
+};
+
 /** Probes gateway memory readiness without forcing deep embedding checks. */
 export async function probeGatewayMemoryStatus(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
-}) {
+}): Promise<GatewayMemoryProbe> {
   const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
   const timeoutMs =
