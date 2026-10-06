@@ -1,8 +1,6 @@
 // Matrix inbound burst debouncing (`messages.inbound.byChannel.matrix` / `debounceMs`).
 // Each m.room.message is keyed by room, sender, and thread. Plain text bursts merge into
-// one turn. One caption-less image/file/video waits for the sender's trailing text and
-// uses it as the caption, because Element Web sends an attachment and the composer text
-// as separate events. Everything else dispatches immediately in per-key order.
+// one turn. Media and everything else dispatch immediately in per-key order.
 import {
   createChannelInboundDebouncer,
   resolveInboundDebounceMs,
@@ -13,7 +11,6 @@ import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-sn
 import { asNullableObjectRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig } from "../../types.js";
-import { resolveMatrixMessageAttachment } from "../media-text.js";
 import type { MatrixRoomMessageDispatchOptions, MatrixRoomMessageHandler } from "./handler.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { stripMatrixMentionPrefix } from "./mentions.js";
@@ -36,9 +33,6 @@ const MATRIX_HTML_FORMAT = "org.matrix.custom.html";
 // the TTL only bounds entries whose batch never settles.
 const REPEAT_SIGHTING_TTL_MS = 60_000;
 const REPEAT_SIGHTING_MAX = 1024;
-
-// Audio and stickers stay immediate: voice notes are complete messages on their own.
-const CAPTION_WAITING_MSGTYPES = new Set(["m.image", "m.file", "m.video"]);
 
 function readRelation(event: MatrixRawEvent) {
   return asNullableObjectRecord(event.content["m.relates_to"]);
@@ -63,24 +57,6 @@ function isPlainNewMessage(event: MatrixRawEvent): boolean {
   }
   // Thread messages carry an m.in_reply_to fallback for older clients; that is not a reply.
   return relation["m.in_reply_to"] === undefined || relation.is_falling_back === true;
-}
-
-function hasMediaSource(event: MatrixRawEvent): boolean {
-  const file = asNullableObjectRecord(event.content.file);
-  return Boolean(readStringValue(event.content.url) ?? readStringValue(file?.url));
-}
-
-function isCaptionlessMedia(event: MatrixRawEvent): boolean {
-  const msgtype = readStringValue(event.content.msgtype);
-  if (!msgtype || !CAPTION_WAITING_MSGTYPES.has(msgtype) || !hasMediaSource(event)) {
-    return false;
-  }
-  const attachment = resolveMatrixMessageAttachment({
-    body: readStringValue(event.content.body),
-    filename: readStringValue(event.content.filename),
-    msgtype,
-  });
-  return attachment !== undefined && attachment.caption === undefined;
 }
 
 function readFormattedBody(event: MatrixRawEvent): string | undefined {
@@ -116,18 +92,13 @@ function mergeMentions(events: readonly MatrixRawEvent[]): Record<string, unknow
   return { ...(userIds.size > 0 ? { user_ids: [...userIds] } : {}), ...(room ? { room } : {}) };
 }
 
-/**
- * Build the single event dispatched for a burst. Text bursts keep the latest event's
- * id for reply threading; a media burst keeps the media event and carries the joined
- * text as an MSC2530 caption (`body` = caption, `filename` = original name).
- */
+/** Build the single event dispatched for a text burst; the latest event's id is kept for reply threading. */
 function mergeMatrixInboundBurst(events: readonly MatrixRawEvent[]): MatrixRawEvent {
-  const media = events.find(isCaptionlessMedia);
-  const base = media ?? events.at(-1);
+  const base = events.at(-1);
   if (!base) {
     throw new Error("cannot merge an empty Matrix inbound burst");
   }
-  const textEvents = events.filter((event) => event !== media && readTextBody(event));
+  const textEvents = events.filter((event) => readTextBody(event));
   const text = textEvents.map(readTextBody).join("\n");
   // Keep each event's HTML in the merged formatted_body: the handler validates native
   // mentions from matrix.to anchors there, and bare m.mentions metadata is not trusted.
@@ -143,14 +114,7 @@ function mergeMatrixInboundBurst(events: readonly MatrixRawEvent[]): MatrixRawEv
   if (mentions) {
     content["m.mentions"] = mentions;
   }
-  if (media) {
-    const filename =
-      readStringValue(media.content.filename)?.trim() || readTextBody(media) || "attachment";
-    content.filename = filename;
-    content.body = text || filename;
-  } else {
-    content.body = text;
-  }
+  content.body = text;
   return { ...base, content };
 }
 
@@ -189,9 +153,6 @@ export function createMatrixInboundDebouncer(params: {
     ) {
       return false;
     }
-    if (isCaptionlessMedia(event)) {
-      return true;
-    }
     if (event.content.msgtype !== "m.text") {
       return false;
     }
@@ -229,8 +190,8 @@ export function createMatrixInboundDebouncer(params: {
   };
 
   // First sighting per message id, held until that event's batch settles. Without this, the
-  // second emit of a held attachment fails canAppend, flushes the attachment alone, and its
-  // trailing caption becomes a second turn. Once settled, the replay guard owns duplicates: a
+  // second emit of a pending message joins its own batch, or a bypassed copy dispatches
+  // ahead of it. Once settled, the replay guard owns duplicates: a
   // committed event stays suppressed there, and a released one must be processable again.
   const recentSightings = new Map<string, number>();
   const sightingKeyOf = (roomId: string, event: MatrixRawEvent) => {
@@ -271,9 +232,6 @@ export function createMatrixInboundDebouncer(params: {
     resolveDebounceMs: () => resolveInboundDebounceMs({ cfg: readConfig(), channel: "matrix" }),
     buildKey: ({ roomId, event }) => buildBatchKey(roomId, event),
     shouldDebounce,
-    // One attachment per turn: a second caption-less upload starts its own batch.
-    canAppend: (item, pending) =>
-      !isCaptionlessMedia(item.event) || !pending.some((entry) => isCaptionlessMedia(entry.event)),
     onFlush: (entries, createFlush) =>
       createFlush({
         dispatch: async (admission) => {
@@ -303,7 +261,7 @@ export function createMatrixInboundDebouncer(params: {
         roomId,
         entries.map((entry) => entry.event),
       );
-      const base = kept.find((entry) => isCaptionlessMedia(entry.event)) ?? kept.at(-1);
+      const base = kept.at(-1);
       if (!base) {
         return;
       }

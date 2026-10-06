@@ -156,43 +156,41 @@ describe("matrix inbound debounce", () => {
     expect(claims.size).toBe(0);
   });
 
-  it("uses trailing text as the caption for one waiting attachment", async () => {
+  it("dispatches a caption-less attachment immediately and leaves trailing text separate", async () => {
     const { enqueue, dispatched } = createSubject();
 
+    await enqueue(ROOM, text("$1", "look"));
     await enqueue(ROOM, media("$img", "m.image", "IMG_0001.jpg"));
+    // Pending text flushes first, then the attachment dispatches without waiting.
+    expect(dispatched.map((entry) => [entry.event.event_id, entry.event.content.body])).toEqual([
+      ["$1", "look"],
+      ["$img", "IMG_0001.jpg"],
+    ]);
+
     await enqueue(ROOM, text("$q", "what is this?"));
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
-
-    expect(dispatched).toHaveLength(1);
-    const [{ event }] = dispatched as [Dispatched];
-    expect(event.event_id).toBe("$img");
-    expect(event.content).toMatchObject({
-      msgtype: "m.image",
-      url: "mxc://example.org/media",
-      body: "what is this?",
-      filename: "IMG_0001.jpg",
-    });
+    expect(dispatched.map((entry) => entry.event.event_id)).toEqual(["$1", "$img", "$q"]);
   });
 
-  it("captions an attachment when E2EE emits every event twice", async () => {
+  it("merges a text burst once when E2EE emits every event twice", async () => {
     const { enqueue, dispatched, claims } = createSubject();
-    const image = media("$img", "m.image", "IMG_0002.jpg");
-    const caption = text("$q", "lool");
+    const first = text("$1", "hey");
+    const second = text("$2", "lool");
 
     // The decrypt bridge emits room.decrypted_event and room.message for each event.
-    await enqueue(ROOM, image);
-    await enqueue(ROOM, image);
+    await enqueue(ROOM, first);
+    await enqueue(ROOM, first);
+    await enqueue(ROOM, second);
+    await enqueue(ROOM, second);
     expect(dispatched).toHaveLength(0);
-    await enqueue(ROOM, caption);
-    await enqueue(ROOM, caption);
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
 
     expect(dispatched).toHaveLength(1);
     const [{ event, options }] = dispatched as [Dispatched];
-    expect(event.event_id).toBe("$img");
-    expect(event.content).toMatchObject({ body: "lool", filename: "IMG_0002.jpg" });
-    expect(options?.replayClaim).toBe(claims.get("$img"));
-    expect(options?.absorbedReplayClaims).toEqual([claims.get("$q")]);
+    expect(event.event_id).toBe("$2");
+    expect(event.content.body).toBe("hey\nlool");
+    expect(options?.replayClaim).toBe(claims.get("$2"));
+    expect(options?.absorbedReplayClaims).toEqual([claims.get("$1")]);
   });
 
   it.each([0, DEBOUNCE_MS])(
@@ -242,20 +240,6 @@ describe("matrix inbound debounce", () => {
     expect(dispatched).toHaveLength(1);
   });
 
-  it("starts a new batch for a second attachment", async () => {
-    const { enqueue, dispatched } = createSubject();
-
-    await enqueue(ROOM, media("$a", "m.image", "a.jpg"));
-    await enqueue(ROOM, media("$b", "m.image", "b.jpg"));
-    await enqueue(ROOM, text("$t", "caption for b"));
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
-
-    expect(dispatched.map((entry) => [entry.event.event_id, entry.event.content.body])).toEqual([
-      ["$a", "a.jpg"],
-      ["$b", "caption for b"],
-    ]);
-  });
-
   it.each([
     ["an edit", withContent(text("$x", "* fixed"), { "m.relates_to": { rel_type: "m.replace" } })],
     [
@@ -267,6 +251,7 @@ describe("matrix inbound debounce", () => {
     ["a control command", text("$x", "/status")],
     ["a command behind the bot's MXID", text("$x", `${BOT}: /stop`)],
     ["a voice note", media("$x", "m.audio", "voice.ogg")],
+    ["an image", media("$x", "m.image", "photo.jpg")],
   ])("flushes pending text before %s and dispatches it immediately", async (_name, event) => {
     const { enqueue, dispatched } = createSubject();
 
@@ -451,7 +436,8 @@ describe("matrix inbound debounce", () => {
     // History dispatches alone so the handler's startup filter drops it untouched.
     expect(dispatched.map((entry) => [entry.event.event_id, entry.event.content.body])).toEqual([
       ["$old", "from before startup"],
-      ["$img", "fresh"],
+      ["$new", "fresh"],
+      ["$img", "a.jpg"],
       ["$late", "history"],
     ]);
   });

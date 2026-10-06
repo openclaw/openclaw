@@ -54,7 +54,7 @@ Rapid text messages from the same sender can be batched into one agent turn via 
 - Telegram batches ordinary text by default after a 300ms quiet window. Other channels have no generic debounce delay unless configured.
 - `messages.inbound.byChannel.<channel>` takes precedence over `messages.inbound.debounceMs`; either overrides the channel default. Set `0` to disable ordinary burst batching.
 - For non-forwarded Telegram text, messages of at least 4000 characters allow up to 1500ms for continuations. Short and long messages share the same batch, without requiring consecutive message IDs. This automatic long-paste assembly remains active when ordinary batching is disabled.
-- Matrix batches per room, sender, and thread. One caption-less image, file, or video waits for the sender's next text in the window and uses it as the caption, because Element sends an attachment and the composer text as separate events. A second attachment, voice notes, edits, and replies dispatch immediately.
+- Matrix batches text per room, sender, and thread. Media, voice notes, edits, replies, and prefixed commands dispatch immediately.
 - iMessage follows the same generic debounce policy. `imsg` 0.13.1 and newer coalesces Apple URL-preview split-sends before OpenClaw receives them, so no iMessage-specific debounce setting is needed.
 
 Changes to `messages.inbound.debounceMs` and `messages.inbound.byChannel` apply without
