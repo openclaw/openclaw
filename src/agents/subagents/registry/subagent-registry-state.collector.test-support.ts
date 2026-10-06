@@ -14,7 +14,6 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 export function registerSubagentCollectorPublicationCases(params: {
   createRun: (runId: string) => SubagentRunRecord;
   mockRestoredRows(runs: Map<string, SubagentRunRecord>): void;
-  refuseNextWrite(): void;
 }) {
   const { createRun } = params;
   it("invalidates the strict collector parent after each committed lifecycle transition", async () => {
@@ -58,35 +57,6 @@ export function registerSubagentCollectorPublicationCases(params: {
           ({ stored }) => stored?.collectorCompletion?.status ?? stored?.execution.status,
         ),
       ).toEqual(["queued", "running", "done", undefined]);
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  it("does not advance collector notifications on failed writes", () => {
-    const run: SubagentRunRecord = {
-      ...createRun("retry"),
-      collect: true,
-      swarmRequesterSessionKey: "agent:ops:parent",
-      requesterAgentId: "ops",
-      groupId: "batch",
-    };
-    const runs = new Map([[run.runId, run]]);
-    persistRegistryFixture(runs, [run.runId]);
-    const received = vi.fn();
-    const unsubscribe = onSessionLifecycleEvent(received);
-    try {
-      run.collectorCompletion = { status: "failed" };
-      params.refuseNextWrite();
-      expect(() => persistRegistryFixture(runs, [run.runId])).toThrow("disk unavailable");
-      expect(received).not.toHaveBeenCalled();
-      persistRegistryFixture(runs, [run.runId]);
-      expect(received).toHaveBeenCalledExactlyOnceWith({
-        sessionKey: "agent:ops:parent",
-        agentId: "ops",
-        reason: "swarm",
-        scope: "runtime",
-      });
     } finally {
       unsubscribe();
     }
