@@ -307,7 +307,7 @@ function expectRecoveryCopy(text: string, authMode: AuthMode) {
 
 function aggregateFailures(attempts: FallbackAttempt[], lastError: unknown): unknown {
   try {
-    throwFallbackFailureSummary({
+    return throwFallbackFailureSummary({
       attempts,
       candidates: attempts,
       lastError,
