@@ -10,7 +10,10 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
@@ -293,6 +296,8 @@ describe("sessions.abort agent scope", () => {
         await registerSubagentRun({
           runId: "run-orphaned-child",
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childSessionKey }),
           controllerSessionKey: "agent:main:main",
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",

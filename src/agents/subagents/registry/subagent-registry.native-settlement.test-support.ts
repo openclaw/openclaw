@@ -28,6 +28,10 @@ export function registerQueuedCollectorLaunchSettlementTest({
     await mod.addSubagentRunForTests({
       runId,
       childSessionKey: "agent:main:subagent:launch-kill",
+      childSessionIdentity: {
+        sessionId: "session-launch-kill",
+        lifecycleRevision: "revision-launch-kill",
+      },
       task: "cancel while gateway launch is unresolved",
       createdAt: Date.now(),
       collect: true,
@@ -87,6 +91,10 @@ export function registerRestartDrainCompletionSettlementTest({
     await mod.addSubagentRunForTests({
       runId,
       childSessionKey: "agent:main:subagent:terminal-restart-retry",
+      childSessionIdentity: {
+        sessionId: "session-terminal-restart-retry",
+        lifecycleRevision: "revision-terminal-restart-retry",
+      },
       task: "deliver terminal completion after restart",
       expectsCompletionMessage: true,
       createdAt: now - 10_000,

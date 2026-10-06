@@ -268,6 +268,8 @@ describe("Completed child results on a real parent-agent turn", () => {
         await registerSubagentRun({
           runId: RUN_ID,
           childSessionKey: CHILD_SESSION_KEY,
+          childAgentId: "main",
+          sessionEntry: { sessionId: "gw-prompt-recent-child" },
           requesterSessionKey: PARENT_SESSION_KEY,
           requesterDisplayKey: "main",
           task: "summarize the inbox",

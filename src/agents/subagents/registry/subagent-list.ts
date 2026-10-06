@@ -12,6 +12,7 @@ import {
   truncateLine,
 } from "../../../shared/subagents-format.js";
 import { resolveModelDisplayName, resolveModelDisplayRef } from "../../model-selection-display.js";
+import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   observeSubagentExecution,
@@ -94,6 +95,9 @@ export async function readSubagentListSessionEntries(
     { agentId: string; storePath: string; runs: SubagentRunRecord[] }
   >();
   for (const run of runs) {
+    if (!resolveSubagentChildAgentId(run)) {
+      continue;
+    }
     if (incognito && isIncognitoSessionKey(run.childSessionKey)) {
       privateReads.push(
         loadSubagentSessionEntry({ ...run, cfg }).then((entry) => {

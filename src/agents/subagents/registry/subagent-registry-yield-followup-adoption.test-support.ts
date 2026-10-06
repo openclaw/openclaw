@@ -135,6 +135,7 @@ export function registerYieldFollowupAdoptionTests({
       await getRegistry().registerSubagentRun({
         runId,
         childSessionKey,
+        sessionEntry: { sessionId: "sess-late-yield" },
         task: "handle authoritative late yield",
       });
       const lifecycleHandler = getLifecycleHandler();
@@ -227,6 +228,7 @@ export function registerYieldFollowupAdoptionTests({
       await getRegistry().registerSubagentRun({
         runId: PAUSED_RUN_ID,
         childSessionKey: CHILD_SESSION_KEY,
+        sessionEntry: { sessionId: "sess-yield-followup" },
         requesterSessionKey: ORIGINAL_REQUESTER,
         expectsCompletionMessage: true,
         task: "wait for the remote job",
@@ -248,6 +250,7 @@ export function registerYieldFollowupAdoptionTests({
       getRegistry().registerSubagentRun({
         runId: FOLLOW_UP_RUN_ID,
         childSessionKey: CHILD_SESSION_KEY,
+        sessionEntry: { sessionId: "sess-yield-followup" },
         requesterSessionKey: requesterSessionKey ?? "agent:main:main",
         controllerSessionKey: "agent:main:main",
         requesterDisplayKey: requesterSessionKey ?? "main",
@@ -279,6 +282,7 @@ export function registerYieldFollowupAdoptionTests({
       await getRegistry().registerSubagentRun({
         runId: PAUSED_RUN_ID,
         childSessionKey: CHILD_SESSION_KEY,
+        sessionEntry: { sessionId: "sess-yield-followup" },
         requesterSessionKey,
         task: "wait for the remote job",
       });

@@ -6,7 +6,10 @@ import {
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAuthorityError,
+} from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   prepareSubagentKillSession,
@@ -62,7 +65,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }): Promise<boolean> {
   const killIntent = params.entry.killIntent;
-  if (!killIntent) {
+  if (!killIntent || resolveSubagentChildAuthorityError(params.entry)) {
     return false;
   }
   if (!isSameSubagentRunOwner(params.runs.get(params.runId), params.entry)) {
@@ -151,6 +154,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
       },
       undefined,
       params.entry.childAgentId,
+      params.entry.childSessionIdentity,
     );
     if (isSessionLifecycleMutationActive(session.storePath, identities)) {
       return false;
@@ -227,7 +231,7 @@ export async function reconcileProvisionalSubagentKill(params: {
 }): Promise<boolean> {
   const { entry, now, runId, runs } = params;
   const killReconciliation = entry.killReconciliation;
-  if (!killReconciliation) {
+  if (!killReconciliation || resolveSubagentChildAuthorityError(entry)) {
     return false;
   }
   // The child-session index stays current across awaits. Re-read it at each

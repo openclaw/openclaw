@@ -82,6 +82,8 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
       registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId: "main",
+        sessionEntry: { sessionId: "contended-registration-session" },
         requesterSessionKey: "agent:main:main",
         requesterDisplayKey: "main",
         task: "Register while a foreign SQLite writer holds its transaction",

@@ -7,6 +7,10 @@ import {
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthorityError,
+} from "./subagent-child-owner-match.js";
+import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
 } from "./subagent-registry-persistence.js";
@@ -15,7 +19,6 @@ import { isSuspendedPendingFinalDelivery } from "./subagent-registry-suspended-d
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 export function createSubagentSweepReadScope(
   runs: Map<string, SubagentRunRecord>,
@@ -73,13 +76,9 @@ export function createSubagentSweepReadScope(
 
 export type FrozenSessionIdentity = { sessionId: string; lifecycleRevision: string };
 
-export async function freezeSessionIdentity(
-  entry: Pick<SubagentRunRecord, "childSessionKey" | "childAgentId">,
-  assertCurrent: () => void,
-): Promise<FrozenSessionIdentity | undefined> {
-  const sessionEntry = await loadSubagentSessionEntry({ ...entry, assertCurrent });
-  const sessionId = sessionEntry?.sessionId?.trim();
-  const lifecycleRevision = sessionEntry?.lifecycleRevision?.trim();
+export function freezeSessionIdentity(entry: SubagentRunRecord): FrozenSessionIdentity | undefined {
+  const sessionId = entry.childSessionIdentity?.sessionId?.trim();
+  const lifecycleRevision = entry.childSessionIdentity?.lifecycleRevision?.trim();
   return sessionId && lifecycleRevision ? { sessionId, lifecycleRevision } : undefined;
 }
 
@@ -110,6 +109,7 @@ export function isCleanupCurrent(
 ): current is SubagentRunRecord {
   return (
     current !== undefined &&
+    !resolveSubagentChildAuthorityError(current) &&
     isSameSubagentRunOwner(current, expected) &&
     current.execution.status === expected.execution.status &&
     current.execution.endedAt === expected.execution.endedAt &&
@@ -128,14 +128,18 @@ export async function deleteSweptSession(
   identity: FrozenSessionIdentity,
   runs: Map<string, SubagentRunRecord>,
   call: typeof callGateway,
+  assertCurrent: () => void,
 ): Promise<"deleted" | "changed"> {
   let failure: unknown;
   const outcome = await deleteSubagentSessionForCleanup({
     callGateway: call,
     gatewayBinding: { resolveGatewayContext: getGatewayContextResolver(entry) },
-    isCurrent: () => isCleanupCurrent(runs.get(entry.runId), entry),
+    isCurrent: () => {
+      assertCurrent();
+      return isCleanupCurrent(runs.get(entry.runId), entry);
+    },
     childSessionKey: entry.childSessionKey,
-    childAgentId: entry.childAgentId,
+    childAgentId: resolveSubagentChildAgentId(entry),
     expectedSessionId: identity.sessionId,
     expectedLifecycleRevision: identity.lifecycleRevision,
     onError: (error) => {

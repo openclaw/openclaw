@@ -25,7 +25,10 @@ import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-w
 import { immutableSubagentRun, subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunMutation } from "./subagent-registry-mutation.types.js";
 import type {
+  PendingRegistryWrite,
+  RegistrySourceQueue,
   SubagentRegistryWriteAuthority,
+  SubagentRegistryWriteFailure,
   SubagentRegistryWorkerWrite,
   SubagentRunMutationOptions,
 } from "./subagent-registry-persistence.types.js";
@@ -40,7 +43,7 @@ import {
   rememberSubagentRunVersion,
   subagentRunRecordVersion,
 } from "./subagent-registry.store.codec.js";
-import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
+import type { SubagentRegistryWrite } from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   bindSubagentRunRuntimeKey,
@@ -54,25 +57,6 @@ import {
 } from "./subagent-run-generation.js";
 
 type Admission = OpenClawStateWorkerContext["admission"];
-type PendingRegistryWrite = {
-  runIds: ReadonlySet<string>;
-  admission: Admission;
-  settled: ReturnType<typeof createDeferredCore<void>>;
-  uncertain?: SubagentRegistryWriteError;
-  killClaim?: SubagentRunRecord;
-  rekeys?: Array<{
-    from: string;
-    to: string;
-    owner: object;
-    sourceIdentity: string;
-    destinationIdentity: string;
-  }>;
-};
-type RegistrySourceQueue = {
-  admission: Admission;
-  tails: Map<string, Promise<void>>;
-  restore?: Promise<void>;
-};
 const pendingWrites = new Set<PendingRegistryWrite>();
 const sourceQueues = new Set<RegistrySourceQueue>();
 
@@ -155,7 +139,7 @@ export class SubagentRegistryVersionConflictError extends Error {
   }
 }
 
-class SubagentRegistryConflictError extends Error {
+export class SubagentRegistryConflictError extends Error {
   override name = "SubagentRegistryConflictError";
   constructor(
     readonly runIds: readonly string[],
@@ -167,9 +151,9 @@ class SubagentRegistryConflictError extends Error {
 
 export class SubagentRegistryWriteError extends Error {
   constructor(
-    readonly outcome: "not-committed" | "committed" | "unknown",
+    readonly outcome: SubagentRegistryWriteFailure["outcome"],
     cause: unknown,
-    readonly publication?: "published" | "superseded",
+    readonly publication?: SubagentRegistryWriteFailure["publication"],
   ) {
     let failure = cause;
     if (outcome === "unknown" && !hasSqliteWorkerOutcomeUnknown(cause)) {
@@ -247,11 +231,10 @@ function publishRows(
   }
 }
 
-async function refreshRows(
-  runs: Map<string, SubagentRunRecord>,
+export async function readVersionedSubagentRows(
   runIds: readonly string[],
   context: OpenClawStateWorkerContext,
-): Promise<void> {
+) {
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "subagents.runs", scope: { kind: "ids", runIds } },
@@ -261,16 +244,28 @@ async function refreshRows(
   if (!reply?.ok || reply.type !== "subagents.runs" || reply.projection || !reply.versions) {
     throw new Error("Subagent version refresh did not return authoritative rows");
   }
-  const postimages = new Map<string, SubagentRunRecord | null>();
   for (const runId of runIds) {
     const row = reply.runs.get(runId);
-    if (!row && reply.versions.get(runId)) {
+    const version = reply.versions.get(runId);
+    if (!row && version) {
       throw new SubagentRegistryMutationRejectedError(
         "Subagent mutation found an unreadable durable row",
       );
     }
-    postimages.set(runId, row ?? null);
+    if (row && version) {
+      rememberSubagentRunVersion(row, version);
+    }
   }
+  return reply;
+}
+
+async function refreshRows(
+  runs: Map<string, SubagentRunRecord>,
+  runIds: readonly string[],
+  context: OpenClawStateWorkerContext,
+): Promise<void> {
+  const reply = await readVersionedSubagentRows(runIds, context);
+  const postimages = new Map(runIds.map((runId) => [runId, reply.runs.get(runId) ?? null]));
   publishRows(runs, postimages, context, reply.versions);
 }
 
@@ -405,6 +400,7 @@ function commitRows<T>(
       deleteRunIds: [...postimages].flatMap(([id, row]) => (row ? [] : [id])),
       versions: [...versions].map(([runId, version]) => ({ runId, version })),
       terminalEvents: planned.terminalEvents?.map(({ input }) => structuredClone(input)),
+      registrationCohort: structuredClone(planned.registrationCohort),
     };
     let acknowledged = false;
     const decode = (value: unknown): SubagentRunMutationReceipt<T> => {
@@ -499,7 +495,8 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
       authority.assertCurrent();
       const rows = new Map<string, SubagentRunRecord>();
       for (const runId of runIds) {
-        const entry = runs.get(runId);
+        const entry =
+          runs.get(runId) ?? (attempt === 1 ? options.preparedRows?.get(runId) : undefined);
         if (entry) {
           rows.set(runId, immutableSubagentRun(entry));
         }

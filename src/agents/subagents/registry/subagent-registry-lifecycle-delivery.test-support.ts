@@ -12,6 +12,11 @@ import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
+import {
+  findAuthorizedSwarmCollectorRequest,
+  findSwarmCollectorSession,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -47,6 +52,56 @@ export function registerLifecycleDeliveryReceiptCases({
   completeAndJoinCleanup: CompleteRun;
   waitForLifecycleState: <T>(assertion: () => T | Promise<T>) => Promise<T>;
 }) {
+  it("authorizes and completes both collectors sharing a raw key across agents", async () => {
+    const entries = ["main", "research"].map((childAgentId) =>
+      createRunEntry({
+        runId: `collector-${childAgentId}`,
+        childSessionKey: "global",
+        childAgentId,
+        childSessionIdentity: { sessionId: `session-${childAgentId}` },
+        collect: true,
+        groupId: "shared-group",
+        swarmLaunchIdempotencyKey: `launch-${childAgentId}`,
+        expectsCompletionMessage: false,
+      }),
+    );
+    onTestFinished(() => subagentRuns.clear());
+    for (const entry of entries) {
+      subagentRuns.set(entry.runId, entry);
+    }
+    const controller = createLifecycleController({
+      entry: entries[0]!,
+      runs: subagentRuns,
+      captureSubagentCompletionReply: vi
+        .fn()
+        .mockResolvedValueOnce("main result")
+        .mockResolvedValueOnce("research result"),
+    });
+    for (const entry of entries) {
+      expect(
+        findAuthorizedSwarmCollectorRequest({
+          childSessionKey: entry.childSessionKey,
+          childAgentId: entry.childAgentId,
+          idempotencyKey: entry.swarmLaunchIdempotencyKey,
+        }),
+      ).toMatchObject({ runId: entry.runId });
+      await completeRun(controller, entry);
+    }
+    for (const entry of entries) {
+      expect(findSwarmCollectorSession(entry.childSessionKey, entry.childAgentId)).toMatchObject({
+        runId: entry.runId,
+        collectorCompletion: { status: "done" },
+        completion: { resultText: `${entry.childAgentId} result` },
+      });
+    }
+    expect(findSwarmCollectorSession("global")).toBeUndefined();
+    subagentRuns.delete(entries[0]!.runId);
+    expect(findSwarmCollectorSession("global", "research")).toMatchObject({
+      runId: entries[1]!.runId,
+      collectorCompletion: { status: "done" },
+    });
+  });
+
   it.each([false, true])(
     "reconciles changed lifecycle owners without reading unrelated runs (rekeyed=%s)",
     (rekeyed) => {

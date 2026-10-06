@@ -1,8 +1,4 @@
 import { getRuntimeConfig } from "../../../config/config.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../../config/sessions.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -12,6 +8,8 @@ import {
   getSessionWorkAdmissionRelease,
   isSessionWorkAdmissionActive,
 } from "../../../sessions/session-lifecycle-admission.js";
+import { resolveSubagentChildAuthorityError } from "./subagent-child-owner-match.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   isRetiredSubagentExecution,
   isRetiredSubagentSessionOwner,
@@ -46,9 +44,11 @@ export async function loadSubagentRecoverySession(params: {
   retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
 } | null> {
   const sessionKey = params.entry.childSessionKey.trim();
-  const agentId = params.entry.childAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
-  const scope = { storePath, sessionKey, agentId, projection: "list" as const };
+  if (resolveSubagentChildAuthorityError(params.entry)) {
+    return null;
+  }
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(params.entry, getRuntimeConfig());
+  const scope = { agentId, storePath, sessionKey, projection: "list" as const };
   const { sessionEntry, currentRead } = await withSessionEntryReadOnlyInWorker(
     scope,
     () => {
@@ -66,6 +66,16 @@ export async function loadSubagentRecoverySession(params: {
       };
     },
   );
+  const original = params.entry.childSessionIdentity;
+  if (
+    sessionEntry &&
+    (sessionEntry.sessionId !== original?.sessionId ||
+      sessionEntry.lifecycleRevision !== original?.lifecycleRevision)
+  ) {
+    throw new Error(
+      "Subagent original session incarnation is unresolved or changed. No child work was changed. Inspect the retained record and original execution evidence before retrying.",
+    );
+  }
   const retained = retainSessionOwner(storePath, sessionKey, sessionEntry?.sessionId);
   if (
     retained ||

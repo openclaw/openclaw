@@ -112,6 +112,10 @@ export function registerRawChildRestoreOwnershipTest(
         runId,
         childSessionKey,
         childAgentId: "research",
+        childSessionIdentity: {
+          sessionId: "research-restore-session",
+          lifecycleRevision: "research-restore-revision",
+        },
         createdAt: startedAt,
         expectsCompletionMessage: true,
         endedReason: "subagent-complete",

@@ -39,7 +39,11 @@ vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
 
 async function register(runId: string) {
   await registerSubagentRun(
-    createSubagentRunParams({ runId, childSessionKey: `agent:main:subagent:${runId}` }),
+    createSubagentRunParams({
+      runId,
+      childSessionKey: `agent:main:subagent:${runId}`,
+      sessionEntry: { sessionId: `sess-${runId}` },
+    }),
   );
 }
 

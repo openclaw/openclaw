@@ -348,6 +348,7 @@ describe("session state events", () => {
     ] as const) {
       const prepared = prepareSubagentTerminalState({
         childSessionKey: child,
+        agentId: "main",
         requesterSessionKey: watcher,
         ...terminal,
       });

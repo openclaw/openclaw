@@ -226,17 +226,33 @@ Their writers ensure them idempotently on first use; reads do not install them.
 Older readers ignore the columns. NULL remains unknown, so Gateway notification
 delivery does not assign historical records to a current parent by key alone.
 
-Subagent runs record the known owning agent for raw child keys such as `global`
-in the optional `childAgentId` field inside `subagent_runs.payload_json`.
-Agent-qualified child keys do not record this field. This is a payload-only
-addition: no DDL, new column, or schema-version bump is required. The session
-store is derived from the agent and current configuration, just as it is for
-agent-qualified keys. Legacy rows without that binding continue to resolve their
-agent through the current configuration, without migration or backfill.
-Cancellation clears queues only for the resolved agent. Downgraded writers retain
-the field in `payload_json` because
-`normalizeSubagentRunState` mutates the parsed record in place rather than
-rebuilding it from known fields.
+New subagent runs record their selected logical owning agent in `childAgentId`
+inside `subagent_runs.payload_json`, for both raw and agent-qualified keys.
+Historical valid qualified keys remain ownership evidence when the property is
+absent; conflicting or malformed ownership stays unresolved. No DDL, new column,
+schema-version bump, or automatic backfill accompanies this runtime repair.
+Current configuration locates a known owner's store; it does not identify the
+original owner. Unknown-owner or unknown-incarnation records remain unchanged
+and ineligible for ordinary cleanup rather than being guessed or deleted.
+
+Same-version rollback is not a guarantee that older writers preserve this
+contract. A codec round trip does not prove existing-row replacement or writable
+reopen. The exact baseline `930bd387bbaa` is a candidate for certification, not a
+certified target or permission to use any schema-20 build. Before same-database
+rollback, completely drain queued launches, running and paused work, cancellation
+reconciliation, requester wakes, delivery, ordinary and collector cleanup, and
+private parent-completion obligations. Unresolved ownership, unbound raw watch
+cursors, and outstanding raw-resource cleanup make that drain incomplete; never
+delete evidence to satisfy it.
+
+Take coordinated WAL-aware backups of shared and relevant agent databases, then
+preflight the exact target against copies, including writable reopen, existing-row
+replacement, ordinary updates, close/reopen, and re-upgrade. Do not run affected
+raw-key workflows on an older target while expecting the repaired isolation
+guarantees; use a compatible backport instead. `d64730851269` is excluded because
+its replacement writer drops the owner. An unverified older build requires its
+matching pre-upgrade backup in a separate state directory. Existing newer-schema
+refusals and private parent-completion downgrade restrictions remain in force.
 
 Cron standing-grant definition generations use three bare nullable projections on
 `cron_jobs`: `grant_definition_revision`, `grant_definition_generation`, and

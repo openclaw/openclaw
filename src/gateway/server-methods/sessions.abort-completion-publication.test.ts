@@ -41,6 +41,8 @@ it.for(["before commit", "after commit"] as const)(
     await registerSubagentRun({
       runId,
       childSessionKey: childKey,
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childKey })?.entry,
       requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
       requesterDisplayKey: "main",

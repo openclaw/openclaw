@@ -140,9 +140,6 @@ it("recovers the exact complete child answer without preventing host event progr
           readSubagentSessionEntry: () => {
             throw new Error("Unexpected session fallback");
           },
-          resolveAgentIdFromSessionKey: () => {
-            throw new Error("Unexpected agent fallback");
-          },
           resolveSessionStorePathCore: () => {
             throw new Error("Unexpected store fallback");
           },

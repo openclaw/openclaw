@@ -289,6 +289,10 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
             { storePath: state.storePath, sessionKey: childKey },
             { sessionId: childSessionId, updatedAt: Date.now() },
           );
+          const childEntry = expectDefined(
+            loadSessionEntry({ storePath: state.storePath, sessionKey: childKey }),
+            "selected child session",
+          );
           publishSystemEventStoreConfig(state.cfg);
           const controllerStorePath = resolvePhysicalSessionStorePath(
             { sessionKey, agentId: "main" },
@@ -298,6 +302,10 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
             runId: childRunId,
             childSessionKey: childKey,
             childAgentId: "main",
+            childSessionIdentity: {
+              sessionId: childEntry.sessionId,
+              lifecycleRevision: childEntry.lifecycleRevision,
+            },
             requesterSessionKey: sessionKey,
             requesterAgentId: "main",
             requesterDisplayKey: sessionKey,

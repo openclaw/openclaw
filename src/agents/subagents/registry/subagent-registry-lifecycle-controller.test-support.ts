@@ -30,6 +30,7 @@ export function createRunEntry(overrides: RunEntryOverrides = {}): SubagentRunRe
   return createSubagentRunRecord({
     runId: "run-1",
     childSessionKey: "agent:main:subagent:child",
+    childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "finish the task",

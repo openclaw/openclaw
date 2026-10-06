@@ -37,6 +37,7 @@ export function registerQueuedReservationFailureTests({
     let entry = createSubagentRunRecord({
       runId: "failure-queued",
       childSessionKey: "agent:main:subagent:failure-queued",
+      childSessionIdentity: { sessionId: "queued-session" },
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
       task: "queued failure",

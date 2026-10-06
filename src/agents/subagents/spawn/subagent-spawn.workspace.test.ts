@@ -154,6 +154,7 @@ describe("spawnSubagentDirect child session preparation", () => {
       context,
     );
     expect(result.status).toBe("accepted");
+    expect(registerSubagentRunMock.mock.calls[0]?.[0].childAgentId).toBe("ops");
     expect(registerSubagentRunMock.mock.calls[0]?.[0].workspaceDir).toBe("/tmp/workspace-ops");
     expect(store[result.childSessionKey!]).toMatchObject({
       spawnedWorkspaceDir: "/tmp/workspace-ops",

@@ -113,6 +113,8 @@ async function arrangeAuthorityProof(name: string) {
   await registerSubagentRun({
     runId: previousRunId,
     childSessionKey: child,
+    childAgentId: "main",
+    sessionEntry: { sessionId },
     controllerSessionKey: parent,
     requesterSessionKey: parent,
     requesterDisplayKey: parent,
@@ -456,6 +458,8 @@ it.each(["explicit", "automatic"] as const)(
       await registerSubagentRun({
         runId: previousRunId,
         childSessionKey: child,
+        childAgentId: "main",
+        sessionEntry: { sessionId: `resume-${mode}-child` },
         controllerSessionKey: parent,
         requesterSessionKey: parent,
         requesterDisplayKey: parent,

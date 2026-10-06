@@ -7,6 +7,7 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isSessionWorkAdmissionActive } from "../../../sessions/session-lifecycle-admission.js";
+import { resolveSubagentChildAuthorityError } from "./subagent-child-owner-match.js";
 import {
   getSubagentRunsForRequesterSession,
   getSubagentRunsForChildSession,
@@ -29,6 +30,15 @@ export async function recoverInterruptedSubagentRow(
   params: RestartRecoveryParams,
 ): Promise<RestartRecoveryResult> {
   const { entry, runId } = params;
+  const authorityError = resolveSubagentChildAuthorityError(entry);
+  if (authorityError) {
+    params.warn("retained subagent record cannot be recovered", {
+      runId,
+      childSessionKey: entry.childSessionKey,
+      error: new Error(authorityError),
+    });
+    return { status: "deferred" };
+  }
   let expectedObservation = entry;
   const childSessionKey = entry.childSessionKey.trim();
   const lifecycleGeneration = agentEvents.getAgentEventLifecycleGeneration();

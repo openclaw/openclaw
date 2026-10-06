@@ -88,6 +88,8 @@ it.each([
       await registerSubagentRun({
         runId: "predecessor",
         childSessionKey: ancestorKey,
+        childAgentId: "main",
+        sessionEntry: loadSessionEntry({ storePath, sessionKey: ancestorKey }),
         requesterSessionKey: controllerSessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -105,6 +107,8 @@ it.each([
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId: "main",
+        sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
         requesterSessionKey: owner,
         controllerSessionKey: owner,
         requesterAgentId: "main",
@@ -223,6 +227,8 @@ it.each([
               registerSubagentRun({
                 runId: "successor",
                 childSessionKey: ancestorKey,
+                childAgentId: "main",
+                sessionEntry: loadSessionEntry({ storePath, sessionKey: ancestorKey }),
                 requesterSessionKey: controllerSessionKey,
                 requesterAgentId: "main",
                 requesterDisplayKey: "main",
@@ -254,6 +260,8 @@ it.each([
             await registerSubagentRun({
               runId: "late",
               childSessionKey: "agent:main:subagent:late-child",
+              childAgentId: "main",
+              sessionEntry: { sessionId: "late-child-session" },
               requesterSessionKey: ancestorKey,
               requesterAgentId: "main",
               requesterDisplayKey: "main",
@@ -338,6 +346,8 @@ it.each([
     await registerSubagentRun({
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
       requesterSessionKey: owner,
       controllerSessionKey: owner,
       requesterAgentId: "main",
@@ -469,6 +479,8 @@ it("signals the non-main runtime owner in a template session store", async () =>
   await registerSubagentRun({
     runId: "fixed-store-child",
     childSessionKey,
+    childAgentId: "other",
+    sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -508,6 +520,8 @@ it("does not create a missing child database while binding cancellation", async 
   await registerSubagentRun({
     runId: "unprepared",
     childSessionKey,
+    childAgentId: "missing",
+    sessionEntry: { sessionId: "unprepared-session" },
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -594,6 +608,7 @@ describe("restored historical cancellation ownership", () => {
       generation: 1,
       taskRunId: input.subagent.taskRunId,
       childSessionKey: input.subagent.childSessionKey,
+      childSessionIdentity: input.subagent.childSessionIdentity,
       createdAt: endedAt - 60_000,
       startedAt: endedAt - 50_000,
       endedAt,
@@ -728,6 +743,7 @@ describe("restored historical cancellation ownership", () => {
       const successor = createSubagentRunRecord({
         runId: "successor-run",
         childSessionKey: input.subagent.childSessionKey,
+        childSessionIdentity: input.subagent.childSessionIdentity,
         generation: 2,
         createdAt: input.subagent.createdAt + 1,
         endedAt: input.subagent.execution.endedAt,

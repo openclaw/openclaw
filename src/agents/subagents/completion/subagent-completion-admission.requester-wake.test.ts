@@ -19,12 +19,14 @@ import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-st
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { registerRequesterWakeOwnershipTests } from "./subagent-completion-admission.requester-wake-ownership.test-support.js";
 import {
   blockSubagentCompletionDelivery,
   mutateRequesterCompletionBatch,
 } from "./subagent-completion-admission.store.js";
 import {
   currentCompletionRun,
+  readCompletionSystemEvents,
   advanceRequesterWakeTime,
   armRequesterWake,
   reopenCompletionFixtureOwners,
@@ -63,11 +65,7 @@ describe("persisted subagent requester wakes", () => {
   const persistOwner = (input: ReturnType<typeof records>) =>
     seedSubagentCompletionOwner({ subagent: input.subagent, databaseOptions: { database } });
 
-  function systemEvents() {
-    return database.db
-      .prepare("SELECT id FROM delivery_queue_entries WHERE entry_kind = 'systemEvent'")
-      .all();
-  }
+  registerRequesterWakeOwnershipTests({ database: () => database, persistOwner });
 
   it("reconciles an acknowledged retirement without even a no-op data write", async () => {
     const input = armRequesterWake(records());
@@ -319,7 +317,7 @@ describe("persisted subagent requester wakes", () => {
           await retry.run();
           expect(observed).toHaveBeenCalledOnce();
           expect(observed.mock.results[0]?.value).toEqual([undefined, undefined]);
-          expect(systemEvents()).toHaveLength(2);
+          expect(readCompletionSystemEvents(database)).toHaveLength(2);
           database = await reopenCompletionFixtureOwners();
           for (const input of inputs) {
             expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
@@ -738,7 +736,9 @@ describe("persisted subagent requester wakes", () => {
         expect(subagentRuns.get(second.subagent.runId)?.requesterSettleWake).toEqual(
           ["retired", "blocked", "blocked retirement"].includes(change) ? undefined : newerWake,
         );
-        expect(systemEvents()).toHaveLength((blocked ? 1 : 0) + (delivered ? 0 : 2));
+        expect(readCompletionSystemEvents(database)).toHaveLength(
+          (blocked ? 1 : 0) + (delivered ? 0 : 2),
+        );
       } finally {
         process.env.OPENCLAW_STATE_DIR = originalStateDir;
         publication.restore();
@@ -771,7 +771,7 @@ describe("persisted subagent requester wakes", () => {
         expect(restored.requesterSettleWake).toBeUndefined();
         expect(restored.execution).toEqual(before.subagent.execution);
         expect(restored.completion).toEqual(before.subagent.completion);
-        expect(systemEvents()).toEqual([]);
+        expect(readCompletionSystemEvents(database)).toEqual([]);
         expect(driver.wake).toHaveBeenCalledOnce();
       } finally {
         driver.controller.clearScheduledResumeTimers();
@@ -806,7 +806,7 @@ describe("persisted subagent requester wakes", () => {
       }
       database = await reopenCompletionFixtureOwners();
       expect(subagentRuns.get(input.subagent.runId)).toEqual(before.subagent);
-      expect(systemEvents()).toEqual([]);
+      expect(readCompletionSystemEvents(database)).toEqual([]);
     },
   );
 
@@ -857,7 +857,7 @@ describe("persisted subagent requester wakes", () => {
       expect(restored.execution.outcome).toBeUndefined();
       expect(restored.delivery).toEqual({ status: "pending" });
       expect(subagentRuns.get(sibling.subagent.runId)).toEqual(siblingBefore);
-      expect(systemEvents()).toEqual([]);
+      expect(readCompletionSystemEvents(database)).toEqual([]);
     },
   );
 
@@ -899,7 +899,7 @@ describe("persisted subagent requester wakes", () => {
           ...before.subagent,
           requesterSettleWake: undefined,
         });
-        expect(systemEvents()).toEqual([]);
+        expect(readCompletionSystemEvents(database)).toEqual([]);
       } finally {
         driver.controller.clearScheduledResumeTimers();
       }
@@ -979,7 +979,7 @@ describe("persisted subagent requester wakes", () => {
           expect(restored.delivery).toEqual(before.delivery);
         }
         expect(database.db.prepare("SELECT COUNT(*) AS count FROM task_runs").get()?.count).toBe(0);
-        expect(systemEvents()).toEqual([]);
+        expect(readCompletionSystemEvents(database)).toEqual([]);
       } finally {
         driver.controller.clearScheduledResumeTimers();
       }
@@ -1023,7 +1023,7 @@ describe("persisted subagent requester wakes", () => {
       expect(currentCompletionRun(input).completion).toEqual(before.completion);
       expect(currentCompletionRun(input).suppressCompletionDelivery).toBe(true);
       expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
-      expect(systemEvents()).toEqual([]);
+      expect(readCompletionSystemEvents(database)).toEqual([]);
     },
   );
 });

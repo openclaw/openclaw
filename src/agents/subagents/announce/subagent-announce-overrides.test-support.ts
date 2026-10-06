@@ -19,7 +19,6 @@ type OutputTestDeps = Pick<
   typeof announceRuntime,
   | "getRuntimeConfig"
   | "readSessionMessagesAsync"
-  | "resolveAgentIdFromSessionKey"
   | "resolveSessionStorePathCore"
 > & {
   readSubagentSessionEntry: (
@@ -145,13 +144,6 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
       announceRuntime.readSessionMessagesAsync,
       () => vi.spyOn(announceRuntime, "readSessionMessagesAsync"),
       current.readSessionMessagesAsync,
-    );
-  }
-  if (current.resolveAgentIdFromSessionKey) {
-    install(
-      announceRuntime.resolveAgentIdFromSessionKey,
-      () => vi.spyOn(announceRuntime, "resolveAgentIdFromSessionKey"),
-      current.resolveAgentIdFromSessionKey,
     );
   }
   if (current.resolveSessionStorePathCore) {

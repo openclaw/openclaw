@@ -126,8 +126,7 @@ export function getSubagentExecutionCleanup(
   const observation = executionCleanups.get(getSubagentRunRuntimeKey(entry));
   return observation?.sessionId === session?.sessionId &&
     observation?.matchesRecord() &&
-    (observation.sessionLifecycleRevision === undefined ||
-      observation.sessionLifecycleRevision === session?.lifecycleRevision)
+    observation.sessionLifecycleRevision === session?.lifecycleRevision
     ? observation
     : undefined;
 }

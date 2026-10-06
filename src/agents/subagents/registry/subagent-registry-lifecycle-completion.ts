@@ -15,6 +15,7 @@ import {
   clearPublishedSwarmCollectorOutput,
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
+import { resolveSubagentChildAuthorityError } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   prepareSubagentKillSession,
@@ -40,8 +41,8 @@ import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import {
-  resolveSubagentRunDeadlineMs,
   resolveSubagentRunEffectiveEndedAt,
+  shouldPreservePublishedExplicitRunTimeout,
 } from "./subagent-run-timeout.js";
 
 const MISSING_REQUIRED_FINAL_REPLY_ERROR = "subagent run ended before producing a final reply";
@@ -49,26 +50,6 @@ const MISSING_REQUIRED_FINAL_REPLY_ERROR = "subagent run ended before producing 
 const browserCleanupLoader = createLazyImportLoader(
   () => import("../../../browser-lifecycle-cleanup.js"),
 );
-
-function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
-  if (
-    entry.execution.outcome?.status !== "timeout" ||
-    typeof entry.execution.endedAt !== "number"
-  ) {
-    return false;
-  }
-  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
-  if (deadlineMs === undefined || entry.execution.endedAt < deadlineMs) {
-    return false;
-  }
-  return (
-    entry.cleanupHandled === true ||
-    typeof entry.cleanupCompletedAt === "number" ||
-    typeof entry.endedHookEmittedAt === "number" ||
-    entry.delivery?.status === "delivered" ||
-    typeof entry.delivery?.announcedAt === "number"
-  );
-}
 
 function resolveTerminalRequest(
   entry: SubagentRunRecord,
@@ -157,7 +138,7 @@ export async function completeSubagentRunAttempt(
     ? getCurrentSubagentRunOwner(params.runs, completeParams.expectedEntry)
     : params.runs.get(completeParams.runId);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  if (!selectedOwner) {
+  if (!selectedOwner || resolveSubagentChildAuthorityError(selectedOwner)) {
     return;
   }
   let releaseCompletionLock: (() => void) | undefined = await context.acquireTerminalCompletionLock(
@@ -204,6 +185,7 @@ export async function completeSubagentRunAttempt(
         assertCurrent,
         selected.execution.transcriptTarget,
         selected.childAgentId,
+        selected.childSessionIdentity,
       );
     }
     const now = Date.now();

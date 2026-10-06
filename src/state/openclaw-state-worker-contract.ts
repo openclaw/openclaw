@@ -6,7 +6,7 @@ import type {
 import type {
   SubagentRegistryWrite,
   SubagentRegistryWriteReceipt,
-} from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+} from "../agents/subagents/registry/subagent-registry.store.types.js";
 import type {
   WorkspaceAttestation,
   WorkspaceAttestationInput,

@@ -125,6 +125,7 @@ function stripAndClassifyReply(text: string): string | null {
 type SubagentAnnounceFlowParams = {
   childSessionKey: string;
   childAgentId?: string;
+  childSessionIdentity?: { sessionId: string; lifecycleRevision?: string };
   childRunId: string;
   runTimeoutSeconds?: number;
   requesterSessionKey: string;
@@ -196,7 +197,6 @@ async function runSubagentAnnounceFlowBound(
     (ownResult?.isCurrent() ?? true) &&
     isChildResultsCurrent();
   let childSessionId: string | undefined;
-  let childSessionLifecycleRevision: string | undefined;
   try {
     let targetRequesterSessionKey = params.requesterSessionKey;
     let targetRequesterAgentId = params.requesterAgentId;
@@ -212,7 +212,6 @@ async function runSubagentAnnounceFlowBound(
       typeof childSessionEntry?.sessionId === "string" && childSessionEntry.sessionId.trim()
         ? childSessionEntry.sessionId.trim()
         : undefined;
-    childSessionLifecycleRevision = normalizeOptionalString(childSessionEntry?.lifecycleRevision);
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
     let reply =
       params.terminalReply?.disposition === "visible"
@@ -384,6 +383,7 @@ async function runSubagentAnnounceFlowBound(
         params.childSessionKey,
         params.timeoutMs,
         outcome,
+        params.childAgentId,
       );
       // Empty remains the authoritative terminal fact. Transcript text is a
       // timeout-only progress hint and must never reclassify silence as output.
@@ -398,7 +398,9 @@ async function runSubagentAnnounceFlowBound(
         (await prepareChildSessionEffects()) &&
         childSessionEffectsAllowed()
       ) {
-        reply = await readSubagentOutput(params.childSessionKey, outcome);
+        reply = await readSubagentOutput(params.childSessionKey, outcome, {
+          childAgentId: params.childAgentId,
+        });
       }
 
       if (
@@ -409,6 +411,7 @@ async function runSubagentAnnounceFlowBound(
       ) {
         reply = await readLatestSubagentOutputWithRetry({
           sessionKey: params.childSessionKey,
+          childAgentId: params.childAgentId,
           maxWaitMs: params.timeoutMs,
           outcome,
         });
@@ -513,6 +516,7 @@ async function runSubagentAnnounceFlowBound(
         ? undefined
         : await buildCompactAnnounceStatsLine({
             sessionKey: params.childSessionKey,
+            childAgentId: params.childAgentId,
             startedAt: params.startedAt,
             endedAt: params.endedAt,
           });
@@ -652,8 +656,8 @@ async function runSubagentAnnounceFlowBound(
         childSessionKey: params.childSessionKey,
         childAgentId: params.childAgentId,
         spawnMode: params.spawnMode,
-        expectedSessionId: childSessionId,
-        expectedLifecycleRevision: childSessionLifecycleRevision,
+        expectedSessionId: params.childSessionIdentity?.sessionId,
+        expectedLifecycleRevision: params.childSessionIdentity?.lifecycleRevision,
       });
     }
   }

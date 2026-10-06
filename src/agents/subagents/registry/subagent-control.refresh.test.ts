@@ -55,6 +55,7 @@ it.for(["complete", "reject undefined"] as const)(
         runId: "refresh-" + id,
         childAgentId: agentId(id),
         childSessionKey: key(id),
+        sessionEntry: { sessionId: "refresh-" + id + "-session" },
         requesterSessionKey: id === "root" ? "agent:main:main" : rootKey,
         controllerSessionKey: id === "root" ? "agent:main:main" : rootKey,
         requesterAgentId: "main",
@@ -219,6 +220,8 @@ it("retires queued refreshes after an escaping native failure and an undefined c
   await registerSubagentRun({
     runId: "refresh-failure",
     childSessionKey: rootKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: "refresh-failure-session" },
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -332,6 +335,8 @@ it("retains a captured child prefix when the next child's session preparation fa
     await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId: `${runId}-session` },
       requesterSessionKey,
       controllerSessionKey: requesterSessionKey,
       requesterAgentId: "main",
@@ -447,6 +452,11 @@ it.each([
         await registerSubagentRun({
           runId,
           childSessionKey: sessionKey,
+          childAgentId: "main",
+          sessionEntry: {
+            sessionId: `${runId}-session`,
+            lifecycleRevision: `${runId}-revision`,
+          },
           requesterSessionKey,
           controllerSessionKey: requesterSessionKey,
           requesterAgentId: "main",
@@ -561,6 +571,8 @@ it.each([
         await registerSubagentRun({
           runId: "g",
           childSessionKey: gKey,
+          childAgentId: "main",
+          sessionEntry: { sessionId: "g-session", lifecycleRevision: "g-revision" },
           requesterSessionKey: dKey,
           controllerSessionKey: dKey,
           requesterAgentId: "main",

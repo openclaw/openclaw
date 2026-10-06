@@ -34,10 +34,9 @@ import type {
 } from "../../../state/openclaw-state-read.types.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import {
+  conflictingSubagentRegistrationCohort,
   conflictingSubagentRunVersions,
   writeSubagentRunValuesInDatabase,
-  type SubagentRegistryWrite,
-  type SubagentRegistryWriteReceipt,
 } from "./subagent-registry.store.kernel.js";
 import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 import {
@@ -46,6 +45,10 @@ import {
   loadVersionedSubagentRunsInDatabase,
   loadSubagentRunsForSessionFromSqlite,
 } from "./subagent-registry.store.sqlite.js";
+import type {
+  SubagentRegistryWrite,
+  SubagentRegistryWriteReceipt,
+} from "./subagent-registry.store.types.js";
 
 const log = createSubsystemLogger("state/worker");
 
@@ -173,7 +176,10 @@ export function persistSubagentRunChangesInWorker(
   try {
     return runOpenClawStateWriteTransaction((writer): SubagentRegistryWriteReceipt => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-      const conflictRunIds = conflictingSubagentRunVersions(writer, versions);
+      const conflictRunIds = [
+        ...conflictingSubagentRunVersions(writer, versions),
+        ...conflictingSubagentRegistrationCohort(writer, input.registrationCohort),
+      ];
       if (conflictRunIds.length > 0) {
         return { writeId, conflictRunIds };
       }

@@ -272,6 +272,7 @@ export async function retrySubagentCleanup(
 }
 
 type SessionCleanupOptions = {
+  childAgentId?: string;
   waitForCleanup?: () => Promise<void> | undefined;
   isCurrent?: () => boolean;
   emitLifecycleHooks?: boolean;
@@ -334,6 +335,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   isCurrent?: () => boolean;
   callGateway?: GatewayCall;
   childSessionKey: string;
+  childAgentId?: string;
   attachmentId?: string;
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
@@ -349,6 +351,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
     try {
       await cleanupMaterializedSubagentAttachments({
         childSessionKey,
+        childAgentId: params.childAgentId,
         attachmentId,
         isCurrent: params.isCurrent,
       });

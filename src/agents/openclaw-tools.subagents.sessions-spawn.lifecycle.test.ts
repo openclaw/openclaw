@@ -105,20 +105,22 @@ describe("sessions_spawn lifecycle", () => {
       includeChatHistory: true,
       agentWaitResult: { status: "ok", startedAt: 3000, endedAt: 4000 },
     });
+    let childSessionId: string | undefined;
     try {
       await spawn(mainContext, { cleanup: "keep" });
       const child = ctx.getChild();
       assert(child.sessionKey);
       await started.promise;
+      childSessionId = getLatestLiveSubagentRunByChildSessionKey(child.sessionKey)
+        ?.childSessionIdentity?.sessionId;
+      assert(childSessionId);
       await getOrCreateSessionMcpRuntime({
-        sessionId: "session:subagent:mcp-retire",
+        sessionId: childSessionId,
         sessionKey: child.sessionKey,
         workspaceDir: "/tmp/openclaw-subagent-mcp-retire",
         cfg: unopenedMcpConfig,
       });
-      expect(bundleMcpRuntimeTesting.getCachedSessionIds()).toContain(
-        "session:subagent:mcp-retire",
-      );
+      expect(bundleMcpRuntimeTesting.getCachedSessionIds()).toContain(childSessionId);
     } finally {
       gate.resolve("delivered");
       const key = ctx.getChild().sessionKey;
@@ -130,9 +132,10 @@ describe("sessions_spawn lifecycle", () => {
         await settleRootWork();
       }
     }
+    assert(childSessionId);
     await waitForSessionsSpawnEvent(
       "bundle MCP runtime retirement",
-      () => !bundleMcpRuntimeTesting.getCachedSessionIds().includes("session:subagent:mcp-retire"),
+      () => !bundleMcpRuntimeTesting.getCachedSessionIds().includes(childSessionId),
     );
   });
 

@@ -43,7 +43,7 @@ export function registerAcpSpawnOwnerTests(fixture: {
         fixture.registerSubagentRunMock,
         {
           childSessionKey: accepted.childSessionKey,
-          agentId: "main",
+          childAgentId: "main",
           requesterAgentId: "main",
         },
         { assertCurrent: undefined },

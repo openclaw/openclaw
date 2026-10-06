@@ -48,8 +48,9 @@ vi.mock("../completion/subagent-completion-admission.store.js", async (importOri
   blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,
   mutateRequesterCompletionBatch: completionDeliveryMocks.mutateRequesterCompletionBatch,
 }));
+// mock-isolation: Retry policy does not own a process-wide MCP runtime.
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
-  retireSessionMcpRuntimeForSessionKey: vi.fn(),
+  retireSessionMcpRuntime: vi.fn(),
 }));
 vi.mock("../../internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession: vi.fn(),

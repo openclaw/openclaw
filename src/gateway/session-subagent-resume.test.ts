@@ -51,12 +51,16 @@ async function updateRun(runId: string, update: (draft: SubagentRunRecord) => vo
 }
 
 // Seed the same paused registry state that the yield terminal observer records.
-async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-child") {
+async function arrangePausedChild(
+  childSessionKey = "agent:main:subagent:resume-child",
+  lifecycleRevision?: string,
+) {
   await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
     agentId: "main",
     sessionKey: childSessionKey,
     defaultSessionId: sessionId,
+    lifecycleRevision,
   });
   await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
@@ -67,6 +71,8 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
   await registerSubagentRun({
     runId: previousRunId,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId, lifecycleRevision },
     requesterSessionKey: parent,
     controllerSessionKey: parent,
     requesterDisplayKey: parent,
@@ -85,6 +91,7 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
     caller,
     childSessionKey,
     childSessionId: sessionId,
+    childLifecycleRevision: lifecycleRevision,
   });
   const prepare = (overrides: Partial<Parameters<typeof prepareParentSubagentResume>[0]> = {}) =>
     prepareParentSubagentResume({
@@ -94,7 +101,7 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
       getSessionId: () => sessionId,
       runId: nextRunId,
       task: "Continue with the supplied answer",
-      assertAdmissionCurrent: vi.fn(),
+      assertAdmissionCurrent: vi.fn(() => ({ sessionId, lifecycleRevision, updatedAt: 1 })),
       ...overrides,
     });
   return { cfg, caller, entry, resume, prepare, childSessionKey };
@@ -103,7 +110,7 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
 it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"])(
   "preserves the task and frozen completion batch for %s",
   async (childSessionKey) => {
-    const state = await arrangePausedChild(childSessionKey);
+    const state = await arrangePausedChild(childSessionKey, "original-incarnation");
     state.entry = await updateRun(previousRunId, (draft) => {
       draft.requesterSettleWake = {
         status: "pending",
@@ -135,6 +142,31 @@ it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"
     });
     expect(stored.has(previousRunId)).toBe(false);
     await expect(adopt()).rejects.toThrow(/paused/);
+  },
+);
+
+it.each([
+  { original: undefined, current: "successor-incarnation" },
+  { original: "original-incarnation", current: "successor-incarnation" },
+  { original: "original-incarnation", current: undefined },
+])(
+  "refuses a same-sessionId resume with changed lifecycle $original -> $current",
+  async ({ original, current }) => {
+    const state = await arrangePausedChild(undefined, original);
+    expect(() =>
+      bindParentSubagentResume({
+        ...state,
+        childSessionId: sessionId,
+        childLifecycleRevision: current,
+      }),
+    ).toThrow(/incarnation/);
+    const adopt = await state.prepare({
+      assertAdmissionCurrent: () => ({ sessionId, lifecycleRevision: current, updatedAt: 1 }),
+    });
+    await expect(adopt()).rejects.toThrow(/changed/);
+    expect(subagentRuns.has(nextRunId)).toBe(false);
+    expect(subagentRuns.get(previousRunId)).toBe(state.entry);
+    expect(loadSubagentRegistryFromSqlite().get(previousRunId)).toEqual(state.entry);
   },
 );
 
@@ -212,11 +244,12 @@ it.each(["resume", "cancel"] as const)(
   },
 );
 
-it.each(["cancel", "complete", "replace", "session", "caller", "admission"] as const)(
+it.each(["cancel", "complete", "replace", "session", "revision", "caller", "admission"] as const)(
   "rejects a %s race after preparing admission without creating a successor",
   async (race) => {
     const state = await arrangePausedChild();
-    const assertAdmissionCurrent = vi.fn();
+    let lifecycleRevision: string | undefined;
+    const assertAdmissionCurrent = vi.fn(() => ({ sessionId, lifecycleRevision, updatedAt: 1 }));
     let currentSessionId = sessionId;
     const adopt = await state.prepare({
       getSessionId: () => currentSessionId,
@@ -235,6 +268,9 @@ it.each(["cancel", "complete", "replace", "session", "caller", "admission"] as c
     }
     if (race === "session") {
       currentSessionId = "replaced-session";
+    }
+    if (race === "revision") {
+      lifecycleRevision = "successor-incarnation";
     }
     if (race === "caller") {
       state.caller.assertCurrent.mockImplementation(() => {

@@ -28,6 +28,7 @@ import * as requesterAuthority from "../../agents/subagents/requester-cron-autho
 import * as requesterAttachment from "../../agents/subagents/requester-final-attachment.js";
 import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as transcriptArchive from "../../config/sessions/session-accessor.sqlite-archive.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
@@ -56,6 +57,8 @@ async function createInitialYieldFixture(label: string) {
   await registerSubagentRun({
     runId,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: `${runId}-session` },
     requesterSessionKey,
     requesterAgentId: "main",
     requesterTurnRunId,
@@ -145,6 +148,8 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   for (const child of children) {
     await registerSubagentRun({
       ...child,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: child.childSessionKey }),
       requesterSessionKey,
       requesterAgentId: "main",
       requesterTurnRunId,

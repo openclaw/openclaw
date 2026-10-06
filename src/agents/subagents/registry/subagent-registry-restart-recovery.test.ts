@@ -22,6 +22,44 @@ const { mocks, childSessionKey, gatewayRuntime, dispatchAgent, run, recover } =
 describe("subagent registry restart recovery", () => {
   beforeEach(() => restartRecoveryTestHarness.reset());
 
+  it.each(["owning agent", "original session incarnation"] as const)(
+    "diagnoses a retained unresolved %s once without attempting recovery",
+    async (missing) => {
+      const entry = run(
+        missing === "owning agent"
+          ? { childSessionKey: "global", childAgentId: undefined }
+          : { childSessionIdentity: undefined },
+      );
+      const before = structuredClone(entry);
+      const { sweeper, runs, warn, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
+        { current: gatewayRuntime },
+        entry,
+      );
+
+      await sweeper.recoverInterruptedRuns();
+      await sweeper.recoverInterruptedRuns();
+      await sweeper.sweepOnce();
+
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "retained subagent record cannot be recovered",
+        expect.objectContaining({
+          runId: entry.runId,
+          childSessionKey: entry.childSessionKey,
+          error: expect.objectContaining({
+            message: expect.stringContaining(
+              `its ${missing} is unresolved. No child work was changed. Inspect the retained record`,
+            ),
+          }),
+        }),
+      );
+      expect(runs.get(entry.runId)).toEqual(before);
+      expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
+      expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
+      expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+      expect(dispatchAgent).not.toHaveBeenCalled();
+    },
+  );
+
   it("pauses startup settlement until the crash-loop breaker releases the periodic sweep", async () => {
     vi.useFakeTimers();
     const pausedUntilMs = Date.now() + 2_000;
@@ -170,6 +208,43 @@ describe("subagent registry restart recovery", () => {
   });
 
   describe("orphaned session executions", () => {
+    it.each([
+      { originalRevision: undefined, currentRevision: "replacement-revision" },
+      { originalRevision: "original-revision", currentRevision: undefined },
+      { originalRevision: "original-revision", currentRevision: "replacement-revision" },
+    ])(
+      "refuses a same-sessionId recovery with a changed revision ($originalRevision -> $currentRevision)",
+      async ({ originalRevision, currentRevision }) => {
+        const entry = run({
+          childSessionIdentity: { sessionId: "session-id", lifecycleRevision: originalRevision },
+        });
+        entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+        rotateAgentEventLifecycleGeneration();
+        Object.assign(mocks.entries[childSessionKey]!, {
+          lifecycleRevision: currentRevision,
+          lifecycleRunId: entry.runId,
+          abortedLastRun: false,
+        });
+        const beforeRun = structuredClone(entry);
+        const beforeSession = structuredClone(mocks.entries[childSessionKey]);
+
+        expect(await recover(entry)).toEqual({ status: "deferred" });
+
+        expect(entry).toEqual(beforeRun);
+        expect(mocks.entries[childSessionKey]).toEqual(beforeSession);
+        expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
+        expect(dispatchAgent).not.toHaveBeenCalled();
+        expect(restartRecoveryTestHarness.warn).toHaveBeenCalledWith(
+          "failed to reconcile interrupted subagent execution",
+          expect.objectContaining({
+            error: expect.objectContaining({
+              message: expect.stringContaining("Inspect the retained record"),
+            }),
+          }),
+        );
+      },
+    );
+
     it.each([60_000, 3 * 24 * 60 * 60_000])(
       "reconciles a hard-kill orphan last observed %i ms ago",
       async (ageMs) => {

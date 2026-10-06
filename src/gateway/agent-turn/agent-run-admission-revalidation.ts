@@ -1,4 +1,5 @@
 import { ErrorCodes, type ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -50,7 +51,7 @@ export function createAgentRunAdmissionRevalidator(options: {
     getOwnedAgentDedupeKeys: () => readonly string[];
     admissionAgentId: () => string | undefined;
     runId: string;
-    assertGatewayWorkAdmissionAllowed: () => void;
+    assertGatewayWorkAdmissionAllowed: () => SessionEntry | undefined;
     client: AgentTurnPrincipal | null;
     cfg: OpenClawConfig;
     resolvedSessionKey?: string;
@@ -84,7 +85,7 @@ export function createAgentRunAdmissionRevalidator(options: {
   return (userTurn?: PreparedAgentRunUserTurn): true | Promise<undefined> => {
     const disposition = parentResume ? "cancelled" : "interrupted";
     try {
-      params.assertGatewayWorkAdmissionAllowed();
+      const sessionEntry = params.assertGatewayWorkAdmissionAllowed();
       if (parentResume) {
         if (params.client?.internal?.syntheticClient !== true) {
           throw new Error("Task resume requires trusted in-process admission.");
@@ -94,6 +95,7 @@ export function createAgentRunAdmissionRevalidator(options: {
           resume: parentResume,
           sessionKey: params.resolvedSessionKey,
           sessionId: params.getAdmittedSessionId(),
+          sessionLifecycleRevision: sessionEntry?.lifecycleRevision,
         });
       }
     } catch (err) {

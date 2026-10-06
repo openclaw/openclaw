@@ -30,6 +30,7 @@ import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-c
 import * as requesterAttachment from "../../agents/subagents/requester-final-attachment.js";
 import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
@@ -80,6 +81,8 @@ async function createYieldedChild(withSibling = false) {
   for (const child of children) {
     await registerSubagentRun({
       ...child,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: child.childSessionKey }),
       requesterSessionKey,
       requesterAgentId: "main",
       requesterTurnRunId,
@@ -147,6 +150,8 @@ it.each(["unchanged", "replaced", "empty"] as const)(
       await registerSubagentRun({
         runId,
         childSessionKey: "agent:main:subagent:cold-initial-child",
+        childAgentId: "main",
+        sessionEntry: { sessionId: "cold-initial-child-session" },
         requesterSessionKey,
         requesterAgentId: "main",
         requesterTurnRunId,
@@ -393,6 +398,8 @@ it.each([
       await registerSubagentRun({
         runId: healthyRunId,
         childSessionKey: healthyChild,
+        childAgentId: "other",
+        sessionEntry: loadSessionEntry({ agentId: "other", sessionKey: healthyChild }),
         requesterSessionKey: healthyRequester,
         requesterAgentId: "other",
         requesterTurnRunId: "independent-restored-parent",
@@ -682,6 +689,8 @@ it("joins a real authority preparation without releasing borrowed facts before y
   await registerSubagentRun({
     runId,
     childSessionKey: "agent:main:subagent:joined-authority-child",
+    childAgentId: "main",
+    sessionEntry: { sessionId: "joined-authority-child-session" },
     requesterSessionKey,
     requesterAgentId: "main",
     requesterTurnRunId,

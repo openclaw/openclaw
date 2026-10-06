@@ -45,6 +45,7 @@ describe("subagent spawn cleanup identity", () => {
       method: "sessions.delete",
       params: {
         key: "agent:main:subagent:child",
+        agentId: "main",
         emitLifecycleHooks: false,
         deleteTranscript: true,
         expectedSessionId: "session-id",

@@ -13,6 +13,11 @@ import {
 import { resolveEventSessionKey } from "../../../routing/session-key.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
 import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthorityError,
+} from "../registry/subagent-child-owner-match.js";
+import {
   consumeSubagentPauseNotice,
   completeRequesterSettleWakeState,
   transitionRequesterSettleWakeState,
@@ -87,6 +92,7 @@ export function retiredCancellationEndedAt(
 ): number | undefined {
   const endedAt = subagent.execution.endedAt;
   if (
+    resolveSubagentChildAuthorityError(subagent) ||
     subagent.execution.status !== "terminal" ||
     subagent.execution.outcome?.status !== "error" ||
     subagent.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
@@ -118,8 +124,11 @@ function ownsRetiredCancellation(
   expected: SubagentRunRecord,
 ): boolean {
   const newerSibling = (candidate: SubagentRunRecord) =>
-    candidate.childSessionKey === subagent.childSessionKey &&
-    compareSubagentRunGeneration(candidate, subagent) > 0;
+    matchesSubagentChildSessionOwner(
+      candidate,
+      subagent.childSessionKey,
+      resolveSubagentChildAgentId(subagent),
+    ) && compareSubagentRunGeneration(candidate, subagent) > 0;
   return (
     compareSubagentRunGeneration(subagent, expected) === 0 &&
     !loadSubagentRunsForChildSessionFromSqlite(subagent.childSessionKey, database).some(
@@ -448,7 +457,12 @@ function reconcileRequesterWake(
     const row = readSubagentRunRow(database, expected.runId);
     if (
       loadSubagentRunsForChildSessionFromSqlite(originalCanonical.childSessionKey, database).some(
-        (candidate) => compareSubagentRunGeneration(candidate, originalCanonical) > 0,
+        (candidate) =>
+          matchesSubagentChildSessionOwner(
+            candidate,
+            originalCanonical.childSessionKey,
+            resolveSubagentChildAgentId(originalCanonical),
+          ) && compareSubagentRunGeneration(candidate, originalCanonical) > 0,
       )
     ) {
       throw new Error("Requester wake reconciliation was superseded");

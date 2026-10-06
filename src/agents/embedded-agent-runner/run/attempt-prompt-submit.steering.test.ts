@@ -79,6 +79,8 @@ async function prepareSteering() {
   await registerSubagentRun({
     runId: childRunId,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: "kept-child-session" },
     requesterSessionKey,
     requesterDisplayKey: "main",
     task: "Inspect the findings",
@@ -411,6 +413,8 @@ async function publishChild(runId: string, resultText: string) {
   await registerSubagentRun({
     runId,
     childSessionKey: publishedSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: childSessionId },
     requesterSessionKey,
     requesterDisplayKey: "main",
     task: "Inspect the findings",

@@ -11,6 +11,7 @@ import { rowToSubagentRunRecord } from "../../agents/subagents/registry/subagent
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  loadSessionEntry,
   markSessionAbortTarget,
   replaceSessionEntry,
   resolveSessionAbortTarget,
@@ -440,7 +441,7 @@ describe("abort detection", () => {
     const childKey = "agent:main:subagent:slow-persistence-child";
     const sessionId = "session-slow-persistence";
     const childSessionId = "session-slow-persistence-child";
-    const { root, cfg } = await createAbortConfig({
+    const { root, storePath, cfg } = await createAbortConfig({
       sessionIdsByKey: {
         [childKey]: childSessionId,
         [sessionKey]: sessionId,
@@ -478,6 +479,8 @@ describe("abort detection", () => {
     await addSubagentFixture({
       runId: "slow-child-run",
       childSessionKey: childKey,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ storePath, agentId: "main", sessionKey: childKey }),
       requesterSessionKey: sessionKey,
       requesterDisplayKey: sessionKey,
       task: "slow child",
@@ -572,6 +575,8 @@ describe("abort detection", () => {
         await registerSubagentRun({
           runId: "during-acp-wait",
           childSessionKey: "agent:main:subagent:during-acp-wait",
+          childAgentId: "main",
+          sessionEntry: { sessionId: "during-acp-wait-session" },
           requesterSessionKey: sessionKey,
           requesterAgentId: "main",
           requesterDisplayKey: sessionKey,
@@ -755,6 +760,8 @@ describe("abort detection", () => {
     const run = (runId: string, childSessionKey: string): SubagentRunFixture => ({
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId: runId },
       requesterSessionKey: sessionKey,
       requesterDisplayKey: sessionKey,
       task: "stop despite persistence failure",

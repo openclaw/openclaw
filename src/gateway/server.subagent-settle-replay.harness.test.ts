@@ -87,6 +87,8 @@ describe("public yielded settle replay with real Gateway admission", () => {
     child = {
       runId: `settle-replay-child-${sequence}`,
       childSessionKey: `agent:main:subagent:settle-replay-child-${sequence}`,
+      childAgentId: "main",
+      childSessionIdentity: { sessionId: `settle-replay-child-session-${sequence}` },
       requesterSessionKey,
       requesterDisplayKey: requesterSessionKey,
       requesterAgentId: "main",

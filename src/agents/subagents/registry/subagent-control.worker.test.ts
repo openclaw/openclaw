@@ -31,11 +31,17 @@ import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-age
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { createOpenClawTools } from "../../openclaw-tools.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
-import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createSubagentRunRecord,
+  isSubagentRegistryWriteCommand,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
 import { holdQueuedSwarmRun, releaseSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import * as registryState from "./subagent-registry-state.js";
 import { registerSubagentRun } from "./subagent-registry.js";
@@ -56,6 +62,8 @@ it.each(["caller admission", "session generation"] as const)(
     await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
       requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -162,6 +170,8 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
       const registration = {
         runId,
         childSessionKey: sessionKey,
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
         requesterSessionKey: "agent:main:main",
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -364,23 +374,42 @@ it.each([
       ).toBe(true);
     }
     for (const id of [runId, siblingId]) {
-      // Fixture seeding ends before the observed Stop, without scheduling maintenance tails.
-      if (!missingStore || id !== runId) {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: key(id) },
-          {
-            sessionId: `${id}-session`,
-            updatedAt: Date.now(),
-            lifecycleRevision: `${id}-revision`,
-            inputTokens: 11,
-            outputTokens: 7,
-            totalTokens: 18,
-          },
-        );
+      if (missingStore && id === runId) {
+        const retained = createSubagentRunRecord({
+          runId: id,
+          childSessionKey: key(id),
+          childAgentId: "missing",
+          childSessionIdentity: undefined,
+          requesterSessionKey: requester,
+          requesterAgentId: "main",
+          execution: { status: "queued" },
+          collect: true,
+          expectsCompletionMessage: false,
+        });
+        await mutateSubagentRuns([id], () => ({
+          value: undefined,
+          postimages: new Map([[id, retained]]),
+        }));
+        continue;
       }
+      // Fixture seeding ends before the observed Stop, without scheduling maintenance tails.
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key(id) },
+        {
+          sessionId: `${id}-session`,
+          updatedAt: Date.now(),
+          lifecycleRevision: `${id}-revision`,
+          inputTokens: 11,
+          outputTokens: 7,
+          totalTokens: 18,
+        },
+      );
       await registerSubagentRun({
         runId: id,
         childSessionKey: key(id),
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(id) })
+          ?.entry,
         requesterSessionKey: requester,
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -442,6 +471,7 @@ it.each([
     }
     await fixture.settle();
     registryState.clearSubagentRunsReadCacheForTest();
+    const beforeStop = structuredClone(subagentRuns.get(runId));
     // Warm initialization ends here. Count all eight host APIs through Stop and
     // its owned settlement; independent durable readbacks begin after restore.
     const sql = observeParentSqlite();
@@ -469,8 +499,11 @@ it.each([
       const result = await cancellation;
       expect(result.details, JSON.stringify(result.details)).toMatchObject({
         found: true,
-        killed: !earlierSuccess,
+        killed: !earlierSuccess && !missingStore,
         runId,
+        ...(missingStore
+          ? { error: expect.stringContaining("original session incarnation is unresolved") }
+          : {}),
         ...(earlierSuccess ? { targetState: { task: { status: "succeeded" } } } : {}),
       });
       // Include required native finalization work, including tails the baseline fails to await.
@@ -497,6 +530,15 @@ it.each([
     }
     try {
       const persisted = loadSubagentRegistryFromSqlite();
+      if (missingStore) {
+        expect(persisted.get(runId)).toEqual(beforeStop);
+        expect(persisted.get(siblingId)?.execution.endedAt).toBeUndefined();
+        expect(handles.find(({ id }) => id === siblingId)?.abort).not.toHaveBeenCalled();
+        unexpectedHold = holdQueuedSwarmRun(runId);
+        expect(unexpectedHold).toBeDefined();
+        expect(counts).toEqual(emptySqliteCounts());
+        return;
+      }
       expect(persisted.get(runId)).toMatchObject({
         execution: {
           status: "terminal",

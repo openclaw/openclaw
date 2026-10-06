@@ -413,6 +413,8 @@ it.each([
     await registerSubagentRun({
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId },
       requesterSessionKey,
       requesterAgentId: "main",
       requesterDisplayKey: requesterSessionKey,

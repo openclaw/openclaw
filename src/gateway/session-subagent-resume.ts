@@ -5,6 +5,7 @@ import {
 } from "../agents/subagents/registry/subagent-control-scope.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TrustedSubagentResume } from "./in-process-subagent-resume.js";
 import type { GatewayContextResolver, TrustedAgentToolCaller } from "./server-methods/types.js";
@@ -86,15 +87,25 @@ export function bindParentSubagentResume(params: {
   caller: TrustedAgentToolCaller;
   childSessionKey: string;
   childSessionId: string;
+  childLifecycleRevision?: string;
 }): TrustedSubagentResume {
   if (!params.childSessionId) {
     throw new Error("Task resume requires an existing child session.");
   }
   const entry = requirePausedChild(params.cfg, params.caller, params.childSessionKey);
+  if (
+    entry.childSessionIdentity?.sessionId !== params.childSessionId ||
+    entry.childSessionIdentity.lifecycleRevision !== params.childLifecycleRevision
+  ) {
+    throw new Error(
+      "Paused child session incarnation changed or is unresolved; inspect subagents again.",
+    );
+  }
   return Object.freeze({
     caller: params.caller,
     childSessionKey: params.childSessionKey,
     childSessionId: params.childSessionId,
+    childLifecycleRevision: params.childLifecycleRevision,
     previousRunId: entry.runId,
     taskRunId: entry.taskRunId ?? entry.runId,
     generation: entry.generation,
@@ -108,12 +119,16 @@ export function assertParentSubagentResumeCurrent(params: {
   resume: TrustedSubagentResume;
   sessionKey: string | undefined;
   sessionId: string;
+  sessionLifecycleRevision?: string;
 }): SubagentRunRecord {
   const { resume } = params;
   const entry = requirePausedChild(params.cfg, resume.caller, resume.childSessionKey);
   if (
     params.sessionKey !== resume.childSessionKey ||
     params.sessionId !== resume.childSessionId ||
+    params.sessionLifecycleRevision !== resume.childLifecycleRevision ||
+    entry.childSessionIdentity?.sessionId !== resume.childSessionId ||
+    entry.childSessionIdentity.lifecycleRevision !== resume.childLifecycleRevision ||
     entry.runId !== resume.previousRunId ||
     (entry.taskRunId ?? entry.runId) !== resume.taskRunId ||
     entry.generation !== resume.generation ||
@@ -153,16 +168,17 @@ export async function prepareParentSubagentResume(params: {
   getSessionId: () => string;
   runId: string;
   task: string;
-  assertAdmissionCurrent: () => void;
+  assertAdmissionCurrent: () => SessionEntry | undefined;
   onAdopted?: (entry: SubagentRunRecord) => void;
   gatewayContextResolver?: GatewayContextResolver;
 }): Promise<() => Promise<string>> {
   const runtime = await import("../agents/subagents/registry/subagent-registry.js");
   return async () => {
-    params.assertAdmissionCurrent();
+    const sessionEntry = params.assertAdmissionCurrent();
     const expected = assertParentSubagentResumeCurrent({
       ...params,
       sessionId: params.getSessionId(),
+      sessionLifecycleRevision: sessionEntry?.lifecycleRevision,
     });
     const adopted = await runtime.adoptPausedSubagentRunForFollowUp({
       childSessionKey: params.resume.childSessionKey,
@@ -172,8 +188,12 @@ export async function prepareParentSubagentResume(params: {
       onPublished: params.onAdopted,
       gatewayContextResolver: params.gatewayContextResolver,
       assertCurrent: () => {
-        params.assertAdmissionCurrent();
-        assertParentSubagentResumeCurrent({ ...params, sessionId: params.getSessionId() });
+        const currentSessionEntry = params.assertAdmissionCurrent();
+        assertParentSubagentResumeCurrent({
+          ...params,
+          sessionId: params.getSessionId(),
+          sessionLifecycleRevision: currentSessionEntry?.lifecycleRevision,
+        });
       },
     });
     if (!adopted) {

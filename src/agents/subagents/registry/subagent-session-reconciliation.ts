@@ -1,10 +1,6 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../../config/config.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-  type InternalSessionEntry as SessionEntry,
-} from "../../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
@@ -75,9 +71,8 @@ export async function loadSubagentSessionEntry(params: {
   if (!key) {
     return undefined;
   }
-  const agentId = resolveAgentIdFromSessionKey(key, params.childAgentId);
   const cfg = params.cfg ?? getRuntimeConfig();
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(params, cfg);
   if (isIncognitoSessionKey(key) && captureIncognitoSessionSource()) {
     return withSubagentSessionEntry({ ...params, cfg }, (entry) => entry);
   }

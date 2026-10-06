@@ -13,6 +13,7 @@ import {
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
 import { holdQueuedSwarmRun, isSwarmRunActive } from "../swarm/swarm-scheduler.js";
+import { resolveSubagentChildAuthorityError } from "./subagent-child-owner-match.js";
 import { matchesSubagentKillIntent } from "./subagent-control-kill-intent.js";
 import {
   persistSubagentAbortedLastRun,
@@ -44,14 +45,16 @@ const log = createSubsystemLogger("agents/subagent-registry");
 class SubagentRunManager extends SubagentLaunchManager {
   readonly releaseSubagentRun = async (runId: string): Promise<void> => {
     const selected = this.options.runs.get(runId);
-    if (!selected) {
+    if (!selected || resolveSubagentChildAuthorityError(selected)) {
       return;
     }
     const entry = await mutateSubagentRuns(
       [runId],
       (rows) => {
         const current = rows.get(runId);
-        return current && isSameSubagentRunOwner(current, selected)
+        return current &&
+          !resolveSubagentChildAuthorityError(current) &&
+          isSameSubagentRunOwner(current, selected)
           ? { value: current, postimages: new Map([[runId, null]]) }
           : { value: undefined };
       },
@@ -115,6 +118,7 @@ class SubagentRunManager extends SubagentLaunchManager {
         if (
           !runId ||
           !entry ||
+          resolveSubagentChildAuthorityError(entry) ||
           !isSameSubagentRunOwner(entry, claimParams.expected) ||
           entry.killReconciliation ||
           entry.killIntent ||
@@ -149,6 +153,7 @@ class SubagentRunManager extends SubagentLaunchManager {
         if (
           !runId ||
           !entry ||
+          resolveSubagentChildAuthorityError(entry) ||
           !isSameSubagentRunOwner(entry, releaseParams.expected) ||
           !claim ||
           !matchesSubagentKillIntent(claim, releaseParams.claim)
@@ -201,7 +206,7 @@ class SubagentRunManager extends SubagentLaunchManager {
     const selected = new Map(
       [...runIds].flatMap((id) => {
         const entry = this.options.runs.get(id);
-        return entry ? [[id, entry] as const] : [];
+        return entry && !resolveSubagentChildAuthorityError(entry) ? [[id, entry] as const] : [];
       }),
     );
     let published = false;
@@ -264,6 +269,7 @@ class SubagentRunManager extends SubagentLaunchManager {
             assertCurrent,
             entry.execution.transcriptTarget,
             entry.childAgentId,
+            entry.childSessionIdentity,
           );
           sessions.set(entry.runId, session);
         }
@@ -284,7 +290,7 @@ class SubagentRunManager extends SubagentLaunchManager {
             const postimages = new Map<string, SubagentRunRecord | null>();
             for (const runId of runIds) {
               const current = rows.get(runId);
-              if (!current) {
+              if (!current || resolveSubagentChildAuthorityError(current)) {
                 continue;
               }
               const entry = structuredClone(current);

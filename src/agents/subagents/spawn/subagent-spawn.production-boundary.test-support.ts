@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
@@ -424,6 +425,11 @@ export function registerYieldedRequesterBatchCase(options: {
         await registry.registerSubagentRun({
           runId: bound.parentRunId,
           childSessionKey: bound.parentSessionKey,
+          childAgentId: "main",
+          sessionEntry: expectDefined(
+            loadSessionEntry({ storePath: bound.storePath, sessionKey: bound.parentSessionKey }),
+            "registered parent session",
+          ),
           requesterSessionKey: "agent:main:main",
           requesterAgentId: "main",
           requesterDisplayKey: "main",

@@ -74,9 +74,15 @@ export function registerRestoredRollbackPublicationTest({
     const now = Date.now();
     mockSingleCollectorConcurrency();
     mockRestoredRuns(() => [
-      makeQueuedRun({ runId: "run-restored-stop-one", groupId: "restore-stop", createdAt: now }),
+      makeQueuedRun({
+        runId: "run-restored-stop-one",
+        childSessionIdentity: { sessionId: "one", lifecycleRevision: "revision-one" },
+        groupId: "restore-stop",
+        createdAt: now,
+      }),
       makeQueuedRun({
         runId: "run-restored-stop-two",
+        childSessionIdentity: { sessionId: "two", lifecycleRevision: "revision-two" },
         groupId: "restore-stop",
         createdAt: now + 1,
       }),
@@ -87,7 +93,11 @@ export function registerRestoredRollbackPublicationTest({
         lifecycleRevision: "revision-one",
         updatedAt: now,
       },
-      "agent:main:subagent:run-restored-stop-two": { sessionId: "two", updatedAt: now },
+      "agent:main:subagent:run-restored-stop-two": {
+        sessionId: "two",
+        lifecycleRevision: "revision-two",
+        updatedAt: now,
+      },
     };
     let agentCalls = 0;
     const dispatchedSessionKeys: unknown[] = [];
@@ -229,6 +239,10 @@ export function registerRestoredRequesterWakeSettlementTests({
         createSubagentRunRecord({
           runId,
           childSessionKey: `agent:main:subagent:${runId}`,
+          childSessionIdentity: {
+            sessionId: `session-${runId}`,
+            lifecycleRevision: `revision-${runId}`,
+          },
           requesterAgentId: "main",
           task: "restore requester settle wake",
           cleanup: "delete",
@@ -371,11 +385,13 @@ export function registerRestoredRotationFailureTest({
     mockRestoredRuns(() => [
       makeQueuedRun({
         runId: "run-restored-rotation-one",
+        childSessionIdentity: { sessionId: "one", lifecycleRevision: "revision-one" },
         groupId: "restore-lifecycle-rotation",
         createdAt: now,
       }),
       makeQueuedRun({
         runId: "run-restored-rotation-two",
+        childSessionIdentity: { sessionId: "two", lifecycleRevision: "revision-two" },
         groupId: "restore-lifecycle-rotation",
         createdAt: now + 1,
       }),

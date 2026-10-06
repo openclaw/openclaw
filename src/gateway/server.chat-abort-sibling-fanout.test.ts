@@ -182,7 +182,7 @@ for (const { name, fault, replaceParent } of [
         expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
         for (const runId of selected) {
-          await writeSubagentSessionEntry({
+          const childStorePath = await writeSubagentSessionEntry({
             stateDir,
             agentId: "main",
             sessionKey: sessionKey(runId),
@@ -196,6 +196,11 @@ for (const { name, fault, replaceParent } of [
           await registerSubagentRun({
             runId,
             childSessionKey: sessionKey(runId),
+            childAgentId: "main",
+            sessionEntry: loadExactSessionEntryReadOnly({
+              storePath: childStorePath,
+              sessionKey: sessionKey(runId),
+            })?.entry,
             requesterSessionKey: parentKey,
             requesterAgentId: "main",
             requesterTurnRunId: parentRunId,
