@@ -7,22 +7,9 @@ const X_API_ORIGIN = "https://api.x.com";
 const POST_FIELDS =
   "author_id,conversation_id,created_at,in_reply_to_user_id,referenced_tweets,entities";
 
-export type XPost = {
-  id: string;
-  text: string;
-  author_id: string;
-  conversation_id: string;
-  created_at?: string;
-  in_reply_to_user_id?: string;
-  referenced_tweets?: { type: "replied_to" | "quoted" | "retweeted"; id: string }[];
-  entities?: { mentions?: { id?: string; username: string }[] };
-};
+export type XPost = NonNullable<ReturnType<typeof parseXPost>>;
 export type XUser = { id: string; username: string; name?: string };
-export type XPage = {
-  data: XPost[];
-  includes: { users: XUser[]; tweets: XPost[] };
-  meta: { newest_id?: string; next_token?: string };
-};
+export type XPage = ReturnType<typeof parsePage>;
 export type XPostEnvelope = { post: XPost; users: XUser[]; recipientPending?: true };
 export type XFetch = (input: string, init?: RequestInit) => Promise<Response>;
 export type XTokenState = "idle" | "refreshing" | "ready" | "error";
@@ -83,7 +70,7 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-export function parseXPost(input: unknown): XPost | undefined {
+export function parseXPost(input: unknown) {
   const row = record(input);
   if (
     !row ||
@@ -97,7 +84,7 @@ export function parseXPost(input: unknown): XPost | undefined {
   ) {
     return undefined;
   }
-  const references: NonNullable<XPost["referenced_tweets"]> = [];
+  const references: { type: "replied_to" | "quoted" | "retweeted"; id: string }[] = [];
   for (const value of Array.isArray(row.referenced_tweets) ? row.referenced_tweets : []) {
     const reference = record(value);
     if (
@@ -164,7 +151,7 @@ export function parseXPostEnvelope(input: unknown): XPostEnvelope | undefined {
     : undefined;
 }
 
-function parsePage(input: unknown): XPage {
+function parsePage(input: unknown) {
   const row = record(input);
   if (!row || (row.data !== undefined && !Array.isArray(row.data))) {
     throw new Error("X API returned an invalid post page");

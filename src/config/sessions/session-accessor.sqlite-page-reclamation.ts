@@ -62,7 +62,7 @@ export async function readSqliteSessionArchivePruning(
   };
   assertExistingDatabaseIdentity(options.path, physical.key);
   return withSessionHistoryWorkerDatabase(
-    { ...databaseOptions, requestedPath: options.path },
+    { ...databaseOptions, requestedPaths: [options.path] },
     async (reader) => {
       assertExistingDatabaseIdentity(options.path, physical.key);
       const result = await reader.readArchivePruning({
@@ -276,7 +276,7 @@ export async function withSqliteSessionPageReclamation<T>(
     try {
       assertPruningCurrent();
       return await withSessionHistoryWorkerDatabase(
-        { ...databaseOptions, requestedPath: options.path },
+        { ...databaseOptions, requestedPaths: [options.path] },
         async (reader) => {
           assertPruningCurrent();
           return run(

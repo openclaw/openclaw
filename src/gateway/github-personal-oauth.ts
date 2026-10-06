@@ -158,21 +158,6 @@ function requirePending(
   return { ...record, pending: record.pending };
 }
 
-function rotatedSelection(
-  selection: UserGitHubConnected,
-  tokens: GitHubOAuthTokenPair,
-  receivedAtMs: number,
-): UserGitHubConnected {
-  return {
-    ...selection,
-    refreshToken: tokens.refreshToken,
-    scopes: tokens.scopes,
-    accessExpiresAtMs: receivedAtMs + tokens.expiresInSeconds * 1000,
-    refreshExpiresAtMs: receivedAtMs + tokens.refreshTokenExpiresInSeconds * 1000,
-    refreshFailure: undefined,
-  };
-}
-
 function needsRefresh(selection: UserGitHubConnected): boolean {
   return (
     Boolean(selection.refresh?.tokens) ||
@@ -385,7 +370,13 @@ export function createPersonalGitHubOAuthLifecycle() {
     updateUserGitHubRefresh({
       ...pending,
       update: (selection) => ({
-        ...rotatedSelection(selection, pending.tokens, pending.receivedAtMs),
+        ...selection,
+        refreshToken: pending.tokens.refreshToken,
+        scopes: pending.tokens.scopes,
+        accessExpiresAtMs: pending.receivedAtMs + pending.tokens.expiresInSeconds * 1000,
+        refreshExpiresAtMs:
+          pending.receivedAtMs + pending.tokens.refreshTokenExpiresInSeconds * 1000,
+        refreshFailure: undefined,
         refresh: {
           operationId: pending.operationId,
           tokens: pending.tokens,

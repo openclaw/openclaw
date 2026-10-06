@@ -539,7 +539,10 @@ it.each([0, 32 * 24 * 60 * 60 * 1_000])(
         updatedAt: updatedAt - clockRollbackMs - 2_000,
       });
     }, scope);
-    const release = registerSessionMaintenancePreserveKeysProvider(() => [sessionKey]);
+    const release = registerSessionMaintenancePreserveKeysProvider(async () => ({
+      capture: () => [sessionKey],
+      dispose() {},
+    }));
     try {
       kickSessionEntryMaintenanceAfterWrite(request);
       await yieldToEventLoop();

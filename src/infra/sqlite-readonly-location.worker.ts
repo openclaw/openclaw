@@ -2,6 +2,7 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { jsonFieldBatches } from "./json-field-transfer.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
@@ -285,15 +286,14 @@ function runSession(): void {
         assertExistingDatabaseIdentity(pathname, expectedIdentity);
         const rows = readAuthProfileRowsReadOnly(pathname);
         assertExistingDatabaseIdentity(pathname, expectedIdentity);
-        const handle = transfers.start(
-          [
-            { kind: "store", value: rows.store },
-            { kind: "state", value: rows.state },
-          ].values(),
-          { kinds: ["store", "state"] },
-        );
+        function* rowFields() {
+          for (const batch of jsonFieldBatches(rows)) {
+            yield { kind: "fields", value: batch };
+          }
+        }
+        const handle = transfers.start(rowFields(), { kinds: ["fields"] });
         activeTransfer = { requestId: id, transferId: handle.id, label: "Auth profile" };
-        send(id, { type: "start", handle: { ...handle, cacheable: rows.cacheable } });
+        send(id, { type: "start", handle });
       })().catch((error: unknown) => fail(id, error));
       return;
     }

@@ -1,3 +1,4 @@
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 /** Parent cancellation survives an unreadable descendant partition without hiding failure. */
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
@@ -218,11 +219,11 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
           formatAbortReplyText(result.stoppedSubagents, undefined, result.failedSubagents),
         ).toContain("Cancellation was incomplete for 2 sub-agents");
       }
-      expect(getSubagentRunByChildSessionKey(healthyKey)).toMatchObject({
+      expect(await getSubagentRunByChildSessionKey(healthyKey)).toMatchObject({
         endedReason: "subagent-killed",
       });
       expect(healthyDispatch).not.toHaveBeenCalled();
-      expect(getSubagentRunByChildSessionKey(badKey)?.killIntent).toBeUndefined();
+      expect((await getSubagentRunByChildSessionKey(badKey))?.killIntent).toBeUndefined();
       await vi.waitFor(() => expect(badDispatch).toHaveBeenCalledOnce());
       releaseSwarmRun("bad");
       await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
@@ -352,11 +353,15 @@ it.each([
         result = await killSubagentRunAdmin({ cfg, sessionKey });
       }
       expect(parentAbort, JSON.stringify(result)).toHaveBeenCalledOnce();
-      expect(getSubagentRunByChildSessionKey(sessionKey)?.endedReason).toBe("subagent-killed");
-      expect(getSubagentRunByChildSessionKey(healthyKey)?.endedReason).toBe("subagent-killed");
+      expect((await getSubagentRunByChildSessionKey(sessionKey))?.endedReason).toBe(
+        "subagent-killed",
+      );
+      expect((await getSubagentRunByChildSessionKey(healthyKey))?.endedReason).toBe(
+        "subagent-killed",
+      );
       expect(healthyDispatch).not.toHaveBeenCalled();
       expect(badAbort).not.toHaveBeenCalled();
-      expect(getSubagentRunByChildSessionKey(badKey)?.killIntent).toBeUndefined();
+      expect((await getSubagentRunByChildSessionKey(badKey))?.killIntent).toBeUndefined();
       if (queued) {
         await vi.waitFor(() => expect(badDispatch).toHaveBeenCalledOnce());
         releaseSwarmRun("bad");
@@ -447,10 +452,10 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
     });
     const entered = createDeferred();
     const release = createDeferred();
-    const child = getSubagentRunByChildSessionKey(childKey)!;
+    const child = (await getSubagentRunByChildSessionKey(childKey))!;
     const childTerminated = createDeferred();
     const stopObservingChild = subscribeSubagentRunChanges("persistence", () => {
-      const current = getSubagentRunByChildSessionKey(childKey);
+      const current = subagentRuns.get(child.runId);
       if (isSameSubagentRunOwner(current, child) && current?.endedReason === "subagent-killed") {
         childTerminated.resolve();
       }
@@ -518,7 +523,9 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       );
       expect(parent.controller.signal.aborted).toBe(true);
       expect(context.chatAbortControllers.has("parent")).toBe(false);
-      expect(getSubagentRunByChildSessionKey(childKey)?.endedReason).toBe("subagent-killed");
+      expect((await getSubagentRunByChildSessionKey(childKey))?.endedReason).toBe(
+        "subagent-killed",
+      );
       // Explicit reset drains children, including native /new. Keep the original
       // abort pending on its marker publication, not on work the reset must stop.
       clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
@@ -579,7 +586,9 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       release.resolve();
       const response = await abort;
       expect(response).toHaveBeenCalledWith(true, expect.objectContaining({ aborted: true }));
-      expect(getSubagentRunByChildSessionKey(childKey)?.endedReason).toBe("subagent-killed");
+      expect((await getSubagentRunByChildSessionKey(childKey))?.endedReason).toBe(
+        "subagent-killed",
+      );
       expect(
         await loadTranscriptEvents(scope),
         "old partial must not cross the committed lifecycle boundary",

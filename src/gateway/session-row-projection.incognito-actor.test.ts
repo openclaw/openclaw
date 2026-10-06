@@ -12,8 +12,8 @@ import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-ex
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withIncognitoSessionRow } from "./session-row-projection-incognito.js";
 import { readResidentSessionRow } from "./session-row-projection-materialize.js";
+import { withIncognitoSessionRow } from "./session-row-projection-read.js";
 import type { Row } from "./session-row-projection-record.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { presentSessionRow } from "./session-utils-row.js";

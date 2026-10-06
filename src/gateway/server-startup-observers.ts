@@ -83,6 +83,13 @@ export async function runGatewayStartupObservers(params: {
     await runWithGatewayIndependentRootWorkAdmission(
       async () => {
         await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
+          // Restored wakes start their admission budget at dispatch. Join reader startup
+          // first, including maintenance that shares compute with foreground admission.
+          const { prewarmGatewaySessionHistory } = await import("./server-history-prewarm.js");
+          await prewarmGatewaySessionHistory(params.config, {
+            includeMaintenance: true,
+            isCancelled: () => params.signal.aborted || params.isClosing?.() === true,
+          });
           const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
           if (!params.signal.aborted && params.isClosing?.() !== true) {
             await activateSubagentRegistry(params.resolveGatewayContext);

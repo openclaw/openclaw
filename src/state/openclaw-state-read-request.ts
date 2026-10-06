@@ -242,6 +242,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "workerPlacements.changeSnapshot") {
     return bytes + stringBytes(command.profileIds ?? []);
   }
+  if (command.type === "workers.placementEnvironmentOwner") {
+    return bytes + Buffer.byteLength(command.environmentId, "utf8");
+  }
   if (command.type === "tui.lastSession.read") {
     return bytes + Buffer.byteLength(command.stateKey, "utf8");
   }
@@ -304,9 +307,11 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
           )
         : command.scope.kind === "session"
           ? Buffer.byteLength(command.scope.sessionKey, "utf8")
-          : command.scope.kind === "ids"
-            ? stringBytes(command.scope.runIds)
-            : 0)
+          : command.scope.kind === "page"
+            ? Buffer.byteLength(command.scope.after ?? "", "utf8")
+            : command.scope.kind === "ids"
+              ? stringBytes(command.scope.runIds)
+              : 0)
     );
   }
   if (command.type === "mcpOAuth.statuses") {

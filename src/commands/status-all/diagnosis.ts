@@ -68,12 +68,8 @@ type DeliveryDiagnosticsLike = {
   }>;
 };
 
-type AgentStatusLike = {
+type AgentStatusLike = Parameters<typeof countActiveStatusAgents>[0]["agentStatus"] & {
   totalSessions: number;
-  agents: Array<{
-    id: string;
-    lastActiveAgeMs?: number | null;
-  }>;
 };
 
 const AGENT_ACTIVITY_SOFT_WARNING_MS = 30 * 60_000;

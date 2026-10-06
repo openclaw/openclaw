@@ -134,7 +134,10 @@ describe("registered correlated completion recovery custody", () => {
         const unavailable = vi
           .spyOn(store, "executeExistingOpenClawStateRead")
           .mockImplementationOnce(async (_options, command) => {
-            expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
+            expect(command).toEqual({
+              type: "subagents.runs",
+              scope: { kind: "page", after: undefined },
+            });
             throw new Error("registry hydration read unavailable");
           });
         try {

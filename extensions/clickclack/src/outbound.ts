@@ -82,10 +82,7 @@ function durableDeliveryDigest(params: {
     .digest("hex");
 }
 
-function mediaDeliveryNonces(params: { deliveryQueueId?: string; deliveryPartIndex?: number }): {
-  message?: string;
-  upload?: string;
-} {
+function mediaDeliveryNonces(params: Parameters<typeof durableDeliveryDigest>[0]) {
   const digest = durableDeliveryDigest(params);
   if (!digest) {
     return {};
@@ -96,10 +93,9 @@ function mediaDeliveryNonces(params: { deliveryQueueId?: string; deliveryPartInd
   };
 }
 
-function textDeliveryNonce(params: {
-  deliveryQueueId?: string;
-  deliveryPartIndex?: number;
-}): string | undefined {
+function textDeliveryNonce(
+  params: Parameters<typeof durableDeliveryDigest>[0],
+): string | undefined {
   const digest = durableDeliveryDigest(params);
   return digest ? `openclaw-text:${digest}` : undefined;
 }
@@ -197,29 +193,17 @@ export async function sendClickClackText(params: {
   return message.id;
 }
 
-export async function sendClickClackMedia(params: {
-  cfg: CoreConfig;
-  accountId?: string | null;
-  to: string;
-  text: string;
-  mediaUrl: string;
-  mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  threadId?: string | number | null;
-  replyToId?: string | number | null;
-  /** Opaque durable intent id used only to derive ClickClack's message nonce. */
-  deliveryQueueId?: string;
-  /** Stable platform-send index within the durable intent. */
-  deliveryPartIndex?: number;
-  /** Records recipient-visible dispatch immediately before message creation. */
-  onPlatformSendDispatch?: () => Promise<void>;
-  assertDirectAdapterHandoff?: () => void;
-  onDeliveryResult?: (result: {
-    messageId: string;
-    receipt: MessageReceipt;
-  }) => Promise<void> | void;
-}): Promise<string> {
+export async function sendClickClackMedia(
+  params: Omit<Parameters<typeof sendClickClackText>[0], "correlationId" | "provenance"> &
+    Pick<OutboundMediaLoadOptions, "mediaAccess" | "mediaReadFile"> & {
+      mediaUrl: string;
+      mediaLocalRoots?: readonly string[];
+      onDeliveryResult?: (result: {
+        messageId: string;
+        receipt: MessageReceipt;
+      }) => Promise<void> | void;
+    },
+): Promise<string> {
   const nonces = mediaDeliveryNonces(params);
   const { account, client } = createOutboundContext(params);
   const maxBytes = Math.min(

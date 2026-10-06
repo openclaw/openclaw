@@ -34,10 +34,7 @@ function hasNoCow(pathname: string): boolean {
   return flags.includes("C");
 }
 
-export function inspectDoctorSqliteNoCow(paths: readonly string[]): {
-  paths: string[];
-  notes: string[];
-} {
+export function inspectDoctorSqliteNoCow(paths: readonly string[]) {
   const result: { paths: string[]; notes: string[] } = { paths: [], notes: [] };
   for (const pathname of new Set(paths)) {
     try {

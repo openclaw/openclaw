@@ -42,6 +42,7 @@ export const runtimeProcessEntrypoints = {
   progressCardStore: runtimeProcessEntrypoint("session-cards/progress-card-store.worker"),
   sessionSharingStore: runtimeProcessEntrypoint("config/sessions/session-sharing-store.worker"),
   sessionForkDomain: runtimeProcessEntrypoint("config/sessions/session-fork-domain.worker"),
+  sessionGoalOperations: runtimeProcessEntrypoint("config/sessions/goals-operations.worker"),
   sessionLifecyclePlanningDomain: runtimeProcessEntrypoint(
     "config/sessions/session-lifecycle-projection.worker",
   ),

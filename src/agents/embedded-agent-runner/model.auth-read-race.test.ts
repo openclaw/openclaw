@@ -1,6 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -48,6 +53,7 @@ import type {
 import { resolveDynamicModelAuthProfile } from "./model.registry-resolution.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const modelAuthReadScope = new AsyncLocalStorage<boolean>();
 
 afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
@@ -141,7 +147,7 @@ it.each([
   );
 });
 
-it.each([
+it.for([
   "inherited",
   "caller timeout",
   "unrelated pin",
@@ -158,7 +164,7 @@ it.each([
   "foreign shared generation",
   "foreign shared replacement",
   "foreign shared portable replacement",
-] as const)("resolves model auth across one OAuth claim and settlement: %s", async (scope) => {
+] as const)("resolves model auth across one OAuth claim and settlement: %s", async (scope, ctx) => {
   const root = tempDirs.make("openclaw-model-auth-refresh-race-");
   const agentDir = path.join(root, "agents/main/agent");
   const localOverride = scope === "cold local account override" || scope === "peer CAS replacement";
@@ -340,8 +346,14 @@ it.each([
   });
   let refresh: ReturnType<typeof manager.resolveOAuthAccess> | undefined;
   let foreignLocalChanged = false;
-  vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(
-    ({ databasePath }) => ({
+  const prepareRowsRead = sqliteRead.prepareAgentAuthProfileRowsRead;
+  vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((options) => {
+    // Only selection reads are held; refresh publication must reach the provider independently.
+    if (!modelAuthReadScope.getStore()) {
+      return prepareRowsRead(options);
+    }
+    const { databasePath } = options;
+    return {
       assertCurrent: () => {},
       dispose: async () => {},
       read: async () => {
@@ -390,21 +402,33 @@ it.each([
           if (activeCredential?.type !== "oauth") {
             throw new Error("Expected current OAuth credential");
           }
-          refresh = manager.resolveOAuthAccess({
-            store: activeStore,
-            profileId,
-            credential: activeCredential,
-            agentDir,
-            forceRefresh: true,
-          });
+          refresh = modelAuthReadScope.exit(() =>
+            manager.resolveOAuthAccess({
+              store: activeStore,
+              profileId,
+              credential: activeCredential,
+              agentDir,
+              forceRefresh: true,
+            }),
+          );
           void refresh.catch(() => {});
-          await refreshEntered.promise;
+          await withinTest(
+            awaitGateBeforeSettlement(
+              refreshEntered.promise,
+              refresh,
+              "OAuth refresh settled before entering the fixture provider",
+            ),
+            ctx.signal,
+          );
           if (foreignSharedChange) {
             const local = loadPersistedAuthProfileStore(readAgentDir)?.profiles[profileId];
             if (scope === "foreign shared replacement") {
               expect(readPendingOAuthRefreshClaimId(local)).toEqual(expect.any(String));
             } else {
-              expect(local).toMatchObject({ copyToAgents: true, refresh: "fixture-local-refresh" });
+              expect(local).toMatchObject({
+                copyToAgents: true,
+                refresh: "fixture-local-refresh",
+              });
             }
           }
           if (localRemoved) {
@@ -454,7 +478,7 @@ it.each([
         } else if (refresh) {
           retryEntered.resolve();
           if (!localOverride) {
-            await settled.promise;
+            await withinTest(settled.promise, ctx.signal);
           }
         }
         return {
@@ -463,27 +487,32 @@ it.each([
           cacheable: true,
         };
       },
+    };
+  });
+  const resolution = modelAuthReadScope.run(true, () =>
+    resolveDynamicModelAuthProfile({
+      provider: scope === "unrelated provider" ? "other" : "custom",
+      modelId: "fixture",
+      agentDir: readAgentDir,
+      authProfileId:
+        scope === "unrelated pin"
+          ? "custom:other"
+          : scope === "unrelated provider"
+            ? undefined
+            : profileId,
     }),
   );
-  const resolution = resolveDynamicModelAuthProfile({
-    provider: scope === "unrelated provider" ? "other" : "custom",
-    modelId: "fixture",
-    agentDir: readAgentDir,
-    authProfileId:
-      scope === "unrelated pin"
-        ? "custom:other"
-        : scope === "unrelated provider"
-          ? undefined
-          : profileId,
-  });
   try {
-    const waitedForRefresh = await Promise.race([
-      retryEntered.promise.then(() => false),
-      observationEntered.promise.then(() => true),
-      resolution.then(() => {
-        throw new Error("Resolution skipped the refresh barrier");
-      }),
-    ]);
+    const waitedForRefresh = await withinTest(
+      Promise.race([
+        retryEntered.promise.then(() => false),
+        observationEntered.promise.then(() => true),
+        resolution.then(() => {
+          throw new Error("Resolution skipped the refresh barrier");
+        }),
+      ]),
+      ctx.signal,
+    );
     if (localOverride) {
       expect(waitedForRefresh).toBe(false);
     } else if (localRemoved || localAdded) {
@@ -584,7 +613,6 @@ it.each([
   } finally {
     releaseRefresh.resolve();
     await Promise.allSettled([resolution, refresh]);
-    await settled.promise;
     stopObservingMutations();
     vi.useRealTimers();
     await cleanupSessionStateForTest({ stateDir: root });
@@ -688,53 +716,65 @@ it.each(["settled", "replaced", "removed", "failed"] as const)(
       });
       let ownerReads = 0;
       let refresh: Promise<unknown> | undefined;
-      vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((owner) => ({
-        assertCurrent: () => {},
-        dispose: async () => {},
-        read: async () => {
-          const ownerAgentDir = path.dirname(owner.databasePath);
-          const rows = persistedRows(
-            readPersistedAuthProfileStoreRaw(ownerAgentDir),
-            readPersistedAuthProfileStateRaw(ownerAgentDir),
-          );
-          if (owner.databasePath !== databasePath) {
+      const prepareRowsRead = sqliteRead.prepareAgentAuthProfileRowsRead;
+      vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((owner) => {
+        if (!modelAuthReadScope.getStore()) {
+          return prepareRowsRead(owner);
+        }
+        return {
+          assertCurrent: () => {},
+          dispose: async () => {},
+          read: async () => {
+            const ownerAgentDir = path.dirname(owner.databasePath);
+            const rows = persistedRows(
+              readPersistedAuthProfileStoreRaw(ownerAgentDir),
+              readPersistedAuthProfileStateRaw(ownerAgentDir),
+            );
+            if (owner.databasePath !== databasePath) {
+              return rows;
+            }
+            ownerReads += 1;
+            if (ownerReads === 1) {
+              // This real claim revokes the first captured read. The provider stays
+              // pending until selection joins it or wrongly begins its second read.
+              refresh = modelAuthReadScope
+                .exit(() =>
+                  manager.resolveOAuthAccess({
+                    store: initialStore,
+                    profileId,
+                    credential: original,
+                    agentDir,
+                    forceRefresh: true,
+                  }),
+                )
+                .then(
+                  (value) => ({ value }),
+                  (error: unknown) => ({ error }),
+                );
+              await Promise.race([providerEntered.promise, refresh]);
+            } else {
+              readingPendingFence.resolve();
+              // Before the repair this read captures the pending fence and its
+              // settlement invalidates the one remaining selection attempt.
+              await refresh;
+            }
             return rows;
-          }
-          ownerReads += 1;
-          if (ownerReads === 1) {
-            // This real claim revokes the first captured read. The provider stays
-            // pending until selection joins it or wrongly begins its second read.
-            refresh = manager
-              .resolveOAuthAccess({
-                store: initialStore,
-                profileId,
-                credential: original,
-                agentDir,
-                forceRefresh: true,
-              })
-              .then(
-                (value) => ({ value }),
-                (error: unknown) => ({ error }),
-              );
-            await Promise.race([providerEntered.promise, refresh]);
-          } else {
-            readingPendingFence.resolve();
-            // Before the repair this read captures the pending fence and its
-            // settlement invalidates the one remaining selection attempt.
-            await refresh;
-          }
-          return rows;
-        },
-      }));
-      const resolution = resolveDynamicModelAuthProfile({
-        provider: "openai",
-        modelId: "fixture",
-        agentDir,
-        ...(outcome === "failed" ? {} : { authProfileId: profileId }),
-      }).then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+          },
+        };
+      });
+      const resolution = modelAuthReadScope
+        .run(true, () =>
+          resolveDynamicModelAuthProfile({
+            provider: "openai",
+            modelId: "fixture",
+            agentDir,
+            ...(outcome === "failed" ? {} : { authProfileId: profileId }),
+          }),
+        )
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
       try {
         await Promise.race([joiningRefresh.promise, readingPendingFence.promise, resolution]);
         releaseProvider.resolve();

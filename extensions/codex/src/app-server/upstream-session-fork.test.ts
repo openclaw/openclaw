@@ -53,8 +53,8 @@ const boundary = {
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   ...(await importOriginal()),
-  deleteSessionUpstreamLink: linkMocks.delete,
-  upsertSessionUpstreamLink: linkMocks.upsert,
+  deleteSessionUpstreamLinkAsync: linkMocks.delete,
+  upsertSessionUpstreamLinkAsync: linkMocks.upsert,
 }));
 
 vi.mock("./transcript-mirror.js", async (importOriginal) => ({

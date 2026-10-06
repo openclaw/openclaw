@@ -56,6 +56,10 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const maintenance = vi.hoisted(() => ({
   signal: new AbortController().signal,
+  serviceUpdateVerdict: undefined,
+  warnings: [],
+  failureFacts: [],
+  databaseWrites: undefined,
   run: <T>(operation: () => T): T => operation(),
   finish: vi.fn(),
   releaseState: vi.fn(),

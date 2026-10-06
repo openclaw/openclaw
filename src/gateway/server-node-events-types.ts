@@ -1,8 +1,7 @@
 // Gateway node event types.
 // Defines the narrowed context and event envelope for node-originated handlers.
-import type { DesktopAvailability } from "../../packages/gateway-protocol/src/schema/environments.js";
-import type { NodeHostStatsPayload } from "../../packages/gateway-protocol/src/schema/nodes.js";
-import type { NodeHostStats } from "../shared/node-host-stats.js";
+import type { NodeRegistry } from "./node-registry.js";
+import type { NodePresenceActivityUpdate } from "./node-registry.presence.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 /** Runtime context available to node event handlers. */
@@ -24,31 +23,15 @@ export type NodeEventContext = Pick<
   nodeSubscribe: (nodeId: string, sessionKey: string, connId?: string) => void | Promise<void>;
   nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void | Promise<void>;
   loadGatewayModelCatalogSnapshot?: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
-  authorizeNodeSystemRunEvent: (params: {
-    nodeId: string;
-    connId?: string;
-    runId?: string;
-    sessionKey: string;
-    terminal: boolean;
-  }) => boolean;
-  updateNodePresenceActivity?: (params: {
-    nodeId: string;
-    connId?: string;
-    idleSeconds: number;
-    source?: "app" | "system";
-    saturated?: boolean;
-  }) => { lastActiveAtMs: number; presenceUpdatedAtMs: number } | null;
-  clearNodePresenceActivity?: (params: { nodeId: string; connId?: string }) => boolean | null;
-  updateNodeHostStats?: (params: {
-    nodeId: string;
-    connId?: string;
-    stats: NodeHostStatsPayload;
-  }) => NodeHostStats | null;
-  updateNodeDesktopAvailability?: (params: {
-    nodeId: string;
-    connId?: string;
-    availability: DesktopAvailability;
-  }) => boolean | null;
+  authorizeNodeSystemRunEvent: NodeRegistry["authorizeSystemRunEvent"];
+  updateNodePresenceActivity?: (
+    params: Omit<NodePresenceActivityUpdate, "observedAtMs">,
+  ) => { lastActiveAtMs: number; presenceUpdatedAtMs: number } | null;
+  clearNodePresenceActivity?: NodeRegistry["clearPresenceActivity"];
+  updateNodeHostStats?: (
+    params: Omit<Parameters<NodeRegistry["updateHostStats"]>[0], "observedAtMs">,
+  ) => ReturnType<NodeRegistry["updateHostStats"]>;
+  updateNodeDesktopAvailability?: NodeRegistry["updateDesktopAvailability"];
   logGateway: { warn: (msg: string) => void };
 };
 

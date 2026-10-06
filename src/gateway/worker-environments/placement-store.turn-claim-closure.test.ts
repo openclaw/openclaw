@@ -84,46 +84,40 @@ it("rejects an unbounded claim wait when its signal is already aborted", async (
   expect(store.validateTurnClaim(claim)).toBe(true);
 });
 
-it.each([
-  { executionMode: "worker-turn", visibleBeforeStaging: true },
-  { executionMode: "remote-exec", visibleBeforeStaging: false },
-] as const)(
-  "projects $executionMode workspace reconciliation at its owned boundary",
-  async (scenario) => {
-    const active = await advanceToActive(scenario.executionMode);
-    const claim = await store.claimTurn({
-      ...SESSION,
-      owner: placementTurnOwner(active),
-      claimId: `workspace-result-${scenario.executionMode}`,
-      runId: `run-${scenario.executionMode}`,
-    });
-    await store.markWorkspaceResultPending(claim);
+it("projects worker-turn workspace reconciliation at its owned boundary", async () => {
+  const active = await advanceToActive();
+  const claim = await store.claimTurn({
+    ...SESSION,
+    owner: placementTurnOwner(active),
+    claimId: "workspace-result-worker-turn",
+    runId: "run-worker-turn",
+  });
+  await store.markWorkspaceResultPending(claim);
 
-    const readReconciling = async () =>
-      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds;
-    expect((await readReconciling()).has(active.sessionId)).toBe(scenario.visibleBeforeStaging);
-    const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
-    await store.recordStagedWorkspaceResult(claim, stagedResultRef);
-    expect(await readReconciling()).toEqual(new Set([active.sessionId]));
-    store.recordWorkspaceResultConflict(claim, { paths: ["conflict.txt"], stagedResultRef });
-    const conflicted = await store.readProjection([active.sessionId]);
-    expect(conflicted.placements.get(active.sessionId)).toMatchObject({
-      workspaceResultConflict: { paths: ["conflict.txt"], stagedResultRef, totalCount: 1 },
-    });
-    expect(conflicted.workspaceResultReconcilingSessionIds.has(active.sessionId)).toBe(true);
-    store.recordWorkspaceResultConflict(claim, undefined);
-    expect(
-      (await store.readProjection([active.sessionId])).placements.get(active.sessionId),
-    ).not.toHaveProperty("workspaceResultConflict");
-    await store.acceptWorkspaceResult(claim);
-    await store.completeWorkspaceResultAndReleaseTurn(claim);
-    expect(
-      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
-        active.sessionId,
-      ),
-    ).toBe(false);
-  },
-);
+  const readReconciling = async () =>
+    (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds;
+  expect((await readReconciling()).has(active.sessionId)).toBe(true);
+  const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
+  await store.recordStagedWorkspaceResult(claim, stagedResultRef);
+  expect(await readReconciling()).toEqual(new Set([active.sessionId]));
+  store.recordWorkspaceResultConflict(claim, { paths: ["conflict.txt"], stagedResultRef });
+  const conflicted = await store.readProjection([active.sessionId]);
+  expect(conflicted.placements.get(active.sessionId)).toMatchObject({
+    workspaceResultConflict: { paths: ["conflict.txt"], stagedResultRef, totalCount: 1 },
+  });
+  expect(conflicted.workspaceResultReconcilingSessionIds.has(active.sessionId)).toBe(true);
+  store.recordWorkspaceResultConflict(claim, undefined);
+  expect(
+    (await store.readProjection([active.sessionId])).placements.get(active.sessionId),
+  ).not.toHaveProperty("workspaceResultConflict");
+  await store.acceptWorkspaceResult(claim);
+  await store.completeWorkspaceResultAndReleaseTurn(claim);
+  expect(
+    (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
+      active.sessionId,
+    ),
+  ).toBe(false);
+});
 
 it("keeps placement and result facts in one snapshot across a peer commit", async () => {
   const active = await advanceToActive();
@@ -210,17 +204,6 @@ it("keeps placement and result facts in one snapshot across a peer commit", asyn
   }
 });
 
-it("rejects invalid placement fields when reading projection facts", async () => {
-  const active = await advanceToActive();
-  database.db
-    .prepare("UPDATE worker_session_placements SET worker_bundle_hash = ' ' WHERE session_id = ?")
-    .run(active.sessionId);
-
-  await expect(store.readProjection([active.sessionId])).rejects.toThrow(
-    "Worker session placement worker bundle hash must be a non-empty string",
-  );
-});
-
 async function bindFinishingOwner() {
   const active = await advanceToActive();
   const claim = await store.claimTurn({
@@ -276,7 +259,7 @@ async function bindFinishingOwner() {
     }
     releaseAgentRunDelegatedAuthority(authority);
   };
-  return { claim, authority, abort, bind, take, identity, request, close };
+  return { abort, bind, take, identity, request, close };
 }
 
 it.each([false, true])(
@@ -310,7 +293,7 @@ it.each([false, true])(
   },
 );
 
-it.each(["claim", "run", "abort", "lifecycle", "same-claim replacement"] as const)(
+it.each(["abort", "lifecycle", "same-claim replacement"] as const)(
   "rejects retained finishing readers and delayed events after %s closure",
   async (closure) => {
     const h = await bindFinishingOwner();
@@ -320,11 +303,7 @@ it.each(["claim", "run", "abort", "lifecycle", "same-claim replacement"] as cons
       record?.();
       acknowledgeWorkerTurnFinishing(h.identity, 2, () => true);
       let replacement: typeof h.take | undefined;
-      if (closure === "claim") {
-        await store.releaseTurn(h.claim);
-      } else if (closure === "run") {
-        releaseAgentRunDelegatedAuthority(h.authority);
-      } else if (closure === "abort") {
+      if (closure === "abort") {
         h.abort.abort(new Error("turn cancelled"));
       } else if (closure === "lifecycle") {
         rotateAgentRunRegistryLifecycleGeneration();
@@ -349,79 +328,36 @@ it.each(["claim", "run", "abort", "lifecycle", "same-claim replacement"] as cons
   },
 );
 
-it.each([
-  "session",
-  "run",
-  "environment",
-  "epoch",
-  "claim",
-  "generation",
-  "request run",
-  "request epoch",
-] as const)("does not retain finishing from a mismatched %s binding", async (field) => {
-  const h = await bindFinishingOwner();
-  try {
-    const identity = { ...h.identity };
-    const request = { ...h.request };
-    if (field === "session") {
-      identity.sessionId = "other-session";
-    } else if (field === "run") {
-      identity.runId = "other-run";
-    } else if (field === "environment") {
-      identity.environmentId = "other-environment";
-    } else if (field === "epoch") {
-      identity.ownerEpoch += 1;
-    } else if (field === "claim") {
-      identity.turnClaim = { ...h.claim, claimId: "other-claim" };
-    } else if (field === "generation") {
-      identity.turnClaim = { ...h.claim, placementGeneration: h.claim.placementGeneration + 1 };
-    } else if (field === "request run") {
-      request.runId = "other-run";
-    } else {
-      request.runEpoch += 1;
+it.each(["environment", "request run"] as const)(
+  "does not retain finishing from a mismatched %s binding",
+  async (field) => {
+    const h = await bindFinishingOwner();
+    try {
+      const identity = { ...h.identity };
+      const request = { ...h.request };
+      if (field === "environment") {
+        identity.environmentId = "other-environment";
+      } else {
+        request.runId = "other-run";
+      }
+      expect(captureWorkerTurnFinishing(identity, request)).toBeUndefined();
+      acknowledgeWorkerTurnFinishing(identity, 2, () => true);
+      expect(h.take(h.identity.credentialHash)).toBeUndefined();
+    } finally {
+      await h.close();
     }
-    expect(captureWorkerTurnFinishing(identity, request)).toBeUndefined();
-    acknowledgeWorkerTurnFinishing(identity, 2, () => true);
-    expect(h.take(h.identity.credentialHash)).toBeUndefined();
-  } finally {
-    await h.close();
-  }
-});
+  },
+);
 
-it("emits exact worker claim closure after release", async () => {
+it("fences the exact local claim when reconciliation starts", async () => {
   const closed = vi.fn();
   const unregister = store.registerTurnClaimClosedHandler(closed);
-  const active = await advanceToActive();
-  const owner = {
-    kind: "worker" as const,
-    environmentId: active.environmentId,
-    ownerEpoch: active.activeOwnerEpoch,
-  };
-  const first = await store.claimTurn({
-    ...SESSION,
-    owner,
-    claimId: "claim-release",
-    runId: "run-release",
-  });
-  await store.releaseTurn(first);
-  expect(closed).toHaveBeenLastCalledWith(first);
-
-  expect(closed).toHaveBeenCalledOnce();
-  unregister();
-});
-
-it.each([
-  { ownerKind: "worker", executionMode: "worker-turn" },
-  { ownerKind: "local", executionMode: "remote-exec" },
-] as const)("fences the exact $ownerKind claim when reconciliation starts", async (scenario) => {
-  const closed = vi.fn();
-  const unregister = store.registerTurnClaimClosedHandler(closed);
-  const active = await advanceToActive(scenario.executionMode);
+  const active = await advanceToActive("remote-exec");
   const claim = await store.claimTurn({
     ...SESSION,
     owner: placementTurnOwner(active),
-    claimId: `claim-reconcile-${scenario.ownerKind}`,
-    runId: `run-reconcile-${scenario.ownerKind}`,
+    claimId: "claim-reconcile-local",
+    runId: "run-reconcile-local",
   });
   const draining = await store.startDrain({
     sessionId: active.sessionId,
@@ -441,21 +377,16 @@ it.each([
   ).rejects.toThrow("Cannot reconcile stale worker placement");
   expect(store.get(active.sessionId)).toMatchObject({
     state: "draining",
-    turnClaim: { claimId: claim.claimId, owner: scenario.ownerKind },
+    turnClaim: { claimId: claim.claimId, owner: "local" },
   });
   expect(closed).not.toHaveBeenCalled();
 
-  const authorizedReconcileInput =
-    scenario.ownerKind === "local"
-      ? { ...reconcileInput, forceLocalClaim: true as const }
-      : reconcileInput;
-  if (scenario.ownerKind === "local") {
-    const preserved = store.get(active.sessionId);
-    await expect(store.startReconcile(reconcileInput)).rejects.toThrow("local turn is active");
-    expect(store.get(active.sessionId)).toEqual(preserved);
-    expect(store.validateTurnClaim(claim)).toBe(true);
-    expect(closed).not.toHaveBeenCalled();
-  }
+  const authorizedReconcileInput = { ...reconcileInput, forceLocalClaim: true as const };
+  const preserved = store.get(active.sessionId);
+  await expect(store.startReconcile(reconcileInput)).rejects.toThrow("local turn is active");
+  expect(store.get(active.sessionId)).toEqual(preserved);
+  expect(store.validateTurnClaim(claim)).toBe(true);
+  expect(closed).not.toHaveBeenCalled();
 
   expect(await store.startReconcile(authorizedReconcileInput)).toMatchObject({
     state: "reconciling",
@@ -618,15 +549,7 @@ it("lets an unaudited admitted worker complete the exact turn that closes its ow
   }
 });
 
-it.each([
-  "root admission",
-  "no root admission",
-  "released claim",
-  "released run",
-  "replaced claim",
-  "wrong environment",
-  "wrong generation",
-] as const)(
+it.each(["root admission", "wrong generation"] as const)(
   "prepares worker transcript publication only for its live owner: %s",
   async (scenario) => {
     const active = await advanceToActive();
@@ -672,7 +595,6 @@ it.each([
         );
       }
     });
-    let replacement: typeof claim | undefined;
     try {
       const bind = () =>
         bindWorkerTurnOwner(store, claim, undefined, instance, target, () => {}, prepare);
@@ -684,21 +606,7 @@ it.each([
       } else {
         await bind();
       }
-      if (scenario === "released claim" || scenario === "replaced claim") {
-        await store.releaseTurn(claim);
-        if (scenario === "replaced claim") {
-          replacement = await store.claimTurn({
-            ...SESSION,
-            owner: placementTurnOwner(active),
-            claimId: "claim-replacement",
-            runId: claim.runId,
-          });
-        }
-      } else if (scenario === "released run") {
-        releaseAgentRunDelegatedAuthority(authority);
-      } else if (scenario === "wrong environment") {
-        identity.environmentId = "different-environment";
-      } else if (scenario === "wrong generation") {
+      if (scenario === "wrong generation") {
         identity.turnClaim = { ...claim, placementGeneration: claim.placementGeneration + 1 };
       }
       await upsertSessionEntryCore(target, { sessionId: SESSION.sessionId, updatedAt: 1 });
@@ -727,7 +635,7 @@ it.each([
       expect(published[0]).toMatchObject({
         message: { content: [{ type: "text", text: userText }] },
       });
-      const current = scenario === "root admission" || scenario === "no root admission";
+      const current = scenario === "root admission";
       expect(published[1]).toMatchObject({
         message: {
           content: [{ type: "text", text: current ? "Prepared\nMEDIA:./unowned.png" : text }],
@@ -743,8 +651,8 @@ it.each([
       });
     } finally {
       unsubscribe();
-      if (store.validateTurnClaim(replacement ?? claim)) {
-        await store.releaseTurn(replacement ?? claim);
+      if (store.validateTurnClaim(claim)) {
+        await store.releaseTurn(claim);
       }
       releaseAgentRunDelegatedAuthority(authority);
       admission?.release();

@@ -51,10 +51,7 @@ export function isControlCommandMessage(
   options?: CommandNormalizeOptions,
 ): boolean {
   const normalizedBody = normalizeControlCommandBody(text, options);
-  return (
-    hasNormalizedControlCommand(normalizedBody, cfg) ||
-    isAbortTrigger(normalizeLowercaseStringOrEmpty(normalizedBody))
-  );
+  return hasNormalizedControlCommand(normalizedBody, cfg) || isAbortTrigger(normalizedBody);
 }
 
 /** Returns true when a command starts a new transcript rather than resetting in place. */

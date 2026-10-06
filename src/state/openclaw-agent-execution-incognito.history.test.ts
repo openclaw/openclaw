@@ -534,14 +534,14 @@ it("reads committed actor writes in FIFO order and retains the hydration snapsho
       }),
       actor.sessions.history(authority, { type: "session.history.context", input }),
       actor.sessions.history(authority, { type: "session.history.branches", input }),
+      actor.sessions.history(authority, {
+        type: "session.history.search",
+        input: { ...input, query: "committed" },
+      }),
     ]);
     barrier.release.resolve();
-    const [written, result, [recent, page, title, preview, context, branches]] = await Promise.all([
-      write,
-      read,
-      selected,
-      barrier.held,
-    ]);
+    const [written, result, [recent, page, title, preview, context, branches, searched]] =
+      await Promise.all([write, read, selected, barrier.held]);
     assert(written.ok && written.value.append);
     assert(result.kind === "full");
     expect(result.snapshot.events).toContainEqual(message("committed before history"));
@@ -556,6 +556,23 @@ it("reads committed actor writes in FIFO order and retains the hydration snapsho
     expect(title.fields.lastMessagePreview).toBe("committed before history");
     expect(preview.items).toEqual([{ role: "assistant", text: "committed before history" }]);
     expect(context.events).toContainEqual(message("committed before history"));
+    expect(searched).toMatchObject({
+      kind: "transcript-search",
+      result: {
+        hits: [
+          {
+            sessionKey: target.sessionKey,
+            sessionId: target.entry.sessionId,
+            messageId: written.value.append.messageId,
+            snippet: "committed before history",
+          },
+        ],
+        // A FIFO read does not certify global projection maintenance.
+        indexing: true,
+      },
+    });
+    expect(searched.result).not.toHaveProperty("found");
+    expect(searched.result).not.toHaveProperty("revision");
     expect(branches).toMatchObject({
       status: "ok",
       branches: [

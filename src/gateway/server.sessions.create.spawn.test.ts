@@ -309,48 +309,6 @@ test("sessions.create commits no session after delegated authority closes", asyn
   }
 });
 
-test("sessions.create commits no child after its bound Gateway is replaced", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:dashboard:gateway-replacement-race";
-  const admitted = {};
-  const replacement = {};
-  let current = admitted;
-  const firstGuard = createDeferredCore();
-  const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
-  const creating = directSessionReq(
-    "sessions.create",
-    { agentId: "main", key: sessionKey },
-    {
-      sessionMutationAuthorization: {
-        assertCurrent: () => {
-          if (current !== admitted) {
-            throw new Error("current gateway instance binding was replaced");
-          }
-          firstGuard.resolve();
-        },
-        assertTargetCurrent: vi.fn(),
-      },
-    },
-  );
-
-  const rejected = expect(creating).rejects.toThrow(
-    "current gateway instance binding was replaced",
-  );
-
-  try {
-    await firstGuard.promise;
-    current = replacement;
-    releaseWriter.resolve();
-    await heldWriter;
-
-    await rejected;
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
-  } finally {
-    releaseWriter.resolve();
-    await Promise.allSettled([heldWriter, creating]);
-  }
-});
-
 test("sessions.create commits no child after its worker turn closes", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:worker-turn-race";

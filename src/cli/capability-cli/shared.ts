@@ -174,10 +174,5 @@ export async function resolveLocalCapabilityAgent(params: {
 }
 
 export function pinRuntimeConfigSnapshot(config: OpenClawConfig): void {
-  const sourceConfig = getRuntimeConfigSourceSnapshot();
-  if (sourceConfig) {
-    setRuntimeConfigSnapshot(config, sourceConfig);
-  } else {
-    setRuntimeConfigSnapshot(config);
-  }
+  setRuntimeConfigSnapshot(config, getRuntimeConfigSourceSnapshot() ?? undefined);
 }

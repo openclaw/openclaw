@@ -3,6 +3,7 @@ import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import type { WorktreeCleanupMutation } from "./gc-removal.js";
 import type { requireGit } from "./git.js";
 import { finalizeWorktreeRemovalRows, updateRegistryWorktree } from "./registry.js";
 import type {
@@ -31,25 +32,30 @@ export async function finalizeManagedWorktreeRemoval(params: {
   deletionOptions?: GitOptions;
   onFinalized: () => void;
   workerAuthority: WorktreeWorkerAuthority;
+  withOwnerMutation?: WorktreeCleanupMutation;
 }): Promise<RemoveManagedWorktreeResult> {
   const { record, env, git, options, snapshotRef, snapshotError, recoveryPath } = params;
   options.beforeRun();
   const removedAt = params.now();
   // A failed housekeeping command must not make a deleted checkout appear live.
-  await updateRegistryWorktree(
-    env,
-    record.id,
-    {
-      removedAt,
-      snapshotRef,
-      ...(params.runEndCleanup ? { runEndCleanup: params.runEndCleanup } : {}),
-    },
-    {
-      assertCurrent: options.beforeRun,
-      removalToken: params.claimToken,
-      workerAuthority: params.workerAuthority,
-    },
-  );
+  const publish = () =>
+    updateRegistryWorktree(
+      env,
+      record.id,
+      {
+        removedAt,
+        snapshotRef,
+        ...(params.runEndCleanup ? { runEndCleanup: params.runEndCleanup } : {}),
+      },
+      {
+        assertCurrent: options.beforeRun,
+        removalToken: params.claimToken,
+        workerAuthority: params.workerAuthority,
+      },
+    );
+  await (params.withOwnerMutation
+    ? params.withOwnerMutation(publish, { settle: true })
+    : publish());
   params.onFinalized();
   try {
     if (params.deletionOptions) {

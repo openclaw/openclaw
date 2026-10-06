@@ -323,16 +323,16 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(broadcastDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-2" });
   });
 
-  it("retries failed terminal persistence", async () => {
+  it("does not replay terminal persistence after an unknown write outcome", async () => {
     vi.setSystemTime(30_000);
     const persistDigest = vi
       .fn()
-      .mockRejectedValueOnce(new Error("temporary write failure"))
+      .mockRejectedValueOnce(new Error("write outcome unknown"))
       .mockResolvedValueOnce(true);
     const harness = createHarness({ persistDigest });
     await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 30_000 });
 
-    expect(persistDigest).toHaveBeenCalledTimes(2);
+    expect(persistDigest).toHaveBeenCalledTimes(1);
   });
 
   it("redacts secrets split across assistant deltas in the assembled note", async () => {

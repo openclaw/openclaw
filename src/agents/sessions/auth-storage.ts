@@ -36,7 +36,6 @@ import {
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
   type AuthProfileDatabase,
-  type PreparedAuthProfileStoreOwner,
 } from "../auth-profiles/sqlite.js";
 import { loadPersistedAuthProfileState } from "../auth-profiles/state.js";
 import {
@@ -46,6 +45,7 @@ import {
 import type {
   AuthProfileCredentialSource,
   AuthProfileStore,
+  PreparedAuthProfileStoreOwner,
   RuntimeAuthProfileStore,
 } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";

@@ -6,9 +6,15 @@ import {
 } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import type { TemplateContext } from "../templating.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { enqueueFollowupRun, parkSteerCandidate, type FollowupRun } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  parkSteerCandidate,
+  scheduleFollowupDrain,
+  type FollowupRun,
+} from "./queue.js";
 import { clearFollowupDrainCallback } from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import {
@@ -16,6 +22,7 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 type SteeringReceiptFixture = {
   createMinimalRun: (params: {
@@ -48,9 +55,120 @@ export function registerSteeringReceiptCases({
   makeSessionFixture,
   state,
 }: SteeringReceiptFixture): void {
+  it("queues instead of steering when privilege facts differ on the active route", async ({
+    signal,
+  }) => {
+    const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
+    const followupTasks: Promise<void>[] = [];
+    const observeFollowup =
+      (runFollowup: Parameters<typeof scheduleFollowupDrain>[1]) => (queued: FollowupRun) => {
+        const task = runFollowup(queued);
+        followupTasks.push(task.catch(() => {}));
+        return task;
+      };
+    vi.mocked(parkSteerCandidate).mockImplementation((key, queued, settings, runFollowup) =>
+      actualQueue.parkSteerCandidate(key, queued, settings, observeFollowup(runFollowup)),
+    );
+    vi.mocked(scheduleFollowupDrain).mockImplementation((key, runFollowup) =>
+      actualQueue.scheduleFollowupDrain(key, observeFollowup(runFollowup)),
+    );
+    const queued = createDeferred();
+    const onDeferred = vi.fn(queued.resolve);
+    const settled = createDeferred();
+    const onAdopted = vi.fn();
+    const onBlockReply = vi.fn();
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      bindActiveAuthority: false,
+      opts: {
+        onBlockReply,
+        turnAdoptionLifecycle: {
+          onAdopted,
+          onDeferred,
+          onSettled: settled.resolve,
+        },
+      },
+    });
+    active.bindToolAuthoritySnapshot(
+      prepareReplyToolAuthority({
+        ...followupRun,
+        run: {
+          ...followupRun.run,
+          runtimePluginToolGrant: {
+            pluginId: "workboard",
+            toolNames: ["workboard_complete"],
+          },
+        },
+      }),
+    );
+    active.bindToolAuthorityRoute({ provider: "openai", model: "gpt-fallback" });
+    active.setPhase("running");
+    try {
+      await expect(run()).resolves.toBeUndefined();
+      await withinTest(
+        awaitGateBeforeSettlement(
+          queued.promise,
+          settled.promise,
+          "followup settled before queue acceptance",
+        ),
+        signal,
+      );
+      expect(onDeferred).toHaveBeenCalledOnce();
+      expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(onAdopted).not.toHaveBeenCalled();
+      expect(onBlockReply).not.toHaveBeenCalled();
+
+      active.complete();
+      await withinTest(settled.promise, signal);
+      await Promise.all(followupTasks);
+      expect(onAdopted).toHaveBeenCalledOnce();
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
+        prompt: "hello",
+      });
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "final" }));
+    } finally {
+      active.complete();
+      clearFollowupQueue("main");
+      clearFollowupDrainCallback("main");
+      await Promise.all(followupTasks);
+    }
+  });
+
+  it("does not steer, enqueue, or start a second run after accepted Gateway injection", async () => {
+    const runState: ReplyOperationRunState = {};
+    const { run } = createMinimalRun({
+      opts: {
+        messageInjectionDisposition: "accepted",
+        [REPLY_OPERATION_RUN_STATE]: runState,
+      },
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it.each(["new", "old"] as const)(
     "keeps a rejected steer skipped when drop:%s discards it",
     async (dropPolicy) => {
+      using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
       const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
       vi.mocked(parkSteerCandidate).mockImplementation(actualQueue.parkSteerCandidate);
       const active = createReplyOperation({
@@ -94,6 +212,10 @@ export function registerSteeringReceiptCases({
       }
       try {
         await candidate.run();
+        expect(warning).toHaveBeenCalledWith(
+          "steering rejected; applying follow-up policy",
+          expect.objectContaining({ reason: "runtime_rejected", disposition: "skipped-queue-cap" }),
+        );
         expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
         expect(replyState.admission).toEqual({ status: "skipped", reason: "queue-cap" });
         expect(getExistingFollowupQueue("main")?.items).toEqual([retained]);
@@ -210,8 +332,13 @@ export function registerSteeringReceiptCases({
     }
   });
 
-  for (const receiptState of ["terminal-pending", "delivered-terminal"] as const) {
-    it(`queues instead of steering while the active turn holds a ${receiptState} source-reply receipt`, async () => {
+  for (const { receiptState, enqueued } of [
+    { receiptState: "terminal-pending", enqueued: true },
+    { receiptState: "delivered-terminal", enqueued: true },
+    { receiptState: "terminal-pending", enqueued: false },
+  ] as const) {
+    it(`${enqueued ? "queues instead of steering" : "reports a non-enqueued fallback"} while the active turn holds a ${receiptState} source-reply receipt`, async () => {
+      using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
       const sessionEntry = makeSessionEntry({
         status: "running",
         restartRecoveryDeliveryRunId: "recovery-run-1",
@@ -229,6 +356,7 @@ export function registerSteeringReceiptCases({
       // The active turn's backend would accept the steer; the failure mode is
       // that the steered message-tool final then gets fail-closed and lost.
       state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+      vi.mocked(enqueueFollowupRun).mockReturnValueOnce(enqueued);
       const runState: ReplyOperationRunState = {};
       const { run } = createMinimalRun({
         opts: { [REPLY_OPERATION_RUN_STATE]: runState },
@@ -255,7 +383,16 @@ export function registerSteeringReceiptCases({
       // reuse the same delivery claim and silently lose its reply (#128971).
       expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
       expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-      expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+      expect(warning).toHaveBeenCalledWith("steering rejected; applying follow-up policy", {
+        reason: receiptState,
+        disposition: enqueued ? "followup-queued" : "followup-not-enqueued",
+        channel: "telegram",
+        sessionId: "session",
+        runId: undefined,
+      });
+      expect(runState.admission).toEqual(
+        enqueued ? { status: "accepted", mode: "followup" } : undefined,
+      );
       expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
       active.complete();
     });

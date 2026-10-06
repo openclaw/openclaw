@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -63,7 +62,6 @@ export const modelsHandlers: GatewayRequestHandlers = {
             rawAgentId: params.agentId ?? tryResolveAmbientOwnerAgentId(cfg),
             respond: respondToCaller,
             cfg,
-            normalize: normalizeOptionalString,
           });
         if (!resolved) {
           return undefined;
@@ -135,24 +133,32 @@ export const modelsHandlers: GatewayRequestHandlers = {
                 readScope: scope,
                 publicationScope: preparedScope,
               }));
-            const currentConfig = context.getRuntimeConfig();
-            const projected =
-              scope && params.view !== "provider-config"
-                ? {
-                    ...result,
-                    models: projectSessionModelCatalog(scope, result.models, currentConfig),
-                  }
-                : result;
-            const policy = prepareOperatorModelPresentation({
-              cfg: currentConfig,
-              policyConfig: context.getCommittedRuntimeConfig?.() ?? currentConfig,
-              client,
-            })?.forAgent(resolved.agentId, projected.models);
-            respond(
-              true,
-              projectModelFastModeCatalog(policy ? policy.catalog(projected) : projected, client),
-              undefined,
-            );
+            const publish = () => {
+              assertCurrent();
+              const currentConfig = context.getRuntimeConfig();
+              const projected =
+                scope && params.view !== "provider-config"
+                  ? {
+                      ...result,
+                      models: projectSessionModelCatalog(scope, result.models, currentConfig),
+                    }
+                  : result;
+              const policy = prepareOperatorModelPresentation({
+                cfg: currentConfig,
+                policyConfig: context.getCommittedRuntimeConfig?.() ?? currentConfig,
+                client,
+              })?.forAgent(resolved.agentId, projected.models);
+              respond(
+                true,
+                projectModelFastModeCatalog(policy ? policy.catalog(projected) : projected, client),
+                undefined,
+              );
+            };
+            if (preparedScope.withCurrent) {
+              await preparedScope.withCurrent(publish);
+            } else {
+              publish();
+            }
             if (params.refresh === true) {
               void Promise.resolve()
                 .then(() => applyRemoteModelCatalogUpdate(context.getRuntimeConfig))

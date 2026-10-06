@@ -15,7 +15,6 @@ import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   chunkTextWithMode,
   resolveChunkMode,
@@ -50,7 +49,7 @@ import {
   waitForSignalDaemonReady,
 } from "./daemon.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
-import type { SignalAttachment, SignalNativeReplyContext } from "./monitor/event-handler.types.js";
+import type { SignalEventHandlerDeps } from "./monitor/event-handler.types.js";
 import { createSignalNativeReplyIdPlan } from "./native-reply.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { registerSignalReactionTargetsForDeliveredPayload } from "./reaction-targets.js";
@@ -123,15 +122,11 @@ function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | u
   return base64Bytes + SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES;
 }
 
-async function fetchAttachment(params: {
-  baseUrl: string;
-  account?: string;
-  transportKind?: SignalTransportKind;
-  attachment: SignalAttachment;
-  sender?: string;
-  groupId?: string;
-  maxBytes: number;
-}): Promise<{ path: string; contentType?: string } | null> {
+async function fetchAttachment(
+  params: Parameters<SignalEventHandlerDeps["fetchAttachment"]>[0] & {
+    transportKind?: SignalTransportKind;
+  },
+) {
   const { attachment } = params;
   if (!attachment?.id) {
     return null;
@@ -187,21 +182,11 @@ async function fetchAttachment(params: {
   return { path: saved.path, contentType: saved.contentType };
 }
 
-export async function deliverReplies(params: {
-  cfg: OpenClawConfig;
-  replies: ReplyPayload[];
-  target: string;
-  baseUrl: string;
-  account?: string;
-  accountUuid?: string;
-  accountId?: string;
-  runtime: RuntimeEnv;
-  maxBytes: number;
-  textLimit: number;
-  chunkMode: "length" | "newline";
-  replyContext?: SignalNativeReplyContext;
-  chatType?: "direct" | "group";
-}) {
+export async function deliverReplies(
+  params: Parameters<SignalEventHandlerDeps["deliverReplies"]>[0] & {
+    chunkMode: "length" | "newline";
+  },
+) {
   const {
     replies,
     target,
@@ -262,10 +247,7 @@ export async function deliverReplies(params: {
       });
       // Failed blocks must leave the shared first-reply slot available to the final reply.
       replyPlan.markSent();
-      const messageId =
-        typeof result?.messageId === "string" && result.messageId.trim()
-          ? result.messageId.trim()
-          : null;
+      const messageId = result.messageId.trim();
       if (messageId) {
         deliveryResults.push({
           channel: "signal",

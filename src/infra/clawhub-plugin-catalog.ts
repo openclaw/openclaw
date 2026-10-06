@@ -1,10 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type {
   ClawHubDownloadability,
   ClawHubSelectedRelease,
 } from "../../packages/gateway-protocol/src/schema/clawhub-listing.js";
 import type {
   PluginDiscoveryDetail,
+  PluginDiscoveryCategory,
   PluginInstallTrust,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
@@ -56,7 +58,7 @@ export type ClawHubPluginCatalogEntry = {
 
 export type ClawHubPluginDetail = ClawHubPluginCatalogEntry &
   ClawHubPluginCapabilities & {
-    owner?: { handle?: string; displayName?: string; imageUrl?: string; official?: boolean };
+    owner?: NonNullable<SchemaContract<PluginDiscoveryDetail["author"]>>;
     topics: string[];
     createdAt?: number;
     updatedAt?: number;
@@ -64,56 +66,26 @@ export type ClawHubPluginDetail = ClawHubPluginCatalogEntry &
     repositoryUrl?: string;
     documentationUrl?: string;
     compatibility?: ClawHubPluginCompatibility;
-    configFields: ClawHubPluginConfigField[];
+    configFields: SchemaContract<PluginDiscoveryDetail["configuration"]>;
     mcpServers: string[];
     mcpServerDetails?: PluginDiscoveryDetail["mcpServerDetails"];
-    skills: Array<{ name: string; description?: string }>;
+    skills: SchemaContract<PluginDiscoveryDetail["skills"]>;
     versions: ClawHubPluginVersion[];
     registry: string;
     tags: Record<string, string>;
     selectedRelease: ClawHubSelectedRelease | null;
     downloadability: ClawHubDownloadability;
-    metadata: {
-      manifest: "available" | "missing";
-      readme: "available" | "missing";
-      security: "available" | "missing";
-    };
+    metadata: NonNullable<SchemaContract<PluginDiscoveryDetail["metadata"]>>;
     trust?: PluginInstallTrust;
     verification?: ClawHubPluginVerification;
     security?: ClawHubPluginSecurity;
   };
 
-type ClawHubPluginConfigField = {
-  name: string;
-  description?: string;
-  required: boolean;
-  sensitive: boolean;
-};
+type ClawHubPluginVersion = PluginDiscoveryDetail["versions"][number];
 
-type ClawHubPluginVersion = {
-  version: string;
-  createdAt: number;
-  changelog: string;
-  tags: string[];
-};
+type ClawHubPluginVerification = NonNullable<SchemaContract<PluginDiscoveryDetail["verification"]>>;
 
-type ClawHubPluginVerification = {
-  tier: string;
-  summary?: string;
-  sourceRepo?: string;
-  sourceCommit?: string;
-  sourcePath?: string;
-  scanStatus?: string;
-};
-
-export type ClawHubPluginCategory = {
-  slug: string;
-  label: string;
-  description: string;
-  icon: string;
-  order: number;
-  pinnedPackages?: string[];
-};
+export type ClawHubPluginCategory = SchemaContract<PluginDiscoveryCategory>;
 
 export type ClawHubPluginVersionCategories = {
   name: string;

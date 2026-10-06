@@ -15,29 +15,13 @@ import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
 import { resolveModelsTargetAgent } from "./shared.js";
 
-type AuthProfileSummary = {
-  id: string;
-  provider: string;
-  type: AuthProfileCredential["type"];
-  label: string;
-  email?: string;
-  displayName?: string;
-  expiresAt?: string;
-  cooldownUntil?: string;
-  disabledUntil?: string;
-  cooldownReason?: ProfileUsageStats["cooldownReason"];
-  cooldownClassification?: ProfileUsageStats["cooldownClassification"];
-  disabledReason?: ProfileUsageStats["disabledReason"];
-  recoveryHint?: string;
-};
-
 function summarizeProfile(params: {
   cfg: Awaited<ReturnType<typeof loadModelsConfig>>;
   store: AuthProfileStore;
   profileId: string;
   profile: AuthProfileCredential;
   usage?: ProfileUsageStats;
-}): AuthProfileSummary {
+}) {
   const expiresAt =
     params.profile.type === "api_key" ? undefined : timestampMsToIsoString(params.profile.expires);
   const cooldownUntil = timestampMsToIsoString(params.usage?.cooldownUntil);
@@ -80,7 +64,7 @@ function summarizeProfile(params: {
   };
 }
 
-function formatProfileLine(profile: AuthProfileSummary): string {
+function formatProfileLine(profile: ReturnType<typeof summarizeProfile>): string {
   const details = [`${profile.provider}/${profile.type}`];
   if (profile.expiresAt) {
     details.push(`expires ${profile.expiresAt}`);

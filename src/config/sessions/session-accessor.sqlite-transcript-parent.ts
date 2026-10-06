@@ -23,10 +23,6 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-import {
-  isTranscriptEntryOnVisiblePath,
-  resolveVisibleTranscriptAppendParentId,
-} from "./transcript-visible-events.js";
 
 // Stamped by the Talk voice writer in src/talk/client-voice-session.ts.
 const REALTIME_VOICE_PROVENANCE = { kind: "realtime_voice", sourceChannel: "talk" } as const;
@@ -244,9 +240,9 @@ export function isTranscriptEntryOnActivePathInTransaction(
   sessionId: string,
   entryId: string,
 ): boolean {
-  return isTranscriptEntryOnVisiblePath(
-    readTranscriptNavigationEvents(database, sessionId),
-    entryId,
+  const tree = scanSessionTranscriptTree(readTranscriptNavigationEvents(database, sessionId));
+  return selectSessionTranscriptTreePathNodes(tree, tree.leafId).some(
+    (node) => node.id === entryId,
   );
 }
 
@@ -384,7 +380,7 @@ function readActiveTranscriptAppendParentId(
       .limit(1),
   );
   const resolveFromNavigation = () =>
-    resolveVisibleTranscriptAppendParentId(readTranscriptNavigationEvents(database, sessionId));
+    scanSessionTranscriptTree(readTranscriptNavigationEvents(database, sessionId)).appendParentId;
   if (!latest) {
     // Exact imports captured the append cursor while rebuilding their projection,
     // even though they did not transfer identity or idempotency ownership.
