@@ -1,7 +1,6 @@
 /** Registry-bound plugin command selection and execution for native/channel surfaces. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactToolPayloadTextWithConfig } from "../logging/redact.js";
 import type { RegisteredPluginCommand } from "./command-registry-state.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "./manifest-command-aliases.js";
@@ -27,42 +26,27 @@ export type { PluginCommandReplyOptions };
 
 declare const pluginCommandDispatchBrand: unique symbol;
 
-export type PluginCommandDispatchContext = Readonly<{
-  senderId?: string;
-  channel: string;
-  channelId?: PluginCommandContext["channelId"];
-  isAuthorizedSender: boolean;
-  senderIsOwner?: boolean;
-  assertOwnerCurrent?: () => void;
-  gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
-  /** Host-resolved agent authority for plugin-owned or non-agent-shaped session keys. */
-  agentId?: string;
-  sessionKey?: PluginCommandContext["sessionKey"];
-  sessionId?: PluginCommandContext["sessionId"];
-  sessionTarget?: PluginCommandContext["sessionTarget"];
-  sessionFile?: PluginCommandContext["sessionFile"];
-  authProfileId?: string;
-  commandBody: string;
-  config: OpenClawConfig;
-  from?: PluginCommandContext["from"];
-  to?: PluginCommandContext["to"];
-  originatingTo?: string;
-  accountId?: PluginCommandContext["accountId"];
-  messageThreadId?: PluginCommandContext["messageThreadId"];
-  threadParentId?: PluginCommandContext["threadParentId"];
-  diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
-  diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
-  diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
-  diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
-  runtimeContext?: {
-    compactCurrent?: (
-      signal?: AbortSignal,
-      assertOwnerCurrent?: () => void,
-    ) => ReturnType<
-      NonNullable<NonNullable<PluginCommandContext["runtimeContext"]>["compactCurrent"]>
-    >;
-  };
-}>;
+export type PluginCommandDispatchContext = Readonly<
+  Omit<
+    PluginCommandContext,
+    | "args"
+    | "requestConversationBinding"
+    | "detachConversationBinding"
+    | "getCurrentConversationBinding"
+    | "runtimeContext"
+  > & {
+    authProfileId?: string;
+    originatingTo?: string;
+    runtimeContext?: {
+      compactCurrent?: (
+        signal?: AbortSignal,
+        assertOwnerCurrent?: () => void,
+      ) => ReturnType<
+        NonNullable<NonNullable<PluginCommandContext["runtimeContext"]>["compactCurrent"]>
+      >;
+    };
+  }
+>;
 
 /** Opaque capability bound to one selected command in one registry generation. */
 export type PluginCommandDispatch = Readonly<{

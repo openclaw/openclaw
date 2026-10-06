@@ -1,26 +1,8 @@
 // Builds payloads for the plugin-runtime before_install lifecycle hook.
-import type {
-  PluginHookBeforeInstallBuiltinScan,
-  PluginHookBeforeInstallContext,
-  PluginHookBeforeInstallEvent,
-  PluginHookBeforeInstallPlugin,
-  PluginHookBeforeInstallRequest,
-  PluginHookBeforeInstallSkill,
-  PluginInstallSourcePathKind,
-  PluginInstallTargetType,
-} from "./types.js";
+import type { PluginHookBeforeInstallContext, PluginHookBeforeInstallEvent } from "./types.js";
 
-type BeforeInstallHookPayloadParams = {
-  targetType: PluginInstallTargetType;
-  targetName: string;
-  origin?: string;
-  sourcePath: string;
-  sourcePathKind: PluginInstallSourcePathKind;
-  request: PluginHookBeforeInstallRequest;
-  builtinScan?: PluginHookBeforeInstallBuiltinScan;
-  skill?: PluginHookBeforeInstallSkill;
-  plugin?: PluginHookBeforeInstallPlugin;
-};
+type BeforeInstallHookPayloadParams = Omit<PluginHookBeforeInstallEvent, "builtinScan"> &
+  Partial<Pick<PluginHookBeforeInstallEvent, "builtinScan">>;
 
 export function createBeforeInstallHookPayload(params: BeforeInstallHookPayloadParams): {
   ctx: PluginHookBeforeInstallContext;

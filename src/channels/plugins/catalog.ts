@@ -34,14 +34,7 @@ type ChannelUiMetaEntry = {
   systemImage?: string;
 };
 
-export type ChannelUiCatalog = {
-  entries: ChannelUiMetaEntry[];
-  order: string[];
-  labels: Record<string, string>;
-  detailLabels: Record<string, string>;
-  systemImages: Record<string, string>;
-  byId: Record<string, ChannelUiMetaEntry>;
-};
+export type ChannelUiCatalog = ReturnType<typeof buildChannelUiCatalog>;
 
 type ChannelPluginCatalogInstall = PluginPackageInstall &
   ({ clawhubSpec: string } | { npmSpec: string });
@@ -305,9 +298,7 @@ function resolveOfficialCatalogDocsPath(
     : undefined;
 }
 
-export function buildChannelUiCatalog(
-  plugins: Array<{ id: string; meta: ChannelMeta }>,
-): ChannelUiCatalog {
+export function buildChannelUiCatalog(plugins: Array<{ id: string; meta: ChannelMeta }>) {
   const entries: ChannelUiMetaEntry[] = plugins.map((plugin) => {
     const detailLabel = plugin.meta.detailLabel ?? plugin.meta.selectionLabel ?? plugin.meta.label;
     return {
